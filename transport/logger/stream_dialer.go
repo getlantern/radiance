@@ -12,32 +12,39 @@ import (
 var log = golog.LoggerFor("LogDialer")
 
 type logDialer struct {
-	dialer transport.StreamDialer
+	innerSD transport.StreamDialer
 }
 
-func NewStreamDialer(dialer transport.StreamDialer) (transport.StreamDialer, error) {
-	if dialer == nil {
+func NewStreamDialer(innerSD transport.StreamDialer) (transport.StreamDialer, error) {
+	if innerSD == nil {
 		return nil, errors.New("dialer must not be nil")
 	}
 
-	return &logDialer{dialer: dialer}, nil
+	return &logDialer{innerSD: innerSD}, nil
 }
 
 func (d *logDialer) DialStream(ctx context.Context, remoteAddr string) (transport.StreamConn, error) {
-	stream, err := d.dialer.DialStream(ctx, remoteAddr)
+	stream, err := d.innerSD.DialStream(ctx, remoteAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	w := &logWritter{w: stream}
-	return transport.WrapConn(stream, stream, w), nil
+	log.Debugf("Connected to %v", remoteAddr)
+	rw := &logRW{rw: stream}
+	return transport.WrapConn(stream, rw, rw), nil
 }
 
-type logWritter struct {
-	w io.Writer
+type logRW struct {
+	rw io.ReadWriter
 }
 
-func (w *logWritter) Write(p []byte) (n int, err error) {
+func (c *logRW) Write(p []byte) (n int, err error) {
 	log.Debugf("Writing %v bytes", len(p))
-	return w.w.Write(p)
+	return c.rw.Write(p)
+}
+
+func (c *logRW) Read(p []byte) (n int, err error) {
+	n, err = c.rw.Read(p)
+	log.Debugf("Read %v bytes", n)
+	return
 }
