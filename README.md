@@ -39,3 +39,4 @@ go run cmd/main.go -addr localhost:8080
 - [ ] Implement remaining protocols
 - [ ] Add socks5 support
 - [ ] Implement VPN TUN 
+- [ ] Add way to manage multiple proxies. MAB?
