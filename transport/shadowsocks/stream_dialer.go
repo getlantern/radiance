@@ -13,28 +13,34 @@ import (
 
 	"github.com/getlantern/errors"
 	"github.com/getlantern/flashlight/v7/chained/prefixgen"
+
+	"github.com/getlantern/radiance/config"
 )
 
 const (
 	defaultShadowsocksUpstreamSuffix = "test"
 )
 
+// StreamDialer routes traffic through a shadowsocks proxy.
 type StreamDialer struct {
-	*shadowsocks.StreamDialer
+	// innerSD is the shadowsocks stream dialer that has been configured with the key, endpoint, etc.
+	innerSD *shadowsocks.StreamDialer
+	// upstream is the suffix of the upstream address to dial.
 	upstream string
 	rng      *mrand.Rand
 	rngmx    sync.Mutex
 }
 
-func NewStreamDialer(innerSD transport.StreamDialer, config map[string]string) (transport.StreamDialer, error) {
-	secret := config["secret"]
-	cipher := config["cipher"]
-	key, err := shadowsocks.NewEncryptionKey(cipher, secret)
+// NewStreamDialer creates a new shadowsocks StreamDialer using the provided configuration.
+// The returned StreamDialer will route traffic through the provided inner StreamDialer.
+func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (transport.StreamDialer, error) {
+	ssconf := config.Shadowsocks
+	key, err := shadowsocks.NewEncryptionKey(ssconf["cipher"], ssconf["secret"])
 	if err != nil {
 		return nil, errors.New("failed to create shadowsocks key: %v", err)
 	}
 
-	addr := config["addr"]
+	addr := fmt.Sprintf("%s:%d", config.Addr, config.Port)
 	endpoint := &transport.StreamDialerEndpoint{Dialer: innerSD, Address: addr}
 	dialer, err := shadowsocks.NewStreamDialer(endpoint, key)
 	if err != nil {
@@ -42,10 +48,10 @@ func NewStreamDialer(innerSD transport.StreamDialer, config map[string]string) (
 	}
 
 	// Infrastructure python code seems to insert "None" as the prefix generator if there is none.
-	prefixGen := config["prefixgenerator"]
+	prefixGen := ssconf["prefixgenerator"]
 	if prefixGen != "" && prefixGen != "None" {
 		gen, err := prefixgen.New(prefixGen)
-		name := config["name"]
+		name := config.Name
 		if err != nil {
 			return nil, errors.New("failed to parse shadowsocks prefix generator from %v for proxy %v: %v", prefixGen, name, err)
 		}
@@ -61,7 +67,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, config map[string]string) (
 	source := mrand.NewSource(seed)
 	rng := mrand.New(source)
 
-	upstream := config["upstream"]
+	upstream := ssconf["upstream"]
 	if upstream == "" {
 		upstream = defaultShadowsocksUpstreamSuffix
 	}
@@ -69,8 +75,9 @@ func NewStreamDialer(innerSD transport.StreamDialer, config map[string]string) (
 	return &StreamDialer{dialer, upstream, rng, sync.Mutex{}}, nil
 }
 
+// DialStream implements the transport.StreamDialer interface.
 func (sd *StreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
-	return sd.StreamDialer.DialStream(ctx, sd.generateUpstream())
+	return sd.innerSD.DialStream(ctx, sd.generateUpstream())
 }
 
 // generateUpstream() creates a marker upstream address.  This isn't an
