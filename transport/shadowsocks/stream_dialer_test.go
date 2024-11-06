@@ -40,7 +40,7 @@ func TestWrapStreamDialer(t *testing.T) {
 		Timeout: 10 * time.Second,
 	}
 
-	req, err := http.NewRequest("GET", "https://lantern.io", nil)
+	req, err := http.NewRequest("GET", "https://geo.getiantem.org/lookup/185.228.19.20", nil)
 	require.NoError(t, err, "Failed to create request")
 
 	resp, err := client.Do(req)
@@ -53,6 +53,8 @@ func TestWrapStreamDialer(t *testing.T) {
 	}
 
 	defer resp.Body.Close()
-	_, err = io.Copy(io.Discard, resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err, "Failed to read response body")
+
+	t.Log(string(body))
 }

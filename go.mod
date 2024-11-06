@@ -6,7 +6,6 @@ require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.17
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
-	github.com/getlantern/flashlight/v7 v7.6.125
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/stretchr/testify v1.9.0
 	github.com/xtaci/smux v1.5.31
@@ -29,8 +28,10 @@ require (
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	go.opentelemetry.io/otel v1.31.0 // indirect
 	go.opentelemetry.io/otel/metric v1.31.0 // indirect

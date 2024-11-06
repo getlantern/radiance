@@ -12,7 +12,6 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/flashlight/v7/chained/prefixgen"
 
 	"github.com/getlantern/radiance/config"
 )
@@ -50,13 +49,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (tran
 	// Infrastructure python code seems to insert "None" as the prefix generator if there is none.
 	prefixGen := ssconf["prefixgenerator"]
 	if prefixGen != "" && prefixGen != "None" {
-		gen, err := prefixgen.New(prefixGen)
-		name := config.Name
-		if err != nil {
-			return nil, errors.New("failed to parse shadowsocks prefix generator from %v for proxy %v: %v", prefixGen, name, err)
-		}
-		prefixFunc := func() ([]byte, error) { return gen(), nil }
-		dialer.SaltGenerator = &PrefixSaltGen{prefixFunc}
+		dialer.SaltGenerator = shadowsocks.NewPrefixSaltGenerator([]byte(prefixGen))
 	}
 
 	var seed int64
