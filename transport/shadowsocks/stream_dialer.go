@@ -32,14 +32,17 @@ type StreamDialer struct {
 
 // NewStreamDialer creates a new shadowsocks StreamDialer using the provided configuration.
 // The returned StreamDialer will route traffic through the provided inner StreamDialer.
-func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (transport.StreamDialer, error) {
-	ssconf := config.Shadowsocks
-	key, err := shadowsocks.NewEncryptionKey(ssconf["cipher"], ssconf["secret"])
+func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
+	ssconf := cfg.GetConnectCfgShadowsocks()
+	if ssconf == nil {
+		return nil, errors.New("config is not a shadowsocks config")
+	}
+	key, err := shadowsocks.NewEncryptionKey(ssconf.Cipher, ssconf.Secret)
 	if err != nil {
 		return nil, errors.New("failed to create shadowsocks key: %v", err)
 	}
 
-	addr := fmt.Sprintf("%s:%d", config.Addr, config.Port)
+	addr := fmt.Sprintf("%s:%d", cfg.Addr, cfg.Port)
 	endpoint := &transport.StreamDialerEndpoint{Dialer: innerSD, Address: addr}
 	dialer, err := shadowsocks.NewStreamDialer(endpoint, key)
 	if err != nil {
@@ -47,7 +50,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (tran
 	}
 
 	// Infrastructure python code seems to insert "None" as the prefix generator if there is none.
-	prefixGen := ssconf["prefixgenerator"]
+	prefixGen := ssconf.PrefixGenerator
 	if prefixGen != "" && prefixGen != "None" {
 		dialer.SaltGenerator = shadowsocks.NewPrefixSaltGenerator([]byte(prefixGen))
 	}
@@ -60,12 +63,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (tran
 	source := mrand.NewSource(seed)
 	rng := mrand.New(source)
 
-	upstream := ssconf["upstream"]
-	if upstream == "" {
-		upstream = defaultShadowsocksUpstreamSuffix
-	}
-
-	return &StreamDialer{dialer, upstream, rng, sync.Mutex{}}, nil
+	return &StreamDialer{dialer, defaultShadowsocksUpstreamSuffix, rng, sync.Mutex{}}, nil
 }
 
 // DialStream implements the transport.StreamDialer interface.

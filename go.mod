@@ -6,9 +6,11 @@ require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.17
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
+	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/stretchr/testify v1.9.0
 	github.com/xtaci/smux v1.5.31
+	google.golang.org/protobuf v1.35.1
 )
 
 require (

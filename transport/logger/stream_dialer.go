@@ -19,7 +19,7 @@ type StreamDialer struct {
 	innerSD transport.StreamDialer
 }
 
-func NewStreamDialer(innerSD transport.StreamDialer, _ config.Config) (transport.StreamDialer, error) {
+func NewStreamDialer(innerSD transport.StreamDialer, _ *config.Config) (transport.StreamDialer, error) {
 	if innerSD == nil {
 		return nil, errors.New("dialer must not be nil")
 	}

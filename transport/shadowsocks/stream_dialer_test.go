@@ -18,7 +18,10 @@ import (
 )
 
 func TestWrapStreamDialer(t *testing.T) {
-	config, err := config.GetConfig()
+	ch := config.NewConfigHandler()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	config, err := ch.GetConfig(ctx)
+	cancel()
 	require.NoError(t, err, "Failed to get config")
 
 	dialer, err := NewStreamDialer(&transport.TCPDialer{}, config)

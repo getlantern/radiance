@@ -21,13 +21,13 @@ var log = golog.LoggerFor("proxy")
 // attaching the auth token to each request.
 type Proxy struct {
 	*http.Server
-	conf   config.Config
+	conf   *config.Config
 	dialer otransport.StreamDialer
 }
 
 // NewProxy creates a new Proxy. config is used to create the transport.StreamDialer that will be
 // used to dial the target server.
-func NewProxy(config config.Config) (*Proxy, error) {
+func NewProxy(config *config.Config) (*Proxy, error) {
 	log.Debugf("Creating proxy with config: %+v", config)
 
 	dialer, err := transport.DialerFrom(config)

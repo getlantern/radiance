@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,7 +15,10 @@ import (
 )
 
 func TestProxy(t *testing.T) {
-	config, err := config.GetConfig()
+	ch := config.NewConfigHandler()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	config, err := ch.GetConfig(ctx)
+	cancel()
 	require.NoError(t, err, "Failed to get config")
 
 	p, err := NewProxy(config)

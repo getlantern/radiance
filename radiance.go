@@ -20,10 +20,14 @@ type Radiance struct {
 }
 
 func (r *Radiance) Run(addr string) error {
-	proxyConfig, err := config.GetConfig()
+	ch := config.NewConfigHandler()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	proxyConfig, err := ch.GetConfig(ctx)
+	cancel()
 	if err != nil {
 		return err
 	}
+
 	proxy, err := proxy.NewProxy(proxyConfig)
 	if err != nil {
 		return fmt.Errorf("Could not create proxy: %w", err)
