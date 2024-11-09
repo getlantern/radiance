@@ -10,12 +10,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const configURL = "https://api.iantem.io/v1/config"
+const (
+	configURL = "https://api.iantem.io/v1/config"
+
+	appVersionHeader = "X-Lantern-App-Version"
+	versionHeader    = "X-Lantern-Version"
+	platformHeader   = "X-Lantern-Platform"
+	appNameHeader    = "X-Lantern-App"
+	deviceIdHeader   = "X-Lantern-Device-Id"
+)
 
 var (
-	clientVersion = "9999.99.99-dev"
-	version       = "9999.99.99"
-	userID        = "12343"
+	clientVersion = "7.6.47"
+	version       = "7.6.47"
+	userID        = "2089345"
 	proToken      = ""
 )
 
@@ -23,9 +31,9 @@ type fetcher struct {
 	httpClient *http.Client
 }
 
-func newFetcher() *fetcher {
+func newFetcher(client *http.Client) *fetcher {
 	return &fetcher{
-		httpClient: &http.Client{},
+		httpClient: client,
 	}
 }
 
@@ -48,6 +56,9 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 
 	buf, statusCode, err := f.fetch(bytes.NewReader(buf))
 	if err != nil {
+		if statusCode == 0 {
+			return nil, fmt.Errorf("failed to fetch config: %w", err)
+		}
 		return nil, fmt.Errorf("failed to fetch config: %d %w", statusCode, err)
 	}
 
@@ -66,7 +77,10 @@ func (f *fetcher) fetch(b io.Reader) ([]byte, int, error) {
 	addHeaders(req)
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to send request: %w", err)
+		if resp != nil {
+			return nil, resp.StatusCode, errors.New(resp.Status)
+		}
+		return nil, 0, err
 	}
 
 	buf, err := io.ReadAll(resp.Body)
@@ -82,11 +96,11 @@ func (f *fetcher) fetch(b io.Reader) ([]byte, int, error) {
 }
 
 func addHeaders(req *http.Request) {
-	req.Header.Set("X-Lantern-App-Version", clientVersion)
-	req.Header.Set("X-Lantern-Version", version) // panics if not set
-	req.Header.Set("X-Lantern-Platform", "linux")
-	req.Header.Set("X-Lantern-App", "radiance")
-	req.Header.Set("X-Lantern-Device-Id", "some-uuid-here")
+	req.Header.Set(appVersionHeader, clientVersion)
+	req.Header.Set(versionHeader, version) // panics if not set
+	req.Header.Set(platformHeader, "linux")
+	req.Header.Set(appNameHeader, "radiance")
+	req.Header.Set(deviceIdHeader, "some-uuid-here")
 
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Cache-Control", "no-cache")
