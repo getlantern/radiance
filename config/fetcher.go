@@ -18,12 +18,13 @@ const (
 	platformHeader   = "X-Lantern-Platform"
 	appNameHeader    = "X-Lantern-App"
 	deviceIdHeader   = "X-Lantern-Device-Id"
+	userIdHeader     = "X-Lantern-User-Id"
 )
 
 var (
 	clientVersion = "7.6.47"
 	version       = "7.6.47"
-	userID        = "2089345"
+	userId        = "23409"
 	proToken      = ""
 )
 
@@ -42,7 +43,7 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 		ClientInfo: &ConfigRequest_ClientInfo{
 			FlashlightVersion: version,
 			ClientVersion:     clientVersion,
-			UserId:            userID,
+			UserId:            userId,
 			ProToken:          proToken,
 			Country:           "",
 			Ip:                "",
@@ -98,6 +99,7 @@ func (f *fetcher) fetch(b io.Reader) ([]byte, int, error) {
 func addHeaders(req *http.Request) {
 	req.Header.Set(appVersionHeader, clientVersion)
 	req.Header.Set(versionHeader, version) // panics if not set
+	req.Header.Set(userIdHeader, userId)
 	req.Header.Set(platformHeader, "linux")
 	req.Header.Set(appNameHeader, "radiance")
 	req.Header.Set(deviceIdHeader, "some-uuid-here")
