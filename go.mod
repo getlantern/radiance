@@ -3,7 +3,7 @@ module github.com/getlantern/radiance
 go 1.23.0
 
 require (
-	github.com/Jigsaw-Code/outline-sdk v0.0.17
+	github.com/Jigsaw-Code/outline-sdk v0.0.18-0.20241106233708-faffebb12629
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20241121204512-95cfba19c57e // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd // indirect
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
@@ -39,6 +40,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.28.0 // indirect
+	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

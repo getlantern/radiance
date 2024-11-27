@@ -1,5 +1,9 @@
 github.com/Jigsaw-Code/outline-sdk v0.0.17 h1:xkGsp3fs+5EbIZEeCEPI1rl0oyCrOLuO7YSK0gB75HE=
 github.com/Jigsaw-Code/outline-sdk v0.0.17/go.mod h1:CFDKyGZA4zatKE4vMLe8TyQpZCyINOeRFbMAmYHxodw=
+github.com/Jigsaw-Code/outline-sdk v0.0.18-0.20241106233708-faffebb12629 h1:sHi1X4vwtNNBUDCbxynGXe7cM/inwTbavowHziaxlbk=
+github.com/Jigsaw-Code/outline-sdk v0.0.18-0.20241106233708-faffebb12629/go.mod h1:CFDKyGZA4zatKE4vMLe8TyQpZCyINOeRFbMAmYHxodw=
+github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20241121204512-95cfba19c57e h1:p8XFrRHRhFyZng1k6m5AvUOTBwTIGLre0fjiZATLPyM=
+github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20241121204512-95cfba19c57e/go.mod h1:TIoolIUwJ9jA2O8yKy/1l/6vQ5IhhX0cAGEVjDucMB4=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -128,6 +132,8 @@ golang.org/x/net v0.0.0-20190311183353-d8887717615a/go.mod h1:t9HGtf8HONx5eT2rtn
 golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
 golang.org/x/net v0.0.0-20190620200207-3b0461eec859/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
 golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4/go.mod h1:p54w0d4576C0XHj96bSt6lcn1PtDYWL6XObtHCRCNQM=
+golang.org/x/net v0.28.0 h1:a9JDOJc5GMUJ0+UDqmLT86WiEy7iWyIhz8gz8E4e5hE=
+golang.org/x/net v0.28.0/go.mod h1:yqtgsTWOOnlGLG9GFRrK3++bGOUEkNBoHZc8MEDWPNg=
 golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sync v0.0.0-20210220032951-036812b2e83c/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
