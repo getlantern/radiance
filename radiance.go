@@ -1,11 +1,7 @@
 package radiance
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"net/http"
-	"time"
 
 	"github.com/getlantern/golog"
 
@@ -30,20 +26,5 @@ func (r *Radiance) Run(addr string) error {
 	}
 	r.proxy = proxy
 
-	go func() {
-		if err := proxy.ListenAndServe(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Errorf("Proxy failed: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-func (r *Radiance) Shutdown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := r.proxy.Shutdown(ctx); err != nil {
-		return fmt.Errorf("Failed to shutdown proxy gracefully: %w", err)
-	}
-	return nil
+	return proxy.ListenAndServe(addr)
 }
