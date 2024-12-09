@@ -3,10 +3,8 @@ package shadowsocks
 import (
 	"context"
 	crand "crypto/rand"
-	"encoding/binary"
 	"fmt"
-	mrand "math/rand"
-	"sync"
+	"math/rand/v2"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
@@ -26,8 +24,6 @@ type StreamDialer struct {
 	innerSD *shadowsocks.StreamDialer
 	// upstream is the suffix of the upstream address to dial.
 	upstream string
-	rng      *mrand.Rand
-	rngmx    sync.Mutex
 }
 
 // NewStreamDialer creates a new shadowsocks StreamDialer using the provided configuration.
@@ -46,26 +42,17 @@ func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (tran
 		return nil, errors.New("failed to create shadowsocks client: %v", err)
 	}
 
-	// Infrastructure python code seems to insert "None" as the prefix generator if there is none.
 	prefixGen := ssconf["prefixgenerator"]
-	if prefixGen != "" && prefixGen != "None" {
+	if prefixGen != "" {
 		dialer.SaltGenerator = shadowsocks.NewPrefixSaltGenerator([]byte(prefixGen))
 	}
-
-	var seed int64
-	err = binary.Read(crand.Reader, binary.BigEndian, &seed)
-	if err != nil {
-		return nil, errors.New("unable to initialize rng: %v", err)
-	}
-	source := mrand.NewSource(seed)
-	rng := mrand.New(source)
 
 	upstream := ssconf["upstream"]
 	if upstream == "" {
 		upstream = defaultShadowsocksUpstreamSuffix
 	}
 
-	return &StreamDialer{dialer, upstream, rng, sync.Mutex{}}, nil
+	return &StreamDialer{dialer, upstream}, nil
 }
 
 // DialStream implements the transport.StreamDialer interface.
@@ -82,13 +69,11 @@ func (sd *StreamDialer) DialStream(ctx context.Context, addr string) (transport.
 // configured suffix (along with a .) and a port is affixed to the end.
 func (sd *StreamDialer) generateUpstream() string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	sd.rngmx.Lock()
-	defer sd.rngmx.Unlock()
 	// [2 - 22]
-	sz := 2 + sd.rng.Intn(21)
+	sz := 2 + rand.IntN(21)
 	b := make([]byte, sz)
 	for i := range b {
-		b[i] = letters[sd.rng.Intn(len(letters))]
+		b[i] = letters[rand.IntN(len(letters))]
 	}
 
 	return string(b) + "." + sd.upstream + ":443"
