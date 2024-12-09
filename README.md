@@ -40,3 +40,4 @@ go run cmd/main.go -addr localhost:8080
 - [ ] Add socks5 support
 - [ ] Implement VPN TUN 
 - [ ] Add way to manage multiple proxies. MAB?
+- [ ] Switch from getlantern/golog to rs/zerolog w/ local log pkg
