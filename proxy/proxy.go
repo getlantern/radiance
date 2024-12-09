@@ -13,7 +13,6 @@ import (
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
-	"github.com/getlantern/radiance/transport/logger"
 )
 
 const (
@@ -54,7 +53,7 @@ func NewProxy(config config.Config) (*Proxy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Could not create dialer: %w", err)
 	}
-	dialer, _ = logger.NewStreamDialer(dialer, config)
+	// dialer, _ = logger.NewStreamDialer(dialer, config)
 
 	handler := proxyHandler{
 		addr:      config.Addr,
@@ -104,12 +103,11 @@ type proxyHandler struct {
 }
 
 func (h *proxyHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	log.Debugf("Handling %v request to %v", req.Method, req.URL)
 	if req.Method == http.MethodConnect {
 		h.handleConnect(resp, req)
 		return
 	}
-	h.handleForward(resp, req)
+	h.handleNonConnect(resp, req)
 }
 
 // handleConnect handles CONNECT requests by dialing the proxy server and sending the CONNECT request
@@ -134,6 +132,13 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		return
 	}
 
+	log.Debug("hijacked connection, writing connect request")
+
+	// We're responsible for closing the client connection since we hijacked it. But since we're
+	// just piping data back and forth, we can give that responsibility back to the server, which
+	// will close the connection when the request is done.
+	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
+
 	// Create a new CONNECT request to send to the proxy server.
 	connectReq, err := http.NewRequestWithContext(
 		proxyReq.Context(),
@@ -147,11 +152,6 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		return
 	}
 
-	// We're responsible for closing the client connection since we hijacked it. But since we're
-	// just piping data back and forth, we can give that responsibility back to the server, which
-	// will close the connection when the request is done.
-	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
-
 	// Pipe data between the client and the target.
 	log.Debug("proxy connected to target, piping data")
 	go func() {
@@ -160,8 +160,8 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	io.Copy(clientConn, targetConn)
 }
 
-// handleForward forwards the request to the proxy server with the required headers.
-func (h *proxyHandler) handleForward(proxyResp http.ResponseWriter, proxyReq *http.Request) {
+// handleNonConnect forwards non-CONNECT requests to the proxy server with the required headers.
+func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
 	// To avoid modifying the original request, we create a new identical request that we give to
 	// the http client to modify as needed. The result is then copied to the original response writer.
 	targetReq, err := http.NewRequestWithContext(
