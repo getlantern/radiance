@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/errors"
 
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/transport/shadowsocks/prefixgen"
 )
 
 const (
@@ -44,7 +45,13 @@ func NewStreamDialer(innerSD transport.StreamDialer, config config.Config) (tran
 
 	prefixGen := ssconf["prefixgenerator"]
 	if prefixGen != "" {
-		dialer.SaltGenerator = shadowsocks.NewPrefixSaltGenerator([]byte(prefixGen))
+		gen, err := prefixgen.New(prefixGen)
+		if err != nil {
+			return nil, errors.New("failed to create prefix generator: %v", err)
+		}
+		dialer.SaltGenerator = &PrefixSaltGen{
+			prefixFunc: func() ([]byte, error) { return gen(), nil },
+		}
 	}
 
 	upstream := ssconf["upstream"]
