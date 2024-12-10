@@ -1,3 +1,8 @@
+/*
+Package radiance provides a local server that proxies all requests to a remote proxy server using different
+protocols meant to circumvent censorship. Radiance uses a [transport.StreamDialer] to dial the target server
+over the desired protocol. The [config.Config] is used to configure the dialer for a proxy server.
+*/
 package radiance
 
 import (

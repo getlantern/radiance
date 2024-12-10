@@ -1,3 +1,13 @@
+/*
+Package shadowsocks provides a [transport.StreamDialer] that routes traffic through a shadowsocks proxy.
+
+Config values:
+
+	"cipher": Cipher to use to create the encryption key. REQUIRED
+	"secret": The secret key to use to create the encryption key. REQUIRED
+	"upstream": This is used to signal that the upstream should be determined by other methods and to add some randomness.
+	"prefixgenerator": Generator function to create prefixes.
+*/
 package shadowsocks
 
 import (
@@ -68,7 +78,7 @@ func (sd *StreamDialer) DialStream(ctx context.Context, addr string) (transport.
 }
 
 // generateUpstream() creates a marker upstream address.  This isn't an
-// acutal upstream that will be dialed, it signals that the upstream
+// actual upstream that will be dialed, it signals that the upstream
 // should be determined by other methods.  It's just a bit random just to
 // mix it up and not do anything especially consistent on every dial.
 //

@@ -1,11 +1,12 @@
 # Radiance
 _(WIP)_
 
-Radiance is a pilot PoC of Lantern core SDK (flashlight) utilizing the Outline SDK. 
+Radiance is a pilot PoC of Lantern core SDK (flashlight) utilizing the [outline-sdk](github.com/Jigsaw-code/outline-sdk). 
 What's the "core" idea behind a lantern, and I guess a flashlight? _Light_, or synonymously, _radiance_.
 
 ## Current State
-Currently, `radiance` reads a proxy config from a file, `config/proxy.conf`.
+`radiance` runs a local server that proxies requests to a remote Lantern proxy, specifically, `omanyte`. Requests are proxied over a [transport.StreamDialer], which use a specific protocol to communicate with the remote proxy, _i.e._ shadowsocks. The dialers are configured using a proxy config embedded from a file at `config/proxy.conf`. 
+
 ##### protocols
 - shadowsocks
 - multiplexing

@@ -1,3 +1,6 @@
+/*
+Package multiplex provides a [transport.StreamDialer] that multiplexes connections.
+*/
 package multiplex
 
 import (

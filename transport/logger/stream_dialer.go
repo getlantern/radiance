@@ -1,3 +1,6 @@
+/*
+Package logger implements a StreamDialer that logs the data written to and read from the connection. This is used for debugging and will be removed in the future.
+*/
 package logger
 
 import (
