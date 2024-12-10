@@ -1,21 +1,15 @@
-package proxy
+package radiance
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"net"
 	"net/http"
 
-	"github.com/getlantern/golog"
-
-	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
-
-	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/transport"
+	"github.com/Jigsaw-Code/outline-sdk/transport"
 )
 
 const (
+	// Required headers to send to the proxy server.
 	appVersionHeader = "X-Lantern-App-Version"
 	versionHeader    = "X-Lantern-Version"
 	platformHeader   = "X-Lantern-Platform"
@@ -24,69 +18,6 @@ const (
 	userIdHeader     = "X-Lantern-User-Id"
 	authTokenHeader  = "X-Lantern-Auth-Token"
 )
-
-var (
-	// Placeholders to use in the request headers. These will be replaced with real values when the
-	// ability to fetch the config is implemented.
-	clientVersion = "9999.9999"
-	version       = "9999.9999"
-	userId        = "23409"
-	proToken      = ""
-)
-
-var log = golog.LoggerFor("proxy")
-
-// Proxy is a local server that pipes all request to a proxy over a transport.StreamDialer,
-// attaching the auth token to each request.
-type Proxy struct {
-	*http.Server
-	conf   config.Config
-	dialer otransport.StreamDialer
-}
-
-// NewProxy creates a new Proxy. config is used to create the transport.StreamDialer that will be
-// used to dial the target server.
-func NewProxy(config config.Config) (*Proxy, error) {
-	log.Debugf("Creating proxy with config: %+v", config)
-
-	dialer, err := transport.DialerFrom(config)
-	if err != nil {
-		return nil, fmt.Errorf("Could not create dialer: %w", err)
-	}
-	// dialer, _ = logger.NewStreamDialer(dialer, config)
-
-	handler := proxyHandler{
-		addr:      config.Addr,
-		authToken: config.AuthToken,
-		dialer:    dialer,
-		client: http.Client{
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, config.Addr)
-				},
-			},
-		},
-	}
-
-	return &Proxy{
-		conf:   config,
-		dialer: dialer,
-		Server: &http.Server{
-			Handler: &handler,
-		},
-	}, nil
-}
-
-// ListenAndServe starts the proxy server on the given address.
-func (p *Proxy) ListenAndServe(addr string) error {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("Could not listen on %v: %w", addr, err)
-	}
-
-	log.Debugf("Listening on %v", addr)
-	return p.Serve(listener)
-}
 
 // proxyHandler sends all requests over dialer to the proxy server. Requests are handled differently
 // based on whether they are CONNECT requests or not. CONNECT requests, which are usually https, will
@@ -97,7 +28,7 @@ type proxyHandler struct {
 	addr string
 	// authToken is the authentication token to send with each request to the proxy server.
 	authToken string
-	dialer    otransport.StreamDialer
+	dialer    transport.StreamDialer
 	// client is an http client that will be used to forward non-CONNECT requests to the proxy server.
 	client http.Client
 }
