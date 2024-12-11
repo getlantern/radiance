@@ -4,27 +4,16 @@ import (
 	"io"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-func TestFetchConfig(t *testing.T) {
+func TestFetcher(t *testing.T) {
 	fetcher := newFetcher(&http.Client{Transport: &mockRoundtripper{t: t}})
 	_, err := fetcher.fetchConfig()
 	assert.NoError(t, err)
-}
-
-func Test_fetcher_fetchConfig(t *testing.T) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	c, err := newFetcher(client).fetchConfig()
-	require.NoError(t, err)
-
-	for _, p := range c.Proxy.Proxies {
-		t.Logf("Proxy: %s %s", p.Track, p.Protocol)
-	}
 }
 
 type mockRoundtripper struct {
