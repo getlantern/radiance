@@ -71,18 +71,21 @@ func startServer(done chan error) (net.Listener, error) {
 	return listener, nil
 }
 
-func newTestConfig(addr string) (config.Config, error) {
+func newTestConfig(addr string) (*config.Config, error) {
 	addr, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return config.Config{}, err
+		return nil, err
 	}
 	p, _ := strconv.Atoi(port)
-	return config.Config{
-		Addr: addr,
-		Port: p,
-		Shadowsocks: map[string]string{
-			"cipher": "aes-256-gcm",
-			"secret": "test",
+	return &config.Config{
+		Addr:     addr,
+		Port:     int32(p),
+		Protocol: "shadowsocks",
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgShadowsocks{
+			ConnectCfgShadowsocks: &config.ProxyConnectConfig_ShadowsocksConfig{
+				Cipher: "aes-256-gcm",
+				Secret: "test",
+			},
 		},
 	}, nil
 }
