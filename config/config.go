@@ -6,6 +6,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	sync "sync"
 	"sync/atomic"
@@ -20,7 +21,7 @@ var (
 
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when the ctx expires before a
 	// proxy config is available and a fetch is in progress.
-	ErrFetchingConfig = errors.New("still fetching config")
+	ErrFetchingConfig = errors.New("fetch in progress")
 )
 
 // alias for convenience
@@ -59,16 +60,24 @@ func NewConfigHandler() *ConfigHandler {
 // GetConfig does not initiate a fetch. See [ConfigHandler.FetchConfig].
 func (ch *ConfigHandler) GetConfig(ctx context.Context) (*Config, error) {
 	cfg, err := ch.config.Get(ctx)
-	if err != nil {
+	if err != nil { // no config available
 		if ch.isFetching.Load() {
-			return nil, ErrFetchingConfig
+			return nil, fmt.Errorf("config unavailable: %w", ErrFetchingConfig)
 		}
-		return nil, err
+		if ferr := ch.getFErr(); ferr != nil {
+			// fetch failed and has not been retried yet
+			return nil, ferr
+		}
+
+		// fetch only returns a nil config if 1) the config we have currently doesn't need to be
+		// updated or 2) we encountered an error while fetching. If we don't have a config yet, we
+		// should be either fetching or have an error. We should never reach here. If we do, we have
+		// a bigger problem; the server is not assigning us proxies and is returning '204 no content'.
+		//
+		// Or someone modified the code and didn't test it properly..
+		return nil, errors.New("no config received from server")
 	}
-	ch.errMu.Lock()
-	err = ch.err
-	ch.errMu.Unlock()
-	return cfg.(*Config), err
+	return cfg.(*Config), ch.getFErr()
 }
 
 // FetchConfig initiates a fetch for a proxy config. The fetch is performed asynchronously. If a fetch
@@ -81,11 +90,11 @@ func (ch *ConfigHandler) FetchConfig() bool {
 	go func() {
 		defer ch.isFetching.Store(false)
 		log.Debug("fetching config")
-		ch.setErr(nil)
+		ch.setFErr(nil)
 		cfgres, err := ch.fetcher.fetchConfig()
 		if err != nil {
 			log.Error(err)
-			ch.setErr(err)
+			ch.setFErr(err)
 			return
 		}
 
@@ -106,8 +115,15 @@ func (ch *ConfigHandler) FetchConfig() bool {
 	return true
 }
 
-func (ch *ConfigHandler) setErr(err error) {
+func (ch *ConfigHandler) setFErr(err error) {
 	ch.errMu.Lock()
 	ch.err = err
 	ch.errMu.Unlock()
+}
+
+func (ch *ConfigHandler) getFErr() error {
+	ch.errMu.Lock()
+	err := ch.err
+	ch.errMu.Unlock()
+	return err
 }

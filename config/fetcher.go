@@ -44,9 +44,9 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
-	buf, err = f.fetch(bytes.NewReader(buf))
+	buf, err = f.send(bytes.NewReader(buf))
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch config: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 
 	if buf == nil { // no new config available
@@ -60,8 +60,8 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 	return newConf, nil
 }
 
-// fetch sends a request to the server with the given body and returns the response.
-func (f *fetcher) fetch(body io.Reader) ([]byte, error) {
+// send sends a request to the server with the given body and returns the response.
+func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	req, err := common.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
