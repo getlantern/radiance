@@ -79,9 +79,15 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	// Pipe data between the client and the target.
 	log.Debug("proxy connected to target, piping data")
 	go func() {
-		io.Copy(targetConn, clientConn)
+		_, err := io.Copy(targetConn, clientConn)
+		if err != nil {
+			log.Errorf("Failed to copy data to target: %v", err)
+		}
 	}()
-	io.Copy(clientConn, targetConn)
+	_, err = io.Copy(clientConn, targetConn)
+	if err != nil {
+		log.Errorf("Failed to copy data to client: %v", err)
+	}
 }
 
 // handleNonConnect forwards non-CONNECT requests to the proxy server with the required headers.
