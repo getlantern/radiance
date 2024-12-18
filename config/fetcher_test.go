@@ -12,18 +12,19 @@ import (
 )
 
 type mockRoundTripper struct {
-	req  *http.Request
-	resp *http.Response
-	done chan struct{}
+	req       *http.Request
+	resp      *http.Response
+	err       error
+	continueC chan struct{}
 }
 
 func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	m.req = req
 	select {
-	case m.done <- struct{}{}:
+	case m.continueC <- struct{}{}:
 	default:
 	}
-	return m.resp, nil
+	return m.resp, m.err
 }
 
 func TestFetcher(t *testing.T) {

@@ -18,7 +18,11 @@ import (
 	"github.com/getlantern/radiance/transport"
 )
 
-var log = golog.LoggerFor("radiance")
+var (
+	log = golog.LoggerFor("radiance")
+
+	configPollInterval = 10 * time.Minute
+)
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
@@ -28,7 +32,7 @@ type Radiance struct {
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
-	return &Radiance{confHandler: config.NewConfigHandler()}
+	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval)}
 }
 
 // Run starts the Radiance proxy server on the specified address.
