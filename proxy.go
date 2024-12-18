@@ -7,7 +7,7 @@ import (
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 
-	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/backend"
 )
 
 const authTokenHeader = "X-Lantern-Auth-Token"
@@ -64,7 +64,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
 
 	// Create a new CONNECT request to send to the proxy server.
-	connectReq, err := common.NewRequestWithHeaders(
+	connectReq, err := backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		http.MethodConnect,
 		proxyReq.URL.String(),
@@ -94,7 +94,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
 	// To avoid modifying the original request, we create a new identical request that we give to
 	// the http client to modify as needed. The result is then copied to the original response writer.
-	targetReq, err := common.NewRequestWithHeaders(
+	targetReq, err := backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		proxyReq.Method,
 		proxyReq.URL.String(),

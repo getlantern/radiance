@@ -9,7 +9,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/backend"
 )
 
 const configURL = "https://api.iantem.io/v1/config"
@@ -30,10 +31,10 @@ func newFetcher(client *http.Client) *fetcher {
 func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 	confReq := ConfigRequest{
 		ClientInfo: &ConfigRequest_ClientInfo{
-			FlashlightVersion: common.Version,
-			ClientVersion:     common.ClientVersion,
-			UserId:            common.UserId,
-			ProToken:          common.ProToken,
+			FlashlightVersion: app.Version,
+			ClientVersion:     app.ClientVersion,
+			UserId:            app.UserId,
+			ProToken:          app.ProToken,
 			Country:           "",
 			Ip:                "",
 		},
@@ -62,7 +63,7 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	req, err := common.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
+	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
