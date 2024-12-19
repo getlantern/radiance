@@ -6,18 +6,11 @@ import (
 	"net/http"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
+
+	"github.com/getlantern/radiance/backend"
 )
 
-const (
-	// Required headers to send to the proxy server.
-	appVersionHeader = "X-Lantern-App-Version"
-	versionHeader    = "X-Lantern-Version"
-	platformHeader   = "X-Lantern-Platform"
-	appNameHeader    = "X-Lantern-App"
-	deviceIdHeader   = "X-Lantern-Device-Id"
-	userIdHeader     = "X-Lantern-User-Id"
-	authTokenHeader  = "X-Lantern-Auth-Token"
-)
+const authTokenHeader = "X-Lantern-Auth-Token"
 
 // proxyHandler sends all requests over dialer to the proxy server. Requests are handled differently
 // based on whether they are CONNECT requests or not. CONNECT requests, which are usually https, will
@@ -71,13 +64,13 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
 
 	// Create a new CONNECT request to send to the proxy server.
-	connectReq, err := http.NewRequestWithContext(
+	connectReq, err := backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		http.MethodConnect,
 		proxyReq.URL.String(),
 		nil,
 	)
-	addRequiredHeaders(connectReq, h.authToken)
+	connectReq.Header.Set(authTokenHeader, h.authToken)
 	if err = connectReq.Write(targetConn); err != nil {
 		sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
 		return
@@ -101,7 +94,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
 	// To avoid modifying the original request, we create a new identical request that we give to
 	// the http client to modify as needed. The result is then copied to the original response writer.
-	targetReq, err := http.NewRequestWithContext(
+	targetReq, err := backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		proxyReq.Method,
 		proxyReq.URL.String(),
@@ -112,8 +105,7 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 		return
 	}
 	targetReq.Header = proxyReq.Header.Clone()
-	addRequiredHeaders(targetReq, h.authToken)
-
+	targetReq.Header.Set(authTokenHeader, h.authToken)
 	targetResp, err := h.client.Do(targetReq)
 	if err != nil {
 		sendError(proxyResp, "Failed to fetch destination", http.StatusServiceUnavailable, err)
@@ -130,17 +122,6 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 	if err != nil {
 		sendError(proxyResp, "Failed write response", http.StatusServiceUnavailable, err)
 	}
-}
-
-// addRequiredHeaders adds the required headers to the request. Currently, all but the auth token are placeholders.
-func addRequiredHeaders(req *http.Request, authToken string) {
-	req.Header.Set(appVersionHeader, clientVersion)
-	req.Header.Set(versionHeader, version)
-	req.Header.Set(userIdHeader, userId)
-	req.Header.Set(platformHeader, "linux")
-	req.Header.Set(appNameHeader, "radiance")
-	req.Header.Set(deviceIdHeader, "some-uuid-here")
-	req.Header.Set(authTokenHeader, authToken)
 }
 
 // sendError is a helper function to log an error and send an error message to the client.

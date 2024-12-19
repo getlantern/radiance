@@ -18,17 +18,17 @@ import (
 )
 
 // BuilderFn is a function that creates a new StreamDialer wrapping innerSD.
-type BuilderFn func(innerSD transport.StreamDialer, conf config.Config) (transport.StreamDialer, error)
+type BuilderFn func(innerSD transport.StreamDialer, conf *config.Config) (transport.StreamDialer, error)
 
 var (
 	// dialerBuilders is a map of builder functions for each supported protocol.
 	dialerBuilders = make(map[string]BuilderFn)
 
-	log = golog.LoggerFor("transport.dialer")
+	log = golog.LoggerFor("transport")
 )
 
-// DialerFrom creates a new StreamDialer from the provided configuration.
-func DialerFrom(config config.Config) (transport.StreamDialer, error) {
+// DialerFrom creates a new StreamDialer from [config.Config].
+func DialerFrom(config *config.Config) (transport.StreamDialer, error) {
 	builder, ok := dialerBuilders[config.Protocol]
 	if !ok {
 		return nil, fmt.Errorf("Unsupported protocol: %v", config.Protocol)
@@ -63,3 +63,4 @@ func SupportedDialers() []string {
 	}
 	return availableDialers
 }
+

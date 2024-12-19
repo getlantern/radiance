@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/getlantern/golog"
 
@@ -18,35 +19,36 @@ import (
 )
 
 var (
-	// Placeholders to use in the request headers. These will be replaced with real values when the
-	// ability to fetch the config is implemented.
-	clientVersion = "9999.9999"
-	version       = "9999.9999"
-	userId        = "23409"
-	proToken      = ""
-
 	log = golog.LoggerFor("radiance")
+
+	configPollInterval = 10 * time.Minute
 )
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
-	srv    *http.Server
-	config config.Config
+	srv         *http.Server
+	confHandler *config.ConfigHandler
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance() (*Radiance, error) {
-	conf, err := config.GetConfig()
-	if err != nil {
-		return nil, err
-	}
+func NewRadiance() *Radiance {
+	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval)}
+}
 
-	log.Debugf("Creating radiance with config: %+v", conf)
+// Run starts the Radiance proxy server on the specified address.
+func (r *Radiance) Run(addr string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	conf, err := r.confHandler.GetConfig(ctx)
+	cancel()
+	if err != nil {
+		return err
+	}
 
 	dialer, err := transport.DialerFrom(conf)
 	if err != nil {
-		return nil, fmt.Errorf("Could not create dialer: %w", err)
+		return fmt.Errorf("Could not create dialer: %w", err)
 	}
+	log.Debugf("Creating dialer with config: %+v", conf)
 
 	handler := proxyHandler{
 		addr:      conf.Addr,
@@ -60,15 +62,7 @@ func NewRadiance() (*Radiance, error) {
 			},
 		},
 	}
-
-	return &Radiance{
-		srv:    &http.Server{Handler: &handler},
-		config: conf,
-	}, nil
-}
-
-// Run starts the Radiance proxy server on the specified address.
-func (r *Radiance) Run(addr string) error {
+	r.srv = &http.Server{Handler: &handler}
 	return r.listenAndServe(addr)
 }
 

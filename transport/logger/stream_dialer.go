@@ -14,7 +14,7 @@ import (
 	"github.com/getlantern/radiance/config"
 )
 
-var log = golog.LoggerFor("LogDialer")
+var log = golog.LoggerFor("transport.logDialer")
 
 // StreamDialer is a wrapper around a StreamDialer that is used for debugging. Currently, it logs
 // the data written to and read from the connection. This will be removed in the future.
@@ -22,7 +22,7 @@ type StreamDialer struct {
 	innerSD transport.StreamDialer
 }
 
-func NewStreamDialer(innerSD transport.StreamDialer, _ config.Config) (transport.StreamDialer, error) {
+func NewStreamDialer(innerSD transport.StreamDialer, _ *config.Config) (transport.StreamDialer, error) {
 	if innerSD == nil {
 		return nil, errors.New("dialer must not be nil")
 	}

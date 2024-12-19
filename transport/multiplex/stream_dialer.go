@@ -25,7 +25,7 @@ type StreamDialer struct {
 }
 
 // NewStreamDialer creates a new multiplexing StreamDialer wrapping innerSD.
-func NewStreamDialer(innerSD transport.StreamDialer, _ config.Config) (transport.StreamDialer, error) {
+func NewStreamDialer(innerSD transport.StreamDialer, _ *config.Config) (transport.StreamDialer, error) {
 	dialer := cmux.Dialer(
 		&cmux.DialerOpts{
 			Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {

@@ -1,18 +1,19 @@
 # Radiance
 _(WIP)_
 
-Radiance is a pilot PoC of Lantern core SDK (flashlight) utilizing the [outline-sdk](github.com/Jigsaw-code/outline-sdk). 
+Radiance is a pilot PoC of Lantern core SDK (flashlight) utilizing the [outline-sdk](github.com/Jigsaw-code/outline-sdk).
 What's the "core" idea behind a lantern, and I guess a flashlight? _Light_, or synonymously, _radiance_.
 
 ## Current State
-`radiance` runs a local server that proxies requests to a remote Lantern proxy, specifically, `omanyte`. Requests are proxied over a `transport.StreamDialer`, which use a specific protocol to communicate with the remote proxy, _i.e._ shadowsocks. The dialers are configured using a proxy config embedded from a file at `config/proxy.conf`. 
+`radiance` runs a local server that proxies requests to a remote Lantern proxy. Requests are proxied over a `transport.StreamDialer`, which uses a specific protocol to communicate with the remote proxy, _i.e._ shadowsocks. `radiance` will automatically fetch the proxy and protocol information and configure the dialer. Currently, not all protocols are supported.
 
 ##### supported protocols
 - shadowsocks
 - multiplexing
 
 ### Add transports
-New transports/protocols can be added by implementing [transport.StreamDialer](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk@v0.0.17/transport#StreamDialer) and creating a [BuilderFn](https://github.com/getlantern/radiance/blob/main/transport/transport.go#L21). Create a new package in `transport` (_i.e._ `transport/myTransport`) and add the necessary code to run the transport here, including the `StreamDialer` and `BuilderFn`. Then add `registerDialerBuilder("myTransportName", myTransport.MyBuilderFn)` to `init` in [register.go](https://github.com/getlantern/radiance/blob/main/transport/register.go) to enable it. `myTransportName` must match [protocol](https://github.com/getlantern/radiance/blob/main/config/config.go#L16) in the proxy config as this is what's used to configure the dialer.
+New transports/protocols can be added by implementing [transport.StreamDialer](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk@v0.0.17/transport#StreamDialer) and creating a [BuilderFn](https://github.com/getlantern/radiance/blob/main/transport/transport.go#L21). Create a new package in `transport` (_e.g._ `transport/myTransport`) and add the necessary code to run the transport here, including the `StreamDialer` and `BuilderFn`. Then add `registerDialerBuilder("myTransportName", myTransport.MyBuilderFn)` to `init` in [register.go](https://github.com/getlantern/radiance/blob/main/transport/register.go) to enable it. `myTransportName` must match [protocol](https://github.com/getlantern/radiance/blob/main/config/config.go#L16) in the proxy config as this is what's used to configure the dialer.
+
 
 > [!NOTE]
 > You should not need to make any other modifications to `register.go` or modify any other file.
@@ -20,22 +21,6 @@ New transports/protocols can be added by implementing [transport.StreamDialer](h
 
 ## Run
 
-#### Retrieve proxy config
-A new config will be needed each time the IP is rotated.
-
-You need to be connected to `tailscale` (refer to lantern-cloud to setup and configure if needed).
-
-The following commands assume you are in the `lantern-cloud` root directory:
-Get an IP for one of the routes for `omanyte`. This is a shadowsocks test track. 
-```
-bin/lc routes list --track omanyte
-```
-then dump the config to a file as JSON (don't add the `--legacy` flag)
-```
-bin/lc route dump-config <ip> > ../radiance/config/proxy.conf
-```
-
-From the `radiance` directory, run 
 ```
 go run cmd/main.go -addr localhost:8080
 ```
@@ -43,7 +28,7 @@ go run cmd/main.go -addr localhost:8080
 ## TODO
 - [x] Create an Outline transport StreamDialer using a proxy config. (shadowsocks w/ multiplex)
 - [x] Connect to and route requests to backend proxy using a StreamDialer.
-- [ ] Retrieve proxy config from backend.
+- [x] Retrieve proxy config from backend.
 - [ ] Implement remaining protocols
 - [ ] Add socks5 support
 - [ ] Implement VPN TUN 
