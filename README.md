@@ -5,14 +5,15 @@ Radiance is a pilot PoC of Lantern core SDK (flashlight) utilizing the [outline-
 What's the "core" idea behind a lantern, and I guess a flashlight? _Light_, or synonymously, _radiance_.
 
 ## Current State
-`radiance` runs a local server that proxies requests to a remote Lantern proxy. Requests are proxied over a `transport.StreamDialer`, which uses a specific protocol to communicate with the remote proxy, i.e. shadowsocks. `radiance` will automatically fetch the proxy and protocol information and configure the dialer. Currently, not all protocols are supported.
+`radiance` runs a local server that proxies requests to a remote Lantern proxy. Requests are proxied over a `transport.StreamDialer`, which uses a specific protocol to communicate with the remote proxy, _i.e._ shadowsocks. `radiance` will automatically fetch the proxy and protocol information and configure the dialer. Currently, not all protocols are supported.
 
 ##### supported protocols
 - shadowsocks
 - multiplexing
 
 ### Add transports
-New transports/protocols can be added by implementing [transport.StreamDialer](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk@v0.0.17/transport#StreamDialer) and creating a [BuilderFn](https://github.com/getlantern/radiance/blob/main/transport/transport.go#L21). Create a new package in `transport` (_i.e._ `transport/myTransport`) and add the necessary code to run the transport here, including the `StreamDialer` and `BuilderFn`. Then add `registerDialerBuilder("myTransportName", myTransport.MyBuilderFn)` to `init` in [register.go](https://github.com/getlantern/radiance/blob/main/transport/register.go) to enable it. `myTransportName` must match [protocol](https://github.com/getlantern/radiance/blob/main/config/config.go#L16) in the proxy config as this is what's used to configure the dialer.
+New transports/protocols can be added by implementing [transport.StreamDialer](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk@v0.0.17/transport#StreamDialer) and creating a [BuilderFn](https://github.com/getlantern/radiance/blob/main/transport/transport.go#L21). Create a new package in `transport` (_e.g._ `transport/myTransport`) and add the necessary code to run the transport here, including the `StreamDialer` and `BuilderFn`. Then add `registerDialerBuilder("myTransportName", myTransport.MyBuilderFn)` to `init` in [register.go](https://github.com/getlantern/radiance/blob/main/transport/register.go) to enable it. `myTransportName` must match [protocol](https://github.com/getlantern/radiance/blob/main/config/config.go#L16) in the proxy config as this is what's used to configure the dialer.
+
 
 > [!NOTE]
 > You should not need to make any other modifications to `register.go` or modify any other file.
