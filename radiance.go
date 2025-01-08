@@ -8,14 +8,17 @@ package radiance
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/http"
 	"time"
 
 	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/transport"
+	"github.com/getlantern/radiance/vpn"
+)
+
+const (
+	VPN_Router   RouterType = "vpn"
+	Proxy_Router RouterType = "proxy"
 )
 
 var (
@@ -24,19 +27,32 @@ var (
 	configPollInterval = 10 * time.Minute
 )
 
+// RouterType represents the type of router to use for routing traffic.
+type RouterType string
+
+// router routes traffic over a local address to its destination. This can be directly or indirectly.
+type router interface {
+	Start(localAddr string) error
+	Close() error
+}
+
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
-	srv         *http.Server
 	confHandler *config.ConfigHandler
+	router      router
+	routerType  RouterType
 }
 
-// NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance() *Radiance {
-	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval)}
+// New creates a new Radiance instance that will route traffic over a VPN or a proxy server, routerType.
+func New(typ RouterType) *Radiance {
+	return &Radiance{
+		confHandler: config.NewConfigHandler(configPollInterval),
+		routerType:  typ,
+	}
 }
 
-// Run starts the Radiance proxy server on the specified address.
-func (r *Radiance) Run(addr string) error {
+// Run runs the Radiance instance on localAddr.
+func (r *Radiance) Run(localAddr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	conf, err := r.confHandler.GetConfig(ctx)
 	cancel()
@@ -44,34 +60,17 @@ func (r *Radiance) Run(addr string) error {
 		return err
 	}
 
-	dialer, err := transport.DialerFrom(conf)
+	switch r.routerType {
+	case VPN_Router:
+		r.router, err = vpn.New(conf)
+	case Proxy_Router:
+		r.router, err = newProxy(conf)
+	default:
+		return fmt.Errorf("unknown router type: %v", r.routerType)
+	}
 	if err != nil {
-		return fmt.Errorf("Could not create dialer: %w", err)
-	}
-	log.Debugf("Creating dialer with config: %+v", conf)
-
-	handler := proxyHandler{
-		addr:      conf.Addr,
-		authToken: conf.AuthToken,
-		dialer:    dialer,
-		client: http.Client{
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, conf.Addr)
-				},
-			},
-		},
-	}
-	r.srv = &http.Server{Handler: &handler}
-	return r.listenAndServe(addr)
-}
-
-func (r *Radiance) listenAndServe(addr string) error {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("Could not listen on %v: %w", addr, err)
+		return err
 	}
 
-	log.Debugf("Listening on %v", addr)
-	return r.srv.Serve(listener)
+	return r.router.Start(localAddr)
 }

@@ -2,15 +2,63 @@ package radiance
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
+	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
 
 	"github.com/getlantern/radiance/backend"
+
+	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/transport"
 )
 
 const authTokenHeader = "X-Lantern-Auth-Token"
+
+type proxy struct {
+	srv *http.Server
+}
+
+func newProxy(conf *config.Config) (*proxy, error) {
+	dialer, err := transport.DialerFrom(conf)
+	if err != nil {
+		return nil, fmt.Errorf("Could not create dialer: %w", err)
+	}
+
+	handler := proxyHandler{
+		addr:      conf.Addr,
+		authToken: conf.AuthToken,
+		dialer:    dialer,
+		client: http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.DialStream(ctx, conf.Addr)
+				},
+			},
+		},
+	}
+	return &proxy{
+		srv: &http.Server{Handler: &handler},
+	}, nil
+}
+
+func (p *proxy) Start(localAddr string) error {
+	log.Debugf("Starting proxy on %v", localAddr)
+	listener, err := net.Listen("tcp", localAddr)
+	if err != nil {
+		return fmt.Errorf("Could not listen on %v: %w", localAddr, err)
+	}
+
+	log.Debugf("Listening on %v", localAddr)
+	return p.srv.Serve(listener)
+}
+
+func (p *proxy) Close() error {
+	log.Debug("Stopping proxy")
+	return p.srv.Shutdown(context.Background())
+}
 
 // proxyHandler sends all requests over dialer to the proxy server. Requests are handled differently
 // based on whether they are CONNECT requests or not. CONNECT requests, which are usually https, will
@@ -21,7 +69,7 @@ type proxyHandler struct {
 	addr string
 	// authToken is the authentication token to send with each request to the proxy server.
 	authToken string
-	dialer    transport.StreamDialer
+	dialer    otransport.StreamDialer
 	// client is an http client that will be used to forward non-CONNECT requests to the proxy server.
 	client http.Client
 }
