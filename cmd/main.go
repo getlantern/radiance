@@ -14,7 +14,8 @@ var log = golog.LoggerFor("main")
 func main() {
 	addrFlag := flag.String("addr", "localhost:8080",
 		"The address the proxy should listen on as host:port when running in proxy mode. In VPN mode, "+
-			"this is the IP address that will be assigned to the TUN network interface. Example: '10.1.0.10'.",
+			"this will be the IP address that will be assigned to the TUN network interface. "+
+			"Example: '10.255.1.2'.",
 	)
 	asVPN := flag.Bool("vpn", false,
 		"Run as VPN client. Must run as sudo on Linux/MacOS or as admin on Windows. Windows users "+
