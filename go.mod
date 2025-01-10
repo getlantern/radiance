@@ -10,6 +10,7 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/stretchr/testify v1.9.0
 	github.com/xtaci/smux v1.5.31
+	go.uber.org/mock v0.5.0
 	google.golang.org/protobuf v1.35.1
 )
 
