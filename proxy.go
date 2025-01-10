@@ -55,7 +55,7 @@ func (p *proxy) Start(localAddr string) error {
 	return p.srv.Serve(listener)
 }
 
-func (p *proxy) Close() error {
+func (p *proxy) Stop() error {
 	log.Debug("Stopping proxy")
 	return p.srv.Shutdown(context.Background())
 }

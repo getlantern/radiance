@@ -33,7 +33,7 @@ type RouterType string
 // router routes traffic over a local address to its destination. This can be directly or indirectly.
 type router interface {
 	Start(localAddr string) error
-	Close() error
+	Stop() error
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.

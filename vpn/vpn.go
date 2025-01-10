@@ -29,6 +29,7 @@ type VPN struct {
 
 // TODO:
 // - set system settings for the VPN
+// - add tests
 
 // New creates a new VPN client.
 func New(conf *config.Config) (*VPN, error) {
@@ -62,6 +63,6 @@ func (vpn *VPN) Start(localAddr string) error {
 	return errors.Join(err, t2dErr)
 }
 
-func (vpn *VPN) Close() error {
+func (vpn *VPN) Stop() error {
 	return vpn.tun.Close()
 }
