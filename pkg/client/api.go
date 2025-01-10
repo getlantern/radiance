@@ -5,9 +5,9 @@ package client
 type VPNStatus string
 
 const (
-	ConnectedVPNStatus    = "connected"
-	DisconnectedVPNStatus = "disconnected"
-	ConnectingVPNStatus   = "connecting"
+	ConnectedVPNStatus    VPNStatus = "connected"
+	DisconnectedVPNStatus VPNStatus = "disconnected"
+	ConnectingVPNStatus   VPNStatus = "connecting"
 )
 
 type bandwidithStatistics struct {
