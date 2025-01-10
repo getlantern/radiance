@@ -28,11 +28,12 @@ var (
 type Radiance struct {
 	srv         *http.Server
 	confHandler *config.ConfigHandler
+	config      *config.Config
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
-	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval)}
+	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval), config: nil}
 }
 
 // Run starts the Radiance proxy server on the specified address.
@@ -43,6 +44,7 @@ func (r *Radiance) Run(addr string) error {
 	if err != nil {
 		return err
 	}
+	r.config = conf
 
 	dialer, err := transport.DialerFrom(conf)
 	if err != nil {
@@ -74,4 +76,13 @@ func (r *Radiance) listenAndServe(addr string) error {
 
 	log.Debugf("Listening on %v", addr)
 	return r.srv.Serve(listener)
+}
+
+// Shutdown stops the Radiance server.
+func (r *Radiance) Shutdown() error {
+	return r.srv.Shutdown(context.Background())
+}
+
+func (r *Radiance) GetConfig() *config.Config {
+	return r.config
 }
