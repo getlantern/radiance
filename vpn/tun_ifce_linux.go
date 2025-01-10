@@ -7,8 +7,8 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-// openTun creates a new TUN device with the given IP address.
-func openTun(ip string) (*water.Interface, error) {
+// openTun creates a new TUN device with the given IP address and gateway.
+func openTun(ip, gateway string) (*water.Interface, error) {
 	ifce, err := water.New(water.Config{
 		DeviceType: water.TUN,
 		PlatformSpecificParams: water.PlatformSpecificParams{

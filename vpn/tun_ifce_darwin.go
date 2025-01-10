@@ -7,8 +7,8 @@ import (
 	"github.com/songgao/water"
 )
 
-// openTun creates a new TUN device with the given IP address.
-func openTun(ip string) (*water.Interface, error) {
+// openTun creates a new TUN device with the given IP address and gateway.
+func openTun(ip, gateway string) (*water.Interface, error) {
 	ifce, err := water.New(water.Config{
 		DeviceType: water.TUN,
 	})
@@ -17,7 +17,7 @@ func openTun(ip string) (*water.Interface, error) {
 	}
 
 	// assign the IP address to the TUN interface and bring it up
-	if err := exec.Command("ifconfig", ifce.Name(), ip, "up").Run(); err != nil {
+	if err := exec.Command("ifconfig", ifce.Name(), ip, gateway, "up").Run(); err != nil {
 		ifce.Close()
 		return nil, fmt.Errorf("failed to set IP address on TUN interface %s: %w", ifce.Name(), err)
 	}

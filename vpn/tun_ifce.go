@@ -16,7 +16,13 @@ type tunIfce struct {
 
 // openTunIfce opens a TUN network interface and assigns it the specified IP address.
 func openTunIfce(ip string) (tun network.IPDevice, err error) {
-	ifce, err := openTun(ip)
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return nil, fmt.Errorf("invalid IP address: %s", ip)
+	}
+	gw := addr.To4()
+	gw[3]++ // Increment the last octet to get the gateway address
+	ifce, err := openTun(ip, gw.String())
 	if err != nil {
 		return nil, err
 	}
