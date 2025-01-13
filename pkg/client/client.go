@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -15,16 +16,16 @@ type proxyServer struct {
 	radiance    server
 }
 
-//go:generate mockgen -destination ./proxy_server_mock_test.go -source proxy_server.go -package client server
+//go:generate mockgen -destination ./client_mock_test.go -source client.go -package client server
 
 type server interface {
 	Run(addr string) error
 	Shutdown() error
-	GetConfig() *config.Config
+	GetConfig(ctx context.Context) (*config.Config, error)
 }
 
-// NewProxyServer creates a new proxy server instance.
-func NewProxyServer(laddr string) (*proxyServer, error) {
+// NewClient creates a new proxy server instance.
+func NewClient(laddr string) (*proxyServer, error) {
 	if laddr == "" {
 		return nil, fmt.Errorf("missing listen address parameter")
 	}
@@ -76,16 +77,20 @@ func (s *proxyServer) VPNStatus() VPNStatus {
 
 // ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 // If the VPN is disconnected, it returns nil.
-func (s *proxyServer) ActiveProxyLocation() *string {
-	config := s.radiance.GetConfig()
+func (s *proxyServer) ActiveProxyLocation(ctx context.Context) (*string, error) {
+	config, err := s.radiance.GetConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not retrieve config: %w", err)
+	}
+
 	if s.VPNStatus() == DisconnectedVPNStatus || config == nil {
-		return nil
+		return nil, fmt.Errorf("VPN is not connected")
 	}
 
 	if location := config.GetLocation(); location != nil {
-		return &location.City
+		return &location.City, nil
 	}
-	return nil
+	return nil, fmt.Errorf("could not retrieve location")
 }
 
 // BandwidthStatus retrieve the current bandwidth usage for use by data cap.

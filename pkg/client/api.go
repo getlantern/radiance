@@ -1,6 +1,8 @@
 // Package client provides an API for external applications to use and manage radiance VPN.
 package client
 
+import "context"
+
 // VPNStatus is a type used for representing possible VPN statuses
 type VPNStatus string
 
@@ -25,7 +27,7 @@ type APIManager interface {
 	VPNStatus() VPNStatus
 	// ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 	// If the VPN is disconnected, it returns nil.
-	ActiveProxyLocation() *string
+	ActiveProxyLocation(ctx context.Context) (*string, error)
 	// BandwidthStatus retrieve the current bandwidth usage for use by data cap.
 	// It returns a JSON string containing the data used and data cap in bytes.
 	BandwidthStatus() string

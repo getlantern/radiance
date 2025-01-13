@@ -9,7 +9,7 @@ import (
 	gomock "go.uber.org/mock/gomock"
 )
 
-func TestNewProxyServer(t *testing.T) {
+func TestNewClient(t *testing.T) {
 	var tests = []struct {
 		name            string
 		givenListenAddr string
@@ -38,7 +38,7 @@ func TestNewProxyServer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := NewProxyServer(tt.givenListenAddr)
+			s, err := NewClient(tt.givenListenAddr)
 			tt.assert(t, s, err)
 		})
 	}
