@@ -7,6 +7,7 @@ import (
 
 	"github.com/getlantern/radiance"
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/transport/consumption"
 )
 
 type proxyServer struct {
@@ -100,7 +101,7 @@ func (s *proxyServer) ActiveProxyLocation(ctx context.Context) (*string, error) 
 // BandwidthStatus retrieve the current bandwidth usage for use by data cap.
 // It returns a JSON string containing the data used and data cap in bytes.
 func (s *proxyServer) BandwidthStatus() string {
-	panic("not implemented") // TODO: Implement
+	return fmt.Sprintf(`{"dataUsedBytes": %d, "dataCapBytes": %d}`, consumption.DataRecv.Load()+consumption.DataSent.Load(), 0)
 }
 
 // SetSystemProxy configures the system proxy to route traffic through a specific proxy.

@@ -2,10 +2,12 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/transport/consumption"
 	"github.com/stretchr/testify/assert"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -260,4 +262,22 @@ func TestActiveProxyLocation(t *testing.T) {
 			tt.assert(t, s, location, err)
 		})
 	}
+}
+
+func TestBandwidthStatus(t *testing.T) {
+	s := &proxyServer{}
+	responseJSON := s.BandwidthStatus()
+	assert.NotEmpty(t, responseJSON)
+	var response bandwidithStatistics
+	err := json.Unmarshal([]byte(responseJSON), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), response.DataUsedBytes)
+	assert.Equal(t, int64(0), response.DataCapBytes)
+
+	consumption.DataRecv.Add(100)
+	responseJSON = s.BandwidthStatus()
+	err = json.Unmarshal([]byte(responseJSON), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(100), response.DataUsedBytes)
+	assert.Equal(t, int64(0), response.DataCapBytes)
 }
