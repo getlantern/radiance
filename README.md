@@ -42,3 +42,4 @@ go run cmd/main.go -addr localhost:8080
 - [ ] Add way to manage multiple proxies. MAB?
 - [ ] Switch from getlantern/golog to slog
 - [ ] Add PacketDialer (UDP) support
+- [ ] Add support for split tunneling, using [v2ray's routing rule syntax](https://www.v2ray.com/en/configuration/routing.html)
