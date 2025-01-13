@@ -78,13 +78,17 @@ func (s *proxyServer) VPNStatus() VPNStatus {
 // ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 // If the VPN is disconnected, it returns nil.
 func (s *proxyServer) ActiveProxyLocation(ctx context.Context) (*string, error) {
+	if s.VPNStatus() == DisconnectedVPNStatus {
+		return nil, fmt.Errorf("VPN is not connected")
+	}
+
 	config, err := s.radiance.GetConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not retrieve config: %w", err)
 	}
 
-	if s.VPNStatus() == DisconnectedVPNStatus || config == nil {
-		return nil, fmt.Errorf("VPN is not connected")
+	if config == nil {
+		return nil, fmt.Errorf("config is nil")
 	}
 
 	if location := config.GetLocation(); location != nil {

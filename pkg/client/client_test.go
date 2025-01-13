@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -192,10 +193,10 @@ func TestActiveProxyLocation(t *testing.T) {
 	var tests = []struct {
 		name   string
 		setup  func(*gomock.Controller) *proxyServer
-		assert func(*testing.T, *proxyServer, *string)
+		assert func(*testing.T, *proxyServer, *string, error)
 	}{
 		{
-			name: "it should return nil when VPN is disconnected or config is nil",
+			name: "it should return nil when VPN is disconnected and return an error",
 			setup: func(ctrl *gomock.Controller) *proxyServer {
 				server := NewMockserver(ctrl)
 				s := &proxyServer{
@@ -203,11 +204,28 @@ func TestActiveProxyLocation(t *testing.T) {
 					statusMutex: new(sync.Mutex),
 					status:      DisconnectedVPNStatus,
 				}
-				server.EXPECT().GetConfig().Return(nil)
 				return s
 			},
-			assert: func(t *testing.T, s *proxyServer, location *string) {
+			assert: func(t *testing.T, s *proxyServer, location *string, err error) {
 				assert.Nil(t, location)
+				assert.Error(t, err)
+			},
+		},
+		{
+			name: "it should return nil when failed to retrieve config",
+			setup: func(ctrl *gomock.Controller) *proxyServer {
+				server := NewMockserver(ctrl)
+				s := &proxyServer{
+					radiance:    server,
+					statusMutex: new(sync.Mutex),
+					status:      ConnectedVPNStatus,
+				}
+				server.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
+				return s
+			},
+			assert: func(t *testing.T, s *proxyServer, location *string, err error) {
+				assert.Nil(t, location)
+				assert.Error(t, err)
 			},
 		},
 		{
@@ -222,10 +240,11 @@ func TestActiveProxyLocation(t *testing.T) {
 				config := config.Config{
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
 				}
-				server.EXPECT().GetConfig().Return(&config)
+				server.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
 				return s
 			},
-			assert: func(t *testing.T, s *proxyServer, location *string) {
+			assert: func(t *testing.T, s *proxyServer, location *string, err error) {
+				assert.NoError(t, err)
 				assert.NotNil(t, location)
 				assert.Equal(t, expectedCity, *location)
 			},
@@ -237,8 +256,8 @@ func TestActiveProxyLocation(t *testing.T) {
 			defer ctrl.Finish()
 
 			s := tt.setup(ctrl)
-			location := s.ActiveProxyLocation()
-			tt.assert(t, s, location)
+			location, err := s.ActiveProxyLocation(context.Background())
+			tt.assert(t, s, location, err)
 		})
 	}
 }
