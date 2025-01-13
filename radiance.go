@@ -28,7 +28,6 @@ var (
 type Radiance struct {
 	srv         *http.Server
 	confHandler *config.ConfigHandler
-	config      *config.Config
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
@@ -44,7 +43,6 @@ func (r *Radiance) Run(addr string) error {
 	if err != nil {
 		return err
 	}
-	r.config = conf
 
 	dialer, err := transport.DialerFrom(conf)
 	if err != nil {
@@ -83,6 +81,6 @@ func (r *Radiance) Shutdown() error {
 	return r.srv.Shutdown(context.Background())
 }
 
-func (r *Radiance) GetConfig() *config.Config {
-	return r.config
+func (r *Radiance) GetConfig(ctx context.Context) (*config.Config, error) {
+	return r.confHandler.GetConfig(ctx)
 }
