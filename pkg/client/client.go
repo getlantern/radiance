@@ -101,7 +101,9 @@ func (s *proxyServer) ActiveProxyLocation(ctx context.Context) (*string, error) 
 // BandwidthStatus retrieve the current bandwidth usage for use by data cap.
 // It returns a JSON string containing the data used and data cap in bytes.
 func (s *proxyServer) BandwidthStatus() string {
-	return fmt.Sprintf(`{"dataUsedBytes": %d, "dataCapBytes": %d}`, consumption.DataRecv.Load()+consumption.DataSent.Load(), 0)
+	// dataCapBytes is not implemented yet, at flashlight this information is retrieved from the global config
+	dataCapBytes := 0
+	return fmt.Sprintf(`{"dataUsedBytes": %d, "dataCapBytes": %d}`, consumption.DataRecv.Load()+consumption.DataSent.Load(), dataCapBytes)
 }
 
 // SetSystemProxy configures the system proxy to route traffic through a specific proxy.
