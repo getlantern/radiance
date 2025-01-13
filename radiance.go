@@ -32,7 +32,7 @@ type Radiance struct {
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
-	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval), config: nil}
+	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval)}
 }
 
 // Run starts the Radiance proxy server on the specified address.
