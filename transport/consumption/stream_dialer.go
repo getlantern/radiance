@@ -20,6 +20,8 @@ var (
 	DataRecv = new(atomic.Uint64)
 )
 
+//go:generate mockgen -destination=./stream_dialer_mock_test.go -package=consumption github.com/Jigsaw-Code/outline-sdk/transport StreamDialer,StreamConn
+
 // StreamDialer is a wrapper around a StreamDialer that is used for registering data usage.
 type StreamDialer struct {
 	innerSD transport.StreamDialer
