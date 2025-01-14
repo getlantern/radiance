@@ -34,7 +34,7 @@ func bringUpTun(name, ip string) error {
 	if err != nil {
 		return fmt.Errorf("could not find TUN interface %s: %w", name, err)
 	}
-	addr, err := netlink.ParseAddr(ip + "/24")
+	addr, err := netlink.ParseAddr(ip + "/32")
 	if err != nil {
 		return fmt.Errorf("subnet IP address %s invalid: %w", ip, err)
 	}
