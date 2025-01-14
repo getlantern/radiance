@@ -14,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 
 	"github.com/Jigsaw-Code/outline-sdk/network"
 
+	"github.com/getlantern/golog"
+
 	"github.com/getlantern/radiance/config"
 )
+
+var log = golog.LoggerFor("vpn")
 
 // VPN is a VPN client.
 type VPN struct {
@@ -52,12 +55,12 @@ func (vpn *VPN) Start(localAddr string) error {
 	done := make(chan struct{})
 	go func() {
 		n, err := io.Copy(vpn.device, vpn.tun)
-		log.Printf("TUN -> Device: %d bytes, %v", n, err)
+		log.Debugf("TUN -> Device: %d bytes, %v", n, err)
 		t2dErr = err
 		close(done)
 	}()
 	n, err := io.Copy(vpn.tun, vpn.device)
-	log.Printf("Device -> TUN: %d bytes, %v", n, err)
+	log.Debugf("Device -> TUN: %d bytes, %v", n, err)
 	<-done
 
 	return errors.Join(err, t2dErr)

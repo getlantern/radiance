@@ -5,6 +5,7 @@ package vpn
 
 import (
 	"fmt"
+	"os/exec"
 
 	"github.com/songgao/water"
 )
@@ -21,6 +22,15 @@ func openTun(ip, gateway string) (*water.Interface, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create TUN Interface: %w", err)
+	}
+
+	// assign the IP and gateway to the TUN interface
+	if err := exec.Command(
+		"netsh", "interface", "ip", "set", "address", "name="+ifce.Name(),
+		"source=static", "addr="+ip, "mask=255.255.255.0", "gateway="+gateway,
+	).Run(); err != nil {
+		ifce.Close()
+		return nil, fmt.Errorf("failed to set IP address on TUN interface %s: %w", ifce.Name(), err)
 	}
 
 	return ifce, nil
