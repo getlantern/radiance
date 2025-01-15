@@ -30,10 +30,6 @@ type VPN struct {
 	tun    network.IPDevice
 }
 
-// TODO:
-// - set system settings for the VPN
-// - add tests
-
 // New creates a new VPN client.
 func New(conf *config.Config) (*VPN, error) {
 	device, err := newDevice(conf)
