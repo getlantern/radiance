@@ -46,3 +46,15 @@ func bringUpTun(name, ip string) error {
 	}
 	return nil
 }
+
+// closeTun closes the TUN interface.
+func closeTun(name string) error {
+	tunLink, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("could not find TUN interface %s: %w", name, err)
+	}
+	if err = netlink.LinkSetDown(tunLink); err != nil {
+		return fmt.Errorf("failed to bring down TUN interface %s: %w", name, err)
+	}
+	return netlink.LinkDel(tunLink)
+}

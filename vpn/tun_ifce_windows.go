@@ -35,3 +35,8 @@ func openTun(ip, gateway string) (*water.Interface, error) {
 
 	return ifce, nil
 }
+
+// closeTun closes the TUN interface.
+func closeTun(name string) error {
+	return exec.Command("netsh", "interface", "ip", "delete", "address", "name="+name, "addr=all").Run()
+}

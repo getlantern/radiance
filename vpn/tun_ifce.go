@@ -41,3 +41,10 @@ func openTunIfce(ip string) (tun network.IPDevice, err error) {
 func (t *tunIfce) MTU() int {
 	return t.ifce.MTU
 }
+
+func (t *tunIfce) Close() error {
+	if err := t.Interface.Close(); err != nil {
+		return fmt.Errorf("failed to close TUN interface %s: %w", t.Name(), err)
+	}
+	return closeTun(t.Name())
+}

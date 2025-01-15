@@ -66,6 +66,7 @@ func (vpn *VPN) Start(localAddr string) error {
 	return errors.Join(err, t2dErr)
 }
 
+// Stop stops the VPN client and closes the TUN interface.
 func (vpn *VPN) Stop() error {
 	return vpn.tun.Close()
 }

@@ -24,3 +24,8 @@ func openTun(ip, gateway string) (*water.Interface, error) {
 
 	return ifce, nil
 }
+
+// closeTun closes the TUN interface.
+func closeTun(name string) error {
+	return exec.Command("ifconfig", name, "down").Run()
+}
