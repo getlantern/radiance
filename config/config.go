@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	sync "sync"
 	"time"
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
+	"github.com/getlantern/kindling"
 )
 
 var (
@@ -47,7 +47,12 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 		stopC:     make(chan struct{}),
 		closeOnce: &sync.Once{},
 	}
-	ftr := newFetcher(&http.Client{Timeout: 10 * time.Second})
+	// TODO: Ideally we would know the user locale here on radiance startup.
+	k := kindling.NewKindling(
+		kindling.WithDomainFronting("https://media.githubusercontent.com/media/getlantern/fronted/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithProxyless("api.iantem.io"),
+	)
+	ftr := newFetcher(k.NewHTTPClient())
 	go ch.fetchLoop(ftr, pollInterval)
 	return ch
 }
