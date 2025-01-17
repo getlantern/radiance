@@ -20,8 +20,9 @@ import (
 // # Add routing rule (e.g., route all traffic through the VPN)
 // route add -net 0.0.0.0/1 tun0
 
-// startRouting sets up a VPN connection, creates the VPN service, and adds the necessary routing rules.
-func startRouting(ifceName, svrAddr, gateway string) error {
+// startRouting adds the necessary routing rules.
+func startRouting(ifceName, proxyAddr, ifceIP, gateway string) error {
+	log.Debugf("configuring routing for interface %s with gateway %s", ifceName, gateway)
 	err := exec.Command("route", "add", "-net", gateway, ifceName).Run()
 	if err != nil {
 		return fmt.Errorf("failed to add routing rule: %v", err)
@@ -30,8 +31,9 @@ func startRouting(ifceName, svrAddr, gateway string) error {
 	return nil
 }
 
-// stopRouting removes the routing rule and deletes the VPN service.
+// stopRouting removes the routing rules.
 func stopRouting(ifceName string, gateway string) error {
+	log.Debug("removing routing rules")
 	err := exec.Command("route", "delete", "-net", gateway, ifceName).Run()
 	if err != nil {
 		return fmt.Errorf("failed to remove routing rule: %v", err)

@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"errors"
 	"fmt"
 	"net"
 
@@ -24,25 +25,43 @@ type routingConfig struct {
 }
 
 // startRouting configures the routing table and IP rule to forward packets to the TUN interface.
-func startRouting(proxyAddr string, routeConf routingConfig) error {
-	err := configureRoutingTable(routeConf.tableID, routeConf.ifceName, routeConf.ifceGatewayCIDR, routeConf.ifceIP)
+func startRouting(ifceName, proxyAddr, ifceIP, gatewayCIDR string) error {
+	log.Debugf("configuring routing for interface %s with IP %s and gateway %s",
+		ifceName, ifceIP, gatewayCIDR,
+	)
+	err := configureRoutingTable(tableID, ifceName, ifceIP, gatewayCIDR)
 	if err != nil {
-		return fmt.Errorf("failed to configure routing table: %w", err)
+		err = fmt.Errorf("failed to configure routing table: %w", err)
+		log.Error(err)
+		return err
 	}
-	return configureIPRule(proxyAddr, routeConf.tableID, routeConf.tablePriority)
+	if err = addIPRule(proxyAddr, tableID, tablePriority); err != nil {
+		err = fmt.Errorf("failed to configure IP rule: %w", err)
+		log.Error(err)
+		return err
+	}
+	return nil
 }
 
 // stopRouting removes the routing table and IP rule that forwards packets to the TUN interface.
-func stopRouting(tableID int) error {
+func stopRouting(_, _ string) error {
+	log.Debug("removing routing rules")
 	if err := deleteRoutingTable(tableID); err != nil {
-		return fmt.Errorf("failed to delete routing table: %w", err)
+		err = fmt.Errorf("failed to delete routing table: %w", err)
+		log.Error(err)
+		return err
 	}
-	return deleteIPRule(tableID)
+	if err := deleteIPRule(tableID); err != nil {
+		err = fmt.Errorf("failed to delete IP rule: %w", err)
+		log.Error(err)
+		return err
+	}
+	return nil
 }
 
 // configureRoutingTable adds routes to the routing table, tableID, to forward packets to the TUN
 // interface, ifceName, with the gateway, gateway, and IP address, ifceIP.
-func configureRoutingTable(tableID int, ifceName, gateway, ifceIP string) error {
+func configureRoutingTable(tableID int, ifceName, ifceIP, gateway string) error {
 	ifce, err := netlink.LinkByName(ifceName)
 	if err != nil {
 		return fmt.Errorf("failed to find interface %s: %w", ifceName, err)
@@ -88,18 +107,24 @@ func deleteRoutingTable(tableID int) error {
 		return fmt.Errorf("failed to get routes in table %d: %v", tableID, err)
 	}
 
+	errs := []error{}
 	for _, route := range routes {
+		log.Debugf("Deleting route: %v", route)
 		if err := netlink.RouteDel(&route); err != nil {
-			return fmt.Errorf("failed to delete route %+v: %w", route, err)
+			errs = append(errs, fmt.Errorf("%v: %w", route, err))
 		}
+	}
+	err = errors.Join(errs...)
+	if err != nil {
+		return fmt.Errorf("failed to delete routes: %w", err)
 	}
 
 	log.Debugf("Deleted routing table: %v", tableID)
 	return nil
 }
 
-// configureIPRule adds an IP rule to forward packets to the TUN interface.
-func configureIPRule(dstIP string, table, priority int) error {
+// addIPRule adds an IP rule to forward packets to the TUN interface.
+func addIPRule(dstIP string, table, priority int) error {
 	dst, err := netlink.ParseIPNet(dstIP)
 	if err != nil {
 		return fmt.Errorf("invalid IP address %s: %w", dstIP, err)

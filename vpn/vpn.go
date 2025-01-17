@@ -11,58 +11,83 @@ Windows users must have an OpenVPN client installed.
 package vpn
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
-
-	"github.com/Jigsaw-Code/outline-sdk/network"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/config"
 )
 
-var log = golog.LoggerFor("vpn")
+var (
+	log = golog.LoggerFor("vpn")
 
-// VPN is a VPN client.
-type VPN struct {
-	device *device
-	tun    network.IPDevice
+	clientMu sync.Mutex
+	client   *vpnClient
+)
+
+// vpnClient is a vpn client. It's also a Singleton
+type vpnClient struct {
+	tunnel        *tunnel
+	tunConfig     TunConfig
+	configHandler *config.ConfigHandler
+
+	started atomic.Bool
 }
 
-// New creates a new VPN client.
-func New(conf *config.Config) (*VPN, error) {
-	device, err := newDevice(conf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ip device: %w", err)
+func NewVPNClient(conf TunConfig) (*vpnClient, error) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if client != nil {
+		return client, nil
 	}
-	return &VPN{device: device}, nil
+	log.Debug("initializing VPN client")
+	client = &vpnClient{
+		configHandler: config.NewConfigHandler(2 * time.Minute),
+		tunConfig:     conf,
+		started:       atomic.Bool{},
+	}
+	return client, nil
 }
 
-// Start starts the VPN client on localAddr. It blocks until the VPN client is closed.
-func (vpn *VPN) Start(localAddr string) error {
-	tun, err := openTunIfce(localAddr)
-	if err != nil {
-		return fmt.Errorf("failed to create tun interface: %w", err)
+// Start starts the VPN client on localAddr and configures routing.
+func (c *vpnClient) Start() (err error) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if c.started.Load() {
+		return fmt.Errorf("VPN client already started")
 	}
-	vpn.tun = tun
 
-	var t2dErr error
-	done := make(chan struct{})
-	go func() {
-		n, err := io.Copy(vpn.device, vpn.tun)
-		log.Debugf("TUN -> Device: %d bytes, %v", n, err)
-		t2dErr = err
-		close(done)
-	}()
-	n, err := io.Copy(vpn.tun, vpn.device)
-	log.Debugf("Device -> TUN: %d bytes, %v", n, err)
-	<-done
+	log.Debugf("starting VPN client with local address: %s", c.tunConfig.Addr)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	proxyConf, err := c.configHandler.GetConfig(ctx)
+	if err != nil {
+		return errors.New("failed to get config")
+	}
 
-	return errors.Join(err, t2dErr)
+	tun, err := newTunnel(c.tunConfig, proxyConf)
+	if err != nil {
+		return fmt.Errorf("failed to create tunnel: %w", err)
+	}
+
+	c.tunnel = tun
+	go tun.start()
+	log.Debug("client started")
+	c.started.Store(true)
+	return nil
 }
 
 // Stop stops the VPN client and closes the TUN interface.
-func (vpn *VPN) Stop() error {
-	return vpn.tun.Close()
+func (c *vpnClient) Stop() error {
+	log.Debug("stopping client")
+	return c.tunnel.close()
+}
+
+func (c *vpnClient) IsConnected() bool {
+	return c.tunnel.connected.Load()
 }
