@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/getlantern/radiance/config"
 	"github.com/stretchr/testify/assert"
@@ -11,11 +12,9 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
-	dataCap := uint64(1024)
 	var tests = []struct {
 		name            string
 		givenListenAddr string
-		givenDataCap    uint64
 		assert          func(*testing.T, *proxyServer, error)
 	}{
 		{
@@ -29,7 +28,6 @@ func TestNewClient(t *testing.T) {
 		{
 			name:            "it should succeed when providing a valid listen address",
 			givenListenAddr: "http://localhost:9999",
-			givenDataCap:    dataCap,
 			assert: func(t *testing.T, s *proxyServer, err error) {
 				assert.NoError(t, err)
 				assert.NotNil(t, s)
@@ -37,13 +35,13 @@ func TestNewClient(t *testing.T) {
 				assert.NotEmpty(t, s.status)
 				assert.NotNil(t, s.statusMutex)
 				assert.NotNil(t, s.radiance)
-				assert.Equal(t, dataCap, s.dataCapInBytes)
+				assert.NotNil(t, s.stopChan)
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := NewClient(tt.givenListenAddr, tt.givenDataCap)
+			s, err := NewClient(tt.givenListenAddr)
 			tt.assert(t, s, err)
 		})
 	}
@@ -155,8 +153,13 @@ func TestStopVPN(t *testing.T) {
 					radiance:    server,
 					statusMutex: new(sync.Mutex),
 					status:      ConnectedVPNStatus,
+					stopChan:    make(chan struct{}),
 				}
 				server.EXPECT().Shutdown().Return(nil)
+				go func() {
+					_, ok := <-s.stopChan
+					assert.False(t, ok, "stopChan should be closed")
+				}()
 				return s
 			},
 			assert: func(t *testing.T, s *proxyServer, err error) {
@@ -264,4 +267,59 @@ func TestActiveProxyLocation(t *testing.T) {
 			tt.assert(t, s, location, err)
 		})
 	}
+}
+
+func TestProxyStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	expectedCity := "New York"
+	server := NewMockserver(ctrl)
+	config := config.Config{
+		Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
+	}
+	server.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
+
+	s := &proxyServer{
+		statusMutex: new(sync.Mutex),
+		status:      DisconnectedVPNStatus,
+		stopChan:    make(chan struct{}),
+		radiance:    server,
+	}
+	pollInterval := 1 * time.Millisecond
+	var statusChan <-chan ProxyStatus
+	t.Run("it should return a not connected status", func(t *testing.T) {
+		statusChan = s.ProxyStatus(pollInterval)
+		assert.NotNil(t, statusChan)
+		status, ok := <-statusChan
+		assert.True(t, ok)
+		assert.False(t, status.Connected)
+		assert.Empty(t, status.Location)
+	})
+
+	t.Run("it should return the proxy status when VPN is connected", func(t *testing.T) {
+		s.setStatus(ConnectedVPNStatus)
+		status, ok := <-statusChan
+		assert.True(t, ok)
+		assert.True(t, status.Connected)
+		assert.Equal(t, expectedCity, status.Location)
+	})
+
+	t.Run("it should return the proxy status when VPN is disconnected", func(t *testing.T) {
+		s.setStatus(DisconnectedVPNStatus)
+		status, ok := <-statusChan
+		assert.True(t, ok)
+		assert.False(t, status.Connected)
+		assert.Empty(t, status.Location)
+	})
+
+	t.Run("it should close the channel when stopChan is closed", func(t *testing.T) {
+		close(s.stopChan)
+		_, ok := <-statusChan
+		assert.False(t, ok)
+
+		secondStatusChan := s.ProxyStatus(pollInterval)
+		_, ok = <-secondStatusChan
+		assert.False(t, ok)
+	})
 }
