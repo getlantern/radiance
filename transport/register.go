@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"github.com/getlantern/radiance/transport/consumption"
 	"github.com/getlantern/radiance/transport/logger"
 	"github.com/getlantern/radiance/transport/multiplex"
 	"github.com/getlantern/radiance/transport/shadowsocks"
@@ -12,5 +11,4 @@ func init() {
 	registerDialerBuilder("logger", logger.NewStreamDialer)
 	registerDialerBuilder("multiplex", multiplex.NewStreamDialer)
 	registerDialerBuilder("shadowsocks", shadowsocks.NewStreamDialer)
-	registerDialerBuilder("consumption", consumption.NewStreamDialer)
 }

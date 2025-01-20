@@ -39,7 +39,6 @@ func DialerFrom(config *config.Config) (transport.StreamDialer, error) {
 		return nil, fmt.Errorf("Failed to create %s dialer: %w", config.Protocol, err)
 	}
 
-	dialer, _ = dialerBuilders["consumption"](dialer, config)
 	dialer, _ = dialerBuilders["multiplex"](dialer, config)
 	// dialer, _ = logger.NewStreamDialer(dialer, config)
 	return dialer, nil

@@ -2,20 +2,20 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"testing"
 
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/transport/consumption"
 	"github.com/stretchr/testify/assert"
 	gomock "go.uber.org/mock/gomock"
 )
 
 func TestNewClient(t *testing.T) {
+	dataCap := uint64(1024)
 	var tests = []struct {
 		name            string
 		givenListenAddr string
+		givenDataCap    uint64
 		assert          func(*testing.T, *proxyServer, error)
 	}{
 		{
@@ -29,6 +29,7 @@ func TestNewClient(t *testing.T) {
 		{
 			name:            "it should succeed when providing a valid listen address",
 			givenListenAddr: "http://localhost:9999",
+			givenDataCap:    dataCap,
 			assert: func(t *testing.T, s *proxyServer, err error) {
 				assert.NoError(t, err)
 				assert.NotNil(t, s)
@@ -36,12 +37,13 @@ func TestNewClient(t *testing.T) {
 				assert.NotEmpty(t, s.status)
 				assert.NotNil(t, s.statusMutex)
 				assert.NotNil(t, s.radiance)
+				assert.Equal(t, dataCap, s.dataCapInBytes)
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := NewClient(tt.givenListenAddr)
+			s, err := NewClient(tt.givenListenAddr, tt.givenDataCap)
 			tt.assert(t, s, err)
 		})
 	}
@@ -262,22 +264,4 @@ func TestActiveProxyLocation(t *testing.T) {
 			tt.assert(t, s, location, err)
 		})
 	}
-}
-
-func TestBandwidthStatus(t *testing.T) {
-	s := &proxyServer{}
-	responseJSON := s.BandwidthStatus()
-	assert.NotEmpty(t, responseJSON)
-	var response bandwidithStatistics
-	err := json.Unmarshal([]byte(responseJSON), &response)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(0), response.DataUsedBytes)
-	assert.Equal(t, int64(0), response.DataCapBytes)
-
-	consumption.DataRecv.Add(100)
-	responseJSON = s.BandwidthStatus()
-	err = json.Unmarshal([]byte(responseJSON), &response)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(100), response.DataUsedBytes)
-	assert.Equal(t, int64(0), response.DataCapBytes)
 }

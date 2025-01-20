@@ -7,14 +7,14 @@ import (
 
 	"github.com/getlantern/radiance"
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/transport/consumption"
 )
 
 type proxyServer struct {
-	listenAddr  string
-	status      VPNStatus
-	statusMutex sync.Locker
-	radiance    server
+	listenAddr     string
+	status         VPNStatus
+	statusMutex    sync.Locker
+	radiance       server
+	dataCapInBytes uint64
 }
 
 //go:generate mockgen -destination ./client_mock_test.go -source client.go -package client server
@@ -26,16 +26,17 @@ type server interface {
 }
 
 // NewClient creates a new proxy server instance.
-func NewClient(laddr string) (*proxyServer, error) {
+func NewClient(laddr string, dataCapInBytes uint64) (*proxyServer, error) {
 	if laddr == "" {
 		return nil, fmt.Errorf("missing listen address parameter")
 	}
 
 	return &proxyServer{
-		listenAddr:  laddr,
-		radiance:    radiance.NewRadiance(),
-		status:      DisconnectedVPNStatus,
-		statusMutex: new(sync.Mutex),
+		listenAddr:     laddr,
+		radiance:       radiance.NewRadiance(),
+		status:         DisconnectedVPNStatus,
+		statusMutex:    new(sync.Mutex),
+		dataCapInBytes: dataCapInBytes,
 	}, nil
 }
 
@@ -96,14 +97,6 @@ func (s *proxyServer) ActiveProxyLocation(ctx context.Context) (*string, error) 
 		return &location.City, nil
 	}
 	return nil, fmt.Errorf("could not retrieve location")
-}
-
-// BandwidthStatus retrieve the current bandwidth usage for use by data cap.
-// It returns a JSON string containing the data used and data cap in bytes.
-func (s *proxyServer) BandwidthStatus() string {
-	// dataCapBytes is not implemented yet, at flashlight this information is retrieved from the global config
-	dataCapBytes := 0
-	return fmt.Sprintf(`{"dataUsedBytes": %d, "dataCapBytes": %d}`, consumption.DataRecv.Load()+consumption.DataSent.Load(), dataCapBytes)
 }
 
 // SetSystemProxy configures the system proxy to route traffic through a specific proxy.
