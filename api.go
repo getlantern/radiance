@@ -1,7 +1,8 @@
-// Package client provides an API for external applications to use and manage radiance VPN.
-package client
+package radiance
 
-import "context"
+import (
+	"context"
+)
 
 // VPNStatus is a type used for representing possible VPN statuses
 type VPNStatus string
@@ -22,10 +23,10 @@ type ProxyStatus struct {
 
 // APIManager set the minimal functionalities an client must provide for using radiance
 type APIManager interface {
-	// StartVPN selects a proxy internally and start the VPN.
-	StartVPN() error
-	// StopVPN stops the VPN and closes the TUN device.
-	StopVPN() error
+	// Run starts the Radiance proxy server on the specified address.
+	Run(addr string) error
+	// Shutdown stops the Radiance server.
+	Shutdown(ctx context.Context) error
 	// VPNStatus checks the current VPN status
 	VPNStatus() VPNStatus
 	// ActiveProxyLocation returns the proxy server's location if the VPN is connected.
@@ -34,8 +35,4 @@ type APIManager interface {
 	// ProxyStatus provides information about the current proxy status like the proxy's
 	// location or whether the proxy is connected or not.
 	ProxyStatus() <-chan ProxyStatus
-	// SetSystemProxy configures the system proxy to route traffic through a specific proxy.
-	SetSystemProxy(serverAddr string, port int) error
-	// ClearSystemProxy reset the system proxy settings to their default (no proxy).
-	ClearSystemProxy() error
 }

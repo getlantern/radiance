@@ -6,10 +6,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
+	"github.com/getlantern/radiance/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestHandleConnect(t *testing.T) {
@@ -120,4 +125,325 @@ func (msc *mockStreamConn) Read(p []byte) (n int, err error) {
 func (msc *mockStreamConn) Write(p []byte) (n int, err error) {
 	// log.Debugf("%v conn: writing\n%s", msc.name, p)
 	return msc.innerConn.Write(p)
+}
+
+func TestNewRadiance(t *testing.T) {
+	t.Run("it should return a new Radiance instance", func(t *testing.T) {
+		r := NewRadiance()
+		assert.NotNil(t, r)
+		assert.NotNil(t, r.confHandler)
+		assert.Nil(t, r.srv)
+		assert.NotEmpty(t, r.status)
+		assert.NotNil(t, r.statusMutex)
+		assert.NotNil(t, r.stopChan)
+	})
+}
+
+func TestStartVPN(t *testing.T) {
+	var tests = []struct {
+		name      string
+		setup     func(*gomock.Controller) *Radiance
+		givenAddr string
+		assert    func(*testing.T, *Radiance, error)
+	}{
+		{
+			name: "it should return an error when failed to get config",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
+				r := &Radiance{
+					confHandler: configHandler,
+					statusMutex: new(sync.Mutex),
+					status:      DisconnectedVPNStatus,
+				}
+				configHandler.EXPECT().GetConfig(gomock.Any()).DoAndReturn(func(ctx context.Context) (*config.Config, error) {
+					// asserting if status changed to connecting
+					assert.Equal(t, ConnectingVPNStatus, r.VPNStatus())
+					return nil, assert.AnError
+				})
+
+				return r
+			},
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+			},
+		},
+		{
+			name: "it should return an error when providing an invalid config",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
+				r := &Radiance{
+					confHandler: configHandler,
+					statusMutex: new(sync.Mutex),
+					status:      DisconnectedVPNStatus,
+				}
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config.Config{}, nil)
+
+				return r
+			},
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+			},
+		},
+		{
+			name: "it should succeed when providing valid config and address",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
+				r := &Radiance{
+					confHandler: configHandler,
+					statusMutex: new(sync.Mutex),
+					status:      DisconnectedVPNStatus,
+				}
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config.Config{Protocol: "logger"}, nil)
+
+				return r
+			},
+			givenAddr: "127.0.0.1:6666",
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
+				require.NoError(t, r.srv.Shutdown(context.Background()))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			r := tt.setup(ctrl)
+			errChan := make(chan error)
+			go func() {
+				errChan <- r.Run(tt.givenAddr)
+				close(errChan)
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			select {
+			case err := <-errChan:
+				tt.assert(t, r, err)
+			case <-ctx.Done():
+				// the server probably started listening successfully and we can assert and stop running
+				tt.assert(t, r, nil)
+			}
+		})
+	}
+}
+
+func TestStopVPN(t *testing.T) {
+	var tests = []struct {
+		name   string
+		setup  func(*gomock.Controller) *Radiance
+		assert func(*testing.T, *Radiance, error)
+	}{
+		{
+			name: "it should return nil when VPN is disconnected",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				return &Radiance{
+					statusMutex: new(sync.Mutex),
+					status:      DisconnectedVPNStatus,
+				}
+			},
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+			},
+		},
+		{
+			name: "it should return an error when failed to shutdown http server",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				server := NewMockhttpServer(ctrl)
+				r := &Radiance{
+					srv:         server,
+					statusMutex: new(sync.Mutex),
+					status:      ConnectedVPNStatus,
+				}
+				server.EXPECT().Shutdown(gomock.Any()).Return(assert.AnError)
+				return r
+			},
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
+			},
+		},
+		{
+			name: "it should succeed when stopping radiance",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				server := NewMockhttpServer(ctrl)
+				configHandler := NewMockconfigHandler(ctrl)
+				r := &Radiance{
+					srv:         server,
+					confHandler: configHandler,
+					statusMutex: new(sync.Mutex),
+					status:      ConnectedVPNStatus,
+					stopChan:    make(chan struct{}),
+				}
+				server.EXPECT().Shutdown(gomock.Any()).Return(nil).Times(1)
+				configHandler.EXPECT().Stop().Times(1)
+				go func() {
+					_, ok := <-r.stopChan
+					assert.False(t, ok, "stopChan should be closed")
+				}()
+				return r
+			},
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+			},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ctx := context.Background()
+			r := tt.setup(ctrl)
+			err := r.Shutdown(ctx)
+			tt.assert(t, r, err)
+		})
+	}
+}
+
+func TestVPNStatus(t *testing.T) {
+	r := &Radiance{
+		statusMutex: new(sync.Mutex),
+		status:      ConnectedVPNStatus,
+	}
+	assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
+
+	r.setStatus(DisconnectedVPNStatus)
+	assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+
+	r.setStatus(ConnectingVPNStatus)
+	assert.Equal(t, ConnectingVPNStatus, r.VPNStatus())
+}
+
+func TestActiveProxyLocation(t *testing.T) {
+	expectedCity := "New York"
+	var tests = []struct {
+		name   string
+		setup  func(*gomock.Controller) *Radiance
+		assert func(*testing.T, *string, error)
+	}{
+		{
+			name: "it should return nil when VPN is disconnected and return an error",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				r := &Radiance{
+					statusMutex: new(sync.Mutex),
+					status:      DisconnectedVPNStatus,
+				}
+				return r
+			},
+			assert: func(t *testing.T, location *string, err error) {
+				assert.Nil(t, location)
+				assert.Error(t, err)
+			},
+		},
+		{
+			name: "it should return nil when failed to retrieve config",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
+				r := &Radiance{
+					confHandler: configHandler,
+					statusMutex: new(sync.Mutex),
+					status:      ConnectedVPNStatus,
+				}
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
+				return r
+			},
+			assert: func(t *testing.T, location *string, err error) {
+				assert.Nil(t, location)
+				assert.Error(t, err)
+			},
+		},
+		{
+			name: "it should return the location when VPN is connected",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
+				r := &Radiance{
+					confHandler: configHandler,
+					statusMutex: new(sync.Mutex),
+					status:      ConnectedVPNStatus,
+				}
+				config := config.Config{
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
+				}
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
+				return r
+			},
+			assert: func(t *testing.T, location *string, err error) {
+				assert.NoError(t, err)
+				assert.NotNil(t, location)
+				assert.Equal(t, expectedCity, *location)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			r := tt.setup(ctrl)
+			location, err := r.ActiveProxyLocation(context.Background())
+			tt.assert(t, location, err)
+		})
+	}
+}
+
+func TestProxyStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	expectedCity := "New York"
+	configHandler := NewMockconfigHandler(ctrl)
+	config := config.Config{
+		Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
+	}
+	configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
+
+	r := &Radiance{
+		statusMutex: new(sync.Mutex),
+		status:      DisconnectedVPNStatus,
+		stopChan:    make(chan struct{}),
+		confHandler: configHandler,
+	}
+	pollInterval := 1 * time.Millisecond
+	var statusChan <-chan ProxyStatus
+	t.Run("it should return a not connected status", func(t *testing.T) {
+		statusChan = r.ProxyStatus(pollInterval)
+		assert.NotNil(t, statusChan)
+		status, ok := <-statusChan
+		assert.True(t, ok)
+		assert.False(t, status.Connected)
+		assert.Empty(t, status.Location)
+	})
+
+	t.Run("it should return the proxy status when VPN is connected", func(t *testing.T) {
+		r.setStatus(ConnectedVPNStatus)
+		status, ok := <-statusChan
+		assert.True(t, ok)
+		assert.True(t, status.Connected)
+		assert.Equal(t, expectedCity, status.Location)
+	})
+
+	t.Run("it should return the proxy status when VPN is disconnected", func(t *testing.T) {
+		r.setStatus(DisconnectedVPNStatus)
+		status, ok := <-statusChan
+		assert.True(t, ok)
+		assert.False(t, status.Connected)
+		assert.Empty(t, status.Location)
+	})
+
+	t.Run("it should close the channel when stopChan is closed", func(t *testing.T) {
+		close(r.stopChan)
+		_, ok := <-statusChan
+		assert.False(t, ok)
+
+		secondStatusChan := r.ProxyStatus(pollInterval)
+		_, ok = <-secondStatusChan
+		assert.False(t, ok)
+	})
 }
