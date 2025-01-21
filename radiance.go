@@ -112,6 +112,9 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 	if r.VPNStatus() == DisconnectedVPNStatus {
 		return nil
 	}
+	if r.srv == nil {
+		return fmt.Errorf("server is nil")
+	}
 	if err := r.srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}

@@ -251,6 +251,19 @@ func TestStopVPN(t *testing.T) {
 			},
 		},
 		{
+			name: "it should return an error when http server is nil",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				return &Radiance{
+					statusMutex: new(sync.Mutex),
+					status:      ConnectedVPNStatus,
+				}
+			},
+			assert: func(t *testing.T, r *Radiance, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
+			},
+		},
+		{
 			name: "it should return an error when failed to shutdown http server",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				server := NewMockhttpServer(ctrl)
