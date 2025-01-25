@@ -4,13 +4,13 @@ import (
 	"context"
 )
 
-// VPNStatus is a type used for representing possible VPN statuses
-type VPNStatus string
+// TUNStatus is a type used for representing the state of the TUN device and routing configuration.
+type TUNStatus string
 
 const (
-	ConnectedVPNStatus    VPNStatus = "connected"
-	DisconnectedVPNStatus VPNStatus = "disconnected"
-	ConnectingVPNStatus   VPNStatus = "connecting"
+	ConnectedTUNStatus    TUNStatus = "connected"
+	DisconnectedTUNStatus TUNStatus = "disconnected"
+	ConnectingTUNStatus   TUNStatus = "connecting"
 )
 
 // ProxyStatus provide
@@ -27,8 +27,9 @@ type APIManager interface {
 	Run(addr string) error
 	// Shutdown stops the Radiance server.
 	Shutdown(ctx context.Context) error
-	// VPNStatus checks the current VPN status
-	VPNStatus() VPNStatus
+	// TUNStatus returns the current status of the TUN device and routing configuration,
+	// indicating whether the local VPN is active, disconnected, or in the process of connecting.
+	TUNStatus() TUNStatus
 	// ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 	// If the VPN is disconnected, it returns nil.
 	ActiveProxyLocation(ctx context.Context) (*string, error)
