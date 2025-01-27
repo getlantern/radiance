@@ -133,7 +133,8 @@ func TestNewRadiance(t *testing.T) {
 		assert.NotNil(t, r)
 		assert.NotNil(t, r.confHandler)
 		assert.Nil(t, r.srv)
-		assert.NotEmpty(t, r.status)
+		assert.False(t, r.connected)
+		assert.NotEmpty(t, r.tunStatus)
 		assert.NotNil(t, r.statusMutex)
 		assert.NotNil(t, r.stopChan)
 	})
@@ -153,19 +154,16 @@ func TestStartVPN(t *testing.T) {
 				r := &Radiance{
 					confHandler: configHandler,
 					statusMutex: new(sync.Mutex),
-					status:      DisconnectedVPNStatus,
+					tunStatus:   DisconnectedTUNStatus,
 				}
-				configHandler.EXPECT().GetConfig(gomock.Any()).DoAndReturn(func(ctx context.Context) (*config.Config, error) {
-					// asserting if status changed to connecting
-					assert.Equal(t, ConnectingVPNStatus, r.VPNStatus())
-					return nil, assert.AnError
-				})
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
 
 				return r
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.Error(t, err)
-				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+				assert.False(t, r.connectionStatus())
+				assert.Equal(t, DisconnectedTUNStatus, r.VPNStatus())
 			},
 		},
 		{
@@ -175,7 +173,7 @@ func TestStartVPN(t *testing.T) {
 				r := &Radiance{
 					confHandler: configHandler,
 					statusMutex: new(sync.Mutex),
-					status:      DisconnectedVPNStatus,
+					tunStatus:   DisconnectedTUNStatus,
 				}
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config.Config{}, nil)
 
@@ -183,7 +181,8 @@ func TestStartVPN(t *testing.T) {
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.Error(t, err)
-				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+				assert.False(t, r.connectionStatus())
+				assert.Equal(t, DisconnectedTUNStatus, r.VPNStatus())
 			},
 		},
 		{
@@ -193,7 +192,7 @@ func TestStartVPN(t *testing.T) {
 				r := &Radiance{
 					confHandler: configHandler,
 					statusMutex: new(sync.Mutex),
-					status:      DisconnectedVPNStatus,
+					tunStatus:   DisconnectedTUNStatus,
 				}
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config.Config{Protocol: "logger"}, nil)
 
@@ -202,7 +201,9 @@ func TestStartVPN(t *testing.T) {
 			givenAddr: "127.0.0.1:6666",
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
+				assert.True(t, r.connectionStatus())
+				// TODO: update assert when using TUN
+				assert.Equal(t, DisconnectedTUNStatus, r.VPNStatus())
 				require.NoError(t, r.srv.Shutdown(context.Background()))
 			},
 		},
@@ -242,12 +243,10 @@ func TestStopVPN(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				return &Radiance{
 					statusMutex: new(sync.Mutex),
-					status:      DisconnectedVPNStatus,
 				}
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
 			},
 		},
 		{
@@ -255,12 +254,11 @@ func TestStopVPN(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				return &Radiance{
 					statusMutex: new(sync.Mutex),
-					status:      ConnectedVPNStatus,
+					connected:   true,
 				}
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.Error(t, err)
-				assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
 			},
 		},
 		{
@@ -270,14 +268,13 @@ func TestStopVPN(t *testing.T) {
 				r := &Radiance{
 					srv:         server,
 					statusMutex: new(sync.Mutex),
-					status:      ConnectedVPNStatus,
+					connected:   true,
 				}
 				server.EXPECT().Shutdown(gomock.Any()).Return(assert.AnError)
 				return r
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.Error(t, err)
-				assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
 			},
 		},
 		{
@@ -289,7 +286,7 @@ func TestStopVPN(t *testing.T) {
 					srv:         server,
 					confHandler: configHandler,
 					statusMutex: new(sync.Mutex),
-					status:      ConnectedVPNStatus,
+					connected:   true,
 					stopChan:    make(chan struct{}),
 				}
 				server.EXPECT().Shutdown(gomock.Any()).Return(nil).Times(1)
@@ -302,7 +299,7 @@ func TestStopVPN(t *testing.T) {
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.NoError(t, err)
-				assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
+				assert.False(t, r.connectionStatus())
 			},
 		},
 	}
@@ -323,15 +320,14 @@ func TestStopVPN(t *testing.T) {
 func TestVPNStatus(t *testing.T) {
 	r := &Radiance{
 		statusMutex: new(sync.Mutex),
-		status:      ConnectedVPNStatus,
+		tunStatus:   DisconnectedTUNStatus,
 	}
-	assert.Equal(t, ConnectedVPNStatus, r.VPNStatus())
+	assert.Equal(t, DisconnectedTUNStatus, r.VPNStatus())
+	r.setStatus(false, ConnectedTUNStatus)
+	assert.Equal(t, ConnectedTUNStatus, r.VPNStatus())
 
-	r.setStatus(DisconnectedVPNStatus)
-	assert.Equal(t, DisconnectedVPNStatus, r.VPNStatus())
-
-	r.setStatus(ConnectingVPNStatus)
-	assert.Equal(t, ConnectingVPNStatus, r.VPNStatus())
+	r.setStatus(false, ConnectingTUNStatus)
+	assert.Equal(t, ConnectingTUNStatus, r.VPNStatus())
 }
 
 func TestActiveProxyLocation(t *testing.T) {
@@ -346,7 +342,6 @@ func TestActiveProxyLocation(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r := &Radiance{
 					statusMutex: new(sync.Mutex),
-					status:      DisconnectedVPNStatus,
 				}
 				return r
 			},
@@ -362,7 +357,7 @@ func TestActiveProxyLocation(t *testing.T) {
 				r := &Radiance{
 					confHandler: configHandler,
 					statusMutex: new(sync.Mutex),
-					status:      ConnectedVPNStatus,
+					connected:   true,
 				}
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
 				return r
@@ -379,7 +374,7 @@ func TestActiveProxyLocation(t *testing.T) {
 				r := &Radiance{
 					confHandler: configHandler,
 					statusMutex: new(sync.Mutex),
-					status:      ConnectedVPNStatus,
+					connected:   true,
 				}
 				config := config.Config{
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
@@ -419,7 +414,7 @@ func TestProxyStatus(t *testing.T) {
 
 	r := &Radiance{
 		statusMutex: new(sync.Mutex),
-		status:      DisconnectedVPNStatus,
+		connected:   false,
 		stopChan:    make(chan struct{}),
 		confHandler: configHandler,
 	}
@@ -434,8 +429,8 @@ func TestProxyStatus(t *testing.T) {
 		assert.Empty(t, status.Location)
 	})
 
-	t.Run("it should return the proxy status when VPN is connected", func(t *testing.T) {
-		r.setStatus(ConnectedVPNStatus)
+	t.Run("it should return the proxy status with location when proxy is connected", func(t *testing.T) {
+		r.setStatus(true, ConnectedTUNStatus)
 		status, ok := <-statusChan
 		assert.True(t, ok)
 		assert.True(t, status.Connected)
@@ -443,7 +438,7 @@ func TestProxyStatus(t *testing.T) {
 	})
 
 	t.Run("it should return the proxy status when VPN is disconnected", func(t *testing.T) {
-		r.setStatus(DisconnectedVPNStatus)
+		r.setStatus(false, DisconnectedTUNStatus)
 		status, ok := <-statusChan
 		assert.True(t, ok)
 		assert.False(t, status.Connected)

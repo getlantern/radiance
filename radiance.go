@@ -42,11 +42,13 @@ type configHandler interface {
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
+// TODO: tunStatus need to be updated when TUN is active
 type Radiance struct {
 	srv         httpServer
 	confHandler configHandler
 
-	status      VPNStatus
+	connected   bool
+	tunStatus   TUNStatus
 	statusMutex sync.Locker
 	stopChan    chan struct{}
 }
@@ -55,7 +57,8 @@ type Radiance struct {
 func NewRadiance() *Radiance {
 	return &Radiance{
 		confHandler: config.NewConfigHandler(configPollInterval),
-		status:      DisconnectedVPNStatus,
+		connected:   false,
+		tunStatus:   DisconnectedTUNStatus,
 		statusMutex: new(sync.Mutex),
 		stopChan:    make(chan struct{}),
 	}
@@ -63,18 +66,17 @@ func NewRadiance() *Radiance {
 
 // Run starts the Radiance proxy server on the specified address.
 func (r *Radiance) Run(addr string) error {
-	r.setStatus(ConnectingVPNStatus)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	conf, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
-		r.setStatus(DisconnectedVPNStatus)
+		r.setStatus(false, r.VPNStatus())
 		return err
 	}
 
 	dialer, err := transport.DialerFrom(conf)
 	if err != nil {
-		r.setStatus(DisconnectedVPNStatus)
+		r.setStatus(false, r.VPNStatus())
 		return fmt.Errorf("Could not create dialer: %w", err)
 	}
 	log.Debugf("Creating dialer with config: %+v", conf)
@@ -93,7 +95,7 @@ func (r *Radiance) Run(addr string) error {
 	}
 	r.srv = &http.Server{Handler: &handler}
 
-	r.setStatus(ConnectedVPNStatus)
+	r.setStatus(true, r.VPNStatus())
 	return r.listenAndServe(addr)
 }
 
@@ -109,7 +111,7 @@ func (r *Radiance) listenAndServe(addr string) error {
 
 // Shutdown stops the Radiance server.
 func (r *Radiance) Shutdown(ctx context.Context) error {
-	if r.VPNStatus() == DisconnectedVPNStatus {
+	if !r.connectionStatus() {
 		return nil
 	}
 	if r.srv == nil {
@@ -119,28 +121,35 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 	r.confHandler.Stop()
-	r.setStatus(DisconnectedVPNStatus)
+	r.setStatus(false, r.VPNStatus())
 	close(r.stopChan)
 	return nil
 }
 
-func (s *Radiance) setStatus(status VPNStatus) {
-	s.statusMutex.Lock()
-	s.status = status
-	s.statusMutex.Unlock()
+func (r *Radiance) connectionStatus() bool {
+	r.statusMutex.Lock()
+	defer r.statusMutex.Unlock()
+	return r.connected
+}
+
+func (r *Radiance) setStatus(connected bool, status TUNStatus) {
+	r.statusMutex.Lock()
+	r.connected = connected
+	r.tunStatus = status
+	r.statusMutex.Unlock()
 }
 
 // VPNStatus checks the current VPN status
-func (r *Radiance) VPNStatus() VPNStatus {
+func (r *Radiance) VPNStatus() TUNStatus {
 	r.statusMutex.Lock()
 	defer r.statusMutex.Unlock()
-	return r.status
+	return r.tunStatus
 }
 
 // ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 // If the VPN is disconnected, it returns nil.
 func (r *Radiance) ActiveProxyLocation(ctx context.Context) (*string, error) {
-	if r.VPNStatus() == DisconnectedVPNStatus {
+	if !r.connectionStatus() {
 		return nil, fmt.Errorf("VPN is not connected")
 	}
 
@@ -171,11 +180,6 @@ func (r *Radiance) ProxyStatus(pollInterval time.Duration) <-chan ProxyStatus {
 				close(proxyStatus)
 				return
 			case <-ticker.C:
-				if r.VPNStatus() != ConnectedVPNStatus {
-					proxyStatus <- ProxyStatus{Connected: false}
-					continue
-				}
-
 				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 				location, err := r.ActiveProxyLocation(ctx)
 				cancel()
@@ -184,7 +188,7 @@ func (r *Radiance) ProxyStatus(pollInterval time.Duration) <-chan ProxyStatus {
 					continue
 				}
 				proxyStatus <- ProxyStatus{
-					Connected: true,
+					Connected: r.connectionStatus(),
 					Location:  *location,
 				}
 			}
