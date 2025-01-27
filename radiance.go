@@ -163,13 +163,14 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) (*string, error) {
 // location or whether the proxy is connected or not.
 func (r *Radiance) ProxyStatus(pollInterval time.Duration) <-chan ProxyStatus {
 	proxyStatus := make(chan ProxyStatus)
+	ticker := time.NewTicker(pollInterval)
 	go func() {
 		for {
 			select {
 			case <-r.stopChan:
 				close(proxyStatus)
 				return
-			case <-time.After(pollInterval):
+			case <-ticker.C:
 				if r.VPNStatus() != ConnectedVPNStatus {
 					proxyStatus <- ProxyStatus{Connected: false}
 					continue
