@@ -1,6 +1,6 @@
 module github.com/getlantern/radiance
 
-go 1.23.0
+go 1.22.4
 
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.18-0.20241106233708-faffebb12629
@@ -8,7 +8,7 @@ require (
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
-	github.com/getlantern/kindling v0.0.0-20250116200716-4e9f04a388f3
+	github.com/getlantern/kindling v0.0.0-20250124205353-40a8d1cbcfdb
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
 	google.golang.org/protobuf v1.35.1
@@ -26,7 +26,7 @@ require (
 	github.com/getlantern/elevate v0.0.0-20220903142053-479ab992b264 // indirect
 	github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731 // indirect
 	github.com/getlantern/filepersist v0.0.0-20210901195658-ed29a1cb0b7c // indirect
-	github.com/getlantern/fronted v0.0.0-20250116185732-4ed3a2adcfbd // indirect
+	github.com/getlantern/fronted v0.0.0-20250122202701-759a25a3e2d0 // indirect
 	github.com/getlantern/hex v0.0.0-20220104173244-ad7e4b9194dc // indirect
 	github.com/getlantern/hidden v0.0.0-20220104173330-f221c5a24770 // indirect
 	github.com/getlantern/iptool v0.0.0-20230112135223-c00e863b2696 // indirect
