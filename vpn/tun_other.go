@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/eycorsican/go-tun2socks/tun"
+	"github.com/songgao/water"
 )
 
 func openTunDevice(rConf *RoutingConfig) (io.ReadWriteCloser, error) {
@@ -18,7 +19,14 @@ func openTunDevice(rConf *RoutingConfig) (io.ReadWriteCloser, error) {
 	}
 	mask := net.IP(ipNet.Mask).To4().String()
 	dns := strings.Split(rConf.Dns, ",")
-	return tun.OpenTunDevice(
+	tunDev, err := tun.OpenTunDevice(
 		rConf.TunName, rConf.TunIP, ip.To4().String(), mask, dns, false,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if tunDev, ok := tunDev.(*water.Interface); ok {
+		rConf.TunName = tunDev.Name()
+	}
+	return tunDev, nil
 }

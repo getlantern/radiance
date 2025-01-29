@@ -18,27 +18,20 @@ import (
 // -------------------------------------------------------------------
 //
 // # Add routing rule (e.g., route all traffic through the VPN)
-// route add -net 0.0.0.0/1 tun0
+// route add -net 0.0.0.0/1 -interface <tunName>
 
 // startRouting adds the necessary routing rules.
 func startRouting(rConf *RoutingConfig, proxyAddr string, bypassUDP bool) error {
-	name, gwCIDR := rConf.TunName, rConf.Gw
-	log.Debugf("configuring routing for interface %s with gateway %s", name, gwCIDR)
-	err := exec.Command("route", "add", "-net", gwCIDR, name).Run()
+	err := exec.Command("route", "add", "-net", "0.0.0.0/1", "-interface", rConf.TunName).Run()
 	if err != nil {
 		return fmt.Errorf("failed to add routing rule: %v", err)
 	}
-	log.Debugf("added routing rule for target network %s", gwCIDR)
+	log.Debugf("Added routing table: 0.0.0.0/1 -> %s", rConf.TunName)
 	return nil
 }
 
 // stopRouting removes the routing rules.
 func stopRouting(rConf *RoutingConfig) error {
-	log.Debug("removing routing rules")
-	err := exec.Command("route", "delete", "-net", rConf.Gw, rConf.TunName).Run()
-	if err != nil {
-		return fmt.Errorf("failed to remove routing rule: %v", err)
-	}
-	log.Debugf("removed routing rule for target network %s", rConf.Gw)
+	// darwin will automatically remove it when the tun device is closed
 	return nil
 }
