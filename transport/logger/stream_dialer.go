@@ -16,7 +16,7 @@ import (
 
 const (
 	logBytes = true
-	logData  = true
+	logData  = false
 )
 
 var log = golog.LoggerFor("transport.logDialer")

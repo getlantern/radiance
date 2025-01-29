@@ -9,8 +9,6 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 )
 
-const authTokenHeader = "X-Lantern-Auth-Token"
-
 func checkConnectivity(ctx context.Context, dialer transport.StreamDialer, target, authToken string) error {
 	log.Debugf("connection test --> dialing target %s", target)
 	conn, err := dialer.DialStream(ctx, target)
