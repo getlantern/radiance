@@ -6,37 +6,27 @@ import (
 	"net"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // This is based on the routing code from the outline-cli example in the Outline-SDK
 // https://github.com/Jigsaw-Code/outline-sdk/blob/main/x/examples/outline-cli/routing_linux.go
 
 const (
-	tableID       = 1337
-	tablePriority = 133337
+	tableID       = 252
+	tablePriority = 25552
 )
 
-type routingConfig struct {
-	ifceName        string
-	ifceIP          string
-	ifceGatewayCIDR string
-	tableID         int
-	tablePriority   int
-}
-
 // startRouting configures the routing table and IP rule to forward packets to the TUN interface.
-func startRouting(ifceName, proxyAddr, ifceIP, gatewayCIDR string) error {
-	log.Debugf("configuring routing for interface %s with IP %s and gateway %s",
-		ifceName, ifceIP, gatewayCIDR,
-	)
-	err := configureRoutingTable(tableID, ifceName, ifceIP, gatewayCIDR)
+func startRouting(rConf *RoutingConfig, proxyAddr string, bypassUDP bool) error {
+	err := configureRoutingTable(tableID, rConf)
 	if err != nil {
-		err = fmt.Errorf("failed to configure routing table: %w", err)
+		err = fmt.Errorf("could not configure routing table: %w", err)
 		log.Error(err)
 		return err
 	}
-	if err = addIPRule(proxyAddr, tableID, tablePriority); err != nil {
-		err = fmt.Errorf("failed to configure IP rule: %w", err)
+	if err = addIPRule(proxyAddr+"/32", bypassUDP); err != nil {
+		err = fmt.Errorf("could not configure IP rule: %w", err)
 		log.Error(err)
 		return err
 	}
@@ -44,14 +34,14 @@ func startRouting(ifceName, proxyAddr, ifceIP, gatewayCIDR string) error {
 }
 
 // stopRouting removes the routing table and IP rule that forwards packets to the TUN interface.
-func stopRouting(_, _ string) error {
+func stopRouting(rConf *RoutingConfig) error {
 	log.Debug("removing routing rules")
 	if err := deleteRoutingTable(tableID); err != nil {
 		err = fmt.Errorf("failed to delete routing table: %w", err)
 		log.Error(err)
 		return err
 	}
-	if err := deleteIPRule(tableID); err != nil {
+	if err := deleteIPRule(); err != nil {
 		err = fmt.Errorf("failed to delete IP rule: %w", err)
 		log.Error(err)
 		return err
@@ -59,30 +49,29 @@ func stopRouting(_, _ string) error {
 	return nil
 }
 
-// configureRoutingTable adds routes to the routing table, tableID, to forward packets to the TUN
-// interface, ifceName, with the gateway, gateway, and IP address, ifceIP.
-func configureRoutingTable(tableID int, ifceName, ifceIP, gateway string) error {
-	ifce, err := netlink.LinkByName(ifceName)
+// configureRoutingTable adds routes to the routing table, tableID,
+func configureRoutingTable(tableID int, rConf *RoutingConfig) error {
+	ifce, err := netlink.LinkByName(rConf.TunName)
 	if err != nil {
-		return fmt.Errorf("failed to find interface %s: %w", ifceName, err)
+		return fmt.Errorf("failed to find interface %s: %w", rConf.TunName, err)
 	}
 
-	dst, err := netlink.ParseIPNet(gateway)
+	dst, err := netlink.ParseIPNet(rConf.Gw)
 	if err != nil {
-		return fmt.Errorf("invalid gateway IP address %s: %w", gateway, err)
+		return fmt.Errorf("failed to parse gateway '%s': %w", rConf.Gw, err)
 	}
 
 	route := netlink.Route{
 		LinkIndex: ifce.Attrs().Index,
 		Table:     tableID,
 		Dst:       dst,
-		Src:       net.ParseIP(ifceIP),
+		Src:       net.ParseIP(rConf.TunIP),
 		Scope:     netlink.SCOPE_LINK,
 	}
 	if err := netlink.RouteAdd(&route); err != nil {
-		return fmt.Errorf("failed to add routing table: %w", err)
+		return fmt.Errorf("failed to add route %v -> %v: %w", route.Src, route.Dst, err)
 	}
-	log.Debugf("Added routing table: %v", route)
+	log.Debugf("Added routing table: %v -> %v", route.Src, route.Dst)
 
 	// add a default route to the routing table to forward packets to the gateway
 	route = netlink.Route{
@@ -91,9 +80,9 @@ func configureRoutingTable(tableID int, ifceName, ifceIP, gateway string) error 
 		Gw:        dst.IP,
 	}
 	if err := netlink.RouteAdd(&route); err != nil {
-		return fmt.Errorf("failed to add gateway routing table: %w", err)
+		return fmt.Errorf("failed to add default route for gateway %v: %w", route.Gw, err)
 	}
-	log.Debugf("Added gateway routing table: %v", route)
+	log.Debugf("routing through gateway %v on %v", route.Gw, route.LinkIndex)
 
 	return nil
 }
@@ -123,46 +112,47 @@ func deleteRoutingTable(tableID int) error {
 	return nil
 }
 
+// Store the IP rule so we can delete it later. This way, we don't accidentally delete other IP
+// rules, which could cause major network issues (again XD). We could try to filter for it, but this
+// is was safer!
+var ipRule *netlink.Rule
+
 // addIPRule adds an IP rule to forward packets to the TUN interface.
-func addIPRule(dstIP string, table, priority int) error {
-	dst, err := netlink.ParseIPNet(dstIP)
+func addIPRule(proxyAddr string, bypassUDP bool) error {
+	dst, err := netlink.ParseIPNet(proxyAddr)
 	if err != nil {
-		return fmt.Errorf("invalid IP address %s: %w", dstIP, err)
+		return fmt.Errorf("invalid IP address %s: %w", proxyAddr, err)
 	}
 
 	rule := netlink.NewRule()
 	rule.Family = netlink.FAMILY_V4
-	rule.Table = table
-	rule.Priority = priority
+	rule.Table = tableID
+	rule.Priority = tablePriority
 	rule.Dst = dst
 	rule.Invert = true
+	if bypassUDP {
+		rule.IPProto = unix.IPPROTO_TCP
+	}
 
 	if err := netlink.RuleAdd(rule); err != nil {
 		return fmt.Errorf("failed to add IP rule: %w", err)
 	}
+	ipRule = rule
 	log.Debugf("Added IP rule: %v", rule)
 	return nil
 }
 
 // deleteIPRule deletes the IP rule that forwards packets to the TUN interface.
-func deleteIPRule(table int) error {
-	rule := netlink.Rule{
-		Table: table,
-	}
-	rules, err := netlink.RuleListFiltered(netlink.FAMILY_V4, &rule, 0)
-	if err != nil {
-		return fmt.Errorf("failed to get IP rules: %w", err)
-	}
-	if len(rules) == 0 {
-		return fmt.Errorf("no IP rules found for table %d", table)
+func deleteIPRule() error {
+	if ipRule == nil {
+		return nil
 	}
 
-	// the table should only have one rule since we only added one
-	rule = rules[0]
-	if err := netlink.RuleDel(&rule); err != nil {
+	if err := netlink.RuleDel(ipRule); err != nil {
 		return fmt.Errorf("failed to delete IP rule: %w", err)
 	}
 
-	log.Debugf("Deleted IP rule: %v", rule)
+	log.Debugf("Deleted IP rule: %v", ipRule)
+	ipRule = nil
 	return nil
 }

@@ -40,7 +40,7 @@ func DialerFrom(config *config.Config) (transport.StreamDialer, error) {
 	}
 
 	dialer, _ = dialerBuilders["multiplex"](dialer, config)
-	// dialer, _ = logger.NewStreamDialer(dialer, config)
+	dialer, _ = dialerBuilders["logger"](dialer, config)
 	return dialer, nil
 }
 
@@ -63,4 +63,3 @@ func SupportedDialers() []string {
 	}
 	return availableDialers
 }
-
