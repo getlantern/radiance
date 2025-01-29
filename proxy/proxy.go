@@ -1,4 +1,4 @@
-package radiance
+package proxy
 
 import (
 	"context"
@@ -7,55 +7,52 @@ import (
 	"net"
 	"net/http"
 
-	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
+	"github.com/Jigsaw-Code/outline-sdk/transport"
+	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/backend"
-
-	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/transport"
 )
 
 const authTokenHeader = "X-Lantern-Auth-Token"
 
-type proxy struct {
-	srv *http.Server
+var log = golog.LoggerFor("proxy")
+
+type Proxy struct {
+	localAddr string
+	srv       *http.Server
 }
 
-func newProxy(conf *config.Config) (*proxy, error) {
-	dialer, err := transport.DialerFrom(conf)
-	if err != nil {
-		return nil, fmt.Errorf("Could not create dialer: %w", err)
-	}
-
+func New(dialer transport.StreamDialer, remoteAddr, authToken, localAddr string) *Proxy {
 	handler := proxyHandler{
-		addr:      conf.Addr,
-		authToken: conf.AuthToken,
+		addr:      remoteAddr,
+		authToken: authToken,
 		dialer:    dialer,
 		client: http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, conf.Addr)
+					return dialer.DialStream(ctx, addr)
 				},
 			},
 		},
 	}
-	return &proxy{
-		srv: &http.Server{Handler: &handler},
-	}, nil
+	return &Proxy{
+		srv:       &http.Server{Handler: &handler},
+		localAddr: localAddr,
+	}
 }
 
-func (p *proxy) Start(localAddr string) error {
-	log.Debugf("Starting proxy on %v", localAddr)
-	listener, err := net.Listen("tcp", localAddr)
+func (p *Proxy) Start() error {
+	log.Debugf("Starting proxy on %v", p.localAddr)
+	listener, err := net.Listen("tcp", p.localAddr)
 	if err != nil {
-		return fmt.Errorf("Could not listen on %v: %w", localAddr, err)
+		return fmt.Errorf("Could not listen on %v: %w", p.localAddr, err)
 	}
 
-	log.Debugf("Listening on %v", localAddr)
+	log.Debugf("Listening on %v", p.localAddr)
 	return p.srv.Serve(listener)
 }
 
-func (p *proxy) Stop() error {
+func (p *Proxy) Stop() error {
 	log.Debug("Stopping proxy")
 	return p.srv.Shutdown(context.Background())
 }
@@ -69,7 +66,7 @@ type proxyHandler struct {
 	addr string
 	// authToken is the authentication token to send with each request to the proxy server.
 	authToken string
-	dialer    otransport.StreamDialer
+	dialer    transport.StreamDialer
 	// client is an http client that will be used to forward non-CONNECT requests to the proxy server.
 	client http.Client
 }
@@ -86,7 +83,7 @@ func (h *proxyHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 // with the required headers. After the connection is established, data is piped between the client
 // and the target.
 func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
-	targetConn, err := h.dialer.DialStream(proxyReq.Context(), h.addr)
+	targetConn, err := h.dialer.DialStream(proxyReq.Context(), proxyReq.Host)
 	if err != nil {
 		sendError(proxyResp, "Failed to dial target", http.StatusServiceUnavailable, err)
 		return
@@ -104,14 +101,15 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		return
 	}
 
-	log.Debug("hijacked connection, writing connect request")
+	log.Debug("hijacked connection")
 
 	// We're responsible for closing the client connection since we hijacked it. But since we're
 	// just piping data back and forth, we can give that responsibility back to the server, which
 	// will close the connection when the request is done.
 	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
 
-	// Create a new CONNECT request to send to the proxy server.
+	// // Create a new CONNECT request to send to the proxy server.
+	log.Debug("sending CONNECT request to proxy")
 	connectReq, err := backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		http.MethodConnect,
@@ -142,7 +140,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
 	// To avoid modifying the original request, we create a new identical request that we give to
 	// the http client to modify as needed. The result is then copied to the original response writer.
-	targetReq, err := backend.NewRequestWithHeaders(
+	targetReq, err := http.NewRequestWithContext(
 		proxyReq.Context(),
 		proxyReq.Method,
 		proxyReq.URL.String(),
@@ -152,7 +150,11 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 		sendError(proxyResp, "Error creating target request", http.StatusInternalServerError, err)
 		return
 	}
-	targetReq.Header = proxyReq.Header.Clone()
+	for key, values := range proxyReq.Header {
+		for _, value := range values {
+			targetReq.Header.Add(key, value)
+		}
+	}
 	targetReq.Header.Set(authTokenHeader, h.authToken)
 	targetResp, err := h.client.Do(targetReq)
 	if err != nil {
@@ -167,6 +169,7 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 		}
 	}
 	_, err = io.Copy(proxyResp, targetResp.Body)
+	log.Debug("copied response")
 	if err != nil {
 		sendError(proxyResp, "Failed write response", http.StatusServiceUnavailable, err)
 	}

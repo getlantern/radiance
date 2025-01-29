@@ -10,15 +10,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/vpn"
-)
-
-const (
-	VPN_Router   RouterType = "vpn"
-	Proxy_Router RouterType = "proxy"
+	"github.com/getlantern/radiance/proxy"
+	"github.com/getlantern/radiance/transport"
 )
 
 var (
@@ -27,32 +24,24 @@ var (
 	configPollInterval = 10 * time.Minute
 )
 
-// RouterType represents the type of router to use for routing traffic.
-type RouterType string
-
-// router routes traffic over a local address to its destination. This can be directly or indirectly.
-type router interface {
-	Start(localAddr string) error
+type client interface {
+	Start() error
 	Stop() error
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
+	client      client
 	confHandler *config.ConfigHandler
-	router      router
-	routerType  RouterType
 }
 
-// New creates a new Radiance instance that will route traffic over a VPN or a proxy server, routerType.
-func New(typ RouterType) *Radiance {
-	return &Radiance{
-		confHandler: config.NewConfigHandler(configPollInterval),
-		routerType:  typ,
-	}
+// New creates a new Radiance server using an existing config.
+func New() *Radiance {
+	return &Radiance{confHandler: config.NewConfigHandler(configPollInterval)}
 }
 
-// Run runs the Radiance instance on localAddr.
-func (r *Radiance) Run(localAddr string) error {
+// Run starts the Radiance proxy server on the specified address.
+func (r *Radiance) Run(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	conf, err := r.confHandler.GetConfig(ctx)
 	cancel()
@@ -60,17 +49,28 @@ func (r *Radiance) Run(localAddr string) error {
 		return err
 	}
 
-	switch r.routerType {
-	case VPN_Router:
-		r.router, err = vpn.New(conf)
-	case Proxy_Router:
-		r.router, err = newProxy(conf)
-	default:
-		return fmt.Errorf("unknown router type: %v", r.routerType)
-	}
+	log.Debugf("Creating dialer with config: %+v", conf)
+	dialer, err := transport.DialerFrom(conf)
 	if err != nil {
-		return err
+		return fmt.Errorf("Could not create dialer: %w", err)
 	}
 
-	return r.router.Start(localAddr)
+	r.client = proxy.New(dialer, conf.Addr, conf.AuthToken, addr)
+	return r.client.Start()
+}
+
+func waitForConfig(ctx context.Context, ch *config.ConfigHandler) (*config.Config, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+			log.Debug("waiting for config")
+		case <-time.After(400 * time.Millisecond):
+			proxies, _ := ch.GetConfig(eventual.DontWait)
+			if proxies != nil {
+				return proxies, nil
+			}
+		}
+	}
 }
