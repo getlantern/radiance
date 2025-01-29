@@ -29,7 +29,6 @@ func NewStreamDialer(innerSD transport.StreamDialer, _ *config.Config) (transpor
 	dialer := cmux.Dialer(
 		&cmux.DialerOpts{
 			Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				log.Debugf("innerSD dialing %v", addr)
 				return innerSD.DialStream(ctx, addr)
 			},
 			PoolSize: 1,
@@ -43,10 +42,9 @@ func NewStreamDialer(innerSD transport.StreamDialer, _ *config.Config) (transpor
 func (m *StreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
 	conn, err := m.dialer(ctx, "", addr)
 	if err != nil {
-		log.Errorf("Error dialing %v: %v", addr, err)
 		return nil, err
 	}
-	log.Debugf("dialed %v", addr)
+	log.Tracef("dialed %v", addr)
 	return &StreamConn{
 		Conn:        conn,
 		readClosed:  atomic.Bool{},

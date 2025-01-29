@@ -13,19 +13,22 @@ package shadowsocks
 import (
 	"context"
 	crand "crypto/rand"
+	"errors"
 	"fmt"
 	mrand "math/rand/v2"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
 
-	"github.com/getlantern/errors"
+	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport/shadowsocks/prefixgen"
 )
 
 const defaultShadowsocksUpstreamSuffix = "test"
+
+var log = golog.LoggerFor("transport.shadowsocks")
 
 // StreamDialer routes traffic through a shadowsocks proxy.
 type StreamDialer struct {
@@ -44,21 +47,21 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 	}
 	key, err := shadowsocks.NewEncryptionKey(ssconf.Cipher, ssconf.Secret)
 	if err != nil {
-		return nil, errors.New("failed to create shadowsocks key: %v", err)
+		return nil, fmt.Errorf("failed to create shadowsocks key: %w", err)
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Addr, cfg.Port)
 	endpoint := &transport.StreamDialerEndpoint{Dialer: innerSD, Address: addr}
 	dialer, err := shadowsocks.NewStreamDialer(endpoint, key)
 	if err != nil {
-		return nil, errors.New("failed to create shadowsocks client: %v", err)
+		return nil, fmt.Errorf("failed to create shadowsocks client: %w", err)
 	}
 
 	prefixGen := ssconf.PrefixGenerator
 	if prefixGen != "" {
 		gen, err := prefixgen.New(prefixGen)
 		if err != nil {
-			return nil, errors.New("failed to create prefix generator: %v", err)
+			return nil, fmt.Errorf("failed to create prefix generator: %w", err)
 		}
 		dialer.SaltGenerator = &PrefixSaltGen{
 			prefixFunc: func() ([]byte, error) { return gen(), nil },

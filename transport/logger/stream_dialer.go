@@ -14,6 +14,11 @@ import (
 	"github.com/getlantern/radiance/config"
 )
 
+const (
+	logBytes = true
+	logData  = true
+)
+
 var log = golog.LoggerFor("transport.logDialer")
 
 // StreamDialer is a wrapper around a StreamDialer that is used for debugging. Currently, it logs
@@ -22,38 +27,51 @@ type StreamDialer struct {
 	innerSD transport.StreamDialer
 }
 
-func NewStreamDialer(innerSD transport.StreamDialer, _ *config.Config) (transport.StreamDialer, error) {
+func NewStreamDialer(innerSD transport.StreamDialer, conf *config.Config) (transport.StreamDialer, error) {
 	if innerSD == nil {
 		return nil, errors.New("dialer must not be nil")
 	}
 
-	return &StreamDialer{innerSD: innerSD}, nil
+	return &StreamDialer{
+		innerSD: innerSD,
+	}, nil
 }
 
-func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (transport.StreamConn, error) {
-	stream, err := d.innerSD.DialStream(ctx, remoteAddr)
+func (sd *StreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
+	log.Debugf("Dialing %v", addr)
+	conn, err := sd.innerSD.DialStream(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Debugf("Connected to %v", remoteAddr)
-	rw := &logRW{rw: stream}
-	return transport.WrapConn(stream, rw, rw), nil
+	log.Debugf("Connected to %v", addr)
+	rw := &logRW{rw: conn, logBytes: logBytes, logData: logData}
+	return transport.WrapConn(conn, rw, rw), nil
 }
 
 type logRW struct {
-	rw io.ReadWriter
+	rw       io.ReadWriter
+	logBytes bool
+	logData  bool
 }
 
 func (c *logRW) Write(p []byte) (n int, err error) {
-	log.Debugf("Writing %v bytes", len(p))
-	log.Debug(string(p))
+	if c.logBytes {
+		log.Debugf("Writing %v bytes", len(p))
+	}
+	if c.logData {
+		log.Debug(string(p))
+	}
 	return c.rw.Write(p)
 }
 
 func (c *logRW) Read(p []byte) (n int, err error) {
 	n, err = c.rw.Read(p)
-	log.Debugf("Read %v bytes", n)
-	log.Debug(string(p[:n]))
+	if c.logBytes {
+		log.Debugf("Read %v bytes", n)
+	}
+	if c.logData {
+		log.Debug(string(p[:n]))
+	}
 	return
 }
