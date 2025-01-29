@@ -96,11 +96,12 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 			ch := &ConfigHandler{
 				config: eventual.NewValue(),
 				stopC:  make(chan struct{}),
+				ftr:    ftr,
 			}
 			conf := &Config{}
 			ch.config.Set(configResult{cfg: conf, err: nil})
 
-			go ch.fetchLoop(ftr, 0)
+			go ch.fetchLoop(0)
 			<-continueC
 			close(ch.stopC)
 
