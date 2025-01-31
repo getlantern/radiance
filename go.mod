@@ -4,17 +4,18 @@ go 1.23.0
 
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.18-0.20241106233708-faffebb12629
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20250131142109-b32720fa2c3e
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
+	github.com/golang/protobuf v1.5.3
 	github.com/stretchr/testify v1.9.0
 	github.com/xtaci/smux v1.5.31
 	google.golang.org/protobuf v1.35.1
 )
 
 require (
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20250131142109-b32720fa2c3e // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd // indirect
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
@@ -31,6 +32,7 @@ require (
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

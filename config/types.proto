@@ -135,6 +135,10 @@ message ProxyConnectConfig {
     string transport = 2;
   }
 
+  message ProxylessConfig {
+    string config_text = 1;
+  }
+
   oneof protocol_config {
     TLSConfig connect_cfg_tls = 20;
     TLSMasqConfig connect_cfg_tlsmasq = 21;
@@ -143,5 +147,6 @@ message ProxyConnectConfig {
     StarbridgeConfig connect_cfg_starbridge = 24;
     AlgenevaConfig connect_cfg_algeneva = 25;
     WATERConfig connect_cfg_water = 26;
+    ProxylessConfig connect_cfg_proxyless = 27;
   }
 }
