@@ -64,20 +64,24 @@ type Radiance struct {
 	srv         httpServer
 	confHandler configHandler
 
-	connected   bool
-	tunStatus   TUNStatus
-	statusMutex sync.Locker
-	stopChan    chan struct{}
+	connected              bool
+	tunStatus              TUNStatus
+	statusMutex            sync.Locker
+	stopChan               chan struct{}
+	proxyStatusListenersMu sync.Locker
+	proxyStatusListeners   []chan ProxyStatus
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
 	return &Radiance{
-		confHandler: config.NewConfigHandler(configPollInterval),
-		connected:   false,
-		tunStatus:   DisconnectedTUNStatus,
-		statusMutex: new(sync.Mutex),
-		stopChan:    make(chan struct{}),
+		confHandler:            config.NewConfigHandler(configPollInterval),
+		connected:              false,
+		tunStatus:              DisconnectedTUNStatus,
+		statusMutex:            new(sync.Mutex),
+		proxyStatusListenersMu: new(sync.Mutex),
+		stopChan:               make(chan struct{}),
+		proxyStatusListeners:   make([]chan ProxyStatus, 0),
 	}
 }
 
@@ -87,13 +91,13 @@ func (r *Radiance) Run(addr string) error {
 	conf, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
-		r.setStatus(false, r.VPNStatus())
+		r.setStatus(false, r.TUNStatus())
 		return err
 	}
 
 	dialer, err := transport.DialerFrom(conf)
 	if err != nil {
-		r.setStatus(false, r.VPNStatus())
+		r.setStatus(false, r.TUNStatus())
 		return fmt.Errorf("Could not create dialer: %w", err)
 	}
 	log.Debugf("Creating dialer with config: %+v", conf)
@@ -112,7 +116,7 @@ func (r *Radiance) Run(addr string) error {
 	}
 	r.srv = &http.Server{Handler: &handler}
 
-	r.setStatus(true, r.VPNStatus())
+	r.setStatus(true, r.TUNStatus())
 	return r.listenAndServe(addr)
 }
 
@@ -138,7 +142,7 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 	r.confHandler.Stop()
-	r.setStatus(false, r.VPNStatus())
+	r.setStatus(false, r.TUNStatus())
 	close(r.stopChan)
 	return nil
 }
@@ -154,10 +158,28 @@ func (r *Radiance) setStatus(connected bool, status TUNStatus) {
 	r.connected = connected
 	r.tunStatus = status
 	r.statusMutex.Unlock()
+
+	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
+	go r.notifyListeners(connected)
 }
 
-// VPNStatus checks the current VPN status
-func (r *Radiance) VPNStatus() TUNStatus {
+func (r *Radiance) notifyListeners(connected bool) {
+	r.proxyStatusListenersMu.Lock()
+	status := ProxyStatus{
+		Connected: connected,
+		Location:  r.ActiveProxyLocation(context.Background()),
+	}
+	r.proxyStatusListenersMu.Unlock()
+	for _, listener := range r.proxyStatusListeners {
+		select {
+		case listener <- status:
+		default:
+		}
+	}
+}
+
+// TUNStatus checks the current TUN status
+func (r *Radiance) TUNStatus() TUNStatus {
 	r.statusMutex.Lock()
 	defer r.statusMutex.Unlock()
 	return r.tunStatus
@@ -191,25 +213,10 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 
 // ProxyStatus provides information about the current proxy status like the proxy's
 // location or whether the proxy is connected or not.
-func (r *Radiance) ProxyStatus(pollInterval time.Duration) <-chan ProxyStatus {
+func (r *Radiance) ProxyStatus() <-chan ProxyStatus {
 	proxyStatus := make(chan ProxyStatus)
-	ticker := time.NewTicker(pollInterval)
-	go func() {
-		for {
-			select {
-			case <-r.stopChan:
-				close(proxyStatus)
-				return
-			case <-ticker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-				location := r.ActiveProxyLocation(ctx)
-				cancel()
-				proxyStatus <- ProxyStatus{
-					Connected: r.connectionStatus(),
-					Location:  location,
-				}
-			}
-		}
-	}()
+	r.proxyStatusListenersMu.Lock()
+	r.proxyStatusListeners = append(r.proxyStatusListeners, proxyStatus)
+	r.proxyStatusListenersMu.Unlock()
 	return proxyStatus
 }
