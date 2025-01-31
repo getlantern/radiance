@@ -18,7 +18,9 @@ var (
 )
 
 type Tunnel struct {
-	lwip.LWIPStack
+	stack     lwip.LWIPStack
+	tunWriter io.WriteCloser
+
 	sd         transport.StreamDialer
 	pd         transport.PacketListener
 	udpEnabled bool
@@ -29,21 +31,22 @@ func NewTunnel(sd transport.StreamDialer, pd transport.PacketListener, udpEnable
 	if tunWriter == nil {
 		return nil, errors.New("tunWriter is required")
 	}
-	lwipStack := lwip.NewLWIPStack()
+	lwip.RegisterOutputFn(func(data []byte) (int, error) {
+		log.Tracef("proxy outputFn writing %d bytes to tunDevice", len(data))
+		return tunWriter.Write(data)
+	})
+
 	if udpEnabled {
 		lwip.RegisterUDPConnHandler(newUDPHandler(pd, udpTimeout))
 	} else {
 		lwip.RegisterUDPConnHandler(dnsfallback.NewUDPHandler())
 	}
 	lwip.RegisterTCPConnHandler(newTCPHandler(sd))
-	lwip.RegisterOutputFn(func(data []byte) (int, error) {
-		log.Tracef("proxy outputFn writing %d bytes to tunDevice", len(data))
-		return tunWriter.Write(data)
-	})
 
 	log.Debug("tunnel created")
 	return &Tunnel{
-		LWIPStack:  lwipStack,
+		stack:      lwip.NewLWIPStack(),
+		tunWriter:  tunWriter,
 		sd:         sd,
 		pd:         pd,
 		udpEnabled: udpEnabled,
@@ -57,13 +60,17 @@ func (t *Tunnel) Write(data []byte) (int, error) {
 		return 0, errors.New("tunnel is closed")
 	}
 	log.Tracef("writing %d bytes to tunnel", len(data))
-	return t.LWIPStack.Write(data)
+	return t.stack.Write(data)
+}
+
+func (t *Tunnel) IsConnected() bool {
+	return !t.isClosed.Load()
 }
 
 func (t *Tunnel) Close() error {
 	if t.isClosed.CompareAndSwap(false, true) {
 		log.Debug("closing tunnel")
-		return t.LWIPStack.Close()
+		return t.stack.Close()
 	}
 	return nil
 }
