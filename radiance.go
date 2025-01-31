@@ -211,7 +211,8 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 	return ""
 }
 
-// ProxyStatus provides information about the current proxy status like the proxy's
+// ProxyStatus returns a channel that is populated whenever the proxy status changes.
+// It provides information about the current proxy status like the proxy's
 // location or whether the proxy is connected or not.
 func (r *Radiance) ProxyStatus() <-chan ProxyStatus {
 	proxyStatus := make(chan ProxyStatus)
