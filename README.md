@@ -19,10 +19,12 @@ New transports/protocols can be added by implementing [transport.StreamDialer](h
 > You should not need to make any other modifications to `register.go` or modify any other file.
 
 
-## Run
+## Run VPN
 
+> [!NOTE] 
+> You will need to run with sudo or admin privileges
 ```
-go run cmd/main.go -addr localhost:8080
+go run cmd/main.go -vpn
 ```
 
 ## TODO
