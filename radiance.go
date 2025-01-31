@@ -165,24 +165,28 @@ func (r *Radiance) VPNStatus() TUNStatus {
 
 // ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 // If the VPN is disconnected, it returns nil.
-func (r *Radiance) ActiveProxyLocation(ctx context.Context) (*string, error) {
+func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 	if !r.connectionStatus() {
-		return nil, fmt.Errorf("VPN is not connected")
+		log.Debug("VPN is not connected")
+		return ""
 	}
 
 	config, err := r.confHandler.GetConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("could not retrieve config: %w", err)
+		log.Errorf("could not retrieve config: %w", err)
+		return ""
 	}
 
 	if config == nil {
-		return nil, fmt.Errorf("config is nil")
+		log.Errorf("config is nil")
+		return ""
 	}
 
 	if location := config.GetLocation(); location != nil {
-		return &location.City, nil
+		return location.City
 	}
-	return nil, fmt.Errorf("could not retrieve location")
+	log.Errorf("could not retrieve location")
+	return ""
 }
 
 // ProxyStatus provides information about the current proxy status like the proxy's
@@ -198,15 +202,11 @@ func (r *Radiance) ProxyStatus(pollInterval time.Duration) <-chan ProxyStatus {
 				return
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-				location, err := r.ActiveProxyLocation(ctx)
+				location := r.ActiveProxyLocation(ctx)
 				cancel()
-				if err != nil {
-					proxyStatus <- ProxyStatus{Connected: false}
-					continue
-				}
 				proxyStatus <- ProxyStatus{
 					Connected: r.connectionStatus(),
-					Location:  *location,
+					Location:  location,
 				}
 			}
 		}

@@ -335,7 +335,7 @@ func TestActiveProxyLocation(t *testing.T) {
 	var tests = []struct {
 		name   string
 		setup  func(*gomock.Controller) *Radiance
-		assert func(*testing.T, *string, error)
+		assert func(*testing.T, string)
 	}{
 		{
 			name: "it should return nil when VPN is disconnected and return an error",
@@ -345,9 +345,8 @@ func TestActiveProxyLocation(t *testing.T) {
 				}
 				return r
 			},
-			assert: func(t *testing.T, location *string, err error) {
-				assert.Nil(t, location)
-				assert.Error(t, err)
+			assert: func(t *testing.T, location string) {
+				assert.Empty(t, location)
 			},
 		},
 		{
@@ -362,9 +361,8 @@ func TestActiveProxyLocation(t *testing.T) {
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
 				return r
 			},
-			assert: func(t *testing.T, location *string, err error) {
-				assert.Nil(t, location)
-				assert.Error(t, err)
+			assert: func(t *testing.T, location string) {
+				assert.Empty(t, location)
 			},
 		},
 		{
@@ -382,10 +380,9 @@ func TestActiveProxyLocation(t *testing.T) {
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
 				return r
 			},
-			assert: func(t *testing.T, location *string, err error) {
-				assert.NoError(t, err)
-				assert.NotNil(t, location)
-				assert.Equal(t, expectedCity, *location)
+			assert: func(t *testing.T, location string) {
+				assert.NotEmpty(t, location)
+				assert.Equal(t, expectedCity, location)
 			},
 		},
 	}
@@ -395,8 +392,8 @@ func TestActiveProxyLocation(t *testing.T) {
 			defer ctrl.Finish()
 
 			r := tt.setup(ctrl)
-			location, err := r.ActiveProxyLocation(context.Background())
-			tt.assert(t, location, err)
+			location := r.ActiveProxyLocation(context.Background())
+			tt.assert(t, location)
 		})
 	}
 }
