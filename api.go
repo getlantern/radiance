@@ -4,23 +4,6 @@ import (
 	"context"
 )
 
-// TUNStatus is a type used for representing the state of the TUN device and routing configuration.
-type TUNStatus string
-
-const (
-	ConnectedTUNStatus    TUNStatus = "connected"
-	DisconnectedTUNStatus TUNStatus = "disconnected"
-	ConnectingTUNStatus   TUNStatus = "connecting"
-)
-
-// ProxyStatus provide
-type ProxyStatus struct {
-	Connected bool
-	// Location provides the proxy's geographical location. If connected is false,
-	// the value will be a empty string.
-	Location string
-}
-
 // APIManager set the minimal functionalities an client must provide for using radiance
 type APIManager interface {
 	// Run starts the Radiance proxy server on the specified address.

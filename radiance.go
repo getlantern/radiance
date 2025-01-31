@@ -41,6 +41,23 @@ type configHandler interface {
 	Stop()
 }
 
+// TUNStatus is a type used for representing the state of the TUN device and routing configuration.
+type TUNStatus string
+
+const (
+	ConnectedTUNStatus    TUNStatus = "connected"
+	DisconnectedTUNStatus TUNStatus = "disconnected"
+	ConnectingTUNStatus   TUNStatus = "connecting"
+)
+
+// ProxyStatus provide
+type ProxyStatus struct {
+	Connected bool
+	// Location provides the proxy's geographical location. If connected is false,
+	// the value will be a empty string.
+	Location string
+}
+
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 // TODO: tunStatus need to be updated when TUN is active
 type Radiance struct {
