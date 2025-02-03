@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	sync "sync"
 	"time"
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
+	"github.com/getlantern/kindling"
 )
 
 var (
@@ -36,6 +36,7 @@ type configResult struct {
 type ConfigHandler struct {
 	// config holds a configResult.
 	config    eventual.Value
+	ftr       *fetcher
 	stopC     chan struct{}
 	closeOnce *sync.Once
 }
@@ -47,38 +48,60 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 		stopC:     make(chan struct{}),
 		closeOnce: &sync.Once{},
 	}
-	ftr := newFetcher(&http.Client{Timeout: 10 * time.Second})
-	go ch.fetchLoop(ftr, pollInterval)
+	// TODO: Ideally we would know the user locale here on radiance startup.
+	k := kindling.NewKindling(
+		kindling.WithDomainFronting("https://media.githubusercontent.com/media/getlantern/fronted/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithProxyless("api.iantem.io"),
+	)
+	ch.ftr = newFetcher(k.NewHTTPClient())
+	go ch.fetchLoop(pollInterval)
 	return ch
 }
 
+func (ch *ConfigHandler) fetchConfig() error {
+	log.Debug("Fetching config")
+	proxies, _ := ch.GetConfig(eventual.DontWait)
+	resp, err := ch.ftr.fetchConfig()
+	if resp != nil {
+		log.Debug("received config response")
+		// we got a new config and no error so we can update the current config
+		proxyList := resp.GetProxy()
+		// make sure we have at least one proxy
+		if proxyList != nil && len(proxyList.GetProxies()) > 0 {
+			log.Debugf("received %d new proxies", len(proxyList.GetProxies()))
+			proxies = proxyList.GetProxies()[0]
+			log.Debugf("new proxy: %+v", proxies)
+		} else {
+			log.Debug("proxy list is empty")
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
+	}
+
+	// Otherwise, we keep the previous config and store any error that might have occurred.
+	// We still want to keep the previous config if there was an error. This is important
+	// because the error could have been due to temporary network issues, such as brief
+	// power loss or internet disconnection.
+	// On the other hand, if we have a new config, we want to overwrite any previous error.
+	ch.config.Set(configResult{cfg: proxies, err: err})
+
+	return nil
+}
+
 // fetchLoop fetches the configuration every pollInterval.
-func (ch *ConfigHandler) fetchLoop(ftr *fetcher, pollInterval time.Duration) {
+func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
+	if err := ch.fetchConfig(); err != nil {
+		log.Errorf("Failed to fetch config: %v. Retrying in %v", err, pollInterval)
+	}
 	for {
 		select {
 		case <-ch.stopC:
 			return
 		case <-time.After(pollInterval):
-			proxies, _ := ch.GetConfig(eventual.DontWait)
-			resp, err := ftr.fetchConfig()
-			if resp != nil {
-				// we got a new config and no error so we can update the current config
-				proxyList := resp.GetProxy()
-				// make sure we have at least one proxy
-				if proxyList != nil && len(proxyList.GetProxies()) > 0 {
-					proxies = proxyList.GetProxies()[0]
-				}
+			if err := ch.fetchConfig(); err != nil {
+				log.Errorf("Failed to fetch config: %v. Retrying in %v", err, pollInterval)
 			}
-			if err != nil {
-				err = fmt.Errorf("%w: %w", ErrFetchingConfig, err)
-			}
-
-			// Otherwise, we keep the previous config and store any error that might have occurred.
-			// We still want to keep the previous config if there was an error. This is important
-			// because the error could have been due to temporary network issues, such as brief
-			// power loss or internet disconnection.
-			// On the other hand, if we have a new config, we want to overwrite any previous error.
-			ch.config.Set(configResult{cfg: proxies, err: err})
 		}
 	}
 }

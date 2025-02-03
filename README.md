@@ -30,8 +30,16 @@ go run cmd/main.go -addr localhost:8080
 - [x] Connect to and route requests to backend proxy using a StreamDialer.
 - [x] Retrieve proxy config from backend.
 - [ ] Implement remaining protocols
+  - [ ] tls w/ frag
+  - [ ] algeneva
+  - [ ] tlsmasq
+  - [ ] water
+  - [ ] starbridge
+  - [ ] vmess
+  - [ ] broflake?
 - [ ] Add socks5 support
 - [ ] Implement VPN TUN 
 - [ ] Add way to manage multiple proxies. MAB?
 - [ ] Switch from getlantern/golog to slog
 - [ ] Add PacketDialer (UDP) support
+- [ ] Add support for split tunneling, using [v2ray's routing rule syntax](https://www.v2ray.com/en/configuration/routing.html)
