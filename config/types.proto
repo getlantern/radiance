@@ -147,8 +147,9 @@ message ProxyConnectConfig {
     StarbridgeConfig connect_cfg_starbridge = 24;
     AlgenevaConfig connect_cfg_algeneva = 25;
     WATERConfig connect_cfg_water = 26;
-    ProxylessConfig connect_cfg_proxyless_split = 27;
-    ProxylessConfig connect_cfg_proxyless_tlsfrag = 28;
-    ProxylessConfig connect_cfg_proxyless_disorder = 29;
+    // skipping 27 because it's reserved to vmess
+    ProxylessConfig connect_cfg_proxyless_split = 28;
+    ProxylessConfig connect_cfg_proxyless_tlsfrag = 29;
+    ProxylessConfig connect_cfg_proxyless_disorder = 30;
   }
 }
