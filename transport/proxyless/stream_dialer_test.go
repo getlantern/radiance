@@ -13,20 +13,37 @@ import (
 )
 
 func TestNewStreamDialer(t *testing.T) {
-	validConfig := &config.Config{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+	validSplitConfig := &config.Config{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxylessSplit{
+			ConnectCfgProxylessSplit: &config.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:2|split:123",
 			},
 		},
 	}
-	invalidConfig := &config.Config{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+	invalidSplitConfig := &config.Config{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxylessSplit{
+			ConnectCfgProxylessSplit: &config.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:|split:",
 			},
 		},
 	}
+
+	tlsFragConfig := &config.Config{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxylessTlsfrag{
+			ConnectCfgProxylessTlsfrag: &config.ProxyConnectConfig_ProxylessConfig{
+				ConfigText: "tlsfrag:10",
+			},
+		},
+	}
+
+	disorderConfig := &config.Config{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxylessDisorder{
+			ConnectCfgProxylessDisorder: &config.ProxyConnectConfig_ProxylessConfig{
+				ConfigText: "disorder:1",
+			},
+		},
+	}
+
 	var tests = []struct {
 		name         string
 		givenConfig  *config.Config
@@ -35,7 +52,7 @@ func TestNewStreamDialer(t *testing.T) {
 	}{
 		{
 			name:        "it should fail when innerSD is nil",
-			givenConfig: validConfig,
+			givenConfig: validSplitConfig,
 			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
 				return nil
 			},
@@ -46,7 +63,7 @@ func TestNewStreamDialer(t *testing.T) {
 		},
 		{
 			name:        "it should fail when config is invalid",
-			givenConfig: invalidConfig,
+			givenConfig: invalidSplitConfig,
 			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
 				return NewMockStreamDialer(ctrl)
 			},
@@ -57,7 +74,39 @@ func TestNewStreamDialer(t *testing.T) {
 		},
 		{
 			name:        "it should succeed with valid config and inner stream dialer",
-			givenConfig: validConfig,
+			givenConfig: validSplitConfig,
+			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
+				return NewMockStreamDialer(ctrl)
+			},
+			assert: func(t *testing.T, dialer transport.StreamDialer, err error) {
+				assert.NoError(t, err)
+				assert.NotNil(t, dialer)
+				d := dialer.(*StreamDialer)
+				assert.NotNil(t, d.innerSD)
+				assert.NotNil(t, d.proxylessDialer)
+				assert.NotNil(t, d.upstreamStatusCacheMutex)
+				assert.NotNil(t, d.upstreamStatusCache)
+			},
+		},
+		{
+			name:        "it should succeed with tlsfrag config",
+			givenConfig: tlsFragConfig,
+			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
+				return NewMockStreamDialer(ctrl)
+			},
+			assert: func(t *testing.T, dialer transport.StreamDialer, err error) {
+				assert.NoError(t, err)
+				assert.NotNil(t, dialer)
+				d := dialer.(*StreamDialer)
+				assert.NotNil(t, d.innerSD)
+				assert.NotNil(t, d.proxylessDialer)
+				assert.NotNil(t, d.upstreamStatusCacheMutex)
+				assert.NotNil(t, d.upstreamStatusCache)
+			},
+		},
+		{
+			name:        "it should succeed with disorder config",
+			givenConfig: disorderConfig,
 			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
 				return NewMockStreamDialer(ctrl)
 			},
@@ -84,8 +133,8 @@ func TestNewStreamDialer(t *testing.T) {
 
 func TestDialStream(t *testing.T) {
 	validConfig := &config.Config{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxylessSplit{
+			ConnectCfgProxylessSplit: &config.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:2|split:123",
 			},
 		},
@@ -130,7 +179,7 @@ func TestDialStream(t *testing.T) {
 				proxylessDialer := NewMockStreamDialer(ctrl)
 				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
 				d.proxylessDialer = proxylessDialer
-				d.updateUpstreamStatus(remoteAddr, validConfig.GetConnectCfgProxyless().GetConfigText(), true)
+				d.updateUpstreamStatus(remoteAddr, validConfig.GetConnectCfgProxylessSplit().GetConfigText(), true)
 				return d
 			},
 			givenContext:    context.Background(),
@@ -177,7 +226,7 @@ func TestDialStream(t *testing.T) {
 					LastSuccess:   time.Now().Add(-48 * time.Hour).Unix(),
 					NumberOfTries: 10,
 					LastResult:    false,
-					ConfigText:    validConfig.GetConnectCfgProxyless().GetConfigText(),
+					ConfigText:    validConfig.GetConnectCfgProxylessSplit().GetConfigText(),
 				}
 				return d
 			},
@@ -202,7 +251,7 @@ func TestDialStream(t *testing.T) {
 					LastSuccess:   time.Now().Unix(),
 					NumberOfTries: 10,
 					LastResult:    false,
-					ConfigText:    validConfig.GetConnectCfgProxyless().GetConfigText(),
+					ConfigText:    validConfig.GetConnectCfgProxylessSplit().GetConfigText(),
 				}
 				return d
 			},
