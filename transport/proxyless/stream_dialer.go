@@ -30,8 +30,7 @@ type upstreamStatus struct {
 
 //go:generate mockgen -destination=mock_stream_dialer_test.go -package=proxyless github.com/Jigsaw-Code/outline-sdk/transport StreamDialer
 
-// StreamDialer is a wrapper around a StreamDialer that is used for debugging. Currently, it logs
-// the data written to and read from the connection. This will be removed in the future.
+// StreamDialer is a transport.StreamDialer that will try to connect to the upstream by using the proxyless configuration
 type StreamDialer struct {
 	innerSD         transport.StreamDialer
 	proxylessDialer transport.StreamDialer
@@ -41,6 +40,8 @@ type StreamDialer struct {
 	upstreamStatusCacheMutex sync.Locker
 }
 
+// NewStreamDialer build a Proxyless StreamDialer that will try to connect to the upstream by using the proxyless configuration
+// if the conditions are met. If the conditions are not met, it will try to connect to the upstream using the inner StreamDialer.
 func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
 	if innerSD == nil {
 		return nil, errors.New("dialer must not be nil")
@@ -88,6 +89,7 @@ func (d *StreamDialer) updateUpstreamStatus(remoteAddr, configText string, succe
 	d.upstreamStatusCache[remoteAddr] = status
 }
 
+// DialStream tries to connect to the upstream by using the proxyless configuration if the conditions are met.
 func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (transport.StreamConn, error) {
 	status := d.getUpstreamStatus(remoteAddr)
 	if status.haveNeverTriedProxyless() ||
