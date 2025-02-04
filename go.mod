@@ -11,6 +11,7 @@ require (
 	github.com/getlantern/kindling v0.0.0-20250131224031-b92afbdcc7e0
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
+	go.uber.org/mock v0.5.0
 	google.golang.org/protobuf v1.35.1
 )
 
