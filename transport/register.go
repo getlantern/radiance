@@ -12,7 +12,5 @@ func init() {
 	registerDialerBuilder("logger", logger.NewStreamDialer)
 	registerDialerBuilder("multiplex", multiplex.NewStreamDialer)
 	registerDialerBuilder("shadowsocks", shadowsocks.NewStreamDialer)
-	registerDialerBuilder("split", proxyless.NewStreamDialer)
-	registerDialerBuilder("tlsfrag", proxyless.NewStreamDialer)
-	registerDialerBuilder("disorder", proxyless.NewStreamDialer)
+	registerDialerBuilder("proxyless", proxyless.NewStreamDialer)
 }

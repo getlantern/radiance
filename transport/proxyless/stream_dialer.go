@@ -46,17 +46,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 		return nil, errors.New("dialer must not be nil")
 	}
 
-	var configText string
-	if cfg.GetConnectCfgProxylessSplit() != nil {
-		configText = cfg.GetConnectCfgProxylessSplit().GetConfigText()
-	}
-	if cfg.GetConnectCfgProxylessDisorder() != nil {
-		configText = cfg.GetConnectCfgProxylessDisorder().GetConfigText()
-	}
-	if cfg.GetConnectCfgProxylessTlsfrag() != nil {
-		configText = cfg.GetConnectCfgProxylessTlsfrag().GetConfigText()
-	}
-
+	configText := cfg.GetConnectCfgProxyless().GetConfigText()
 	provider := configurl.NewDefaultProviders()
 	dialer, err := provider.NewStreamDialer(context.Background(), configText)
 	if err != nil {
