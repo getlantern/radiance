@@ -100,7 +100,7 @@ func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (trans
 			return conn, nil
 		}
 		d.updateUpstreamStatus(remoteAddr, d.currentConfig, false)
-		log.Errorf("failed to dial %s via proxyless: %v", remoteAddr, err)
+		log.Debugf("failed to dial %s via proxyless: %v", remoteAddr, err)
 	}
 
 	return d.innerSD.DialStream(ctx, remoteAddr)
