@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
+	"github.com/getlantern/radiance/transport/proxyless"
 )
 
 var (
@@ -36,7 +37,7 @@ func NewRadiance() *Radiance {
 }
 
 // Run starts the Radiance proxy server on the specified address.
-func (r *Radiance) Run(addr string) error {
+func (r *Radiance) Run(addr string, proxylessConfig *string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	conf, err := r.confHandler.GetConfig(ctx)
 	cancel()
@@ -49,6 +50,21 @@ func (r *Radiance) Run(addr string) error {
 		return fmt.Errorf("Could not create dialer: %w", err)
 	}
 	log.Debugf("Creating dialer with config: %+v", conf)
+
+	if proxylessConfig != nil && *proxylessConfig != "" {
+		proxylessDialer, err := proxyless.NewStreamDialer(dialer, &config.Config{
+			Protocol: "proxyless",
+			ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+				ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+					ConfigText: *proxylessConfig,
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("could not create proxyless dialer: %w", err)
+		}
+		dialer = proxylessDialer
+	}
 
 	handler := proxyHandler{
 		addr:      conf.Addr,
