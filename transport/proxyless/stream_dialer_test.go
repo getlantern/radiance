@@ -35,17 +35,6 @@ func TestNewStreamDialer(t *testing.T) {
 		assert       func(t *testing.T, dialer transport.StreamDialer, err error)
 	}{
 		{
-			name:        "it should fail when innerSD is nil",
-			givenConfig: validSplitConfig,
-			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
-				return nil
-			},
-			assert: func(t *testing.T, dialer transport.StreamDialer, err error) {
-				assert.Error(t, err)
-				assert.Nil(t, dialer)
-			},
-		},
-		{
 			name:        "it should fail when config is invalid",
 			givenConfig: invalidSplitConfig,
 			givenInnerSD: func(ctrl *gomock.Controller) transport.StreamDialer {
@@ -66,8 +55,7 @@ func TestNewStreamDialer(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NotNil(t, dialer)
 				d := dialer.(*StreamDialer)
-				assert.NotNil(t, d.innerSD)
-				assert.NotNil(t, d.proxylessDialer)
+				assert.NotNil(t, d.dialer)
 				assert.NotNil(t, d.upstreamStatusCacheMutex)
 				assert.NotNil(t, d.upstreamStatusCache)
 			},
@@ -110,7 +98,7 @@ func TestDialStream(t *testing.T) {
 				d := dialer.(*StreamDialer)
 				proxylessDialer := NewMockStreamDialer(ctrl)
 				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
-				d.proxylessDialer = proxylessDialer
+				d.dialer = proxylessDialer
 				return d
 			},
 			givenContext:    context.Background(),
@@ -130,7 +118,7 @@ func TestDialStream(t *testing.T) {
 				d := dialer.(*StreamDialer)
 				proxylessDialer := NewMockStreamDialer(ctrl)
 				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
-				d.proxylessDialer = proxylessDialer
+				d.dialer = proxylessDialer
 				d.updateUpstreamStatus(remoteAddr, validConfig.GetConnectCfgProxyless().GetConfigText(), true)
 				return d
 			},
@@ -151,7 +139,7 @@ func TestDialStream(t *testing.T) {
 				d := dialer.(*StreamDialer)
 				proxylessDialer := NewMockStreamDialer(ctrl)
 				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
-				d.proxylessDialer = proxylessDialer
+				d.dialer = proxylessDialer
 				d.updateUpstreamStatus(remoteAddr, "split:2", false)
 				return d
 			},
@@ -172,7 +160,7 @@ func TestDialStream(t *testing.T) {
 				d := dialer.(*StreamDialer)
 				proxylessDialer := NewMockStreamDialer(ctrl)
 				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
-				d.proxylessDialer = proxylessDialer
+				d.dialer = proxylessDialer
 				d.upstreamStatusCache[remoteAddr] = upstreamStatus{
 					RemoteAddr:    remoteAddr,
 					LastSuccess:   time.Now().Add(-48 * time.Hour).Unix(),
@@ -190,11 +178,9 @@ func TestDialStream(t *testing.T) {
 			},
 		},
 		{
-			name: "it should use inner stream dialer when none of the conditions are met",
+			name: "it should return an error when none of the conditions are met",
 			dialer: func(ctrl *gomock.Controller) *StreamDialer {
-				innerSD := NewMockStreamDialer(ctrl)
-				innerSD.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
-				dialer, err := NewStreamDialer(innerSD, validConfig)
+				dialer, err := NewStreamDialer(nil, validConfig)
 				require.NoError(t, err)
 
 				d := dialer.(*StreamDialer)
@@ -210,28 +196,7 @@ func TestDialStream(t *testing.T) {
 			givenContext:    context.Background(),
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
-				assert.NoError(t, err)
-				assert.Nil(t, conn)
-			},
-		},
-		{
-			name: "it should use inner stream dialer when proxyless dialer fails",
-			dialer: func(ctrl *gomock.Controller) *StreamDialer {
-				innerSD := NewMockStreamDialer(ctrl)
-				innerSD.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
-				dialer, err := NewStreamDialer(innerSD, validConfig)
-				require.NoError(t, err)
-
-				d := dialer.(*StreamDialer)
-				proxylessDialer := NewMockStreamDialer(ctrl)
-				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, assert.AnError)
-				d.proxylessDialer = proxylessDialer
-				return d
-			},
-			givenContext:    context.Background(),
-			givenRemoteAddr: remoteAddr,
-			assert: func(t *testing.T, conn transport.StreamConn, err error) {
-				assert.NoError(t, err)
+				assert.Error(t, err)
 				assert.Nil(t, conn)
 			},
 		},

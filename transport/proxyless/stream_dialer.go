@@ -7,7 +7,6 @@ package proxyless
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -28,12 +27,16 @@ type upstreamStatus struct {
 	ConfigText    string
 }
 
+type contextKey string
+
+// AddrContextKey is the context key used to store the address of the target server.
+var AddrContextKey contextKey = "addr"
+
 //go:generate mockgen -destination=mock_stream_dialer_test.go -package=proxyless github.com/Jigsaw-Code/outline-sdk/transport StreamDialer
 
 // StreamDialer is a transport.StreamDialer that will try to connect to the upstream by using the proxyless configuration
 type StreamDialer struct {
-	innerSD         transport.StreamDialer
-	proxylessDialer transport.StreamDialer
+	dialer transport.StreamDialer
 
 	currentConfig            string
 	upstreamStatusCache      map[string]upstreamStatus
@@ -41,12 +44,8 @@ type StreamDialer struct {
 }
 
 // NewStreamDialer build a Proxyless StreamDialer that will try to connect to the upstream by using the proxyless configuration
-// if the conditions are met. If the conditions are not met, it will try to connect to the upstream using the inner StreamDialer.
-func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
-	if innerSD == nil {
-		return nil, errors.New("dialer must not be nil")
-	}
-
+// if the conditions are met.
+func NewStreamDialer(_ transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
 	configText := cfg.GetConnectCfgProxyless().GetConfigText()
 	provider := configurl.NewDefaultProviders()
 	dialer, err := provider.NewStreamDialer(context.Background(), configText)
@@ -55,8 +54,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 	}
 
 	return &StreamDialer{
-		innerSD:                  innerSD,
-		proxylessDialer:          dialer,
+		dialer:                   dialer,
 		upstreamStatusCacheMutex: &sync.Mutex{},
 		upstreamStatusCache:      make(map[string]upstreamStatus),
 		currentConfig:            configText,
@@ -96,16 +94,19 @@ func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (trans
 		status.itWorkedOnLastTry() ||
 		status.haveNewConfig(d.currentConfig) ||
 		status.lastTryWasLongAgo() {
-		conn, err := d.proxylessDialer.DialStream(ctx, remoteAddr)
-		if err == nil {
-			d.updateUpstreamStatus(remoteAddr, d.currentConfig, true)
-			return conn, nil
+
+		conn, err := d.dialer.DialStream(ctx, remoteAddr)
+		if err != nil {
+			d.updateUpstreamStatus(remoteAddr, d.currentConfig, false)
+			log.Debugf("failed to dial %s via proxyless: %v", remoteAddr, err)
+			return nil, fmt.Errorf("failed to dial %s via proxyless: %w", remoteAddr, err)
 		}
-		d.updateUpstreamStatus(remoteAddr, d.currentConfig, false)
-		log.Debugf("failed to dial %s via proxyless: %v", remoteAddr, err)
+		d.updateUpstreamStatus(remoteAddr, d.currentConfig, true)
+		log.Debugf("successfully dialed %s via proxyless", remoteAddr)
+		return conn, nil
 	}
 
-	return d.innerSD.DialStream(ctx, remoteAddr)
+	return nil, fmt.Errorf("none conditions met for proxyless request to %s", remoteAddr)
 }
 
 func (s upstreamStatus) haveNeverTriedProxyless() bool {
