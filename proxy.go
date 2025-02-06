@@ -50,6 +50,10 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		sendError(proxyResp, "Failed to hijack connection", http.StatusInternalServerError, err)
 		return
 	}
+	// We're responsible for closing the client connection since we hijacked it. But since we're
+	// just piping data back and forth, we can give that responsibility back to the server, which
+	// will close the connection when the request is done.
+	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
 	log.Debug("hijacked connection, writing connect request")
 
 	var targetConn transport.StreamConn
@@ -68,7 +72,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	}
 	defer targetConn.Close()
 
-	if !proxylessFailed {
+	if proxylessFailed {
 		// Create a new CONNECT request to send to the proxy server.
 		connectReq, err := backend.NewRequestWithHeaders(
 			proxyReq.Context(),
@@ -86,10 +90,17 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 			sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
 			return
 		}
-		// We're responsible for closing the client connection since we hijacked it. But since we're
-		// just piping data back and forth, we can give that responsibility back to the server, which
-		// will close the connection when the request is done.
-		context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
+	} else {
+		log.Debug("trying proxyless request")
+		req, err := http.NewRequestWithContext(proxyReq.Context(), http.MethodConnect, proxyReq.URL.String(), http.NoBody)
+		if err != nil {
+			sendError(proxyResp, "Error creating connect request", http.StatusInternalServerError, err)
+			return
+		}
+		if err = req.Write(targetConn); err != nil {
+			sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
+			return
+		}
 	}
 
 	// Pipe data between the client and the target.
@@ -98,9 +109,6 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		_, err := io.Copy(targetConn, clientConn)
 		if err != nil {
 			log.Errorf("Failed to copy data to target: %v", err)
-		}
-		if proxylessFailed {
-			clientConn.Close()
 		}
 	}()
 	_, err = io.Copy(clientConn, targetConn)
