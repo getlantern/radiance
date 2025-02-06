@@ -51,21 +51,6 @@ func (r *Radiance) Run(addr string, proxylessConfig *string) error {
 	}
 	log.Debugf("Creating dialer with config: %+v", conf)
 
-	if proxylessConfig != nil && *proxylessConfig != "" {
-		proxylessDialer, err := proxyless.NewStreamDialer(dialer, &config.Config{
-			Protocol: "proxyless",
-			ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-				ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
-					ConfigText: *proxylessConfig,
-				},
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("could not create proxyless dialer: %w", err)
-		}
-		dialer = proxylessDialer
-	}
-
 	handler := proxyHandler{
 		addr:      conf.Addr,
 		authToken: conf.AuthToken,
@@ -78,6 +63,21 @@ func (r *Radiance) Run(addr string, proxylessConfig *string) error {
 			},
 		},
 	}
+
+	if proxylessConfig != nil && *proxylessConfig != "" {
+		handler.proxylessDialer, err = proxyless.NewStreamDialer(dialer, &config.Config{
+			Protocol: "proxyless",
+			ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+				ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+					ConfigText: *proxylessConfig,
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("could not create proxyless dialer: %w", err)
+		}
+	}
+
 	r.srv = &http.Server{Handler: &handler}
 	return r.listenAndServe(addr)
 }
