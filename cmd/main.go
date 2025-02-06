@@ -8,16 +8,12 @@ import (
 	"syscall"
 	"time"
 
-	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance"
 
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/proxy"
-	"github.com/getlantern/radiance/transport"
-	"github.com/getlantern/radiance/transport/logger"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -26,12 +22,11 @@ var log = golog.LoggerFor("main")
 func main() {
 	proxyAddr := flag.String("proxyAddr", "127.0.0.1:8080", "Address to listen on when running as a proxy")
 	asVPN := flag.Bool("vpn", false, "Run as a vpn client")
-	testVPN := flag.Bool("testvpn", false,
-		"Start a proxy server, on 'proxyAddr', to test the VPN client. Only traffic from the proxy server "+
-			"will be routed through the VPN client. The proxy server will be stopped when the VPN client is stopped.",
-	)
+	// testVPN := flag.Bool("testvpn", false,
+	// 	"Start a proxy server, on 'proxyAddr', to test the VPN client. Only traffic from the proxy server "+
+	// 		"will be routed through the VPN client. The proxy server will be stopped when the VPN client is stopped.",
+	// )
 	flag.Parse()
-	log.Debugf("flag values: proxyAddr=%s, asVPN=%s, testVPN=%s", *proxyAddr, *asVPN, *testVPN)
 
 	if !*asVPN {
 		log.Debugf("Starting radiance on %s", *proxyAddr)
@@ -49,41 +44,43 @@ func main() {
 			log.Fatalf("Failed to get config: %v", err)
 		}
 
-		sd, err := transport.DialerFrom(proxyConf)
-		if err != nil {
-			log.Fatalf("Failed to create dialer: %v", err)
-		}
-
-		var (
-			dialer = sd
-			addr   = proxyConf.Addr
-			auth   = proxyConf.AuthToken
-		)
-		if *testVPN {
-			// Start a local proxy server to test the VPN
-			log.Debug("Starting test proxy server")
-			p := proxy.New(sd, proxyConf.Addr, proxyConf.AuthToken, *proxyAddr)
-			go p.Start()
-
-			ep := otransport.StreamDialerEndpoint{
-				Dialer:  &otransport.TCPDialer{},
-				Address: *proxyAddr,
-			}
-			dialer = otransport.FuncStreamDialer(func(ctx context.Context, addr string) (otransport.StreamConn, error) {
-				return ep.ConnectStream(ctx)
-			})
-			dialer, _ = logger.NewStreamDialer(dialer, proxyConf)
-			addr = *proxyAddr
-			auth = "testToken"
-		}
-		conf := vpn.RoutingConfig{
+		// base := dialer.NewFWMarkTCPDialer(0x711e)
+		// sd, err := transport.DialerFromWithBase(base, proxyConf)
+		// if err != nil {
+		// 	log.Fatalf("Failed to create dialer: %v", err)
+		// }
+		//
+		// var (
+		// 	dialer = sd
+		// 	addr   = proxyConf.Addr
+		// 	auth   = proxyConf.AuthToken
+		// )
+		// if *testVPN {
+		// 	// Start a local proxy server to test the VPN
+		// 	log.Debug("Starting test proxy server")
+		// 	p := proxy.New(sd, proxyConf.Addr, proxyConf.AuthToken, *proxyAddr)
+		// 	go p.Start()
+		//
+		// 	ep := otransport.StreamDialerEndpoint{
+		// 		Dialer:  &otransport.TCPDialer{},
+		// 		Address: *proxyAddr,
+		// 	}
+		// 	dialer = otransport.FuncStreamDialer(func(ctx context.Context, addr string) (otransport.StreamConn, error) {
+		// 		return ep.ConnectStream(ctx)
+		// 	})
+		// 	dialer, _ = logger.NewStreamDialer(dialer, proxyConf)
+		// 	addr = *proxyAddr
+		// 	auth = "testToken"
+		// }
+		routeConf := vpn.RoutingConfig{
 			TunName:      "radtun",
 			TunIP:        "10.10.1.2",
 			Gw:           "10.10.1.1/32",
 			Dns:          "8.8.8.8",
 			StartRouting: true,
 		}
-		client, err := vpn.NewClient(dialer, conf, addr, auth)
+
+		client, err := vpn.NewClient(proxyConf, routeConf)
 		if err != nil {
 			log.Fatalf("Failed to create VPN client: %v", err)
 		}

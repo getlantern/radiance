@@ -19,6 +19,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/getlantern/golog"
 
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/vpn/tunnel"
 )
 
@@ -42,28 +43,36 @@ type vpnClient struct {
 	routeConfig *RoutingConfig
 	tunDev      io.ReadWriteCloser
 	proxy       *tunnel.Tunnel
+
 	dialer      transport.StreamDialer
-	remoteAddr  string
-	authToken   string
+	pktListener transport.PacketListener
+
+	remoteAddr string
+	authToken  string
 
 	running     bool
 	isConnected bool
 	done        chan struct{}
 }
 
-func NewClient(dialer transport.StreamDialer, conf RoutingConfig, remoteAddr, authToken string) (*vpnClient, error) {
+func NewClient(proxyConf *config.Config, routeConf RoutingConfig) (*vpnClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
 		return client, nil
 	}
 
+	dialer, pktListener, err := newDialerListener(proxyConf)
+	if err != nil {
+		return nil, err
+	}
 	log.Debug("initializing VPN client")
 	client = &vpnClient{
-		routeConfig: &conf,
+		routeConfig: &routeConf,
 		dialer:      dialer,
-		remoteAddr:  remoteAddr,
-		authToken:   authToken,
+		pktListener: pktListener,
+		remoteAddr:  proxyConf.Addr,
+		authToken:   proxyConf.AuthToken,
 		done:        make(chan struct{}),
 	}
 	return client, nil
@@ -90,8 +99,7 @@ func (c *vpnClient) Start() (err error) {
 		}
 	}()
 
-	pl := transport.UDPListener{}
-	proxy, err := tunnel.NewTunnel(c.dialer, pl, false, c.tunDev)
+	proxy, err := tunnel.NewTunnel(c.dialer, c.pktListener, false, c.tunDev)
 	if err != nil {
 		return fmt.Errorf("failed to create device: %w", err)
 	}
@@ -107,6 +115,9 @@ func (c *vpnClient) Start() (err error) {
 		if err := startRouting(c.routeConfig, c.remoteAddr, false); err != nil {
 			return err
 		}
+	}
+	if err := checkConnectivity(c.dialer, c.remoteAddr, c.authToken); err != nil {
+		log.Debug("could not connect to server")
 	}
 	log.Debug("client started")
 	c.running = true
