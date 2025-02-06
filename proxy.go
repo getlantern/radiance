@@ -2,6 +2,7 @@ package radiance
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -23,15 +24,60 @@ type proxyHandler struct {
 	authToken string
 	dialer    transport.StreamDialer
 	// client is an http client that will be used to forward non-CONNECT requests to the proxy server.
-	client http.Client
+	client          http.Client
+	proxylessDialer transport.StreamDialer
 }
 
 func (h *proxyHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodConnect {
-		h.handleConnect(resp, req)
+		if err := h.handleProxylessConnect(resp, req); err != nil {
+			log.Debugf("failed to handle proxyless connect: %w", err)
+			h.handleConnect(resp, req)
+		}
 		return
 	}
 	h.handleNonConnect(resp, req)
+}
+
+func (h *proxyHandler) handleProxylessConnect(w http.ResponseWriter, r *http.Request) error {
+	if h.proxylessDialer == nil {
+		return fmt.Errorf("proxyless dialer not defined")
+	}
+	targetConn, err := h.proxylessDialer.DialStream(r.Context(), r.Host)
+	if err != nil {
+		return log.Errorf("failed to proxyless dial target: %w", err)
+	}
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		return log.Errorf("request doesn't support hijacking")
+	}
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		return log.Errorf("failed to hijack connection: %w", err)
+	}
+	context.AfterFunc(r.Context(), func() { clientConn.Close() })
+
+	connectReq, err := http.NewRequestWithContext(r.Context(), http.MethodConnect, r.URL.String(), http.NoBody)
+	if err != nil {
+		return log.Errorf("failed to create connect request: %w", err)
+	}
+	if err = connectReq.Write(targetConn); err != nil {
+		return log.Errorf("failed to write connect request to proxy: %w", err)
+	}
+	// Pipe data between the client and the target.
+	log.Debug("proxy connected to target, piping data")
+	go func() {
+		_, err := io.Copy(targetConn, clientConn)
+		if err != nil {
+			log.Errorf("Failed to copy data to target: %v", err)
+		}
+	}()
+	_, err = io.Copy(clientConn, targetConn)
+	if err != nil {
+		log.Errorf("Failed to copy data to client: %v", err)
+	}
+	return nil
 }
 
 // handleConnect handles CONNECT requests by dialing the proxy server and sending the CONNECT request
@@ -63,14 +109,20 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	// will close the connection when the request is done.
 	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
 
+	var connectReq *http.Request
 	// Create a new CONNECT request to send to the proxy server.
-	connectReq, err := backend.NewRequestWithHeaders(
+	connectReq, err = backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		http.MethodConnect,
 		proxyReq.URL.String(),
-		nil,
+		http.NoBody,
 	)
+	if err != nil {
+		sendError(proxyResp, "Error creating connect request", http.StatusInternalServerError, err)
+		return
+	}
 	connectReq.Header.Set(authTokenHeader, h.authToken)
+
 	if err = connectReq.Write(targetConn); err != nil {
 		sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
 		return
