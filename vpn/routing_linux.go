@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -19,6 +20,9 @@ const (
 
 // startRouting configures the routing table and IP rule to forward packets to the TUN interface.
 func startRouting(rConf *RoutingConfig, proxyAddr string, bypassUDP bool) error {
+	if err := enableIPForwarding(); err != nil {
+		return fmt.Errorf("failed to enable IP forwarding: %w", err)
+	}
 	err := configureRoutingTable(tableID, rConf)
 	if err != nil {
 		err = fmt.Errorf("could not configure routing table: %w", err)
@@ -47,6 +51,10 @@ func stopRouting(rConf *RoutingConfig) error {
 		return err
 	}
 	return nil
+}
+
+func enableIPForwarding() error {
+	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 }
 
 // configureRoutingTable adds routes to the routing table, tableID,
