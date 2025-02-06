@@ -56,13 +56,14 @@ type logRW struct {
 }
 
 func (c *logRW) Write(p []byte) (n int, err error) {
+	n, err = c.rw.Write(p)
 	if c.logBytes {
-		log.Debugf("Writing %v bytes", len(p))
+		log.Debugf("Wrote %v/%v bytes", n, len(p))
 	}
 	if c.logData {
 		log.Debug(string(p))
 	}
-	return c.rw.Write(p)
+	return n, err
 }
 
 func (c *logRW) Read(p []byte) (n int, err error) {
@@ -73,5 +74,5 @@ func (c *logRW) Read(p []byte) (n int, err error) {
 	if c.logData {
 		log.Debug(string(p[:n]))
 	}
-	return
+	return n, err
 }
