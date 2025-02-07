@@ -54,7 +54,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	// just piping data back and forth, we can give that responsibility back to the server, which
 	// will close the connection when the request is done.
 	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
-	log.Debug("hijacked connection, writing connect request")
+	log.Debug("hijacked connection")
 
 	var targetConn transport.StreamConn
 	var proxylessFailed bool
@@ -62,7 +62,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		targetConn, err = h.proxylessDialer.DialStream(proxyReq.Context(), proxyReq.Host)
 		if err != nil {
 			proxylessFailed = true
-			log.Debugf("failed to proxyless dial: %w", err)
+			log.Debugf("failed to proxyless dial: %w. Trying with proxy instead", err)
 			targetConn, err = h.dialer.DialStream(proxyReq.Context(), h.addr)
 			if err != nil {
 				sendError(proxyResp, "Failed to dial target", http.StatusServiceUnavailable, err)
@@ -91,16 +91,9 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 			return
 		}
 	} else {
-		log.Debug("trying proxyless request")
-		req, err := http.NewRequestWithContext(proxyReq.Context(), http.MethodConnect, proxyReq.URL.String(), http.NoBody)
-		if err != nil {
-			sendError(proxyResp, "Error creating connect request", http.StatusInternalServerError, err)
-			return
-		}
-		if err = req.Write(targetConn); err != nil {
-			sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
-			return
-		}
+		// if proxyless succeed, we can return a 200 response that indicates we're able to
+		// stream the request and response
+		clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	}
 
 	// Pipe data between the client and the target.
