@@ -8,7 +8,7 @@ require (
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
-	github.com/getlantern/kindling v0.0.0-20250210193232-d8fd8f2e4370
+	github.com/getlantern/kindling v0.0.0-20250210193738-66bf81b94856
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
 	go.uber.org/mock v0.5.0
