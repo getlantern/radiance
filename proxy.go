@@ -57,22 +57,27 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	log.Debug("hijacked connection")
 
 	var targetConn transport.StreamConn
-	var proxylessFailed bool
+	var proxylessFailedOrSkipped bool
+
 	if h.proxylessDialer != nil {
 		targetConn, err = h.proxylessDialer.DialStream(proxyReq.Context(), proxyReq.Host)
 		if err != nil {
-			proxylessFailed = true
+			proxylessFailedOrSkipped = true
 			log.Debugf("failed to proxyless dial: %w. Trying with proxy instead", err)
-			targetConn, err = h.dialer.DialStream(proxyReq.Context(), h.addr)
-			if err != nil {
-				sendError(proxyResp, "Failed to dial target", http.StatusServiceUnavailable, err)
-				return
-			}
+		}
+	}
+
+	if h.proxylessDialer == nil || proxylessFailedOrSkipped {
+		proxylessFailedOrSkipped = true
+		targetConn, err = h.dialer.DialStream(proxyReq.Context(), h.addr)
+		if err != nil {
+			sendError(proxyResp, "Failed to dial target", http.StatusServiceUnavailable, err)
+			return
 		}
 	}
 	defer targetConn.Close()
 
-	if proxylessFailed {
+	if proxylessFailedOrSkipped {
 		// Create a new CONNECT request to send to the proxy server.
 		connectReq, err := backend.NewRequestWithHeaders(
 			proxyReq.Context(),
@@ -114,34 +119,38 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
 	var targetReq *http.Request
 	var err error
-	var proxylessFailed bool
+	var proxylessSkipped bool
+	if h.proxylessDialer == nil {
+		proxylessSkipped = true
+	}
 
 	if h.proxylessDialer != nil {
-		targetReq, err = http.NewRequestWithContext(proxyReq.Context(), proxyReq.Method, proxyReq.URL.String(), proxyReq.Body)
+		targetReq, err = createProxylessRequest(proxyReq)
 		if err != nil {
-			proxylessFailed = true
-			log.Debugf("failed to create proxyless request: %w", err)
-			// To avoid modifying the original request, we create a new identical request that we give to
-			// the http client to modify as needed. The result is then copied to the original response writer.
-			targetReq, err = backend.NewRequestWithHeaders(
-				proxyReq.Context(),
-				proxyReq.Method,
-				proxyReq.URL.String(),
-				proxyReq.Body,
-			)
-			if err != nil {
-				sendError(proxyResp, "Error creating target request", http.StatusInternalServerError, err)
-				return
-			}
-		}
-		targetReq.Header = proxyReq.Header.Clone()
-		if proxylessFailed {
-			targetReq.Header.Set(authTokenHeader, h.authToken)
+			proxylessSkipped = true
+			log.Debugf("failed to build proxyless target request: %w", err)
 		}
 	}
 
+	if proxylessSkipped {
+		// To avoid modifying the original request, we create a new identical request that we give to
+		// the http client to modify as needed. The result is then copied to the original response writer.
+		targetReq, err = backend.NewRequestWithHeaders(
+			proxyReq.Context(),
+			proxyReq.Method,
+			proxyReq.URL.String(),
+			proxyReq.Body,
+		)
+		if err != nil {
+			sendError(proxyResp, "Error creating target request", http.StatusInternalServerError, err)
+			return
+		}
+		targetReq.Header = proxyReq.Header.Clone()
+		targetReq.Header.Set(authTokenHeader, h.authToken)
+	}
+
 	cli := h.client
-	if !proxylessFailed {
+	if !proxylessSkipped {
 		cli = http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -166,6 +175,15 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 	if err != nil {
 		sendError(proxyResp, "Failed write response", http.StatusServiceUnavailable, err)
 	}
+}
+
+func createProxylessRequest(proxyReq *http.Request) (*http.Request, error) {
+	targetReq, err := http.NewRequestWithContext(proxyReq.Context(), proxyReq.Method, proxyReq.URL.String(), proxyReq.Body)
+	if err != nil {
+		return nil, log.Errorf("failed to create proxyless request: %w", err)
+	}
+	targetReq.Header = proxyReq.Header.Clone()
+	return targetReq, nil
 }
 
 // sendError is a helper function to log an error and send an error message to the client.
