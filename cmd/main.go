@@ -12,11 +12,10 @@ var log = golog.LoggerFor("main")
 
 func main() {
 	addrFlag := flag.String("addr", "localhost:8080", "Address to listen on")
-	proxylessConfigFlag := flag.String("proxyless-config", "disorder:0|split:123", "Proxyless config for used for proxyless mode. You can find examples here: https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Examples")
 	flag.Parse()
 
 	rad := radiance.NewRadiance()
-	if err := rad.Run(*addrFlag, proxylessConfigFlag); err != nil {
+	if err := rad.Run(*addrFlag); err != nil {
 		log.Fatalf("Failed to run radiance: %v", err)
 	}
 }

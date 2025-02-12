@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/golog"
@@ -37,7 +38,7 @@ type httpServer interface {
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
 	// GetConfig returns the current proxy configuration.
-	GetConfig(ctx context.Context) (*config.Config, error)
+	GetConfig(ctx context.Context) ([]*config.Config, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
 }
@@ -62,8 +63,9 @@ type ProxyStatus struct {
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 // TODO: tunStatus need to be updated when TUN is active
 type Radiance struct {
-	srv         httpServer
-	confHandler configHandler
+	srv                  httpServer
+	confHandler          configHandler
+	activeProxyConfIndex *atomic.Int64
 
 	connected              bool
 	tunStatus              TUNStatus
@@ -77,6 +79,7 @@ type Radiance struct {
 func NewRadiance() *Radiance {
 	return &Radiance{
 		confHandler:            config.NewConfigHandler(configPollInterval),
+		activeProxyConfIndex:   new(atomic.Int64),
 		connected:              false,
 		tunStatus:              DisconnectedTUNStatus,
 		statusMutex:            new(sync.Mutex),
@@ -87,44 +90,46 @@ func NewRadiance() *Radiance {
 }
 
 // Run starts the Radiance proxy server on the specified address.
-func (r *Radiance) Run(addr string, proxylessConfig *string) error {
+func (r *Radiance) Run(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	conf, err := r.confHandler.GetConfig(ctx)
+	configs, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
 		r.setStatus(false, r.TUNStatus())
 		return err
 	}
 
-	dialer, err := transport.DialerFrom(conf)
+	var proxyConf, proxylessConf *config.Config
+	for i, conf := range configs {
+		if conf.GetConnectCfgProxyless() != nil {
+			proxylessConf = conf
+		}
+		proxyConf = conf
+		r.activeProxyConfIndex.Store(int64(i))
+	}
+
+	dialer, err := transport.DialerFrom(proxyConf)
 	if err != nil {
 		r.setStatus(false, r.TUNStatus())
 		return fmt.Errorf("Could not create dialer: %w", err)
 	}
-	log.Debugf("Creating dialer with config: %+v", conf)
+	log.Debugf("Creating dialer with config: %+v", proxyConf)
 
 	handler := proxyHandler{
-		addr:      conf.Addr,
-		authToken: conf.AuthToken,
+		addr:      proxyConf.Addr,
+		authToken: proxyConf.AuthToken,
 		dialer:    dialer,
 		client: http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, conf.Addr)
+					return dialer.DialStream(ctx, proxyConf.Addr)
 				},
 			},
 		},
 	}
 
-	if proxylessConfig != nil && *proxylessConfig != "" {
-		handler.proxylessDialer, err = proxyless.NewStreamDialer(dialer, &config.Config{
-			Protocol: "proxyless",
-			ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-				ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
-					ConfigText: *proxylessConfig,
-				},
-			},
-		})
+	if proxylessConf != nil {
+		handler.proxylessDialer, err = proxyless.NewStreamDialer(dialer, proxylessConf)
 		if err != nil {
 			return fmt.Errorf("could not create proxyless dialer: %w", err)
 		}
@@ -220,7 +225,7 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 		return ""
 	}
 
-	if location := config.GetLocation(); location != nil {
+	if location := config[r.activeProxyConfIndex.Load()].GetLocation(); location != nil {
 		return location.City
 	}
 	log.Errorf("could not retrieve location")
