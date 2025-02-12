@@ -26,6 +26,9 @@ import (
 
 var log = golog.LoggerFor("transport.proxyless")
 
+// TODO: in the future we want to persist this information on a file
+// once we have a standard directory for storing radiance info. This should be
+// useful for retrieving the last configs used that successfully worked.
 type upstreamStatus struct {
 	RemoteAddr    string
 	NumberOfTries int
