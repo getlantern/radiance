@@ -125,14 +125,6 @@ func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn)
 
 // handleNonConnect forwards non-CONNECT requests to the proxy server with the required headers.
 func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
-	if h.proxylessDialer != nil {
-		err := h.tryProxylessNonConnect(proxyResp, proxyReq)
-		if err == nil {
-			return
-		}
-		log.Debugf("proxyless request failed: %w", err)
-	}
-
 	// To avoid modifying the original request, we create a new identical request that we give to
 	// the http client to modify as needed. The result is then copied to the original response writer.
 	targetReq, err := backend.NewRequestWithHeaders(
@@ -148,33 +140,10 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 	targetReq.Header = proxyReq.Header.Clone()
 	targetReq.Header.Set(authTokenHeader, h.authToken)
 
-	if err := h.sendRequestAndPipe(proxyResp, targetReq, h.client); err != nil {
+	targetResp, err := h.client.Do(targetReq)
+	if err != nil {
 		sendError(proxyResp, "Failed to fetch destination", http.StatusServiceUnavailable, err)
-	}
-}
-
-func (h *proxyHandler) tryProxylessNonConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) error {
-	targetReq, err := http.NewRequestWithContext(proxyReq.Context(), proxyReq.Method, proxyReq.URL.String(), proxyReq.Body)
-	if err != nil {
-		return log.Errorf("failed to build proxyless target request: %w", err)
-	}
-	targetReq.Header = proxyReq.Header.Clone()
-
-	cli := http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return h.proxylessDialer.DialStream(ctx, addr)
-			},
-		},
-	}
-
-	return h.sendRequestAndPipe(proxyResp, targetReq, cli)
-}
-
-func (h *proxyHandler) sendRequestAndPipe(proxyResp http.ResponseWriter, targetReq *http.Request, cli http.Client) error {
-	targetResp, err := cli.Do(targetReq)
-	if err != nil {
-		return log.Errorf("failed to fetch destination: %w", err)
+		return
 	}
 	defer targetResp.Body.Close()
 
@@ -185,9 +154,9 @@ func (h *proxyHandler) sendRequestAndPipe(proxyResp http.ResponseWriter, targetR
 	}
 	_, err = io.Copy(proxyResp, targetResp.Body)
 	if err != nil {
-		return log.Errorf("failed to write response: %w", err)
+		sendError(proxyResp, "Failed to write response", http.StatusServiceUnavailable, err)
+		return
 	}
-	return nil
 }
 
 // sendError is a helper function to log an error and send an error message to the client.
