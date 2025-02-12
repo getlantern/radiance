@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 
@@ -107,7 +108,9 @@ func copyData(dst io.Writer, src io.Reader, errCh chan error) {
 }
 
 func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn) error {
-	targetConn, err := h.proxylessDialer.DialStream(r.Context(), r.Host)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	targetConn, err := h.proxylessDialer.DialStream(ctx, r.Host)
 	if err != nil {
 		return log.Errorf("failed to proxyless dial: %w. Trying with proxy instead", err)
 	}
