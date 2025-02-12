@@ -331,11 +331,8 @@ func TestActiveProxyLocation(t *testing.T) {
 		{
 			name: "it should return nil when failed to retrieve config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
-				r.confHandler = configHandler
 				r.connected = true
-				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
 				return r
 			},
 			assert: func(t *testing.T, location string) {
@@ -345,14 +342,9 @@ func TestActiveProxyLocation(t *testing.T) {
 		{
 			name: "it should return the location when VPN is connected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
-				r.confHandler = configHandler
 				r.connected = true
-				config := config.Config{
-					Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
-				}
-				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
+				r.proxyLocation.Store(&config.ProxyConnectConfig_ProxyLocation{City: expectedCity})
 				return r
 			},
 			assert: func(t *testing.T, location string) {

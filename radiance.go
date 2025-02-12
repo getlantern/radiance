@@ -63,9 +63,9 @@ type ProxyStatus struct {
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 // TODO: tunStatus need to be updated when TUN is active
 type Radiance struct {
-	srv                  httpServer
-	confHandler          configHandler
-	activeProxyConfIndex *atomic.Int64
+	srv           httpServer
+	confHandler   configHandler
+	proxyLocation *atomic.Value
 
 	connected              bool
 	tunStatus              TUNStatus
@@ -79,7 +79,7 @@ type Radiance struct {
 func NewRadiance() *Radiance {
 	return &Radiance{
 		confHandler:            config.NewConfigHandler(configPollInterval),
-		activeProxyConfIndex:   new(atomic.Int64),
+		proxyLocation:          new(atomic.Value),
 		connected:              false,
 		tunStatus:              DisconnectedTUNStatus,
 		statusMutex:            new(sync.Mutex),
@@ -100,12 +100,12 @@ func (r *Radiance) Run(addr string) error {
 	}
 
 	var proxyConf, proxylessConf *config.Config
-	for i, conf := range configs {
+	for _, conf := range configs {
 		if conf.GetConnectCfgProxyless() != nil {
 			proxylessConf = conf
 		}
 		proxyConf = conf
-		r.activeProxyConfIndex.Store(int64(i))
+		r.proxyLocation.Store(proxyConf.GetLocation())
 	}
 
 	dialer, err := transport.DialerFrom(proxyConf)
@@ -214,18 +214,7 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 		return ""
 	}
 
-	config, err := r.confHandler.GetConfig(ctx)
-	if err != nil {
-		log.Errorf("could not retrieve config: %w", err)
-		return ""
-	}
-
-	if config == nil {
-		log.Errorf("config is nil")
-		return ""
-	}
-
-	if location := config[r.activeProxyConfIndex.Load()].GetLocation(); location != nil {
+	if location, ok := r.proxyLocation.Load().(*config.ProxyConnectConfig_ProxyLocation); ok && location != nil {
 		return location.City
 	}
 	log.Errorf("could not retrieve location")
