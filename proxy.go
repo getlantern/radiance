@@ -139,7 +139,6 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 	}
 	targetReq.Header = proxyReq.Header.Clone()
 	targetReq.Header.Set(authTokenHeader, h.authToken)
-
 	targetResp, err := h.client.Do(targetReq)
 	if err != nil {
 		sendError(proxyResp, "Failed to fetch destination", http.StatusServiceUnavailable, err)
@@ -154,8 +153,7 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 	}
 	_, err = io.Copy(proxyResp, targetResp.Body)
 	if err != nil {
-		sendError(proxyResp, "Failed to write response", http.StatusServiceUnavailable, err)
-		return
+		sendError(proxyResp, "Failed write response", http.StatusServiceUnavailable, err)
 	}
 }
 
