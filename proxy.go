@@ -58,7 +58,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 	log.Debug("hijacked connection")
 
 	if h.proxylessDialer != nil {
-		err := h.tryProxylessConnect(proxyReq, clientConn)
+		err = h.tryProxylessConnect(proxyReq, clientConn)
 		if err == nil {
 			return
 		}
@@ -89,7 +89,9 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
 		return
 	}
-	h.pipeData(targetConn, clientConn)
+	if err = h.pipeData(targetConn, clientConn); err != nil && err != io.EOF {
+		log.Errorf("failed to pipe data between target and client connections: %w", err)
+	}
 }
 
 func (h *proxyHandler) pipeData(targetConn net.Conn, clientConn net.Conn) error {
