@@ -27,7 +27,7 @@ var (
 type Config = ProxyConnectConfig
 
 type configResult struct {
-	cfg *Config
+	cfg []*Config
 	err error
 }
 
@@ -69,7 +69,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		// make sure we have at least one proxy
 		if proxyList != nil && len(proxyList.GetProxies()) > 0 {
 			log.Debugf("received %d new proxies", len(proxyList.GetProxies()))
-			proxies = proxyList.GetProxies()[0]
+			proxies = proxyList.GetProxies()
 			log.Debugf("new proxy: %+v", proxies)
 		} else {
 			log.Debug("proxy list is empty")
@@ -110,7 +110,7 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 // will wait until one is available or the context has expired. If an error occurred during the
 // last fetch, that error is returned, as a ErrFetchingConfig, along with the most recent
 // configuration, if available. GetConfig is a blocking call.
-func (ch *ConfigHandler) GetConfig(ctx context.Context) (*Config, error) {
+func (ch *ConfigHandler) GetConfig(ctx context.Context) ([]*Config, error) {
 	_cfgRes, err := ch.config.Get(ctx)
 	if err != nil { // ctx expired
 		return nil, err

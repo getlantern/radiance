@@ -95,10 +95,10 @@ func (m *MockconfigHandler) EXPECT() *MockconfigHandlerMockRecorder {
 }
 
 // GetConfig mocks base method.
-func (m *MockconfigHandler) GetConfig(ctx context.Context) (*config.ProxyConnectConfig, error) {
+func (m *MockconfigHandler) GetConfig(ctx context.Context) ([]*config.ProxyConnectConfig, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetConfig", ctx)
-	ret0, _ := ret[0].(*config.ProxyConnectConfig)
+	ret0, _ := ret[0].([]*config.ProxyConnectConfig)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
