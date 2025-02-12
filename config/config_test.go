@@ -5,12 +5,24 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
+
+var testConfigResponse = &ConfigResponse{
+	Country: "US",
+	Proxy: &ConfigResponse_Proxy{
+		Proxies: []*ProxyConnectConfig{{
+			Track:    "track",
+			Protocol: "protocol",
+		}},
+	},
+}
 
 func TestConfigHandler_GetConfig(t *testing.T) {
 	respProxy := testConfigResponse.Proxy.Proxies[0]
@@ -115,12 +127,13 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 	}
 }
 
-var testConfigResponse = &ConfigResponse{
-	Country: "US",
-	Proxy: &ConfigResponse_Proxy{
-		Proxies: []*ProxyConnectConfig{{
-			Track:    "track",
-			Protocol: "protocol",
-		}},
-	},
+func TestPersistConfig(t *testing.T) {
+	filename := "config.test"
+	config := testConfigResponse.Proxy.Proxies[0]
+	require.NoError(t, saveConfig(filename, config))
+	defer os.Remove(filename)
+
+	loadedConfig, err := loadConfig(filename)
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(config, loadedConfig))
 }
