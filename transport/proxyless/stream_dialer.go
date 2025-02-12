@@ -1,8 +1,15 @@
-// proxyless transport adds a mode in which the client will try proxy-less solutions upon its first attempt to connect to an upstream. The client should track (in a persistent manner) its previous attempts to use proxy-less solutions for each upstream. It should only try connecting to an upstream via proxy-less solutions if one of the following is true:
+// Package proxyless transport adds a mode in which the client will try proxy-less
+// solutions upon its first attempt to connect to an upstream. The client should
+// track (in a persistent manner) its previous attempts to use proxy-less solutions
+// for each upstream. It should only try connecting to an upstream via proxy-less
+// solutions if one of the following is true:
 // - This client has never tried proxy-less solutions for this upstream before.
-// - This client was able to successfully use a proxy-less solution on its last connection to this upstream.
-// - This client has received new proxy-less configuration from the back-end since its last connection to this upstream.
-// - It has been sufficiently long since this client attempted proxy-less solutions with this upstream. Let's initially set this to 48 hours.
+// - This client was able to successfully use a proxy-less solution on its last
+// connection to this upstream.
+// - This client has received new proxy-less configuration from the back-end since
+// its last connection to this upstream.
+// - It has been sufficiently long since this client attempted proxy-less solutions
+// with this upstream.
 package proxyless
 
 import (
@@ -26,11 +33,6 @@ type upstreamStatus struct {
 	LastSuccess   int64
 	ConfigText    string
 }
-
-type contextKey string
-
-// AddrContextKey is the context key used to store the address of the target server.
-var AddrContextKey contextKey = "addr"
 
 //go:generate mockgen -destination=mock_stream_dialer_test.go -package=proxyless github.com/Jigsaw-Code/outline-sdk/transport StreamDialer
 
