@@ -48,6 +48,8 @@ const (
 	ConnectedTUNStatus    TUNStatus = "connected"
 	DisconnectedTUNStatus TUNStatus = "disconnected"
 	ConnectingTUNStatus   TUNStatus = "connecting"
+
+	configDir = ""
 )
 
 // ProxyStatus provide
@@ -75,7 +77,7 @@ type Radiance struct {
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
 	return &Radiance{
-		confHandler:            config.NewConfigHandler(configPollInterval),
+		confHandler:            config.NewConfigHandler(configDir, configPollInterval),
 		connected:              false,
 		tunStatus:              DisconnectedTUNStatus,
 		statusMutex:            new(sync.Mutex),
