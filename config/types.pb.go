@@ -1139,6 +1139,9 @@ type ProxyConnectConfig_ProxylessConfig struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// config_text contain a packet manipulation config (e.g "disorder:0|split:123").
+	// You can see more details about proxyless packet manipulation here:
+	// https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Packet_manipulation
 	ConfigText string `protobuf:"bytes,1,opt,name=config_text,json=configText,proto3" json:"config_text,omitempty"`
 }
 
