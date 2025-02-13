@@ -2,6 +2,7 @@ package radiance
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -89,7 +90,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
 		return
 	}
-	if err = h.pipeData(targetConn, clientConn); err != nil && err != io.EOF {
+	if err = h.pipeData(targetConn, clientConn); err != nil && !errors.Is(err, io.EOF) {
 		log.Errorf("failed to pipe data between target and client connections: %w", err)
 	}
 }
