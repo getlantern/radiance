@@ -88,6 +88,7 @@ func NewRadiance() *Radiance {
 // Run starts the Radiance proxy server on the specified address.
 func (r *Radiance) Run(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	log.Debug("Fetching config")
 	conf, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
@@ -102,14 +103,15 @@ func (r *Radiance) Run(addr string) error {
 	}
 	log.Debugf("Creating dialer with config: %+v", conf)
 
+	pAddr := fmt.Sprintf("%s:%d", conf.Addr, conf.Port)
 	handler := proxyHandler{
-		addr:      conf.Addr,
+		addr:      pAddr,
 		authToken: conf.AuthToken,
 		dialer:    dialer,
 		client: http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, conf.Addr)
+					return dialer.DialStream(ctx, pAddr)
 				},
 			},
 		},
@@ -160,7 +162,7 @@ func (r *Radiance) setStatus(connected bool, status TUNStatus) {
 	r.statusMutex.Unlock()
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
-	go r.notifyListeners(connected)
+	// go r.notifyListeners(connected)
 }
 
 func (r *Radiance) notifyListeners(connected bool) {
