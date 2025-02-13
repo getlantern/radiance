@@ -162,7 +162,7 @@ func (r *Radiance) setStatus(connected bool, status TUNStatus) {
 	r.statusMutex.Unlock()
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
-	// go r.notifyListeners(connected)
+	go r.notifyListeners(connected)
 }
 
 func (r *Radiance) notifyListeners(connected bool) {
