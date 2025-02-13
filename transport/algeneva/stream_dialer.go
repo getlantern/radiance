@@ -44,9 +44,9 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 	if alcfg == nil {
 		return nil, errors.New("no algeneva config found")
 	}
-	if sd, ok := innerSD.(*transport.TCPDialer); !ok {
+	if _, ok := innerSD.(*transport.TCPDialer); !ok {
 		// we need a warn log function
-		log.Debugf("Warning: the algeneva protocol will be ineffective if innerSD (%T) modifies the request-line or headers", sd)
+		log.Debugf("Warning: the algeneva protocol will be ineffective if innerSD (%T) modifies the request-line or headers", innerSD)
 	}
 
 	opts := algeneva.DialerOpts{
