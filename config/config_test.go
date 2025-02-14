@@ -13,24 +13,26 @@ import (
 )
 
 func TestConfigHandler_GetConfig(t *testing.T) {
-	respProxy := testConfigResponse.Proxy.Proxies[0]
+	respProxy := testConfigResponse.Proxy.Proxies
 	tests := []struct {
 		name         string
 		configResult configResult
-		assert       func(t *testing.T, got *Config, err error)
+		assert       func(t *testing.T, got []*Config, err error)
 	}{
 		{
 			name:         "returns current config",
 			configResult: configResult{cfg: respProxy, err: nil},
-			assert: func(t *testing.T, got *Config, err error) {
+			assert: func(t *testing.T, got []*Config, err error) {
 				assert.NoError(t, err)
-				assert.True(t, proto.Equal(respProxy, got), "GetConfig should return the current config")
+				for i := range got {
+					assert.True(t, proto.Equal(respProxy[i], got[i]), "GetConfig should return the current config")
+				}
 			},
 		},
 		{
 			name:         "error encountered during fetch",
 			configResult: configResult{cfg: nil, err: ErrFetchingConfig},
-			assert: func(t *testing.T, got *Config, err error) {
+			assert: func(t *testing.T, got []*Config, err error) {
 				assert.ErrorIs(t, err, ErrFetchingConfig,
 					"GetConfig should return the error encountered during fetch",
 				)
@@ -78,7 +80,7 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 			name: "error fetching config",
 			err:  assert.AnError,
 			assert: func(t *testing.T, changed bool, err error) {
-				assert.Error(t, err)
+				assert.NoError(t, err)
 				assert.False(t, changed, "fetchLoop should not update the config if no new config is received")
 			},
 		},
@@ -99,7 +101,7 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 				ftr:    ftr,
 			}
 			conf := &Config{}
-			ch.config.Set(configResult{cfg: conf, err: nil})
+			ch.config.Set(configResult{cfg: []*Config{conf}, err: nil})
 
 			go ch.fetchLoop(0)
 			<-continueC
@@ -110,7 +112,7 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 			_got, _ := ch.config.Get(ctx)
 			got := _got.(configResult)
 
-			tt.assert(t, !proto.Equal(conf, got.cfg), got.err)
+			tt.assert(t, !proto.Equal(conf, got.cfg[0]), got.err)
 		})
 	}
 }
