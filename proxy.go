@@ -2,8 +2,11 @@ package radiance
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 
@@ -23,7 +26,8 @@ type proxyHandler struct {
 	authToken string
 	dialer    transport.StreamDialer
 	// client is an http client that will be used to forward non-CONNECT requests to the proxy server.
-	client http.Client
+	client          http.Client
+	proxylessDialer transport.StreamDialer
 }
 
 func (h *proxyHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
@@ -38,13 +42,6 @@ func (h *proxyHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 // with the required headers. After the connection is established, data is piped between the client
 // and the target.
 func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *http.Request) {
-	targetConn, err := h.dialer.DialStream(proxyReq.Context(), h.addr)
-	if err != nil {
-		sendError(proxyResp, "Failed to dial target", http.StatusServiceUnavailable, err)
-		return
-	}
-	defer targetConn.Close()
-
 	hijacker, ok := proxyResp.(http.Hijacker)
 	if !ok {
 		http.Error(proxyResp, "request doesn't support hijacking", http.StatusInternalServerError)
@@ -55,39 +52,81 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		sendError(proxyResp, "Failed to hijack connection", http.StatusInternalServerError, err)
 		return
 	}
-
-	log.Debug("hijacked connection, writing connect request")
-
 	// We're responsible for closing the client connection since we hijacked it. But since we're
 	// just piping data back and forth, we can give that responsibility back to the server, which
 	// will close the connection when the request is done.
 	context.AfterFunc(proxyReq.Context(), func() { clientConn.Close() })
+	log.Debug("hijacked connection")
+
+	if h.proxylessDialer != nil {
+		err = h.tryProxylessConnect(proxyReq, clientConn)
+		if err == nil {
+			return
+		}
+		log.Debugf("failed with proxyless connection: %w", err)
+	}
+
+	targetConn, err := h.dialer.DialStream(proxyReq.Context(), h.addr)
+	if err != nil {
+		sendError(proxyResp, "Failed to dial target", http.StatusServiceUnavailable, err)
+		return
+	}
+	defer targetConn.Close()
 
 	// Create a new CONNECT request to send to the proxy server.
 	connectReq, err := backend.NewRequestWithHeaders(
 		proxyReq.Context(),
 		http.MethodConnect,
 		proxyReq.URL.String(),
-		nil,
+		http.NoBody,
 	)
+	if err != nil {
+		sendError(proxyResp, "Error creating connect request", http.StatusInternalServerError, err)
+		return
+	}
 	connectReq.Header.Set(authTokenHeader, h.authToken)
+
 	if err = connectReq.Write(targetConn); err != nil {
 		sendError(proxyResp, "Failed to write connect request to proxy", http.StatusInternalServerError, err)
 		return
 	}
+	if err = h.pipeData(targetConn, clientConn); err != nil && !errors.Is(err, io.EOF) {
+		log.Errorf("failed to pipe data between target and client connections: %w", err)
+	}
+}
 
+func (h *proxyHandler) pipeData(targetConn net.Conn, clientConn net.Conn) error {
 	// Pipe data between the client and the target.
 	log.Debug("proxy connected to target, piping data")
-	go func() {
-		_, err := io.Copy(targetConn, clientConn)
-		if err != nil {
-			log.Errorf("Failed to copy data to target: %v", err)
-		}
-	}()
-	_, err = io.Copy(clientConn, targetConn)
+	errCh := make(chan error, 2)
+	go copyData(targetConn, clientConn, errCh)
+	go copyData(clientConn, targetConn, errCh)
+
+	return <-errCh
+}
+
+func copyData(dst io.Writer, src io.Reader, errCh chan error) {
+	_, err := io.Copy(dst, src)
+	errCh <- err
+}
+
+func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn) error {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	targetConn, err := h.proxylessDialer.DialStream(ctx, r.Host)
 	if err != nil {
-		log.Errorf("Failed to copy data to client: %v", err)
+		return log.Errorf("failed to proxyless dial: %w. Trying with proxy instead", err)
 	}
+	defer targetConn.Close()
+
+	// if proxyless succeed, we can return a 200 response that indicates we're able to
+	// stream the request and response
+	_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	if err != nil {
+		return log.Errorf("failed to send connection established: %w", err)
+	}
+
+	return h.pipeData(targetConn, clientConn)
 }
 
 // handleNonConnect forwards non-CONNECT requests to the proxy server with the required headers.

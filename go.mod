@@ -4,11 +4,13 @@ go 1.22.4
 
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.18-0.20241106233708-faffebb12629
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20250131142109-b32720fa2c3e
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/kindling v0.0.0-20250210193738-66bf81b94856
+	github.com/golang/protobuf v1.5.3
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
 	go.uber.org/mock v0.5.0
@@ -16,7 +18,6 @@ require (
 )
 
 require (
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.0-20250113162209-efa808309e1e // indirect
 	github.com/alitto/pond/v2 v2.1.5 // indirect
 	github.com/andybalholm/brotli v1.0.6 // indirect
 	github.com/cloudflare/circl v1.3.7 // indirect
@@ -42,6 +43,7 @@ require (
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/goccy/go-yaml v1.15.13 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/pgzip v1.2.5 // indirect
 	github.com/kr/pretty v0.3.1 // indirect

@@ -135,6 +135,13 @@ message ProxyConnectConfig {
     string transport = 2;
   }
 
+  message ProxylessConfig {
+    // config_text contain a packet manipulation config (e.g "disorder:0|split:123").
+    // You can see more details about proxyless packet manipulation here: 
+    // https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Packet_manipulation
+    string config_text = 1;
+  }
+
   oneof protocol_config {
     TLSConfig connect_cfg_tls = 20;
     TLSMasqConfig connect_cfg_tlsmasq = 21;
@@ -143,5 +150,6 @@ message ProxyConnectConfig {
     StarbridgeConfig connect_cfg_starbridge = 24;
     AlgenevaConfig connect_cfg_algeneva = 25;
     WATERConfig connect_cfg_water = 26;
+    ProxylessConfig connect_cfg_proxyless = 28;
   }
 }
