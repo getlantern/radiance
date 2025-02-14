@@ -41,7 +41,8 @@ Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
 				ProtocolConfig: protocolConfig,
 			},
 			assert: func(t *testing.T, got transport.StreamDialer, cfg *config.Config, err error) {
-
+				assert.NoError(t, err)
+				assert.NotNil(t, got)
 			},
 		},
 		{
