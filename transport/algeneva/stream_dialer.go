@@ -28,6 +28,8 @@ var log = golog.LoggerFor("transport.algeneva")
 type StreamDialer struct {
 	innerSD transport.StreamDialer
 	opts    algeneva.DialerOpts
+	// dialAlg is a function that dials a connection using the algeneva protocol.
+	dialAlg func(context.Context, string, string, algeneva.DialerOpts) (net.Conn, error)
 }
 
 // NewStreamDialer creates a new algeneva StreamDialer using the provided configuration.
@@ -53,6 +55,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 	return &StreamDialer{
 		innerSD: innerSD,
 		opts:    opts,
+		dialAlg: algeneva.DialContext,
 	}, nil
 }
 
@@ -65,7 +68,7 @@ func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (trans
 	}
 	opts := d.opts
 	opts.Dialer = &dialer{conn: sd}
-	conn, err := algeneva.DialContext(ctx, "tcp", remoteAddr, opts)
+	conn, err := d.dialAlg(ctx, "tcp", remoteAddr, opts)
 	if err != nil {
 		log.Debugf("algeneva.DialContext: %v", err)
 		return nil, err

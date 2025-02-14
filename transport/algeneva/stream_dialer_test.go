@@ -2,6 +2,7 @@ package algeneva
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
@@ -95,22 +96,24 @@ func (m *mockStreamConn) CloseWrite() error {
 	return args.Error(0)
 }
 
-// TODO: fix this test
 func TestDialStream(t *testing.T) {
 	name := "preserves inner dialer close read/write"
+	dl := func(ctx context.Context, network, address string, opts algeneva.DialerOpts) (net.Conn, error) {
+		return &net.TCPConn{}, nil
+	}
 	t.Run(name, func(t *testing.T) {
 		mockDialer := new(mockStreamDialer)
 		mockConn := new(mockStreamConn)
 		ctx := context.Background()
-		remoteAddr := "127.0.0.1:8080"
 
-		mockDialer.On("DialStream", ctx, remoteAddr).Return(mockConn, nil)
+		mockDialer.On("DialStream", ctx, "").Return(mockConn, nil)
 		dialer := &StreamDialer{
 			innerSD: mockDialer,
 			opts:    algeneva.DialerOpts{},
+			dialAlg: dl,
 		}
 
-		conn, err := dialer.DialStream(ctx, remoteAddr)
+		conn, err := dialer.DialStream(ctx, "")
 		assert.NoError(t, err)
 		assert.NotNil(t, conn)
 		mockDialer.AssertExpectations(t)
