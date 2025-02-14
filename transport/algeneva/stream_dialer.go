@@ -4,11 +4,6 @@ route traffic through a proxy server.
 
 HTTP strategies can be found here:
 https://github.com/getlantern/algeneva/blob/main/strategies.go
-
-Application layer geneva modifies the request-line or headers of the request using the specified strategy.
-Any further modifications to these fields essentially breaks the geneva protocol. Due to this, it
-is recommended to only wrap a StreamDialer that does not modify the request-line or headers for it
-to be effective, such as the [transport.TCPDialer].
 */
 package algeneva
 
