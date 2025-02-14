@@ -31,17 +31,10 @@ type StreamDialer struct {
 }
 
 // NewStreamDialer creates a new algeneva StreamDialer using the provided configuration.
-//
-// Note: it is recommended to only wrap a StreamDialer that does not modify the request-line or headers
-// such as the [transport.TCPDialer] for the geneva protocol to be effective.
 func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
 	alcfg := cfg.GetConnectCfgAlgeneva()
 	if alcfg == nil {
 		return nil, errors.New("no algeneva config found")
-	}
-	if _, ok := innerSD.(*transport.TCPDialer); !ok {
-		// we need a warn log function
-		log.Debugf("Warning: the algeneva protocol will be ineffective if innerSD (%T) modifies the request-line or headers", innerSD)
 	}
 
 	opts := algeneva.DialerOpts{
@@ -81,7 +74,7 @@ func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (trans
 }
 
 // dialer is a helper struct that implements the [algeneva.Dialer] interface, which requires a Dial
-// method. This also allows us to still have access to CloseRead and CloseWrite on the inned StreamConn
+// method. This also allows us to still have access to CloseRead and CloseWrite on the inner StreamConn
 // by wrapping it in a dialer and passing it to algeneva in the dialer opts. algeneva will receive
 // the established StreamConn when it calls Dial or DialContext.
 type dialer struct {
