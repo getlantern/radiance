@@ -92,6 +92,7 @@ func NewRadiance() *Radiance {
 // Run starts the Radiance proxy server on the specified address.
 func (r *Radiance) Run(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	log.Debug("Fetching config")
 	configs, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
@@ -115,14 +116,15 @@ func (r *Radiance) Run(addr string) error {
 	}
 	log.Debugf("Creating dialer with config: %+v", proxyConf)
 
+	pAddr := fmt.Sprintf("%s:%d", proxyConf.Addr, proxyConf.Port)
 	handler := proxyHandler{
-		addr:      proxyConf.Addr,
+		addr:      pAddr,
 		authToken: proxyConf.AuthToken,
 		dialer:    dialer,
 		client: http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, proxyConf.Addr)
+					return dialer.DialStream(ctx, pAddr)
 				},
 			},
 		},

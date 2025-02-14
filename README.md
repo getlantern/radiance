@@ -10,6 +10,7 @@ What's the "core" idea behind a lantern, and I guess a flashlight? _Light_, or s
 ##### supported protocols
 - shadowsocks
 - multiplexing
+- algeneva
 
 ### Add transports
 New transports/protocols can be added by implementing [transport.StreamDialer](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk@v0.0.17/transport#StreamDialer) and creating a [BuilderFn](https://github.com/getlantern/radiance/blob/main/transport/transport.go#L21). Create a new package in `transport` (_e.g._ `transport/myTransport`) and add the necessary code to run the transport here, including the `StreamDialer` and `BuilderFn`. Then add `registerDialerBuilder("myTransportName", myTransport.MyBuilderFn)` to `init` in [register.go](https://github.com/getlantern/radiance/blob/main/transport/register.go) to enable it. `myTransportName` must match [protocol](https://github.com/getlantern/radiance/blob/main/config/config.go#L16) in the proxy config as this is what's used to configure the dialer.
@@ -26,12 +27,12 @@ go run cmd/main.go -addr localhost:8080
 ```
 
 ## TODO
-- [x] Create an Outline transport StreamDialer using a proxy config. (shadowsocks w/ multiplex)
+- [x] Create an Outline transport StreamDialer using a proxy config.
 - [x] Connect to and route requests to backend proxy using a StreamDialer.
 - [x] Retrieve proxy config from backend.
 - [ ] Implement remaining protocols
   - [ ] tls w/ frag
-  - [ ] algeneva
+  - [x] algeneva
   - [ ] tlsmasq
   - [ ] water
   - [ ] starbridge
