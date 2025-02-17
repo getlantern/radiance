@@ -25,7 +25,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create box: %v", err)
 	}
-	b.Close()
 	err = b.Start()
 	if err != nil {
 		log.Fatalf("Failed to start box: %v", err)
