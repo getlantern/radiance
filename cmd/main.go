@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/getlantern/golog"
 
@@ -23,20 +25,32 @@ func main() {
 
 	b, err := client.NewBox()
 	if err != nil {
-		log.Fatalf("Failed to create box: %v", err)
+		log.Fatalf("failed to create box: %v", err)
 	}
 	err = b.Start()
 	if err != nil {
-		log.Fatalf("Failed to start box: %v", err)
+		log.Fatalf("failed to start box: %v", err)
 	}
-	log.Debug("Box started")
+	log.Debug("box started")
 	defer func() {
-		log.Debug("Box stopping")
-		err := b.Close()
-		if err != nil {
-			log.Errorf("Failed to close box: %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		var err error
+		log.Debug("stopping box..")
+		go func() {
+			err = b.Close()
+			cancel()
+		}()
+		<-ctx.Done()
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
+			log.Error("timed out waiting for box to close")
+		case context.Canceled:
+			if err != nil {
+				log.Errorf("failed to close box: %v", err)
+			} else {
+				log.Debug("box stopped")
+			}
 		}
-		log.Debug("Box stopped")
 	}()
 
 	sig := make(chan os.Signal, 1)
