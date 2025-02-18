@@ -15,7 +15,6 @@ import (
 	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/transport/logger"
 )
 
 // BuilderFn is a function that creates a new StreamDialer wrapping innerSD.
@@ -46,7 +45,7 @@ func DialerFromWithBase(base transport.StreamDialer, config *config.Config) (tra
 	}
 
 	dialer, _ = dialerBuilders["multiplex"](dialer, config)
-	dialer, _ = logger.NewStreamDialer(dialer, config)
+	// dialer, _ = logger.NewStreamDialer(dialer, config)
 	return dialer, nil
 }
 
