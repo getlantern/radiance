@@ -52,7 +52,9 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	alog.Debug("getting config")
 	ch := config.NewConfigHandler(time.Minute * 10)
-	conf, err := ch.GetConfig(ctx)
+	cctx, cancel := context.WithTimeout(ctx, time.Second*30)
+	defer cancel()
+	conf, err := ch.GetConfig(cctx)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +80,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		logger:  logger,
 		dialer:  dialer,
 		client: sHTTP.NewClient(sHTTP.Options{
-			Dialer:  &sdBoxDialer{sd: outSD, logger: logger},
+			Dialer:  &sdBoxDialer{sd: dialer, logger: logger},
 			Server:  srvOpts.Build(),
 			Headers: header,
 		}),

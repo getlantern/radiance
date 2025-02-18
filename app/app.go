@@ -11,6 +11,9 @@ const (
 	DeviceId = "some-uuid-here"
 
 	// userId and proToken will be set to actual values when user management is implemented.
-	UserId   = "23409" // set to specific value so the server returns a desired config.
+	// set to specific value so the server returns a desired config.
+	// - 23409 -> shadowsocks
+	// - 23403 -> algeneva
+	UserId   = "23403"
 	ProToken = ""
 )

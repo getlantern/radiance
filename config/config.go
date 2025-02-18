@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	sync "sync"
@@ -58,9 +59,9 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 		closeOnce:  &sync.Once{},
 		configPath: filepath.Join(configDir, configFileName),
 	}
-	if err := ch.loadConfig(); err != nil {
-		log.Errorf("failed to load config: %v", err)
-	}
+	// if err := ch.loadConfig(); err != nil {
+	// 	log.Errorf("failed to load config: %v", err)
+	// }
 
 	// TODO: Ideally we would know the user locale here on radiance startup.
 	// k := kindling.NewKindling(
@@ -68,7 +69,8 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 	// 	kindling.WithProxyless("api.iantem.io"),
 	// )
 	// ch.ftr = newFetcher(k.NewHTTPClient())
-	// go ch.fetchLoop(pollInterval)
+	ch.ftr = newFetcher(&http.Client{})
+	go ch.fetchLoop(pollInterval)
 	return ch
 }
 

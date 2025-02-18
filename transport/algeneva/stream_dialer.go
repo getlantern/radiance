@@ -61,6 +61,7 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 
 // DialStream implements the [transport.StreamDialer] interface.
 func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (transport.StreamConn, error) {
+	log.Debugf("dialing %v", remoteAddr)
 	sd, err := d.innerSD.DialStream(ctx, remoteAddr)
 	if err != nil {
 		log.Debugf("innerSD: %v", err)
