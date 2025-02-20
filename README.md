@@ -1,3 +1,5 @@
+[![Go](https://github.com/getlantern/radiance/actions/workflows/go.yml/badge.svg)](https://github.com/getlantern/radiance/actions/workflows/go.yml)
+
 # Radiance
 _(WIP)_
 
