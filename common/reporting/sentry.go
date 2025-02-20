@@ -1,4 +1,4 @@
-package sentry
+package reporting
 
 import (
 	"time"
@@ -10,7 +10,7 @@ import (
 
 var log = golog.LoggerFor("sentry")
 
-func InitSentry() {
+func Init() {
 	err := sentry.Init(sentry.ClientOptions{
 		Dsn:              "https://f0b8f24478c68542e418ba644051ef56@o75725.ingest.us.sentry.io/4508853370093568",
 		AttachStacktrace: true,

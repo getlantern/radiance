@@ -17,7 +17,7 @@ import (
 	"github.com/getlantern/golog"
 	"github.com/getsentry/sentry-go"
 
-	rsentry "github.com/getlantern/radiance/common/sentry"
+	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
 	"github.com/getlantern/radiance/transport/proxyless"
@@ -93,7 +93,7 @@ func NewRadiance() *Radiance {
 
 // Run starts the Radiance proxy server on the specified address.
 func (r *Radiance) Run(addr string) error {
-	rsentry.InitSentry()
+	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	log.Debug("Fetching config")
 	configs, err := r.confHandler.GetConfig(ctx)
@@ -193,7 +193,16 @@ func (r *Radiance) setStatus(connected bool, status TUNStatus) {
 	r.statusMutex.Unlock()
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
-	go r.notifyListeners(connected)
+	go func() {
+		// Recover from panics to avoid crashing the Radiance main loop
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("Recovered from panic: %v", r)
+				reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
+			}
+		}()
+		r.notifyListeners(connected)
+	}()
 }
 
 func (r *Radiance) notifyListeners(connected bool) {

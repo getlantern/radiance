@@ -13,7 +13,7 @@ import (
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
 	"github.com/getlantern/kindling"
-	"github.com/getlantern/radiance/common/sentry"
+	"github.com/getlantern/radiance/common/reporting"
 )
 
 var (
@@ -51,7 +51,7 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 	}
 	// TODO: Ideally we would know the user locale here on radiance startup.
 	k := kindling.NewKindling(
-		kindling.WithPanicListener(sentry.PanicListener),
+		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
 		kindling.WithProxyless("api.iantem.io"),
 	)
