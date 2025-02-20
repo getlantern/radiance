@@ -9,7 +9,7 @@ require (
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
-	github.com/getlantern/kindling v0.0.0-20250210193738-66bf81b94856
+	github.com/getlantern/kindling v0.0.0-20250219132519-d16b5c65a853
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
 	github.com/golang/protobuf v1.5.3
 	github.com/stretchr/testify v1.10.0
@@ -17,6 +17,8 @@ require (
 	go.uber.org/mock v0.5.0
 	google.golang.org/protobuf v1.35.1
 )
+
+require golang.org/x/text v0.21.0 // indirect
 
 require (
 	github.com/alitto/pond/v2 v2.1.5 // indirect
@@ -31,7 +33,7 @@ require (
 	github.com/getlantern/elevate v0.0.0-20220903142053-479ab992b264 // indirect
 	github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731 // indirect
 	github.com/getlantern/filepersist v0.0.0-20210901195658-ed29a1cb0b7c // indirect
-	github.com/getlantern/fronted v0.0.0-20250205182429-f8aa4896e1e5 // indirect
+	github.com/getlantern/fronted v0.0.0-20250219040712-771dbc843542 // indirect
 	github.com/getlantern/hex v0.0.0-20220104173244-ad7e4b9194dc // indirect
 	github.com/getlantern/hidden v0.0.0-20220104173330-f221c5a24770 // indirect
 	github.com/getlantern/iptool v0.0.0-20230112135223-c00e863b2696 // indirect
@@ -41,6 +43,7 @@ require (
 	github.com/getlantern/netx v0.0.0-20240830183145-c257516187f0 // indirect
 	github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 // indirect
 	github.com/getlantern/tlsdialer/v3 v3.0.3 // indirect
+	github.com/getsentry/sentry-go v0.31.1
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
@@ -68,6 +71,5 @@ require (
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
