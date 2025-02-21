@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/getlantern/golog"
+	"github.com/getsentry/sentry-go"
 
+	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
 	"github.com/getlantern/radiance/transport/proxyless"
@@ -91,13 +93,15 @@ func NewRadiance() *Radiance {
 
 // Run starts the Radiance proxy server on the specified address.
 func (r *Radiance) Run(addr string) error {
+	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	log.Debug("Fetching config")
 	configs, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
 		r.setStatus(false, r.TUNStatus())
-		return err
+		sentry.CaptureException(err)
+		return fmt.Errorf("Could not fetch config: %w", err)
 	}
 
 	var proxyConf, proxylessConf *config.Config
@@ -112,6 +116,7 @@ func (r *Radiance) Run(addr string) error {
 	dialer, err := transport.DialerFrom(proxyConf)
 	if err != nil {
 		r.setStatus(false, r.TUNStatus())
+		sentry.CaptureException(err)
 		return fmt.Errorf("Could not create dialer: %w", err)
 	}
 	log.Debugf("Creating dialer with config: %+v", proxyConf)
@@ -133,11 +138,16 @@ func (r *Radiance) Run(addr string) error {
 	if proxylessConf != nil {
 		handler.proxylessDialer, err = proxyless.NewStreamDialer(dialer, proxylessConf)
 		if err != nil {
+			sentry.CaptureException(err)
 			return fmt.Errorf("could not create proxyless dialer: %w", err)
 		}
 	}
 
-	r.srv = &http.Server{Handler: &handler}
+	r.srv = &http.Server{
+		Handler: &handler,
+		// Prevent slowloris attacks by setting a read timeout.
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	r.setStatus(true, r.TUNStatus())
 	return r.listenAndServe(addr)
@@ -183,7 +193,16 @@ func (r *Radiance) setStatus(connected bool, status TUNStatus) {
 	r.statusMutex.Unlock()
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
-	go r.notifyListeners(connected)
+	go func() {
+		// Recover from panics to avoid crashing the Radiance main loop
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("Recovered from panic: %v", r)
+				reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
+			}
+		}()
+		r.notifyListeners(connected)
+	}()
 }
 
 func (r *Radiance) notifyListeners(connected bool) {

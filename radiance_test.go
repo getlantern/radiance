@@ -167,7 +167,7 @@ func TestStartVPN(t *testing.T) {
 				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
 				r.confHandler = configHandler
-				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config.Config{}, nil)
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{}}, nil)
 
 				return r
 			},
@@ -184,10 +184,10 @@ func TestStartVPN(t *testing.T) {
 				r := NewRadiance()
 				r.confHandler = configHandler
 				// expect to get config twice, once for the initial check and once for active proxy location
-				configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config.Config{
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{
 					Protocol: "logger",
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
-				}, nil).Times(2)
+				}}, nil).Times(1)
 
 				return r
 			},
@@ -370,14 +370,8 @@ func TestProxyStatus(t *testing.T) {
 	defer ctrl.Finish()
 
 	expectedCity := "New York"
-	configHandler := NewMockconfigHandler(ctrl)
-	config := config.Config{
-		Location: &config.ProxyConnectConfig_ProxyLocation{City: expectedCity},
-	}
-	configHandler.EXPECT().GetConfig(gomock.Any()).Return(&config, nil)
-
 	r := NewRadiance()
-	r.confHandler = configHandler
+	r.proxyLocation.Store(&config.ProxyConnectConfig_ProxyLocation{City: expectedCity})
 	var statusChan <-chan ProxyStatus
 	t.Run("it should", func(t *testing.T) {
 		t.Run("not return a nil channel", func(t *testing.T) {
