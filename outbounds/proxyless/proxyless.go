@@ -1,4 +1,4 @@
-package proxyless_outbound
+package proxyless
 
 import (
 	"context"
@@ -14,13 +14,14 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/logger"
 	"github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/network"
 )
 
-var log = golog.LoggerFor("proxyless")
+var glog = golog.LoggerFor("proxyless")
 
 type ProxylessOutboundOptions struct {
 	option.DialerOptions
@@ -33,18 +34,18 @@ type Outbound struct {
 	client *http.Client
 }
 
-func NewOutbound(ctx context.Context, router adapter.Router, logger logger.ContextLogger, tag string, options ProxylessOutboundOptions) (adapter.Outbound, error) {
-	log.Debug("creating outbound dialer")
+func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options ProxylessOutboundOptions) (adapter.Outbound, error) {
+	glog.Debug("creating outbound dialer")
 	_, err := dialer.New(ctx, options.DialerOptions)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Debug("getting config")
+	glog.Debug("getting config")
 	ch := config.NewConfigHandler(time.Minute * 10)
-	cctx, cancel := context.WithTimeout(ctx, time.Second*30)
+	configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
 	defer cancel()
-	conf, err := ch.GetConfig(cctx)
+	conf, err := ch.GetConfig(configCtx)
 	if err != nil {
 		return nil, err
 	}
