@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -59,37 +60,44 @@ func getopts() option.Options {
 				Type: "algeneva",
 				Tag:  "algeneva-out",
 			},
+			{
+				Type: "proxyless",
+				Tag:  "proxyless-out",
+			},
 		},
 		Route: &option.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []option.Rule{
 				{
-					Type: "default",
+					Type: constant.RuleTypeDefault,
 					DefaultOptions: option.DefaultRule{
 						RawDefaultRule: option.RawDefaultRule{
 							Inbound: badoption.Listable[string]{"tun-in"},
 						},
 						RuleAction: option.RuleAction{
-							Action:       "sniff",
-							RouteOptions: option.RouteActionOptions{},
+							Action: constant.RuleActionTypeSniff,
+							RouteOptions: option.RouteActionOptions{
+								Outbound: "proxyless-out",
+							},
 						},
 					},
 				},
 				{
-					Type: "default",
+					Type: constant.RuleTypeDefault,
 					DefaultOptions: option.DefaultRule{
 						RawDefaultRule: option.RawDefaultRule{
 							Inbound: badoption.Listable[string]{"tun-in"},
 							Domain:  badoption.Listable[string]{"ipconfig.io"},
 						},
 						RuleAction: option.RuleAction{
-							Action: "route",
+							Action: constant.RuleActionTypeRoute,
 							RouteOptions: option.RouteActionOptions{
 								Outbound: "algeneva-out",
 							},
 						},
 					},
 				},
+				{},
 			},
 		},
 	}
