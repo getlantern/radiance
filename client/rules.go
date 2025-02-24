@@ -97,7 +97,6 @@ func getopts() option.Options {
 						},
 					},
 				},
-				{},
 			},
 		},
 	}
