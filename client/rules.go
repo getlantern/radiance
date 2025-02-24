@@ -76,9 +76,6 @@ func getopts() option.Options {
 						},
 						RuleAction: option.RuleAction{
 							Action: constant.RuleActionTypeSniff,
-							RouteOptions: option.RouteActionOptions{
-								Outbound: "proxyless-out",
-							},
 						},
 					},
 				},
@@ -93,6 +90,21 @@ func getopts() option.Options {
 							Action: constant.RuleActionTypeRoute,
 							RouteOptions: option.RouteActionOptions{
 								Outbound: "algeneva-out",
+							},
+						},
+					},
+				},
+				{
+					Type: constant.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Inbound: badoption.Listable[string]{"tun-in"},
+							Domain:  badoption.Listable[string]{"ifconfig.me"},
+						},
+						RuleAction: option.RuleAction{
+							Action: constant.RuleActionTypeRoute,
+							RouteOptions: option.RouteActionOptions{
+								Outbound: "proxyless-out",
 							},
 						},
 					},

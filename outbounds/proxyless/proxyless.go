@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 
 	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/getlantern/golog"
@@ -42,15 +41,21 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 
 	glog.Debug("getting config")
-	ch := config.NewConfigHandler(time.Minute * 10)
-	configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
-	defer cancel()
-	conf, err := ch.GetConfig(configCtx)
-	if err != nil {
-		return nil, err
-	}
+	// ch := config.NewConfigHandler(time.Minute * 10)
+	// configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
+	// defer cancel()
+	// conf, err := ch.GetConfig(configCtx)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	dialer, err := proxyless.NewStreamDialer(nil, conf[0])
+	dialer, err := proxyless.NewStreamDialer(nil, &config.ProxyConnectConfig{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+				ConfigText: "split:2|split:123",
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +71,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = o.Tag()
 	metadata.Destination = destination
+	glog.Debugf("received proxyless request to %q domain", metadata.Domain)
 	conn, err := o.dialer.DialStream(ctx, metadata.Domain)
 	if err != nil {
 		o.logger.ErrorContext(ctx, "failed to dial to %q: %w", metadata.Domain, err)
