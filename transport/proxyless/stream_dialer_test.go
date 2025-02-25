@@ -180,7 +180,8 @@ func TestDialStream(t *testing.T) {
 		{
 			name: "it should return an error when none of the conditions are met",
 			dialer: func(ctrl *gomock.Controller) *StreamDialer {
-				dialer, err := NewStreamDialer(nil, validConfig)
+				innerSD := NewMockStreamDialer(ctrl)
+				dialer, err := NewStreamDialer(innerSD, validConfig)
 				require.NoError(t, err)
 
 				d := dialer.(*StreamDialer)
@@ -192,6 +193,22 @@ func TestDialStream(t *testing.T) {
 					ConfigText:    validConfig.GetConnectCfgProxyless().GetConfigText(),
 				}
 				return d
+			},
+			givenContext:    context.Background(),
+			givenRemoteAddr: remoteAddr,
+			assert: func(t *testing.T, conn transport.StreamConn, err error) {
+				assert.Error(t, err)
+				assert.Nil(t, conn)
+			},
+		},
+		{
+			name: "it should return an error when it fail to dial",
+			dialer: func(ctrl *gomock.Controller) *StreamDialer {
+				innerSD := NewMockStreamDialer(ctrl)
+				innerSD.EXPECT().DialStream(gomock.Any(), gomock.Any()).Return(nil, assert.AnError)
+				dialer, err := NewStreamDialer(innerSD, validConfig)
+				require.NoError(t, err)
+				return dialer.(*StreamDialer)
 			},
 			givenContext:    context.Background(),
 			givenRemoteAddr: remoteAddr,
