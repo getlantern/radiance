@@ -50,9 +50,9 @@ type StreamDialer struct {
 
 // NewStreamDialer build a Proxyless StreamDialer that will try to connect to the upstream by using the proxyless configuration
 // if the conditions are met.
-func NewStreamDialer(_ transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
+func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
 	configText := cfg.GetConnectCfgProxyless().GetConfigText()
-	provider := configurl.NewDefaultProviders()
+	provider := createProvider(innerSD)
 	dialer, err := provider.NewStreamDialer(context.Background(), configText)
 	if err != nil {
 		return nil, fmt.Errorf("failed to created proxyless dialer: %w", err)
@@ -64,6 +64,19 @@ func NewStreamDialer(_ transport.StreamDialer, cfg *config.Config) (transport.St
 		upstreamStatusCache:      make(map[string]upstreamStatus),
 		currentConfig:            configText,
 	}, nil
+}
+
+// createProvider
+func createProvider(innerSD transport.StreamDialer) *configurl.ProviderContainer {
+	container := configurl.NewProviderContainer()
+	newSD := func(ctx context.Context, config *configurl.Config) (transport.StreamDialer, error) {
+		return innerSD, nil
+	}
+	registerDisorderDialer(&container.StreamDialers, "disorder", newSD)
+	registerSplitStreamDialer(&container.StreamDialers, "split", newSD)
+	registerTLSFragStreamDialer(&container.StreamDialers, "tlsfrag", newSD)
+
+	return container
 }
 
 func (d *StreamDialer) getUpstreamStatus(remoteAddr string) upstreamStatus {
