@@ -75,6 +75,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = o.Tag()
 	metadata.Destination = destination
+	ctx = context.WithValue(ctx, proxyless.RemoteAddrContextKey, destination.String())
 	o.logger.InfoContext(ctx, "received proxyless request to %q domain", metadata.Domain)
 	conn, err := o.dialer.DialStream(ctx, metadata.Domain)
 	if err != nil {
