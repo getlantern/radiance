@@ -7,6 +7,7 @@ package radiance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,8 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/golog"
 	"github.com/getsentry/sentry-go"
+
+	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
@@ -28,6 +30,10 @@ var (
 
 	configPollInterval = 10 * time.Minute
 )
+
+// ErrNotImplemented is returned by functions which have not yet been implemented. The existence of
+// this error is temporary; this will go away when the API stabilized.
+var ErrNotImplemented = errors.New("not yet implemented")
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
 
@@ -45,53 +51,30 @@ type configHandler interface {
 	Stop()
 }
 
-// TUNStatus is a type used for representing the state of the TUN device and routing configuration.
-type TUNStatus string
-
-const (
-	ConnectedTUNStatus    TUNStatus = "connected"
-	DisconnectedTUNStatus TUNStatus = "disconnected"
-	ConnectingTUNStatus   TUNStatus = "connecting"
-)
-
-// ProxyStatus provide
-type ProxyStatus struct {
-	Connected bool
-	// Location provides the proxy's geographical location. If connected is false,
-	// the value will be a empty string.
-	Location string
-}
-
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
-// TODO: tunStatus need to be updated when TUN is active
 type Radiance struct {
 	srv           httpServer
 	confHandler   configHandler
 	proxyLocation *atomic.Value
 
-	connected              bool
-	tunStatus              TUNStatus
-	statusMutex            sync.Locker
-	stopChan               chan struct{}
-	proxyStatusListenersMu sync.Locker
-	proxyStatusListeners   []chan ProxyStatus
+	connected   bool
+	statusMutex sync.Locker
+	stopChan    chan struct{}
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
 	return &Radiance{
-		confHandler:            config.NewConfigHandler(configPollInterval),
-		proxyLocation:          new(atomic.Value),
-		connected:              false,
-		tunStatus:              DisconnectedTUNStatus,
-		statusMutex:            new(sync.Mutex),
-		proxyStatusListenersMu: new(sync.Mutex),
-		stopChan:               make(chan struct{}),
-		proxyStatusListeners:   make([]chan ProxyStatus, 0),
+		confHandler:   config.NewConfigHandler(configPollInterval),
+		proxyLocation: new(atomic.Value),
+		connected:     false,
+		statusMutex:   new(sync.Mutex),
+		stopChan:      make(chan struct{}),
 	}
 }
 
 // Run starts the Radiance proxy server on the specified address.
+// This function will be replaced by StartVPN as part of https://github.com/getlantern/engineering/issues/1883
 func (r *Radiance) Run(addr string) error {
 	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -99,7 +82,7 @@ func (r *Radiance) Run(addr string) error {
 	configs, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
-		r.setStatus(false, r.TUNStatus())
+		r.setStatus(false)
 		sentry.CaptureException(err)
 		return fmt.Errorf("Could not fetch config: %w", err)
 	}
@@ -115,7 +98,7 @@ func (r *Radiance) Run(addr string) error {
 
 	dialer, err := transport.DialerFrom(proxyConf)
 	if err != nil {
-		r.setStatus(false, r.TUNStatus())
+		r.setStatus(false)
 		sentry.CaptureException(err)
 		return fmt.Errorf("Could not create dialer: %w", err)
 	}
@@ -149,7 +132,7 @@ func (r *Radiance) Run(addr string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	r.setStatus(true, r.TUNStatus())
+	r.setStatus(true)
 	return r.listenAndServe(addr)
 }
 
@@ -164,6 +147,7 @@ func (r *Radiance) listenAndServe(addr string) error {
 }
 
 // Shutdown stops the Radiance server.
+// This function will be replaced by StopVPN as part of https://github.com/getlantern/engineering/issues/1883
 func (r *Radiance) Shutdown(ctx context.Context) error {
 	if !r.connectionStatus() {
 		return nil
@@ -175,7 +159,7 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 	r.confHandler.Stop()
-	r.setStatus(false, r.TUNStatus())
+	r.setStatus(false)
 	close(r.stopChan)
 	// Flush sentry events before returning
 	if result := sentry.Flush(6 * time.Second); !result {
@@ -184,16 +168,32 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// StartVPN starts the local VPN device, configuring routing rules such that network traffic on this
+// machine is sent through this instance of Radiance.
+//
+// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
+func (r *Radiance) StartVPN() error {
+	// TODO: implement me!
+	return ErrNotImplemented
+}
+
+// StopVPN stops the local VPN device and removes routing rules configured by StartVPN.
+//
+// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
+func (r *Radiance) StopVPN() error {
+	// TODO: implement me!
+	return ErrNotImplemented
+}
+
 func (r *Radiance) connectionStatus() bool {
 	r.statusMutex.Lock()
 	defer r.statusMutex.Unlock()
 	return r.connected
 }
 
-func (r *Radiance) setStatus(connected bool, status TUNStatus) {
+func (r *Radiance) setStatus(connected bool) {
 	r.statusMutex.Lock()
 	r.connected = connected
-	r.tunStatus = status
 	r.statusMutex.Unlock()
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
@@ -205,34 +205,32 @@ func (r *Radiance) setStatus(connected bool, status TUNStatus) {
 				reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
 			}
 		}()
-		r.notifyListeners(connected)
 	}()
 }
 
-func (r *Radiance) notifyListeners(connected bool) {
-	r.proxyStatusListenersMu.Lock()
-	status := ProxyStatus{
-		Connected: connected,
-		Location:  r.ActiveProxyLocation(context.Background()),
-	}
-	r.proxyStatusListenersMu.Unlock()
-	for _, listener := range r.proxyStatusListeners {
-		select {
-		case listener <- status:
-		default:
-		}
-	}
+// ServerLocation is the location of a remote VPN server.
+type ServerLocation config.ProxyConnectConfig_ProxyLocation
+
+// Server represents a remote VPN server.
+type Server struct {
+	Address            string
+	Location           ServerLocation
+	SupportedProtocols []string
 }
 
-// TUNStatus checks the current TUN status
-func (r *Radiance) TUNStatus() TUNStatus {
-	r.statusMutex.Lock()
-	defer r.statusMutex.Unlock()
-	return r.tunStatus
+// GetServers returns the remote VPN servers currently assigned to this client, as well as the index
+// of the active server.
+//
+// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1920
+func (r *Radiance) GetServers() (servers []Server, activeServer int) {
+	// TODO: implement me!
+	return nil, 0
 }
 
 // ActiveProxyLocation returns the proxy server's location if the VPN is connected.
 // If the VPN is disconnected, it returns nil.
+//
+// This function will be removed as part of https://github.com/getlantern/engineering/issues/1920
 func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 	if !r.connectionStatus() {
 		log.Debug("VPN is not connected")
@@ -246,13 +244,17 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 	return ""
 }
 
-// ProxyStatus returns a channel that is populated whenever the proxy status changes.
-// It provides information about the current proxy status like the proxy's
-// location or whether the proxy is connected or not.
-func (r *Radiance) ProxyStatus() <-chan ProxyStatus {
-	proxyStatus := make(chan ProxyStatus)
-	r.proxyStatusListenersMu.Lock()
-	r.proxyStatusListeners = append(r.proxyStatusListeners, proxyStatus)
-	r.proxyStatusListenersMu.Unlock()
-	return proxyStatus
+// IssueReport represents a user report of a bug or service problem. This report can be submitted
+// via [Radiance.ReportIssue].
+//
+// The fields of this type will be defined as part of https://github.com/getlantern/engineering/issues/1921
+type IssueReport struct {
+}
+
+// ReportIssue submits an issue report to the back-end.
+//
+// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1921
+func (r *Radiance) ReportIssue(report IssueReport) error {
+	// TODO: implement me!
+	return ErrNotImplemented
 }
