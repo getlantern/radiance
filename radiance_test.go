@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/getlantern/radiance/backend/apipb"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -189,7 +190,7 @@ func TestStartVPN(t *testing.T) {
 				// expect to get config twice, once for the initial check and once for active proxy location
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{
 					Protocol: "logger",
-					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
+					Location: &apipb.ProxyConnectConfig_ProxyLocation{City: "new york"},
 				}}, nil).Times(1)
 
 				return r
@@ -343,7 +344,7 @@ func TestActiveProxyLocation(t *testing.T) {
 				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
-				r.proxyLocation.Store(&config.ProxyConnectConfig_ProxyLocation{City: expectedCity})
+				r.proxyLocation.Store(&apipb.ProxyConnectConfig_ProxyLocation{City: expectedCity})
 				return r
 			},
 			assert: func(t *testing.T, location string) {

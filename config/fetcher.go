@@ -14,6 +14,7 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/backend/apipb"
 )
 
 const configURL = "https://api.iantem.io/v1/config"
@@ -31,9 +32,9 @@ func newFetcher(client *http.Client) *fetcher {
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
-	confReq := ConfigRequest{
-		ClientInfo: &ConfigRequest_ClientInfo{
+func (f *fetcher) fetchConfig() (*apipb.ConfigResponse, error) {
+	confReq := apipb.ConfigRequest{
+		ClientInfo: &apipb.ConfigRequest_ClientInfo{
 			SingboxVersion: singVersion(),
 			ClientVersion:  app.ClientVersion,
 			UserId:         app.UserId,
@@ -41,7 +42,7 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 			Country:        "",
 			Ip:             "",
 		},
-		Proxy: &ConfigRequest_Proxy{},
+		Proxy: &apipb.ConfigRequest_Proxy{},
 	}
 	buf, err := proto.Marshal(&confReq)
 	if err != nil {
@@ -57,7 +58,7 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 		return nil, nil
 	}
 
-	newConf := &ConfigResponse{}
+	newConf := &apipb.ConfigResponse{}
 	if err := proto.Unmarshal(buf, newConf); err != nil {
 		return nil, fmt.Errorf("unmarshal config response: %w", err)
 	}
