@@ -35,7 +35,7 @@ type Outbound struct {
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options ProxylessOutboundOptions) (adapter.Outbound, error) {
 	glog.Debug("creating outbound dialer")
-	_, err := dialer.New(ctx, options.DialerOptions)
+	outboundDialer, err := dialer.New(ctx, options.DialerOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,11 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	// 	return nil, err
 	// }
 
-	dialer, err := proxyless.NewStreamDialer(nil, &config.ProxyConnectConfig{
+	outSD := &sboxSD{
+		outSD:  outboundDialer,
+		logger: logger,
+	}
+	dialer, err := proxyless.NewStreamDialer(outSD, &config.ProxyConnectConfig{
 		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
 			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:2|split:123",
@@ -71,7 +75,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = o.Tag()
 	metadata.Destination = destination
-	glog.Debugf("received proxyless request to %q domain", metadata.Domain)
+	o.logger.InfoContext(ctx, "received proxyless request to %q domain", metadata.Domain)
 	conn, err := o.dialer.DialStream(ctx, metadata.Domain)
 	if err != nil {
 		o.logger.ErrorContext(ctx, "failed to dial to %q: %w", metadata.Domain, err)
@@ -81,4 +85,22 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 
 func (o *Outbound) ListenPacket(ctx context.Context, destination metadata.Socksaddr) (net.PacketConn, error) {
 	return nil, os.ErrInvalid
+}
+
+// wrapper around sing-box's network.Dialer to implement streamDialer interface to pass to a
+// stream dialer as innerSD
+type sboxSD struct {
+	outSD  network.Dialer
+	logger log.ContextLogger
+}
+
+func (s *sboxSD) DialStream(ctx context.Context, addr string) (otransport.StreamConn, error) {
+	s.logger.InfoContext(ctx, "proxyless sboxSD dialing ", addr)
+	destination := metadata.ParseSocksaddr(addr)
+	conn, err := s.outSD.DialContext(ctx, network.NetworkTCP, destination)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Error dialing %s: %v", addr, err)
+		return nil, err
+	}
+	return conn.(*net.TCPConn), nil
 }
