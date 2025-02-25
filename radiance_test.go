@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/getlantern/radiance/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+
+	"github.com/getlantern/radiance/config"
 )
 
 func TestHandleConnect(t *testing.T) {
@@ -133,7 +134,6 @@ func TestNewRadiance(t *testing.T) {
 		assert.NotNil(t, r.confHandler)
 		assert.Nil(t, r.srv)
 		assert.False(t, r.connected)
-		assert.NotEmpty(t, r.tunStatus)
 		assert.NotNil(t, r.statusMutex)
 	})
 }
@@ -158,7 +158,6 @@ func TestStartVPN(t *testing.T) {
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.Error(t, err)
 				assert.False(t, r.connectionStatus())
-				assert.Equal(t, DisconnectedTUNStatus, r.TUNStatus())
 			},
 		},
 		{
@@ -174,7 +173,6 @@ func TestStartVPN(t *testing.T) {
 			assert: func(t *testing.T, r *Radiance, err error) {
 				assert.Error(t, err)
 				assert.False(t, r.connectionStatus())
-				assert.Equal(t, DisconnectedTUNStatus, r.TUNStatus())
 			},
 		},
 		{
@@ -196,7 +194,6 @@ func TestStartVPN(t *testing.T) {
 				assert.NoError(t, err)
 				assert.True(t, r.connectionStatus())
 				// TODO: update assert when using TUN
-				assert.Equal(t, DisconnectedTUNStatus, r.TUNStatus())
 				require.NoError(t, r.srv.Shutdown(context.Background()))
 			},
 		},
@@ -302,16 +299,6 @@ func TestStopVPN(t *testing.T) {
 	}
 }
 
-func TestTUNStatus(t *testing.T) {
-	r := NewRadiance()
-	assert.Equal(t, DisconnectedTUNStatus, r.TUNStatus())
-	r.setStatus(false, ConnectedTUNStatus)
-	assert.Equal(t, ConnectedTUNStatus, r.TUNStatus())
-
-	r.setStatus(false, ConnectingTUNStatus)
-	assert.Equal(t, ConnectingTUNStatus, r.TUNStatus())
-}
-
 func TestActiveProxyLocation(t *testing.T) {
 	expectedCity := "New York"
 	var tests = []struct {
@@ -363,27 +350,4 @@ func TestActiveProxyLocation(t *testing.T) {
 			tt.assert(t, location)
 		})
 	}
-}
-
-func TestProxyStatus(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	expectedCity := "New York"
-	r := NewRadiance()
-	r.proxyLocation.Store(&config.ProxyConnectConfig_ProxyLocation{City: expectedCity})
-	var statusChan <-chan ProxyStatus
-	t.Run("it should", func(t *testing.T) {
-		t.Run("not return a nil channel", func(t *testing.T) {
-			statusChan = r.ProxyStatus()
-			assert.NotNil(t, statusChan)
-		})
-		t.Run("send a message when status changes", func(t *testing.T) {
-			go r.setStatus(true, ConnectingTUNStatus)
-			status, ok := <-statusChan
-			assert.True(t, ok)
-			assert.True(t, status.Connected)
-			assert.NotEmpty(t, status.Location)
-		})
-	})
 }
