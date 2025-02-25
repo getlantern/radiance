@@ -66,7 +66,8 @@ func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transp
 	}, nil
 }
 
-// createProvider
+// createProvider creates a configurl container provider and register the proxyless techniques
+// that we want to use. It also specifies which inner dialer should be used.
 func createProvider(innerSD transport.StreamDialer) *configurl.ProviderContainer {
 	container := configurl.NewProviderContainer()
 	newSD := func(ctx context.Context, config *configurl.Config) (transport.StreamDialer, error) {
