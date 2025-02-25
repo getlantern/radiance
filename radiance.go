@@ -177,6 +177,10 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 	r.confHandler.Stop()
 	r.setStatus(false, r.TUNStatus())
 	close(r.stopChan)
+	// Flush sentry events before returning
+	if result := sentry.Flush(6 * time.Second); !result {
+		log.Error("sentry.Flush: timeout")
+	}
 	return nil
 }
 
