@@ -18,7 +18,6 @@ import (
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
-	"github.com/getlantern/radiance/transport/proxyless"
 )
 
 var (
@@ -131,7 +130,7 @@ func (r *Radiance) Run(addr string) error {
 	}
 
 	if proxylessConf != nil {
-		handler.proxylessDialer, err = proxyless.NewStreamDialer(dialer, proxylessConf)
+		handler.proxylessDialer, err = transport.DialerFrom(proxylessConf)
 		if err != nil {
 			return fmt.Errorf("could not create proxyless dialer: %w", err)
 		}
