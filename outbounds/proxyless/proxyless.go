@@ -1,10 +1,12 @@
+// Package proxyless hold a sing-box outbound proxyless implementation that basically
+// wraps the proxyless transport and use it for dialing
 package proxyless
 
 import (
 	"context"
 	"net"
-	"net/http"
 	"os"
+	"time"
 
 	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/getlantern/golog"
@@ -22,56 +24,50 @@ import (
 
 var glog = golog.LoggerFor("proxyless")
 
-type ProxylessOutboundOptions struct {
-	option.DialerOptions
-}
-
-type Outbound struct {
+// ProxylessOutbound implements a proxyless outbound
+type ProxylessOutbound struct {
 	outbound.Adapter
 	logger logger.ContextLogger
 	dialer otransport.StreamDialer
-	client *http.Client
 }
 
-func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options ProxylessOutboundOptions) (adapter.Outbound, error) {
+// NewProxylessOutbound creates a proxyless outbond that uses the proxyless transport
+// for dialing
+func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.DialerOptions) (adapter.Outbound, error) {
 	glog.Debug("creating outbound dialer")
-	outboundDialer, err := dialer.New(ctx, options.DialerOptions)
+	outboundDialer, err := dialer.New(ctx, options)
 	if err != nil {
 		return nil, err
 	}
 
 	glog.Debug("getting config")
-	// ch := config.NewConfigHandler(time.Minute * 10)
-	// configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
-	// defer cancel()
-	// conf, err := ch.GetConfig(configCtx)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	ch := config.NewConfigHandler(time.Minute * 10)
+	configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
+	defer cancel()
+	conf, err := ch.GetConfig(configCtx)
+	if err != nil {
+		return nil, err
+	}
 
 	outSD := &sboxSD{
 		outSD:  outboundDialer,
 		logger: logger,
 	}
-	dialer, err := proxyless.NewStreamDialer(outSD, &config.ProxyConnectConfig{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
-				ConfigText: "split:2|split:123",
-			},
-		},
-	})
+	dialer, err := proxyless.NewStreamDialer(outSD, conf[0])
 	if err != nil {
 		return nil, err
 	}
 
-	return &Outbound{
-		Adapter: outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options.DialerOptions),
+	return &ProxylessOutbound{
+		Adapter: outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options),
 		logger:  logger,
 		dialer:  dialer,
 	}, nil
 }
 
-func (o *Outbound) DialContext(ctx context.Context, network string, destination metadata.Socksaddr) (net.Conn, error) {
+// DialContext extracts the metadata domain, add the destination to the context
+// and use the proxyless dialer for sending the request
+func (o *ProxylessOutbound) DialContext(ctx context.Context, network string, destination metadata.Socksaddr) (net.Conn, error) {
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = o.Tag()
 	metadata.Destination = destination
@@ -84,7 +80,8 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	return conn, err
 }
 
-func (o *Outbound) ListenPacket(ctx context.Context, destination metadata.Socksaddr) (net.PacketConn, error) {
+// ListenPacket isn't implemented
+func (o *ProxylessOutbound) ListenPacket(ctx context.Context, destination metadata.Socksaddr) (net.PacketConn, error) {
 	return nil, os.ErrInvalid
 }
 
