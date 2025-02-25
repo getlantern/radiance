@@ -6,23 +6,25 @@ import (
 	"time"
 
 	transport "github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/getlantern/radiance/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
+
+	"github.com/getlantern/radiance/backend/apipb"
+	"github.com/getlantern/radiance/config"
 )
 
 func TestNewStreamDialer(t *testing.T) {
 	validSplitConfig := &config.Config{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+		ProtocolConfig: &apipb.ProxyConnectConfig_ConnectCfgProxyless{
+			ConnectCfgProxyless: &apipb.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:2|split:123",
 			},
 		},
 	}
 	invalidSplitConfig := &config.Config{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+		ProtocolConfig: &apipb.ProxyConnectConfig_ConnectCfgProxyless{
+			ConnectCfgProxyless: &apipb.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:|split:",
 			},
 		},
@@ -73,8 +75,8 @@ func TestNewStreamDialer(t *testing.T) {
 
 func TestDialStream(t *testing.T) {
 	validConfig := &config.Config{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+		ProtocolConfig: &apipb.ProxyConnectConfig_ConnectCfgProxyless{
+			ConnectCfgProxyless: &apipb.ProxyConnectConfig_ProxylessConfig{
 				ConfigText: "split:2|split:123",
 			},
 		},

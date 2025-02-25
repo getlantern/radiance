@@ -6,10 +6,12 @@ import (
 	"testing"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	algeneva "github.com/getlantern/lantern-algeneva"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	algeneva "github.com/getlantern/lantern-algeneva"
+
+	"github.com/getlantern/radiance/backend/apipb"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -25,8 +27,8 @@ NDUzgg4xMjcuMC4wLjE6NTQ1MzAKBggqhkjOPQQDAgNIADBFAiEA2zpJEPQyz6/l
 Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
 6MF9+Yw1Yy0t
 -----END CERTIFICATE-----`)
-	protocolConfig := &config.ProxyConnectConfig_ConnectCfgAlgeneva{
-		ConnectCfgAlgeneva: &config.ProxyConnectConfig_AlgenevaConfig{Strategy: "test-strategy"},
+	protocolConfig := &apipb.ProxyConnectConfig_ConnectCfgAlgeneva{
+		ConnectCfgAlgeneva: &apipb.ProxyConnectConfig_AlgenevaConfig{Strategy: "test-strategy"},
 	}
 	tests := []struct {
 		name   string

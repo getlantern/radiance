@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/getlantern/eventual/v2"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/getlantern/eventual/v2"
+	"github.com/getlantern/radiance/backend/apipb"
 )
 
 func TestConfigHandler_GetConfig(t *testing.T) {
@@ -117,10 +119,10 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 	}
 }
 
-var testConfigResponse = &ConfigResponse{
+var testConfigResponse = &apipb.ConfigResponse{
 	Country: "US",
-	Proxy: &ConfigResponse_Proxy{
-		Proxies: []*ProxyConnectConfig{{
+	Proxy: &apipb.ConfigResponse_Proxy{
+		Proxies: []*apipb.ProxyConnectConfig{{
 			Track:    "track",
 			Protocol: "protocol",
 		}},

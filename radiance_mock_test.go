@@ -14,7 +14,7 @@ import (
 	net "net"
 	reflect "reflect"
 
-	config "github.com/getlantern/radiance/config"
+	apipb "github.com/getlantern/radiance/backend/apipb"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -95,10 +95,10 @@ func (m *MockconfigHandler) EXPECT() *MockconfigHandlerMockRecorder {
 }
 
 // GetConfig mocks base method.
-func (m *MockconfigHandler) GetConfig(ctx context.Context) ([]*config.ProxyConnectConfig, error) {
+func (m *MockconfigHandler) GetConfig(ctx context.Context) ([]*apipb.ProxyConnectConfig, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetConfig", ctx)
-	ret0, _ := ret[0].([]*config.ProxyConnectConfig)
+	ret0, _ := ret[0].([]*apipb.ProxyConnectConfig)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
