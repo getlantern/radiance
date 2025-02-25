@@ -6,6 +6,7 @@ import (
 
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
+	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 )
@@ -15,21 +16,15 @@ func getopts() option.Options {
 		Log: &option.LogOptions{
 			Disabled: true,
 		},
-		// DNS: &option.DNSOptions{
-		// 	Servers: []option.DNSServerOptions{
-		// 		{
-		// 			Tag:      "proxy",
-		// 			Address:  "192.1.2.11",
-		// 			Detour:   "proxy",
-		// 			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
-		// 		},
-		// 		{
-		// 			Tag:      "local",
-		// 			Address:  "192.1.2.11",
-		// 			Detour:   "direct",
-		// 			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
-		// 		},
-		// 	},
+		DNS: &option.DNSOptions{
+			Servers: []option.DNSServerOptions{
+				{
+					Tag:      "google",
+					Address:  "8.8.8.8",
+					Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
+				},
+			},
+		},
 		// 	Rules: rules,
 		// 	DNSClientOptions: option.DNSClientOptions{
 		// 		DisableCache: true,
@@ -55,6 +50,10 @@ func getopts() option.Options {
 			{
 				Type: "direct",
 				Tag:  "direct",
+			},
+			{
+				Type: "dns",
+				Tag:  "dns-out",
 			},
 			{
 				Type: "algeneva",
@@ -105,6 +104,20 @@ func getopts() option.Options {
 							Action: constant.RuleActionTypeRoute,
 							RouteOptions: option.RouteActionOptions{
 								Outbound: "proxyless-out",
+							},
+						},
+					},
+				},
+				{
+					Type: constant.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Protocol: badoption.Listable[string]{"dns"},
+						},
+						RuleAction: option.RuleAction{
+							Action: constant.RuleActionTypeRoute,
+							RouteOptions: option.RouteActionOptions{
+								Outbound: "dns-out",
 							},
 						},
 					},
