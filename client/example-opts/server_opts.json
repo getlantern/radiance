@@ -1,0 +1,38 @@
+{
+	"log": {
+		"level": "trace",
+		"output": "stdout",
+		"timestamp": true
+	},
+	"endpoints": [
+		{
+			"type": "wireguard",
+			"tag": "wg-ep",
+			"system": true,
+			"name": "wg0",
+			"mtu": 1408,
+			"address": ["10.0.0.2/32"],
+			"private_key": "private_key",
+			"listen_port": 10000,
+			"peers": [
+				{
+					"address": "127.0.0.1",
+					"port": 10001,
+					"public_key": "peer_public_key",
+					"pre_shared_key": "pre_shared_key",
+					"allowed_ips": ["0.0.0.0/0"],
+					"persistent_keepalive_interval": 30,
+					"reserved": "AAAA"
+				}
+			]
+		}
+	],
+	"inbounds": [
+		{
+			"type": "algeneva",
+			"tag": "algeneva-in",
+			"listen": "0.0.0.0",
+			"listen_port": 8080
+		}
+	]
+}
