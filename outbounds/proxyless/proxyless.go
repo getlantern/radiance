@@ -24,16 +24,21 @@ import (
 
 var glog = golog.LoggerFor("proxyless")
 
+// ProxylessOutboundOptions set options that will be used when building the outbound dialer.
+// A Config must be provided with a config text used by the proxyless dialer.
+// A FallbackDialer must be provided so we can use it when proxyless fail
 type ProxylessOutboundOptions struct {
 	option.DialerOptions
-	Config *config.ProxyConnectConfig
+	Config         *config.ProxyConnectConfig
+	FallbackDialer otransport.StreamDialer
 }
 
 // ProxylessOutbound implements a proxyless outbound
 type ProxylessOutbound struct {
 	outbound.Adapter
-	logger logger.ContextLogger
-	dialer otransport.StreamDialer
+	logger         logger.ContextLogger
+	dialer         otransport.StreamDialer
+	fallbackDialer otransport.StreamDialer
 }
 
 // NewProxylessOutbound creates a proxyless outbond that uses the proxyless transport
@@ -55,9 +60,10 @@ func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log
 	}
 
 	return &ProxylessOutbound{
-		Adapter: outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options.DialerOptions),
-		logger:  logger,
-		dialer:  dialer,
+		Adapter:        outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options.DialerOptions),
+		logger:         logger,
+		dialer:         dialer,
+		fallbackDialer: options.FallbackDialer,
 	}, nil
 }
 
@@ -67,12 +73,27 @@ func (o *ProxylessOutbound) DialContext(ctx context.Context, network string, des
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = o.Tag()
 	metadata.Destination = destination
+
+	// trying proxyless
 	o.logger.InfoContext(ctx, "received proxyless request to %q (%q) domain", metadata.Domain, destination.String())
 	conn, err := o.dialer.DialStream(ctx, fmt.Sprintf("%s:%d", metadata.Domain, destination.Port))
-	if err != nil {
-		o.logger.ErrorContext(ctx, "failed to dial to %q: %w", metadata.Domain, err)
+	if err == nil {
+		return conn, nil
 	}
-	return conn, err
+
+	// dialing with fallback because proxyless failed
+	if o.fallbackDialer == nil {
+		return nil, err
+	}
+
+	o.logger.ErrorContext(ctx, "failed to dial to proxyless dial %q, using fallback dialer: %w", metadata.Domain, err)
+	conn, err = o.fallbackDialer.DialStream(ctx, destination.String())
+	if err != nil {
+		o.logger.ErrorContext(ctx, "failed to dial to proxyless dial %q with fallback: %w", metadata.Domain, err)
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 // ListenPacket isn't implemented
