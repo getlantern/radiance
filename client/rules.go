@@ -60,6 +60,7 @@ func getopts() option.Options {
 				Type: "proxyless",
 				Tag:  "proxyless-out",
 				Options: &proxyless.ProxylessOutboundOptions{
+					// TODO: replace this hard-coded config by the config fetched from config handler
 					Config: &config.ProxyConnectConfig{
 						ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
 							ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
