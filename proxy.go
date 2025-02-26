@@ -11,7 +11,6 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/transport/proxyless"
 )
 
 const authTokenHeader = "X-Lantern-Auth-Token"
@@ -112,16 +111,14 @@ func copyData(dst io.Writer, src io.Reader, errCh chan error) {
 }
 
 func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn) error {
-	ctx := context.WithValue(r.Context(), proxyless.DomainContextKey, r.Host)
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	raddr, err := raddrFromRequest(r)
-	if err != nil {
-		return err
+	port := "80"
+	if r.TLS != nil {
+		port = "443"
 	}
-
-	targetConn, err := h.proxylessDialer.DialStream(ctx, raddr)
+	targetConn, err := h.proxylessDialer.DialStream(ctx, net.JoinHostPort(r.Host, port))
 	if err != nil {
 		return log.Errorf("failed to proxyless dial: %w. Trying with proxy instead", err)
 	}
@@ -135,19 +132,6 @@ func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn)
 	}
 
 	return h.pipeData(targetConn, clientConn)
-}
-
-func raddrFromRequest(r *http.Request) (string, error) {
-	ips, err := net.LookupIP(r.Host)
-	if err != nil {
-		return "", log.Errorf("failed to lookup for host IPs: %w", err)
-	}
-
-	port := "80"
-	if r.TLS != nil {
-		port = "443"
-	}
-	return net.JoinHostPort(ips[0].String(), port), nil
 }
 
 // handleNonConnect forwards non-CONNECT requests to the proxy server with the required headers.

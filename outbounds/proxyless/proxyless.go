@@ -4,6 +4,7 @@ package proxyless
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"time"
@@ -41,6 +42,17 @@ func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log
 	}
 
 	glog.Debug("getting config")
+	// for manual local testing, you can try a hard-coded config by using
+	// conf := []*config.ProxyConnectConfig{
+	// 	&config.ProxyConnectConfig{
+	// 		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+	// 			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+	// 				ConfigText: "split:2|split:123",
+	// 			},
+	// 		},
+	// 	},
+	// }
+
 	ch := config.NewConfigHandler(time.Minute * 10)
 	configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
 	defer cancel()
@@ -71,9 +83,8 @@ func (o *ProxylessOutbound) DialContext(ctx context.Context, network string, des
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = o.Tag()
 	metadata.Destination = destination
-	ctx = context.WithValue(ctx, proxyless.DomainContextKey, metadata.Domain)
 	o.logger.InfoContext(ctx, "received proxyless request to %q (%q) domain", metadata.Domain, destination.String())
-	conn, err := o.dialer.DialStream(ctx, destination.String())
+	conn, err := o.dialer.DialStream(ctx, fmt.Sprintf("%s:%d", metadata.Domain, destination.Port))
 	if err != nil {
 		o.logger.ErrorContext(ctx, "failed to dial to %q: %w", metadata.Domain, err)
 	}
