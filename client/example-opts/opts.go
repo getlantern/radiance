@@ -18,6 +18,19 @@ func save(opts *option.Options, path string) error {
 	return os.WriteFile(path, b, 0644)
 }
 
+/*
+example usage:
+
+ctx := box.Context(
+	context.Background(),
+	include.InboundRegistry(),
+	include.OutboundRegistry(),
+	include.EndpointRegistry(),
+)
+// register other protocols
+...
+opts, err := load(ctx, "path/to/config.json")
+*/
 func load(ctx context.Context, path string) (*option.Options, error) {
 	buf, err := os.ReadFile(path)
 	if err != nil {
