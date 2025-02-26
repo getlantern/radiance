@@ -26,7 +26,7 @@ var glog = golog.LoggerFor("proxyless")
 
 type ProxylessOutboundOptions struct {
 	option.DialerOptions
-	ConfigText string `json:"config_text"`
+	Config *config.ProxyConnectConfig
 }
 
 // ProxylessOutbound implements a proxyless outbound
@@ -49,13 +49,7 @@ func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log
 		outSD:  outboundDialer,
 		logger: logger,
 	}
-	dialer, err := proxyless.NewStreamDialer(outSD, &config.ProxyConnectConfig{
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
-				ConfigText: options.ConfigText,
-			},
-		},
-	})
+	dialer, err := proxyless.NewStreamDialer(outSD, options.Config)
 	if err != nil {
 		return nil, err
 	}

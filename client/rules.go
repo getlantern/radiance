@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/outbounds/proxyless"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -59,7 +60,13 @@ func getopts() option.Options {
 				Type: "proxyless",
 				Tag:  "proxyless-out",
 				Options: &proxyless.ProxylessOutboundOptions{
-					ConfigText: "split:1|split:123",
+					Config: &config.ProxyConnectConfig{
+						ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+							ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+								ConfigText: "split:1|split:123",
+							},
+						},
+					},
 				},
 			},
 		},
