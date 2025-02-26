@@ -48,12 +48,6 @@ type StreamDialer struct {
 	upstreamStatusCacheMutex sync.Locker
 }
 
-type contextKey string
-
-// DomainContextKey use this context key for providing the domain so we can
-// have enough data for using proxyless or another alternative for this domain
-var DomainContextKey contextKey = "domain"
-
 // NewStreamDialer build a Proxyless StreamDialer that will try to connect to the upstream by using the proxyless configuration
 // if the conditions are met.
 func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
@@ -113,30 +107,26 @@ func (d *StreamDialer) updateUpstreamStatus(remoteAddr, configText string, succe
 }
 
 // DialStream tries to connect to the upstream by using the proxyless configuration if the conditions are met.
-// Please provide a context with DomainContextKey and the domain as a value so we can register proxyless
-// metrics.
-func (d *StreamDialer) DialStream(ctx context.Context, raddr string) (transport.StreamConn, error) {
-	domain, ok := ctx.Value(DomainContextKey).(string)
-	if !ok {
-		return nil, log.Error("domain not defined in context")
-	}
+// Differently from other DialStream operations, proxyless expects a domain:port instead of ip:port
+func (d *StreamDialer) DialStream(ctx context.Context, domain string) (transport.StreamConn, error) {
+	log.Debugf("received dial request for %q", domain)
 	status := d.getUpstreamStatus(domain)
 	if status.haveNeverTriedProxyless() ||
 		status.itWorkedOnLastTry() ||
 		status.haveNewConfig(d.currentConfig) ||
 		status.lastTryWasLongAgo() {
 
-		conn, err := d.dialer.DialStream(ctx, raddr)
+		conn, err := d.dialer.DialStream(ctx, domain)
 		if err != nil {
 			d.updateUpstreamStatus(domain, d.currentConfig, false)
-			return nil, fmt.Errorf("failed to dial %q (%q) via proxyless: %w", domain, raddr, err)
+			return nil, fmt.Errorf("failed to dial %q via proxyless: %w", domain, err)
 		}
 		d.updateUpstreamStatus(domain, d.currentConfig, true)
 		log.Debugf("successfully dialed %q via proxyless", domain)
 		return conn, nil
 	}
 
-	return nil, fmt.Errorf("none conditions met for proxyless request to %q", raddr)
+	return nil, log.Errorf("none conditions met for proxyless request to %q", domain)
 }
 
 func (s upstreamStatus) haveNeverTriedProxyless() bool {
