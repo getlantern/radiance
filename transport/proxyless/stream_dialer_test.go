@@ -79,7 +79,9 @@ func TestDialStream(t *testing.T) {
 			},
 		},
 	}
-	remoteAddr := "1.1.1.1"
+	domain := "abc.com"
+	remoteAddr := "1.1.1.1:80"
+	ctx := context.WithValue(context.Background(), DomainContextKey, domain)
 	var tests = []struct {
 		name            string
 		dialer          func(ctrl *gomock.Controller) *StreamDialer
@@ -87,6 +89,26 @@ func TestDialStream(t *testing.T) {
 		givenRemoteAddr string
 		assert          func(t *testing.T, conn transport.StreamConn, err error)
 	}{
+		{
+			name: "it should return an error when domain is not defined in context",
+			dialer: func(ctrl *gomock.Controller) *StreamDialer {
+				// innerSD shouldn't be called
+				innerSD := NewMockStreamDialer(ctrl)
+				dialer, err := NewStreamDialer(innerSD, validConfig)
+				require.NoError(t, err)
+
+				d := dialer.(*StreamDialer)
+				proxylessDialer := NewMockStreamDialer(ctrl)
+				d.dialer = proxylessDialer
+				return d
+			},
+			givenContext:    context.Background(),
+			givenRemoteAddr: remoteAddr,
+			assert: func(t *testing.T, conn transport.StreamConn, err error) {
+				assert.Error(t, err)
+				assert.Nil(t, conn)
+			},
+		},
 		{
 			name: "it should try proxyless dialer when it's the first time",
 			dialer: func(ctrl *gomock.Controller) *StreamDialer {
@@ -101,7 +123,7 @@ func TestDialStream(t *testing.T) {
 				d.dialer = proxylessDialer
 				return d
 			},
-			givenContext:    context.Background(),
+			givenContext:    ctx,
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
 				assert.NoError(t, err)
@@ -122,7 +144,7 @@ func TestDialStream(t *testing.T) {
 				d.updateUpstreamStatus(remoteAddr, validConfig.GetConnectCfgProxyless().GetConfigText(), true)
 				return d
 			},
-			givenContext:    context.Background(),
+			givenContext:    ctx,
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
 				assert.NoError(t, err)
@@ -143,7 +165,7 @@ func TestDialStream(t *testing.T) {
 				d.updateUpstreamStatus(remoteAddr, "split:2", false)
 				return d
 			},
-			givenContext:    context.Background(),
+			givenContext:    ctx,
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
 				assert.NoError(t, err)
@@ -161,7 +183,7 @@ func TestDialStream(t *testing.T) {
 				proxylessDialer := NewMockStreamDialer(ctrl)
 				proxylessDialer.EXPECT().DialStream(gomock.Any(), remoteAddr).Return(nil, nil)
 				d.dialer = proxylessDialer
-				d.upstreamStatusCache[remoteAddr] = upstreamStatus{
+				d.upstreamStatusCache[domain] = upstreamStatus{
 					RemoteAddr:    remoteAddr,
 					LastSuccess:   time.Now().Add(-48 * time.Hour).Unix(),
 					NumberOfTries: 10,
@@ -170,7 +192,7 @@ func TestDialStream(t *testing.T) {
 				}
 				return d
 			},
-			givenContext:    context.Background(),
+			givenContext:    ctx,
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
 				assert.NoError(t, err)
@@ -185,7 +207,7 @@ func TestDialStream(t *testing.T) {
 				require.NoError(t, err)
 
 				d := dialer.(*StreamDialer)
-				d.upstreamStatusCache[remoteAddr] = upstreamStatus{
+				d.upstreamStatusCache[domain] = upstreamStatus{
 					RemoteAddr:    remoteAddr,
 					LastSuccess:   time.Now().Unix(),
 					NumberOfTries: 10,
@@ -194,7 +216,7 @@ func TestDialStream(t *testing.T) {
 				}
 				return d
 			},
-			givenContext:    context.Background(),
+			givenContext:    ctx,
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
 				assert.Error(t, err)
@@ -210,7 +232,7 @@ func TestDialStream(t *testing.T) {
 				require.NoError(t, err)
 				return dialer.(*StreamDialer)
 			},
-			givenContext:    context.Background(),
+			givenContext:    ctx,
 			givenRemoteAddr: remoteAddr,
 			assert: func(t *testing.T, conn transport.StreamConn, err error) {
 				assert.Error(t, err)
