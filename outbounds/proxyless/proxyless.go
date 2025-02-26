@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"time"
 
 	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/getlantern/golog"
@@ -25,6 +24,11 @@ import (
 
 var glog = golog.LoggerFor("proxyless")
 
+type ProxylessOutboundOptions struct {
+	option.DialerOptions
+	ConfigText string `json:"config_text"`
+}
+
 // ProxylessOutbound implements a proxyless outbound
 type ProxylessOutbound struct {
 	outbound.Adapter
@@ -34,29 +38,9 @@ type ProxylessOutbound struct {
 
 // NewProxylessOutbound creates a proxyless outbond that uses the proxyless transport
 // for dialing
-func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.DialerOptions) (adapter.Outbound, error) {
+func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options ProxylessOutboundOptions) (adapter.Outbound, error) {
 	glog.Debug("creating outbound dialer")
-	outboundDialer, err := dialer.New(ctx, options)
-	if err != nil {
-		return nil, err
-	}
-
-	glog.Debug("getting config")
-	// for manual local testing, you can try a hard-coded config by using
-	// conf := []*config.ProxyConnectConfig{
-	// 	&config.ProxyConnectConfig{
-	// 		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
-	// 			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
-	// 				ConfigText: "split:2|split:123",
-	// 			},
-	// 		},
-	// 	},
-	// }
-
-	ch := config.NewConfigHandler(time.Minute * 10)
-	configCtx, cancel := context.WithTimeout(ctx, time.Second*30)
-	defer cancel()
-	conf, err := ch.GetConfig(configCtx)
+	outboundDialer, err := dialer.New(ctx, options.DialerOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -65,13 +49,19 @@ func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log
 		outSD:  outboundDialer,
 		logger: logger,
 	}
-	dialer, err := proxyless.NewStreamDialer(outSD, conf[0])
+	dialer, err := proxyless.NewStreamDialer(outSD, &config.ProxyConnectConfig{
+		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+			ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+				ConfigText: options.ConfigText,
+			},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return &ProxylessOutbound{
-		Adapter: outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options),
+		Adapter: outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options.DialerOptions),
 		logger:  logger,
 		dialer:  dialer,
 	}, nil

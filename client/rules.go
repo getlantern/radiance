@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/getlantern/radiance/outbounds/proxyless"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
@@ -25,11 +26,6 @@ func getopts() option.Options {
 				},
 			},
 		},
-		// 	Rules: rules,
-		// 	DNSClientOptions: option.DNSClientOptions{
-		// 		DisableCache: true,
-		// 	},
-		// },
 		Inbounds: []option.Inbound{
 			{
 				Type: "tun",
@@ -62,6 +58,9 @@ func getopts() option.Options {
 			{
 				Type: "proxyless",
 				Tag:  "proxyless-out",
+				Options: &proxyless.ProxylessOutboundOptions{
+					ConfigText: "split:1|split:123",
+				},
 			},
 		},
 		Route: &option.RouteOptions{
