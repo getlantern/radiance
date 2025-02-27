@@ -4,7 +4,11 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/outbounds/proxyless"
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
+	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 )
@@ -14,26 +18,15 @@ func getopts() option.Options {
 		Log: &option.LogOptions{
 			Disabled: true,
 		},
-		// DNS: &option.DNSOptions{
-		// 	Servers: []option.DNSServerOptions{
-		// 		{
-		// 			Tag:      "proxy",
-		// 			Address:  "192.1.2.11",
-		// 			Detour:   "proxy",
-		// 			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
-		// 		},
-		// 		{
-		// 			Tag:      "local",
-		// 			Address:  "192.1.2.11",
-		// 			Detour:   "direct",
-		// 			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
-		// 		},
-		// 	},
-		// 	Rules: rules,
-		// 	DNSClientOptions: option.DNSClientOptions{
-		// 		DisableCache: true,
-		// 	},
-		// },
+		DNS: &option.DNSOptions{
+			Servers: []option.DNSServerOptions{
+				{
+					Tag:      "google",
+					Address:  "8.8.8.8",
+					Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
+				},
+			},
+		},
 		Inbounds: []option.Inbound{
 			{
 				Type: "tun",
@@ -56,36 +49,82 @@ func getopts() option.Options {
 				Tag:  "direct",
 			},
 			{
+				Type: "dns",
+				Tag:  "dns-out",
+			},
+			{
 				Type: "algeneva",
 				Tag:  "algeneva-out",
+			},
+			{
+				Type: "proxyless",
+				Tag:  "proxyless-out",
+				Options: &proxyless.ProxylessOutboundOptions{
+					// TODO: replace this hard-coded config by the config fetched from config handler
+					Config: &config.ProxyConnectConfig{
+						ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgProxyless{
+							ConnectCfgProxyless: &config.ProxyConnectConfig_ProxylessConfig{
+								ConfigText: "split:1|split:123",
+							},
+						},
+					},
+				},
 			},
 		},
 		Route: &option.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []option.Rule{
 				{
-					Type: "default",
+					Type: constant.RuleTypeDefault,
 					DefaultOptions: option.DefaultRule{
 						RawDefaultRule: option.RawDefaultRule{
 							Inbound: badoption.Listable[string]{"tun-in"},
 						},
 						RuleAction: option.RuleAction{
-							Action:       "sniff",
-							RouteOptions: option.RouteActionOptions{},
+							Action: constant.RuleActionTypeSniff,
 						},
 					},
 				},
 				{
-					Type: "default",
+					Type: constant.RuleTypeDefault,
 					DefaultOptions: option.DefaultRule{
 						RawDefaultRule: option.RawDefaultRule{
 							Inbound: badoption.Listable[string]{"tun-in"},
 							Domain:  badoption.Listable[string]{"ipconfig.io"},
 						},
 						RuleAction: option.RuleAction{
-							Action: "route",
+							Action: constant.RuleActionTypeRoute,
 							RouteOptions: option.RouteActionOptions{
 								Outbound: "algeneva-out",
+							},
+						},
+					},
+				},
+				{
+					Type: constant.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Inbound: badoption.Listable[string]{"tun-in"},
+							Domain:  badoption.Listable[string]{"ifconfig.me"},
+						},
+						RuleAction: option.RuleAction{
+							Action: constant.RuleActionTypeRoute,
+							RouteOptions: option.RouteActionOptions{
+								Outbound: "proxyless-out",
+							},
+						},
+					},
+				},
+				{
+					Type: constant.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Protocol: badoption.Listable[string]{"dns"},
+						},
+						RuleAction: option.RuleAction{
+							Action: constant.RuleActionTypeRoute,
+							RouteOptions: option.RouteActionOptions{
+								Outbound: "dns-out",
 							},
 						},
 					},

@@ -20,11 +20,8 @@ import (
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
-	"github.com/getlantern/golog"
 	"github.com/getlantern/radiance/config"
 )
-
-var log = golog.LoggerFor("transport.proxyless")
 
 // TODO: in the future we want to persist this information on a file
 // once we have a standard directory for storing radiance info. This should be
@@ -50,9 +47,9 @@ type StreamDialer struct {
 
 // NewStreamDialer build a Proxyless StreamDialer that will try to connect to the upstream by using the proxyless configuration
 // if the conditions are met.
-func NewStreamDialer(_ transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
+func NewStreamDialer(innerSD transport.StreamDialer, cfg *config.Config) (transport.StreamDialer, error) {
 	configText := cfg.GetConnectCfgProxyless().GetConfigText()
-	provider := configurl.NewDefaultProviders()
+	provider := createProvider(innerSD)
 	dialer, err := provider.NewStreamDialer(context.Background(), configText)
 	if err != nil {
 		return nil, fmt.Errorf("failed to created proxyless dialer: %w", err)
@@ -64,6 +61,20 @@ func NewStreamDialer(_ transport.StreamDialer, cfg *config.Config) (transport.St
 		upstreamStatusCache:      make(map[string]upstreamStatus),
 		currentConfig:            configText,
 	}, nil
+}
+
+// createProvider creates a configurl container provider and register the proxyless techniques
+// that we want to use. It also specifies which inner dialer should be used.
+func createProvider(innerSD transport.StreamDialer) *configurl.ProviderContainer {
+	container := configurl.NewProviderContainer()
+	newSD := func(ctx context.Context, config *configurl.Config) (transport.StreamDialer, error) {
+		return innerSD, nil
+	}
+	registerDisorderDialer(&container.StreamDialers, "disorder", newSD)
+	registerSplitStreamDialer(&container.StreamDialers, "split", newSD)
+	registerTLSFragStreamDialer(&container.StreamDialers, "tlsfrag", newSD)
+
+	return container
 }
 
 func (d *StreamDialer) getUpstreamStatus(remoteAddr string) upstreamStatus {
@@ -93,25 +104,24 @@ func (d *StreamDialer) updateUpstreamStatus(remoteAddr, configText string, succe
 }
 
 // DialStream tries to connect to the upstream by using the proxyless configuration if the conditions are met.
-func (d *StreamDialer) DialStream(ctx context.Context, remoteAddr string) (transport.StreamConn, error) {
-	status := d.getUpstreamStatus(remoteAddr)
+// Differently from other DialStream operations, proxyless expects a domain:port instead of ip:port
+func (d *StreamDialer) DialStream(ctx context.Context, domain string) (transport.StreamConn, error) {
+	status := d.getUpstreamStatus(domain)
 	if status.haveNeverTriedProxyless() ||
 		status.itWorkedOnLastTry() ||
 		status.haveNewConfig(d.currentConfig) ||
 		status.lastTryWasLongAgo() {
 
-		conn, err := d.dialer.DialStream(ctx, remoteAddr)
+		conn, err := d.dialer.DialStream(ctx, domain)
 		if err != nil {
-			d.updateUpstreamStatus(remoteAddr, d.currentConfig, false)
-			log.Debugf("failed to dial %s via proxyless: %v", remoteAddr, err)
-			return nil, fmt.Errorf("failed to dial %s via proxyless: %w", remoteAddr, err)
+			d.updateUpstreamStatus(domain, d.currentConfig, false)
+			return nil, fmt.Errorf("failed to dial %q via proxyless: %w", domain, err)
 		}
-		d.updateUpstreamStatus(remoteAddr, d.currentConfig, true)
-		log.Debugf("successfully dialed %s via proxyless", remoteAddr)
+		d.updateUpstreamStatus(domain, d.currentConfig, true)
 		return conn, nil
 	}
 
-	return nil, fmt.Errorf("none conditions met for proxyless request to %s", remoteAddr)
+	return nil, fmt.Errorf("none conditions met for proxyless request to %q", domain)
 }
 
 func (s upstreamStatus) haveNeverTriedProxyless() bool {

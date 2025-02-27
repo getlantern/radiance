@@ -33,10 +33,6 @@ type AlgenevaOutboundOptions struct {
 	Strategy string
 }
 
-func RegisterOutbound(registry *outbound.Registry) {
-	outbound.Register[AlgenevaOutboundOptions](registry, "algeneva", NewOutbound)
-}
-
 type Outbound struct {
 	outbound.Adapter
 	logger logger.ContextLogger
