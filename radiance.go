@@ -19,6 +19,7 @@ import (
 
 	"github.com/getlantern/golog"
 
+	"github.com/getlantern/radiance/backend/apipb"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
@@ -209,7 +210,7 @@ func (r *Radiance) setStatus(connected bool) {
 }
 
 // ServerLocation is the location of a remote VPN server.
-type ServerLocation config.ProxyConnectConfig_ProxyLocation
+type ServerLocation apipb.ProxyConnectConfig_ProxyLocation
 
 // Server represents a remote VPN server.
 type Server struct {
@@ -237,7 +238,7 @@ func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
 		return ""
 	}
 
-	if location, ok := r.proxyLocation.Load().(*config.ProxyConnectConfig_ProxyLocation); ok && location != nil {
+	if location, ok := r.proxyLocation.Load().(*apipb.ProxyConnectConfig_ProxyLocation); ok && location != nil {
 		return location.City
 	}
 	log.Errorf("could not retrieve location")

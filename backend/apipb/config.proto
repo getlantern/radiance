@@ -1,6 +1,9 @@
 syntax = "proto3";
+package apipb;
+
+option go_package = "github.com/getlantern/radiance/backend/apipb";
+
 import "google/protobuf/timestamp.proto";
-option go_package = "github.com/getlantern/radiance/config";
 
 //
 // Copied from lantern-cloud: e57d588aa976ca9d1a8531c92972e20a7d1640f9

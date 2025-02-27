@@ -11,7 +11,6 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/kindling v0.0.0-20250219132519-d16b5c65a853
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
-	github.com/golang/protobuf v1.5.3
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
 	go.uber.org/mock v0.5.0

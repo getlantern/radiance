@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/getlantern/radiance/backend/apipb"
 )
 
 type mockRoundTripper struct {
@@ -33,12 +35,12 @@ func TestFetcher(t *testing.T) {
 	tests := []struct {
 		name     string
 		response *http.Response
-		assert   func(*testing.T, *ConfigResponse, error)
+		assert   func(*testing.T, *apipb.ConfigResponse, error)
 	}{
 		{
 			name:     "received new config",
 			response: &http.Response{StatusCode: http.StatusOK, Body: confReader},
-			assert: func(t *testing.T, got *ConfigResponse, err error) {
+			assert: func(t *testing.T, got *apipb.ConfigResponse, err error) {
 				require.NoError(t, err)
 				if !proto.Equal(testConfigResponse, got) {
 					// Use Failf to print the expected and actual values nicely.
@@ -51,7 +53,7 @@ func TestFetcher(t *testing.T) {
 		}, {
 			name:     "did not receive new config",
 			response: &http.Response{StatusCode: http.StatusNoContent},
-			assert: func(t *testing.T, got *ConfigResponse, err error) {
+			assert: func(t *testing.T, got *apipb.ConfigResponse, err error) {
 				assert.NoError(t, err)
 				assert.Nil(t, got)
 			},
@@ -81,7 +83,7 @@ func TestFetch_RequiredHeaders(t *testing.T) {
 	body, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 
-	cfg := new(ConfigRequest)
+	cfg := new(apipb.ConfigRequest)
 	err = proto.Unmarshal(body, cfg)
 	require.NoError(t, err)
 

@@ -13,6 +13,7 @@ import (
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
 	"github.com/getlantern/kindling"
+	"github.com/getlantern/radiance/backend/apipb"
 	"github.com/getlantern/radiance/common/reporting"
 )
 
@@ -25,7 +26,7 @@ var (
 )
 
 // alias for convenience
-type Config = ProxyConnectConfig
+type Config = apipb.ProxyConnectConfig
 
 type configResult struct {
 	cfg []*Config

@@ -12,6 +12,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/backend/apipb"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -81,8 +82,8 @@ func newTestConfig(addr string) (*config.Config, error) {
 		Addr:     addr,
 		Port:     int32(p),
 		Protocol: "shadowsocks",
-		ProtocolConfig: &config.ProxyConnectConfig_ConnectCfgShadowsocks{
-			ConnectCfgShadowsocks: &config.ProxyConnectConfig_ShadowsocksConfig{
+		ProtocolConfig: &apipb.ProxyConnectConfig_ConnectCfgShadowsocks{
+			ConnectCfgShadowsocks: &apipb.ProxyConnectConfig_ShadowsocksConfig{
 				Cipher: "aes-256-gcm",
 				Secret: "test",
 			},
