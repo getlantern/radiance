@@ -299,44 +299,84 @@ func TestStopVPN(t *testing.T) {
 	}
 }
 
-func TestActiveProxyLocation(t *testing.T) {
-	expectedCity := "New York"
+func TestGetServers(t *testing.T) {
 	var tests = []struct {
 		name   string
 		setup  func(*gomock.Controller) *Radiance
-		assert func(*testing.T, string)
+		assert func(*testing.T, []Server, int)
 	}{
 		{
-			name: "it should return nil when VPN is disconnected and return an error",
+			name: "it should return empty when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				return NewRadiance()
 			},
-			assert: func(t *testing.T, location string) {
-				assert.Empty(t, location)
+			assert: func(t *testing.T, servers []Server, activeServer int) {
+				assert.Empty(t, servers)
+				assert.Empty(t, activeServer)
 			},
 		},
 		{
-			name: "it should return nil when failed to retrieve config",
+			name: "it should return empty when we don't have current config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r := NewRadiance()
 				r.connected = true
 				return r
 			},
-			assert: func(t *testing.T, location string) {
-				assert.Empty(t, location)
+			assert: func(t *testing.T, servers []Server, activeServer int) {
+				assert.Empty(t, servers)
+				assert.Empty(t, activeServer)
 			},
 		},
 		{
-			name: "it should return the location when VPN is connected",
+			name: "it should return empty when failed to retrieve config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
 				r.connected = true
-				r.proxyLocation.Store(&config.ProxyConnectConfig_ProxyLocation{City: expectedCity})
+				r.confHandler = configHandler
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
+				r.proxyConfig.Store(&config.Config{
+					Protocol: "random",
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
+				})
 				return r
 			},
-			assert: func(t *testing.T, location string) {
-				assert.NotEmpty(t, location)
-				assert.Equal(t, expectedCity, location)
+			assert: func(t *testing.T, servers []Server, activeServer int) {
+				assert.Empty(t, servers)
+				assert.Empty(t, activeServer)
+			},
+		},
+		{
+			name: "it should return the servers when VPN is connected",
+			setup: func(ctrl *gomock.Controller) *Radiance {
+				configHandler := NewMockconfigHandler(ctrl)
+				r := NewRadiance()
+				r.confHandler = configHandler
+				// mock configs
+				configs := []*config.Config{{
+					Addr:     "1.2.3.4",
+					Protocol: "random1",
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
+				}, {
+					Addr:     "5.6.7.8",
+					Protocol: "random2",
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: "tokyo"},
+				}, {
+					Addr:     "9.8.7.6",
+					Protocol: "random3",
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: "paris"},
+				}}
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(configs, nil)
+				r.proxyConfig.Store(configs[len(configs)-1]) // always use the last config
+				r.connected = true
+				return r
+			},
+			assert: func(t *testing.T, servers []Server, activeServer int) {
+				assert.Equal(t, len(servers), 3)
+				assert.Equal(t, activeServer, 2)
+				assert.Equal(t, servers[activeServer].Address, "9.8.7.6")
+				assert.Equal(t, servers[activeServer].Location.City, "paris")
+				assert.Contains(t, servers[activeServer].SupportedProtocols, "random3")
 			},
 		},
 	}
@@ -346,8 +386,8 @@ func TestActiveProxyLocation(t *testing.T) {
 			defer ctrl.Finish()
 
 			r := tt.setup(ctrl)
-			location := r.ActiveProxyLocation(context.Background())
-			tt.assert(t, location)
+			servers, activeServer := r.GetServers()
+			tt.assert(t, servers, activeServer)
 		})
 	}
 }
