@@ -9,7 +9,6 @@ import (
 	"os"
 
 	otransport "github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/getlantern/golog"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport/proxyless"
 	"github.com/sagernet/sing-box/adapter"
@@ -21,8 +20,6 @@ import (
 	"github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/network"
 )
-
-var glog = golog.LoggerFor("proxyless")
 
 // ProxylessOutboundOptions set options that will be used when building the outbound dialer.
 // A Config must be provided with a config text used by the proxyless dialer.
@@ -36,15 +33,14 @@ type ProxylessOutboundOptions struct {
 // ProxylessOutbound implements a proxyless outbound
 type ProxylessOutbound struct {
 	outbound.Adapter
-	logger         logger.ContextLogger
-	dialer         otransport.StreamDialer
-	fallbackDialer otransport.StreamDialer
+	logger logger.ContextLogger
+	dialer otransport.StreamDialer
 }
 
 // NewProxylessOutbound creates a proxyless outbond that uses the proxyless transport
 // for dialing
 func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options ProxylessOutboundOptions) (adapter.Outbound, error) {
-	glog.Debug("creating outbound dialer")
+	logger.DebugContext(ctx, "creating proxyless outbound")
 	outboundDialer, err := dialer.New(ctx, options.DialerOptions)
 	if err != nil {
 		return nil, err
@@ -60,10 +56,9 @@ func NewProxylessOutbound(ctx context.Context, router adapter.Router, logger log
 	}
 
 	return &ProxylessOutbound{
-		Adapter:        outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options.DialerOptions),
-		logger:         logger,
-		dialer:         dialer,
-		fallbackDialer: options.FallbackDialer,
+		Adapter: outbound.NewAdapterWithDialerOptions("proxyless", tag, []string{network.NetworkTCP}, options.DialerOptions),
+		logger:  logger,
+		dialer:  dialer,
 	}, nil
 }
 
@@ -76,24 +71,7 @@ func (o *ProxylessOutbound) DialContext(ctx context.Context, network string, des
 
 	// trying proxyless
 	o.logger.InfoContext(ctx, "received proxyless request to %q (%q) domain", metadata.Domain, destination.String())
-	conn, err := o.dialer.DialStream(ctx, fmt.Sprintf("%s:%d", metadata.Domain, destination.Port))
-	if err == nil {
-		return conn, nil
-	}
-
-	// dialing with fallback because proxyless failed
-	if o.fallbackDialer == nil {
-		return nil, err
-	}
-
-	o.logger.ErrorContext(ctx, "failed to dial to proxyless dial %q, using fallback dialer: %w", metadata.Domain, err)
-	conn, err = o.fallbackDialer.DialStream(ctx, destination.String())
-	if err != nil {
-		o.logger.ErrorContext(ctx, "failed to dial to proxyless dial %q with fallback: %w", metadata.Domain, err)
-		return nil, err
-	}
-
-	return conn, nil
+	return o.dialer.DialStream(ctx, fmt.Sprintf("%s:%d", metadata.Domain, destination.Port))
 }
 
 // ListenPacket isn't implemented
