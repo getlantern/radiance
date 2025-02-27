@@ -20,11 +20,8 @@ import (
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
-	"github.com/getlantern/golog"
 	"github.com/getlantern/radiance/config"
 )
-
-var log = golog.LoggerFor("transport.proxyless")
 
 // TODO: in the future we want to persist this information on a file
 // once we have a standard directory for storing radiance info. This should be
@@ -109,7 +106,6 @@ func (d *StreamDialer) updateUpstreamStatus(remoteAddr, configText string, succe
 // DialStream tries to connect to the upstream by using the proxyless configuration if the conditions are met.
 // Differently from other DialStream operations, proxyless expects a domain:port instead of ip:port
 func (d *StreamDialer) DialStream(ctx context.Context, domain string) (transport.StreamConn, error) {
-	log.Debugf("received dial request for %q", domain)
 	status := d.getUpstreamStatus(domain)
 	if status.haveNeverTriedProxyless() ||
 		status.itWorkedOnLastTry() ||
@@ -122,11 +118,10 @@ func (d *StreamDialer) DialStream(ctx context.Context, domain string) (transport
 			return nil, fmt.Errorf("failed to dial %q via proxyless: %w", domain, err)
 		}
 		d.updateUpstreamStatus(domain, d.currentConfig, true)
-		log.Debugf("successfully dialed %q via proxyless", domain)
 		return conn, nil
 	}
 
-	return nil, log.Errorf("none conditions met for proxyless request to %q", domain)
+	return nil, fmt.Errorf("none conditions met for proxyless request to %q", domain)
 }
 
 func (s upstreamStatus) haveNeverTriedProxyless() bool {
