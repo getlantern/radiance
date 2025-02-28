@@ -1,4 +1,4 @@
-package client
+package boxoptions
 
 import (
 	"net/netip"
@@ -54,8 +54,8 @@ var boxOptions = option.Options{
 				Address: badoption.Listable[netip.Prefix]{
 					netip.MustParsePrefix("10.10.1.1/30"),
 				},
-				AutoRoute:              true,
-				AutoRedirect:           true,
+				AutoRoute: true,
+				// AutoRedirect:           true,
 				StrictRoute:            true,
 				EndpointIndependentNat: true,
 				Stack:                  "system",
@@ -73,19 +73,22 @@ var boxOptions = option.Options{
 			Tag:  "dns-out",
 			// Options: &option.DNSOptions{},
 		},
-		{
-			Type: "http",
-			Tag:  "sing-out",
-			Options: &option.HTTPOutboundOptions{
-				ServerOptions: option.ServerOptions{
-					Server:     "103.104.245.192",
-					ServerPort: 80,
-				},
-			},
-		},
+		// {
+		// 	Type: "socks",
+		// 	Tag:  "socks-out",
+		// 	Options: &option.SOCKSOutboundOptions{
+		// 		Username: "lantern",
+		// 		Password: "wtfcares",
+		// 		ServerOptions: option.ServerOptions{
+		// 			Server:     "103.104.245.192",
+		// 			ServerPort: 80,
+		// 		},
+		// 	},
+		// },
 	},
 	Route: &option.RouteOptions{
 		AutoDetectInterface: true,
+		// OverrideAndroidVPN: true,
 		Rules: []option.Rule{
 			{
 				Type: "default",
@@ -98,6 +101,20 @@ var boxOptions = option.Options{
 					},
 				},
 			},
+			// {
+			// 	Type: "default",
+			// 	DefaultOptions: option.DefaultRule{
+			// 		RawDefaultRule: option.RawDefaultRule{
+			// 			Inbound: badoption.Listable[string]{"tun-in"},
+			// 		},
+			// 		RuleAction: option.RuleAction{
+			// 			Action: "route",
+			// 			RouteOptions: option.RouteActionOptions{
+			// 				Outbound: "socks-out",
+			// 			},
+			// 		},
+			// 	},
+			// },
 			// {
 			// 	Type: "default",
 			// 	DefaultOptions: option.DefaultRule{

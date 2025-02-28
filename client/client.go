@@ -10,11 +10,9 @@ import (
 
 	"github.com/getlantern/golog"
 
-	"github.com/getlantern/radiance/client/algeneva"
+	"github.com/getlantern/radiance/client/boxoptions"
 
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -76,7 +74,7 @@ func newBoxService() (*boxService, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	instance, err := box.New(box.Options{
 		Context: ctx,
-		Options: boxOptions,
+		Options: boxoptions.Options(),
 	})
 	if err != nil {
 		cancel()
@@ -139,28 +137,32 @@ func (c *vpnClient) Start() error {
 	if c.boxService == nil {
 		return errors.New("box service is not initialized")
 	}
-	return c.boxService.instance.Start()
+	err := c.boxService.instance.Start()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // old code
-func newBox() (*box.Box, error) {
-	glog.Debug("Creating box")
-
-	// ***** REGISTER NEW PROTOCOL HERE *****
-	ctx := box.Context(
-		context.Background(),
-		include.InboundRegistry(),
-		include.OutboundRegistry(),
-		include.EndpointRegistry(),
-	)
-	glog.Debug("registering algeneva protocol")
-	outboundRegistry := service.FromContext[adapter.OutboundRegistry](ctx)
-	algeneva.RegisterOutbound(outboundRegistry.(*outbound.Registry))
-	// see https://github.com/SagerNet/sing-box/blob/v1.11.3/protocol/http/outbound.go#L22
-
-	boxOpts := box.Options{
-		Options: boxOptions,
-		Context: ctx,
-	}
-	return box.New(boxOpts)
-}
+// func newBox() (*box.Box, error) {
+// 	glog.Debug("Creating box")
+//
+// 	// ***** REGISTER NEW PROTOCOL HERE *****
+// 	ctx := box.Context(
+// 		context.Background(),
+// 		include.InboundRegistry(),
+// 		include.OutboundRegistry(),
+// 		include.EndpointRegistry(),
+// 	)
+// 	glog.Debug("registering algeneva protocol")
+// 	outboundRegistry := service.FromContext[adapter.OutboundRegistry](ctx)
+// 	algeneva.RegisterOutbound(outboundRegistry.(*outbound.Registry))
+// 	// see https://github.com/SagerNet/sing-box/blob/v1.11.3/protocol/http/outbound.go#L22
+//
+// 	boxOpts := box.Options{
+// 		Options: boxOptions,
+// 		Context: ctx,
+// 	}
+// 	return box.New(boxOpts)
+// }
