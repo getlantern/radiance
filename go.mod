@@ -48,7 +48,7 @@ require (
 	github.com/cretz/bine v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/getlantern/algeneva v0.0.0-20240222191137-2b4e88234f59
+	github.com/getlantern/algeneva v0.0.0-20250227003541-28296c766ad8
 	github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd // indirect
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
 	github.com/getlantern/elevate v0.0.0-20220903142053-479ab992b264 // indirect
@@ -103,7 +103,7 @@ require (
 	github.com/sagernet/nftables v0.3.0-beta.4 // indirect
 	github.com/sagernet/quic-go v0.49.0-beta.1 // indirect
 	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691 // indirect
-	github.com/sagernet/sing-dns v0.4.0 // indirect
+	github.com/sagernet/sing-dns v0.4.0
 	github.com/sagernet/sing-mux v0.3.1 // indirect
 	github.com/sagernet/sing-quic v0.4.0 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
