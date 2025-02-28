@@ -69,18 +69,6 @@ var boxOptions = option.Options{
 	},
 	Outbounds: []option.Outbound{
 		{
-			Type: "socks",
-			Tag:  "socks-out",
-			Options: &option.SOCKSOutboundOptions{
-				// Username: "lantern",
-				// Password: "wtfcares",
-				ServerOptions: option.ServerOptions{
-					Server:     "103.104.245.192",
-					ServerPort: 80,
-				},
-			},
-		},
-		{
 			Type: "direct",
 			Tag:  "direct",
 			// Options: &option.DirectOutboundOptions{},
@@ -143,7 +131,7 @@ var boxOptions = option.Options{
 					RuleAction: option.RuleAction{
 						Action: "route",
 						RouteOptions: option.RouteActionOptions{
-							Outbound: "socks-out",
+							Outbound: "direct",
 						},
 					},
 				},
