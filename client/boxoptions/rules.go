@@ -20,7 +20,12 @@ var boxOptions = option.Options{
 		Servers: []option.DNSServerOptions{
 			{
 				Tag:     "dns-google",
-				Address: "8.8.8.8",
+				Address: "tls://8.8.8.8",
+			},
+			{
+				Tag:     "local",
+				Address: "223.5.5.5",
+				Detour:  "direct",
 			},
 		},
 		Rules: []option.DNSRule{
@@ -64,6 +69,18 @@ var boxOptions = option.Options{
 	},
 	Outbounds: []option.Outbound{
 		{
+			Type: "socks",
+			Tag:  "socks-out",
+			Options: &option.SOCKSOutboundOptions{
+				// Username: "lantern",
+				// Password: "wtfcares",
+				ServerOptions: option.ServerOptions{
+					Server:     "103.104.245.192",
+					ServerPort: 80,
+				},
+			},
+		},
+		{
 			Type: "direct",
 			Tag:  "direct",
 			// Options: &option.DirectOutboundOptions{},
@@ -73,18 +90,6 @@ var boxOptions = option.Options{
 			Tag:  "dns-out",
 			// Options: &option.DNSOptions{},
 		},
-		// {
-		// 	Type: "socks",
-		// 	Tag:  "socks-out",
-		// 	Options: &option.SOCKSOutboundOptions{
-		// 		Username: "lantern",
-		// 		Password: "wtfcares",
-		// 		ServerOptions: option.ServerOptions{
-		// 			Server:     "103.104.245.192",
-		// 			ServerPort: 80,
-		// 		},
-		// 	},
-		// },
 	},
 	Route: &option.RouteOptions{
 		AutoDetectInterface: true,
@@ -101,20 +106,48 @@ var boxOptions = option.Options{
 					},
 				},
 			},
-			// {
-			// 	Type: "default",
-			// 	DefaultOptions: option.DefaultRule{
-			// 		RawDefaultRule: option.RawDefaultRule{
-			// 			Inbound: badoption.Listable[string]{"tun-in"},
-			// 		},
-			// 		RuleAction: option.RuleAction{
-			// 			Action: "route",
-			// 			RouteOptions: option.RouteActionOptions{
-			// 				Outbound: "socks-out",
-			// 			},
-			// 		},
-			// 	},
-			// },
+			{
+				Type: "default",
+				DefaultOptions: option.DefaultRule{
+					RawDefaultRule: option.RawDefaultRule{
+						Protocol: badoption.Listable[string]{"dns"},
+					},
+					RuleAction: option.RuleAction{
+						Action: "route",
+						RouteOptions: option.RouteActionOptions{
+							Outbound: "dns-out",
+						},
+					},
+				},
+			},
+			{
+				Type: "default",
+				DefaultOptions: option.DefaultRule{
+					RawDefaultRule: option.RawDefaultRule{
+						Protocol: badoption.Listable[string]{"ssh"},
+					},
+					RuleAction: option.RuleAction{
+						Action: "route",
+						RouteOptions: option.RouteActionOptions{
+							Outbound: "direct",
+						},
+					},
+				},
+			},
+			{
+				Type: "default",
+				DefaultOptions: option.DefaultRule{
+					RawDefaultRule: option.RawDefaultRule{
+						Inbound: badoption.Listable[string]{"tun-in"},
+					},
+					RuleAction: option.RuleAction{
+						Action: "route",
+						RouteOptions: option.RouteActionOptions{
+							Outbound: "socks-out",
+						},
+					},
+				},
+			},
 			// {
 			// 	Type: "default",
 			// 	DefaultOptions: option.DefaultRule{
@@ -128,20 +161,6 @@ var boxOptions = option.Options{
 			// 			Action: "route",
 			// 			RouteOptions: option.RouteActionOptions{
 			// 				Outbound: "algeneva-out",
-			// 			},
-			// 		},
-			// 	},
-			// },
-			// {
-			// 	Type: "default",
-			// 	DefaultOptions: option.DefaultRule{
-			// 		RawDefaultRule: option.RawDefaultRule{
-			// 			Protocol: badoption.Listable[string]{"dns"},
-			// 		},
-			// 		RuleAction: option.RuleAction{
-			// 			Action: "route",
-			// 			RouteOptions: option.RouteActionOptions{
-			// 				Outbound: "dns-out",
 			// 			},
 			// 		},
 			// 	},
