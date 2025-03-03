@@ -62,8 +62,7 @@ var boxOptions = option.Options{
 				Address: badoption.Listable[netip.Prefix]{
 					netip.MustParsePrefix("10.10.1.1/30"),
 				},
-				AutoRoute: true,
-				// AutoRedirect:           true,
+				AutoRoute:              true,
 				StrictRoute:            true,
 				EndpointIndependentNat: true,
 				Stack:                  "system",
@@ -104,7 +103,6 @@ var boxOptions = option.Options{
 	},
 	Route: &option.RouteOptions{
 		AutoDetectInterface: true,
-		// OverrideAndroidVPN: true,
 		Rules: []option.Rule{
 			{
 				Type: "default",
@@ -160,23 +158,20 @@ var boxOptions = option.Options{
 					},
 				},
 			},
-			// {
-			// 	Type: "default"
-			// 	DefaultOptions: option.DefaultRule{
-			// 		RawDefaultRule: option.RawDefaultRule{
-			// 			Inbound:     badoption.Listable[string]{"tun-in"},
-			// 			Domain:      badoption.Listable[string]{"ipconfig.io"},
-			// 			ProcessName: badoption.Listable[string]{"curl"},
-			// 			ProcessPath: badoption.Listable[string]{"/usr/bin/curl"},
-			// 		},
-			// 		RuleAction: option.RuleAction{
-			// 			Action: "route",
-			// 			RouteOptions: option.RouteActionOptions{
-			// 				Outbound: "algeneva-out",
-			// 			},
-			// 		},
-			// 	},
-			// },
+			{
+				Type: "default",
+				DefaultOptions: option.DefaultRule{
+					RawDefaultRule: option.RawDefaultRule{
+						Inbound: badoption.Listable[string]{"tun-in"},
+					},
+					RuleAction: option.RuleAction{
+						Action: "route",
+						RouteOptions: option.RouteActionOptions{
+							Outbound: "direct",
+						},
+					},
+				},
+			},
 		},
 	},
 }

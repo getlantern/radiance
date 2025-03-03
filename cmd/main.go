@@ -13,9 +13,6 @@ import (
 var log = golog.LoggerFor("main")
 
 func main() {
-	// addrFlag := flag.String("addr", "localhost:8080", "Address to listen on")
-	// flag.Parse()
-	//
 	rad, err := radiance.NewRadiance()
 	if err != nil {
 		log.Fatalf("unable to create radiance: %v", err)

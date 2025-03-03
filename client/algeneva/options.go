@@ -183,3 +183,26 @@ var options = option.Options{
 		},
 	},
 }
+
+// old code
+// func newBox() (*box.Box, error) {
+// 	glog.Debug("Creating box")
+//
+// 	// ***** REGISTER NEW PROTOCOL HERE *****
+// 	ctx := box.Context(
+// 		context.Background(),
+// 		include.InboundRegistry(),
+// 		include.OutboundRegistry(),
+// 		include.EndpointRegistry(),
+// 	)
+// 	glog.Debug("registering algeneva protocol")
+// 	outboundRegistry := service.FromContext[adapter.OutboundRegistry](ctx)
+// 	algeneva.RegisterOutbound(outboundRegistry.(*outbound.Registry))
+// 	// see https://github.com/SagerNet/sing-box/blob/v1.11.3/protocol/http/outbound.go#L22
+//
+// 	boxOpts := box.Options{
+// 		Options: boxOptions,
+// 		Context: ctx,
+// 	}
+// 	return box.New(boxOpts)
+// }

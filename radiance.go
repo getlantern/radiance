@@ -27,7 +27,8 @@ import (
 )
 
 var (
-	log = golog.LoggerFor("radiance")
+	log          = golog.LoggerFor("radiance")
+	vpnLogOutput = "radiance.log"
 
 	configPollInterval = 10 * time.Minute
 )
@@ -67,7 +68,7 @@ type Radiance struct {
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() (*Radiance, error) {
-	vpnC, err := client.NewVPNClient()
+	vpnC, err := client.NewVPNClient(vpnLogOutput)
 	if err != nil {
 		return nil, err
 	}
@@ -197,11 +198,13 @@ func (r *Radiance) StopVPN() error {
 	return r.vpnClient.Stop()
 }
 
+// PauseVPN pauses the VPN connection for the specified duration.
 func (r *Radiance) PauseVPN(dur time.Duration) error {
 	log.Debugf("Pausing VPN for %v", dur)
 	return r.vpnClient.Pause(dur)
 }
 
+// ResumeVPN resumes a paused VPN connection.
 func (r *Radiance) ResumeVPN() {
 	log.Debug("Resuming VPN")
 	r.vpnClient.Resume()
