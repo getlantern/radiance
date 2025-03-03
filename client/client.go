@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
-
-	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/client/boxoptions"
 
@@ -23,11 +20,7 @@ import (
 var (
 	client   *vpnClient
 	clientMu sync.Mutex
-
-	glog = golog.LoggerFor("box")
 )
-
-type ClientOptions = option.Options
 
 type VPNClient interface {
 	Start() error
@@ -40,6 +33,8 @@ type vpnClient struct {
 	boxService *boxService
 }
 
+// NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
+// the existing instance.
 func NewVPNClient() (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
@@ -54,6 +49,33 @@ func NewVPNClient() (VPNClient, error) {
 		boxService: b,
 	}
 	return client, nil
+}
+
+// Start starts the VPN client
+func (c *vpnClient) Start() error {
+	if c.boxService == nil {
+		return errors.New("box service is not initialized")
+	}
+	err := c.boxService.instance.Start()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Stop stops the VPN client and closes the TUN device
+func (c *vpnClient) Stop() error {
+	ctx, cancel := context.WithTimeout(c.boxService.ctx, time.Second*30)
+	var err error
+	go func() {
+		err = c.boxService.instance.Close()
+		cancel()
+	}()
+	<-ctx.Done()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return errors.New("box did not stop in time")
+	}
+	return err
 }
 
 type boxService struct {
@@ -88,20 +110,15 @@ func newBoxService() (*boxService, error) {
 	}, nil
 }
 
-func (c *vpnClient) Stop() error {
-	ctx, cancel := context.WithTimeout(c.boxService.ctx, time.Second*30)
-	var err error
-	go func() {
-		err = c.boxService.instance.Close()
-		cancel()
-	}()
-	<-ctx.Done()
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return errors.New("box did not stop in time")
+func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
+	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(configContent))
+	if err != nil {
+		return option.Options{}, fmt.Errorf("unmarshal config: %w", err)
 	}
-	return err
+	return options, nil
 }
 
+// Pause pauses the VPN client for the specified duration
 func (c *vpnClient) Pause(dur time.Duration) error {
 	if c.boxService.pauseManager.IsNetworkPaused() {
 		return errors.New("network is already paused")
@@ -111,58 +128,9 @@ func (c *vpnClient) Pause(dur time.Duration) error {
 	return nil
 }
 
+// Resume resumes the VPN client
 func (c *vpnClient) Resume() {
 	if c.boxService.pauseManager.IsNetworkPaused() {
 		c.boxService.pauseManager.NetworkWake()
 	}
 }
-
-func readConfigFile(path string) (string, error) {
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("reading config file: %v", err)
-	}
-	return string(buf), nil
-}
-
-func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
-	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(configContent))
-	if err != nil {
-		return option.Options{}, fmt.Errorf("unmarshal config: %w", err)
-	}
-	return options, nil
-}
-
-func (c *vpnClient) Start() error {
-	if c.boxService == nil {
-		return errors.New("box service is not initialized")
-	}
-	err := c.boxService.instance.Start()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// old code
-// func newBox() (*box.Box, error) {
-// 	glog.Debug("Creating box")
-//
-// 	// ***** REGISTER NEW PROTOCOL HERE *****
-// 	ctx := box.Context(
-// 		context.Background(),
-// 		include.InboundRegistry(),
-// 		include.OutboundRegistry(),
-// 		include.EndpointRegistry(),
-// 	)
-// 	glog.Debug("registering algeneva protocol")
-// 	outboundRegistry := service.FromContext[adapter.OutboundRegistry](ctx)
-// 	algeneva.RegisterOutbound(outboundRegistry.(*outbound.Registry))
-// 	// see https://github.com/SagerNet/sing-box/blob/v1.11.3/protocol/http/outbound.go#L22
-//
-// 	boxOpts := box.Options{
-// 		Options: boxOptions,
-// 		Context: ctx,
-// 	}
-// 	return box.New(boxOpts)
-// }
