@@ -4,6 +4,8 @@ package boxoptions
 
 import "github.com/sagernet/sing-box/option"
 
-func Options() option.Options {
-	return boxOptions
+func Options(logOutput string) option.Options {
+	opts := boxOptions
+	opts.Log.Output = logOutput
+	return opts
 }

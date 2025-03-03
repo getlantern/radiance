@@ -27,7 +27,8 @@ import (
 )
 
 var (
-	log = golog.LoggerFor("radiance")
+	log          = golog.LoggerFor("radiance")
+	vpnLogOutput = "radiance.log"
 
 	configPollInterval = 10 * time.Minute
 )
@@ -67,7 +68,7 @@ type Radiance struct {
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() (*Radiance, error) {
-	vpnC, err := client.NewVPNClient()
+	vpnC, err := client.NewVPNClient(vpnLogOutput)
 	if err != nil {
 		return nil, err
 	}
