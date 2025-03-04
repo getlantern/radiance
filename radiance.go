@@ -220,20 +220,15 @@ type Server struct {
 }
 
 // GetServers returns the remote VPN servers currently assigned to this client, as well as the index
-// of the active server.
+// of the active server. It returns nil if the client isn't currently connected.
 func (r *Radiance) GetServers() ([]Server, int) {
 	if !r.connectionStatus() {
 		log.Debug("VPN is not connected")
 		return nil, 0
 	}
-	val := r.proxyConfig.Load()
-	if val == nil {
-		log.Error("No active server config")
-		return nil, 0
-	}
-	config, ok := val.(*config.Config)
+	config, ok := r.proxyConfig.Load().(*config.Config)
 	if !ok {
-		log.Error("Unexpected config")
+		log.Error("No active server config")
 		return nil, 0
 	}
 

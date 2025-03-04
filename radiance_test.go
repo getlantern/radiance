@@ -306,29 +306,29 @@ func TestGetServers(t *testing.T) {
 		assert func(*testing.T, []Server, int)
 	}{
 		{
-			name: "it should return empty when VPN is disconnected",
+			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				return NewRadiance()
 			},
 			assert: func(t *testing.T, servers []Server, activeServer int) {
-				assert.Empty(t, servers)
-				assert.Empty(t, activeServer)
+				assert.Nil(t, servers)
+				assert.Equal(t, activeServer, 0)
 			},
 		},
 		{
-			name: "it should return empty when we don't have current config",
+			name: "it should return nil when we don't have current config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r := NewRadiance()
 				r.connected = true
 				return r
 			},
 			assert: func(t *testing.T, servers []Server, activeServer int) {
-				assert.Empty(t, servers)
-				assert.Empty(t, activeServer)
+				assert.Nil(t, servers)
+				assert.Equal(t, activeServer, 0)
 			},
 		},
 		{
-			name: "it should return empty when failed to retrieve config",
+			name: "it should return nil when failed to retrieve config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
@@ -342,12 +342,12 @@ func TestGetServers(t *testing.T) {
 				return r
 			},
 			assert: func(t *testing.T, servers []Server, activeServer int) {
-				assert.Empty(t, servers)
-				assert.Empty(t, activeServer)
+				assert.Nil(t, servers)
+				assert.Equal(t, activeServer, 0)
 			},
 		},
 		{
-			name: "it should return empty when config is empty",
+			name: "it should return nil when config is empty",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
@@ -361,8 +361,8 @@ func TestGetServers(t *testing.T) {
 				return r
 			},
 			assert: func(t *testing.T, servers []Server, activeServer int) {
-				assert.Empty(t, servers)
-				assert.Empty(t, activeServer)
+				assert.Nil(t, servers)
+				assert.Equal(t, activeServer, 0)
 			},
 		},
 		{
@@ -399,7 +399,7 @@ func TestGetServers(t *testing.T) {
 			},
 		},
 		{
-			name: "it should return the servers when VPN is connected when new configs are added",
+			name: "it should return the servers when VPN is connected and new configs are added",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
 				r := NewRadiance()
@@ -411,11 +411,12 @@ func TestGetServers(t *testing.T) {
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: "sydney"},
 				}}
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(configs, nil)
+				// this is an old config which isn't in the current config
 				r.proxyConfig.Store(&config.Config{
 					Addr:     "9.8.7.6",
 					Protocol: "random3",
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: "paris"},
-				}) // this is an old config which isn't in the current config
+				})
 				r.connected = true
 				return r
 			},
