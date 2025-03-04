@@ -21,35 +21,49 @@ var boxOptions = option.Options{
 		DisableColor: true,
 	},
 	DNS: &option.DNSOptions{
-		Servers: []option.DNSServerOptions{
-			{
-				Tag:     "dns-google-dot",
-				Address: "tls://8.8.8.8",
-			},
-			{
-				Tag:     "local",
-				Address: "223.5.5.5",
-				Detour:  "direct",
-			},
-		},
-		Rules: []option.DNSRule{
-			{
-				Type: "default",
-				DefaultOptions: option.DefaultDNSRule{
-					RawDefaultDNSRule: option.RawDefaultDNSRule{
-						Outbound: []string{"any"},
+		RawDNSOptions: option.RawDNSOptions{
+			Servers: []option.NewDNSServerOptions{
+				{
+					Tag:  "dns-google-dot",
+					Type: constant.DNSTypeTLS,
+					Options: &option.RemoteTLSDNSServerOptions{
+						RemoteDNSServerOptions: option.RemoteDNSServerOptions{
+							ServerOptions: option.ServerOptions{
+								Server:     "8.8.8.8",
+								ServerPort: 853,
+							},
+						},
 					},
-					DNSRuleAction: option.DNSRuleAction{
-						Action: "route",
-						RouteOptions: option.DNSRouteActionOptions{
-							Server: "dns-google-dot",
+				},
+				// {
+				// 	Tag:  "local",
+				// 	Type: constant.DNSTypeLocal,
+				// 	Options: option.LocalDNSServerOptions{
+				// 		DialerOptions: option.DialerOptions{
+				// 			Detour: "direct",
+				// 		},
+				// 	},
+				// },
+			},
+			Rules: []option.DNSRule{
+				{
+					Type: "default",
+					DefaultOptions: option.DefaultDNSRule{
+						RawDefaultDNSRule: option.RawDefaultDNSRule{
+							Outbound: []string{"any"},
+						},
+						DNSRuleAction: option.DNSRuleAction{
+							Action: "route",
+							RouteOptions: option.DNSRouteActionOptions{
+								Server: "dns-google-dot",
+							},
 						},
 					},
 				},
 			},
-		},
-		DNSClientOptions: option.DNSClientOptions{
-			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
+			DNSClientOptions: option.DNSClientOptions{
+				Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
+			},
 		},
 	},
 	Inbounds: []option.Inbound{
@@ -105,24 +119,24 @@ var boxOptions = option.Options{
 		AutoDetectInterface: true,
 		Rules: []option.Rule{
 			{
-				Type: "default",
+				Type: constant.RuleTypeDefault,
 				DefaultOptions: option.DefaultRule{
 					RawDefaultRule: option.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
 					},
 					RuleAction: option.RuleAction{
-						Action: "sniff",
+						Action: constant.RuleActionTypeSniff,
 					},
 				},
 			},
 			{
-				Type: "default",
+				Type: constant.RuleTypeDefault,
 				DefaultOptions: option.DefaultRule{
 					RawDefaultRule: option.RawDefaultRule{
 						Protocol: badoption.Listable[string]{"dns"},
 					},
 					RuleAction: option.RuleAction{
-						Action: "route",
+						Action: constant.RuleActionTypeRoute,
 						RouteOptions: option.RouteActionOptions{
 							Outbound: "dns-out",
 						},
@@ -130,14 +144,14 @@ var boxOptions = option.Options{
 				},
 			},
 			{
-				Type: "default",
+				Type: constant.RuleTypeDefault,
 				DefaultOptions: option.DefaultRule{
 					RawDefaultRule: option.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
 						Domain:  badoption.Listable[string]{"google.com"},
 					},
 					RuleAction: option.RuleAction{
-						Action: "route",
+						Action: constant.RuleActionTypeRoute,
 						RouteOptions: option.RouteActionOptions{
 							Outbound: "outline-out",
 						},
@@ -145,13 +159,13 @@ var boxOptions = option.Options{
 				},
 			},
 			{
-				Type: "default",
+				Type: constant.RuleTypeDefault,
 				DefaultOptions: option.DefaultRule{
 					RawDefaultRule: option.RawDefaultRule{
 						Protocol: badoption.Listable[string]{"ssh"},
 					},
 					RuleAction: option.RuleAction{
-						Action: "route",
+						Action: constant.RuleActionTypeRoute,
 						RouteOptions: option.RouteActionOptions{
 							Outbound: "direct",
 						},
@@ -159,13 +173,13 @@ var boxOptions = option.Options{
 				},
 			},
 			{
-				Type: "default",
+				Type: constant.RuleTypeDefault,
 				DefaultOptions: option.DefaultRule{
 					RawDefaultRule: option.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
 					},
 					RuleAction: option.RuleAction{
-						Action: "route",
+						Action: constant.RuleActionTypeRoute,
 						RouteOptions: option.RouteActionOptions{
 							Outbound: "direct",
 						},
