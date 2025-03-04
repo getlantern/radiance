@@ -17,6 +17,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
+	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
 
 	"github.com/getlantern/radiance/common/reporting"
@@ -53,9 +54,9 @@ type configHandler interface {
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
-	srv           httpServer
-	confHandler   configHandler
-	proxyLocation *atomic.Value
+	srv         httpServer
+	confHandler configHandler
+	proxyConfig *atomic.Value
 
 	connected   bool
 	statusMutex sync.Locker
@@ -65,11 +66,11 @@ type Radiance struct {
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() *Radiance {
 	return &Radiance{
-		confHandler:   config.NewConfigHandler(configPollInterval),
-		proxyLocation: new(atomic.Value),
-		connected:     false,
-		statusMutex:   new(sync.Mutex),
-		stopChan:      make(chan struct{}),
+		confHandler: config.NewConfigHandler(configPollInterval),
+		proxyConfig: new(atomic.Value),
+		connected:   false,
+		statusMutex: new(sync.Mutex),
+		stopChan:    make(chan struct{}),
 	}
 }
 
@@ -93,7 +94,7 @@ func (r *Radiance) Run(addr string) error {
 			proxylessConf = conf
 		}
 		proxyConf = conf
-		r.proxyLocation.Store(proxyConf.GetLocation())
+		r.proxyConfig.Store(conf)
 	}
 
 	dialer, err := transport.DialerFrom(proxyConf)
@@ -219,29 +220,52 @@ type Server struct {
 }
 
 // GetServers returns the remote VPN servers currently assigned to this client, as well as the index
-// of the active server.
-//
-// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1920
-func (r *Radiance) GetServers() (servers []Server, activeServer int) {
-	// TODO: implement me!
-	return nil, 0
-}
-
-// ActiveProxyLocation returns the proxy server's location if the VPN is connected.
-// If the VPN is disconnected, it returns nil.
-//
-// This function will be removed as part of https://github.com/getlantern/engineering/issues/1920
-func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
+// of the active server. It returns nil if the client isn't currently connected.
+func (r *Radiance) GetServers() ([]Server, int) {
 	if !r.connectionStatus() {
 		log.Debug("VPN is not connected")
-		return ""
+		return nil, 0
+	}
+	config, ok := r.proxyConfig.Load().(*config.Config)
+	if !ok {
+		log.Error("No active server config")
+		return nil, 0
 	}
 
-	if location, ok := r.proxyLocation.Load().(*config.ProxyConnectConfig_ProxyLocation); ok && location != nil {
-		return location.City
+	proxies, err := r.confHandler.GetConfig(eventual.DontWait)
+	if err != nil {
+		log.Errorf("Error getting config: %v", err)
+		return nil, 0
 	}
-	log.Errorf("could not retrieve location")
-	return ""
+	if len(proxies) == 0 {
+		log.Error("Empty config")
+		return nil, 0
+	}
+
+	servers := []Server{}
+	activeServer := -1
+	for i, p := range proxies {
+		servers = append(servers, Server{
+			Address:            p.GetAddr(),
+			Location:           ServerLocation(*p.GetLocation()),
+			SupportedProtocols: []string{p.GetProtocol()},
+		})
+		if config == p {
+			activeServer = i
+		}
+	}
+
+	// if the current config is not in the list, add it
+	if activeServer == -1 {
+		servers = append(servers, Server{
+			Address:            config.GetAddr(),
+			Location:           ServerLocation(*config.GetLocation()),
+			SupportedProtocols: []string{config.GetProtocol()},
+		})
+		activeServer = len(servers) - 1
+	}
+
+	return servers, activeServer
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
