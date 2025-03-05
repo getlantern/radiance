@@ -87,7 +87,7 @@ func TestFetch_RequiredHeaders(t *testing.T) {
 
 	ci := cfg.GetClientInfo()
 	if assert.NotNil(t, ci, "missing client info") {
-		assert.NotEmpty(t, ci.FlashlightVersion, "config request missing flashlight version")
+		assert.NotEmpty(t, ci.SingboxVersion, "config request missing singbox version")
 		assert.NotEmpty(t, ci.ClientVersion, "config request missing client version")
 		assert.NotEmpty(t, ci.UserId, "config request missing user id")
 	}
