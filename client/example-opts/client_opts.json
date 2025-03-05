@@ -8,10 +8,21 @@
 		"servers": [
 			{
 				"tag": "dns-google",
-				"address": "8.8.8.8",
-				"strategy": "ipv4_only"
+				"address": "tls://8.8.8.8"
+			},
+			{
+				"tag": "local",
+				"address": "223.5.5.5",
+				"detour": "direct"
 			}
 		],
+		"rules": [
+			{
+				"outbound": "any",
+				"server": "dns-google"
+			}
+		],
+		"strategy": "ipv4_only",
 		"disable_cache": true
 	},
 	"endpoints": [
@@ -21,7 +32,9 @@
 			"system": true,
 			"name": "wg0",
 			"mtu": 1408,
-			"address": ["10.0.0.2/32"],
+			"address": [
+				"10.0.0.2/32"
+			],
 			"private_key": "private_key",
 			"listen_port": 10000,
 			"peers": [
@@ -30,7 +43,9 @@
 					"port": 10001,
 					"public_key": "peer_public_key",
 					"pre_shared_key": "pre_shared_key",
-					"allowed_ips": ["0.0.0.0/0"],
+					"allowed_ips": [
+						"0.0.0.0/0"
+					],
 					"persistent_keepalive_interval": 30,
 					"reserved": "AAAA"
 				}
@@ -57,20 +72,39 @@
 			"tag": "algeneva-out",
 			"server": "103.104.245.192",
 			"server_port": 80,
-			"strategy": "[HTTP:method:*]-insert{%0A:end:value:4}-|"
-		},
-		{
-			"type": "algeneva",
-			"tag": "algeneva-local",
-			"server": "127.0.0.1",
-			"server_port": 8080,
+			"headers": {
+				"x-auth-token": "token"
+			},
+			"tls": {
+				"enabled": true,
+				"disable_sni": false,
+				"server_name": "",
+				"insecure": false,
+				"min_version": "",
+				"max_version": "",
+				"cipher_suites": [],
+				"certificate": ""
+			},
 			"strategy": "[HTTP:method:*]-insert{%0A:end:value:4}-|"
 		},
 		{
 			"type": "http",
 			"tag": "sing-out",
 			"server": "103.104.245.192",
-			"server_port": 80
+			"server_port": 80,
+			"headers": {
+				"x-auth-token": "token"
+			},
+			"tls": {
+				"enabled": true,
+				"disable_sni": false,
+				"server_name": "",
+				"insecure": false,
+				"min_version": "",
+				"max_version": "",
+				"cipher_suites": [],
+				"certificate": ""
+			}
 		},
 		{
 			"type": "direct",
@@ -89,9 +123,6 @@
 			},
 			{
 				"inbound": "tun-in",
-				"domain": "ipconfig.io",
-				"process_name": "curl",
-				"process_path": "/usr/bin/curl",
 				"outbound": "algeneva-out"
 			},
 			{
