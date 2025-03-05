@@ -2,8 +2,6 @@ module github.com/getlantern/radiance
 
 go 1.23.1
 
-toolchain go1.23.6
-
 replace github.com/sagernet/sing-box => ../sing-box
 
 require (
@@ -53,11 +51,11 @@ require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/caddyserver/certmagic v0.21.7 // indirect
 	github.com/cloudflare/circl v1.6.0 // indirect
-	github.com/coder/websocket v1.8.12
+	github.com/coder/websocket v1.8.12 // indirect
 	github.com/cretz/bine v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/getlantern/algeneva v0.0.0-20250227003541-28296c766ad8
+	github.com/getlantern/algeneva v0.0.0-20250227003541-28296c766ad8 // indirect
 	github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd // indirect
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
 	github.com/getlantern/elevate v0.0.0-20220903142053-479ab992b264 // indirect
