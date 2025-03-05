@@ -21,49 +21,35 @@ var boxOptions = option.Options{
 		DisableColor: true,
 	},
 	DNS: &option.DNSOptions{
-		RawDNSOptions: option.RawDNSOptions{
-			Servers: []option.NewDNSServerOptions{
-				{
-					Tag:  "dns-google-dot",
-					Type: constant.DNSTypeTLS,
-					Options: &option.RemoteTLSDNSServerOptions{
-						RemoteDNSServerOptions: option.RemoteDNSServerOptions{
-							ServerOptions: option.ServerOptions{
-								Server:     "8.8.8.8",
-								ServerPort: 853,
-							},
-						},
-					},
-				},
-				// {
-				// 	Tag:  "local",
-				// 	Type: constant.DNSTypeLocal,
-				// 	Options: option.LocalDNSServerOptions{
-				// 		DialerOptions: option.DialerOptions{
-				// 			Detour: "direct",
-				// 		},
-				// 	},
-				// },
+		Servers: []option.DNSServerOptions{
+			{
+				Tag:     "dns-google-dot",
+				Address: "tls://8.8.8.8",
 			},
-			Rules: []option.DNSRule{
-				{
-					Type: "default",
-					DefaultOptions: option.DefaultDNSRule{
-						RawDefaultDNSRule: option.RawDefaultDNSRule{
-							Outbound: []string{"any"},
-						},
-						DNSRuleAction: option.DNSRuleAction{
-							Action: "route",
-							RouteOptions: option.DNSRouteActionOptions{
-								Server: "dns-google-dot",
-							},
+			{
+				Tag:     "local",
+				Address: "223.5.5.5",
+				Detour:  "direct",
+			},
+		},
+		Rules: []option.DNSRule{
+			{
+				Type: "default",
+				DefaultOptions: option.DefaultDNSRule{
+					RawDefaultDNSRule: option.RawDefaultDNSRule{
+						Outbound: []string{"any"},
+					},
+					DNSRuleAction: option.DNSRuleAction{
+						Action: "route",
+						RouteOptions: option.DNSRouteActionOptions{
+							Server: "dns-google-dot",
 						},
 					},
 				},
 			},
-			DNSClientOptions: option.DNSClientOptions{
-				Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
-			},
+		},
+		DNSClientOptions: option.DNSClientOptions{
+			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
 		},
 	},
 	Inbounds: []option.Inbound{

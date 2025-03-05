@@ -93,7 +93,6 @@ func newBoxService(logOutput string) (*boxService, error) {
 		include.InboundRegistry(),
 		include.OutboundRegistry(),
 		include.EndpointRegistry(),
-		include.DNSTransportRegistry(),
 	)
 	ctx, cancel := context.WithCancel(ctx)
 	instance, err := box.New(box.Options{
