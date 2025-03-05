@@ -8,11 +8,13 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
+const logFile = "lantern.log"
+
 var boxOptions = option.Options{
 	Log: &option.LogOptions{
 		Disabled:     false,
 		Level:        "trace",
-		Output:       "lantern.log",
+		Output:       logFile,
 		Timestamp:    true,
 		DisableColor: true,
 	},

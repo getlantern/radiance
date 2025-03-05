@@ -67,8 +67,8 @@ type Radiance struct {
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance() (*Radiance, error) {
-	vpnC, err := client.NewVPNClient(vpnLogOutput)
+func NewRadiance(baseDir string) (*Radiance, error) {
+	vpnC, err := client.NewVPNClient(baseDir)
 	if err != nil {
 		return nil, err
 	}
