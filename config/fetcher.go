@@ -111,7 +111,6 @@ func moduleVersion(modulePath ...string) (string, error) {
 	}
 
 	for _, mod := range info.Deps {
-		fmt.Printf("module: %s\n", mod.Path)
 		if slices.Contains(modulePath, mod.Path) {
 			return mod.Version, nil
 		}
