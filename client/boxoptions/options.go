@@ -2,15 +2,12 @@ package boxoptions
 
 import (
 	"net/netip"
-	"time"
 
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
 )
-
-var testTimeout = 10 * time.Second
 
 var boxOptions = option.Options{
 	Log: &option.LogOptions{
@@ -34,7 +31,7 @@ var boxOptions = option.Options{
 		},
 		Rules: []option.DNSRule{
 			{
-				Type: "default",
+				Type: constant.RuleTypeDefault,
 				DefaultOptions: option.DefaultDNSRule{
 					RawDefaultDNSRule: option.RawDefaultDNSRule{
 						Outbound: []string{"any"},
@@ -97,7 +94,7 @@ var boxOptions = option.Options{
 				},
 				TLS:         []string{"", "split:1"},
 				Domains:     []string{"google.com"},
-				TestTimeout: &testTimeout,
+				TestTimeout: "10s",
 			},
 		},
 	},
