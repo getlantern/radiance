@@ -15,4 +15,8 @@ const (
 	// - 23403 -> algeneva
 	UserId   = "23403"
 	ProToken = ""
+
+	// TODO: will be used by the vpn-client branch, and later should be user configurable
+	//  this is here because of the need to attach log to the issue report
+	LogDir = "logs"
 )
