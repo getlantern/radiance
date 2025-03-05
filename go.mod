@@ -13,13 +13,18 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
-	github.com/golang/protobuf v1.5.4
+	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/sagernet/sing v0.6.2-0.20250210072154-8dff604468ff
 	github.com/sagernet/sing-box v1.11.3
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
 	go.uber.org/mock v0.5.0
 	google.golang.org/protobuf v1.36.5
+)
+
+require (
+	github.com/tkuchiki/go-timezone v0.2.0 // indirect
+	golang.org/x/text v0.22.0 // indirect
 )
 
 require (
@@ -43,7 +48,6 @@ require (
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
 )
 
 require (
