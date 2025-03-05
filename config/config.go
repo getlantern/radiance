@@ -14,11 +14,9 @@ import (
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
-	"github.com/getlantern/kindling"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/backend/apipb"
 	"google.golang.org/protobuf/encoding/protojson"
-
-	"github.com/getlantern/radiance/common/reporting"
 )
 
 const (
@@ -67,12 +65,7 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 	// }
 
 	// TODO: Ideally we would know the user locale here on radiance startup.
-	k := kindling.NewKindling(
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
-		kindling.WithProxyless("api.iantem.io"),
-	)
-	ch.ftr = newFetcher(k.NewHTTPClient())
+	ch.ftr = newFetcher(backend.GetHTTPClient())
 	go ch.fetchLoop(pollInterval)
 	return ch
 }
