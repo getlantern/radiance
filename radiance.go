@@ -75,7 +75,7 @@ func NewRadiance() (*Radiance, error) {
 	return &Radiance{
 		vpnClient: vpnC,
 
-		// confHandler:   config.NewConfigHandler(configPollInterval),
+		confHandler:   config.NewConfigHandler(configPollInterval),
 		proxyLocation: new(atomic.Value),
 		connected:     false,
 		statusMutex:   new(sync.Mutex),

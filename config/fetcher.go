@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime/debug"
 
 	"google.golang.org/protobuf/proto"
+
+	"slices"
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -31,12 +34,12 @@ func newFetcher(client *http.Client) *fetcher {
 func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 	confReq := ConfigRequest{
 		ClientInfo: &ConfigRequest_ClientInfo{
-			FlashlightVersion: app.Version,
-			ClientVersion:     app.ClientVersion,
-			UserId:            app.UserId,
-			ProToken:          app.ProToken,
-			Country:           "",
-			Ip:                "",
+			SingboxVersion: singVersion(),
+			ClientVersion:  app.ClientVersion,
+			UserId:         app.UserId,
+			ProToken:       app.ProToken,
+			Country:        "",
+			Ip:             "",
 		},
 		Proxy: &ConfigRequest_Proxy{},
 	}
@@ -88,4 +91,31 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	}
 
 	return buf, nil
+}
+
+// singVersion returns the version of the sing-box module.
+func singVersion() string {
+	// First look for the sagernet/sing-box module version, and if it's not found, look for the getlantern/sing-box module version.
+	singVersion, err := moduleVersion("github.com/sagernet/sing-box", "github.com/getlantern/sing-box")
+	if err != nil {
+		singVersion = "unknown"
+	}
+	log.Debugf("sing-box version: %s", singVersion)
+	return singVersion
+}
+
+func moduleVersion(modulePath ...string) (string, error) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "", fmt.Errorf("could not read build info")
+	}
+
+	for _, mod := range info.Deps {
+		fmt.Printf("module: %s\n", mod.Path)
+		if slices.Contains(modulePath, mod.Path) {
+			return mod.Version, nil
+		}
+	}
+
+	return "", fmt.Errorf("module %s not found", modulePath)
 }
