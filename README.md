@@ -25,8 +25,9 @@ New transports/protocols can be added by implementing [transport.StreamDialer](h
 ## Run
 
 ```
-go run cmd/main.go -addr localhost:8080
+go run cmd/main.go 
 ```
+Sudo/Admin privileges are required to run.
 
 ## TODO
 - [x] Create an Outline transport StreamDialer using a proxy config.

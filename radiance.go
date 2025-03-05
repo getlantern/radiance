@@ -19,6 +19,7 @@ import (
 
 	"github.com/getlantern/golog"
 
+	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
@@ -26,7 +27,8 @@ import (
 )
 
 var (
-	log = golog.LoggerFor("radiance")
+	log          = golog.LoggerFor("radiance")
+	vpnLogOutput = "radiance.log"
 
 	configPollInterval = 10 * time.Minute
 )
@@ -53,6 +55,8 @@ type configHandler interface {
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
+	vpnClient client.VPNClient
+
 	srv           httpServer
 	confHandler   configHandler
 	proxyLocation *atomic.Value
@@ -63,19 +67,25 @@ type Radiance struct {
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance() *Radiance {
+func NewRadiance() (*Radiance, error) {
+	vpnC, err := client.NewVPNClient(vpnLogOutput)
+	if err != nil {
+		return nil, err
+	}
 	return &Radiance{
-		confHandler:   config.NewConfigHandler(configPollInterval),
+		vpnClient: vpnC,
+
+		// confHandler:   config.NewConfigHandler(configPollInterval),
 		proxyLocation: new(atomic.Value),
 		connected:     false,
 		statusMutex:   new(sync.Mutex),
 		stopChan:      make(chan struct{}),
-	}
+	}, nil
 }
 
 // Run starts the Radiance proxy server on the specified address.
 // This function will be replaced by StartVPN as part of https://github.com/getlantern/engineering/issues/1883
-func (r *Radiance) Run(addr string) error {
+func (r *Radiance) run(addr string) error {
 	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	log.Debug("Fetching config")
@@ -148,7 +158,7 @@ func (r *Radiance) listenAndServe(addr string) error {
 
 // Shutdown stops the Radiance server.
 // This function will be replaced by StopVPN as part of https://github.com/getlantern/engineering/issues/1883
-func (r *Radiance) Shutdown(ctx context.Context) error {
+func (r *Radiance) shutdown(ctx context.Context) error {
 	if !r.connectionStatus() {
 		return nil
 	}
@@ -173,16 +183,31 @@ func (r *Radiance) Shutdown(ctx context.Context) error {
 //
 // This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
 func (r *Radiance) StartVPN() error {
-	// TODO: implement me!
-	return ErrNotImplemented
+	log.Debug("Starting VPN")
+	err := r.vpnClient.Start()
+	r.setStatus(err == nil)
+	return err
 }
 
 // StopVPN stops the local VPN device and removes routing rules configured by StartVPN.
 //
 // This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
 func (r *Radiance) StopVPN() error {
-	// TODO: implement me!
-	return ErrNotImplemented
+	log.Debug("Stopping VPN")
+	r.setStatus(false)
+	return r.vpnClient.Stop()
+}
+
+// PauseVPN pauses the VPN connection for the specified duration.
+func (r *Radiance) PauseVPN(dur time.Duration) error {
+	log.Debugf("Pausing VPN for %v", dur)
+	return r.vpnClient.Pause(dur)
+}
+
+// ResumeVPN resumes a paused VPN connection.
+func (r *Radiance) ResumeVPN() {
+	log.Debug("Resuming VPN")
+	r.vpnClient.Resume()
 }
 
 func (r *Radiance) connectionStatus() bool {

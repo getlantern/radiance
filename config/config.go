@@ -7,13 +7,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	sync "sync"
 	"time"
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
 	"github.com/getlantern/kindling"
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/getlantern/radiance/common/reporting"
+)
+
+const (
+	configDir      = "config"
+	configFileName = "proxy.conf"
 )
 
 var (
@@ -40,15 +49,22 @@ type ConfigHandler struct {
 	ftr       *fetcher
 	stopC     chan struct{}
 	closeOnce *sync.Once
+
+	configPath string
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 	ch := &ConfigHandler{
-		config:    eventual.NewValue(),
-		stopC:     make(chan struct{}),
-		closeOnce: &sync.Once{},
+		config:     eventual.NewValue(),
+		stopC:      make(chan struct{}),
+		closeOnce:  &sync.Once{},
+		configPath: filepath.Join(configDir, configFileName),
 	}
+	// if err := ch.loadConfig(); err != nil {
+	// 	log.Errorf("failed to load config: %v", err)
+	// }
+
 	// TODO: Ideally we would know the user locale here on radiance startup.
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
@@ -64,6 +80,10 @@ func (ch *ConfigHandler) fetchConfig() error {
 	log.Debug("Fetching config")
 	proxies, _ := ch.GetConfig(eventual.DontWait)
 	resp, err := ch.ftr.fetchConfig()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
+	}
+
 	if resp != nil {
 		log.Debug("received config response")
 		// we got a new config and no error so we can update the current config
@@ -73,12 +93,12 @@ func (ch *ConfigHandler) fetchConfig() error {
 			log.Debugf("received %d new proxies", len(proxyList.GetProxies()))
 			proxies = proxyList.GetProxies()
 			log.Debugf("new proxy: %+v", proxies)
+			if sErr := saveConfig(ch.configPath, proxies[0]); sErr != nil {
+				log.Errorf("failed to save config: %v", sErr)
+			}
 		} else {
 			log.Debug("proxy list is empty")
 		}
-	}
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
 
 	// Otherwise, we keep the previous config and store any error that might have occurred.
@@ -126,4 +146,52 @@ func (ch *ConfigHandler) Stop() {
 	ch.closeOnce.Do(func() {
 		close(ch.stopC)
 	})
+}
+
+// loadConfig loads the configuration from the disk and sets it in the ConfigHandler.
+func (ch *ConfigHandler) loadConfig() error {
+	log.Debug("Loading config")
+	cfg, err := loadConfig(ch.configPath)
+	if err != nil {
+		err = fmt.Errorf("loading config: %w", err)
+		log.Error(err)
+		return err
+	}
+	log.Debug("Config loaded")
+	if cfg == nil { // no config file
+		log.Debug("No config file found")
+		return nil
+	}
+	log.Debug("Setting config")
+	ch.config.Set(configResult{cfg: []*Config{cfg}})
+	return nil
+}
+
+// loadConfig loads the config file from the disk. If the config file is not found, it returns
+// nil.
+func loadConfig(path string) (*Config, error) {
+	log.Debugf("reading config file at %s", path)
+	buf, err := os.ReadFile(path)
+	log.Debug("config file read")
+	if os.IsNotExist(err) { // no config file
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+	var cfg Config
+	err = protojson.Unmarshal(buf, &cfg)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+	return &cfg, nil
+}
+
+// saveConfig saves the configuration to the disk.
+func saveConfig(path string, cfg *Config) error {
+	buf, err := protojson.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	return os.WriteFile(path, buf, 0644)
 }

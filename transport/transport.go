@@ -29,14 +29,19 @@ var (
 
 // DialerFrom creates a new StreamDialer from [config.Config].
 func DialerFrom(config *config.Config) (transport.StreamDialer, error) {
+	return DialerFromWithBase(&transport.TCPDialer{}, config)
+}
+
+func DialerFromWithBase(base transport.StreamDialer, config *config.Config) (transport.StreamDialer, error) {
 	builder, ok := dialerBuilders[config.Protocol]
 	if !ok {
-		return nil, fmt.Errorf("Unsupported protocol: %v", config.Protocol)
+		return nil, fmt.Errorf("unsupported protocol: %v", config.Protocol)
 	}
 
-	dialer, err := builder(&transport.TCPDialer{}, config)
+	log.Debugf("Creating %s dialer", config.Protocol)
+	dialer, err := builder(base, config)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create %s dialer: %w", config.Protocol, err)
+		return nil, fmt.Errorf("failed to create %s dialer: %w", config.Protocol, err)
 	}
 
 	dialer, _ = dialerBuilders["multiplex"](dialer, config)
