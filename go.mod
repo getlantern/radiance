@@ -2,7 +2,7 @@ module github.com/getlantern/radiance
 
 go 1.23.1
 
-replace github.com/sagernet/sing-box => ../sing-box
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box v1.12.0-lantern
 
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.18
