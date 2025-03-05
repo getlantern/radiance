@@ -21,28 +21,35 @@ var boxOptions = option.Options{
 		Servers: []option.DNSServerOptions{
 			{
 				Tag:     "dns-google-dot",
-				Address: "tls://8.8.8.8",
+				Address: "tls://8.8.4.4",
+			},
+			{
+				Tag:     "dns-cloudflare-dot",
+				Address: "tls://1.1.1.1",
+			},
+			{
+				Tag:     "dns-sb-dot",
+				Address: "tls://185.222.222.222",
+			},
+			{
+				Tag:             "dns-google-doh",
+				Address:         "https://dns.google/dns-query",
+				AddressResolver: "dns-google-dot",
+			},
+			{
+				Tag:             "dns-cloudflare-doh",
+				Address:         "https://cloudflare-dns.com/dns-query",
+				AddressResolver: "dns-cloudflare-dot",
+			},
+			{
+				Tag:             "dns-sb-doh",
+				Address:         "https://doh.dns.sb/dns-query",
+				AddressResolver: "dns-sb-dot",
 			},
 			{
 				Tag:     "local",
 				Address: "223.5.5.5",
 				Detour:  "direct",
-			},
-		},
-		Rules: []option.DNSRule{
-			{
-				Type: constant.RuleTypeDefault,
-				DefaultOptions: option.DefaultDNSRule{
-					RawDefaultDNSRule: option.RawDefaultDNSRule{
-						Outbound: []string{"any"},
-					},
-					DNSRuleAction: option.DNSRuleAction{
-						Action: "route",
-						RouteOptions: option.DNSRouteActionOptions{
-							Server: "dns-google-dot",
-						},
-					},
-				},
 			},
 		},
 		DNSClientOptions: option.DNSClientOptions{
@@ -89,11 +96,28 @@ var boxOptions = option.Options{
 						},
 					},
 					{
+						HTTPS: &option.HTTPSEntryConfig{
+							Name: "dns.google",
+						},
+					},
+					{
+						HTTPS: &option.HTTPSEntryConfig{
+							Name:    "cloudflare-dns.com.",
+							Address: "cloudflare.net.",
+						},
+					},
+					{
+						HTTPS: &option.HTTPSEntryConfig{
+							Name:    "doh.dns.sb",
+							Address: "https://doh.dns.sb/dns-query",
+						},
+					},
+					{
 						System: &struct{}{},
 					},
 				},
-				TLS:         []string{"", "split:1"},
-				Domains:     []string{"google.com"},
+				TLS:         []string{"", "split:1", "split:2,20*5", "split:200|disorder:1", "tlsfrag:1"},
+				Domains:     []string{"api.iantem.io", "google.com"},
 				TestTimeout: "10s",
 			},
 		},
@@ -131,7 +155,7 @@ var boxOptions = option.Options{
 				DefaultOptions: option.DefaultRule{
 					RawDefaultRule: option.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
-						Domain:  badoption.Listable[string]{"google.com"},
+						Domain:  badoption.Listable[string]{"api.iantem.io", "google.com"},
 					},
 					RuleAction: option.RuleAction{
 						Action: constant.RuleActionTypeRoute,
