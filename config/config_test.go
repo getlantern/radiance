@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/stretchr/testify/assert"
@@ -108,7 +109,8 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 			close(ch.stopC)
 
 			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // we don't want GetConfig to wait
+			cancel()                    // we don't want GetConfig to wait
+			time.Sleep(1 * time.Second) // waiting 1s until it fetches
 			_got, _ := ch.config.Get(ctx)
 			got := _got.(configResult)
 
