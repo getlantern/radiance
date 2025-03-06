@@ -15,7 +15,7 @@ message ConfigRequest {
   Proxy proxy = 2;
 
   message ClientInfo {
-    string flashlight_version = 1;
+    string singbox_version = 1;
     string client_version = 2;
     string user_id = 3;
     string pro_token = 4;
