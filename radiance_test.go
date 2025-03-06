@@ -132,7 +132,11 @@ func TestNewRadiance(t *testing.T) {
 		r, err := NewRadiance()
 		assert.NoError(t, err)
 		assert.NotNil(t, r)
-		//assert.NotNil(t, r.confHandler)
+		// Currently we're not creating a config handler when starting radiance,
+		// due to recent changes for using sing-box. We will enable it again
+		// in the future for retrieving the sing-box configuration options
+		// and this should be re-enabled.
+		// assert.NotNil(t, r.confHandler)
 		assert.Nil(t, r.srv)
 		assert.False(t, r.connected)
 		assert.NotNil(t, r.statusMutex)
