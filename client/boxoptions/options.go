@@ -3,22 +3,24 @@ package boxoptions
 import (
 	"net/netip"
 
-	"github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/option"
+	"github.com/getlantern/radiance/constant"
+	"github.com/getlantern/radiance/option"
+	C "github.com/sagernet/sing-box/constant"
+	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
-var boxOptions = option.Options{
-	Log: &option.LogOptions{
+var boxOptions = O.Options{
+	Log: &O.LogOptions{
 		Disabled:     false,
 		Level:        "trace",
 		Output:       "lantern.log",
 		Timestamp:    true,
 		DisableColor: true,
 	},
-	DNS: &option.DNSOptions{
-		Servers: []option.DNSServerOptions{
+	DNS: &O.DNSOptions{
+		Servers: []O.DNSServerOptions{
 			{
 				Tag:     "dns-google-dot",
 				Address: "tls://8.8.4.4",
@@ -52,15 +54,15 @@ var boxOptions = option.Options{
 				Detour:  "direct",
 			},
 		},
-		DNSClientOptions: option.DNSClientOptions{
-			Strategy: option.DomainStrategy(dns.DomainStrategyUseIPv4),
+		DNSClientOptions: O.DNSClientOptions{
+			Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
 		},
 	},
-	Inbounds: []option.Inbound{
+	Inbounds: []O.Inbound{
 		{
 			Type: "tun",
 			Tag:  "tun-in",
-			Options: &option.TunInboundOptions{
+			Options: &O.TunInboundOptions{
 				InterfaceName: "utun225",
 				MTU:           1500,
 				Address: badoption.Listable[netip.Prefix]{
@@ -73,16 +75,16 @@ var boxOptions = option.Options{
 			},
 		},
 	},
-	Outbounds: []option.Outbound{
+	Outbounds: []O.Outbound{
 		{
 			Type: "direct",
 			Tag:  "direct",
-			// Options: &option.DirectOutboundOptions{},
+			// Options: &O.DirectOutboundOptions{},
 		},
 		{
 			Type: "dns",
 			Tag:  "dns-out",
-			// Options: &option.DNSOptions{},
+			// Options: &O.DNSOptions{},
 		},
 		{
 			Type: constant.TypeOutline,
@@ -122,72 +124,72 @@ var boxOptions = option.Options{
 			},
 		},
 	},
-	Route: &option.RouteOptions{
+	Route: &O.RouteOptions{
 		AutoDetectInterface: true,
-		Rules: []option.Rule{
+		Rules: []O.Rule{
 			{
-				Type: constant.RuleTypeDefault,
-				DefaultOptions: option.DefaultRule{
-					RawDefaultRule: option.RawDefaultRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultRule{
+					RawDefaultRule: O.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
 					},
-					RuleAction: option.RuleAction{
-						Action: constant.RuleActionTypeSniff,
+					RuleAction: O.RuleAction{
+						Action: C.RuleActionTypeSniff,
 					},
 				},
 			},
 			{
-				Type: constant.RuleTypeDefault,
-				DefaultOptions: option.DefaultRule{
-					RawDefaultRule: option.RawDefaultRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultRule{
+					RawDefaultRule: O.RawDefaultRule{
 						Protocol: badoption.Listable[string]{"dns"},
 					},
-					RuleAction: option.RuleAction{
-						Action: constant.RuleActionTypeRoute,
-						RouteOptions: option.RouteActionOptions{
+					RuleAction: O.RuleAction{
+						Action: C.RuleActionTypeRoute,
+						RouteOptions: O.RouteActionOptions{
 							Outbound: "dns-out",
 						},
 					},
 				},
 			},
 			{
-				Type: constant.RuleTypeDefault,
-				DefaultOptions: option.DefaultRule{
-					RawDefaultRule: option.RawDefaultRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultRule{
+					RawDefaultRule: O.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
 						Domain:  badoption.Listable[string]{"api.iantem.io", "google.com"},
 					},
-					RuleAction: option.RuleAction{
-						Action: constant.RuleActionTypeRoute,
-						RouteOptions: option.RouteActionOptions{
+					RuleAction: O.RuleAction{
+						Action: C.RuleActionTypeRoute,
+						RouteOptions: O.RouteActionOptions{
 							Outbound: "outline-out",
 						},
 					},
 				},
 			},
 			{
-				Type: constant.RuleTypeDefault,
-				DefaultOptions: option.DefaultRule{
-					RawDefaultRule: option.RawDefaultRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultRule{
+					RawDefaultRule: O.RawDefaultRule{
 						Protocol: badoption.Listable[string]{"ssh"},
 					},
-					RuleAction: option.RuleAction{
-						Action: constant.RuleActionTypeRoute,
-						RouteOptions: option.RouteActionOptions{
+					RuleAction: O.RuleAction{
+						Action: C.RuleActionTypeRoute,
+						RouteOptions: O.RouteActionOptions{
 							Outbound: "direct",
 						},
 					},
 				},
 			},
 			{
-				Type: constant.RuleTypeDefault,
-				DefaultOptions: option.DefaultRule{
-					RawDefaultRule: option.RawDefaultRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultRule{
+					RawDefaultRule: O.RawDefaultRule{
 						Inbound: badoption.Listable[string]{"tun-in"},
 					},
-					RuleAction: option.RuleAction{
-						Action: constant.RuleActionTypeRoute,
-						RouteOptions: option.RouteActionOptions{
+					RuleAction: O.RuleAction{
+						Action: C.RuleActionTypeRoute,
+						RouteOptions: O.RouteActionOptions{
 							Outbound: "direct",
 						},
 					},
