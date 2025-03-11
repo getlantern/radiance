@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/getlantern/radiance/client/boxoptions"
+	"github.com/getlantern/radiance/protocol/outline"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -88,12 +90,14 @@ type boxService struct {
 
 func newBoxService(logOutput string) (*boxService, error) {
 	// ***** REGISTER NEW PROTOCOL HERE *****
+	outboundRegistry := include.OutboundRegistry()
 	ctx := box.Context(
 		context.Background(),
 		include.InboundRegistry(),
-		include.OutboundRegistry(),
+		outboundRegistry,
 		include.EndpointRegistry(),
 	)
+	registerOutbounds(outboundRegistry)
 	ctx, cancel := context.WithCancel(ctx)
 	instance, err := box.New(box.Options{
 		Context: ctx,
@@ -109,6 +113,10 @@ func newBoxService(logOutput string) (*boxService, error) {
 		instance:     instance,
 		pauseManager: service.FromContext[pause.Manager](ctx),
 	}, nil
+}
+
+func registerOutbounds(registry *outbound.Registry) {
+	outline.RegisterOutbound(registry)
 }
 
 func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
