@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	sync "sync"
@@ -14,10 +15,7 @@ import (
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
-	"github.com/getlantern/kindling"
 	"google.golang.org/protobuf/encoding/protojson"
-
-	"github.com/getlantern/radiance/common/reporting"
 )
 
 const (
@@ -54,7 +52,7 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client) *ConfigHandler {
 	ch := &ConfigHandler{
 		config:     eventual.NewValue(),
 		stopC:      make(chan struct{}),
@@ -65,13 +63,7 @@ func NewConfigHandler(pollInterval time.Duration) *ConfigHandler {
 	// 	log.Errorf("failed to load config: %v", err)
 	// }
 
-	// TODO: Ideally we would know the user locale here on radiance startup.
-	k := kindling.NewKindling(
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
-		kindling.WithProxyless("api.iantem.io"),
-	)
-	ch.ftr = newFetcher(k.NewHTTPClient())
+	ch.ftr = newFetcher(httpClient)
 	go ch.fetchLoop(pollInterval)
 	return ch
 }

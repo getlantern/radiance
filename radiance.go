@@ -18,12 +18,14 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/getlantern/golog"
+	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
 	"github.com/getlantern/radiance/transport/proxyless"
+	"github.com/getlantern/radiance/user"
 )
 
 var (
@@ -64,6 +66,8 @@ type Radiance struct {
 	connected   bool
 	statusMutex sync.Locker
 	stopChan    chan struct{}
+
+	authClient user.AuthClient
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
@@ -72,14 +76,22 @@ func NewRadiance() (*Radiance, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: Ideally we would know the user locale here on radiance startup.
+	k := kindling.NewKindling(
+		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithProxyless("api.iantem.io"),
+	)
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:   config.NewConfigHandler(configPollInterval),
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient()),
 		proxyLocation: new(atomic.Value),
 		connected:     false,
 		statusMutex:   new(sync.Mutex),
 		stopChan:      make(chan struct{}),
+		authClient:    user.NewAuthClient(k.NewHTTPClient()),
 	}, nil
 }
 
