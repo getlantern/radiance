@@ -2,8 +2,6 @@ module github.com/getlantern/radiance
 
 go 1.23.1
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box v1.12.0-lantern
-
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.18
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.1
@@ -13,8 +11,8 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
-	github.com/sagernet/sing v0.6.2-0.20250210072154-8dff604468ff
-	github.com/sagernet/sing-box v1.11.3
+	github.com/sagernet/sing v0.6.3
+	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
 	go.uber.org/mock v0.5.0
@@ -140,6 +138,6 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241202173237-19429a94021a // indirect
 	google.golang.org/grpc v1.70.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
