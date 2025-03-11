@@ -132,7 +132,11 @@ func (s *outboundDialer) DialPacket(ctx context.Context, addr string) (net.Conn,
 	if err != nil {
 		return nil, err
 	}
-	return conn.(*net.UDPConn), nil
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		return nil, fmt.Errorf("failed to assert connection as *net.UDPConn")
+	}
+	return udpConn, nil
 }
 
 type logWriter struct {
