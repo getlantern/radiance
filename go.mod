@@ -13,7 +13,6 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
-	github.com/golang/protobuf v1.5.4
 	github.com/sagernet/sing v0.6.2-0.20250210072154-8dff604468ff
 	github.com/sagernet/sing-box v1.11.3
 	github.com/stretchr/testify v1.10.0
@@ -26,6 +25,7 @@ require (
 	github.com/alitto/pond/v2 v2.1.5 // indirect
 	github.com/caddyserver/zerossl v0.1.3 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
+	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
 	github.com/getlantern/fronted v0.0.0-20250219040712-771dbc843542 // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d // indirect
 	github.com/getlantern/tlsdialer/v3 v3.0.3 // indirect
@@ -55,7 +55,6 @@ require (
 	github.com/cretz/bine v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/getlantern/algeneva v0.0.0-20250227003541-28296c766ad8 // indirect
 	github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd // indirect
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
 	github.com/getlantern/elevate v0.0.0-20220903142053-479ab992b264 // indirect
