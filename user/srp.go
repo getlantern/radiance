@@ -31,7 +31,7 @@ func NewSRPClient(email string, password string, salt []byte) *srp.SRP {
 // Takes password and email, salt and returns encrypted key
 func GenerateEncryptedKey(password string, email string, salt []byte) *big.Int {
 	if len(salt) == 0 || len(password) == 0 || len(email) == 0 {
-		log.Errorf("slat or password or email is empty %v %v %v", salt, password, email)
+		log.Errorf("salt or password or email is empty %v %v %v", salt, password, email)
 		return nil
 	}
 	lowerCaseEmail := strings.ToLower(email)
