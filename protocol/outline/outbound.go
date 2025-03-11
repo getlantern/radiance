@@ -123,7 +123,11 @@ func (s *outboundDialer) DialStream(ctx context.Context, addr string) (transport
 	if err != nil {
 		return nil, err
 	}
-	return conn.(*net.TCPConn), nil
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		return nil, fmt.Errorf("expected *net.TCPConn, got %T", conn)
+	}
+	return tcpConn, nil
 }
 
 func (s *outboundDialer) DialPacket(ctx context.Context, addr string) (net.Conn, error) {
