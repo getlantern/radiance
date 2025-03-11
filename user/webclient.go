@@ -17,15 +17,12 @@ import (
 
 var (
 	log        = golog.LoggerFor("webclient")
-	ProAPIHost = "api.getiantem.org"
-
-	DFBaseUrl  = "df.iantem.io/api/v1"
 	APIBaseUrl = "iantem.io/api/v1"
 )
 
 type RESTClient interface {
 	// Get data from server and parse to protoc file
-	GetPROTOC(ctx context.Context, path string, params map[string]interface{}, target protoreflect.ProtoMessage) error
+	GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error
 
 	// PostPROTOC sends a POST request with protoc file and parse the response to protoc file
 	PostPROTOC(ctx context.Context, path string, body protoreflect.ProtoMessage, target protoreflect.ProtoMessage) error
@@ -42,8 +39,8 @@ func NewRESTClient(httpClient *http.Client) RESTClient {
 	}
 }
 
-func (c *restClient) GetPROTOC(ctx context.Context, path string, params map[string]interface{}, target protoreflect.ProtoMessage) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+func (c *restClient) GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, http.NoBody)
 	if err != nil {
 		return errors.New("Error creating request: %v", err)
 	}
@@ -58,7 +55,7 @@ func (c *restClient) GetPROTOC(ctx context.Context, path string, params map[stri
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(req)
 
 	if err != nil {
 		return errors.New("Error sending request: %v", err)
@@ -78,7 +75,7 @@ func (c *restClient) GetPROTOC(ctx context.Context, path string, params map[stri
 
 }
 
-func (c *restClient) PostPROTOC(ctx context.Context, path string, msg protoreflect.ProtoMessage, target protoreflect.ProtoMessage) error {
+func (c *restClient) PostPROTOC(ctx context.Context, path string, msg, target protoreflect.ProtoMessage) error {
 	bodyBytes, err := proto.Marshal(msg)
 	if err != nil {
 		return err
@@ -90,7 +87,7 @@ func (c *restClient) PostPROTOC(ctx context.Context, path string, msg protorefle
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(req)
 
 	if err != nil {
 		return errors.New("Error sending request: %v", err)
