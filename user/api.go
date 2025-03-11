@@ -6,14 +6,14 @@ import (
 )
 
 type AuthClient interface {
-	//Sign up methods
+	// Sign up methods
 	SignUp(ctx context.Context, email string, password string) ([]byte, error)
 	SignupEmailResendCode(ctx context.Context, data *SignupEmailResendRequest) error
 	SignupEmailConfirmation(ctx context.Context, data *ConfirmSignupRequest) error
-	//Login methods
+	// Login methods
 	GetSalt(ctx context.Context, email string) (*GetSaltResponse, error)
 	LoginPrepare(ctx context.Context, loginData *PrepareRequest) (*PrepareResponse, error)
-	Login(ctx context.Context, email string, password string, deviceId string, salt []byte) (*LoginResponse, error)
+	Login(ctx context.Context, email, password, deviceID string, salt []byte) (*LoginResponse, error)
 	// Recovery methods
 	StartRecoveryByEmail(ctx context.Context, loginData *StartRecoveryByEmailRequest) error
 	CompleteRecoveryByEmail(ctx context.Context, loginData *CompleteRecoveryByEmailRequest) error
@@ -23,7 +23,7 @@ type AuthClient interface {
 	// Complete change email methods
 	CompleteChangeEmail(ctx context.Context, loginData *CompleteChangeEmailRequest) error
 	DeleteAccount(ctc context.Context, loginData *DeleteUserRequest) error
-	//Logout
+	// Logout
 	SignOut(ctx context.Context, logoutData *LogoutRequest) error
 }
 
