@@ -3,23 +3,12 @@
 # Radiance
 _(WIP)_
 
-Radiance is a pilot PoC of Lantern core SDK (flashlight) utilizing the [outline-sdk](github.com/Jigsaw-code/outline-sdk).
-What's the "core" idea behind a lantern, and I guess a flashlight? _Light_, or synonymously, _radiance_.
+Radiance is the backend core of the Lantern client that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the [Outline SDK ](https://github.com/Jigsaw-Code/outline-sdk)in addition to Lantern's own protocols and techniques.
 
-## Current State
-`radiance` runs a local server that proxies requests to a remote Lantern proxy. Requests are proxied over a `transport.StreamDialer`, which uses a specific protocol to communicate with the remote proxy, _i.e._ shadowsocks. `radiance` will automatically fetch the proxy and protocol information and configure the dialer. Currently, not all protocols are supported.
+What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 
-##### supported protocols
-- shadowsocks
-- multiplexing
-- algeneva
-
-### Add transports
-New transports/protocols can be added by implementing [transport.StreamDialer](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk@v0.0.17/transport#StreamDialer) and creating a [BuilderFn](https://github.com/getlantern/radiance/blob/main/transport/transport.go#L21). Create a new package in `transport` (_e.g._ `transport/myTransport`) and add the necessary code to run the transport here, including the `StreamDialer` and `BuilderFn`. Then add `registerDialerBuilder("myTransportName", myTransport.MyBuilderFn)` to `init` in [register.go](https://github.com/getlantern/radiance/blob/main/transport/register.go) to enable it. `myTransportName` must match [protocol](https://github.com/getlantern/radiance/blob/main/config/config.go#L16) in the proxy config as this is what's used to configure the dialer.
-
-
-> [!NOTE]
-> You should not need to make any other modifications to `register.go` or modify any other file.
+## What's it do?
+`radiance` runs a TUN device on the user's device via [sing-tun](https://github.com/SagerNet/sing-tun/) and integrates all sing-box protocols (shadowsocks, vmess, anytls, etc) in addition to a proxyless dialer from the Outline SDK and [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/). Radiance also integrates [application layer Geneva](https://www.youtube.com/watch?v=b9F696-oax0), with more Lantern protocols coming soon.
 
 
 ## Run
@@ -34,16 +23,15 @@ Sudo/Admin privileges are required to run.
 - [x] Connect to and route requests to backend proxy using a StreamDialer.
 - [x] Retrieve proxy config from backend.
 - [ ] Implement remaining protocols
-  - [ ] tls w/ frag
+  - [x] tls w/ frag
   - [x] algeneva
   - [ ] tlsmasq
   - [ ] water
   - [ ] starbridge
-  - [ ] vmess
+  - [x] vmess
   - [ ] broflake?
-- [ ] Add socks5 support
-- [ ] Implement VPN TUN 
-- [ ] Add way to manage multiple proxies. MAB?
+- [x] Implement VPN TUN 
+- [x] Add way to manage multiple proxies.
 - [ ] Switch from getlantern/golog to slog
 - [ ] Add PacketDialer (UDP) support
-- [ ] Add support for split tunneling, using [v2ray's routing rule syntax](https://www.v2ray.com/en/configuration/routing.html)
+- [x] Add support for split tunneling, using [v2ray's routing rule syntax](https://www.v2ray.com/en/configuration/routing.html)
