@@ -6,7 +6,6 @@ require (
 	github.com/1Password/srp v0.2.0
 	github.com/Jigsaw-Code/outline-sdk v0.0.18
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.1
-	github.com/getlantern/appdir v0.0.0-20200615192800-a0ef1968f4da
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
@@ -37,7 +36,6 @@ require (
 	github.com/mholt/acmez v1.2.0 // indirect
 	github.com/mholt/acmez/v3 v3.0.1 // indirect
 	github.com/mholt/archiver/v3 v3.5.1 // indirect
-	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/nwaples/rardecode v1.1.0 // indirect
 	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
 	github.com/refraction-networking/utls v1.6.7 // indirect
