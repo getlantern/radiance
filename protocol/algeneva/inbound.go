@@ -24,11 +24,14 @@ func RegisterInbound(registry *inbound.Registry) {
 	inbound.Register[option.ALGenevaInboundOptions](registry, constant.TypeALGeneva, NewInbound)
 }
 
+// Inbound is a wrapper around [http.Inbound] that listens for connections using the Application
+// Layer Geneva HTTP protocol.
 type Inbound struct {
 	http.Inbound
 	logger log.ContextLogger
 }
 
+// NewInbound creates a new algeneva inbound adapter.
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.ALGenevaInboundOptions) (adapter.Inbound, error) {
 	httpInbound, err := http.NewInbound(ctx, router, logger, tag, options.HTTPMixedInboundOptions)
 	if err != nil {
@@ -48,6 +51,7 @@ func (a *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata a
 	a.Inbound.NewConnectionEx(ctx, conn, metadata, onClose)
 }
 
+// newConnectionEx processes the connection and upgrades it to a WebSocket connection.
 func (a *Inbound) newConnectionEx(ctx context.Context, conn net.Conn) (net.Conn, error) {
 	a.logger.DebugContext(ctx, "processing connection")
 	reader := bufio.NewReader(conn)

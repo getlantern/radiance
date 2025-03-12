@@ -33,6 +33,7 @@ func RegisterOutbound(registry *outbound.Registry) {
 	outbound.Register[option.ALGenevaOutboundOptions](registry, constant.TypeALGeneva, NewOutbound)
 }
 
+// Outbound is a wrapper around [sHTTP.Client] that implements the Application Layer Geneva HTTP protocol.
 type Outbound struct {
 	outbound.Adapter
 	strategy *alg.HTTPStrategy
@@ -40,6 +41,7 @@ type Outbound struct {
 	logger   logger.ContextLogger
 }
 
+// NewOutbound creates a new Application Layer Geneva HTTP outbound adapter.
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.ALGenevaOutboundOptions) (adapter.Outbound, error) {
 	outboundDialer, err := dialer.New(ctx, options.DialerOptions)
 	if err != nil {
@@ -75,6 +77,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}, nil
 }
 
+// DialContext dials a connection to the destination.
 func (a *Outbound) DialContext(ctx context.Context, network string, destination metadata.Socksaddr) (net.Conn, error) {
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = a.Tag()
@@ -88,10 +91,14 @@ func (a *Outbound) DialContext(ctx context.Context, network string, destination 
 	return conn, err
 }
 
+// ListenPacket is not supported.
 func (a *Outbound) ListenPacket(ctx context.Context, destination metadata.Socksaddr) (net.PacketConn, error) {
 	return nil, os.ErrInvalid
 }
 
+// aDialer is a wrapper around [network.Dialer] that applies the ALGeneva strategy to a CONNECT request
+// that is sent to the proxy server. Once the connection is established, the connection is upgraded to a
+// WebSocket connection.
 type aDialer struct {
 	network.Dialer
 	strategy *alg.HTTPStrategy
@@ -145,6 +152,7 @@ func (d *aDialer) DialContext(ctx context.Context, network string, destination m
 	return conn, nil
 }
 
+// ListenPacket is not supported.
 func (d *aDialer) ListenPacket(ctx context.Context, destination metadata.Socksaddr) (net.PacketConn, error) {
 	return nil, os.ErrInvalid
 }

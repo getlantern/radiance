@@ -87,7 +87,6 @@ type boxService struct {
 }
 
 func newBoxService(logOutput string) (*boxService, error) {
-	// ***** REGISTER NEW PROTOCOL HERE *****
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
 	ctx := box.Context(
 		context.Background(),
