@@ -249,10 +249,12 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 	if !r.connectionStatus() {
 		return nil, nil
 	}
-	config, ok := r.activeConfig.Load().(*config.Config)
-	if !ok {
+	activeConfig := r.activeConfig.Load()
+	if activeConfig == nil {
 		return nil, fmt.Errorf("no active server config")
 	}
+	config := activeConfig.(*config.Config)
+
 	return &Server{
 		Address:  config.GetAddr(),
 		Location: ServerLocation(*config.GetLocation()),

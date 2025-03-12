@@ -353,7 +353,7 @@ func TestGetActiveServer(t *testing.T) {
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.NoError(t, err)
-				assert.NotNil(t, server)
+				require.NotNil(t, server)
 				assert.Equal(t, "1.2.3.4", server.Address)
 				assert.Equal(t, "random", server.Protocol)
 				assert.Equal(t, "new york", server.Location.City)
