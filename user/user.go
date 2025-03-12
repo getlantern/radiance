@@ -1,15 +1,16 @@
-package radiance
+package user
 
 import (
 	"context"
 	"errors"
 	"math/big"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/1Password/srp"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user/deviceid"
 	"google.golang.org/protobuf/proto"
 )
@@ -52,22 +53,40 @@ var (
 // paid user with a full account.
 type User struct {
 	salt       []byte
-	userData   *user.LoginResponse
+	userData   *LoginResponse
 	deviceId   string
-	authClient user.AuthClient
+	authClient AuthClient
 }
 
-func writeUserData(data *user.LoginResponse) error {
+func (u *User) DeviceID() string {
+	return u.deviceId
+}
+
+func (u *User) LegacyID() int64 {
+	if u.userData == nil {
+		return 0
+	}
+	return u.userData.LegacyID
+}
+
+func (u *User) LegacyToken() string {
+	if u.userData == nil {
+		return ""
+	}
+	return u.userData.LegacyToken
+}
+
+func writeUserData(data *LoginResponse) error {
 	return os.WriteFile(userDataLocation, []byte(data.String()), 0600)
 
 }
 
-func readUserData() (*user.LoginResponse, error) {
+func readUserData() (*LoginResponse, error) {
 	data, err := os.ReadFile(userDataLocation)
 	if err != nil {
 		return nil, err
 	}
-	var resp user.LoginResponse
+	var resp LoginResponse
 	if err := proto.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}
@@ -82,12 +101,12 @@ func readSalt() ([]byte, error) {
 	return os.ReadFile(saltLocation)
 }
 
-// GetUser returns information about the current user.
-func (r *Radiance) GetUser() User {
+// New returns the object handling anything user-account related
+func New(httpClient *http.Client) *User {
 	salt, _ := readSalt()
 	userData, _ := readUserData()
-	return User{
-		authClient: r.authClient,
+	return &User{
+		authClient: NewAuthClient(httpClient),
 		salt:       salt,
 		userData:   userData,
 		deviceId:   deviceid.Get(),
@@ -113,13 +132,13 @@ func (u *User) Devices() ([]Device, error) {
 // Subscription returns the subscription status of this user account.
 func (u *User) Subscription() (Subscription, error) {
 	// TODO: implement me!
-	return Subscription{}, ErrNotImplemented
+	return Subscription{}, common.ErrNotImplemented
 }
 
 // DataCapInfo returns information about this user's data cap. Only valid for free accounts.
 func (u *User) DataCapInfo() (*DataCapInfo, error) {
 	// TODO: implement me!
-	return nil, ErrNotImplemented
+	return nil, common.ErrNotImplemented
 }
 
 // SignUp signs the user up for an account.
@@ -142,7 +161,7 @@ func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
 	if u.salt == nil {
 		return ErrNoSalt
 	}
-	return u.authClient.SignupEmailResendCode(ctx, &user.SignupEmailResendRequest{
+	return u.authClient.SignupEmailResendCode(ctx, &SignupEmailResendRequest{
 		Email: email,
 		Salt:  u.salt,
 	})
@@ -150,7 +169,7 @@ func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
 
 // SignupEmailConfirmation confirms the new account using the sign-up code received via email.
 func (u *User) SignupEmailConfirmation(ctx context.Context, email, code string) error {
-	return u.authClient.SignupEmailConfirmation(ctx, &user.ConfirmSignupRequest{
+	return u.authClient.SignupEmailConfirmation(ctx, &ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -189,7 +208,7 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (u *User) Logout(ctx context.Context) error {
-	return u.authClient.SignOut(ctx, &user.LogoutRequest{
+	return u.authClient.SignOut(ctx, &LogoutRequest{
 		Email:        u.userData.Id,
 		DeviceId:     u.deviceId,
 		LegacyUserID: u.userData.LegacyID,
@@ -199,7 +218,7 @@ func (u *User) Logout(ctx context.Context) error {
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
 func (u *User) StartRecoveryByEmail(ctx context.Context, email string) error {
-	return u.authClient.StartRecoveryByEmail(ctx, &user.StartRecoveryByEmailRequest{
+	return u.authClient.StartRecoveryByEmail(ctx, &StartRecoveryByEmailRequest{
 		Email: email,
 	})
 }
@@ -207,17 +226,17 @@ func (u *User) StartRecoveryByEmail(ctx context.Context, email string) error {
 // CompleteRecoveryByEmail completes account recovery using the code received via email.
 func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, code string) error {
 	lowerCaseEmail := strings.ToLower(email)
-	newSalt, err := user.GenerateSalt()
+	newSalt, err := GenerateSalt()
 	if err != nil {
 		return err
 	}
-	srpClient := user.NewSRPClient(lowerCaseEmail, newPassword, newSalt)
+	srpClient := NewSRPClient(lowerCaseEmail, newPassword, newSalt)
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
 		return err
 	}
 
-	err = u.authClient.CompleteRecoveryByEmail(ctx, &user.CompleteRecoveryByEmailRequest{
+	err = u.authClient.CompleteRecoveryByEmail(ctx, &CompleteRecoveryByEmailRequest{
 		Email:       email,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -231,7 +250,7 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 
 // ValidateEmailRecoveryCode validates the recovery code received via email.
 func (u *User) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
-	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &user.ValidateRecoveryCodeRequest{
+	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -259,13 +278,13 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 	}
 
 	// Prepare login request body
-	client := srp.NewSRPClient(srp.KnownGroups[group], user.GenerateEncryptedKey(password, lowerCaseEmail, salt), nil)
+	client := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, lowerCaseEmail, salt), nil)
 
 	//Send this key to client
 	A := client.EphemeralPublic()
 
 	//Create body
-	prepareRequestBody := &user.PrepareRequest{
+	prepareRequestBody := &PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -299,7 +318,7 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 		return log.Errorf("user_not_found error while generating client proof %v", err)
 	}
 
-	changeEmailRequestBody := &user.ChangeEmailRequest{
+	changeEmailRequestBody := &ChangeEmailRequest{
 		OldEmail: lowerCaseEmail,
 		NewEmail: lowerCaseNewEmail,
 		Proof:    clientProof,
@@ -311,18 +330,18 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 // CompleteChangeEmail completes a change of the email address associated with this user account,
 // using the code recieved via email.
 func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
-	newSalt, err := user.GenerateSalt()
+	newSalt, err := GenerateSalt()
 	if err != nil {
 		return err
 	}
 
-	srpClient := srp.NewSRPClient(srp.KnownGroups[group], user.GenerateEncryptedKey(password, newEmail, newSalt), nil)
+	srpClient := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, newEmail, newSalt), nil)
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
 		return err
 	}
 
-	if err := u.authClient.CompleteChangeEmail(ctx, &user.CompleteChangeEmailRequest{
+	if err := u.authClient.CompleteChangeEmail(ctx, &CompleteChangeEmailRequest{
 		OldEmail:    u.userData.Id,
 		NewEmail:    newEmail,
 		Code:        code,
@@ -356,13 +375,13 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	}
 
 	// Prepare login request body
-	client := srp.NewSRPClient(srp.KnownGroups[group], user.GenerateEncryptedKey(password, lowerCaseEmail, salt), nil)
+	client := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, lowerCaseEmail, salt), nil)
 
 	//Send this key to client
 	A := client.EphemeralPublic()
 
 	//Create body
-	prepareRequestBody := &user.PrepareRequest{
+	prepareRequestBody := &PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -395,7 +414,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		return log.Errorf("user_not_found error while generating client proof %v", err)
 	}
 
-	changeEmailRequestBody := &user.DeleteUserRequest{
+	changeEmailRequestBody := &DeleteUserRequest{
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,

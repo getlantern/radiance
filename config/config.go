@@ -15,6 +15,7 @@ import (
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
+	"github.com/getlantern/radiance/user"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -52,7 +53,7 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User) *ConfigHandler {
 	ch := &ConfigHandler{
 		config:     eventual.NewValue(),
 		stopC:      make(chan struct{}),
@@ -63,7 +64,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client) *Conf
 	// 	log.Errorf("failed to load config: %v", err)
 	// }
 
-	ch.ftr = newFetcher(httpClient)
+	ch.ftr = newFetcher(httpClient, user)
 	go ch.fetchLoop(pollInterval)
 	return ch
 }

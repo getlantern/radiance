@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 
 	"google.golang.org/protobuf/proto"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/user"
 )
 
 const configURL = "https://api.iantem.io/v1/config"
@@ -21,12 +23,14 @@ const configURL = "https://api.iantem.io/v1/config"
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient *http.Client
+	user       *user.User
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client) *fetcher {
+func newFetcher(client *http.Client, user *user.User) *fetcher {
 	return &fetcher{
 		httpClient: client,
+		user:       user,
 	}
 }
 
@@ -36,8 +40,8 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 		ClientInfo: &ConfigRequest_ClientInfo{
 			SingboxVersion: singVersion(),
 			ClientVersion:  app.ClientVersion,
-			UserId:         app.UserId,
-			ProToken:       app.ProToken,
+			UserId:         strconv.FormatInt(f.user.LegacyID(), 10),
+			ProToken:       f.user.LegacyToken(),
 			Country:        "",
 			Ip:             "",
 		},
@@ -66,7 +70,7 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
+	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}

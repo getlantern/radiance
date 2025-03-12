@@ -12,10 +12,6 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-const (
-	group = srp.RFC5054Group3072
-)
-
 func NewSRPClient(email string, password string, salt []byte) *srp.SRP {
 	if len(salt) == 0 || len(password) == 0 || len(email) == 0 {
 		log.Errorf("salt, password and email should not be empty %v %v %v", salt, password, email)

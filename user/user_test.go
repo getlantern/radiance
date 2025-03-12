@@ -1,4 +1,4 @@
-package radiance
+package user
 
 import (
 	"context"
@@ -8,42 +8,9 @@ import (
 	"testing"
 
 	"github.com/1Password/srp"
-	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestGetUser(t *testing.T) {
-	r := &Radiance{}
-	u := r.GetUser()
-	assert.NotNil(t, u)
-}
-
-func TestDevices(t *testing.T) {
-	u := &User{
-		userData: &user.LoginResponse{
-			Devices: []*user.LoginResponse_Device{
-				{Name: "Device1", Id: "1"},
-				{Name: "Device2", Id: "2"},
-			},
-		},
-	}
-	devices, err := u.Devices()
-	assert.NoError(t, err)
-	assert.Len(t, devices, 2)
-}
-
-func TestSubscription(t *testing.T) {
-	u := &User{}
-	_, err := u.Subscription()
-	assert.Error(t, err)
-}
-
-func TestDataCapInfo(t *testing.T) {
-	u := &User{}
-	_, err := u.DataCapInfo()
-	assert.Error(t, err)
-}
 
 func TestSignUp(t *testing.T) {
 	u := &User{
@@ -80,7 +47,7 @@ func TestLogin(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	u := &User{
-		userData:   &user.LoginResponse{Id: "test@example.com"},
+		userData:   &LoginResponse{Id: "test@example.com"},
 		authClient: &mockAuthClient{},
 		deviceId:   "deviceId",
 	}
@@ -116,7 +83,7 @@ func TestStartChangeEmail(t *testing.T) {
 	email := "test@example.com"
 	authClient := mockAuthClientNew(t, email, "password")
 	u := &User{
-		userData:   &user.LoginResponse{Id: email},
+		userData:   &LoginResponse{Id: email},
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
@@ -126,7 +93,7 @@ func TestStartChangeEmail(t *testing.T) {
 
 func TestCompleteChangeEmail(t *testing.T) {
 	u := &User{
-		userData:   &user.LoginResponse{Id: "test@example.com"},
+		userData:   &LoginResponse{Id: "test@example.com"},
 		authClient: &mockAuthClient{},
 	}
 	err := u.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
@@ -137,7 +104,7 @@ func TestDeleteAccount(t *testing.T) {
 	email := "test@example.com"
 	authClient := mockAuthClientNew(t, email, "password")
 	u := &User{
-		userData:   &user.LoginResponse{Id: "test@example.com"},
+		userData:   &LoginResponse{Id: "test@example.com"},
 		authClient: authClient,
 		deviceId:   "deviceId",
 		salt:       authClient.salt[email],
@@ -154,10 +121,10 @@ type mockAuthClient struct {
 }
 
 func mockAuthClientNew(t *testing.T, email, password string) *mockAuthClient {
-	salt, err := user.GenerateSalt()
+	salt, err := GenerateSalt()
 	require.NoError(t, err)
 
-	srpClient := srp.NewSRPClient(srp.KnownGroups[group], user.GenerateEncryptedKey(password, email, salt), nil)
+	srpClient := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, email, salt), nil)
 	verifierKey, err := srpClient.Verifier()
 	require.NoError(t, err)
 
@@ -173,51 +140,51 @@ func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]
 	return []byte("salt"), nil
 }
 
-func (m *mockAuthClient) SignupEmailResendCode(ctx context.Context, req *user.SignupEmailResendRequest) error {
+func (m *mockAuthClient) SignupEmailResendCode(ctx context.Context, req *SignupEmailResendRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) SignupEmailConfirmation(ctx context.Context, req *user.ConfirmSignupRequest) error {
+func (m *mockAuthClient) SignupEmailConfirmation(ctx context.Context, req *ConfirmSignupRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) GetSalt(ctx context.Context, email string) (*user.GetSaltResponse, error) {
-	return &user.GetSaltResponse{Salt: []byte("salt")}, nil
+func (m *mockAuthClient) GetSalt(ctx context.Context, email string) (*GetSaltResponse, error) {
+	return &GetSaltResponse{Salt: []byte("salt")}, nil
 }
 
-func (m *mockAuthClient) Login(ctx context.Context, email, password, deviceId string, salt []byte) (*user.LoginResponse, error) {
-	return &user.LoginResponse{}, nil
+func (m *mockAuthClient) Login(ctx context.Context, email, password, deviceId string, salt []byte) (*LoginResponse, error) {
+	return &LoginResponse{}, nil
 }
 
-func (m *mockAuthClient) SignOut(ctx context.Context, req *user.LogoutRequest) error {
+func (m *mockAuthClient) SignOut(ctx context.Context, req *LogoutRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) StartRecoveryByEmail(ctx context.Context, req *user.StartRecoveryByEmailRequest) error {
+func (m *mockAuthClient) StartRecoveryByEmail(ctx context.Context, req *StartRecoveryByEmailRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) CompleteRecoveryByEmail(ctx context.Context, req *user.CompleteRecoveryByEmailRequest) error {
+func (m *mockAuthClient) CompleteRecoveryByEmail(ctx context.Context, req *CompleteRecoveryByEmailRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) ValidateEmailRecoveryCode(ctx context.Context, req *user.ValidateRecoveryCodeRequest) (*user.ValidateRecoveryCodeResponse, error) {
-	return &user.ValidateRecoveryCodeResponse{Valid: true}, nil
+func (m *mockAuthClient) ValidateEmailRecoveryCode(ctx context.Context, req *ValidateRecoveryCodeRequest) (*ValidateRecoveryCodeResponse, error) {
+	return &ValidateRecoveryCodeResponse{Valid: true}, nil
 }
 
-func (m *mockAuthClient) ChangeEmail(ctx context.Context, req *user.ChangeEmailRequest) error {
+func (m *mockAuthClient) ChangeEmail(ctx context.Context, req *ChangeEmailRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) CompleteChangeEmail(ctx context.Context, req *user.CompleteChangeEmailRequest) error {
+func (m *mockAuthClient) CompleteChangeEmail(ctx context.Context, req *CompleteChangeEmailRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) DeleteAccount(ctx context.Context, req *user.DeleteUserRequest) error {
+func (m *mockAuthClient) DeleteAccount(ctx context.Context, req *DeleteUserRequest) error {
 	return nil
 }
 
-func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *user.PrepareRequest) (*user.PrepareResponse, error) {
+func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *PrepareRequest) (*PrepareResponse, error) {
 	A := big.NewInt(0).SetBytes(req.A)
 	verifier := big.NewInt(0).SetBytes(m.verifier)
 
@@ -241,5 +208,5 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *user.PrepareRequ
 		return nil, err
 	}
 	m.cache[req.Email] = hex.EncodeToString(state)
-	return &user.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
+	return &PrepareResponse{B: B.Bytes(), Proof: proof}, nil
 }
