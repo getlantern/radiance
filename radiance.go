@@ -57,9 +57,9 @@ type configHandler interface {
 type Radiance struct {
 	vpnClient client.VPNClient
 
-	srv           httpServer
-	confHandler   configHandler
-	proxyLocation *atomic.Value
+	srv          httpServer
+	confHandler  configHandler
+	activeConfig *atomic.Value
 
 	connected   bool
 	statusMutex sync.Locker
@@ -75,11 +75,11 @@ func NewRadiance() (*Radiance, error) {
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:   config.NewConfigHandler(configPollInterval),
-		proxyLocation: new(atomic.Value),
-		connected:     false,
-		statusMutex:   new(sync.Mutex),
-		stopChan:      make(chan struct{}),
+		confHandler:  config.NewConfigHandler(configPollInterval),
+		activeConfig: new(atomic.Value),
+		connected:    false,
+		statusMutex:  new(sync.Mutex),
+		stopChan:     make(chan struct{}),
 	}, nil
 }
 
@@ -103,7 +103,7 @@ func (r *Radiance) run(addr string) error {
 			proxylessConf = conf
 		}
 		proxyConf = conf
-		r.proxyLocation.Store(proxyConf.GetLocation())
+		r.activeConfig.Store(conf)
 	}
 
 	dialer, err := transport.DialerFrom(proxyConf)
@@ -238,35 +238,28 @@ type ServerLocation config.ProxyConnectConfig_ProxyLocation
 
 // Server represents a remote VPN server.
 type Server struct {
-	Address            string
-	Location           ServerLocation
-	SupportedProtocols []string
+	Address  string
+	Location ServerLocation
+	Protocol string
 }
 
-// GetServers returns the remote VPN servers currently assigned to this client, as well as the index
-// of the active server.
-//
-// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1920
-func (r *Radiance) GetServers() (servers []Server, activeServer int) {
-	// TODO: implement me!
-	return nil, 0
-}
-
-// ActiveProxyLocation returns the proxy server's location if the VPN is connected.
-// If the VPN is disconnected, it returns nil.
-//
-// This function will be removed as part of https://github.com/getlantern/engineering/issues/1920
-func (r *Radiance) ActiveProxyLocation(ctx context.Context) string {
+// GetActiveServer returns the remote VPN server this client is currently connected to.
+// It returns nil when VPN is disconnected
+func (r *Radiance) GetActiveServer() (*Server, error) {
 	if !r.connectionStatus() {
-		log.Debug("VPN is not connected")
-		return ""
+		return nil, nil
 	}
+	activeConfig := r.activeConfig.Load()
+	if activeConfig == nil {
+		return nil, fmt.Errorf("no active server config")
+	}
+	config := activeConfig.(*config.Config)
 
-	if location, ok := r.proxyLocation.Load().(*config.ProxyConnectConfig_ProxyLocation); ok && location != nil {
-		return location.City
-	}
-	log.Errorf("could not retrieve location")
-	return ""
+	return &Server{
+		Address:  config.GetAddr(),
+		Location: ServerLocation(*config.GetLocation()),
+		Protocol: config.GetProtocol(),
+	}, nil
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

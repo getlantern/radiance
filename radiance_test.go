@@ -308,47 +308,55 @@ func TestStopVPN(t *testing.T) {
 	}
 }
 
-func TestActiveProxyLocation(t *testing.T) {
-	expectedCity := "New York"
+func TestGetActiveServer(t *testing.T) {
 	var tests = []struct {
 		name   string
 		setup  func(*gomock.Controller) *Radiance
-		assert func(*testing.T, string)
+		assert func(*testing.T, *Server, error)
 	}{
 		{
-			name: "it should return nil when VPN is disconnected and return an error",
+			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r, _ := NewRadiance()
 				return r
 			},
-			assert: func(t *testing.T, location string) {
-				assert.Empty(t, location)
+			assert: func(t *testing.T, server *Server, err error) {
+				assert.Nil(t, server)
+				assert.NoError(t, err)
 			},
 		},
 		{
-			name: "it should return nil when failed to retrieve config",
+			name: "it should return error when there is no current config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
 				return r
 			},
-			assert: func(t *testing.T, location string) {
-				assert.Empty(t, location)
+			assert: func(t *testing.T, server *Server, err error) {
+				assert.Nil(t, server)
+				assert.Error(t, err)
 			},
 		},
 		{
-			name: "it should return the location when VPN is connected",
+			name: "it should return the active server when VPN is connected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
-				r.proxyLocation.Store(&config.ProxyConnectConfig_ProxyLocation{City: expectedCity})
+				r.activeConfig.Store(&config.Config{
+					Addr:     "1.2.3.4",
+					Protocol: "random",
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
+				})
 				return r
 			},
-			assert: func(t *testing.T, location string) {
-				assert.NotEmpty(t, location)
-				assert.Equal(t, expectedCity, location)
+			assert: func(t *testing.T, server *Server, err error) {
+				assert.NoError(t, err)
+				require.NotNil(t, server)
+				assert.Equal(t, "1.2.3.4", server.Address)
+				assert.Equal(t, "random", server.Protocol)
+				assert.Equal(t, "new york", server.Location.City)
 			},
 		},
 	}
@@ -358,8 +366,8 @@ func TestActiveProxyLocation(t *testing.T) {
 			defer ctrl.Finish()
 
 			r := tt.setup(ctrl)
-			location := r.ActiveProxyLocation(context.Background())
-			tt.assert(t, location)
+			server, err := r.GetActiveServer()
+			tt.assert(t, server, err)
 		})
 	}
 }
