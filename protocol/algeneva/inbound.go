@@ -43,6 +43,7 @@ func (a *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata a
 	if err != nil {
 		network.CloseOnHandshakeFailure(conn, onClose, err)
 		a.logger.ErrorContext(ctx, exceptions.Cause(err, "process connection from ", metadata.Source))
+		return
 	}
 	a.Inbound.NewConnectionEx(ctx, conn, metadata, onClose)
 }
