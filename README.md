@@ -3,7 +3,7 @@
 # Radiance
 _(WIP)_
 
-Radiance is the backend core of the Lantern client that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the Outline SDK [outline-sdk](github.com/Jigsaw-code/outline-sdk) in addition to Lantern's own protocols and techniques.
+Radiance is the backend core of the Lantern client that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the [Outline SDK ](https://github.com/Jigsaw-Code/outline-sdk)in addition to Lantern's own protocols and techniques.
 
 What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 
