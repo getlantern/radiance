@@ -155,7 +155,7 @@ func TestStartVPN(t *testing.T) {
 				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.confHandler = configHandler
-				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, assert.AnError)
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, "", assert.AnError)
 
 				return r
 			},
@@ -172,7 +172,7 @@ func TestStartVPN(t *testing.T) {
 				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.confHandler = configHandler
-				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{}}, nil)
+				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{}}, "", nil)
 
 				return r
 			},
@@ -192,7 +192,7 @@ func TestStartVPN(t *testing.T) {
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{
 					Protocol: "logger",
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
-				}}, nil).Times(1)
+				}}, "US", nil).Times(1)
 
 				return r
 			},
