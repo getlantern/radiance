@@ -331,6 +331,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
+		logDir(),
 		email,
 		typeInt,
 		report.Description,

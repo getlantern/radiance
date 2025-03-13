@@ -64,7 +64,7 @@ func randStr(n int) string {
 
 // Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
 func (ir *IssueReporter) Report(
-	userEmail string,
+	logDir, userEmail string,
 	issueType int,
 	description string,
 	attachments []*Attachment,
@@ -127,10 +127,10 @@ func (ir *IssueReporter) Report(
 			log.Debug("zipping log files for issue report")
 			buf := &bytes.Buffer{}
 			// zip * under folder app.LogDir
-			if _, err := zipLogFiles(buf, app.LogDir, size, int64(maxLogSize)); err == nil {
+			if _, err := zipLogFiles(buf, logDir, size, int64(maxLogSize)); err == nil {
 				r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 					Type:    "application/zip",
-					Name:    app.LogDir + ".zip",
+					Name:    "logs.zip",
 					Content: buf.Bytes(),
 				})
 			} else {

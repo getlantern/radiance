@@ -15,6 +15,7 @@ require (
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
+	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.6.3
