@@ -45,8 +45,8 @@ type httpServer interface {
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
-	// GetConfig returns the current proxy configuration.
-	GetConfig(ctx context.Context) ([]*config.Config, error)
+	// GetConfig returns the current proxy configuration and the country.
+	GetConfig(ctx context.Context) ([]*config.Config, string, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
 }
@@ -98,7 +98,7 @@ func (r *Radiance) run(addr string) error {
 	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	log.Debug("Fetching config")
-	configs, err := r.confHandler.GetConfig(ctx)
+	configs, _, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
 		r.setStatus(false)
