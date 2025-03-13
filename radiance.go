@@ -1,13 +1,13 @@
-/*
-Package radiance provides a local server that proxies all requests to a remote proxy server using different
-protocols meant to circumvent censorship. Radiance uses a [transport.StreamDialer] to dial the target server
-over the desired protocol. The [config.Config] is used to configure the dialer for a proxy server.
-*/
+// Package radiance provides a local server that proxies all requests to a remote proxy server using different
+// protocols meant to circumvent censorship. Radiance uses a [transport.StreamDialer] to dial the target server
+// over the desired protocol. The [config.Config] is used to configure the dialer for a proxy server.
 package radiance
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -19,7 +19,6 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/getlantern/appdir"
-	"github.com/getlantern/golog"
 	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/client"
@@ -32,7 +31,8 @@ import (
 )
 
 var (
-	log = golog.LoggerFor("radiance")
+	vpnLogOutput = filepath.Join(logDir(), "lantern.log")
+	log          = newLog(vpnLogOutput)
 
 	configPollInterval = 10 * time.Minute
 )
@@ -70,7 +70,6 @@ type Radiance struct {
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() (*Radiance, error) {
-	vpnLogOutput := filepath.Join(logDir(), "lantern.log")
 	vpnC, err := client.NewVPNClient(vpnLogOutput)
 	if err != nil {
 		return nil, err
@@ -106,7 +105,7 @@ func (r *Radiance) run(addr string) error {
 	if err != nil {
 		r.setStatus(false)
 		sentry.CaptureException(err)
-		return fmt.Errorf("Could not fetch config: %w", err)
+		return fmt.Errorf("could not fetch config: %w", err)
 	}
 
 	var proxyConf, proxylessConf *config.Config
@@ -122,9 +121,9 @@ func (r *Radiance) run(addr string) error {
 	if err != nil {
 		r.setStatus(false)
 		sentry.CaptureException(err)
-		return fmt.Errorf("Could not create dialer: %w", err)
+		return fmt.Errorf("could not create dialer: %w", err)
 	}
-	log.Debugf("Creating dialer with config: %+v", proxyConf)
+	log.Info("Creating dialer with config", "config", proxyConf)
 
 	pAddr := fmt.Sprintf("%s:%d", proxyConf.Addr, proxyConf.Port)
 	handler := proxyHandler{
@@ -162,10 +161,10 @@ func (r *Radiance) run(addr string) error {
 func (r *Radiance) listenAndServe(addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("Could not listen on %v: %w", addr, err)
+		return fmt.Errorf("could not listen on %v: %w", addr, err)
 	}
 
-	log.Debugf("Listening on %v", addr)
+	log.Info("Listening on", "addr", addr)
 	return r.srv.Serve(listener)
 }
 
@@ -213,7 +212,7 @@ func (r *Radiance) StopVPN() error {
 
 // PauseVPN pauses the VPN connection for the specified duration.
 func (r *Radiance) PauseVPN(dur time.Duration) error {
-	log.Debugf("Pausing VPN for %v", dur)
+	log.Info("Pausing VPN for", "duration", dur)
 	return r.vpnClient.Pause(dur)
 }
 
@@ -239,7 +238,7 @@ func (r *Radiance) setStatus(connected bool) {
 		// Recover from panics to avoid crashing the Radiance main loop
 		defer func() {
 			if r := recover(); r != nil {
-				log.Errorf("Recovered from panic: %v", r)
+				log.Error("Recovered from panic", "error", r)
 				reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
 			}
 		}()
@@ -293,8 +292,19 @@ func (r *Radiance) ReportIssue(report IssueReport) error {
 func logDir() string {
 	dir := appdir.Logs("Lantern")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Errorf("Error creating log directory: %v", err)
 		return ""
 	}
 	return dir
+}
+
+// Return an slog logger configured to write to both stdout and the log file.
+func newLog(logPath string) *slog.Logger {
+	f, err := os.Create(logPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
+	slog.SetDefault(logger)
+	return logger
 }
