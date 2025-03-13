@@ -13,8 +13,8 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
-	github.com/google/uuid v1.6.0
 	github.com/gobwas/ws v1.4.0
+	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.6.3
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
@@ -130,10 +130,10 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
+	golang.org/x/net v0.36.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.30.0
 	golang.org/x/time v0.7.0 // indirect
