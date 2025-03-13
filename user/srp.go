@@ -67,7 +67,7 @@ func (c *authClient) SignUp(ctx context.Context, email string, password string) 
 	}
 	log.Debugf("Sign up request email %v, salt %v verifier %v verifiter in bytes %v", lowerCaseEmail, salt, verifierKey, verifierKey.Bytes())
 
-	if err := c.signUp(context.Background(), signUpRequestBody); err != nil {
+	if err := c.signUp(ctx, signUpRequestBody); err != nil {
 		return nil, err
 	}
 	return salt, nil
@@ -87,7 +87,7 @@ func (c *authClient) Login(ctx context.Context, email string, password string, d
 		A:     A.Bytes(),
 	}
 	log.Debugf("Login prepare request email %v A %v", lowerCaseEmail, A.Bytes())
-	srpB, err := c.LoginPrepare(context.Background(), prepareRequestBody)
+	srpB, err := c.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return nil, err
 	}
@@ -124,5 +124,5 @@ func (c *authClient) Login(ctx context.Context, email string, password string, d
 		Proof:    clientProof,
 		DeviceId: deviceId,
 	}
-	return c.login(context.Background(), loginRequestBody)
+	return c.login(ctx, loginRequestBody)
 }
