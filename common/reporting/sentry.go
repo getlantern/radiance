@@ -1,14 +1,12 @@
 package reporting
 
 import (
+	"log/slog"
 	"time"
 
-	"github.com/getlantern/golog"
 	"github.com/getlantern/radiance/common"
 	"github.com/getsentry/sentry-go"
 )
-
-var log = golog.LoggerFor("sentry")
 
 func Init() {
 	err := sentry.Init(sentry.ClientOptions{
@@ -17,7 +15,7 @@ func Init() {
 		Release:          common.Version,
 	})
 	if err != nil {
-		log.Fatalf("sentry.Init: %s", err)
+		slog.Error("sentry.Init:", "error", err)
 	}
 }
 
@@ -28,6 +26,6 @@ func PanicListener(msg string) {
 
 	sentry.CaptureMessage(msg)
 	if result := sentry.Flush(6 * time.Second); !result {
-		log.Error("sentry.Flush: timeout")
+		slog.Error("sentry.Flush: timeout")
 	}
 }

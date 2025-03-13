@@ -3,6 +3,7 @@ package radiance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -67,7 +68,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		if err == nil {
 			return
 		}
-		log.Debugf("failed with proxyless connection: %w", err)
+		log.Info("failed with proxyless connection", "error", err)
 	}
 
 	targetConn, err := h.dialer.DialStream(proxyReq.Context(), h.addr)
@@ -96,11 +97,11 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		return
 	}
 	if err = h.pipeData(targetConn, clientConn); err != nil && !errors.Is(err, io.EOF) {
-		log.Errorf("failed to pipe data between target and client connections: %w", err)
+		log.Error("failed to pipe data between target and client connections", "error", err)
 	}
 }
 
-func (h *proxyHandler) pipeData(targetConn net.Conn, clientConn net.Conn) error {
+func (h *proxyHandler) pipeData(targetConn, clientConn net.Conn) error {
 	// Pipe data between the client and the target.
 	log.Debug("proxy connected to target, piping data")
 	errCh := make(chan error, 2)
@@ -120,7 +121,8 @@ func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn)
 	defer cancel()
 	targetConn, err := h.proxylessDialer.DialStream(ctx, r.Host)
 	if err != nil {
-		return log.Errorf("failed to proxyless dial: %w. Trying with proxy instead", err)
+		log.Error("failed to proxyless dial:. Trying with proxy instead", "error", err)
+		return fmt.Errorf("failed to proxyless dial: %w", err)
 	}
 	defer targetConn.Close()
 
@@ -128,7 +130,8 @@ func (h *proxyHandler) tryProxylessConnect(r *http.Request, clientConn net.Conn)
 	// stream the request and response
 	_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	if err != nil {
-		return log.Errorf("failed to send connection established: %w", err)
+		log.Error("failed to send connection established", "error", err)
+		return fmt.Errorf("failed to send connection established: %w", err)
 	}
 
 	return h.pipeData(targetConn, clientConn)
@@ -171,6 +174,6 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 
 // sendError is a helper function to log an error and send an error message to the client.
 func sendError(resp http.ResponseWriter, msg string, status int, err error) {
-	log.Errorf("%v: %v", msg, err)
+	log.Error(msg, "error", err)
 	http.Error(resp, msg, status)
 }
