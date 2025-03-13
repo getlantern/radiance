@@ -7,7 +7,6 @@ package radiance
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,12 +17,15 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/getlantern/golog"
+	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/client"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/transport"
 	"github.com/getlantern/radiance/transport/proxyless"
+	"github.com/getlantern/radiance/user"
 )
 
 var (
@@ -32,10 +34,6 @@ var (
 
 	configPollInterval = 10 * time.Minute
 )
-
-// ErrNotImplemented is returned by functions which have not yet been implemented. The existence of
-// this error is temporary; this will go away when the API stabilized.
-var ErrNotImplemented = errors.New("not yet implemented")
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
 
@@ -64,6 +62,8 @@ type Radiance struct {
 	connected   bool
 	statusMutex sync.Locker
 	stopChan    chan struct{}
+
+	user *user.User
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
@@ -72,14 +72,23 @@ func NewRadiance() (*Radiance, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: Ideally we would know the user locale here on radiance startup.
+	k := kindling.NewKindling(
+		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithProxyless("api.iantem.io"),
+	)
+	user := user.New(k.NewHTTPClient())
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:  config.NewConfigHandler(configPollInterval),
+		confHandler:  config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user),
 		activeConfig: new(atomic.Value),
 		connected:    false,
 		statusMutex:  new(sync.Mutex),
 		stopChan:     make(chan struct{}),
+		user:         user,
 	}, nil
 }
 
@@ -119,6 +128,7 @@ func (r *Radiance) run(addr string) error {
 		addr:      pAddr,
 		authToken: proxyConf.AuthToken,
 		dialer:    dialer,
+		user:      r.user,
 		client: http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -274,5 +284,5 @@ type IssueReport struct {
 // This function will be implemented as part of https://github.com/getlantern/engineering/issues/1921
 func (r *Radiance) ReportIssue(report IssueReport) error {
 	// TODO: implement me!
-	return ErrNotImplemented
+	return common.ErrNotImplemented
 }

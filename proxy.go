@@ -6,11 +6,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/user"
 )
 
 const authTokenHeader = "X-Lantern-Auth-Token"
@@ -28,6 +30,8 @@ type proxyHandler struct {
 	// client is an http client that will be used to forward non-CONNECT requests to the proxy server.
 	client          http.Client
 	proxylessDialer transport.StreamDialer
+
+	user *user.User
 }
 
 func (h *proxyHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
@@ -79,6 +83,7 @@ func (h *proxyHandler) handleConnect(proxyResp http.ResponseWriter, proxyReq *ht
 		http.MethodConnect,
 		proxyReq.URL.String(),
 		http.NoBody,
+		h.user,
 	)
 	if err != nil {
 		sendError(proxyResp, "Error creating connect request", http.StatusInternalServerError, err)
@@ -138,6 +143,7 @@ func (h *proxyHandler) handleNonConnect(proxyResp http.ResponseWriter, proxyReq 
 		proxyReq.Method,
 		proxyReq.URL.String(),
 		proxyReq.Body,
+		h.user,
 	)
 	if err != nil {
 		sendError(proxyResp, "Error creating target request", http.StatusInternalServerError, err)

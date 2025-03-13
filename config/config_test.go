@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/getlantern/eventual/v2"
+	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
 )
@@ -95,7 +96,7 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 					err:       tt.err,
 					continueC: continueC,
 				},
-			})
+			}, &user.User{})
 			ch := &ConfigHandler{
 				config: eventual.NewValue(),
 				stopC:  make(chan struct{}),

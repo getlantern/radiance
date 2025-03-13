@@ -15,6 +15,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/user"
 )
 
 func TestHandleConnect(t *testing.T) {
@@ -25,6 +26,7 @@ func TestHandleConnect(t *testing.T) {
 		addr:      "addr",
 		authToken: "test",
 		dialer:    dialer,
+		user:      &user.User{},
 	}
 	testReq, _ := http.NewRequest("CONNECT", "https://bk.lounge", nil)
 	testResp := &mockResponseWriter{

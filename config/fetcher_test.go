@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -61,7 +62,7 @@ func TestFetcher(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fetcher := newFetcher(&http.Client{
 				Transport: &mockRoundTripper{resp: tt.response},
-			})
+			}, &user.User{})
 			got, err := fetcher.fetchConfig()
 			tt.assert(t, got, err)
 		})
@@ -72,7 +73,7 @@ func TestFetch_RequiredHeaders(t *testing.T) {
 	mockRT := &mockRoundTripper{resp: &http.Response{StatusCode: http.StatusBadRequest}}
 	fetcher := newFetcher(&http.Client{
 		Transport: mockRT,
-	})
+	}, &user.User{})
 	_, err := fetcher.fetchConfig()
 	require.Error(t, err)
 

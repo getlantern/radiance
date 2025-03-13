@@ -1,0 +1,5 @@
+build/**
+.salt
+.userData
+config/proxy.conf
+.vscode/**
