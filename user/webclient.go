@@ -20,26 +20,30 @@ var (
 	APIBaseUrl = "iantem.io/api/v1"
 )
 
-type RESTClient interface {
-	// Get data from server and parse to protoc file
+type WebClient interface {
+	// GetPROTOC sends a GET request and parses the Protobuf response into the target object
 	GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error
 
-	// PostPROTOC sends a POST request with protoc file and parse the response to protoc file
+	// PostPROTOC sends a POST request and parses the Protobuf response into the target object
 	PostPROTOC(ctx context.Context, path string, body protoreflect.ProtoMessage, target protoreflect.ProtoMessage) error
 }
 
-type restClient struct {
+type webClient struct {
 	*http.Client
 }
 
-// Construct a REST client using the given SendRequest function
-func NewRESTClient(httpClient *http.Client) RESTClient {
-	return &restClient{
+// Construct an api client using the given httpClient (kindling)
+func NewWebClient(httpClient *http.Client) WebClient {
+	return &webClient{
 		Client: httpClient,
 	}
 }
 
-func (c *restClient) GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error {
+// GetPROTOC sends a GET request and parses the Protobuf response into the target object
+// path - the URL
+// params - the query parameters
+// target - the target object to parse the response into
+func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, http.NoBody)
 	if err != nil {
 		return errors.New("Error creating request: %v", err)
@@ -72,10 +76,13 @@ func (c *restClient) GetPROTOC(ctx context.Context, path string, params map[stri
 		return errors.New("Error reading response body: %v", err)
 	}
 	return proto.Unmarshal(body, target)
-
 }
 
-func (c *restClient) PostPROTOC(ctx context.Context, path string, msg, target protoreflect.ProtoMessage) error {
+// PostPROTOC sends a POST request and parses the Protobuf response into the target object
+// path - the URL
+// msg - the message to send as body
+// target - the target object to parse the response into
+func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target protoreflect.ProtoMessage) error {
 	bodyBytes, err := proto.Marshal(msg)
 	if err != nil {
 		return err

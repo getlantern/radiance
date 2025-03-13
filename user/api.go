@@ -28,11 +28,11 @@ type AuthClient interface {
 }
 
 type authClient struct {
-	RESTClient
+	WebClient
 }
 
 func NewAuthClient(httpClient *http.Client) AuthClient {
-	return &authClient{NewRESTClient(httpClient)}
+	return &authClient{NewWebClient(httpClient)}
 }
 
 // Auth APIS
