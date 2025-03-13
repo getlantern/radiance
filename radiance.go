@@ -10,12 +10,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 
+	"github.com/getlantern/appdir"
 	"github.com/getlantern/golog"
 	"github.com/getlantern/kindling"
 
@@ -29,8 +32,7 @@ import (
 )
 
 var (
-	log          = golog.LoggerFor("radiance")
-	vpnLogOutput = "radiance.log"
+	log = golog.LoggerFor("radiance")
 
 	configPollInterval = 10 * time.Minute
 )
@@ -68,6 +70,7 @@ type Radiance struct {
 
 // NewRadiance creates a new Radiance server using an existing config.
 func NewRadiance() (*Radiance, error) {
+	vpnLogOutput := filepath.Join(logDir(), "lantern.log")
 	vpnC, err := client.NewVPNClient(vpnLogOutput)
 	if err != nil {
 		return nil, err
@@ -285,4 +288,13 @@ type IssueReport struct {
 func (r *Radiance) ReportIssue(report IssueReport) error {
 	// TODO: implement me!
 	return common.ErrNotImplemented
+}
+
+func logDir() string {
+	dir := appdir.Logs("Lantern")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Errorf("Error creating log directory: %v", err)
+		return ""
+	}
+	return dir
 }
