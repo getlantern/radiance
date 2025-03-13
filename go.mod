@@ -11,8 +11,10 @@ require (
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
+	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
+	github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
 	github.com/google/uuid v1.6.0
@@ -26,6 +28,7 @@ require (
 
 require (
 	github.com/alitto/pond/v2 v2.1.5 // indirect
+	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/caddyserver/zerossl v0.1.3 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
 	github.com/getlantern/fronted v0.0.0-20250219040712-771dbc843542 // indirect
@@ -39,7 +42,10 @@ require (
 	github.com/mholt/acmez/v3 v3.0.1 // indirect
 	github.com/mholt/archiver/v3 v3.5.1 // indirect
 	github.com/nwaples/rardecode v1.1.0 // indirect
+	github.com/onsi/ginkgo v1.16.5 // indirect
+	github.com/onsi/gomega v1.36.2 // indirect
 	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
+	github.com/pivotal-cf-experimental/jibber_jabber v0.0.0-20151120183258-bcc4c8345a21 // indirect
 	github.com/refraction-networking/utls v1.6.7 // indirect
 	github.com/sagernet/cloudflare-tls v0.0.0-20231208171750-a4483c1b7cd1 // indirect
 	github.com/tkuchiki/go-timezone v0.2.0 // indirect
@@ -139,7 +145,7 @@ require (
 	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.30.0
 	golang.org/x/time v0.7.0 // indirect
-	golang.org/x/tools v0.24.0 // indirect
+	golang.org/x/tools v0.28.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241202173237-19429a94021a // indirect
 	google.golang.org/grpc v1.70.0 // indirect
