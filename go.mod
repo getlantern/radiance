@@ -7,6 +7,7 @@ require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.18
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.1
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52
+	github.com/getlantern/appdir v0.0.0-20250313193928-1704611498b5
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
@@ -14,8 +15,6 @@ require (
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250224181615-944349e3e260
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
-	github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175
-	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.6.3
@@ -76,6 +75,7 @@ require (
 	github.com/getlantern/mtime v0.0.0-20200417132445-23682092d1f7 // indirect
 	github.com/getlantern/netx v0.0.0-20240830183145-c257516187f0 // indirect
 	github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 // indirect
+	github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175
 	github.com/getsentry/sentry-go v0.31.1
 	github.com/go-chi/chi/v5 v5.2.1 // indirect
 	github.com/go-chi/render v1.0.3 // indirect

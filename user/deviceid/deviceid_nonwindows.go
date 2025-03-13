@@ -4,6 +4,7 @@
 package deviceid
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -16,29 +17,29 @@ import (
 func Get() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Errorf("Could not get home dir %v", err)
+		slog.Error("Could not get home dir", "error", err)
 		return OldStyleDeviceID()
 	}
 	path := filepath.Join(home, ".lanternsecrets")
-	err = os.Mkdir(path, 0755)
+	err = os.Mkdir(path, 0o755)
 	if err != nil && !os.IsExist(err) {
-		log.Errorf("Unable to create folder to store deviceID, defaulting to old-style device ID: %v", err)
+		slog.Error("Unable to create folder to store deviceID, defaulting to old-style device ID", "error", err)
 		return OldStyleDeviceID()
 	}
 
 	filename := filepath.Join(path, ".deviceid")
 	existing, err := os.ReadFile(filename)
 	if err != nil {
-		log.Debug("Storing new deviceID")
+		slog.Debug("Storing new deviceID")
 		_deviceID, err := uuid.NewRandom()
 		if err != nil {
-			log.Errorf("Error generating new deviceID, defaulting to old-style device ID: %v", err)
+			slog.Error("Error generating new deviceID, defaulting to old-style device ID", "error", err)
 			return OldStyleDeviceID()
 		}
 		deviceID := _deviceID.String()
-		err = os.WriteFile(filename, []byte(deviceID), 0644)
+		err = os.WriteFile(filename, []byte(deviceID), 0o644)
 		if err != nil {
-			log.Errorf("Error storing new deviceID, defaulting to old-style device ID: %v", err)
+			slog.Error("Error storing new deviceID, defaulting to old-style device ID", "error", err)
 			return OldStyleDeviceID()
 		}
 		return deviceID
