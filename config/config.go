@@ -79,6 +79,9 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		apiClient:               common.NewWebClient(httpClient),
 		preferredServerLocation: atomic.Value{}, // initially, no preference
 	}
+	// Store an empty preferred location to avoid nil pointer dereference
+	ch.preferredServerLocation.Store(&serverLocation{})
+
 	// if err := ch.loadConfig(); err != nil {
 	// 	log.Errorf("failed to load config: %v", err)
 	// }
@@ -117,12 +120,11 @@ func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]AvailableS
 func (ch *ConfigHandler) fetchConfig() error {
 	log.Debug("Fetching config")
 	proxies, _ := ch.GetConfig(eventual.DontWait)
-	locationPtr := ch.preferredServerLocation.Load()
-	preferredServerLocation := &serverLocation{}
-	if locationPtr != nil {
-		preferredServerLocation = locationPtr.(*serverLocation)
+	preferredLocation, ok := ch.preferredServerLocation.Load().(*serverLocation)
+	if !ok {
+		return fmt.Errorf("failed to load preferred server location")
 	}
-	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
+	resp, err := ch.ftr.fetchConfig(preferredLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
