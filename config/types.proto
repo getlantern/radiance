@@ -3,10 +3,10 @@ import "google/protobuf/timestamp.proto";
 option go_package = "github.com/getlantern/radiance/config";
 
 //
-// Copied from lantern-cloud: e57d588aa976ca9d1a8531c92972e20a7d1640f9
-// 
+// Copied from lantern-cloud: ce637d21974f9d2c75e42e58b66e56283eafc27e
+//
 // The following should be kept in sync with lantern-cloud
-// 
+//
 
 // ConfigRequest is the request sent by the client that contains information about the client
 // and the config it currently has.
@@ -26,6 +26,11 @@ message ConfigRequest {
     repeated string names = 1; // list of proxy ids
     google.protobuf.Timestamp last_request = 2; // last time client requested proxy config
   }
+  message PreferredRegion {
+    string country = 1;
+    string city = 2;
+  }
+  optional PreferredRegion preferred_region = 3; // preferred region for the client
 }
 
 // ConfigResponse is the response sent by the server that contains the updated config for the
@@ -137,7 +142,7 @@ message ProxyConnectConfig {
 
   message ProxylessConfig {
     // config_text contain a packet manipulation config (e.g "disorder:0|split:123").
-    // You can see more details about proxyless packet manipulation here: 
+    // You can see more details about proxyless packet manipulation here:
     // https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Packet_manipulation
     string config_text = 1;
   }
@@ -152,4 +157,17 @@ message ProxyConnectConfig {
     WATERConfig connect_cfg_water = 26;
     ProxylessConfig connect_cfg_proxyless = 28;
   }
+}
+
+
+message ListAvailableResponse {
+  message AvailableRegion {
+    string city = 1;
+    string country = 2;
+    string country_code = 3;
+    optional float latitude = 4;
+    optional float longitude = 5;
+  }
+
+  repeated AvailableRegion regions = 1;
 }

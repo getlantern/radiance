@@ -96,7 +96,7 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 					err:       tt.err,
 					continueC: continueC,
 				},
-			}, &user.User{})
+			}, &user.User{}, nil)
 			ch := &ConfigHandler{
 				config: eventual.NewValue(),
 				stopC:  make(chan struct{}),

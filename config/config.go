@@ -15,6 +15,7 @@ import (
 
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/golog"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -46,27 +47,43 @@ type ConfigHandler struct {
 	// config holds a configResult.
 	config    eventual.Value
 	ftr       *fetcher
+	apiClient common.WebClient
 	stopC     chan struct{}
 	closeOnce *sync.Once
 
 	configPath string
 }
 
+type PreferredServerLocation struct {
+	Country string
+	City    string
+}
+
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, preferredServerLocation *PreferredServerLocation) *ConfigHandler {
 	ch := &ConfigHandler{
 		config:     eventual.NewValue(),
 		stopC:      make(chan struct{}),
 		closeOnce:  &sync.Once{},
 		configPath: filepath.Join(configDir, configFileName),
+		apiClient:  common.NewWebClient(httpClient),
 	}
 	// if err := ch.loadConfig(); err != nil {
 	// 	log.Errorf("failed to load config: %v", err)
 	// }
 
-	ch.ftr = newFetcher(httpClient, user)
+	ch.ftr = newFetcher(httpClient, user, preferredServerLocation)
 	go ch.fetchLoop(pollInterval)
 	return ch
+}
+
+func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]*ListAvailableResponse_AvailableRegion, error) {
+	var resp ListAvailableResponse
+	if err := ch.apiClient.GetPROTOC(ctx, "/available-servers", nil, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.GetRegions(), nil
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
