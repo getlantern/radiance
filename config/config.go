@@ -99,7 +99,7 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 	// fetch the config with the new preferred location on a separate goroutine
 	go func() {
 		if err := ch.fetchConfig(); err != nil {
-			slog.Error("Failed to fetch config: %v", err)
+			slog.Error("Failed to fetch config: %v", "error", err)
 		}
 	}()
 }
@@ -201,8 +201,8 @@ func (ch *ConfigHandler) loadConfig() error {
 	slog.Debug("Loading config")
 	cfg, err := loadConfig(ch.configPath)
 	if err != nil {
+		slog.Error("loading config", "error", err)
 		err = fmt.Errorf("loading config: %w", err)
-		slog.Error("error", err)
 		return err
 	}
 	slog.Debug("Config loaded")
