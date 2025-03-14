@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -106,7 +107,7 @@ func New(httpClient *http.Client) *User {
 	salt, _ := readSalt()
 	userData, _ := readUserData()
 	return &User{
-		authClient: NewAuthClient(httpClient),
+		authClient: &authClient{common.NewWebClient(httpClient)},
 		salt:       salt,
 		userData:   userData,
 		deviceId:   deviceid.Get(),
@@ -199,7 +200,6 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 	}
 	resp, err := u.authClient.Login(ctx, email, password, deviceId, salt)
 	if err == nil {
-		log.Debugf("login response is %v", resp)
 		writeUserData(resp)
 		u.userData = resp
 	}
@@ -230,7 +230,10 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 	if err != nil {
 		return err
 	}
-	srpClient := NewSRPClient(lowerCaseEmail, newPassword, newSalt)
+	srpClient, err := NewSRPClient(lowerCaseEmail, newPassword, newSalt)
+	if err != nil {
+		return err
+	}
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
 		return err
@@ -278,7 +281,11 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 	}
 
 	// Prepare login request body
-	client := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, lowerCaseEmail, salt), nil)
+	encKey, err := GenerateEncryptedKey(password, lowerCaseEmail, salt)
+	if err != nil {
+		return err
+	}
+	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
 	//Send this key to client
 	A := client.EphemeralPublic()
@@ -288,34 +295,32 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
-	srpB, err := u.authClient.LoginPrepare(context.Background(), prepareRequestBody)
+	srpB, err := u.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return err
 	}
-	log.Debugf("Login prepare response %v", srpB)
 	// Once the client receives B from the server Client should check error status here as defense against
 	// a malicious B sent from server
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-		log.Errorf("Error while setting srpB %v", err)
 		return err
 	}
 
 	// client can now make the session key
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return log.Errorf("user_not_found error while generating Client key %v", err)
+		return fmt.Errorf("user_not_found error while generating Client key %w", err)
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return log.Errorf("user_not_found error while checking server proof%v", err)
+		return fmt.Errorf("user_not_found error while checking server proof %w", err)
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return log.Errorf("user_not_found error while generating client proof %v", err)
+		return fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
 
 	changeEmailRequestBody := &ChangeEmailRequest{
@@ -335,7 +340,12 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 		return err
 	}
 
-	srpClient := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, newEmail, newSalt), nil)
+	encKey, err := GenerateEncryptedKey(password, newEmail, newSalt)
+	if err != nil {
+		return err
+	}
+
+	srpClient := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
 		return err
@@ -375,7 +385,11 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	}
 
 	// Prepare login request body
-	client := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, lowerCaseEmail, salt), nil)
+	encKey, err := GenerateEncryptedKey(password, lowerCaseEmail, salt)
+	if err != nil {
+		return err
+	}
+	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
 	//Send this key to client
 	A := client.EphemeralPublic()
@@ -385,33 +399,32 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
-	log.Debugf("Login prepare request  email %v, a bytes %v", lowerCaseEmail, A.Bytes())
-	srpB, err := u.authClient.LoginPrepare(context.Background(), prepareRequestBody)
+
+	srpB, err := u.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return err
 	}
-	log.Debugf("Login prepare response %v", srpB)
 
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-		log.Errorf("Error while setting srpB %v", err)
+
 		return err
 	}
 
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return log.Errorf("user_not_found error while generating Client key %v", err)
+		return fmt.Errorf("user_not_found error while generating Client key %w", err)
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return log.Errorf("user_not_found error while checking server proof%v", err)
+		return fmt.Errorf("user_not_found error while checking server proof %w", err)
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return log.Errorf("user_not_found error while generating client proof %v", err)
+		return fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
 
 	changeEmailRequestBody := &DeleteUserRequest{
@@ -421,13 +434,10 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		DeviceId:  u.deviceId,
 	}
 
-	log.Debugf("Delete Account request email %v proof %v deviceId %v", lowerCaseEmail, clientProof, u.deviceId)
-
 	if err := u.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
 		return err
 	}
 
-	log.Debugf("Account deleted successfully for email %v", lowerCaseEmail)
 	u.userData = nil
 	return writeUserData(nil)
 }

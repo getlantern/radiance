@@ -124,7 +124,10 @@ func mockAuthClientNew(t *testing.T, email, password string) *mockAuthClient {
 	salt, err := GenerateSalt()
 	require.NoError(t, err)
 
-	srpClient := srp.NewSRPClient(srp.KnownGroups[group], GenerateEncryptedKey(password, email, salt), nil)
+	encKey, err := GenerateEncryptedKey(password, email, salt)
+	require.NoError(t, err)
+
+	srpClient := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 	verifierKey, err := srpClient.Verifier()
 	require.NoError(t, err)
 

@@ -51,6 +51,12 @@ type configHandler interface {
 	GetConfig(ctx context.Context) ([]*config.Config, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
+
+	// SetPreferredServerLocation sets the preferred server location. If not set - it's auto selected by the API
+	SetPreferredServerLocation(country, city string)
+
+	// ListAvailableServers lists the available server locations to choose from.
+	ListAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -92,6 +98,14 @@ func NewRadiance() (*Radiance, error) {
 		stopChan:     make(chan struct{}),
 		user:         user,
 	}, nil
+}
+
+func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
+	return r.confHandler.ListAvailableServers(ctx)
+}
+
+func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
+	r.confHandler.SetPreferredServerLocation(country, city)
 }
 
 // Run starts the Radiance proxy server on the specified address.

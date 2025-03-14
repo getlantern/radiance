@@ -35,7 +35,14 @@ func newFetcher(client *http.Client, user *user.User) *fetcher {
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
+func (f *fetcher) fetchConfig(preferredServerLocation *serverLocation) (*ConfigResponse, error) {
+	var preferredRegion *ConfigRequest_PreferredRegion
+	if preferredServerLocation != nil {
+		preferredRegion = &ConfigRequest_PreferredRegion{
+			Country: preferredServerLocation.Country,
+			City:    preferredServerLocation.City,
+		}
+	}
 	confReq := ConfigRequest{
 		ClientInfo: &ConfigRequest_ClientInfo{
 			SingboxVersion: singVersion(),
@@ -45,7 +52,8 @@ func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
 			Country:        "",
 			Ip:             "",
 		},
-		Proxy: &ConfigRequest_Proxy{},
+		PreferredRegion: preferredRegion,
+		Proxy:           &ConfigRequest_Proxy{},
 	}
 	buf, err := proto.Marshal(&confReq)
 	if err != nil {

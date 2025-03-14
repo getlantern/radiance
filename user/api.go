@@ -2,7 +2,9 @@ package user
 
 import (
 	"context"
-	"net/http"
+	"fmt"
+
+	"github.com/getlantern/radiance/common"
 )
 
 type AuthClient interface {
@@ -28,11 +30,7 @@ type AuthClient interface {
 }
 
 type authClient struct {
-	WebClient
-}
-
-func NewAuthClient(httpClient *http.Client) AuthClient {
-	return &authClient{NewWebClient(httpClient)}
+	common.WebClient
 }
 
 // Auth APIS
@@ -75,14 +73,13 @@ func (c *authClient) LoginPrepare(ctx context.Context, loginData *PrepareRequest
 	err := c.PostPROTOC(ctx, "/users/prepare", loginData, &model)
 	if err != nil {
 		// Send custom error to show error on client side
-		return nil, log.Errorf("user_not_found %v", err)
+		return nil, fmt.Errorf("user_not_found %w", err)
 	}
 	return &model, nil
 }
 
 // Login is used to login a user with the LoginRequest
 func (c *authClient) login(ctx context.Context, loginData *LoginRequest) (*LoginResponse, error) {
-	log.Debugf("login request is %v", loginData)
 	var resp LoginResponse
 	err := c.PostPROTOC(ctx, "/users/login", loginData, &resp)
 	if err != nil {
@@ -107,13 +104,12 @@ func (c *authClient) CompleteRecoveryByEmail(ctx context.Context, loginData *Com
 // // ValidateEmailRecoveryCode is used to validate the recovery code
 func (c *authClient) ValidateEmailRecoveryCode(ctx context.Context, recoveryData *ValidateRecoveryCodeRequest) (*ValidateRecoveryCodeResponse, error) {
 	var resp ValidateRecoveryCodeResponse
-	log.Debugf("ValidateEmailRecoveryCode request is %v", recoveryData)
 	err := c.PostPROTOC(ctx, "/users/recovery/validate/email", recoveryData, &resp)
 	if err != nil {
 		return nil, err
 	}
 	if !resp.Valid {
-		return nil, log.Errorf("invalid_code Error decoding response body: %v", err)
+		return nil, fmt.Errorf("invalid_code Error decoding response body: %w", err)
 	}
 	return &resp, nil
 }
