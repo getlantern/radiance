@@ -1,5 +1,7 @@
 package app
 
+import "runtime"
+
 const (
 	AppName = "radiance"
 
@@ -7,5 +9,5 @@ const (
 	ClientVersion = "7.6.47"
 	Version       = "7.6.47"
 
-	Platform = "linux"
+	Platform = runtime.GOOS
 )

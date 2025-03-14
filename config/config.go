@@ -36,8 +36,9 @@ var (
 type Config = ProxyConnectConfig
 
 type configResult struct {
-	cfg []*Config
-	err error
+	cfg     []*Config
+	country string
+	err     error
 }
 
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
@@ -71,7 +72,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 
 func (ch *ConfigHandler) fetchConfig() error {
 	log.Debug("Fetching config")
-	proxies, _ := ch.GetConfig(eventual.DontWait)
+	proxies, country, _ := ch.GetConfig(eventual.DontWait)
 	resp, err := ch.ftr.fetchConfig()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
@@ -79,6 +80,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 
 	if resp != nil {
 		log.Debug("received config response")
+		country = resp.GetCountry()
 		// we got a new config and no error so we can update the current config
 		proxyList := resp.GetProxy()
 		// make sure we have at least one proxy
@@ -99,7 +101,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	ch.config.Set(configResult{cfg: proxies, err: err})
+	ch.config.Set(configResult{cfg: proxies, country: country, err: err})
 
 	return nil
 }
@@ -121,17 +123,17 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 	}
 }
 
-// GetConfig returns the current proxy configuration. If no configuration is available, GetConfig
+// GetConfig returns the current proxy configuration and the country. If no configuration is available, GetConfig
 // will wait until one is available or the context has expired. If an error occurred during the
 // last fetch, that error is returned, as a ErrFetchingConfig, along with the most recent
 // configuration, if available. GetConfig is a blocking call.
-func (ch *ConfigHandler) GetConfig(ctx context.Context) ([]*Config, error) {
+func (ch *ConfigHandler) GetConfig(ctx context.Context) ([]*Config, string, error) {
 	_cfgRes, err := ch.config.Get(ctx)
 	if err != nil { // ctx expired
-		return nil, err
+		return nil, "", err
 	}
 	cfgRes := _cfgRes.(configResult)
-	return cfgRes.cfg, cfgRes.err
+	return cfgRes.cfg, cfgRes.country, cfgRes.err
 }
 
 // Stop stops the ConfigHandler from fetching new configurations.
