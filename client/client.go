@@ -27,6 +27,8 @@ type VPNClient interface {
 	Stop() error
 	Pause(dur time.Duration) error
 	Resume()
+	SelectCustomServer(cfg ServerConnectConfig) error
+	DeselectCustomServer() error
 }
 
 type vpnClient struct {
@@ -57,7 +59,7 @@ func (c *vpnClient) Start() error {
 	if c.boxService == nil {
 		return errors.New("box service is not initialized")
 	}
-	err := c.boxService.instance.Start()
+	err := c.boxService.defaultInstance.Start()
 	if err != nil {
 		return err
 	}
@@ -69,7 +71,7 @@ func (c *vpnClient) Stop() error {
 	ctx, cancel := context.WithTimeout(c.boxService.ctx, time.Second*30)
 	var err error
 	go func() {
-		err = c.boxService.instance.Close()
+		err = c.boxService.defaultInstance.Close()
 		cancel()
 	}()
 	<-ctx.Done()
@@ -80,9 +82,11 @@ func (c *vpnClient) Stop() error {
 }
 
 type boxService struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	instance     *box.Box
+	ctx             context.Context
+	cancel          context.CancelFunc
+	currentInstance *box.Box
+	defaultInstance *box.Box
+
 	pauseManager pause.Manager
 }
 
@@ -105,10 +109,11 @@ func newBoxService(logOutput string) (*boxService, error) {
 		return nil, fmt.Errorf("create service: %w", err)
 	}
 	return &boxService{
-		ctx:          ctx,
-		cancel:       cancel,
-		instance:     instance,
-		pauseManager: service.FromContext[pause.Manager](ctx),
+		ctx:             ctx,
+		cancel:          cancel,
+		defaultInstance: instance,
+		currentInstance: instance,
+		pauseManager:    service.FromContext[pause.Manager](ctx),
 	}, nil
 }
 
@@ -135,4 +140,40 @@ func (c *vpnClient) Resume() {
 	if c.boxService.pauseManager.IsNetworkPaused() {
 		c.boxService.pauseManager.NetworkWake()
 	}
+}
+
+// ServerConnectConfig represents configuration for connecting to a custom server.
+type ServerConnectConfig []byte
+
+// SelectCustomServer replace box service instance by a instance using the
+// given config. If the Box service is already running, you'll need to
+// stop and start the VPN again so it can use the new instance.
+func (c *vpnClient) SelectCustomServer(cfg ServerConnectConfig) error {
+	options, err := json.UnmarshalExtended[option.Options]([]byte(cfg))
+	if err != nil {
+		return fmt.Errorf("unmarshal config: %w", err)
+	}
+
+	customInstance, err := box.New(box.Options{
+		Options: options,
+	})
+	if err != nil {
+		return fmt.Errorf("create service: %w", err)
+	}
+
+	if c.boxService.currentInstance != nil {
+		c.boxService.currentInstance.Close()
+	}
+
+	c.boxService.currentInstance = customInstance
+	return nil
+}
+
+func (c *vpnClient) DeselectCustomServer() error {
+	if c.boxService.currentInstance != nil {
+		c.boxService.currentInstance.Close()
+	}
+
+	c.boxService.currentInstance = c.boxService.defaultInstance
+	return nil
 }
