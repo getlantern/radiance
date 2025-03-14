@@ -2,10 +2,14 @@
 
 package boxoptions
 
-import "github.com/sagernet/sing-box/option"
+import (
+	"path/filepath"
 
-func Options(logOutput string) option.Options {
+	"github.com/sagernet/sing-box/option"
+)
+
+func Options(baseDir string) option.Options {
 	opts := boxOptions
-	opts.Log.Output = logOutput
+	opts.Log.Output = filepath.Join(baseDir, logFile)
 	return opts
 }

@@ -36,13 +36,13 @@ type vpnClient struct {
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
 // the existing instance. logOutput is the path where the log file will be written. logOutput can be
 // set to "stdout" to write logs to stdout.
-func NewVPNClient(logOutput string) (VPNClient, error) {
+func NewVPNClient(baseDir string) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
 		return client, nil
 	}
-	b, err := newBoxService(logOutput)
+	b, err := newBoxService(baseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ type boxService struct {
 	pauseManager pause.Manager
 }
 
-func newBoxService(logOutput string) (*boxService, error) {
+func newBoxService(baseDir string) (*boxService, error) {
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
 	ctx := box.Context(
 		context.Background(),
@@ -98,7 +98,7 @@ func newBoxService(logOutput string) (*boxService, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	instance, err := box.New(box.Options{
 		Context: ctx,
-		Options: boxoptions.Options(logOutput),
+		Options: boxoptions.Options(baseDir),
 	})
 	if err != nil {
 		cancel()
