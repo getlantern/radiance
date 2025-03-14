@@ -120,10 +120,7 @@ func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]AvailableS
 func (ch *ConfigHandler) fetchConfig() error {
 	log.Debug("Fetching config")
 	proxies, _ := ch.GetConfig(eventual.DontWait)
-	preferredServerLocation, ok := ch.preferredServerLocation.Load().(*serverLocation)
-	if !ok {
-		return fmt.Errorf("failed to load preferred server location")
-	}
+	preferredServerLocation := ch.preferredServerLocation.Load().(*serverLocation)
 	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
