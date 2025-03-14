@@ -355,7 +355,7 @@ func newLog(logPath string) *slog.Logger {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
 	slog.SetDefault(logger)
 	return logger
