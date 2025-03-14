@@ -22,27 +22,25 @@ const configURL = "https://api.iantem.io/v1/config"
 
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
-	httpClient              *http.Client
-	user                    *user.User
-	preferredServerLocation *PreferredServerLocation
+	httpClient *http.Client
+	user       *user.User
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user *user.User, preferredServerLocation *PreferredServerLocation) *fetcher {
+func newFetcher(client *http.Client, user *user.User) *fetcher {
 	return &fetcher{
-		httpClient:              client,
-		user:                    user,
-		preferredServerLocation: preferredServerLocation,
+		httpClient: client,
+		user:       user,
 	}
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig() (*ConfigResponse, error) {
+func (f *fetcher) fetchConfig(preferredServerLocation *serverLocation) (*ConfigResponse, error) {
 	var preferredRegion *ConfigRequest_PreferredRegion
-	if f.preferredServerLocation != nil {
+	if preferredServerLocation != nil {
 		preferredRegion = &ConfigRequest_PreferredRegion{
-			Country: f.preferredServerLocation.Country,
-			City:    f.preferredServerLocation.City,
+			Country: preferredServerLocation.Country,
+			City:    preferredServerLocation.City,
 		}
 	}
 	confReq := ConfigRequest{

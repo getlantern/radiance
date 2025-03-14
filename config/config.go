@@ -10,7 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	sync "sync"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/eventual/v2"
@@ -52,45 +53,77 @@ type ConfigHandler struct {
 	stopC     chan struct{}
 	closeOnce *sync.Once
 
-	configPath string
+	configPath              string
+	preferredServerLocation atomic.Value
 }
 
-type PreferredServerLocation struct {
+type serverLocation struct {
 	Country string
 	City    string
 }
 
+type AvailableServerLocation struct {
+	City        string
+	Country     string
+	CountryCode string
+	Latitude    *float32
+	Longitude   *float32
+}
+
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, preferredServerLocation *PreferredServerLocation) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User) *ConfigHandler {
 	ch := &ConfigHandler{
-		config:     eventual.NewValue(),
-		stopC:      make(chan struct{}),
-		closeOnce:  &sync.Once{},
-		configPath: filepath.Join(configDir, configFileName),
-		apiClient:  common.NewWebClient(httpClient),
+		config:                  eventual.NewValue(),
+		stopC:                   make(chan struct{}),
+		closeOnce:               &sync.Once{},
+		configPath:              filepath.Join(configDir, configFileName),
+		apiClient:               common.NewWebClient(httpClient),
+		preferredServerLocation: atomic.Value{}, // initially, no preference
 	}
 	// if err := ch.loadConfig(); err != nil {
 	// 	log.Errorf("failed to load config: %v", err)
 	// }
 
-	ch.ftr = newFetcher(httpClient, user, preferredServerLocation)
+	ch.ftr = newFetcher(httpClient, user)
 	go ch.fetchLoop(pollInterval)
 	return ch
 }
 
-func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]*ListAvailableResponse_AvailableRegion, error) {
+func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
+	ch.preferredServerLocation.Store(&serverLocation{
+		Country: country,
+		City:    city,
+	})
+}
+
+func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]AvailableServerLocation, error) {
 	var resp ListAvailableResponse
 	if err := ch.apiClient.GetPROTOC(ctx, "/available-servers", nil, &resp); err != nil {
 		return nil, err
 	}
+	res := make([]AvailableServerLocation, len(resp.GetRegions()))
+	for i, region := range resp.GetRegions() {
+		res[i] = AvailableServerLocation{
+			Country:     region.GetCountry(),
+			City:        region.GetCity(),
+			Longitude:   region.Latitude,
+			Latitude:    region.Longitude,
+			CountryCode: region.CountryCode,
+		}
+	}
 
-	return resp.GetRegions(), nil
+	return res, nil
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
 	log.Debug("Fetching config")
 	proxies, country, _ := ch.GetConfig(eventual.DontWait)
-	resp, err := ch.ftr.fetchConfig()
+	locationPtr := ch.preferredServerLocation.Load()
+	preferredServerLocation := &serverLocation{}
+	if locationPtr != nil {
+		preferredServerLocation = locationPtr.(*serverLocation)
+	}
+	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
