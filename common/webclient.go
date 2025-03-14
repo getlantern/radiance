@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getlantern/errors"
-
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -44,7 +42,7 @@ func NewWebClient(httpClient *http.Client) WebClient {
 func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, APIBaseUrl+path, http.NoBody)
 	if err != nil {
-		return errors.New("Error creating request: %v", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 	if params != nil {
 		q := req.URL.Query()
@@ -60,18 +58,18 @@ func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[strin
 	resp, err := c.Do(req)
 
 	if err != nil {
-		return errors.New("Error sending request: %v", err)
+		return fmt.Errorf("error sending request: %w", err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("Unexpected status code %v", resp.StatusCode)
+		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return errors.New("Error reading response body: %v", err)
+		return fmt.Errorf("error reading response body: %w", err)
 	}
 	return proto.Unmarshal(body, target)
 }
@@ -87,7 +85,7 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, APIBaseUrl+path, io.NopCloser(bytes.NewReader(bodyBytes)))
 	if err != nil {
-		return errors.New("Error creating request: %v", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
@@ -95,17 +93,17 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 	resp, err := c.Do(req)
 
 	if err != nil {
-		return errors.New("Error sending request: %v", err)
+		return fmt.Errorf("error sending request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("Unexpected status code %v", resp.StatusCode)
+		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
 	}
 
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return errors.New("Error reading response body: %v", err)
+		return fmt.Errorf("error reading response body: %w", err)
 	}
 
 	return proto.Unmarshal(respBodyBytes, target)
