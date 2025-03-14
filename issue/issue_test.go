@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"os"
 	"testing"
 
 	"github.com/getlantern/kindling"
@@ -16,7 +17,11 @@ func TestSendReport(t *testing.T) {
 	user := user.New(k.NewHTTPClient())
 	reporter, err := NewIssueReporter(k.NewHTTPClient(), user)
 	require.NoError(t, err)
+	// Grab a temporary directory
+	dir, err := os.MkdirTemp("", "lantern")
+	require.NoError(t, err)
 	err = reporter.Report(
+		dir,
 		"radiancetest@getlantern.org",
 		int(ReportIssueRequest_NO_ACCESS),
 		"Description placeholder-test only",
