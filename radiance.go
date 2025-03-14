@@ -66,6 +66,9 @@ type Radiance struct {
 	stopChan    chan struct{}
 
 	user *user.User
+
+	configuredServersMutex sync.Locker
+	configuredServers      map[string]client.ServerConnectConfig
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
@@ -91,6 +94,10 @@ func NewRadiance() (*Radiance, error) {
 		statusMutex:  new(sync.Mutex),
 		stopChan:     make(chan struct{}),
 		user:         user,
+		// TODO: after we start to persist data, we should update this implementation
+		// for loading the configured servers and also the custom servers
+		configuredServers:      make(map[string]client.ServerConnectConfig),
+		configuredServersMutex: new(sync.Mutex),
 	}, nil
 }
 
@@ -307,4 +314,26 @@ func newLog(logPath string) *slog.Logger {
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
 	slog.SetDefault(logger)
 	return logger
+}
+
+// SelectCustomServer configures the client to use the input server. cfg may be nil if
+// this server name is already configured for this user. If this server name is not configured
+// for this user, it will be added to the list of configured servers.
+func (r *Radiance) SelectCustomServer(name string, cfg client.ServerConnectConfig) error {
+	r.configuredServersMutex.Lock()
+	defer r.configuredServersMutex.Unlock()
+	if cfg != nil {
+		if _, exists := r.configuredServers[name]; !exists {
+			r.configuredServers[name] = cfg
+		}
+	}
+	cfg = r.configuredServers[name]
+
+	return r.vpnClient.SelectCustomServer(cfg)
+}
+
+// DeselectCustomServer configures the client to use its own choice of server assigned
+// by the Lantern back-end.
+func (r *Radiance) DeselectCustomServer() error {
+	return r.vpnClient.DeselectCustomServer()
 }
