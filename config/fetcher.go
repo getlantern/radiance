@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -112,7 +113,7 @@ func singVersion() string {
 	if err != nil {
 		singVersion = "unknown"
 	}
-	log.Debugf("sing-box version: %s", singVersion)
+	slog.Debug("sing-box version", "version", singVersion)
 	return singVersion
 }
 
