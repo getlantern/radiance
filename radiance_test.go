@@ -133,7 +133,7 @@ func TestNewRadiance(t *testing.T) {
 	t.Run("it should return a new Radiance instance", func(t *testing.T) {
 		r, err := NewRadiance(nil)
 		assert.NoError(t, err)
-		assert.NotNil(t, r)
+		require.NotNil(t, r)
 		assert.NotNil(t, r.confHandler)
 		assert.Nil(t, r.srv)
 		assert.False(t, r.connected)

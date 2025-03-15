@@ -13,10 +13,10 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
-	"github.com/sagernet/sing-box/experimental/deprecated"
+	"github.com/sagernet/sing-box/experimental"
+	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/experimental/libbox/platform"
-	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -39,7 +39,7 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(logOutput string, platformInterface libbox.PlatformInterface) (*BoxService, error) {
+func New(logOutput string, platIfce platform.Interface) (*BoxService, error) {
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
 	ctx := box.Context(
 		context.Background(),
@@ -49,52 +49,41 @@ func New(logOutput string, platformInterface libbox.PlatformInterface) (*BoxServ
 	)
 
 	options := boxoptions.Options(logOutput)
-	bs, err := newlibbox(ctx, options, platformInterface)
-	if err != nil {
-		return nil, fmt.Errorf("create service: %w", err)
-	}
-	return bs, nil
+	return newlibbox(ctx, options, platIfce)
 }
 
 // newlibbox creates a new libbox.BoxService instance using the provided context, options, and
 // platformInterface. This should only be used until sing-box is updated to allow wrapping a box.Box
 // instance (if that ever happens).
-func newlibbox(ctx context.Context, options option.Options, platformIf libbox.PlatformInterface) (*BoxService, error) {
+func newlibbox(ctx context.Context, options option.Options, platIfce platform.Interface) (*BoxService, error) {
 	// TODO: create dummy config string
-	cfg := ""
-	lbService, err := libbox.NewService(cfg, platformIf)
-	if err != nil {
-		return nil, err
-	}
+	experimental.RegisterClashServerConstructor(clashapi.NewServer)
 
 	////////////////////////////////////////////////////////////////////////
 	// Do not modify the following code unless you know what you're doing //
 	////////////////////////////////////////////////////////////////////////
 
+	lbService := new(libbox.BoxService)
 	lbctxptr := getFieldPtr[context.Context](lbService, "ctx")
-	lbctx := *lbctxptr
-	// dnsTransportRegistry := service.FromContext[adapter.DNSTransportRegistry](lbCtx)
+	// lbctx := *lbctxptr
 
 	// TODO: Do we want to use the filemanager service?
 	//
 	//	ctx = filemanager.WithDefault(ctx, sWorkingPath, sTempPath, sUserID, sGroupID)
-	// filemgr := service.FromContext[filemanager.Manager](lbctx)
 	// ctx = service.ContextWith(ctx, filemgr)
-
-	dpm := service.FromContext[deprecated.Manager](lbctx)
-	service.MustRegister[deprecated.Manager](ctx, dpm)
 
 	ctx, cancel := context.WithCancel(ctx)
 	urlTestHistoryStorage := urltest.NewHistoryStorage()
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 
-	platformWrapper := service.FromContext[platform.Interface](lbctx)
-	service.MustRegister[platform.Interface](ctx, platformWrapper)
+	if platIfce != nil {
+		service.MustRegister[platform.Interface](ctx, platIfce)
+	}
 
 	instance, err := box.New(box.Options{
-		Options:           options,
-		Context:           ctx,
-		PlatformLogWriter: platformWrapper.(log.PlatformWriter),
+		Options: options,
+		Context: ctx,
+		// PlatformLogWriter: platformWrapper.(log.PlatformWriter),
 	})
 	if err != nil {
 		cancel()

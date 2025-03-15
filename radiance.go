@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/experimental/libbox/platform"
 
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
@@ -78,8 +78,8 @@ type Radiance struct {
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance(platformInterface libbox.PlatformInterface) (*Radiance, error) {
-	vpnC, err := client.NewVPNClient(vpnLogOutput, platformInterface)
+func NewRadiance(platIfce platform.Interface) (*Radiance, error) {
+	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}
