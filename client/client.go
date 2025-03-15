@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
@@ -33,13 +33,13 @@ type vpnClient struct {
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
 // the existing instance. logOutput is the path where the log file will be written. logOutput can be
 // set to "stdout" to write logs to stdout.
-func NewVPNClient(logOutput string, platformInterface libbox.PlatformInterface) (VPNClient, error) {
+func NewVPNClient(logOutput string, platIfce platform.Interface) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
 		return client, nil
 	}
-	b, err := boxservice.New(logOutput, platformInterface)
+	b, err := boxservice.New(logOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}
