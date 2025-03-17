@@ -31,8 +31,7 @@ func TestNewlibbox(t *testing.T) {
 
 	ob := bs.instance.Outbound()
 	_, fnd := ob.Outbound("testing-out")
-	require.True(t, fnd, "outline-out not found")
-
+	require.True(t, fnd, "testing-out not found")
 	require.NoError(t, bs.Start())
 	require.NoError(t, bs.Close())
 }
