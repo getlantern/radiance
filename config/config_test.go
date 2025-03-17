@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,10 +100,12 @@ func TestFetchLoop_UpdateConfig(t *testing.T) {
 				},
 			}, &user.User{})
 			ch := &ConfigHandler{
-				config: eventual.NewValue(),
-				stopC:  make(chan struct{}),
-				ftr:    ftr,
+				config:                  eventual.NewValue(),
+				stopC:                   make(chan struct{}),
+				ftr:                     ftr,
+				preferredServerLocation: atomic.Value{},
 			}
+			ch.preferredServerLocation.Store(&serverLocation{})
 			conf := &Config{}
 			ch.config.Set(configResult{cfg: []*Config{conf}, err: nil})
 
