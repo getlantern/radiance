@@ -418,7 +418,7 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance()
+			r, err := NewRadiance(nil)
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, tt.report)
 			tt.assert(t, err)
