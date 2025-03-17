@@ -21,7 +21,6 @@ import (
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/kindling"
-
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
@@ -113,6 +112,8 @@ func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableS
 	return r.confHandler.ListAvailableServers(ctx)
 }
 
+// SetPreferredServer sets the preferred server location for the VPN connection.
+// pass empty strings to auto select the server location
 func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
 	r.confHandler.SetPreferredServerLocation(country, city)
 }

@@ -38,7 +38,7 @@ func newFetcher(client *http.Client, user *user.User) *fetcher {
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 func (f *fetcher) fetchConfig(preferredServerLocation *serverLocation) (*ConfigResponse, error) {
 	var preferredRegion *ConfigRequest_PreferredRegion
-	if preferredServerLocation != nil {
+	if preferredServerLocation != nil && (preferredServerLocation.Country != "" && preferredServerLocation.City != "") {
 		preferredRegion = &ConfigRequest_PreferredRegion{
 			Country: preferredServerLocation.Country,
 			City:    preferredServerLocation.City,
