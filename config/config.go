@@ -7,14 +7,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	sync "sync"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/eventual/v2"
-	"github.com/getlantern/golog"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -25,7 +27,6 @@ const (
 )
 
 var (
-	log = golog.LoggerFor("config")
 
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when if there was an error
 	// fetching the configuration.
@@ -47,22 +48,42 @@ type ConfigHandler struct {
 	// config holds a configResult.
 	config    eventual.Value
 	ftr       *fetcher
+	apiClient common.WebClient
 	stopC     chan struct{}
 	closeOnce *sync.Once
 
-	configPath string
+	configPath              string
+	preferredServerLocation atomic.Value
+}
+
+type serverLocation struct {
+	Country string
+	City    string
+}
+
+type AvailableServerLocation struct {
+	City        string
+	Country     string
+	CountryCode string
+	Latitude    *float32
+	Longitude   *float32
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User) *ConfigHandler {
 	ch := &ConfigHandler{
-		config:     eventual.NewValue(),
-		stopC:      make(chan struct{}),
-		closeOnce:  &sync.Once{},
-		configPath: filepath.Join(configDir, configFileName),
+		config:                  eventual.NewValue(),
+		stopC:                   make(chan struct{}),
+		closeOnce:               &sync.Once{},
+		configPath:              filepath.Join(configDir, configFileName),
+		apiClient:               common.NewWebClient(httpClient),
+		preferredServerLocation: atomic.Value{}, // initially, no preference
 	}
+	// Store an empty preferred location to avoid nil pointer dereference
+	ch.preferredServerLocation.Store(&serverLocation{})
+
 	// if err := ch.loadConfig(); err != nil {
-	// 	log.Errorf("failed to load config: %v", err)
+	// 	slog.Error("failed to load config: %v", err)
 	// }
 
 	ch.ftr = newFetcher(httpClient, user)
@@ -70,29 +91,63 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 	return ch
 }
 
+func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
+	ch.preferredServerLocation.Store(&serverLocation{
+		Country: country,
+		City:    city,
+	})
+
+	// fetch the config with the new preferred location on a separate goroutine
+	go func() {
+		if err := ch.fetchConfig(); err != nil {
+			slog.Error("Failed to fetch config: %v", "error", err)
+		}
+	}()
+}
+
+func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]AvailableServerLocation, error) {
+	var resp ListAvailableResponse
+	if err := ch.apiClient.GetPROTOC(ctx, "/available-servers", nil, &resp); err != nil {
+		return nil, err
+	}
+	res := make([]AvailableServerLocation, len(resp.GetRegions()))
+	for i, region := range resp.GetRegions() {
+		res[i] = AvailableServerLocation{
+			Country:     region.GetCountry(),
+			City:        region.GetCity(),
+			Longitude:   region.Latitude,
+			Latitude:    region.Longitude,
+			CountryCode: region.CountryCode,
+		}
+	}
+
+	return res, nil
+}
+
 func (ch *ConfigHandler) fetchConfig() error {
-	log.Debug("Fetching config")
+	slog.Debug("Fetching config")
 	proxies, country, _ := ch.GetConfig(eventual.DontWait)
-	resp, err := ch.ftr.fetchConfig()
+	preferredServerLocation := ch.preferredServerLocation.Load().(*serverLocation)
+	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
 
 	if resp != nil {
-		log.Debug("received config response")
+		slog.Debug("received config response")
 		country = resp.GetCountry()
 		// we got a new config and no error so we can update the current config
 		proxyList := resp.GetProxy()
 		// make sure we have at least one proxy
 		if proxyList != nil && len(proxyList.GetProxies()) > 0 {
-			log.Debugf("received %d new proxies", len(proxyList.GetProxies()))
+			slog.Debug("received new proxies", "proxies", len(proxyList.GetProxies()))
 			proxies = proxyList.GetProxies()
-			log.Debugf("new proxy: %+v", proxies)
+			slog.Debug("new proxies", "proxies", proxies)
 			if sErr := saveConfig(ch.configPath, proxies[0]); sErr != nil {
-				log.Errorf("failed to save config: %v", sErr)
+				slog.Error("failed to save config: %v", "error", sErr)
 			}
 		} else {
-			log.Debug("proxy list is empty")
+			slog.Debug("proxy list is empty")
 		}
 	}
 
@@ -109,7 +164,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 // fetchLoop fetches the configuration every pollInterval.
 func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 	if err := ch.fetchConfig(); err != nil {
-		log.Errorf("Failed to fetch config: %v. Retrying in %v", err, pollInterval)
+		slog.Error("Failed to fetch config. Retrying", "error", err, "interval", pollInterval)
 	}
 	for {
 		select {
@@ -117,7 +172,7 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 			return
 		case <-time.After(pollInterval):
 			if err := ch.fetchConfig(); err != nil {
-				log.Errorf("Failed to fetch config: %v. Retrying in %v", err, pollInterval)
+				slog.Error("Failed to fetch config in select. Retrying", "error", err, "interval", pollInterval)
 			}
 		}
 	}
@@ -145,19 +200,19 @@ func (ch *ConfigHandler) Stop() {
 
 // loadConfig loads the configuration from the disk and sets it in the ConfigHandler.
 func (ch *ConfigHandler) loadConfig() error {
-	log.Debug("Loading config")
+	slog.Debug("Loading config")
 	cfg, err := loadConfig(ch.configPath)
 	if err != nil {
+		slog.Error("loading config", "error", err)
 		err = fmt.Errorf("loading config: %w", err)
-		log.Error(err)
 		return err
 	}
-	log.Debug("Config loaded")
+	slog.Debug("Config loaded")
 	if cfg == nil { // no config file
-		log.Debug("No config file found")
+		slog.Debug("No config file found")
 		return nil
 	}
-	log.Debug("Setting config")
+	slog.Debug("Setting config")
 	ch.config.Set(configResult{cfg: []*Config{cfg}})
 	return nil
 }
@@ -165,9 +220,9 @@ func (ch *ConfigHandler) loadConfig() error {
 // loadConfig loads the config file from the disk. If the config file is not found, it returns
 // nil.
 func loadConfig(path string) (*Config, error) {
-	log.Debugf("reading config file at %s", path)
+	slog.Debug("reading config file at", "path", path)
 	buf, err := os.ReadFile(path)
-	log.Debug("config file read")
+	slog.Debug("config file read")
 	if os.IsNotExist(err) { // no config file
 		return nil, nil
 	}
@@ -188,5 +243,5 @@ func saveConfig(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	return os.WriteFile(path, buf, 0644)
+	return os.WriteFile(path, buf, 0o644)
 }
