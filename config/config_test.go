@@ -19,13 +19,14 @@ func TestConfigHandler_GetConfig(t *testing.T) {
 	tests := []struct {
 		name         string
 		configResult configResult
-		assert       func(t *testing.T, got []*Config, err error)
+		assert       func(t *testing.T, got []*Config, country string, err error)
 	}{
 		{
 			name:         "returns current config",
-			configResult: configResult{cfg: respProxy, err: nil},
-			assert: func(t *testing.T, got []*Config, err error) {
+			configResult: configResult{cfg: respProxy, country: testConfigResponse.Country, err: nil},
+			assert: func(t *testing.T, got []*Config, country string, err error) {
 				assert.NoError(t, err)
+				assert.Equal(t, testConfigResponse.Country, country)
 				for i := range got {
 					assert.True(t, proto.Equal(respProxy[i], got[i]), "GetConfig should return the current config")
 				}
@@ -34,7 +35,7 @@ func TestConfigHandler_GetConfig(t *testing.T) {
 		{
 			name:         "error encountered during fetch",
 			configResult: configResult{cfg: nil, err: ErrFetchingConfig},
-			assert: func(t *testing.T, got []*Config, err error) {
+			assert: func(t *testing.T, got []*Config, country string, err error) {
 				assert.ErrorIs(t, err, ErrFetchingConfig,
 					"GetConfig should return the error encountered during fetch",
 				)
@@ -47,8 +48,8 @@ func TestConfigHandler_GetConfig(t *testing.T) {
 			cancel() // prevent GetConfig from waiting for the context to expire
 			ch := &ConfigHandler{config: eventual.NewValue()}
 			ch.config.Set(tt.configResult)
-			got, err := ch.GetConfig(ctx)
-			tt.assert(t, got, err)
+			got, country, err := ch.GetConfig(ctx)
+			tt.assert(t, got, country, err)
 		})
 	}
 }
