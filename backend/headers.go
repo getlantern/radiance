@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"io"
 	"math/big"
-	mrand "math/rand"
 	"net/http"
 	"strconv"
 	"time"
@@ -79,7 +78,11 @@ func randomizedString() string {
 
 	bytes := make([]byte, size.Int64())
 	for i := range bytes {
-		bytes[i] = charset[mrand.Intn(len(charset))]
+		index, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return ""
+		}
+		bytes[i] = charset[index.Int64()]
 	}
 	return string(bytes)
 }
