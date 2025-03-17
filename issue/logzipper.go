@@ -1,15 +1,12 @@
 package issue
 
-// copy from flashlight/logging/logging.go
-// this should be moved to logging specific package
+// copied from flashlight/logging/logging.go
 
 import (
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
-
-	"github.com/getlantern/radiance/util"
 )
 
 type fileInfo struct {
@@ -42,7 +39,7 @@ func zipLogFilesFrom(w io.Writer, maxBytes int64, maxTextBytes int64, dirs map[s
 	for baseDir, dir := range dirs {
 		globs[baseDir] = filepath.Join(dir, "*")
 	}
-	err := util.ZipFiles(w, util.ZipOptions{
+	err := zipFiles(w, zipOptions{
 		Globs:    globs,
 		MaxBytes: maxBytes,
 	})

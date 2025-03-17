@@ -16,7 +16,6 @@ import (
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/user"
-	"github.com/getlantern/radiance/util"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -121,7 +120,7 @@ func (ir *IssueReporter) Report(
 
 	// Zip logs
 	if maxLogSize > 0 {
-		if size, err := util.ParseFileSize(strconv.Itoa(maxLogSize)); err != nil {
+		if size, err := parseFileSize(strconv.Itoa(maxLogSize)); err != nil {
 			log.Error(err)
 		} else {
 			log.Debug("zipping log files for issue report")

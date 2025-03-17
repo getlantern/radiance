@@ -1,4 +1,4 @@
-package util
+package issue
 
 import (
 	"archive/zip"
@@ -19,18 +19,6 @@ const (
 	gb int64 = 1024 * 1024 * 1024
 )
 
-// ZipOptions is a set of options for ZipFiles.
-type ZipOptions struct {
-	// The search patterns for the files / directories to be zipped, keyed to the
-	// directory prefix used for storing the associated files in the ZIP,
-	// The search pattern is described at the comments of path/filepath.Match.
-	// As a special note, "**/*" doesn't match files not under a subdirectory.
-	Globs map[string]string
-	// The limit of total bytes of all the files in the archive.
-	// All remaining files will be ignored if the limit would be hit.
-	MaxBytes int64
-}
-
 var (
 	sizeRegexp = regexp.MustCompile("^(\\d+)([k|m|g|K|M|G][b|B])?$")
 	units      = map[string]int64{
@@ -41,9 +29,21 @@ var (
 	}
 )
 
-// ParseFileSize converts a string contains a positive integer and an optional
+// zipOptions is a set of options for zipFiles.
+type zipOptions struct {
+	// The search patterns for the files / directories to be zipped, keyed to the
+	// directory prefix used for storing the associated files in the ZIP,
+	// The search pattern is described at the comments of path/filepath.Match.
+	// As a special note, "**/*" doesn't match files not under a subdirectory.
+	Globs map[string]string
+	// The limit of total bytes of all the files in the archive.
+	// All remaining files will be ignored if the limit would be hit.
+	MaxBytes int64
+}
+
+// parseFileSize converts a string contains a positive integer and an optional
 // KB/MB/GB unit to int64, or returns error.
-func ParseFileSize(s string) (int64, error) {
+func parseFileSize(s string) (int64, error) {
 	matched := sizeRegexp.FindStringSubmatch(s)
 	if len(matched) == 0 {
 		return 0, errors.New("malformed string")
@@ -52,8 +52,8 @@ func ParseFileSize(s string) (int64, error) {
 	return i * units[strings.ToUpper(matched[2])], nil
 }
 
-// ZipFiles creates a zip archive per the options and writes to the writer.
-func ZipFiles(writer io.Writer, opts ZipOptions) (err error) {
+// zipFiles creates a zip archive per the options and writes to the writer.
+func zipFiles(writer io.Writer, opts zipOptions) (err error) {
 	w := zip.NewWriter(writer)
 	defer func() {
 		if e := w.Close(); e != nil {
