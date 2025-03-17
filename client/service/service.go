@@ -56,16 +56,14 @@ func New(logOutput string, platIfce platform.Interface) (*BoxService, error) {
 // platformInterface. This should only be used until sing-box is updated to allow wrapping a box.Box
 // instance (if that ever happens).
 func newlibbox(ctx context.Context, options option.Options, platIfce platform.Interface) (*BoxService, error) {
-	// TODO: create dummy config string
-	experimental.RegisterClashServerConstructor(clashapi.NewServer)
-
 	////////////////////////////////////////////////////////////////////////
 	// Do not modify the following code unless you know what you're doing //
 	////////////////////////////////////////////////////////////////////////
 
+	experimental.RegisterClashServerConstructor(clashapi.NewServer)
+
 	lbService := new(libbox.BoxService)
 	lbctxptr := getFieldPtr[context.Context](lbService, "ctx")
-	// lbctx := *lbctxptr
 
 	// TODO: Do we want to use the filemanager service?
 	//
@@ -91,18 +89,16 @@ func newlibbox(ctx context.Context, options option.Options, platIfce platform.In
 	}
 
 	lbcancelptr := getFieldPtr[context.CancelFunc](lbService, "cancel")
-	lbboxptr := getFieldPtr[box.Box](lbService, "instance")
-	lburlthsptr := getFieldPtr[urltest.HistoryStorage](lbService, "urlTestHistoryStorage")
+	lbboxptr := getFieldPtr[*box.Box](lbService, "instance")
+	lburlthsptr := getFieldPtr[*urltest.HistoryStorage](lbService, "urlTestHistoryStorage")
 	lbpauseptr := getFieldPtr[pause.Manager](lbService, "pauseManager")
 	lbclashptr := getFieldPtr[adapter.ClashServer](lbService, "clashServer")
 
 	*lbcancelptr = cancel
 	*lbctxptr = ctx
-	*lbboxptr = *instance
+	*lbboxptr = instance
 
-	// urlTestHistoryStorage.RWMutex has not been used yet so it is safe to copy it. we can ignore
-	// the warning
-	*lburlthsptr = *urlTestHistoryStorage
+	*lburlthsptr = urlTestHistoryStorage
 	*lbpauseptr = service.FromContext[pause.Manager](ctx)
 	*lbclashptr = service.FromContext[adapter.ClashServer](ctx)
 
