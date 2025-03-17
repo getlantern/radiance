@@ -131,9 +131,9 @@ func (msc *mockStreamConn) Write(p []byte) (n int, err error) {
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should return a new Radiance instance", func(t *testing.T) {
-		r, err := NewRadiance(nil)
+		r, err := NewRadiance()
 		assert.NoError(t, err)
-		require.NotNil(t, r)
+		assert.NotNil(t, r)
 		assert.NotNil(t, r.confHandler)
 		assert.Nil(t, r.srv)
 		assert.False(t, r.connected)
@@ -152,7 +152,7 @@ func TestStartVPN(t *testing.T) {
 			name: "it should return an error when failed to get config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, "", assert.AnError)
@@ -169,7 +169,7 @@ func TestStartVPN(t *testing.T) {
 			name: "it should return an error when providing an invalid config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{}}, "", nil)
@@ -185,7 +185,7 @@ func TestStartVPN(t *testing.T) {
 			name: "it should succeed when providing valid config and address",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				// expect to get config twice, once for the initial check and once for active proxy location
@@ -238,7 +238,7 @@ func TestStopVPN(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance(nil)
+				r, _ := NewRadiance()
 				return r
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
@@ -248,7 +248,7 @@ func TestStopVPN(t *testing.T) {
 		{
 			name: "it should return an error when http server is nil",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
 				return r
@@ -261,7 +261,7 @@ func TestStopVPN(t *testing.T) {
 			name: "it should return an error when failed to shutdown http server",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				server := NewMockhttpServer(ctrl)
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
 				r.srv = server
@@ -277,7 +277,7 @@ func TestStopVPN(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				server := NewMockhttpServer(ctrl)
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				r.connected = true
@@ -319,7 +319,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance(nil)
+				r, _ := NewRadiance()
 				return r
 			},
 			assert: func(t *testing.T, server *Server, err error) {
@@ -330,7 +330,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return error when there is no current config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
 				return r
@@ -343,7 +343,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return the active server when VPN is connected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance()
 				assert.NoError(t, err)
 				r.connected = true
 				r.activeConfig.Store(&config.Config{

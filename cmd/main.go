@@ -13,7 +13,7 @@ import (
 var log = golog.LoggerFor("main")
 
 func main() {
-	rad, err := radiance.NewRadiance(nil)
+	rad, err := radiance.NewRadiance()
 	if err != nil {
 		log.Fatalf("unable to create radiance: %v", err)
 	}
