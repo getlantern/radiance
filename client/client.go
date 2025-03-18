@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
@@ -32,8 +32,10 @@ type vpnClient struct {
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
 // the existing instance. logOutput is the path where the log file will be written. logOutput can be
-// set to "stdout" to write logs to stdout.
-func NewVPNClient(logOutput string, platIfce platform.Interface) (VPNClient, error) {
+// set to "stdout" to write logs to stdout. platIfce is the platform interface used to
+// interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
+// can be nil.
+func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
