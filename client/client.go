@@ -59,7 +59,7 @@ func (c *vpnClient) Start() error {
 	if c.boxService == nil {
 		return errors.New("box service is not initialized")
 	}
-	err := c.boxService.defaultInstance.Start()
+	err := c.boxService.instance.Start()
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (c *vpnClient) Stop() error {
 	ctx, cancel := context.WithTimeout(c.boxService.ctx, time.Second*30)
 	var err error
 	go func() {
-		err = c.boxService.defaultInstance.Close()
+		err = c.boxService.instance.Close()
 		cancel()
 	}()
 	<-ctx.Done()
@@ -82,10 +82,10 @@ func (c *vpnClient) Stop() error {
 }
 
 type boxService struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	currentInstance *box.Box
-	defaultInstance *box.Box
+	ctx            context.Context
+	cancel         context.CancelFunc
+	instance       *box.Box
+	defaultOptions option.Options
 
 	pauseManager pause.Manager
 }
@@ -99,22 +99,32 @@ func newBoxService(logOutput string) (*boxService, error) {
 		endpointRegistry,
 	)
 
-	ctx, cancel := context.WithCancel(ctx)
-	instance, err := box.New(box.Options{
-		Context: ctx,
-		Options: boxoptions.Options(logOutput),
-	})
+	options := boxoptions.Options(logOutput)
+	instance, cancel, err := newInstanceWithOptions(ctx, options)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("create service: %w", err)
 	}
 	return &boxService{
-		ctx:             ctx,
-		cancel:          cancel,
-		defaultInstance: instance,
-		currentInstance: instance,
-		pauseManager:    service.FromContext[pause.Manager](ctx),
+		ctx:            ctx,
+		cancel:         cancel,
+		instance:       instance,
+		defaultOptions: options,
+		pauseManager:   service.FromContext[pause.Manager](ctx),
 	}, nil
+}
+
+func newInstanceWithOptions(ctx context.Context, options option.Options) (*box.Box, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	instance, err := box.New(box.Options{
+		Context: ctx,
+		Options: options,
+	})
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("create service: %w", err)
+	}
+	return instance, cancel, nil
 }
 
 func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
@@ -148,32 +158,76 @@ type ServerConnectConfig []byte
 // SelectCustomServer replace box service instance by a instance using the
 // given config. If the Box service is already running, you'll need to
 // stop and start the VPN again so it can use the new instance.
+// From the configuration, we're only going to use the Endpoints and Outbounds.
 func (c *vpnClient) SelectCustomServer(cfg ServerConnectConfig) error {
-	options, err := json.UnmarshalExtended[option.Options]([]byte(cfg))
+	parsedOptions, err := json.UnmarshalExtended[option.Options](cfg)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	customInstance, err := box.New(box.Options{
-		Options: options,
-	})
+	customizedOptions := c.boxService.defaultOptions
+
+	// We will only receive as options Endpoints and Outbounds.
+	// We must be able to retrieve the current Endpoints and Outbounds
+	// from the current instance, add the received ones. After that
+	// we should stop the instance and create a new one. We also
+	// need to test this with different OS.
+	// There won't be a different customInstance since we can't have multiple ones
+	if parsedOptions.Endpoints != nil && len(parsedOptions.Endpoints) > 0 {
+		customizedOptions.Endpoints = append(customizedOptions.Endpoints, parsedOptions.Endpoints...)
+	}
+
+	if parsedOptions.Outbounds != nil && len(parsedOptions.Outbounds) > 0 {
+		customizedOptions.Outbounds = append(customizedOptions.Outbounds, parsedOptions.Outbounds...)
+	}
+
+	// adding different routing rules before the latest one
+	// and then adding the latest one. Assuming the last rule is responsible for
+	// direct traffic
+	if c.boxService.defaultOptions.Route != nil && len(c.boxService.defaultOptions.Route.Rules) > 0 {
+		customizedOptions.Route.Rules = c.boxService.defaultOptions.Route.Rules[:len(c.boxService.defaultOptions.Route.Rules)-1]
+		customizedOptions.Route.Rules = append(customizedOptions.Route.Rules, parsedOptions.Route.Rules...)
+		customizedOptions.Route.Rules = append(customizedOptions.Route.Rules, c.boxService.defaultOptions.Route.Rules[len(c.boxService.defaultOptions.Route.Rules)-1])
+	}
+
+	if c.boxService.defaultOptions.Route != nil && len(c.boxService.defaultOptions.Route.RuleSet) > 0 {
+		customizedOptions.Route.RuleSet = append(customizedOptions.Route.RuleSet, parsedOptions.Route.RuleSet...)
+		customizedOptions.Route.RuleSet = append(customizedOptions.Route.RuleSet, c.boxService.defaultOptions.Route.RuleSet...)
+	}
+
+	if c.boxService.instance != nil {
+		c.boxService.instance.Close()
+	}
+
+	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
+	ctx := box.Context(
+		context.Background(),
+		inboundRegistry,
+		outboundRegistry,
+		endpointRegistry,
+	)
+	instance, cancel, err := newInstanceWithOptions(ctx, customizedOptions)
 	if err != nil {
-		return fmt.Errorf("create service: %w", err)
+		return fmt.Errorf("failed to create box service: %w", err)
 	}
 
-	if c.boxService.currentInstance != nil {
-		c.boxService.currentInstance.Close()
-	}
+	c.boxService.instance = instance
+	c.boxService.cancel = cancel
 
-	c.boxService.currentInstance = customInstance
 	return nil
 }
 
+// DeselectCustomServer stops the current instance and replace it by
+// the default instance.
 func (c *vpnClient) DeselectCustomServer() error {
-	if c.boxService.currentInstance != nil {
-		c.boxService.currentInstance.Close()
+	if c.boxService.instance != nil {
+		c.boxService.instance.Close()
 	}
 
-	c.boxService.currentInstance = c.boxService.defaultInstance
+	instance, err := newBoxService(c.boxService.defaultOptions.Log.Output)
+	if err != nil {
+		return fmt.Errorf("failed to create box service: %w", err)
+	}
+	c.boxService = instance
 	return nil
 }
