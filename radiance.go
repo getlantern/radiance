@@ -38,6 +38,7 @@ var (
 )
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
+//go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
 
 // httpServer is an interface that abstracts the http.Server struct for easier testing.
 type httpServer interface {
@@ -320,14 +321,19 @@ func newLog(logPath string) *slog.Logger {
 // this server name is already configured for this user. If this server name is not configured
 // for this user, it will be added to the list of configured servers.
 func (r *Radiance) SelectCustomServer(name string, cfg client.ServerConnectConfig) error {
+	// TODO: This function should persist the selected configured servers locally.
+	// Since we're not storing configurations locally and don't have a directory
+	// this info thill should be implemented in the future.
 	r.configuredServersMutex.Lock()
 	defer r.configuredServersMutex.Unlock()
-	if cfg != nil {
-		if _, exists := r.configuredServers[name]; !exists {
-			r.configuredServers[name] = cfg
+	if cfg == nil {
+		var exists bool
+		if cfg, exists = r.configuredServers[name]; !exists {
+			return fmt.Errorf("received a nil config and a not registered server with name %q", name)
 		}
+	} else {
+		r.configuredServers[name] = cfg
 	}
-	cfg = r.configuredServers[name]
 
 	return r.vpnClient.SelectCustomServer(cfg)
 }

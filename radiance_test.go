@@ -373,3 +373,32 @@ func TestGetActiveServer(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectCustomServer(t *testing.T) {
+	configServerName := "test"
+	t.Run("it should add the received server to configured servers", func(t *testing.T) {
+		r, err := NewRadiance()
+		require.NoError(t, err)
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		vpnClient := NewMockVPNClient(ctrl)
+		vpnClient.EXPECT().SelectCustomServer(gomock.Any()).Return(nil)
+		r.vpnClient = vpnClient
+
+		assert.Empty(t, r.configuredServers)
+		err = r.SelectCustomServer(configServerName, []byte{})
+		assert.NoError(t, err)
+
+		r.configuredServersMutex.Lock()
+		defer r.configuredServersMutex.Unlock()
+		assert.Contains(t, r.configuredServers, configServerName)
+	})
+
+	t.Run("it should return an error if config is nil and name is not a registered server", func(t *testing.T) {
+		r, err := NewRadiance()
+		require.NoError(t, err)
+
+		err = r.SelectCustomServer(configServerName, nil)
+		assert.Error(t, err)
+	})
+}
