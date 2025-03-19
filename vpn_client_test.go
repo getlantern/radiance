@@ -13,7 +13,7 @@ import (
 	reflect "reflect"
 	time "time"
 
-	client "github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -82,7 +82,7 @@ func (mr *MockVPNClientMockRecorder) Resume() *gomock.Call {
 }
 
 // SelectCustomServer mocks base method.
-func (m *MockVPNClient) SelectCustomServer(cfg client.ServerConnectConfig) error {
+func (m *MockVPNClient) SelectCustomServer(cfg boxservice.ServerConnectConfig) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SelectCustomServer", cfg)
 	ret0, _ := ret[0].(error)
