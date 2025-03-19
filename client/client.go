@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
@@ -22,24 +22,27 @@ var (
 type VPNClient interface {
 	Start() error
 	Stop() error
-	Pause(dur time.Duration) error
+	Pause()
 	Resume()
 }
 
 type vpnClient struct {
-	boxService *boxservice.BoxService
+	boxService *libbox.BoxService
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
 // the existing instance. logOutput is the path where the log file will be written. logOutput can be
 // set to "stdout" to write logs to stdout.
-func NewVPNClient(logOutput string, platIfce platform.Interface) (VPNClient, error) {
+func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
 		return client, nil
 	}
-	b, err := boxservice.New(logOutput, platIfce)
+
+	// TODO: need to store the config as a string somewhere and pass it here, or the
+	// the options themselves.
+	b, err := boxservice.New("", logOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}
@@ -85,8 +88,8 @@ func parseConfig(ctx context.Context, configContent string) (option.Options, err
 }
 
 // Pause pauses the VPN client for the specified duration
-func (c *vpnClient) Pause(dur time.Duration) error {
-	return c.boxService.Pause(dur)
+func (c *vpnClient) Pause() {
+	c.boxService.Pause()
 }
 
 // Resume resumes the VPN client

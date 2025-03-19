@@ -2,6 +2,8 @@ module github.com/getlantern/radiance
 
 go 1.23.1
 
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.6-0.20250319111248-796e10f8a3bf
+
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/Jigsaw-Code/outline-sdk v0.0.18
