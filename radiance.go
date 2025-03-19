@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/sagernet/sing-box/experimental/libbox/platform"
+	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
@@ -78,7 +78,7 @@ type Radiance struct {
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance(platIfce platform.Interface) (*Radiance, error) {
+func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
 	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
 		return nil, err
@@ -236,9 +236,9 @@ func (r *Radiance) StopVPN() error {
 }
 
 // PauseVPN pauses the VPN connection for the specified duration.
-func (r *Radiance) PauseVPN(dur time.Duration) error {
-	log.Info("Pausing VPN for", "duration", dur)
-	return r.vpnClient.Pause(dur)
+func (r *Radiance) PauseVPN() {
+	log.Info("Pausing VPN")
+	r.vpnClient.Pause()
 }
 
 // ResumeVPN resumes a paused VPN connection.
