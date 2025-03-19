@@ -163,7 +163,14 @@ type ServerConnectConfig []byte
 // stop and start the VPN again so it can use the new instance.
 // From the configuration, we're only going to use the Endpoints and Outbounds.
 func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
-	parsedOptions, err := json.UnmarshalExtended[option.Options](cfg)
+	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
+	ctx := box.Context(
+		context.Background(),
+		inboundRegistry,
+		outboundRegistry,
+		endpointRegistry,
+	)
+	parsedOptions, err := json.UnmarshalExtendedContext[option.Options](ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
@@ -202,20 +209,12 @@ func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
 		bs.instance.Close()
 	}
 
-	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
-		context.Background(),
-		inboundRegistry,
-		outboundRegistry,
-		endpointRegistry,
-	)
 	ctx, cancel := context.WithCancel(ctx)
 	urlTestHistoryStorage := urltest.NewHistoryStorage()
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 	instance, err := box.New(box.Options{
 		Options: customizedOptions,
 		Context: ctx,
-		// PlatformLogWriter: platformWrapper.(log.PlatformWriter),
 	})
 	if err != nil {
 		cancel()
@@ -249,7 +248,6 @@ func (bs *BoxService) DeselectCustomServer() error {
 	instance, err := box.New(box.Options{
 		Options: bs.defaultOptions,
 		Context: ctx,
-		// PlatformLogWriter: platformWrapper.(log.PlatformWriter),
 	})
 	if err != nil {
 		cancel()
