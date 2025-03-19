@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
+	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
 )
 
@@ -42,9 +44,15 @@ func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClien
 		return client, nil
 	}
 
-	// TODO: need to store the config as a string somewhere and pass it here, or the
-	// the options themselves.
-	b, err := boxservice.New("", logOutput, platIfce)
+	// TODO: We should be fetching the options from the server.
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	err := encoder.Encode(boxoptions.BoxOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := boxservice.New(buffer.String(), logOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
-var boxOptions = O.Options{
+var BoxOptions = O.Options{
 	Log: &O.LogOptions{
 		Disabled:     false,
 		Level:        "trace",
