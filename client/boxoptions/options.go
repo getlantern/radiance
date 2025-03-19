@@ -77,14 +77,14 @@ var BoxOptions = O.Options{
 	},
 	Outbounds: []O.Outbound{
 		{
-			Type: "direct",
-			Tag:  "direct",
-			// Options: &O.DirectOutboundOptions{},
+			Type:    "direct",
+			Tag:     "direct",
+			Options: &O.DirectOutboundOptions{},
 		},
 		{
-			Type: "dns",
-			Tag:  "dns-out",
-			// Options: &O.DNSOptions{},
+			Type:    "dns",
+			Tag:     "dns-out",
+			Options: &O.DNSOptions{},
 		},
 		{
 			Type: constant.TypeOutline,
