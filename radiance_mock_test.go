@@ -95,18 +95,46 @@ func (m *MockconfigHandler) EXPECT() *MockconfigHandlerMockRecorder {
 }
 
 // GetConfig mocks base method.
-func (m *MockconfigHandler) GetConfig(ctx context.Context) ([]*config.ProxyConnectConfig, error) {
+func (m *MockconfigHandler) GetConfig(ctx context.Context) ([]*config.ProxyConnectConfig, string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetConfig", ctx)
 	ret0, _ := ret[0].([]*config.ProxyConnectConfig)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // GetConfig indicates an expected call of GetConfig.
 func (mr *MockconfigHandlerMockRecorder) GetConfig(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConfig", reflect.TypeOf((*MockconfigHandler)(nil).GetConfig), ctx)
+}
+
+// ListAvailableServers mocks base method.
+func (m *MockconfigHandler) ListAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAvailableServers", ctx)
+	ret0, _ := ret[0].([]config.AvailableServerLocation)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAvailableServers indicates an expected call of ListAvailableServers.
+func (mr *MockconfigHandlerMockRecorder) ListAvailableServers(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAvailableServers", reflect.TypeOf((*MockconfigHandler)(nil).ListAvailableServers), ctx)
+}
+
+// SetPreferredServerLocation mocks base method.
+func (m *MockconfigHandler) SetPreferredServerLocation(country, city string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetPreferredServerLocation", country, city)
+}
+
+// SetPreferredServerLocation indicates an expected call of SetPreferredServerLocation.
+func (mr *MockconfigHandlerMockRecorder) SetPreferredServerLocation(country, city any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPreferredServerLocation", reflect.TypeOf((*MockconfigHandler)(nil).SetPreferredServerLocation), country, city)
 }
 
 // Stop mocks base method.

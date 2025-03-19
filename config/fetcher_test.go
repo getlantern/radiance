@@ -63,7 +63,7 @@ func TestFetcher(t *testing.T) {
 			fetcher := newFetcher(&http.Client{
 				Transport: &mockRoundTripper{resp: tt.response},
 			}, &user.User{})
-			got, err := fetcher.fetchConfig()
+			got, err := fetcher.fetchConfig(nil)
 			tt.assert(t, got, err)
 		})
 	}
@@ -74,7 +74,7 @@ func TestFetch_RequiredHeaders(t *testing.T) {
 	fetcher := newFetcher(&http.Client{
 		Transport: mockRT,
 	}, &user.User{})
-	_, err := fetcher.fetchConfig()
+	_, err := fetcher.fetchConfig(nil)
 	require.Error(t, err)
 
 	req := mockRT.req

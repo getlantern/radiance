@@ -17,14 +17,16 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/sagernet/sing-box/experimental/libbox/platform"
 
 	"github.com/getlantern/appdir"
+	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/kindling"
-
 	"github.com/getlantern/radiance/client"
-	"github.com/getlantern/radiance/common"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/transport"
 	"github.com/getlantern/radiance/transport/proxyless"
 	"github.com/getlantern/radiance/user"
@@ -48,10 +50,16 @@ type httpServer interface {
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
-	// GetConfig returns the current proxy configuration.
-	GetConfig(ctx context.Context) ([]*config.Config, error)
+	// GetConfig returns the current proxy configuration and the country.
+	GetConfig(ctx context.Context) ([]*config.Config, string, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
+
+	// SetPreferredServerLocation sets the preferred server location. If not set - it's auto selected by the API
+	SetPreferredServerLocation(country, city string)
+
+	// ListAvailableServers lists the available server locations to choose from.
+	ListAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -69,12 +77,13 @@ type Radiance struct {
 	user *user.User
 
 	configuredServersMutex sync.Locker
-	configuredServers      map[string]client.ServerConnectConfig
+	configuredServers      map[string]boxservice.ServerConnectConfig
+	issueReporter          *issue.IssueReporter
 }
 
 // NewRadiance creates a new Radiance server using an existing config.
-func NewRadiance() (*Radiance, error) {
-	vpnC, err := client.NewVPNClient(vpnLogOutput)
+func NewRadiance(platIfce platform.Interface) (*Radiance, error) {
+	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}
@@ -86,20 +95,36 @@ func NewRadiance() (*Radiance, error) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	user := user.New(k.NewHTTPClient())
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), user)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:  config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user),
-		activeConfig: new(atomic.Value),
-		connected:    false,
-		statusMutex:  new(sync.Mutex),
-		stopChan:     make(chan struct{}),
-		user:         user,
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user),
+		activeConfig:  new(atomic.Value),
+		connected:     false,
+		statusMutex:   new(sync.Mutex),
+		stopChan:      make(chan struct{}),
+		user:          user,
+		issueReporter: issueReporter,
 		// TODO: after we start to persist data, we should update this implementation
 		// for loading the configured servers and also the custom servers
-		configuredServers:      make(map[string]client.ServerConnectConfig),
+		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
 		configuredServersMutex: new(sync.Mutex),
 	}, nil
+}
+
+func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
+	return r.confHandler.ListAvailableServers(ctx)
+}
+
+// SetPreferredServer sets the preferred server location for the VPN connection.
+// pass empty strings to auto select the server location
+func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
+	r.confHandler.SetPreferredServerLocation(country, city)
 }
 
 // Run starts the Radiance proxy server on the specified address.
@@ -108,7 +133,7 @@ func (r *Radiance) run(addr string) error {
 	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	log.Debug("Fetching config")
-	configs, err := r.confHandler.GetConfig(ctx)
+	configs, _, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
 		r.setStatus(false)
@@ -284,17 +309,60 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
 // via [Radiance.ReportIssue].
-//
-// The fields of this type will be defined as part of https://github.com/getlantern/engineering/issues/1921
 type IssueReport struct {
+	// Type is one of the predefined issue type strings
+	Type string
+	// Issue description
+	Description string
+	// Attachment is a list of issue attachments
+	Attachment []*issue.Attachment
+
+	// device common name
+	Device string
+	// device alphanumeric name
+	Model string
 }
 
-// ReportIssue submits an issue report to the back-end.
-//
-// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1921
-func (r *Radiance) ReportIssue(report IssueReport) error {
-	// TODO: implement me!
-	return common.ErrNotImplemented
+// issue text to type mapping
+var issueTypeMap = map[string]int{
+	"Cannot complete purchase":    0,
+	"Cannot sign in":              1,
+	"Spinner loads endlessly":     2,
+	"Cannot access blocked sites": 3,
+	"Slow":                        4,
+	"Cannot link device":          5,
+	"Application crashes":         6,
+	"Other":                       9,
+	"Update fails":                10,
+}
+
+// ReportIssue submits an issue report to the back-end with an optional user email
+func (r *Radiance) ReportIssue(email string, report IssueReport) error {
+	if report.Type == "" && report.Description == "" {
+		return fmt.Errorf("issue report should contain at least type or description")
+	}
+	// get issue type as integer
+	typeInt, ok := issueTypeMap[report.Type]
+	if !ok {
+		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
+		typeInt = 9
+	}
+	// get country from the config returned by the backend
+	_, country, err := r.confHandler.GetConfig(eventual.DontWait)
+	if err != nil {
+		slog.Error("Failed to get country", "error", err)
+		country = ""
+	}
+
+	return r.issueReporter.Report(
+		logDir(),
+		email,
+		typeInt,
+		report.Description,
+		report.Attachment,
+		report.Device,
+		report.Model,
+		country)
 }
 
 func logDir() string {
@@ -311,7 +379,7 @@ func newLog(logPath string) *slog.Logger {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
 	slog.SetDefault(logger)
 	return logger
@@ -320,7 +388,7 @@ func newLog(logPath string) *slog.Logger {
 // SelectCustomServer configures the client to use the input server. cfg may be nil if
 // this server name is already configured for this user. If this server name is not configured
 // for this user, it will be added to the list of configured servers.
-func (r *Radiance) SelectCustomServer(name string, cfg client.ServerConnectConfig) error {
+func (r *Radiance) SelectCustomServer(name string, cfg boxservice.ServerConnectConfig) error {
 	// TODO: This function should persist the selected configured servers locally.
 	// Since we're not storing configurations locally and don't have a directory
 	// this info thill should be implemented in the future.

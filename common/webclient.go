@@ -1,4 +1,4 @@
-package user
+package common
 
 import (
 	"bytes"
@@ -8,15 +8,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getlantern/errors"
-	"github.com/getlantern/golog"
-
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var (
-	log        = golog.LoggerFor("webclient")
 	APIBaseUrl = "iantem.io/api/v1"
 )
 
@@ -40,13 +36,13 @@ func NewWebClient(httpClient *http.Client) WebClient {
 }
 
 // GetPROTOC sends a GET request and parses the Protobuf response into the target object
-// path - the URL
+// path - the URL. Must start with a forward slash (/)
 // params - the query parameters
 // target - the target object to parse the response into
 func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[string]any, target protoreflect.ProtoMessage) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, APIBaseUrl+path, http.NoBody)
 	if err != nil {
-		return errors.New("Error creating request: %v", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 	if params != nil {
 		q := req.URL.Query()
@@ -62,24 +58,24 @@ func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[strin
 	resp, err := c.Do(req)
 
 	if err != nil {
-		return errors.New("Error sending request: %v", err)
+		return fmt.Errorf("error sending request: %w", err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("Unexpected status code %v", resp.StatusCode)
+		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return errors.New("Error reading response body: %v", err)
+		return fmt.Errorf("error reading response body: %w", err)
 	}
 	return proto.Unmarshal(body, target)
 }
 
 // PostPROTOC sends a POST request and parses the Protobuf response into the target object
-// path - the URL
+// path - the URL. Must start with a forward slash (/)
 // msg - the message to send as body
 // target - the target object to parse the response into
 func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target protoreflect.ProtoMessage) error {
@@ -87,9 +83,9 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, io.NopCloser(bytes.NewReader(bodyBytes)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, APIBaseUrl+path, io.NopCloser(bytes.NewReader(bodyBytes)))
 	if err != nil {
-		return errors.New("Error creating request: %v", err)
+		return fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
@@ -97,17 +93,17 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 	resp, err := c.Do(req)
 
 	if err != nil {
-		return errors.New("Error sending request: %v", err)
+		return fmt.Errorf("error sending request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("Unexpected status code %v", resp.StatusCode)
+		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
 	}
 
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return errors.New("Error reading response body: %v", err)
+		return fmt.Errorf("error reading response body: %w", err)
 	}
 
 	return proto.Unmarshal(respBodyBytes, target)
