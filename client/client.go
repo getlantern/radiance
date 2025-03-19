@@ -45,14 +45,13 @@ func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClien
 	}
 
 	// TODO: We should be fetching the options from the server.
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	err := encoder.Encode(boxoptions.BoxOptions)
+	opts := boxoptions.Options(logOutput)
+	buf, err := json.Marshal(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := boxservice.New(buffer.String(), logOutput, platIfce)
+	b, err := boxservice.New(string(buf), logOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}
