@@ -92,9 +92,23 @@ func TestSelectCustomServer(t *testing.T) {
 	t.Run("it should successfully add algeneva outbound", func(t *testing.T) {
 		err = bs.SelectCustomServer([]byte(customConfig))
 		assert.NoError(t, err)
+
 		// making sure default options haven't been changed
 		assert.Equal(t, options, bs.defaultOptions)
+
+		// checking if algeneva-out was included as an outbound and route
+		_, exists := bs.instance.Outbound().Outbound("algeneva-out")
+		assert.True(t, exists)
 		routingRules := bs.instance.Router().Rules()
-		assert.Contains(t, routingRules[len(routingRules)-2].Action().String(), "route(algeneva-out)")
+		assert.Equal(t, "route(algeneva-out)", routingRules[len(routingRules)-2].Action().String())
+	})
+
+	t.Run("it should de-select the server and use the default provided instance", func(t *testing.T) {
+		err = bs.DeselectCustomServer()
+		assert.NoError(t, err)
+		// making sure default options haven't been changed
+		assert.Equal(t, options, bs.defaultOptions)
+		_, exists := bs.instance.Outbound().Outbound("algeneva-out")
+		assert.False(t, exists)
 	})
 }
