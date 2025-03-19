@@ -50,7 +50,7 @@ func TestSelectCustomServer(t *testing.T) {
 
 	options := boxoptions.Options("stderr")
 	options.Outbounds = append(options.Outbounds, option.Outbound{Type: "direct", Tag: "testing-out"})
-	bs, err := newlibbox(ctx, options, nil)
+	bs, err := configureLibboxService(ctx, options, nil)
 	require.NoError(t, err)
 	require.NotNil(t, bs)
 
