@@ -1,3 +1,11 @@
+/*
+Package boxservice provides a wrapper around libbox.BoxService, managing network control,
+state handling, and platform-specific behavior. It supports functionalities such as
+network pausing and resuming.
+
+This package is designed for both desktop and mobile platforms, with mobile-specific
+platform interfaces being handled internally.
+*/
 package boxservice
 
 import (
@@ -15,7 +23,7 @@ import (
 
 // BoxService is a wrapper around libbox.BoxService
 type BoxService struct {
-	*libbox.BoxService
+	libbox   *libbox.BoxService
 	ctx      context.Context
 	cancel   context.CancelFunc
 	instance *box.Box
@@ -35,8 +43,6 @@ func New(config, logOutput string, platIfce libbox.PlatformInterface) (*libbox.B
 		outboundRegistry,
 		endpointRegistry,
 	)
-
-	//options := boxoptions.Options(logOutput)
 
 	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
 	if err != nil {

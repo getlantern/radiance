@@ -22,6 +22,7 @@ import (
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/kindling"
+
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
@@ -77,7 +78,9 @@ type Radiance struct {
 	issueReporter *issue.IssueReporter
 }
 
-// NewRadiance creates a new Radiance server using an existing config.
+// NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
+// interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
+// can be nil.
 func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
 	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
