@@ -18,6 +18,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
@@ -35,6 +36,8 @@ type BoxService struct {
 	pauseManager pause.Manager
 	pauseAccess  sync.Mutex
 	pauseTimer   *time.Timer
+
+	defaultOptions option.Options
 }
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
@@ -104,11 +107,12 @@ func newlibbox(ctx context.Context, options option.Options, platIfce platform.In
 
 	runtimeDebug.FreeOSMemory()
 	return &BoxService{
-		BoxService:   lbService,
-		ctx:          ctx,
-		cancel:       cancel,
-		instance:     instance,
-		pauseManager: service.FromContext[pause.Manager](ctx),
+		BoxService:     lbService,
+		ctx:            ctx,
+		cancel:         cancel,
+		instance:       instance,
+		defaultOptions: options,
+		pauseManager:   service.FromContext[pause.Manager](ctx),
 	}, nil
 }
 
@@ -149,4 +153,109 @@ func (bs *BoxService) Wake() {
 	bs.pauseManager.NetworkWake()
 	bs.pauseTimer.Stop()
 	bs.pauseTimer = nil
+}
+
+// ServerConnectConfig represents configuration for connecting to a custom server.
+type ServerConnectConfig []byte
+
+// SelectCustomServer replace box service instance by a instance using the
+// given config. If the Box service is already running, you'll need to
+// stop and start the VPN again so it can use the new instance.
+// From the configuration, we're only going to use the Endpoints and Outbounds.
+func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
+	parsedOptions, err := json.UnmarshalExtended[option.Options](cfg)
+	if err != nil {
+		return fmt.Errorf("unmarshal config: %w", err)
+	}
+
+	customizedOptions := bs.defaultOptions
+
+	// We will only receive as options Endpoints and Outbounds.
+	// We must be able to retrieve the current Endpoints and Outbounds
+	// from the current instance, add the received ones. After that
+	// we should stop the instance and create a new one. We also
+	// need to test this with different OS.
+	// There won't be a different customInstance since we can't have multiple ones
+	if parsedOptions.Endpoints != nil && len(parsedOptions.Endpoints) > 0 {
+		customizedOptions.Endpoints = append(customizedOptions.Endpoints, parsedOptions.Endpoints...)
+	}
+
+	if parsedOptions.Outbounds != nil && len(parsedOptions.Outbounds) > 0 {
+		customizedOptions.Outbounds = append(customizedOptions.Outbounds, parsedOptions.Outbounds...)
+	}
+
+	// adding different routing rules before the latest one
+	// and then adding the latest one. Assuming the last rule is responsible for
+	// direct traffic
+	if bs.defaultOptions.Route != nil && len(bs.defaultOptions.Route.Rules) > 0 {
+		customizedOptions.Route.Rules = bs.defaultOptions.Route.Rules[:len(bs.defaultOptions.Route.Rules)-1]
+		customizedOptions.Route.Rules = append(customizedOptions.Route.Rules, parsedOptions.Route.Rules...)
+		customizedOptions.Route.Rules = append(customizedOptions.Route.Rules, bs.defaultOptions.Route.Rules[len(bs.defaultOptions.Route.Rules)-1])
+	}
+
+	if bs.defaultOptions.Route != nil && len(bs.defaultOptions.Route.RuleSet) > 0 {
+		customizedOptions.Route.RuleSet = append(customizedOptions.Route.RuleSet, parsedOptions.Route.RuleSet...)
+		customizedOptions.Route.RuleSet = append(customizedOptions.Route.RuleSet, bs.defaultOptions.Route.RuleSet...)
+	}
+
+	if bs.instance != nil {
+		bs.instance.Close()
+	}
+
+	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
+	ctx := box.Context(
+		context.Background(),
+		inboundRegistry,
+		outboundRegistry,
+		endpointRegistry,
+	)
+	ctx, cancel := context.WithCancel(ctx)
+	urlTestHistoryStorage := urltest.NewHistoryStorage()
+	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
+	instance, err := box.New(box.Options{
+		Options: customizedOptions,
+		Context: ctx,
+		// PlatformLogWriter: platformWrapper.(log.PlatformWriter),
+	})
+	if err != nil {
+		cancel()
+		return fmt.Errorf("create service: %w", err)
+	}
+
+	bs.instance = instance
+	bs.cancel = cancel
+
+	return nil
+}
+
+// DeselectCustomServer stops the current instance and replace it by
+// the default instance.
+func (bs *BoxService) DeselectCustomServer() error {
+	if bs.instance != nil {
+		bs.instance.Close()
+	}
+
+	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
+	ctx := box.Context(
+		context.Background(),
+		inboundRegistry,
+		outboundRegistry,
+		endpointRegistry,
+	)
+	ctx, cancel := context.WithCancel(ctx)
+	urlTestHistoryStorage := urltest.NewHistoryStorage()
+	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
+
+	instance, err := box.New(box.Options{
+		Options: bs.defaultOptions,
+		Context: ctx,
+		// PlatformLogWriter: platformWrapper.(log.PlatformWriter),
+	})
+	if err != nil {
+		cancel()
+		return fmt.Errorf("create service: %w", err)
+	}
+	bs.instance = instance
+	bs.cancel = cancel
+	return nil
 }
