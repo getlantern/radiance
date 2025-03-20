@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -361,6 +362,15 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 }
 
 func logDir() string {
+	if runtime.GOOS == "android" {
+		//To avoid panic from appDir
+		// need to set home dir
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		appdir.SetHomeDir(homeDir)
+	}
 	dir := appdir.Logs("Lantern")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ""
