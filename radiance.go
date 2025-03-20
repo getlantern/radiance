@@ -363,7 +363,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 
 func logDir() string {
 	if runtime.GOOS == "android" {
-		//To avoid panic fro appDir
+		//To avoid panic from appDir
 		// need to set home dir
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
