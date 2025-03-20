@@ -7,7 +7,7 @@ import (
 )
 
 func Options(logOutput string) option.Options {
-	opts := boxOptions
+	opts := BoxOptions
 	for _, opt := range opts.Inbounds {
 		if tun, ok := opt.Options.(*option.TunInboundOptions); ok {
 			tun.AutoRedirect = true
