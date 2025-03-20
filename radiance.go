@@ -240,7 +240,7 @@ func (r *Radiance) StopVPN() error {
 
 // PauseVPN pauses the VPN connection for the specified duration.
 func (r *Radiance) PauseVPN(dur time.Duration) error {
-	log.Info("Pausing VPN")
+	log.Info("Pausing VPN for", "duration", dur)
 	return r.vpnClient.Pause(dur)
 }
 
