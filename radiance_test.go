@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -132,7 +131,7 @@ func (msc *mockStreamConn) Write(p []byte) (n int, err error) {
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should return a new Radiance instance", func(t *testing.T) {
-		r, err := NewRadiance(newPlatformInterfaceStub())
+		r, err := NewRadiance(nil)
 		assert.NoError(t, err)
 		require.NotNil(t, r)
 		assert.NotNil(t, r.confHandler)
@@ -153,7 +152,7 @@ func TestStartVPN(t *testing.T) {
 			name: "it should return an error when failed to get config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return(nil, "", assert.AnError)
@@ -170,7 +169,7 @@ func TestStartVPN(t *testing.T) {
 			name: "it should return an error when providing an invalid config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				configHandler.EXPECT().GetConfig(gomock.Any()).Return([]*config.Config{{}}, "", nil)
@@ -186,7 +185,7 @@ func TestStartVPN(t *testing.T) {
 			name: "it should succeed when providing valid config and address",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				// expect to get config twice, once for the initial check and once for active proxy location
@@ -239,7 +238,7 @@ func TestStopVPN(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance(newPlatformInterfaceStub())
+				r, _ := NewRadiance(nil)
 				return r
 			},
 			assert: func(t *testing.T, r *Radiance, err error) {
@@ -249,7 +248,7 @@ func TestStopVPN(t *testing.T) {
 		{
 			name: "it should return an error when http server is nil",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.connected = true
 				return r
@@ -262,7 +261,7 @@ func TestStopVPN(t *testing.T) {
 			name: "it should return an error when failed to shutdown http server",
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				server := NewMockhttpServer(ctrl)
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.connected = true
 				r.srv = server
@@ -278,7 +277,7 @@ func TestStopVPN(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				server := NewMockhttpServer(ctrl)
 				configHandler := NewMockconfigHandler(ctrl)
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.confHandler = configHandler
 				r.connected = true
@@ -320,7 +319,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance(newPlatformInterfaceStub())
+				r, _ := NewRadiance(nil)
 				return r
 			},
 			assert: func(t *testing.T, server *Server, err error) {
@@ -331,7 +330,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return error when there is no current config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.connected = true
 				return r
@@ -344,7 +343,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return the active server when VPN is connected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(newPlatformInterfaceStub())
+				r, err := NewRadiance(nil)
 				assert.NoError(t, err)
 				r.connected = true
 				r.activeConfig.Store(&config.Config{
@@ -419,95 +418,10 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance(newPlatformInterfaceStub())
+			r, err := NewRadiance(nil)
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, tt.report)
 			tt.assert(t, err)
 		})
 	}
-}
-
-func newPlatformInterfaceStub() libbox.PlatformInterface {
-	return &platformInterfaceStub{}
-}
-
-type platformInterfaceStub struct {
-}
-
-// AutoDetectInterfaceControl implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) AutoDetectInterfaceControl(fd int32) error {
-	return nil
-}
-
-// ClearDNSCache implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) ClearDNSCache() {
-}
-
-// CloseDefaultInterfaceMonitor implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) CloseDefaultInterfaceMonitor(listener libbox.InterfaceUpdateListener) error {
-	return nil
-}
-
-// FindConnectionOwner implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) FindConnectionOwner(ipProtocol int32, sourceAddress string, sourcePort int32, destinationAddress string, destinationPort int32) (int32, error) {
-	panic("unimplemented")
-}
-
-// GetInterfaces implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
-	panic("unimplemented")
-}
-
-// IncludeAllNetworks implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) IncludeAllNetworks() bool {
-	return false
-}
-
-// OpenTun implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) OpenTun(options libbox.TunOptions) (int32, error) {
-	panic("unimplemented")
-}
-
-// PackageNameByUid implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) PackageNameByUid(uid int32) (string, error) {
-	panic("unimplemented")
-}
-
-// ReadWIFIState implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) ReadWIFIState() *libbox.WIFIState {
-	return nil
-}
-
-// SendNotification implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) SendNotification(notification *libbox.Notification) error {
-	return nil
-}
-
-// StartDefaultInterfaceMonitor implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) StartDefaultInterfaceMonitor(listener libbox.InterfaceUpdateListener) error {
-	return nil
-}
-
-// UIDByPackageName implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) UIDByPackageName(packageName string) (int32, error) {
-	return 0, nil
-}
-
-// UnderNetworkExtension implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) UnderNetworkExtension() bool {
-	return false
-}
-
-// UsePlatformAutoDetectInterfaceControl implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) UsePlatformAutoDetectInterfaceControl() bool {
-	return false
-}
-
-// UseProcFS implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) UseProcFS() bool {
-	return false
-}
-
-// WriteLog implements libbox.PlatformInterface.
-func (p *platformInterfaceStub) WriteLog(message string) {
 }

@@ -2,7 +2,9 @@ module github.com/getlantern/radiance
 
 go 1.23.1
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.6-0.20250319111248-796e10f8a3bf
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.6-0.20250319162213-b56a0b17a972
+
+//replace github.com/sagernet/sing-box => ../sing-box-minimal
 
 require (
 	github.com/1Password/srp v0.2.0
