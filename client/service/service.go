@@ -47,6 +47,7 @@ type BoxService struct {
 	pauseTimer   *time.Timer
 
 	defaultOptions option.Options
+	logFactory     log.Factory
 }
 
 // New creates a new BoxService instance using the provided logOutput and platform interface. The
@@ -62,6 +63,13 @@ func New(logOutput string, platIfce libbox.PlatformInterface) (*BoxService, erro
 
 	options := boxoptions.Options(logOutput)
 	return configureLibboxService(ctx, options, platIfce)
+}
+
+func (bs *BoxService) NewLogger(name string) (log.Factory, error) {
+	return log.New(log.Options{
+		Context: bs.ctx,
+		Options: *bs.defaultOptions.Log,
+	})
 }
 
 func (bs *BoxService) ResetNetwork() {
@@ -115,7 +123,7 @@ func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
 	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
 	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
 
-	parsedOptions, err := json.UnmarshalExtendedContext[option.Options](ctx, cfg)
+	parsedOptions, err := json.UnmarshalExtendedContext[option.Options](bs.ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
@@ -125,7 +133,7 @@ func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
 		err = endpointManager.Create(
 			bs.ctx,
 			bs.instance.Router(),
-			bs.NewLogger("endpoint/"+options.Type+"["+tag+"]"),
+			bs.logFactory.NewLogger("endpoint/"+options.Type+"["+tag+"]"),
 			tag,
 			options.Type,
 			options.Options,
@@ -140,7 +148,7 @@ func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
 		err = outboundManager.Create(
 			bs.ctx,
 			bs.instance.Router(),
-			bs.NewLogger("outbound/"+options.Type+"["+tag+"]"),
+			bs.logFactory.NewLogger("outbound/"+options.Type+"["+tag+"]"),
 			tag,
 			options.Type,
 			options.Options,
@@ -256,6 +264,9 @@ func configureLibboxService(ctx context.Context, options option.Options, platIfc
 		instance:       instance,
 		defaultOptions: options,
 		pauseManager:   service.FromContext[pause.Manager](ctx),
+		logFactory: log.NewDefaultFactory(ctx, log.Formatter{
+			DisableColors: true,
+		}, nil, options.Log.Output, logWriter, false),
 	}, nil
 }
 
