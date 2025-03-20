@@ -239,9 +239,9 @@ func (r *Radiance) StopVPN() error {
 }
 
 // PauseVPN pauses the VPN connection for the specified duration.
-func (r *Radiance) PauseVPN() {
+func (r *Radiance) PauseVPN(dur time.Duration) error {
 	log.Info("Pausing VPN")
-	r.vpnClient.Pause()
+	return r.vpnClient.Pause(dur)
 }
 
 // ResumeVPN resumes a paused VPN connection.

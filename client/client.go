@@ -23,12 +23,12 @@ var (
 type VPNClient interface {
 	Start() error
 	Stop() error
-	Pause()
+	Pause(dur time.Duration) error
 	Resume()
 }
 
 type vpnClient struct {
-	boxService *libbox.BoxService
+	boxService *boxservice.BoxService
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -96,8 +96,8 @@ func parseConfig(ctx context.Context, configContent string) (option.Options, err
 }
 
 // Pause pauses the VPN client for the specified duration
-func (c *vpnClient) Pause() {
-	c.boxService.Pause()
+func (c *vpnClient) Pause(dur time.Duration) error {
+	return c.boxService.Pause(dur)
 }
 
 // Resume resumes the VPN client
