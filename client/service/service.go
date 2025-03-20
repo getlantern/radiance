@@ -112,66 +112,43 @@ type ServerConnectConfig []byte
 // stop and start the VPN again so it can use the new instance.
 // From the configuration, we're only going to use the Endpoints and Outbounds.
 func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
-	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
-		context.Background(),
-		inboundRegistry,
-		outboundRegistry,
-		endpointRegistry,
-	)
+	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
+	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
+
 	parsedOptions, err := json.UnmarshalExtendedContext[option.Options](ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	customizedOptions := bs.defaultOptions
-
-	// We will only receive as options Endpoints and Outbounds.
-	// We must be able to retrieve the current Endpoints and Outbounds
-	// from the current instance, add the received ones. After that
-	// we should stop the instance and create a new one. We also
-	// need to test this with different OS.
-	// There won't be a different customInstance since we can't have multiple ones
-	if parsedOptions.Endpoints != nil && len(parsedOptions.Endpoints) > 0 {
-		customizedOptions.Endpoints = append(customizedOptions.Endpoints, parsedOptions.Endpoints...)
+	for _, options := range parsedOptions.Endpoints {
+		tag := options.Tag
+		err = endpointManager.Create(
+			bs.ctx,
+			bs.instance.Router(),
+			bs.NewLogger("endpoint/"+options.Type+"["+tag+"]"),
+			tag,
+			options.Type,
+			options.Options,
+		)
+		if err != nil {
+			return fmt.Errorf("initialize endpoint[%s]: %w", tag, err)
+		}
 	}
 
-	if parsedOptions.Outbounds != nil && len(parsedOptions.Outbounds) > 0 {
-		customizedOptions.Outbounds = append(customizedOptions.Outbounds, parsedOptions.Outbounds...)
+	for _, options := range parsedOptions.Outbounds {
+		tag := options.Tag
+		err = outboundManager.Create(
+			bs.ctx,
+			bs.instance.Router(),
+			bs.NewLogger("outbound/"+options.Type+"["+tag+"]"),
+			tag,
+			options.Type,
+			options.Options,
+		)
+		if err != nil {
+			return fmt.Errorf("initialize outbound[%s]: %w", tag, err)
+		}
 	}
-
-	// adding different routing rules before the latest one
-	// and then adding the latest one. Assuming the last rule is responsible for
-	// direct traffic
-	if bs.defaultOptions.Route != nil && len(bs.defaultOptions.Route.Rules) > 0 {
-		customizedOptions.Route.Rules = bs.defaultOptions.Route.Rules[:len(bs.defaultOptions.Route.Rules)-1]
-		customizedOptions.Route.Rules = append(customizedOptions.Route.Rules, parsedOptions.Route.Rules...)
-		customizedOptions.Route.Rules = append(customizedOptions.Route.Rules, bs.defaultOptions.Route.Rules[len(bs.defaultOptions.Route.Rules)-1])
-	}
-
-	if bs.defaultOptions.Route != nil && len(bs.defaultOptions.Route.RuleSet) > 0 {
-		customizedOptions.Route.RuleSet = append(customizedOptions.Route.RuleSet, parsedOptions.Route.RuleSet...)
-		customizedOptions.Route.RuleSet = append(customizedOptions.Route.RuleSet, bs.defaultOptions.Route.RuleSet...)
-	}
-
-	if bs.instance != nil {
-		bs.instance.Close()
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	urlTestHistoryStorage := urltest.NewHistoryStorage()
-	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
-	instance, err := box.New(box.Options{
-		Options: customizedOptions,
-		Context: ctx,
-	})
-	if err != nil {
-		cancel()
-		return fmt.Errorf("create service: %w", err)
-	}
-
-	bs.instance = instance
-	bs.cancel = cancel
 
 	return nil
 }
