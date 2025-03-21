@@ -35,7 +35,6 @@ import (
 
 var (
 	vpnLogOutput = filepath.Join(logDir(), "lantern.log")
-	log          = newLog(vpnLogOutput)
 
 	configPollInterval = 10 * time.Minute
 )
@@ -83,6 +82,7 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
+	newLog(vpnLogOutput)
 	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string)
 func (r *Radiance) run(addr string) error {
 	reporting.Init()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	log.Debug("Fetching config")
+	slog.Debug("Fetching config")
 	configs, _, err := r.confHandler.GetConfig(ctx)
 	cancel()
 	if err != nil {
@@ -152,7 +152,7 @@ func (r *Radiance) run(addr string) error {
 		sentry.CaptureException(err)
 		return fmt.Errorf("could not create dialer: %w", err)
 	}
-	log.Info("Creating dialer with config", "config", proxyConf)
+	slog.Info("Creating dialer with config", "config", proxyConf)
 
 	pAddr := fmt.Sprintf("%s:%d", proxyConf.Addr, proxyConf.Port)
 	handler := proxyHandler{
@@ -193,7 +193,7 @@ func (r *Radiance) listenAndServe(addr string) error {
 		return fmt.Errorf("could not listen on %v: %w", addr, err)
 	}
 
-	log.Info("Listening on", "addr", addr)
+	slog.Info("Listening on", "addr", addr)
 	return r.srv.Serve(listener)
 }
 
@@ -214,7 +214,7 @@ func (r *Radiance) shutdown(ctx context.Context) error {
 	close(r.stopChan)
 	// Flush sentry events before returning
 	if result := sentry.Flush(6 * time.Second); !result {
-		log.Error("sentry.Flush: timeout")
+		slog.Error("sentry.Flush: timeout")
 	}
 	return nil
 }
@@ -224,7 +224,7 @@ func (r *Radiance) shutdown(ctx context.Context) error {
 //
 // This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
 func (r *Radiance) StartVPN() error {
-	log.Debug("Starting VPN")
+	slog.Debug("Starting VPN")
 	err := r.vpnClient.Start()
 	r.setStatus(err == nil)
 	return err
@@ -234,20 +234,20 @@ func (r *Radiance) StartVPN() error {
 //
 // This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
 func (r *Radiance) StopVPN() error {
-	log.Debug("Stopping VPN")
+	slog.Debug("Stopping VPN")
 	r.setStatus(false)
 	return r.vpnClient.Stop()
 }
 
 // PauseVPN pauses the VPN connection for the specified duration.
 func (r *Radiance) PauseVPN(dur time.Duration) error {
-	log.Info("Pausing VPN for", "duration", dur)
+	slog.Info("Pausing VPN for", "duration", dur)
 	return r.vpnClient.Pause(dur)
 }
 
 // ResumeVPN resumes a paused VPN connection.
 func (r *Radiance) ResumeVPN() {
-	log.Debug("Resuming VPN")
+	slog.Debug("Resuming VPN")
 	r.vpnClient.Resume()
 }
 
@@ -267,7 +267,7 @@ func (r *Radiance) setStatus(connected bool) {
 		// Recover from panics to avoid crashing the Radiance main loop
 		defer func() {
 			if r := recover(); r != nil {
-				log.Error("Recovered from panic", "error", r)
+				slog.Error("Recovered from panic", "error", r)
 				reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
 			}
 		}()
@@ -380,12 +380,19 @@ func logDir() string {
 
 // Return an slog logger configured to write to both stdout and the log file.
 func newLog(logPath string) *slog.Logger {
+	writers := make([]io.Writer, 0)
+	writers = append(writers, os.Stdout)
 	f, err := os.Create(logPath)
 	if err != nil {
-		return nil
+		fmt.Printf("failed to create log file at %q: %v", logPath, err)
 	}
+	writers = append(writers, f)
+
 	// defer f.Close() - file should be closed externally when logger is no longer needed
-	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
+	logger := slog.New(slog.NewTextHandler(io.MultiWriter(writers...), &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	logger.Debug("writing logs", slog.String("path", logPath))
 	slog.SetDefault(logger)
 	return logger
 }
