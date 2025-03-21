@@ -32,7 +32,7 @@ type vpnClient struct {
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
-// the existing instance. logOutput is the path where the log file will be written. logOutput can be
+// the existing instance. logPath is the path where the log file will be written. logPath can be
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
