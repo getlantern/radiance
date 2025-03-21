@@ -76,10 +76,12 @@ type Radiance struct {
 func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	dataDirPath = setupDataDir(dataDir)
-	logPath = filepath.Join(dataDirPath, "logs", app.LogFileName)
-
 	var err error
+	dataDirPath, err = setupDataDir(dataDir)
+	if err != nil {
+		//TODO: should we return the err? logpath isn't set yet..
+	}
+
 	log, err = newLog(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not create log file: %w", err)
@@ -267,14 +269,14 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func setupDataDir(dir string) string {
+func setupDataDir(dir string) (string, error) {
 	if dir == "" {
 		if runtime.GOOS == "android" {
 			//To avoid panic from appDir
 			// need to set home dir
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
-				return ""
+				return "", err
 			}
 			appdir.SetHomeDir(homeDir)
 		}
@@ -282,9 +284,10 @@ func setupDataDir(dir string) string {
 	}
 	logDir := filepath.Join(dir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return ""
+		return "", fmt.Errorf("failed to setup data directory: %w", err)
 	}
-	return dir
+	logPath = filepath.Join(logDir, app.LogFileName)
+	return dir, nil
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
