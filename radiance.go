@@ -35,7 +35,7 @@ import (
 
 var (
 	vpnLogOutput = filepath.Join(logDir(), "lantern.log")
-	log          = newLog(vpnLogOutput)
+	log          *slog.Logger
 
 	configPollInterval = 10 * time.Minute
 )
@@ -83,6 +83,12 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
+	var err error
+	log, err = newLog(vpnLogOutput)
+	if err != nil {
+		return nil, fmt.Errorf("could not create log: %w", err)
+	}
+
 	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
 		return nil, err
@@ -379,13 +385,13 @@ func logDir() string {
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) *slog.Logger {
+func newLog(logPath string) (*slog.Logger, error) {
 	f, err := os.Create(logPath)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
 	slog.SetDefault(logger)
-	return logger
+	return logger, nil
 }
