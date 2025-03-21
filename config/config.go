@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	configDir      = "config"
 	configFileName = "proxy.conf"
 )
 
@@ -76,7 +75,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		config:                  eventual.NewValue(),
 		stopC:                   make(chan struct{}),
 		closeOnce:               &sync.Once{},
-		configPath:              filepath.Join(dataDir, configDir, configFileName),
+		configPath:              filepath.Join(dataDir, configFileName),
 		apiClient:               common.NewWebClient(httpClient),
 		preferredServerLocation: atomic.Value{}, // initially, no preference
 	}

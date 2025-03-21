@@ -30,8 +30,10 @@ import (
 )
 
 var (
-	logPath string
-	log     *slog.Logger
+	dataDirPath string
+	logPath     string
+
+	log *slog.Logger
 
 	configPollInterval = 10 * time.Minute
 )
@@ -74,10 +76,8 @@ type Radiance struct {
 func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	if dataDir == "" {
-		dataDir = defaultDataDir()
-	}
-	logPath = filepath.Join(dataDir, "logs", app.LogFileName)
+	dataDirPath := setupDataDir(dataDir)
+	logPath = filepath.Join(dataDirPath, "logs", app.LogFileName)
 
 	var err error
 	log, err = newLog(logPath)
@@ -85,7 +85,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("could not create log file: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(dataDir, platIfce)
+	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDir),
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDirPath),
 		activeConfig:  new(atomic.Value),
 		connected:     false,
 		statusMutex:   new(sync.Mutex),
@@ -257,7 +257,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		defaultDataDir(),
+		dataDirPath,
 		email,
 		typeInt,
 		report.Description,
@@ -267,17 +267,19 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func defaultDataDir() string {
-	if runtime.GOOS == "android" {
-		//To avoid panic from appDir
-		// need to set home dir
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return ""
+func setupDataDir(dir string) string {
+	if dir == "" {
+		if runtime.GOOS == "android" {
+			//To avoid panic from appDir
+			// need to set home dir
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return ""
+			}
+			appdir.SetHomeDir(homeDir)
 		}
-		appdir.SetHomeDir(homeDir)
+		dir = appdir.General("Lantern")
 	}
-	dir := appdir.General("Lantern")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ""
 	}
