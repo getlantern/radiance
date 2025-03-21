@@ -30,8 +30,10 @@ import (
 )
 
 var (
-	logPath string
-	log     *slog.Logger
+	dataDirPath string
+	logPath     string
+
+	log *slog.Logger
 
 	configPollInterval = 10 * time.Minute
 )
@@ -74,19 +76,18 @@ type Radiance struct {
 func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	path := dataDir
-	if dataDir == "" {
-		path = logDir()
-	}
-	logPath = filepath.Join(path, app.LogFileName)
-
 	var err error
+	dataDirPath, err = setupDataDir(dataDir)
+	if err != nil {
+		//TODO: should we return the err? logpath isn't set yet..
+	}
+
 	log, err = newLog(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not create log file: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(logPath, platIfce)
+	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +107,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user),
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDirPath),
 		activeConfig:  new(atomic.Value),
 		connected:     false,
 		statusMutex:   new(sync.Mutex),
@@ -258,7 +259,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		logDir(),
+		dataDirPath,
 		email,
 		typeInt,
 		report.Description,
@@ -268,21 +269,25 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func logDir() string {
-	if runtime.GOOS == "android" {
-		//To avoid panic from appDir
-		// need to set home dir
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return ""
+func setupDataDir(dir string) (string, error) {
+	if dir == "" {
+		if runtime.GOOS == "android" {
+			//To avoid panic from appDir
+			// need to set home dir
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			appdir.SetHomeDir(homeDir)
 		}
-		appdir.SetHomeDir(homeDir)
+		dir = appdir.General("Lantern")
 	}
-	dir := appdir.Logs("Lantern")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return ""
+	logDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to setup data directory: %w", err)
 	}
-	return dir
+	logPath = filepath.Join(logDir, app.LogFileName)
+	return dir, nil
 }
 
 // Return an slog logger configured to write to both stdout and the log file.

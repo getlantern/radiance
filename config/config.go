@@ -16,13 +16,13 @@ import (
 	"time"
 
 	"github.com/getlantern/eventual/v2"
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
-	configDir      = "config"
 	configFileName = "proxy.conf"
 )
 
@@ -70,12 +70,12 @@ type AvailableServerLocation struct {
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
 	ch := &ConfigHandler{
 		config:                  eventual.NewValue(),
 		stopC:                   make(chan struct{}),
 		closeOnce:               &sync.Once{},
-		configPath:              filepath.Join(configDir, configFileName),
+		configPath:              filepath.Join(dataDir, configFileName),
 		apiClient:               common.NewWebClient(httpClient),
 		preferredServerLocation: atomic.Value{}, // initially, no preference
 	}
