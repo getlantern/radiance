@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"runtime"
 	runtimeDebug "runtime/debug"
@@ -27,6 +28,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/platform"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -48,6 +50,9 @@ type BoxService struct {
 
 	defaultOptions option.Options
 	logFactory     log.Factory
+
+	customServersMutex sync.Locker
+	customServers      map[string]option.Options
 }
 
 // New creates a new BoxService instance using the provided logOutput and platform interface. The
@@ -115,81 +120,78 @@ func (bs *BoxService) Wake() {
 // ServerConnectConfig represents configuration for connecting to a custom server.
 type ServerConnectConfig []byte
 
-// SelectCustomServer replace box service instance by a instance using the
-// given config. If the Box service is already running, you'll need to
-// stop and start the VPN again so it can use the new instance.
-// From the configuration, we're only going to use the Endpoints and Outbounds.
-func (bs *BoxService) SelectCustomServer(cfg ServerConnectConfig) error {
+// AddCustomServer load or parse the given configuration and add given
+// enpdoint/outbound to the instance. We're only expecting one endpoint or
+// outbound per call.
+func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error {
+	bs.customServersMutex.Lock()
+	defer bs.customServersMutex.Unlock()
 	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
 	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
+	router := service.FromContext[adapter.Router](bs.ctx)
 
-	parsedOptions, err := json.UnmarshalExtendedContext[option.Options](bs.ctx, cfg)
+	loadedOptions, configExist := bs.customServers[tag]
+	if configExist {
+		if err := bs.RemoveCustomServer(tag); err != nil {
+			return err
+		}
+	}
+
+	loadedOptions, err := json.UnmarshalExtendedContext[option.Options](bs.ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	for _, options := range parsedOptions.Endpoints {
-		tag := options.Tag
-		err = endpointManager.Create(
-			bs.ctx,
-			bs.instance.Router(),
-			bs.logFactory.NewLogger("endpoint/"+options.Type+"["+tag+"]"),
-			tag,
-			options.Type,
-			options.Options,
-		)
-		if err != nil {
-			return fmt.Errorf("initialize endpoint[%s]: %w", tag, err)
+	if len(loadedOptions.Endpoints) > 0 {
+		for _, endpoint := range loadedOptions.Endpoints {
+			endpointManager.Create(bs.ctx, router, bs.logFactory.NewLogger(fmt.Sprintf("custom_endpoints/%s", tag)), tag, endpoint.Type, endpoint.Options)
 		}
 	}
 
-	for _, options := range parsedOptions.Outbounds {
-		tag := options.Tag
-		err = outboundManager.Create(
-			bs.ctx,
-			bs.instance.Router(),
-			bs.logFactory.NewLogger("outbound/"+options.Type+"["+tag+"]"),
-			tag,
-			options.Type,
-			options.Options,
-		)
-		if err != nil {
-			return fmt.Errorf("initialize outbound[%s]: %w", tag, err)
+	if len(loadedOptions.Outbounds) > 0 {
+		for _, outbound := range loadedOptions.Outbounds {
+			outboundManager.Create(bs.ctx, router, bs.logFactory.NewLogger(fmt.Sprintf("custom_outbounds/%s", tag)), tag, outbound.Type, outbound.Options)
 		}
 	}
 
+	bs.customServers[tag] = loadedOptions
+	// TODO: update/refresh router
 	return nil
 }
 
-// DeselectCustomServer stops the current instance and replace it by
-// the default instance.
-func (bs *BoxService) DeselectCustomServer() error {
-	if bs.instance != nil {
-		bs.instance.Close()
+func (bs *BoxService) RemoveCustomServer(tag string) error {
+	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
+	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
+
+	if err := outboundManager.Remove(tag); err != nil && !errors.Is(err, os.ErrInvalid) {
+		return fmt.Errorf("failed to remove %q outbound: %w", tag, err)
 	}
 
-	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
-		context.Background(),
-		inboundRegistry,
-		outboundRegistry,
-		endpointRegistry,
-	)
-
-	ctx, cancel := context.WithCancel(ctx)
-	urlTestHistoryStorage := urltest.NewHistoryStorage()
-	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
-
-	instance, err := box.New(box.Options{
-		Options: bs.defaultOptions,
-		Context: ctx,
-	})
-	if err != nil {
-		cancel()
-		return fmt.Errorf("create service: %w", err)
+	if err := endpointManager.Remove(tag); err != nil && !errors.Is(err, os.ErrInvalid) {
+		return fmt.Errorf("failed to remove %q endpoint: %w", tag, err)
 	}
-	bs.instance = instance
-	bs.cancel = cancel
+
+	delete(bs.customServers, tag)
+	return nil
+}
+
+// SelectCustomServer update the selector outbound to use the selected
+// outbound based on provided tag. A selector outbound must exist before
+// calling this function, otherwise it'll return a error.
+func (bs *BoxService) SelectCustomServer(tag string) error {
+	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
+	outbound, exist := outboundManager.Outbound("selector")
+	if !exist {
+		return fmt.Errorf("selector outbound not found")
+	}
+	selector, ok := outbound.(*group.Selector)
+	if !ok {
+		return fmt.Errorf("expected selector outbound to be a group.Selector")
+	}
+	selected := selector.SelectOutbound(tag)
+	if !selected {
+		fmt.Errorf("failed to select custom server %q", tag)
+	}
 	return nil
 }
 
