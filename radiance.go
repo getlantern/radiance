@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/kindling"
 
+	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
@@ -29,8 +30,8 @@ import (
 )
 
 var (
-	vpnLogOutput = filepath.Join(logDir(), "lantern.log")
-	log          *slog.Logger
+	logPath string
+	log     *slog.Logger
 
 	configPollInterval = 10 * time.Minute
 )
@@ -70,16 +71,22 @@ type Radiance struct {
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
+func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
+	path := dataDir
+	if dataDir == "" {
+		path = logDir()
+	}
+	logPath = filepath.Join(path, app.LogFileName)
+
 	var err error
-	log, err = newLog(vpnLogOutput)
+	log, err = newLog(logPath)
 	if err != nil {
-		return nil, fmt.Errorf("could not create log: %w", err)
+		return nil, fmt.Errorf("could not create log file: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
+	vpnC, err := client.NewVPNClient(logPath, platIfce)
 	if err != nil {
 		return nil, err
 	}

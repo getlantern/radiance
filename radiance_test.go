@@ -13,7 +13,7 @@ import (
 func TestNewRadiance(t *testing.T) {
 	// TODO: update tests to reflect current implementation of NewRadiance
 	t.Run("it should return a new Radiance instance", func(t *testing.T) {
-		r, err := NewRadiance(nil)
+		r, err := NewRadiance("../", nil)
 		assert.NoError(t, err)
 		require.NotNil(t, r)
 		assert.NotNil(t, r.confHandler)
@@ -31,7 +31,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance(nil)
+				r, _ := NewRadiance("../", nil)
 				return r
 			},
 			assert: func(t *testing.T, server *Server, err error) {
@@ -42,7 +42,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return error when there is no current config",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance("../", nil)
 				assert.NoError(t, err)
 				r.connected = true
 				return r
@@ -55,7 +55,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return the active server when VPN is connected",
 			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance(nil)
+				r, err := NewRadiance("../", nil)
 				assert.NoError(t, err)
 				r.connected = true
 				r.activeConfig.Store(&config.Config{
@@ -130,7 +130,7 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance(nil)
+			r, err := NewRadiance("../", nil)
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, tt.report)
 			tt.assert(t, err)

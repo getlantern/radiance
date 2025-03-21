@@ -36,7 +36,7 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClient, error) {
+func NewVPNClient(logPath string, platIfce libbox.PlatformInterface) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -44,13 +44,13 @@ func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClien
 	}
 
 	// TODO: We should be fetching the options from the server.
-	opts := boxoptions.Options(logOutput)
+	opts := boxoptions.Options(logPath)
 	buf, err := json.Marshal(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), logOutput, platIfce)
+	b, err := boxservice.New(string(buf), logPath, platIfce)
 	if err != nil {
 		return nil, err
 	}
