@@ -160,6 +160,8 @@ func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error
 }
 
 func (bs *BoxService) RemoveCustomServer(tag string) error {
+	bs.customServersMutex.Lock()
+	defer bs.customServersMutex.Unlock()
 	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
 	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
 
@@ -260,12 +262,14 @@ func configureLibboxService(ctx context.Context, options option.Options, platIfc
 
 	runtimeDebug.FreeOSMemory()
 	return &BoxService{
-		libbox:         lbService,
-		ctx:            ctx,
-		cancel:         cancel,
-		instance:       instance,
-		defaultOptions: options,
-		pauseManager:   service.FromContext[pause.Manager](ctx),
+		libbox:             lbService,
+		ctx:                ctx,
+		cancel:             cancel,
+		instance:           instance,
+		defaultOptions:     options,
+		pauseManager:       service.FromContext[pause.Manager](ctx),
+		customServersMutex: new(sync.Mutex),
+		customServers:      make(map[string]option.Options),
 		logFactory: log.NewDefaultFactory(ctx, log.Formatter{
 			DisableColors: true,
 		}, nil, options.Log.Output, logWriter, false),
