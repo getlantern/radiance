@@ -74,11 +74,10 @@ type Radiance struct {
 func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	path := dataDir
 	if dataDir == "" {
-		path = logDir()
+		dataDir = logDir()
 	}
-	logPath = filepath.Join(path, app.LogFileName)
+	logPath = filepath.Join(dataDir, app.LogFileName)
 
 	var err error
 	log, err = newLog(logPath)
@@ -86,7 +85,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("could not create log file: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(path, platIfce)
+	vpnC, err := client.NewVPNClient(dataDir, platIfce)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +105,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user),
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDir),
 		activeConfig:  new(atomic.Value),
 		connected:     false,
 		statusMutex:   new(sync.Mutex),
