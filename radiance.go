@@ -76,7 +76,7 @@ type Radiance struct {
 func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	dataDirPath := setupDataDir(dataDir)
+	dataDirPath = setupDataDir(dataDir)
 	logPath = filepath.Join(dataDirPath, "logs", app.LogFileName)
 
 	var err error
@@ -280,7 +280,8 @@ func setupDataDir(dir string) string {
 		}
 		dir = appdir.General("Lantern")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	logDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return ""
 	}
 	return dir
