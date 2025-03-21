@@ -5,39 +5,16 @@ import (
 	"testing"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/protocol"
 )
-
-func TestNewlibbox(t *testing.T) {
-	// TODO: expand this to test that libbox is actually using the provided context, options, and
-	// platformInterface
-	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
-		context.Background(),
-		inboundRegistry,
-		outboundRegistry,
-		endpointRegistry,
-	)
-
-	options := boxoptions.Options("stderr")
-	options.Outbounds = append(options.Outbounds, option.Outbound{Type: "direct", Tag: "testing-out"})
-	bs, err := configureLibboxService(ctx, options, nil)
-	require.NoError(t, err)
-	require.NotNil(t, bs)
-
-	ob := bs.instance.Outbound()
-	_, fnd := ob.Outbound("testing-out")
-	require.True(t, fnd, "testing-out not found")
-	// TODO: use custom box options that don't need sudo to test this (i.e. no TUN).
-	// for now, just test that it doesn't panic
-	require.NotPanics(t, func() { bs.Start() })
-	bs.Close()
-}
 
 func TestSelectCustomServer(t *testing.T) {
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
@@ -50,7 +27,10 @@ func TestSelectCustomServer(t *testing.T) {
 
 	options := boxoptions.Options("stderr")
 	options.Outbounds = append(options.Outbounds, option.Outbound{Type: "direct", Tag: "testing-out"})
-	bs, err := configureLibboxService(ctx, options, nil)
+
+	cfg, err := json.MarshalContext(ctx, boxoptions.BoxOptions)
+	require.NoError(t, err)
+	bs, err := New(string(cfg), "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, bs)
 
@@ -94,14 +74,16 @@ func TestSelectCustomServer(t *testing.T) {
 		assert.NoError(t, err)
 
 		// checking if algeneva-out was included as an outbound and route
-		_, exists := bs.instance.Outbound().Outbound("algeneva-out")
+		outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
+		_, exists := outboundManager.Outbound("algeneva-out")
 		assert.True(t, exists)
 	})
 
-	t.Run("it should de-select the server and use the default provided instance", func(t *testing.T) {
+	t.Run("it should remove the outbound tag", func(t *testing.T) {
 		err = bs.RemoveCustomServer("algeneva-out")
 		assert.NoError(t, err)
-		_, exists := bs.instance.Outbound().Outbound("algeneva-out")
+		outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
+		_, exists := outboundManager.Outbound("algeneva-out")
 		assert.False(t, exists)
 	})
 }

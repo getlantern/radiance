@@ -38,8 +38,7 @@ type BoxService struct {
 	pauseAccess  sync.Mutex
 	pauseTimer   *time.Timer
 
-	defaultOptions option.Options
-	logFactory     log.Factory
+	logFactory log.Factory
 
 	customServersMutex sync.Locker
 	customServers      map[string]option.Options
@@ -59,7 +58,19 @@ func New(config, logOutput string, platIfce libbox.PlatformInterface) (*BoxServi
 	if err != nil {
 		return nil, fmt.Errorf("create libbox service: %w", err)
 	}
-
+	logFactory, err := log.New(log.Options{
+		Context: ctx,
+		Options: option.LogOptions{
+			Disabled:     false,
+			Level:        log.FormatLevel(log.LevelDebug),
+			Output:       logOutput,
+			Timestamp:    true,
+			DisableColor: true,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log factory: %w", err)
+	}
 	bs := &BoxService{
 		libbox:             lb,
 		ctx:                ctx,
@@ -67,16 +78,10 @@ func New(config, logOutput string, platIfce libbox.PlatformInterface) (*BoxServi
 		pauseAccess:        sync.Mutex{},
 		customServersMutex: new(sync.Mutex),
 		customServers:      make(map[string]option.Options),
+		logFactory:         logFactory,
 	}
 
 	return bs, nil
-}
-
-func (bs *BoxService) NewLogger(name string) (log.Factory, error) {
-	return log.New(log.Options{
-		Context: bs.ctx,
-		Options: *bs.defaultOptions.Log,
-	})
 }
 
 func (bs *BoxService) Start() error {
@@ -152,6 +157,9 @@ func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error
 		}
 	}
 
+	// TODO: This function should persist the selected configured servers locally.
+	// Since we're not storing configurations locally and don't have a directory
+	// this info thill should be implemented in the future.
 	bs.customServers[tag] = loadedOptions
 	// TODO: update/refresh router
 	return nil
@@ -190,7 +198,7 @@ func (bs *BoxService) SelectCustomServer(tag string) error {
 	}
 	selected := selector.SelectOutbound(tag)
 	if !selected {
-		fmt.Errorf("failed to select custom server %q", tag)
+		return fmt.Errorf("failed to select custom server %q", tag)
 	}
 	return nil
 }
