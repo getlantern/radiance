@@ -11,7 +11,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
-var boxOptions = O.Options{
+var BoxOptions = O.Options{
 	Log: &O.LogOptions{
 		Disabled:     false,
 		Level:        "trace",
@@ -77,14 +77,14 @@ var boxOptions = O.Options{
 	},
 	Outbounds: []O.Outbound{
 		{
-			Type: "direct",
-			Tag:  "direct",
-			// Options: &O.DirectOutboundOptions{},
+			Type:    "direct",
+			Tag:     "direct",
+			Options: &O.DirectOutboundOptions{},
 		},
 		{
-			Type: "dns",
-			Tag:  "dns-out",
-			// Options: &O.DNSOptions{},
+			Type:    "dns",
+			Tag:     "dns-out",
+			Options: &O.DNSOptions{},
 		},
 		{
 			Type: constant.TypeOutline,

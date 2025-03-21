@@ -11,6 +11,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
+	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
 )
 
@@ -43,7 +44,15 @@ func NewVPNClient(logOutput string, platIfce libbox.PlatformInterface) (VPNClien
 	if client != nil {
 		return client, nil
 	}
-	b, err := boxservice.New(logOutput, platIfce)
+
+	// TODO: We should be fetching the options from the server.
+	opts := boxoptions.Options(logOutput)
+	buf, err := json.Marshal(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := boxservice.New(string(buf), logOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}

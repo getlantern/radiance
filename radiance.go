@@ -8,15 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/appdir"
@@ -28,26 +26,18 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
-	"github.com/getlantern/radiance/transport"
-	"github.com/getlantern/radiance/transport/proxyless"
 	"github.com/getlantern/radiance/user"
 )
 
 var (
 	vpnLogOutput = filepath.Join(logDir(), "lantern.log")
-	log          = newLog(vpnLogOutput)
+	log          *slog.Logger
 
 	configPollInterval = 10 * time.Minute
 )
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
 //go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
-
-// httpServer is an interface that abstracts the http.Server struct for easier testing.
-type httpServer interface {
-	Serve(listener net.Listener) error
-	Shutdown(ctx context.Context) error
-}
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
@@ -67,7 +57,6 @@ type configHandler interface {
 type Radiance struct {
 	vpnClient client.VPNClient
 
-	srv          httpServer
 	confHandler  configHandler
 	activeConfig *atomic.Value
 
@@ -86,6 +75,14 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
+	reporting.Init()
+
+	var err error
+	log, err = newLog(vpnLogOutput)
+	if err != nil {
+		return nil, fmt.Errorf("could not create log: %w", err)
+	}
+
 	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
 	if err != nil {
 		return nil, err
@@ -128,102 +125,6 @@ func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableS
 // pass empty strings to auto select the server location
 func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
 	r.confHandler.SetPreferredServerLocation(country, city)
-}
-
-// Run starts the Radiance proxy server on the specified address.
-// This function will be replaced by StartVPN as part of https://github.com/getlantern/engineering/issues/1883
-func (r *Radiance) run(addr string) error {
-	reporting.Init()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	log.Debug("Fetching config")
-	configs, _, err := r.confHandler.GetConfig(ctx)
-	cancel()
-	if err != nil {
-		r.setStatus(false)
-		sentry.CaptureException(err)
-		return fmt.Errorf("could not fetch config: %w", err)
-	}
-
-	var proxyConf, proxylessConf *config.Config
-	for _, conf := range configs {
-		if conf.GetConnectCfgProxyless() != nil {
-			proxylessConf = conf
-		}
-		proxyConf = conf
-		r.activeConfig.Store(conf)
-	}
-
-	dialer, err := transport.DialerFrom(proxyConf)
-	if err != nil {
-		r.setStatus(false)
-		sentry.CaptureException(err)
-		return fmt.Errorf("could not create dialer: %w", err)
-	}
-	log.Info("Creating dialer with config", "config", proxyConf)
-
-	pAddr := fmt.Sprintf("%s:%d", proxyConf.Addr, proxyConf.Port)
-	handler := proxyHandler{
-		addr:      pAddr,
-		authToken: proxyConf.AuthToken,
-		dialer:    dialer,
-		user:      r.user,
-		client: http.Client{
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialStream(ctx, pAddr)
-				},
-			},
-		},
-	}
-
-	if proxylessConf != nil {
-		handler.proxylessDialer, err = proxyless.NewStreamDialer(dialer, proxylessConf)
-		if err != nil {
-			sentry.CaptureException(err)
-			return fmt.Errorf("could not create proxyless dialer: %w", err)
-		}
-	}
-
-	r.srv = &http.Server{
-		Handler: &handler,
-		// Prevent slowloris attacks by setting a read timeout.
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	r.setStatus(true)
-	return r.listenAndServe(addr)
-}
-
-func (r *Radiance) listenAndServe(addr string) error {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("could not listen on %v: %w", addr, err)
-	}
-
-	log.Info("Listening on", "addr", addr)
-	return r.srv.Serve(listener)
-}
-
-// Shutdown stops the Radiance server.
-// This function will be replaced by StopVPN as part of https://github.com/getlantern/engineering/issues/1883
-func (r *Radiance) shutdown(ctx context.Context) error {
-	if !r.connectionStatus() {
-		return nil
-	}
-	if r.srv == nil {
-		return fmt.Errorf("server is nil")
-	}
-	if err := r.srv.Shutdown(ctx); err != nil {
-		return fmt.Errorf("failed to shutdown server: %w", err)
-	}
-	r.confHandler.Stop()
-	r.setStatus(false)
-	close(r.stopChan)
-	// Flush sentry events before returning
-	if result := sentry.Flush(6 * time.Second); !result {
-		log.Error("sentry.Flush: timeout")
-	}
-	return nil
 }
 
 // StartVPN starts the local VPN device, configuring routing rules such that network traffic on this
@@ -369,6 +270,15 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 }
 
 func logDir() string {
+	if runtime.GOOS == "android" {
+		//To avoid panic from appDir
+		// need to set home dir
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		appdir.SetHomeDir(homeDir)
+	}
 	dir := appdir.Logs("Lantern")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ""
@@ -377,15 +287,15 @@ func logDir() string {
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) *slog.Logger {
+func newLog(logPath string) (*slog.Logger, error) {
 	f, err := os.Create(logPath)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
 	slog.SetDefault(logger)
-	return logger
+	return logger, nil
 }
 
 // SelectCustomServer configures the client to use the input server. cfg may be nil if
