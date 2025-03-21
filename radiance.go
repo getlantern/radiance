@@ -75,9 +75,9 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	reporting.Init()
 
 	if dataDir == "" {
-		dataDir = logDir()
+		dataDir = defaultDataDir()
 	}
-	logPath = filepath.Join(dataDir, app.LogFileName)
+	logPath = filepath.Join(dataDir, "logs", app.LogFileName)
 
 	var err error
 	log, err = newLog(logPath)
@@ -257,7 +257,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		logDir(),
+		defaultDataDir(),
 		email,
 		typeInt,
 		report.Description,
@@ -267,7 +267,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func logDir() string {
+func defaultDataDir() string {
 	if runtime.GOOS == "android" {
 		//To avoid panic from appDir
 		// need to set home dir
@@ -277,7 +277,7 @@ func logDir() string {
 		}
 		appdir.SetHomeDir(homeDir)
 	}
-	dir := appdir.Logs("Lantern")
+	dir := appdir.General("Lantern")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ""
 	}
