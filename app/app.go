@@ -10,4 +10,7 @@ const (
 	Version       = "7.6.47"
 
 	Platform = runtime.GOOS
+
+	// filenames
+	LogFileName = "lantern.log"
 )
