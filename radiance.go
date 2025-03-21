@@ -23,6 +23,7 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -36,7 +37,8 @@ var (
 	configPollInterval = 10 * time.Minute
 )
 
-//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
+//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
+//go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
@@ -65,7 +67,9 @@ type Radiance struct {
 
 	user *user.User
 
-	issueReporter *issue.IssueReporter
+	configuredServersMutex sync.Locker
+	configuredServers      map[string]boxservice.ServerConnectConfig
+	issueReporter          *issue.IssueReporter
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -113,6 +117,10 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		stopChan:      make(chan struct{}),
 		user:          user,
 		issueReporter: issueReporter,
+		// TODO: after we start to persist data, we should update this implementation
+		// for loading the configured servers and also the custom servers
+		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
+		configuredServersMutex: new(sync.Mutex),
 	}, nil
 }
 
@@ -295,4 +303,16 @@ func newLog(logPath string) (*slog.Logger, error) {
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
 	slog.SetDefault(logger)
 	return logger, nil
+}
+
+func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return r.vpnClient.AddCustomServer(tag, cfg)
+}
+
+func (r *Radiance) SelectCustomServer(tag string) error {
+	return r.vpnClient.SelectCustomServer(tag)
+}
+
+func (r *Radiance) RemoveCustomServer(tag string) error {
+	return r.vpnClient.RemoveCustomServer(tag)
 }
