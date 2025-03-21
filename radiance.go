@@ -71,6 +71,8 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
+	reporting.Init()
+
 	var err error
 	log, err = newLog(vpnLogOutput)
 	if err != nil {
