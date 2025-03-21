@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -32,11 +33,11 @@ type vpnClient struct {
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
-// the existing instance. logPath is the path where the log file will be written. logPath can be
+// the existing instance. logDir is the path where the log file will be written. logDir can be
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(logPath string, platIfce libbox.PlatformInterface) (VPNClient, error) {
+func NewVPNClient(logDir string, platIfce libbox.PlatformInterface) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -44,13 +45,14 @@ func NewVPNClient(logPath string, platIfce libbox.PlatformInterface) (VPNClient,
 	}
 
 	// TODO: We should be fetching the options from the server.
-	opts := boxoptions.Options(logPath)
+	logOutput := filepath.Join(logDir, "lantern-box.log")
+	opts := boxoptions.Options(logOutput)
 	buf, err := json.Marshal(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), logPath, platIfce)
+	b, err := boxservice.New(string(buf), logDir, platIfce)
 	if err != nil {
 		return nil, err
 	}

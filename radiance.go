@@ -86,7 +86,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("could not create log file: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(logPath, platIfce)
+	vpnC, err := client.NewVPNClient(path, platIfce)
 	if err != nil {
 		return nil, err
 	}
