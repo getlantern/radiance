@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -44,14 +45,17 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface) (*BoxService
 		outboundRegistry,
 		endpointRegistry,
 	)
-	libbox.Setup(&libbox.SetupOptions{
-		BasePath:        dataDir,
-		WorkingPath:     filepath.Join(dataDir, "data"),
-		TempPath:        filepath.Join(dataDir, "temp"),
-		Username:        "",
-		IsTVOS:          false,
-		FixAndroidStack: true,
-	})
+	setupOpts := &libbox.SetupOptions{
+		BasePath:    dataDir,
+		WorkingPath: filepath.Join(dataDir, "data"),
+		TempPath:    filepath.Join(dataDir, "temp"),
+	}
+	if runtime.GOOS == "android" {
+		setupOpts.FixAndroidStack = true
+	}
+	if err := libbox.Setup(setupOpts); err != nil {
+		return nil, fmt.Errorf("setup libbox: %w", err)
+	}
 	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
 	if err != nil {
 		return nil, fmt.Errorf("create libbox service: %w", err)
