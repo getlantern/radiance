@@ -41,18 +41,18 @@ func (m *MockVPNClient) EXPECT() *MockVPNClientMockRecorder {
 	return m.recorder
 }
 
-// DeselectCustomServer mocks base method.
-func (m *MockVPNClient) DeselectCustomServer() error {
+// AddCustomServer mocks base method.
+func (m *MockVPNClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeselectCustomServer")
+	ret := m.ctrl.Call(m, "AddCustomServer", tag, cfg)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// DeselectCustomServer indicates an expected call of DeselectCustomServer.
-func (mr *MockVPNClientMockRecorder) DeselectCustomServer() *gomock.Call {
+// AddCustomServer indicates an expected call of AddCustomServer.
+func (mr *MockVPNClientMockRecorder) AddCustomServer(tag, cfg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeselectCustomServer", reflect.TypeOf((*MockVPNClient)(nil).DeselectCustomServer))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddCustomServer", reflect.TypeOf((*MockVPNClient)(nil).AddCustomServer), tag, cfg)
 }
 
 // Pause mocks base method.
@@ -69,6 +69,20 @@ func (mr *MockVPNClientMockRecorder) Pause(dur any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pause", reflect.TypeOf((*MockVPNClient)(nil).Pause), dur)
 }
 
+// RemoveCustomServer mocks base method.
+func (m *MockVPNClient) RemoveCustomServer(tag string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RemoveCustomServer", tag)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RemoveCustomServer indicates an expected call of RemoveCustomServer.
+func (mr *MockVPNClientMockRecorder) RemoveCustomServer(tag any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveCustomServer", reflect.TypeOf((*MockVPNClient)(nil).RemoveCustomServer), tag)
+}
+
 // Resume mocks base method.
 func (m *MockVPNClient) Resume() {
 	m.ctrl.T.Helper()
@@ -82,17 +96,17 @@ func (mr *MockVPNClientMockRecorder) Resume() *gomock.Call {
 }
 
 // SelectCustomServer mocks base method.
-func (m *MockVPNClient) SelectCustomServer(cfg boxservice.ServerConnectConfig) error {
+func (m *MockVPNClient) SelectCustomServer(tag string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SelectCustomServer", cfg)
+	ret := m.ctrl.Call(m, "SelectCustomServer", tag)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SelectCustomServer indicates an expected call of SelectCustomServer.
-func (mr *MockVPNClientMockRecorder) SelectCustomServer(cfg any) *gomock.Call {
+func (mr *MockVPNClientMockRecorder) SelectCustomServer(tag any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SelectCustomServer", reflect.TypeOf((*MockVPNClient)(nil).SelectCustomServer), cfg)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SelectCustomServer", reflect.TypeOf((*MockVPNClient)(nil).SelectCustomServer), tag)
 }
 
 // Start mocks base method.

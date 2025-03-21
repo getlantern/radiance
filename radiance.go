@@ -36,7 +36,7 @@ var (
 	configPollInterval = 10 * time.Minute
 )
 
-//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
+//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 //go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
@@ -298,29 +298,14 @@ func newLog(logPath string) (*slog.Logger, error) {
 	return logger, nil
 }
 
-// SelectCustomServer configures the client to use the input server. cfg may be nil if
-// this server name is already configured for this user. If this server name is not configured
-// for this user, it will be added to the list of configured servers.
-func (r *Radiance) SelectCustomServer(name string, cfg boxservice.ServerConnectConfig) error {
-	// TODO: This function should persist the selected configured servers locally.
-	// Since we're not storing configurations locally and don't have a directory
-	// this info thill should be implemented in the future.
-	r.configuredServersMutex.Lock()
-	defer r.configuredServersMutex.Unlock()
-	if cfg == nil {
-		var exists bool
-		if cfg, exists = r.configuredServers[name]; !exists {
-			return fmt.Errorf("received a nil config and a not registered server with name %q", name)
-		}
-	} else {
-		r.configuredServers[name] = cfg
-	}
-
-	return r.vpnClient.SelectCustomServer(cfg)
+func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return r.vpnClient.AddCustomServer(tag, cfg)
 }
 
-// DeselectCustomServer configures the client to use its own choice of server assigned
-// by the Lantern back-end.
-func (r *Radiance) DeselectCustomServer() error {
-	return r.vpnClient.DeselectCustomServer()
+func (r *Radiance) SelectCustomServer(tag string) error {
+	return r.vpnClient.SelectCustomServer(tag)
+}
+
+func (r *Radiance) RemoveCustomServer(tag string) error {
+	return r.vpnClient.RemoveCustomServer(tag)
 }

@@ -25,8 +25,9 @@ type VPNClient interface {
 	Stop() error
 	Pause(dur time.Duration) error
 	Resume()
-	SelectCustomServer(cfg boxservice.ServerConnectConfig) error
-	DeselectCustomServer() error
+	AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error
+	SelectCustomServer(tag string) error
+	RemoveCustomServer(tag string) error
 }
 
 type vpnClient struct {
@@ -107,10 +108,14 @@ func (c *vpnClient) Resume() {
 	c.boxService.Wake()
 }
 
-func (c *vpnClient) SelectCustomServer(cfg boxservice.ServerConnectConfig) error {
-	return c.boxService.SelectCustomServer(cfg)
+func (c *vpnClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return c.boxService.AddCustomServer(tag, cfg)
 }
 
-func (c *vpnClient) DeselectCustomServer() error {
-	return c.boxService.DeselectCustomServer()
+func (c *vpnClient) SelectCustomServer(tag string) error {
+	return c.boxService.SelectCustomServer(tag)
+}
+
+func (c *vpnClient) RemoveCustomServer(tag string) error {
+	return c.boxService.RemoveCustomServer(tag)
 }
