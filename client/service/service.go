@@ -21,12 +21,21 @@ import (
 	"github.com/sagernet/sing/service/pause"
 
 	"github.com/getlantern/radiance/protocol"
+	splittunnel "github.com/getlantern/radiance/split-tunnel"
 )
+
+type Options struct {
+	SingboxConfig     string
+	DataPath          string
+	EnableSplitTunnel bool
+}
 
 // BoxService is a wrapper around libbox.BoxService
 type BoxService struct {
 	libbox *libbox.BoxService
 	ctx    context.Context
+
+	splitTunnel *splittunnel.Manager
 
 	pauseManager pause.Manager
 	pauseAccess  sync.Mutex
@@ -35,7 +44,7 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, logOutput string, platIfce libbox.PlatformInterface) (*BoxService, error) {
+func New(options Options, platIfce libbox.PlatformInterface) (*BoxService, error) {
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
 	ctx := box.Context(
 		context.Background(),
@@ -43,14 +52,20 @@ func New(config, logOutput string, platIfce libbox.PlatformInterface) (*BoxServi
 		outboundRegistry,
 		endpointRegistry,
 	)
-	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
+	lb, err := libbox.NewServiceWithContext(ctx, options.SingboxConfig, platIfce)
 	if err != nil {
 		return nil, fmt.Errorf("create libbox service: %w", err)
 	}
 
+	stm := splittunnel.NewManager(options.DataPath, options.EnableSplitTunnel)
+	if err := stm.Start(ctx); err != nil {
+		// TODO: log error. which logger?
+		// fmt.Errorf("start split tunnel manager: %w", err)
+	}
 	bs := &BoxService{
 		libbox:       lb,
 		ctx:          ctx,
+		splitTunnel:  stm,
 		pauseManager: service.FromContext[pause.Manager](ctx),
 		pauseAccess:  sync.Mutex{},
 	}
