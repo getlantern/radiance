@@ -4,14 +4,18 @@ import (
 	"os"
 	"testing"
 
+	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSendReport(t *testing.T) {
+	f := fronted.NewFronted(
+		fronted.WithConfigURL("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"),
+	)
 	k := kindling.NewKindling(
-		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	user := user.New(k.NewHTTPClient())

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
+	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/app"
@@ -74,14 +77,14 @@ type Radiance struct {
 func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	var err error
 	dataDirPath, logDir, err := setupDirs(dataDir)
 	if err != nil {
 		//TODO: should we return the err? logpath isn't set yet..
 	}
 
 	logPath := filepath.Join(logDir, app.LogFileName)
-	log, err = newLog(logPath)
+	var logWriter io.Writer
+	log, logWriter, err = newLog(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not create log file: %w", err)
 	}
@@ -91,10 +94,16 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, err
 	}
 
+	f, err := newFronted(logWriter, reporting.PanicListener,
+		"https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz",
+		"", filepath.Join(dataDirPath, "fronted_cache.json"))
+	if err != nil {
+		return nil, err
+	}
 	// TODO: Ideally we would know the user locale here on radiance startup.
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	user := user.New(k.NewHTTPClient())
@@ -282,13 +291,44 @@ func setupDirs(baseDir string) (dataDir, logDir string, err error) {
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (*slog.Logger, error) {
-	f, err := os.Create(logPath)
+func newLog(logPath string) (*slog.Logger, io.Writer, error) {
+	// If the log file does not exist, create it.
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
-	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
+	logWriter := io.MultiWriter(os.Stdout, f)
+	logger := slog.New(slog.NewTextHandler(logWriter, nil))
 	slog.SetDefault(logger)
-	return logger, nil
+	return logger, logWriter, nil
+}
+
+func newFronted(logWriter io.Writer, panicListener func(string), configURL, countryCode, cacheFile string) (fronted.Fronted, error) {
+	// Parse the domain from the URL.
+	u, err := url.Parse(configURL)
+	if err != nil {
+		log.Error("Failed to parse URL", "error", err)
+		return nil, fmt.Errorf("failed to parse URL: %v", err)
+	}
+	// Extract the domain from the URL.
+	domain := u.Host
+
+	// First, download the file from the specified URL using the smart dialer.
+	// Then, create a new fronted instance with the downloaded file.
+	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
+	if err != nil {
+		log.Error("Failed to create smart HTTP transport", "error", err)
+		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
+	}
+	httpClient := &http.Client{
+		Transport: trans,
+	}
+	return fronted.NewFronted(
+		fronted.WithPanicListener(panicListener),
+		fronted.WithCacheFile(cacheFile),
+		fronted.WithHTTPClient(httpClient),
+		fronted.WithConfigURL(configURL),
+		fronted.WithCountryCode(countryCode),
+	), nil
 }
