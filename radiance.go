@@ -29,7 +29,7 @@ import (
 )
 
 var (
-	logDir string
+	logsDir string
 
 	log *slog.Logger
 
@@ -258,7 +258,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		logDir,
+		logsDir,
 		email,
 		typeInt,
 		report.Description,
@@ -268,13 +268,13 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func setupDirs(baseDir string) (string, string, error) {
+func setupDirs(baseDir string) (dataDir, logDir string, err error) {
 	// On Windows, Mac, and Linux, we can easily determine the user directories in Go. Typically mobile will have
 	// to pass the base directory to use.
 	if baseDir == "" {
 		return appdir.General(app.Name), appdir.Logs(app.Name), nil
 	}
-	logDir := filepath.Join(baseDir, "logs")
+	logDir = filepath.Join(baseDir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return "", "", fmt.Errorf("failed to setup data directory: %w", err)
 	}
