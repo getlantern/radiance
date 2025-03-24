@@ -63,7 +63,7 @@ type Radiance struct {
 	activeConfig *atomic.Value
 
 	connected   bool
-	statusMutex sync.Locker
+	statusMutex *sync.Mutex
 	stopChan    chan struct{}
 
 	user *user.User
@@ -118,7 +118,6 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDirPath),
 		activeConfig:  new(atomic.Value),
 		connected:     false,
-		statusMutex:   new(sync.Mutex),
 		stopChan:      make(chan struct{}),
 		user:          user,
 		issueReporter: issueReporter,
