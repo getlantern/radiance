@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,8 +29,7 @@ import (
 )
 
 var (
-	dataDirPath string
-	logPath     string
+	logDir string
 
 	log *slog.Logger
 
@@ -77,11 +75,12 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	reporting.Init()
 
 	var err error
-	dataDirPath, err = setupDataDir(dataDir)
+	dataDirPath, logDir, err := setupDirs(dataDir)
 	if err != nil {
 		//TODO: should we return the err? logpath isn't set yet..
 	}
 
+	logPath := filepath.Join(logDir, app.LogFileName)
 	log, err = newLog(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not create log file: %w", err)
@@ -259,7 +258,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		dataDirPath,
+		logDir,
 		email,
 		typeInt,
 		report.Description,
@@ -269,25 +268,17 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func setupDataDir(dir string) (string, error) {
-	if dir == "" {
-		if runtime.GOOS == "android" {
-			//To avoid panic from appDir
-			// need to set home dir
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			appdir.SetHomeDir(homeDir)
-		}
-		dir = appdir.General("Lantern")
+func setupDirs(baseDir string) (string, string, error) {
+	// On Windows, Mac, and Linux, we can easily determine the user directories in Go. Typically mobile will have
+	// to pass the base directory to use.
+	if baseDir == "" {
+		return appdir.General(app.Name), appdir.Logs(app.Name), nil
 	}
-	logDir := filepath.Join(dir, "logs")
+	logDir := filepath.Join(baseDir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return "", fmt.Errorf("failed to setup data directory: %w", err)
+		return "", "", fmt.Errorf("failed to setup data directory: %w", err)
 	}
-	logPath = filepath.Join(logDir, app.LogFileName)
-	return dir, nil
+	return baseDir, logDir, nil
 }
 
 // Return an slog logger configured to write to both stdout and the log file.

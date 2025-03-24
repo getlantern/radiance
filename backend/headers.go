@@ -38,7 +38,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	req.Header.Set(versionHeader, app.Version)
 	req.Header.Set(userIdHeader, strconv.FormatInt(user.LegacyID(), 10))
 	req.Header.Set(platformHeader, app.Platform)
-	req.Header.Set(appNameHeader, app.AppName)
+	req.Header.Set(appNameHeader, app.Name)
 	req.Header.Set(deviceIdHeader, user.DeviceID())
 	return req, nil
 }
