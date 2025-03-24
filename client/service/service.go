@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -35,7 +37,7 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, logOutput string, platIfce libbox.PlatformInterface) (*BoxService, error) {
+func New(config, dataDir string, platIfce libbox.PlatformInterface) (*BoxService, error) {
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
 	ctx := box.Context(
 		context.Background(),
@@ -43,6 +45,17 @@ func New(config, logOutput string, platIfce libbox.PlatformInterface) (*BoxServi
 		outboundRegistry,
 		endpointRegistry,
 	)
+	setupOpts := &libbox.SetupOptions{
+		BasePath:    dataDir,
+		WorkingPath: filepath.Join(dataDir, "data"),
+		TempPath:    filepath.Join(dataDir, "temp"),
+	}
+	if runtime.GOOS == "android" {
+		setupOpts.FixAndroidStack = true
+	}
+	if err := libbox.Setup(setupOpts); err != nil {
+		return nil, fmt.Errorf("setup libbox: %w", err)
+	}
 	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
 	if err != nil {
 		return nil, fmt.Errorf("create libbox service: %w", err)
