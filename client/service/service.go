@@ -157,6 +157,8 @@ func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error
 		}
 	}
 
+	// TODO: create a custom ruleset and fetch it from the new ruleset manager.
+
 	// TODO: This function should persist the selected configured servers locally.
 	// Since we're not storing configurations locally and don't have a directory
 	// this info thill should be implemented in the future.
