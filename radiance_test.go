@@ -20,7 +20,6 @@ func TestNewRadiance(t *testing.T) {
 		assert.NotNil(t, r.vpnClient)
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.activeConfig)
-		assert.NotNil(t, r.statusMutex)
 		assert.NotNil(t, r.stopChan)
 		assert.NotNil(t, r.user)
 		assert.NotNil(t, r.issueReporter)
