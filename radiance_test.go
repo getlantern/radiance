@@ -13,7 +13,7 @@ import (
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
-		r, err := NewRadiance("", nil)
+		r, err := NewRadiance(t.TempDir(), nil)
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 		assert.False(t, r.connected)
