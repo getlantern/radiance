@@ -12,14 +12,18 @@ import (
 )
 
 func TestNewRadiance(t *testing.T) {
-	// TODO: update tests to reflect current implementation of NewRadiance
-	t.Run("it should return a new Radiance instance", func(t *testing.T) {
+	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
 		r, err := NewRadiance("", nil)
+		assert.NotNil(t, r)
 		assert.NoError(t, err)
-		require.NotNil(t, r)
-		assert.NotNil(t, r.confHandler)
 		assert.False(t, r.connected)
+		assert.NotNil(t, r.vpnClient)
+		assert.NotNil(t, r.confHandler)
+		assert.NotNil(t, r.activeConfig)
 		assert.NotNil(t, r.statusMutex)
+		assert.NotNil(t, r.stopChan)
+		assert.NotNil(t, r.user)
+		assert.NotNil(t, r.issueReporter)
 	})
 }
 
