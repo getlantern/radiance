@@ -2,7 +2,7 @@
 Package ruleset provides functionality to add/remove filters to rulesets or enable/disable all rules
 using the ruleset.
 
-Currently, only supports [rule.LocalRuleSet] and the following filter types:
+Currently, only supports [rule.LocalRuleSet] with only 1 [option.DefaultRule] and the following filter types:
   - domain
   - domainSuffix
   - domainKeyword
@@ -10,7 +10,21 @@ Currently, only supports [rule.LocalRuleSet] and the following filter types:
   - processName
   - packageName
 
-The [rule.LocalRuleSet] stores the filters in a file named <tag>.json at the provided dataPath.
+JSON format:
+
+	{
+		"version":3,
+		"rules":[
+			{
+				"domain":["test.com", "test2.com", ... ],
+				"domain_suffix":[".cn"],
+				"domain_keyword":["test"],
+				"domain_regex":["^stun\\..+"],
+				"process_name":["chrome"],
+				"package_name":["com.android.chrome"]
+			}
+		]
+	}
 */
 package ruleset
 
