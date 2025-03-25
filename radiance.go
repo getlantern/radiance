@@ -79,7 +79,8 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	logPath := filepath.Join(logDir, app.LogFileName)
+	logsDir = logDir
+	logPath := filepath.Join(logsDir, app.LogFileName)
 	var logWriter io.Writer
 	log, logWriter, err = newLog(logPath)
 	if err != nil {
