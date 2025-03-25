@@ -30,7 +30,7 @@ func TestSelectCustomServer(t *testing.T) {
 
 	cfg, err := json.MarshalContext(ctx, boxoptions.BoxOptions)
 	require.NoError(t, err)
-	bs, err := New(string(cfg), "", nil)
+	bs, err := New(string(cfg), "", "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, bs)
 
