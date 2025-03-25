@@ -35,7 +35,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				return NewRadiance("", nil)
+				return NewRadiance(t.TempDir(), nil)
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.Nil(t, server)
@@ -45,7 +45,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return error when there is no current config",
 			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				r, err := NewRadiance("", nil)
+				r, err := NewRadiance(t.TempDir(), nil)
 				assert.NoError(t, err)
 				r.connected.Store(true)
 				return r, err
@@ -58,7 +58,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return the active server when VPN is connected",
 			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				r, err := NewRadiance("", nil)
+				r, err := NewRadiance(t.TempDir(), nil)
 				assert.NoError(t, err)
 				r.connected.Store(true)
 				r.activeConfig.Store(&config.Config{

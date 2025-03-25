@@ -104,8 +104,8 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	user := user.New(k.NewHTTPClient())
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), user)
+	u := user.New(k.NewHTTPClient())
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +113,11 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	return &Radiance{
 		vpnClient: vpnC,
 
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDirPath),
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
 		activeConfig:  new(atomic.Value),
 		connected:     atomic.Bool{},
 		stopChan:      make(chan struct{}),
-		user:          user,
+		user:          u,
 		issueReporter: issueReporter,
 	}, nil
 }
