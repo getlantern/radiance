@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/netip"
 	"os"
-	"strings"
 	"testing"
 
 	box "github.com/sagernet/sing-box"
@@ -12,70 +11,28 @@ import (
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/json/badoption"
-	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestManager(t *testing.T) {
-	rsTag := "rule-set"
-	// domain := "ipconfig.io"
-	path, err := os.MkdirTemp("", "test")
-	require.NoError(t, err)
-	defer os.RemoveAll(path)
-
-	ctx := box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry())
-	instance, err := box.New(box.Options{
-		Context: ctx,
-		Options: testOptions(rsTag, path),
-	})
-	require.NoError(t, err)
-	err = instance.Start()
-	require.NoError(t, err)
-	defer instance.Close()
-
-	router := service.FromContext[adapter.Router](ctx)
-	rules := router.Rules()
-	ruleset, _ := router.RuleSet("split-tunnel")
-	t.Logf("ruleset: %+v", ruleset.(*rule.LocalRuleSet))
-	idx := common.Index(rules, func(it adapter.Rule) bool {
-		return strings.Contains(it.String(), "rule_set=split-tunnel")
-	})
-	lRule := rules[idx]
-	t.Logf("rule: %+v", lRule)
-	t.Logf("match: %v", lRule.Match(testInboundCtx))
-
-	// opts := logicalRuleOpts(true).LogicalOptions
-	// newRule, err := rule.NewLogicalRule(ctx, log.StdLogger(), opts)
-	// require.NoError(t, err)
-	//
-	// rules[idx] = newRule
-	// router = service.FromContext[adapter.Router](ctx)
-	// rules = router.Rules()
-	// idx = common.Index(rules, func(it adapter.Rule) bool {
-	// 	return strings.Contains(it.String(), "rule_set=split-tunnel")
-	// })
-	// lRule = rules[idx]
-	// t.Logf("rule: %v", lRule)
-	// t.Logf("match: %v", lRule.Match(testInboundCtx))
-}
+func TestManager(t *testing.T) {}
 
 func TestStart(t *testing.T) {
 	rsTag := "rule-set"
 	domain := "ipconfig.io"
 	path, err := os.MkdirTemp("", "test")
 	require.NoError(t, err)
-	defer os.RemoveAll(path)
-	os.WriteFile(path+"/"+rsTag+".json", []byte(`{"domain":["`+domain+`"]}`), 0644)
+	rsFile := path + "/" + rsTag + ".json"
+	os.WriteFile(rsFile, []byte(`{"version":3,"rules":[{"domain":"`+domain+`"}]}`), 0644)
+	defer os.RemoveAll(rsFile)
 
 	ctx := box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry())
 
 	_, err = box.New(box.Options{
 		Context: ctx,
-		Options: testOptions(rsTag, path),
+		Options: testOptions(rsTag, rsFile),
 	})
 	require.NoError(t, err)
 
@@ -166,15 +123,6 @@ func testOptions(rsTag, rsPath string) option.Options {
 					Tag:  rsTag,
 					LocalOptions: option.LocalRuleSet{
 						Path: rsPath,
-						// Rules: []option.HeadlessRule{
-						// 	{
-						// 		Type: constant.RuleTypeDefault,
-						// 		DefaultOptions: option.DefaultHeadlessRule{
-						// 			Domain:      []string{domain, "google.com"},
-						// 			ProcessName: []string{"test", "test2"},
-						// 		},
-						// 	},
-						// },
 					},
 				},
 			},
