@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,7 +68,7 @@ type Radiance struct {
 	configuredServers      map[string]boxservice.ServerConnectConfig
 	issueReporter          *issue.IssueReporter
 
-	logsDir       string
+	logsDir string
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -88,7 +89,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
+	vpnC, err := client.NewVPNClient(dataDirPath, logDir, platIfce)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
@@ -123,7 +124,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		// for loading the configured servers and also the custom servers
 		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
 		configuredServersMutex: new(sync.Mutex),
-		logsDir:       logDir,
+		logsDir:                logDir,
 	}, nil
 }
 

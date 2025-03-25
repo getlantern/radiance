@@ -40,7 +40,7 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(logDir string, platIfce libbox.PlatformInterface) (VPNClient, error) {
+func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -55,7 +55,7 @@ func NewVPNClient(logDir string, platIfce libbox.PlatformInterface) (VPNClient, 
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), logDir, platIfce)
+	b, err := boxservice.New(string(buf), dataDir, logOutput, platIfce)
 	if err != nil {
 		return nil, err
 	}

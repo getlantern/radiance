@@ -48,7 +48,7 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface) (*BoxService, error) {
+func New(config, dataDir, logOutput string, platIfce libbox.PlatformInterface) (*BoxService, error) {
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
 	ctx := box.Context(
 		context.Background(),
