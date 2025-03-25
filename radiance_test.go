@@ -1,6 +1,7 @@
 package radiance
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,28 +12,30 @@ import (
 )
 
 func TestNewRadiance(t *testing.T) {
-	// TODO: update tests to reflect current implementation of NewRadiance
-	t.Run("it should return a new Radiance instance", func(t *testing.T) {
-		r, err := NewRadiance("", nil)
+	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
+		r, err := NewRadiance(t.TempDir(), nil)
+		assert.NotNil(t, r)
 		assert.NoError(t, err)
-		require.NotNil(t, r)
+		assert.False(t, r.connected.Load())
+		assert.NotNil(t, r.vpnClient)
 		assert.NotNil(t, r.confHandler)
-		assert.False(t, r.connected)
-		assert.NotNil(t, r.statusMutex)
+		assert.NotNil(t, r.activeConfig)
+		assert.NotNil(t, r.stopChan)
+		assert.NotNil(t, r.user)
+		assert.NotNil(t, r.issueReporter)
 	})
 }
 
 func TestGetActiveServer(t *testing.T) {
 	var tests = []struct {
 		name   string
-		setup  func(*gomock.Controller) *Radiance
+		setup  func(*gomock.Controller) (*Radiance, error)
 		assert func(*testing.T, *Server, error)
 	}{
 		{
 			name: "it should return nil when VPN is disconnected",
-			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance("", nil)
-				return r
+			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
+				return NewRadiance(t.TempDir(), nil)
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.Nil(t, server)
@@ -41,11 +44,11 @@ func TestGetActiveServer(t *testing.T) {
 		},
 		{
 			name: "it should return error when there is no current config",
-			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance("", nil)
+			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
+				r, err := NewRadiance(t.TempDir(), nil)
 				assert.NoError(t, err)
-				r.connected = true
-				return r
+				r.connected.Store(true)
+				return r, err
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.Nil(t, server)
@@ -54,16 +57,16 @@ func TestGetActiveServer(t *testing.T) {
 		},
 		{
 			name: "it should return the active server when VPN is connected",
-			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, err := NewRadiance("", nil)
+			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
+				r, err := NewRadiance(t.TempDir(), nil)
 				assert.NoError(t, err)
-				r.connected = true
+				r.connected.Store(true)
 				r.activeConfig.Store(&config.Config{
 					Addr:     "1.2.3.4",
 					Protocol: "random",
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
 				})
-				return r
+				return r, err
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.NoError(t, err)
@@ -79,7 +82,9 @@ func TestGetActiveServer(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			r := tt.setup(ctrl)
+			r, err := tt.setup(ctrl)
+			assert.NoError(t, err)
+			assert.NotNil(t, r)
 			server, err := r.GetActiveServer()
 			tt.assert(t, server, err)
 		})
@@ -130,10 +135,33 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance("", nil)
+			r, err := NewRadiance(t.TempDir(), nil)
 			require.NoError(t, err)
-			err = r.ReportIssue(tt.email, tt.report)
+			err = r.ReportIssue(tt.email, &tt.report)
 			tt.assert(t, err)
 		})
 	}
+}
+func TestSetupDirs(t *testing.T) {
+	t.Run("it should return default directories when baseDir is empty", func(t *testing.T) {
+		dataDir, logDir, err := setupDirs("")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, dataDir)
+		assert.NotEmpty(t, logDir)
+	})
+
+	t.Run("it should create and return directories when baseDir is provided", func(t *testing.T) {
+		baseDir := t.TempDir()
+		dataDir, logDir, err := setupDirs(baseDir)
+		assert.NoError(t, err)
+		assert.Equal(t, baseDir, dataDir)
+		assert.Equal(t, filepath.Join(baseDir, "logs"), logDir)
+		assert.DirExists(t, logDir)
+	})
+
+	t.Run("it should return error when it fails to create directories", func(t *testing.T) {
+		baseDir := "/invalid/path"
+		_, _, err := setupDirs(baseDir)
+		assert.Error(t, err)
+	})
 }
