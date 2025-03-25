@@ -30,13 +30,9 @@ import (
 	"github.com/getlantern/radiance/user"
 )
 
-var (
-	logsDir string
+var log *slog.Logger
 
-	log *slog.Logger
-
-	configPollInterval = 10 * time.Minute
-)
+const configPollInterval = 10 * time.Minute
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
 
@@ -66,6 +62,7 @@ type Radiance struct {
 	user *user.User
 
 	issueReporter *issue.IssueReporter
+	logsDir       string
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -79,8 +76,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	logsDir = logDir
-	logPath := filepath.Join(logsDir, app.LogFileName)
+	logPath := filepath.Join(logDir, app.LogFileName)
 	var logWriter io.Writer
 	log, logWriter, err = newLog(logPath)
 	if err != nil {
@@ -116,6 +112,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
+		logsDir:       logDir,
 	}, nil
 }
 
@@ -257,7 +254,7 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		logsDir,
+		r.logsDir,
 		email,
 		typeInt,
 		report.Description,
