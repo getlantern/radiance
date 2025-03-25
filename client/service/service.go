@@ -36,7 +36,7 @@ type BoxService struct {
 	pauseAccess  sync.Mutex
 	pauseTimer   *time.Timer
 	mu           sync.Mutex
-	isRunning    atomic.Bool
+	isRunning    bool
 }
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
@@ -65,7 +65,7 @@ func (bs *BoxService) Start() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	if bs.isRunning.Load() {
+	if bs.isRunning {
 		return errors.New("service is already running")
 	}
 
@@ -80,7 +80,7 @@ func (bs *BoxService) Start() error {
 	bs.pauseManager = service.FromContext[pause.Manager](ctx)
 
 	if err = lb.Start(); err == nil {
-		bs.isRunning.Store(true)
+		bs.isRunning = true
 	}
 	return err
 }
@@ -109,7 +109,7 @@ func (bs *BoxService) Close() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	if !bs.isRunning.Load() {
+	if !bs.isRunning {
 		return errors.New("service already stopped")
 	}
 
@@ -127,7 +127,7 @@ func (bs *BoxService) Close() error {
 		bs.libbox = nil
 	}
 
-	bs.isRunning.Store(false)
+	bs.isRunning = false
 	return nil
 }
 
