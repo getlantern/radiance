@@ -99,7 +99,7 @@ func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox
 	// initialize the libbox service
 	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create libbox service: %v", err)
+		return nil, nil, fmt.Errorf("create libbox service: %w", err)
 	}
 
 	return lb, ctx, nil
