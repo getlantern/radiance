@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -34,7 +36,8 @@ var log *slog.Logger
 
 const configPollInterval = 10 * time.Minute
 
-//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
+//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
+//go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
@@ -61,8 +64,11 @@ type Radiance struct {
 
 	user *user.User
 
-	issueReporter *issue.IssueReporter
-	logsDir       string
+	configuredServersMutex sync.Locker
+	configuredServers      map[string]boxservice.ServerConnectConfig
+	issueReporter          *issue.IssueReporter
+
+	logsDir string
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -83,7 +89,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
+	vpnC, err := client.NewVPNClient(dataDirPath, logDir, platIfce)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
@@ -114,7 +120,11 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
-		logsDir:       logDir,
+		// TODO: after we start to persist data, we should update this implementation
+		// for loading the configured servers and also the custom servers
+		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
+		configuredServersMutex: new(sync.Mutex),
+		logsDir:                logDir,
 	}, nil
 }
 
@@ -319,4 +329,16 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
 	), nil
+}
+
+func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return r.vpnClient.AddCustomServer(tag, cfg)
+}
+
+func (r *Radiance) SelectCustomServer(tag string) error {
+	return r.vpnClient.SelectCustomServer(tag)
+}
+
+func (r *Radiance) RemoveCustomServer(tag string) error {
+	return r.vpnClient.RemoveCustomServer(tag)
 }
