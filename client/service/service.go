@@ -64,6 +64,7 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface) (*BoxService
 func (bs *BoxService) Start() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
+
 	if bs.isRunning.Load() {
 		return errors.New("service is already running")
 	}
@@ -123,6 +124,7 @@ func (bs *BoxService) Close() error {
 		if err != nil {
 			return fmt.Errorf("failed to close libbox: %v", err)
 		}
+		bs.libbox = nil
 	}
 
 	bs.isRunning.Store(false)
