@@ -103,9 +103,8 @@ func (m *MutableRuleSet) Start(ctx context.Context) error {
 
 	// load filters from the ruleset and register a callback to reload filters when the ruleset
 	// changes so we're always in sync.
-	fmt.Println("ruleset", ruleset)
-	m.loadFilters(ruleset)
 	ruleset.RegisterCallback(m.loadFilters)
+	m.loadFilters(ruleset)
 	return nil
 }
 
@@ -224,11 +223,12 @@ func (m *MutableRuleSet) saveToFile() error {
 
 // loadFilters loads filters from the given [adapter.RuleSet].
 func (m *MutableRuleSet) loadFilters(s adapter.RuleSet) {
-	filters := s.String()
-	fmt.Println("filters", filters)
-	rule, _ := json.UnmarshalExtended[option.HeadlessRule]([]byte(filters))
+	// we can safely ignore all errors in this function since the wrapped rule.LocalRuleSet would have
+	// already failed before calling this function.
+	content, _ := os.ReadFile(m.ruleFile)
+	ruleSet, _ := json.UnmarshalExtended[option.PlainRuleSetCompat](content)
 	m.filterMu.Lock()
-	m.filter = rule.DefaultOptions
+	m.filter = ruleSet.Options.Rules[0].DefaultOptions
 	m.filterMu.Unlock()
 }
 
