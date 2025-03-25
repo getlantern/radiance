@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	box "github.com/sagernet/sing-box"
