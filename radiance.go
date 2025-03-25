@@ -160,7 +160,8 @@ func (r *Radiance) ResumeVPN() {
 	r.vpnClient.Resume()
 }
 
-func (r *Radiance) connectionStatus() bool {
+// Connection status returns whether or not we're connected to a proxy.
+func (r *Radiance) ConnectionStatus() bool {
 	return r.connected.Load()
 }
 
@@ -192,7 +193,7 @@ type Server struct {
 // GetActiveServer returns the remote VPN server this client is currently connected to.
 // It returns nil when VPN is disconnected
 func (r *Radiance) GetActiveServer() (*Server, error) {
-	if !r.connectionStatus() {
+	if !r.ConnectionStatus() {
 		return nil, nil
 	}
 	activeConfig := r.activeConfig.Load()
