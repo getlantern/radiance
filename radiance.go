@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -62,9 +61,10 @@ type Radiance struct {
 	confHandler  configHandler
 	activeConfig *atomic.Value
 
-	connected   bool
-	statusMutex *sync.Mutex
-	stopChan    chan struct{}
+	//connected   bool
+	//statusMutex *sync.Mutex
+	connected atomic.Bool
+	stopChan  chan struct{}
 
 	user *user.User
 
@@ -117,7 +117,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 
 		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user, dataDirPath),
 		activeConfig:  new(atomic.Value),
-		connected:     false,
+		connected:     atomic.Bool{},
 		stopChan:      make(chan struct{}),
 		user:          user,
 		issueReporter: issueReporter,
@@ -167,15 +167,11 @@ func (r *Radiance) ResumeVPN() {
 }
 
 func (r *Radiance) connectionStatus() bool {
-	r.statusMutex.Lock()
-	defer r.statusMutex.Unlock()
-	return r.connected
+	return r.connected.Load()
 }
 
 func (r *Radiance) setStatus(connected bool) {
-	r.statusMutex.Lock()
-	r.connected = connected
-	r.statusMutex.Unlock()
+	r.connected.Store(connected)
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
 	go func() {

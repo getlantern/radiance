@@ -16,7 +16,7 @@ func TestNewRadiance(t *testing.T) {
 		r, err := NewRadiance(t.TempDir(), nil)
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
-		assert.False(t, r.connected)
+		assert.False(t, r.connected.Load())
 		assert.NotNil(t, r.vpnClient)
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.activeConfig)
@@ -48,7 +48,7 @@ func TestGetActiveServer(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r, err := NewRadiance("", nil)
 				assert.NoError(t, err)
-				r.connected = true
+				r.connected.Store(true)
 				return r
 			},
 			assert: func(t *testing.T, server *Server, err error) {
@@ -61,7 +61,7 @@ func TestGetActiveServer(t *testing.T) {
 			setup: func(ctrl *gomock.Controller) *Radiance {
 				r, err := NewRadiance("", nil)
 				assert.NoError(t, err)
-				r.connected = true
+				r.connected.Store(true)
 				r.activeConfig.Store(&config.Config{
 					Addr:     "1.2.3.4",
 					Protocol: "random",
