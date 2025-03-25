@@ -159,7 +159,7 @@ func (r *Radiance) ResumeVPN() {
 	r.vpnClient.Resume()
 }
 
-func (r *Radiance) connectionStatus() bool {
+func (r *Radiance) ConnectionStatus() bool {
 	r.statusMutex.Lock()
 	defer r.statusMutex.Unlock()
 	return r.connected
@@ -195,7 +195,7 @@ type Server struct {
 // GetActiveServer returns the remote VPN server this client is currently connected to.
 // It returns nil when VPN is disconnected
 func (r *Radiance) GetActiveServer() (*Server, error) {
-	if !r.connectionStatus() {
+	if !r.ConnectionStatus() {
 		return nil, nil
 	}
 	activeConfig := r.activeConfig.Load()
