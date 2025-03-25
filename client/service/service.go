@@ -78,7 +78,7 @@ func (bs *BoxService) Start() error {
 	bs.ctx = ctx
 	bs.pauseManager = service.FromContext[pause.Manager](ctx)
 
-	if err = bs.libbox.Start(); err == nil {
+	if err = lb.Start(); err == nil {
 		bs.isRunning.Store(true)
 	}
 	return err
@@ -109,7 +109,7 @@ func (bs *BoxService) Close() error {
 	defer bs.mu.Unlock()
 
 	if !bs.isRunning.Load() {
-		return errors.New("service already closed")
+		return errors.New("service already stopped")
 	}
 
 	// Clear pause timer
@@ -153,6 +153,8 @@ func (bs *BoxService) Wake() {
 		return
 	}
 	bs.pauseManager.NetworkWake()
-	bs.pauseTimer.Stop()
-	bs.pauseTimer = nil
+	if bs.pauseTimer != nil {
+		bs.pauseTimer.Stop()
+		bs.pauseTimer = nil
+	}
 }
