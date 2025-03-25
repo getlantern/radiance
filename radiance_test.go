@@ -137,7 +137,7 @@ func TestReportIssue(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r, err := NewRadiance(t.TempDir(), nil)
 			require.NoError(t, err)
-			err = r.ReportIssue(tt.email, tt.report)
+			err = r.ReportIssue(tt.email, &tt.report)
 			tt.assert(t, err)
 		})
 	}

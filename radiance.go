@@ -60,11 +60,8 @@ type Radiance struct {
 
 	confHandler  configHandler
 	activeConfig *atomic.Value
-
-	//connected   bool
-	//statusMutex *sync.Mutex
-	connected atomic.Bool
-	stopChan  chan struct{}
+	connected    atomic.Bool
+	stopChan     chan struct{}
 
 	user *user.User
 
@@ -79,7 +76,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 
 	dataDirPath, logDir, err := setupDirs(dataDir)
 	if err != nil {
-		//TODO: should we return the err? logpath isn't set yet..
+		return nil, fmt.Errorf("failed to setup directories: %w", err)
 	}
 
 	logPath := filepath.Join(logDir, app.LogFileName)
@@ -91,7 +88,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 
 	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
 	// TODO: Ideally we would know the user locale to set the country on fronted startup.
@@ -107,12 +104,11 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	u := user.New(k.NewHTTPClient())
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
 
 	return &Radiance{
-		vpnClient: vpnC,
-
+		vpnClient:     vpnC,
 		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
 		activeConfig:  new(atomic.Value),
 		connected:     atomic.Bool{},
@@ -242,7 +238,7 @@ var issueTypeMap = map[string]int{
 }
 
 // ReportIssue submits an issue report to the back-end with an optional user email
-func (r *Radiance) ReportIssue(email string, report IssueReport) error {
+func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
 	}
@@ -323,6 +319,5 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 		fronted.WithCacheFile(cacheFile),
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
-		//fronted.WithCountryCode(countryCode),
 	), nil
 }
