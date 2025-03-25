@@ -29,14 +29,13 @@ func TestNewRadiance(t *testing.T) {
 func TestGetActiveServer(t *testing.T) {
 	var tests = []struct {
 		name   string
-		setup  func(*gomock.Controller) *Radiance
+		setup  func(*gomock.Controller) (*Radiance, error)
 		assert func(*testing.T, *Server, error)
 	}{
 		{
 			name: "it should return nil when VPN is disconnected",
-			setup: func(ctrl *gomock.Controller) *Radiance {
-				r, _ := NewRadiance("", nil)
-				return r
+			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
+				return NewRadiance("", nil)
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.Nil(t, server)
@@ -45,11 +44,11 @@ func TestGetActiveServer(t *testing.T) {
 		},
 		{
 			name: "it should return error when there is no current config",
-			setup: func(ctrl *gomock.Controller) *Radiance {
+			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
 				r, err := NewRadiance("", nil)
 				assert.NoError(t, err)
 				r.connected.Store(true)
-				return r
+				return r, err
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.Nil(t, server)
@@ -58,7 +57,7 @@ func TestGetActiveServer(t *testing.T) {
 		},
 		{
 			name: "it should return the active server when VPN is connected",
-			setup: func(ctrl *gomock.Controller) *Radiance {
+			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
 				r, err := NewRadiance("", nil)
 				assert.NoError(t, err)
 				r.connected.Store(true)
@@ -67,7 +66,7 @@ func TestGetActiveServer(t *testing.T) {
 					Protocol: "random",
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
 				})
-				return r
+				return r, err
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.NoError(t, err)
@@ -83,7 +82,9 @@ func TestGetActiveServer(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			r := tt.setup(ctrl)
+			r, err := tt.setup(ctrl)
+			assert.NoError(t, err)
+			assert.NotNil(t, r)
 			server, err := r.GetActiveServer()
 			tt.assert(t, server, err)
 		})

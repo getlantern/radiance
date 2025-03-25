@@ -94,13 +94,11 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, err
 	}
 
-	f, err := newFronted(logWriter, reporting.PanicListener,
-		"https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz",
-		"", filepath.Join(dataDirPath, "fronted_cache.json"))
+	// TODO: Ideally we would know the user locale to set the country on fronted startup.
+	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(dataDirPath, "fronted_cache.json"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
-	// TODO: Ideally we would know the user locale here on radiance startup.
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithDomainFronting(f),
@@ -299,8 +297,9 @@ func newLog(logPath string) (*slog.Logger, io.Writer, error) {
 	return logger, logWriter, nil
 }
 
-func newFronted(logWriter io.Writer, panicListener func(string), configURL, countryCode, cacheFile string) (fronted.Fronted, error) {
+func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {
 	// Parse the domain from the URL.
+	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
 	u, err := url.Parse(configURL)
 	if err != nil {
 		log.Error("Failed to parse URL", "error", err)
@@ -324,6 +323,6 @@ func newFronted(logWriter io.Writer, panicListener func(string), configURL, coun
 		fronted.WithCacheFile(cacheFile),
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
-		fronted.WithCountryCode(countryCode),
+		//fronted.WithCountryCode(countryCode),
 	), nil
 }
