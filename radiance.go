@@ -80,17 +80,19 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	var logWriter io.Writer
 	log, logWriter, err = newLog(logPath)
 	if err != nil {
-		return nil, fmt.Errorf("could not create log file: %w", err)
+		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 
 	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
+		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
 	// TODO: Ideally we would know the user locale to set the country on fronted startup.
 	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(dataDirPath, "fronted_cache.json"))
 	if err != nil {
+		log.Error("Failed to create fronted", "error", err)
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 	k := kindling.NewKindling(
@@ -243,13 +245,13 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	// get issue type as integer
 	typeInt, ok := issueTypeMap[report.Type]
 	if !ok {
-		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
+		log.Error("Unknown issue type: %s, set to Other", "type", report.Type)
 		typeInt = 9
 	}
 	// get country from the config returned by the backend
 	_, country, err := r.confHandler.GetConfig(eventual.DontWait)
 	if err != nil {
-		slog.Error("Failed to get country", "error", err)
+		log.Error("Failed to get country", "error", err)
 		country = ""
 	}
 
@@ -296,7 +298,6 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
 	u, err := url.Parse(configURL)
 	if err != nil {
-		log.Error("Failed to parse URL", "error", err)
 		return nil, fmt.Errorf("failed to parse URL: %v", err)
 	}
 	// Extract the domain from the URL.
@@ -306,7 +307,6 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	// Then, create a new fronted instance with the downloaded file.
 	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
 	if err != nil {
-		log.Error("Failed to create smart HTTP transport", "error", err)
 		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
 	}
 	httpClient := &http.Client{
