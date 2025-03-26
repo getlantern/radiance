@@ -28,7 +28,7 @@ type EndpointOptions struct {
 	ResolvePeer  func(domain string) (netip.Addr, error)
 	Peers        []PeerOptions
 	Workers      int
-	option.WireGuardAdvancedSecurityOptions
+	option.WireGuardAdvancedSecurityOptions  /**  ADDED FOR AMNEZIA  **/
 }
 
 type PeerOptions struct {

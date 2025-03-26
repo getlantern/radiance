@@ -6,6 +6,7 @@ import (
 	"net/netip"
 )
 
+/*************  ADDED FOR AMNEZIA  *************/
 /*
 WireGuardAdvancedSecurityOptions provides advanced security options for WireGuard required to activate AmneziaWG.
 
@@ -33,6 +34,7 @@ type WireGuardAdvancedSecurityOptions struct {
 	UnderloadPacketMagicHeader uint32 `json:"underload_packet_magic_header,omitempty"` // h3
 	TransportPacketMagicHeader uint32 `json:"transport_packet_magic_header,omitempty"` // h4
 }
+/********************  END  ********************/
 type WireGuardEndpointOptions struct {
 	System     bool                             `json:"system,omitempty"`
 	Name       string                           `json:"name,omitempty"`
@@ -43,7 +45,7 @@ type WireGuardEndpointOptions struct {
 	Peers      []WireGuardPeer                  `json:"peers,omitempty"`
 	UDPTimeout badoption.Duration               `json:"udp_timeout,omitempty"`
 	Workers    int                              `json:"workers,omitempty"`
-	WireGuardAdvancedSecurityOptions
+	WireGuardAdvancedSecurityOptions	/**  ADDED FOR AMNEZIA  **/
 	O.DialerOptions
 }
 

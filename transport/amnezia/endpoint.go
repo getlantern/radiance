@@ -47,6 +47,8 @@ func NewEndpoint(options EndpointOptions) (*Endpoint, error) {
 	if options.ListenPort != 0 {
 		ipcConf += "\nlisten_port=" + F.ToString(options.ListenPort)
 	}
+
+	/*************  ADDED FOR AMNEZIA  *************/
 	if options.JunkPacketCount > 0 {
 		ipcConf += "\njc=" + F.ToString(options.JunkPacketCount)
 	}
@@ -74,6 +76,7 @@ func NewEndpoint(options EndpointOptions) (*Endpoint, error) {
 	if options.TransportPacketMagicHeader > 0 {
 		ipcConf += "\nh4=" + F.ToString(options.TransportPacketMagicHeader)
 	}
+	/********************  END  ********************/
 	var peers []peerConfig
 	for peerIndex, rawPeer := range options.Peers {
 		peer := peerConfig{
