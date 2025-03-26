@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"github.com/getlantern/radiance/protocol/amnezia"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -32,6 +33,9 @@ func registerInbounds(registry *inbound.Registry) {
 func registerOutbounds(registry *outbound.Registry) {
 	algeneva.RegisterOutbound(registry)
 	outline.RegisterOutbound(registry)
+	amnezia.RegisterOutbound(registry)
 }
 
-func registerEndpoints(registry *endpoint.Registry) {}
+func registerEndpoints(registry *endpoint.Registry) {
+	amnezia.RegisterEndpoint(registry)
+}
