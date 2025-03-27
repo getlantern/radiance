@@ -97,6 +97,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	}
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithLogWriter(logWriter),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
