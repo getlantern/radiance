@@ -87,8 +87,8 @@ github.com/getlantern/keyman v0.0.0-20180207174507-f55e7280e93a/go.mod h1:FMf0g7
 github.com/getlantern/keyman v0.0.0-20200819205636-76fef27c39f1/go.mod h1:FMf0g72BHs14jVcD8i8ubEk4sMB6JdidBn67d44i3ws=
 github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b h1:iyEuk8ARQC9HfraqC4r3leBhU55R1TV7bAiyPYE54kA=
 github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b/go.mod h1:ZJ+yDaZkJ/JU9j7EQa3UUh6ouedrNDDLA5OiowS1Iuk=
-github.com/getlantern/kindling v0.0.0-20250324213140-12dec99b91eb h1:IbQdIj16D/RXPgKNXDkUe91hBfd32D3F2fNFNjv3Qeg=
-github.com/getlantern/kindling v0.0.0-20250324213140-12dec99b91eb/go.mod h1:+18SvvV6dP5iBut/cdI1ywG1nPFq4ASp5iEjPJXHVAU=
+github.com/getlantern/kindling v0.0.0-20250327204452-cc0a77c57e75 h1:53+fJ0m3OxHKSarQC1jeixpl9xjX9s5KJES/moCkZEs=
+github.com/getlantern/kindling v0.0.0-20250327204452-cc0a77c57e75/go.mod h1:+18SvvV6dP5iBut/cdI1ywG1nPFq4ASp5iEjPJXHVAU=
 github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d h1:ACBwPR4du54Qw+X5ajsbMqOFR8euGZRdMGkvTDS7I60=
 github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d/go.mod h1:bDcK4RWBjBO+bBPLTCmaEyYK+n0/w0TrzvSCJOQmkgk=
 github.com/getlantern/mockconn v0.0.0-20191023022503-481dbcceeb58/go.mod h1:+F5GJ7qGpQ03DBtcOEyQpM30ix4BLswdaojecFtsdy8=
