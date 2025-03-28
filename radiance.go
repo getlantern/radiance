@@ -15,8 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
-
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/fronted"
@@ -68,10 +66,10 @@ type Radiance struct {
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
+func NewRadiance(opts client.Options) (*Radiance, error) {
 	reporting.Init()
 
-	dataDirPath, logDir, err := setupDirs(dataDir)
+	dataDirPath, logDir, err := setupDirs(opts.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup directories: %w", err)
 	}
@@ -83,7 +81,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
+	vpnC, err := client.NewVPNClient(opts)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
@@ -320,4 +318,9 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
 	), nil
+}
+
+// SplitTunnelHandler returns the split tunnel handler for the VPN client.
+func (r *Radiance) SplitTunnelHandler() *client.SplitTunnel {
+	return r.vpnClient.SplitTunnelHandler()
 }

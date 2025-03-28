@@ -8,12 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/config"
 )
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
-		r, err := NewRadiance(t.TempDir(), nil)
+		r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 		assert.False(t, r.connected.Load())
@@ -35,7 +36,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return nil when VPN is disconnected",
 			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				return NewRadiance(t.TempDir(), nil)
+				return NewRadiance(client.Options{DataDir: t.TempDir()})
 			},
 			assert: func(t *testing.T, server *Server, err error) {
 				assert.Nil(t, server)
@@ -45,7 +46,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return error when there is no current config",
 			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				r, err := NewRadiance(t.TempDir(), nil)
+				r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 				assert.NoError(t, err)
 				r.connected.Store(true)
 				return r, err
@@ -58,7 +59,7 @@ func TestGetActiveServer(t *testing.T) {
 		{
 			name: "it should return the active server when VPN is connected",
 			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				r, err := NewRadiance(t.TempDir(), nil)
+				r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 				assert.NoError(t, err)
 				r.connected.Store(true)
 				r.activeConfig.Store(&config.Config{
@@ -135,7 +136,7 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance(t.TempDir(), nil)
+			r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, &tt.report)
 			tt.assert(t, err)
