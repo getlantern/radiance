@@ -22,7 +22,6 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
-	mutruleset "github.com/getlantern/radiance/client/service/mutable-ruleset"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -321,6 +320,6 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 }
 
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.
-func (r *Radiance) SplitTunnelHandler() *mutruleset.SplitTunnel {
+func (r *Radiance) SplitTunnelHandler() *client.SplitTunnel {
 	return r.vpnClient.SplitTunnelHandler()
 }

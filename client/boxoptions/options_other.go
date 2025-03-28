@@ -4,7 +4,7 @@ package boxoptions
 
 import "github.com/sagernet/sing-box/option"
 
-func Options(dataDir, logOutput string) option.Options {
-	opts := boxOptions(dataDir, logOutput)
+func Options(dataDir, logOutput, splitTunnelTag, splitTunnelFormat string) option.Options {
+	opts := boxOptions(dataDir, logOutput, splitTunnelTag, splitTunnelFormat)
 	return opts
 }

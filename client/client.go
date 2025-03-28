@@ -58,7 +58,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 
 	// TODO: We should be fetching the options from the server.
 	logOutput := filepath.Join(opts.DataDir, "logs", "lantern-box.log")
-	boxOpts := boxoptions.Options(opts.DataDir, logOutput)
+	boxOpts := boxoptions.Options(opts.DataDir, logOutput, SplitTunnelTag, SplitTunnelFormat)
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
 		return nil, err

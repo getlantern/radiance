@@ -15,9 +15,9 @@ import (
 	"github.com/getlantern/radiance/option"
 )
 
-func boxOptions(dataDir, logOutput string) O.Options {
+func boxOptions(dataDir, logOutput, splitTunnelTag, splitTunnelFormat string) O.Options {
 	// TODO: handle error
-	splitTunFile, _ := mutruleset.FilePath(dataDir, mutruleset.SplitTunnelTag, mutruleset.SplitTunnelFormat)
+	splitTunFile, _ := mutruleset.FilePath(dataDir, splitTunnelTag, splitTunnelFormat)
 	return O.Options{
 		Log: &O.LogOptions{
 			Disabled:     false,
@@ -159,7 +159,7 @@ func boxOptions(dataDir, logOutput string) O.Options {
 						},
 					},
 				},
-				ruleset.BaseRouteRule(mutruleset.SplitTunnelTag, "direct"),
+				ruleset.BaseRouteRule(splitTunnelTag, "direct"),
 				{
 					Type: C.RuleTypeDefault,
 					DefaultOptions: O.DefaultRule{
@@ -205,7 +205,7 @@ func boxOptions(dataDir, logOutput string) O.Options {
 				},
 			},
 			RuleSet: []O.RuleSet{
-				ruleset.LocalRuleSet(mutruleset.SplitTunnelTag, splitTunFile, mutruleset.SplitTunnelFormat),
+				ruleset.LocalRuleSet(splitTunnelTag, splitTunFile, splitTunnelFormat),
 			},
 		},
 	}

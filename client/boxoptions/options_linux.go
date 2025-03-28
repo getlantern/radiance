@@ -6,8 +6,8 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
-func Options(dataDir, logOutput string) option.Options {
-	opts := boxOptions(dataDir, logOutput)
+func Options(dataDir, logOutput, splitTunnelTag, splitTunnelFormat string) option.Options {
+	opts := boxOptions(dataDir, logOutput, splitTunnelTag, splitTunnelFormat)
 	for _, opt := range opts.Inbounds {
 		if tun, ok := opt.Options.(*option.TunInboundOptions); ok {
 			if runtime.GOOS != "android" {
