@@ -1,20 +1,25 @@
+/*
+Package mutruleset provides constants for supported filter types and utility functions for working
+with rulesets.
+*/
 package mutruleset
 
 import (
 	"errors"
 	"path/filepath"
 
+	"github.com/getlantern/sing-box-extensions/ruleset"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 )
 
 const (
-	TypeDomain        = "domain"        // ex: "example.com"
-	TypeDomainSuffix  = "domainSuffix"  // ex: ".cn"
-	TypeDomainKeyword = "domainKeyword" // ex: "example"
-	TypeDomainRegex   = "domainRegex"   // ex: ".*\.com"
-	TypeProcessName   = "processName"   // ex: "chrome"
-	TypePackageName   = "packageName"   // ex: "com.android.chrome" (Android)
+	TypeDomain        = ruleset.TypeDomain        // ex: "example.com"
+	TypeDomainSuffix  = ruleset.TypeDomainSuffix  // ex: ".cn"
+	TypeDomainKeyword = ruleset.TypeDomainKeyword // ex: "example"
+	TypeDomainRegex   = ruleset.TypeDomainRegex   // ex: ".*\.com"
+	TypeProcessName   = ruleset.TypeProcessName   // ex: "chrome"
+	TypePackageName   = ruleset.TypePackageName   // ex: "com.android.chrome" (Android)
 )
 
 type RuleSet = option.DefaultHeadlessRule

@@ -8,13 +8,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
+	"github.com/getlantern/sing-box-extensions/ruleset"
+
 	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
-	mutruleset "github.com/getlantern/radiance/client/service/mutable-ruleset"
 )
 
 var (
@@ -34,12 +36,12 @@ type VPNClient interface {
 	Stop() error
 	Pause(dur time.Duration) error
 	Resume()
-	SplitTunnelHandler() *mutruleset.SplitTunnel
+	SplitTunnelHandler() *SplitTunnel
 }
 
 type vpnClient struct {
 	boxService         *boxservice.BoxService
-	splitTunnelHandler *mutruleset.SplitTunnel
+	splitTunnelHandler *SplitTunnel
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -66,7 +68,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	splitTun, err := mutruleset.SplitTunnelHandler(b.RulesetManager(), opts.DataDir, opts.EnableSplitTunneling)
+	splitTun, err := initSplitTunnel(b.RulesetManager(), opts.DataDir, opts.EnableSplitTunneling)
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
@@ -123,6 +125,29 @@ func (c *vpnClient) Resume() {
 	c.boxService.Wake()
 }
 
-func (c *vpnClient) SplitTunnelHandler() *mutruleset.SplitTunnel {
+func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
 	return c.splitTunnelHandler
+}
+
+const (
+	SplitTunnelTag    = "split-tunnel"
+	SplitTunnelFormat = constant.RuleSetFormatSource // file will be saved as json
+)
+
+type SplitTunnel = ruleset.MutableRuleSet
+
+// initSplitTunnel initializes the split tunnel ruleset handler. It retrieves an existing mutable
+// ruleset associated with the SplitTunnelTag or creates a new one if it doesn't exist. dataDir is
+// the directory where the ruleset data is stored. The initial state is determined by the enabled
+// parameter.
+func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*SplitTunnel, error) {
+	rs := mgr.MutableRuleSet(SplitTunnelTag)
+	if rs == nil {
+		var err error
+		rs, err = mgr.NewMutableRuleSet(dataDir, SplitTunnelTag, SplitTunnelFormat, enabled)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return (*SplitTunnel)(rs), nil
 }
