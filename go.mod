@@ -20,10 +20,11 @@ require (
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250324213140-12dec99b91eb
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
+	github.com/getlantern/sing-box-extensions v0.0.0-20250328212829-88023605a644
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
 	github.com/google/uuid v1.6.0
-	github.com/sagernet/sing v0.6.3
+	github.com/sagernet/sing v0.6.4
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31

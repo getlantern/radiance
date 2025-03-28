@@ -14,6 +14,7 @@ import (
 
 	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
+	mutruleset "github.com/getlantern/radiance/client/service/mutable-ruleset"
 )
 
 var (
@@ -21,15 +22,24 @@ var (
 	clientMu sync.Mutex
 )
 
+type Options struct {
+	DataDir  string
+	PlatIfce libbox.PlatformInterface
+	// EnableSplitTunneling is the initial state of split tunneling when the service starts
+	EnableSplitTunneling bool
+}
+
 type VPNClient interface {
 	Start() error
 	Stop() error
 	Pause(dur time.Duration) error
 	Resume()
+	SplitTunnelHandler() *mutruleset.SplitTunnel
 }
 
 type vpnClient struct {
-	boxService *boxservice.BoxService
+	boxService         *boxservice.BoxService
+	splitTunnelHandler *mutruleset.SplitTunnel
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -37,7 +47,7 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(logDir string, platIfce libbox.PlatformInterface) (VPNClient, error) {
+func NewVPNClient(opts Options) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -45,19 +55,25 @@ func NewVPNClient(logDir string, platIfce libbox.PlatformInterface) (VPNClient, 
 	}
 
 	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(logDir, "lantern-box.log")
-	opts := boxoptions.Options(logOutput)
-	buf, err := json.Marshal(opts)
+	logOutput := filepath.Join(opts.DataDir, "logs", "lantern-box.log")
+	boxOpts := boxoptions.Options(opts.DataDir, logOutput)
+	buf, err := json.Marshal(boxOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), logDir, platIfce)
+	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce)
 	if err != nil {
 		return nil, err
 	}
+	splitTun, err := mutruleset.SplitTunnelHandler(b.RulesetManager(), opts.DataDir, opts.EnableSplitTunneling)
+	if err != nil {
+		return nil, fmt.Errorf("split tunnel handler: %w", err)
+	}
+
 	client = &vpnClient{
-		boxService: b,
+		boxService:         b,
+		splitTunnelHandler: splitTun,
 	}
 	return client, nil
 }
@@ -105,4 +121,8 @@ func (c *vpnClient) Pause(dur time.Duration) error {
 // Resume resumes the VPN client
 func (c *vpnClient) Resume() {
 	c.boxService.Wake()
+}
+
+func (c *vpnClient) SplitTunnelHandler() *mutruleset.SplitTunnel {
+	return c.splitTunnelHandler
 }
