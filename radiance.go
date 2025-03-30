@@ -27,6 +27,7 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
+	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/user"
 )
 
@@ -82,6 +83,13 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	if err != nil {
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
+	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
+	if err != nil {
+		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
+		return nil, fmt.Errorf("failed to setup OpenTelemetry SDK: %w", err)
+	}
+	log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
+	// TODO: add shutdownMetrics to a stop function.
 
 	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
