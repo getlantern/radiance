@@ -11,6 +11,7 @@ type metricsManager struct {
 	bytesSent     metric.Int64Counter
 	bytesReceived metric.Int64Counter
 	duration      metric.Int64Histogram
+	conns         metric.Int64UpDownCounter
 }
 
 var metrics = newMetricsManager()
@@ -31,10 +32,17 @@ func newMetricsManager() *metricsManager {
 	if err != nil {
 		duration = &noop.Int64Histogram{}
 	}
+
+	// Track the number of connections.
+	conns, err := meter.Int64UpDownCounter("sing_box.connections", metric.WithDescription("Number of connections"))
+	if err != nil {
+		conns = &noop.Int64UpDownCounter{}
+	}
 	return &metricsManager{
 		meter:         meter,
 		bytesSent:     bytesSent,
 		bytesReceived: bytesReceived,
 		duration:      duration,
+		conns:         conns,
 	}
 }

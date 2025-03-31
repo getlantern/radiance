@@ -59,5 +59,6 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 func (c *Conn) Close() error {
 	duration := time.Since(c.startTime).Milliseconds()
 	metrics.duration.Record(context.Background(), duration, metric.WithAttributes(c.attributes...))
+	metrics.conns.Add(context.Background(), -1, metric.WithAttributes(c.attributes...))
 	return c.Conn.Close()
 }
