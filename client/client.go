@@ -95,7 +95,7 @@ func (c *vpnClient) StopVPN() error {
 		return errors.New("VPN client is not running")
 	}
 
-	slog.Debug("Stoping VPN client")
+	slog.Debug("Stopping VPN client")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	var err error
 	go func() {
