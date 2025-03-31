@@ -1,71 +1,40 @@
 package metrics
 
 import (
-	"context"
-	"net"
-
-	"github.com/sagernet/sing-box/adapter"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
-// Conn wraps a net.Conn and tracks metrics such as bytes sent and received.
-type Conn struct {
-	net.Conn
-	attributes           []attribute.KeyValue
-	bytesSentCounter     metric.Int64Counter
-	bytesReceivedCounter metric.Int64Counter
+type metricsManager struct {
+	meter         metric.Meter
+	bytesSent     metric.Int64Counter
+	bytesReceived metric.Int64Counter
+	duration      metric.Int64Histogram
 }
 
-// NewConn creates a new Conn instance.
-func NewConn(conn net.Conn, metadata *adapter.InboundContext) net.Conn {
+var metrics = newMetricsManager()
 
-	// Convert metadata to attributes
-	attributes := []attribute.KeyValue{
-		attribute.String("source_ip", metadata.Source.IPAddr().String()),
-		attribute.String("protocol", metadata.Protocol),
-		attribute.String("user", metadata.User),
-		attribute.String("inbound", metadata.Inbound),
-		attribute.String("outbound", metadata.Outbound),
-		attribute.String("client", metadata.Client),
-		attribute.String("domain", metadata.Domain),
-	}
-
-	meter := otel.GetMeterProvider().Meter("connection-monitor")
-
-	bytesSentCounter, err := meter.Int64Counter("conn.bytes.sent", metric.WithDescription("Number of bytes sent on a connection"))
+func newMetricsManager() *metricsManager {
+	meter := otel.GetMeterProvider().Meter("sing-box")
+	bytesSent, err := meter.Int64Counter("sing_box.bytes_sent", metric.WithDescription("Bytes sent"))
 	if err != nil {
-		return conn
+		bytesSent = &noop.Int64Counter{}
 	}
-
-	bytesReceivedCounter, err := meter.Int64Counter("conn.bytes.received", metric.WithDescription("Number of bytes received on a connection"))
+	bytesReceived, err := meter.Int64Counter("sing_box.bytes_received", metric.WithDescription("Bytes received"))
 	if err != nil {
-		return conn
+		bytesReceived = &noop.Int64Counter{}
 	}
 
-	return &Conn{
-		Conn:                 conn,
-		attributes:           attributes,
-		bytesSentCounter:     bytesSentCounter,
-		bytesReceivedCounter: bytesReceivedCounter,
+	// Track connection duration.
+	duration, err := meter.Int64Histogram("sing_box.connection_duration", metric.WithDescription("Connection duration"))
+	if err != nil {
+		duration = &noop.Int64Histogram{}
 	}
-}
-
-// Read overrides net.Conn's Read method to track received bytes.
-func (c *Conn) Read(b []byte) (n int, err error) {
-	n, err = c.Conn.Read(b)
-	if n > 0 {
-		c.bytesReceivedCounter.Add(context.Background(), int64(n))
+	return &metricsManager{
+		meter:         meter,
+		bytesSent:     bytesSent,
+		bytesReceived: bytesReceived,
+		duration:      duration,
 	}
-	return
-}
-
-// Write overrides net.Conn's Write method to track sent bytes.
-func (c *Conn) Write(b []byte) (n int, err error) {
-	n, err = c.Conn.Write(b)
-	if n > 0 {
-		c.bytesSentCounter.Add(context.Background(), int64(n))
-	}
-	return
 }
