@@ -86,7 +86,6 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
 	if err != nil {
 		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
-		return nil, fmt.Errorf("failed to setup OpenTelemetry SDK: %w", err)
 	}
 	log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	// TODO: add shutdownMetrics to a stop function.
