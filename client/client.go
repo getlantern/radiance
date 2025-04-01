@@ -117,8 +117,8 @@ func (c *vpnClient) ConnectionStatus() bool {
 }
 
 func (c *vpnClient) setConnectionStatus(connected bool) {
-        c.clientMu.Lock()
-        defer clientMu.Unlock()
+	clientMu.Lock()
+	defer clientMu.Unlock()
 	c.connected = connected
 
 	// TODO: why is this here?? this is going to create a goroutine every time the connection status
