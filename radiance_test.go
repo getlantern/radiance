@@ -2,11 +2,13 @@ package radiance
 
 import (
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/config"
@@ -17,8 +19,7 @@ func TestNewRadiance(t *testing.T) {
 		r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
-		assert.False(t, r.connected.Load())
-		assert.NotNil(t, r.vpnClient)
+		assert.NotNil(t, r.VPNClient)
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.activeConfig)
 		assert.NotNil(t, r.stopChan)
@@ -29,67 +30,84 @@ func TestNewRadiance(t *testing.T) {
 
 func TestGetActiveServer(t *testing.T) {
 	var tests = []struct {
-		name   string
-		setup  func(*gomock.Controller) (*Radiance, error)
-		assert func(*testing.T, *Server, error)
+		name      string
+		want      *Server
+		setup     func(*Server) *Radiance
+		assertErr func(assert.TestingT, error, ...interface{}) bool
 	}{
 		{
 			name: "it should return nil when VPN is disconnected",
-			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				return NewRadiance(client.Options{DataDir: t.TempDir()})
+			setup: func(*Server) *Radiance {
+				vpn := &mockVPNClient{}
+				vpn.On("ConnectionStatus").Return(false)
+				return &Radiance{VPNClient: vpn}
 			},
-			assert: func(t *testing.T, server *Server, err error) {
-				assert.Nil(t, server)
-				assert.NoError(t, err)
-			},
+			assertErr: assert.NoError,
 		},
 		{
 			name: "it should return error when there is no current config",
-			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
-				assert.NoError(t, err)
-				r.connected.Store(true)
-				return r, err
+			setup: func(*Server) *Radiance {
+				vpn := &mockVPNClient{}
+				vpn.On("ConnectionStatus").Return(true)
+				return &Radiance{
+					VPNClient:    vpn,
+					activeConfig: &atomic.Value{},
+				}
 			},
-			assert: func(t *testing.T, server *Server, err error) {
-				assert.Nil(t, server)
-				assert.Error(t, err)
-			},
+			assertErr: assert.Error,
 		},
 		{
 			name: "it should return the active server when VPN is connected",
-			setup: func(ctrl *gomock.Controller) (*Radiance, error) {
-				r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
-				assert.NoError(t, err)
-				r.connected.Store(true)
-				r.activeConfig.Store(&config.Config{
-					Addr:     "1.2.3.4",
-					Protocol: "random",
-					Location: &config.ProxyConnectConfig_ProxyLocation{City: "new york"},
-				})
-				return r, err
+			want: &Server{
+				Address:  "1.2.3.4",
+				Protocol: "random",
+				Location: ServerLocation{City: "new york"},
 			},
-			assert: func(t *testing.T, server *Server, err error) {
-				assert.NoError(t, err)
-				require.NotNil(t, server)
-				assert.Equal(t, "1.2.3.4", server.Address)
-				assert.Equal(t, "random", server.Protocol)
-				assert.Equal(t, "new york", server.Location.City)
+			setup: func(s *Server) *Radiance {
+				vpn := &mockVPNClient{}
+				vpn.On("ConnectionStatus").Return(true)
+				r := &Radiance{
+					VPNClient:    vpn,
+					activeConfig: &atomic.Value{},
+				}
+				c := &config.Config{
+					Addr:     s.Address,
+					Location: &config.ProxyConnectConfig_ProxyLocation{City: s.Location.City},
+					Protocol: s.Protocol,
+				}
+				r.activeConfig.Store(c)
+				return r
 			},
+			assertErr: assert.NoError,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			r, err := tt.setup(ctrl)
-			assert.NoError(t, err)
-			assert.NotNil(t, r)
+			r := tt.setup(tt.want)
 			server, err := r.GetActiveServer()
-			tt.assert(t, server, err)
+			assert.Equal(t, tt.want, server)
+			tt.assertErr(t, err)
 		})
 	}
+}
+
+type mockVPNClient struct {
+	mock.Mock
+}
+
+func (m *mockVPNClient) StartVPN() error                         { panic("not implemented") }
+func (m *mockVPNClient) StopVPN() error                          { panic("not implemented") }
+func (m *mockVPNClient) PauseVPN(dur time.Duration) error        { return nil }
+func (m *mockVPNClient) ResumeVPN()                              {}
+func (m *mockVPNClient) SplitTunnelHandler() *client.SplitTunnel { panic("not implemented") }
+
+func (m *mockVPNClient) ConnectionStatus() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+func (m *mockVPNClient) GetActiveServer() (*Server, error) {
+	args := m.Called()
+	return args.Get(0).(*Server), args.Error(1)
 }
 
 func TestReportIssue(t *testing.T) {
