@@ -173,14 +173,16 @@ func (r *Radiance) ResumeVPN() {
 }
 
 func (r *Radiance) Close() {
-	log.Debug("Closing Radiance")
-	r.confHandler.Stop()
-	close(r.stopChan)
-	for _, shutdown := range r.shutdownFuncs {
-		if err := shutdown(context.Background()); err != nil {
-			log.Error("Failed to shutdown", "error", err)
+	r.closeOnce.Do(func() {
+		log.Debug("Closing Radiance")
+		r.confHandler.Stop()
+		close(r.stopChan)
+		for _, shutdown := range r.shutdownFuncs {
+			if err := shutdown(context.Background()); err != nil {
+				log.Error("Failed to shutdown", "error", err)
+			}
 		}
-	}
+	})
 }
 
 // Connection status returns whether or not we're connected to a proxy.
