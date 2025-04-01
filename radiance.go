@@ -270,5 +270,5 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.
 func (r *Radiance) SplitTunnelHandler() *client.SplitTunnel {
-	return r.vpnClient.SplitTunnelHandler()
+	return r.VPNClient.SplitTunnelHandler()
 }
