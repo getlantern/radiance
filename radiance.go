@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -64,6 +65,7 @@ type Radiance struct {
 	issueReporter *issue.IssueReporter
 	logsDir       string
 	shutdownFuncs []func(context.Context) error
+	closeOnce     sync.Once
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
