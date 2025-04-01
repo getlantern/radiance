@@ -1,7 +1,9 @@
 package metrics
 
 import (
+	"github.com/sagernet/sing-box/adapter"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 )
@@ -44,5 +46,18 @@ func newMetricsManager() *metricsManager {
 		bytesReceived: bytesReceived,
 		duration:      duration,
 		conns:         conns,
+	}
+}
+
+func metadataToAttributes(metadata *adapter.InboundContext) []attribute.KeyValue {
+	// Convert metadata to attributes
+	return []attribute.KeyValue{
+		attribute.String("proxy_ip", metadata.Destination.IPAddr().String()),
+		attribute.String("protocol", metadata.Protocol),
+		attribute.String("user", metadata.User),
+		attribute.String("inbound", metadata.Inbound),
+		attribute.String("outbound", metadata.Outbound),
+		attribute.String("client", metadata.Client),
+		attribute.String("domain", metadata.Domain),
 	}
 }

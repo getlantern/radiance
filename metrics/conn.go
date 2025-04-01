@@ -19,20 +19,9 @@ type Conn struct {
 
 // NewConn creates a new Conn instance.
 func NewConn(conn net.Conn, metadata *adapter.InboundContext) net.Conn {
-	// Convert metadata to attributes
-	attributes := []attribute.KeyValue{
-		attribute.String("proxy_ip", metadata.Destination.IPAddr().String()),
-		attribute.String("protocol", metadata.Protocol),
-		attribute.String("user", metadata.User),
-		attribute.String("inbound", metadata.Inbound),
-		attribute.String("outbound", metadata.Outbound),
-		attribute.String("client", metadata.Client),
-		attribute.String("domain", metadata.Domain),
-	}
-
 	return &Conn{
 		Conn:       conn,
-		attributes: attributes,
+		attributes: metadataToAttributes(metadata),
 		startTime:  time.Now(),
 	}
 }
