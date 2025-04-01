@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+// PacketConn wraps a sing-box network.PacketConn and tracks metrics such as bytes sent and received.
 type PacketConn struct {
 	N.PacketConn
 	attributes []attribute.KeyValue
