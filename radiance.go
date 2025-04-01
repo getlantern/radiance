@@ -84,11 +84,12 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	if err != nil {
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
+	shutdownFuncs := []func(context.Context) error{}
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
 	if err != nil {
 		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
 	} else if shutdownMetrics != nil {
-		r.shutdownFuncs = append(r.shutdownFuncs, shutdownMetrics)
+		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
 		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
@@ -125,7 +126,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		user:          u,
 		issueReporter: issueReporter,
 		logsDir:       logDir,
-		shutdownFuncs: []func(context.Context) error{shutdownMetrics},
+		shutdownFuncs: shutdownFuncs,
 	}, nil
 }
 
