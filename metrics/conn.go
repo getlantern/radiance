@@ -50,7 +50,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 func (c *Conn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
 	if n > 0 {
-		metrics.bytesReceived.Add(context.Background(), int64(n), metric.WithAttributes(c.attributes...))
+		metrics.bytesSent.Add(context.Background(), int64(n), metric.WithAttributes(c.attributes...))
 	}
 	return
 }
