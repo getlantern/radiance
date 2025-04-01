@@ -87,8 +87,10 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
 	if err != nil {
 		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
+	} else if shutdownMetrics != nil {
+		r.shutdownFuncs = append(r.shutdownFuncs, shutdownMetrics)
+		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
-	log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 
 	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
