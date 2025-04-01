@@ -19,24 +19,24 @@ type metricsManager struct {
 var metrics = newMetricsManager()
 
 func newMetricsManager() *metricsManager {
-	meter := otel.GetMeterProvider().Meter("sing-box")
-	bytesSent, err := meter.Int64Counter("sing_box.bytes_sent", metric.WithDescription("Bytes sent"))
+	meter := otel.GetMeterProvider().Meter("radiance")
+	bytesSent, err := meter.Int64Counter("radiance.bytes_sent", metric.WithDescription("Bytes sent"))
 	if err != nil {
 		bytesSent = &noop.Int64Counter{}
 	}
-	bytesReceived, err := meter.Int64Counter("sing_box.bytes_received", metric.WithDescription("Bytes received"))
+	bytesReceived, err := meter.Int64Counter("radiance.bytes_received", metric.WithDescription("Bytes received"))
 	if err != nil {
 		bytesReceived = &noop.Int64Counter{}
 	}
 
 	// Track connection duration.
-	duration, err := meter.Int64Histogram("sing_box.connection_duration", metric.WithDescription("Connection duration"))
+	duration, err := meter.Int64Histogram("radiance.connection_duration", metric.WithDescription("Connection duration"))
 	if err != nil {
 		duration = &noop.Int64Histogram{}
 	}
 
 	// Track the number of connections.
-	conns, err := meter.Int64UpDownCounter("sing_box.connections", metric.WithDescription("Number of connections"))
+	conns, err := meter.Int64UpDownCounter("radiance.connections", metric.WithDescription("Number of connections"))
 	if err != nil {
 		conns = &noop.Int64UpDownCounter{}
 	}

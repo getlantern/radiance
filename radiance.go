@@ -64,6 +64,7 @@ type Radiance struct {
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
+	shutdownFuncs []func(context.Context) error
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -88,7 +89,6 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
 	}
 	log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
-	// TODO: add shutdownMetrics to a stop function.
 
 	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
 	if err != nil {
@@ -123,6 +123,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		user:          u,
 		issueReporter: issueReporter,
 		logsDir:       logDir,
+		shutdownFuncs: []func(context.Context) error{shutdownMetrics},
 	}, nil
 }
 
@@ -166,6 +167,17 @@ func (r *Radiance) PauseVPN(dur time.Duration) error {
 func (r *Radiance) ResumeVPN() {
 	log.Debug("Resuming VPN")
 	r.vpnClient.Resume()
+}
+
+func (r *Radiance) Close() {
+	log.Debug("Closing Radiance")
+	r.confHandler.Stop()
+	close(r.stopChan)
+	for _, shutdown := range r.shutdownFuncs {
+		if err := shutdown(context.Background()); err != nil {
+			log.Error("Failed to shutdown", "error", err)
+		}
+	}
 }
 
 // Connection status returns whether or not we're connected to a proxy.
