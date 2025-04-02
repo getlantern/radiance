@@ -43,11 +43,11 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface) (*BoxService, error) {
+func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
 	bs := &BoxService{
 		config:            config,
 		platIfce:          platIfce,
-		mutRuleSetManager: ruleset.NewManager(),
+		mutRuleSetManager: rulesetManager,
 	}
 	setupOpts := &libbox.SetupOptions{
 		BasePath:    dataDir,
@@ -78,8 +78,8 @@ func (bs *BoxService) Start() error {
 		return err
 	}
 
-	// we need to start the ruleset manager before the libbox service but after the libbox service
-	// has been initialized so that the ruleset manager can access the routing rules.
+	// we need to start the ruleset manager before starting the libbox service but after the libbox
+	// service has been initialized so that the ruleset manager can access the routing rules.
 	if err = bs.mutRuleSetManager.Start(ctx); err != nil {
 		return fmt.Errorf("start ruleset manager: %w", err)
 	}
@@ -173,8 +173,4 @@ func (bs *BoxService) Wake() {
 
 func (bs *BoxService) Ctx() context.Context {
 	return bs.ctx
-}
-
-func (bs *BoxService) RulesetManager() *ruleset.Manager {
-	return bs.mutRuleSetManager
 }

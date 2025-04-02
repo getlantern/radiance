@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ var (
 
 type Options struct {
 	DataDir  string
+	LogDir   string
 	PlatIfce libbox.PlatformInterface
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
@@ -61,20 +63,28 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	}
 
 	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(opts.DataDir, "logs", "lantern-box.log")
-	boxOpts := boxoptions.Options(opts.DataDir, logOutput, SplitTunnelTag, SplitTunnelFormat)
+	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
+	boxOpts := boxoptions.Options(logOutput)
+
+	rsMgr := ruleset.NewManager()
+	splitTun, stRule, stRuleset, err := initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
+	if err != nil {
+		return nil, fmt.Errorf("split tunnel handler: %w", err)
+	}
+	// inject split tunnel routing rule and ruleset into the routing table
+	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
+	// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
+	// index 1
+	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{*stRule}, []option.RuleSet{*stRuleset})
+
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce)
+	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
 	if err != nil {
 		return nil, err
-	}
-	splitTun, err := initSplitTunnel(b.RulesetManager(), opts.DataDir, opts.EnableSplitTunneling)
-	if err != nil {
-		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
 
 	client = &vpnClient{
@@ -191,14 +201,32 @@ type SplitTunnel = ruleset.MutableRuleSet
 // ruleset associated with the SplitTunnelTag or creates a new one if it doesn't exist. dataDir is
 // the directory where the ruleset data is stored. The initial state is determined by the enabled
 // parameter.
-func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*SplitTunnel, error) {
+func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*SplitTunnel, *option.Rule, *option.RuleSet, error) {
 	rs := mgr.MutableRuleSet(SplitTunnelTag)
 	if rs == nil {
 		var err error
 		rs, err = mgr.NewMutableRuleSet(dataDir, SplitTunnelTag, SplitTunnelFormat, enabled)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return (*SplitTunnel)(rs), nil
+	rRule := ruleset.BaseRouteRule(SplitTunnelTag, "direct")
+	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, rs.RuleFilePath(), SplitTunnelFormat)
+	return (*SplitTunnel)(rs), &rRule, &rRuleset, nil
+}
+
+// injectRouteRules injects the given rules and rulesets into routeOpts. atIdx specifies the index
+// at which to insert the rules. rulesets are just appended to the end of the ruleset list as their
+// order doesn't matter.
+func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.Rule, rulesets []option.RuleSet) *option.RouteOptions {
+	if atIdx > len(routeOpts.Rules) {
+		atIdx = len(routeOpts.Rules)
+	}
+	routeOpts.Rules = slices.Insert(routeOpts.Rules, atIdx, rules...)
+	if routeOpts.RuleSet == nil {
+		routeOpts.RuleSet = rulesets
+	} else {
+		routeOpts.RuleSet = append(routeOpts.RuleSet, rulesets...)
+	}
+	return routeOpts
 }
