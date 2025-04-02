@@ -55,11 +55,10 @@ type configHandler interface {
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
-	vpnClient client.VPNClient
+	client.VPNClient
 
 	confHandler  configHandler
 	activeConfig *atomic.Value
-	connected    atomic.Bool
 	stopChan     chan struct{}
 
 	user *user.User
@@ -103,6 +102,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	}
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithLogWriter(logWriter),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
@@ -113,10 +113,9 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	}
 
 	return &Radiance{
-		vpnClient:     vpnC,
+		VPNClient:     vpnC,
 		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
 		activeConfig:  new(atomic.Value),
-		connected:     atomic.Bool{},
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
@@ -128,6 +127,8 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	}, nil
 }
 
+// TODO: the server stuff should probably be moved to the VPNClient as well..
+
 func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
 	return r.confHandler.ListAvailableServers(ctx)
 }
@@ -136,58 +137,6 @@ func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableS
 // pass empty strings to auto select the server location
 func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
 	r.confHandler.SetPreferredServerLocation(country, city)
-}
-
-// StartVPN starts the local VPN device, configuring routing rules such that network traffic on this
-// machine is sent through this instance of Radiance.
-//
-// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
-func (r *Radiance) StartVPN() error {
-	log.Debug("Starting VPN")
-	err := r.vpnClient.Start()
-	r.setStatus(err == nil)
-	return err
-}
-
-// StopVPN stops the local VPN device and removes routing rules configured by StartVPN.
-//
-// This function will be implemented as part of https://github.com/getlantern/engineering/issues/1883
-func (r *Radiance) StopVPN() error {
-	log.Debug("Stopping VPN")
-	r.setStatus(false)
-	return r.vpnClient.Stop()
-}
-
-// PauseVPN pauses the VPN connection for the specified duration.
-func (r *Radiance) PauseVPN(dur time.Duration) error {
-	log.Info("Pausing VPN for", "duration", dur)
-	return r.vpnClient.Pause(dur)
-}
-
-// ResumeVPN resumes a paused VPN connection.
-func (r *Radiance) ResumeVPN() {
-	log.Debug("Resuming VPN")
-	r.vpnClient.Resume()
-}
-
-// Connection status returns whether or not we're connected to a proxy.
-func (r *Radiance) ConnectionStatus() bool {
-	return r.connected.Load()
-}
-
-func (r *Radiance) setStatus(connected bool) {
-	r.connected.Store(connected)
-
-	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
-	go func() {
-		// Recover from panics to avoid crashing the Radiance main loop
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("Recovered from panic", "error", r)
-				reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
-			}
-		}()
-	}()
 }
 
 // ServerLocation is the location of a remote VPN server.

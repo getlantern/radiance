@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
@@ -26,6 +27,11 @@ type VPNClient interface {
 	Stop() error
 	Pause(dur time.Duration) error
 	Resume()
+	StartVPN() error
+	StopVPN() error
+	ConnectionStatus() bool
+	PauseVPN(dur time.Duration) error
+	ResumeVPN()
 	AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error
 	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
@@ -33,6 +39,8 @@ type VPNClient interface {
 
 type vpnClient struct {
 	boxService *boxservice.BoxService
+	started    bool
+	connected  bool
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -66,7 +74,14 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface) (VP
 }
 
 // Start starts the VPN client
-func (c *vpnClient) Start() error {
+func (c *vpnClient) StartVPN() error {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if c.started {
+		return errors.New("VPN client is already running")
+	}
+
+	slog.Debug("Starting VPN client")
 	if c.boxService == nil {
 		return errors.New("box service is not initialized")
 	}
@@ -74,11 +89,20 @@ func (c *vpnClient) Start() error {
 	if err != nil {
 		return err
 	}
+
+	c.started = true
 	return nil
 }
 
 // Stop stops the VPN client and closes the TUN device
-func (c *vpnClient) Stop() error {
+func (c *vpnClient) StopVPN() error {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if !c.started {
+		return errors.New("VPN client is not running")
+	}
+
+	slog.Debug("Stopping VPN client")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	var err error
 	go func() {
@@ -92,6 +116,35 @@ func (c *vpnClient) Stop() error {
 	return err
 }
 
+// ConnectionStatus returns the connection status of the VPN client
+func (c *vpnClient) ConnectionStatus() bool {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	return c.started && c.connected
+}
+
+func (c *vpnClient) setConnectionStatus(connected bool) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	c.connected = connected
+
+	// TODO: why is this here?? this is going to create a goroutine every time the connection status
+	// changes. Also, the defer gets called immediately after the go routine is created because there
+	// are no other statements and you can only recover from panics in the goroutine calling recover.
+	// So, this isn't doing anything.
+
+	// // send notifications in a separate goroutine to avoid blocking the Radiance main loop
+	// go func() {
+	// 	// Recover from panics to avoid crashing the Radiance main loop
+	// 	defer func() {
+	// 		if r := recover(); r != nil {
+	// 			log.Error("Recovered from panic", "error", r)
+	// 			reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
+	// 		}
+	// 	}()
+	// }()
+}
+
 func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(configContent))
 	if err != nil {
@@ -101,12 +154,14 @@ func parseConfig(ctx context.Context, configContent string) (option.Options, err
 }
 
 // Pause pauses the VPN client for the specified duration
-func (c *vpnClient) Pause(dur time.Duration) error {
+func (c *vpnClient) PauseVPN(dur time.Duration) error {
+	slog.Info("Pausing VPN for", "duration", dur)
 	return c.boxService.Pause(dur)
 }
 
 // Resume resumes the VPN client
-func (c *vpnClient) Resume() {
+func (c *vpnClient) ResumeVPN() {
+	slog.Info("Resuming VPN client")
 	c.boxService.Wake()
 }
 
