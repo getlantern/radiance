@@ -80,7 +80,8 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(opts)
+	opts.DataDir = dataDirPath
+	vpnC, err := client.NewVPNClient(opts, logDir)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)

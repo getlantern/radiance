@@ -28,7 +28,6 @@ var (
 
 type Options struct {
 	DataDir  string
-	LogDir   string
 	PlatIfce libbox.PlatformInterface
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
@@ -55,7 +54,7 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(opts Options) (VPNClient, error) {
+func NewVPNClient(opts Options, logDir string) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -63,7 +62,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	}
 
 	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
+	logOutput := filepath.Join(logDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
 	rsMgr := ruleset.NewManager()
