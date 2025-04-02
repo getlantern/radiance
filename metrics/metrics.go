@@ -1,3 +1,8 @@
+// Package metrics provides a metrics manager that uses OpenTelemetry to track
+// various metrics related to the proxy server's performance. It includes
+// tracking bytes sent and received, connection duration, and the number of
+// connections. The metrics are recorded using OpenTelemetry's metric API and
+// can be used for monitoring and observability purposes.
 package metrics
 
 import (
