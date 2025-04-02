@@ -57,6 +57,7 @@ func metadataToAttributes(metadata *adapter.InboundContext) []attribute.KeyValue
 		attribute.String("protocol", metadata.Protocol),
 		attribute.String("user", metadata.User),
 		attribute.String("inbound", metadata.Inbound),
+		attribute.String("inbound_type", metadata.InboundType),
 		attribute.String("outbound", metadata.Outbound),
 		attribute.String("client", metadata.Client),
 		attribute.String("domain", metadata.Domain),
