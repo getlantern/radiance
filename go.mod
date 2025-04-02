@@ -19,10 +19,10 @@ require (
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
-	github.com/getlantern/fronted v0.0.0-20250324204348-a0f02f9a2843
+	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
-	github.com/getlantern/kindling v0.0.0-20250327204452-cc0a77c57e75
+	github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
@@ -31,7 +31,9 @@ require (
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
+	go.opentelemetry.io/otel/log v0.11.0
 	go.opentelemetry.io/otel/sdk v1.35.0
+	go.opentelemetry.io/otel/sdk/metric v1.35.0
 	go.uber.org/mock v0.5.0
 	google.golang.org/protobuf v1.36.5
 )
@@ -62,8 +64,6 @@ require (
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/otel/log v0.11.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.35.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )
