@@ -2,17 +2,18 @@ package amnezia
 
 import (
 	"context"
-	O "github.com/sagernet/sing-box/option"
 	"net"
 	"net/netip"
 	"time"
+
+	O "github.com/sagernet/sing-box/option"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/common/dialer"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
-	"github.com/sagernet/sing-dns"
+	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -20,6 +21,7 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 
+	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/option"
 	"github.com/getlantern/radiance/transport/amnezia"
 )
@@ -123,10 +125,9 @@ func (w *Endpoint) Close() error {
 
 func (w *Endpoint) InterfaceUpdated() {
 	w.endpoint.BindUpdate()
-	return
 }
 
-func (w *Endpoint) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr) error {
+func (w *Endpoint) PrepareConnection(network string, source, destination M.Socksaddr) error {
 	return w.router.PreMatch(adapter.InboundContext{
 		Inbound:     w.Tag(),
 		InboundType: w.Type(),
@@ -136,7 +137,7 @@ func (w *Endpoint) PrepareConnection(network string, source M.Socksaddr, destina
 	})
 }
 
-func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	var metadata adapter.InboundContext
 	metadata.Inbound = w.Tag()
 	metadata.InboundType = w.Type()
@@ -153,12 +154,13 @@ func (w *Endpoint) NewConnectionEx(ctx context.Context, conn net.Conn, source M.
 		}
 	}
 	metadata.Destination = destination
+	conn = metrics.NewConn(conn, &metadata)
 	w.logger.InfoContext(ctx, "inbound connection from ", source)
 	w.logger.InfoContext(ctx, "inbound connection to ", metadata.Destination)
 	w.router.RouteConnectionEx(ctx, conn, metadata, onClose)
 }
 
-func (w *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+func (w *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	var metadata adapter.InboundContext
 	metadata.Inbound = w.Tag()
 	metadata.InboundType = w.Type()
@@ -175,6 +177,7 @@ func (w *Endpoint) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn,
 			conn = bufio.NewNATPacketConn(bufio.NewNetPacketConn(conn), metadata.OriginDestination, metadata.Destination)
 		}
 	}
+	conn = metrics.NewPacketConn(conn, &metadata)
 	w.logger.InfoContext(ctx, "inbound packet connection from ", source)
 	w.logger.InfoContext(ctx, "inbound packet connection to ", destination)
 	w.router.RoutePacketConnectionEx(ctx, conn, metadata, onClose)

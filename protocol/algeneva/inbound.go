@@ -10,6 +10,7 @@ import (
 	"github.com/gobwas/ws"
 
 	"github.com/getlantern/radiance/constant"
+	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/option"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -38,10 +39,16 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		return nil, err
 	}
 	inbound := httpInbound.(*http.Inbound)
-	return &Inbound{Inbound: *inbound, logger: logger}, nil
+	return &Inbound{
+		Inbound: *inbound,
+		logger:  logger,
+	}, nil
 }
 
 func (a *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose network.CloseHandlerFunc) {
+	metadata.Inbound = a.Tag()
+	metadata.InboundType = a.Type()
+	conn = metrics.NewConn(conn, &metadata)
 	conn, err := a.newConnectionEx(ctx, conn)
 	if err != nil {
 		network.CloseOnHandshakeFailure(conn, onClose, err)

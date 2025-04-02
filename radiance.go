@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
+	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/user"
 )
 
@@ -62,6 +64,8 @@ type Radiance struct {
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
+	shutdownFuncs []func(context.Context) error
+	closeOnce     sync.Once
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -80,6 +84,14 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 	log, logWriter, err = newLog(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not create log: %w", err)
+	}
+	shutdownFuncs := []func(context.Context) error{}
+	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
+	if err != nil {
+		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
+	} else if shutdownMetrics != nil {
+		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
+		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
 	vpnC, err := client.NewVPNClient(dataDirPath, platIfce)
@@ -114,6 +126,7 @@ func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, 
 		user:          u,
 		issueReporter: issueReporter,
 		logsDir:       logDir,
+		shutdownFuncs: shutdownFuncs,
 	}, nil
 }
 
@@ -127,6 +140,19 @@ func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableS
 // pass empty strings to auto select the server location
 func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
 	r.confHandler.SetPreferredServerLocation(country, city)
+}
+
+func (r *Radiance) Close() {
+	r.closeOnce.Do(func() {
+		log.Debug("Closing Radiance")
+		r.confHandler.Stop()
+		close(r.stopChan)
+		for _, shutdown := range r.shutdownFuncs {
+			if err := shutdown(context.Background()); err != nil {
+				log.Error("Failed to shutdown", "error", err)
+			}
+		}
+	})
 }
 
 // ServerLocation is the location of a remote VPN server.
