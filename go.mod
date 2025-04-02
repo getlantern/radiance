@@ -19,10 +19,10 @@ require (
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
-	github.com/getlantern/fronted v0.0.0-20250324204348-a0f02f9a2843
+	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
-	github.com/getlantern/kindling v0.0.0-20250327204452-cc0a77c57e75
+	github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6
 	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
@@ -31,6 +31,9 @@ require (
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
 	github.com/xtaci/smux v1.5.31
+	go.opentelemetry.io/otel/log v0.11.0
+	go.opentelemetry.io/otel/sdk v1.35.0
+	go.opentelemetry.io/otel/sdk/metric v1.35.0
 	go.uber.org/mock v0.5.0
 	google.golang.org/protobuf v1.36.5
 )
@@ -60,6 +63,7 @@ require (
 	github.com/tkuchiki/go-timezone v0.2.0 // indirect
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
+	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )
@@ -97,13 +101,12 @@ require (
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gofrs/uuid/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20250109001534-8abf58130905 // indirect
 	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/libdns/alidns v1.0.3 // indirect
 	github.com/libdns/cloudflare v0.1.1 // indirect
 	github.com/libdns/libdns v0.2.2 // indirect
@@ -142,9 +145,13 @@ require (
 	github.com/u-root/uio v0.0.0-20240118234441-a3c409a6018e // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
-	go.opentelemetry.io/otel v1.32.0 // indirect
-	go.opentelemetry.io/otel/metric v1.32.0 // indirect
-	go.opentelemetry.io/otel/trace v1.32.0 // indirect
+	go.opentelemetry.io/otel v1.35.0
+	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.11.0
+	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.35.0
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.35.0
+	go.opentelemetry.io/otel/metric v1.35.0
+	go.opentelemetry.io/otel/sdk/log v0.11.0
+	go.opentelemetry.io/otel/trace v1.35.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba

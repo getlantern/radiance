@@ -127,22 +127,6 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	c.connected = connected
-
-	// TODO: why is this here?? this is going to create a goroutine every time the connection status
-	// changes. Also, the defer gets called immediately after the go routine is created because there
-	// are no other statements and you can only recover from panics in the goroutine calling recover.
-	// So, this isn't doing anything.
-
-	// // send notifications in a separate goroutine to avoid blocking the Radiance main loop
-	// go func() {
-	// 	// Recover from panics to avoid crashing the Radiance main loop
-	// 	defer func() {
-	// 		if r := recover(); r != nil {
-	// 			log.Error("Recovered from panic", "error", r)
-	// 			reporting.PanicListener(fmt.Sprintf("Recovered from panic: %v", r))
-	// 		}
-	// 	}()
-	// }()
 }
 
 func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
