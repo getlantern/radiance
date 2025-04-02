@@ -4,18 +4,22 @@ import (
 	"os"
 	"testing"
 
+	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSendReport(t *testing.T) {
+	f := fronted.NewFronted(
+		fronted.WithConfigURL("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"),
+	)
 	k := kindling.NewKindling(
-		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	user := user.New(k.NewHTTPClient())
-	reporter, err := NewIssueReporter(k.NewHTTPClient(), user)
+	u := user.New(k.NewHTTPClient())
+	reporter, err := NewIssueReporter(k.NewHTTPClient(), u)
 	require.NoError(t, err)
 	// Grab a temporary directory
 	dir, err := os.MkdirTemp("", "lantern")

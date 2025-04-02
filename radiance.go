@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,8 +20,10 @@ import (
 
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/eventual/v2"
+	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
+	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/common/reporting"
@@ -29,12 +32,9 @@ import (
 	"github.com/getlantern/radiance/user"
 )
 
-var (
-	vpnLogOutput = filepath.Join(logDir(), "lantern.log")
-	log          *slog.Logger
+var log *slog.Logger
 
-	configPollInterval = 10 * time.Minute
-)
+const configPollInterval = 10 * time.Minute
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 //go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
@@ -59,61 +59,72 @@ type Radiance struct {
 
 	confHandler  configHandler
 	activeConfig *atomic.Value
-
-	connected   bool
-	statusMutex sync.Locker
-	stopChan    chan struct{}
+	connected    atomic.Bool
+	stopChan     chan struct{}
 
 	user *user.User
 
 	configuredServersMutex sync.Locker
 	configuredServers      map[string]boxservice.ServerConnectConfig
 	issueReporter          *issue.IssueReporter
+
+	logsDir string
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewRadiance(platIfce libbox.PlatformInterface) (*Radiance, error) {
+func NewRadiance(dataDir string, platIfce libbox.PlatformInterface) (*Radiance, error) {
 	reporting.Init()
 
-	var err error
-	log, err = newLog(vpnLogOutput)
+	dataDirPath, logDir, err := setupDirs(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup directories: %w", err)
+	}
+
+	logPath := filepath.Join(logDir, app.LogFileName)
+	var logWriter io.Writer
+	log, logWriter, err = newLog(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 
-	vpnC, err := client.NewVPNClient(vpnLogOutput, platIfce)
+	vpnC, err := client.NewVPNClient(dataDirPath, logDir, platIfce)
 	if err != nil {
-		return nil, err
+		log.Error("Failed to create VPN client", "error", err)
+		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
-	// TODO: Ideally we would know the user locale here on radiance startup.
+	// TODO: Ideally we would know the user locale to set the country on fronted startup.
+	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(dataDirPath, "fronted_cache.json"))
+	if err != nil {
+		log.Error("Failed to create fronted", "error", err)
+		return nil, fmt.Errorf("failed to create fronted: %w", err)
+	}
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithDomainFronting("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz", ""),
+		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	user := user.New(k.NewHTTPClient())
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), user)
+	u := user.New(k.NewHTTPClient())
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
 
 	return &Radiance{
-		vpnClient: vpnC,
-
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), user),
+		vpnClient:     vpnC,
+		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
 		activeConfig:  new(atomic.Value),
-		connected:     false,
-		statusMutex:   new(sync.Mutex),
+		connected:     atomic.Bool{},
 		stopChan:      make(chan struct{}),
-		user:          user,
+		user:          u,
 		issueReporter: issueReporter,
 		// TODO: after we start to persist data, we should update this implementation
 		// for loading the configured servers and also the custom servers
 		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
 		configuredServersMutex: new(sync.Mutex),
+		logsDir:                logDir,
 	}, nil
 }
 
@@ -159,16 +170,13 @@ func (r *Radiance) ResumeVPN() {
 	r.vpnClient.Resume()
 }
 
-func (r *Radiance) connectionStatus() bool {
-	r.statusMutex.Lock()
-	defer r.statusMutex.Unlock()
-	return r.connected
+// Connection status returns whether or not we're connected to a proxy.
+func (r *Radiance) ConnectionStatus() bool {
+	return r.connected.Load()
 }
 
 func (r *Radiance) setStatus(connected bool) {
-	r.statusMutex.Lock()
-	r.connected = connected
-	r.statusMutex.Unlock()
+	r.connected.Store(connected)
 
 	// send notifications in a separate goroutine to avoid blocking the Radiance main loop
 	go func() {
@@ -195,7 +203,7 @@ type Server struct {
 // GetActiveServer returns the remote VPN server this client is currently connected to.
 // It returns nil when VPN is disconnected
 func (r *Radiance) GetActiveServer() (*Server, error) {
-	if !r.connectionStatus() {
+	if !r.ConnectionStatus() {
 		return nil, nil
 	}
 	activeConfig := r.activeConfig.Load()
@@ -241,25 +249,25 @@ var issueTypeMap = map[string]int{
 }
 
 // ReportIssue submits an issue report to the back-end with an optional user email
-func (r *Radiance) ReportIssue(email string, report IssueReport) error {
+func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
 	}
 	// get issue type as integer
 	typeInt, ok := issueTypeMap[report.Type]
 	if !ok {
-		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
+		log.Error("Unknown issue type: %s, set to Other", "type", report.Type)
 		typeInt = 9
 	}
 	// get country from the config returned by the backend
 	_, country, err := r.confHandler.GetConfig(eventual.DontWait)
 	if err != nil {
-		slog.Error("Failed to get country", "error", err)
+		log.Error("Failed to get country", "error", err)
 		country = ""
 	}
 
 	return r.issueReporter.Report(
-		logDir(),
+		r.logsDir,
 		email,
 		typeInt,
 		report.Description,
@@ -269,33 +277,58 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 		country)
 }
 
-func logDir() string {
-	if runtime.GOOS == "android" {
-		//To avoid panic from appDir
-		// need to set home dir
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		appdir.SetHomeDir(homeDir)
+func setupDirs(baseDir string) (dataDir, logDir string, err error) {
+	// On Windows, Mac, and Linux, we can easily determine the user directories in Go. Typically mobile will have
+	// to pass the base directory to use.
+	if baseDir == "" {
+		return appdir.General(app.Name), appdir.Logs(app.Name), nil
 	}
-	dir := appdir.Logs("Lantern")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return ""
+	logDir = filepath.Join(baseDir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return "", "", fmt.Errorf("failed to setup data directory: %w", err)
 	}
-	return dir
+	return baseDir, logDir, nil
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (*slog.Logger, error) {
-	f, err := os.Create(logPath)
+func newLog(logPath string) (*slog.Logger, io.Writer, error) {
+	// If the log file does not exist, create it.
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
-	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, f), nil))
+	logWriter := io.MultiWriter(os.Stdout, f)
+	logger := slog.New(slog.NewTextHandler(logWriter, nil))
 	slog.SetDefault(logger)
-	return logger, nil
+	return logger, logWriter, nil
+}
+
+func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {
+	// Parse the domain from the URL.
+	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
+	u, err := url.Parse(configURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %v", err)
+	}
+	// Extract the domain from the URL.
+	domain := u.Host
+
+	// First, download the file from the specified URL using the smart dialer.
+	// Then, create a new fronted instance with the downloaded file.
+	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
+	}
+	httpClient := &http.Client{
+		Transport: trans,
+	}
+	return fronted.NewFronted(
+		fronted.WithPanicListener(panicListener),
+		fronted.WithCacheFile(cacheFile),
+		fronted.WithHTTPClient(httpClient),
+		fronted.WithConfigURL(configURL),
+	), nil
 }
 
 func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
