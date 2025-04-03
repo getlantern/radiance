@@ -35,7 +35,7 @@ var log *slog.Logger
 
 const configPollInterval = 10 * time.Minute
 
-//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance httpServer,configHandler
+//go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
