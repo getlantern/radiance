@@ -148,9 +148,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-
-	ch.mergeConfig(resp)
-	return nil
+	return ch.mergeConfig(resp)
 }
 
 // mergeConfig merges the new config with the existing config. If the existing config is nil, it sets the new config.

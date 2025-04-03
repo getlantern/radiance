@@ -76,7 +76,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
-	req.Header.Set("content-type", "application/json")
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 
 	// Add If-Modified-Since header to the request
@@ -85,7 +85,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not send request: %w", err)
 	}
 
 	// Note that Go's HTTP library should automatically have decompressed the response here.
