@@ -116,3 +116,96 @@ func TestNewConfigHandler(t *testing.T) {
 		})
 	}
 }
+func TestConfigHandler_mergeConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		existingConfig *C.ConfigResponse
+		newConfig      *C.ConfigResponse
+		expectedConfig *C.ConfigResponse
+		expectMergeErr bool
+	}{
+		{
+			name: "merge new config into existing config",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{IP: "192.168.1.1"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US", IP: "192.168.1.1"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "override existing value",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK", IP: "192.168.1.1"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK", IP: "192.168.1.1"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "keep existing values",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US", IP: "192.168.1.1"},
+			},
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK", IP: "192.168.1.1"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name:           "set new config when no existing config",
+			existingConfig: nil,
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "handle merge error gracefully",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			newConfig: nil, // Invalid new config to simulate merge error
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectMergeErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &ConfigHandler{
+				config: eventual.NewValue(),
+			}
+			if tt.existingConfig != nil {
+				ch.config.Set(tt.existingConfig)
+			}
+
+			err := ch.mergeConfig(tt.newConfig)
+			if tt.expectMergeErr {
+				assert.Error(t, err, "Expected an error but got none")
+			} else {
+				assert.NoError(t, err, "Expected no error but got one")
+			}
+
+			// Verify the resulting config
+			resultConfig, _ := ch.config.Get(eventual.DontWait)
+			assert.Equal(t, tt.expectedConfig, resultConfig)
+		})
+	}
+}

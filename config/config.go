@@ -174,21 +174,25 @@ func (ch *ConfigHandler) fetchConfig() error {
 }
 
 // mergeConfig sets the configuration and notifies the listeners.
-func (ch *ConfigHandler) mergeConfig(cfg *C.ConfigResponse) {
+func (ch *ConfigHandler) mergeConfig(cfg *C.ConfigResponse) error {
 	slog.Debug("Merging config")
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
 
 	existingConfig, _ := ch.config.Get(eventual.DontWait)
 	if existingConfig != nil {
 		mergedConfig := existingConfig.(*C.ConfigResponse)
-		if err := mergo.Merge(&mergedConfig, cfg); err != nil {
+		if err := mergo.MergeWithOverwrite(mergedConfig, cfg); err != nil {
 			slog.Error("merging config", "error", err)
-			return
+			return fmt.Errorf("merging config: %w", err)
 		}
 		cfg = mergedConfig
 	}
 	ch.config.Set(cfg)
 	ch.notifyListeners(cfg)
 	slog.Debug("Config set")
+	return nil
 }
 
 // fetchLoop fetches the configuration every pollInterval.
