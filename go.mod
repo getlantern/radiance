@@ -17,6 +17,7 @@ require (
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
+	github.com/getlantern/common v1.2.1-0.20250402192417-b36070b37ded
 	github.com/getlantern/errors v1.0.4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd

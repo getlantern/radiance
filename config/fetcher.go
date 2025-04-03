@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,10 +11,9 @@ import (
 	"runtime/debug"
 	"strconv"
 
-	"google.golang.org/protobuf/proto"
-
 	"slices"
 
+	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/user"
@@ -24,11 +24,11 @@ const configURL = "https://api.iantem.io/v1/config"
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient *http.Client
-	user       *user.User
+	user       user.BaseUser
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user *user.User) *fetcher {
+func newFetcher(client *http.Client, user user.BaseUser) *fetcher {
 	return &fetcher{
 		httpClient: client,
 		user:       user,
@@ -36,27 +36,17 @@ func newFetcher(client *http.Client, user *user.User) *fetcher {
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(preferredServerLocation *serverLocation) (*ConfigResponse, error) {
-	var preferredRegion *ConfigRequest_PreferredRegion
-	if preferredServerLocation != nil && (preferredServerLocation.Country != "" && preferredServerLocation.City != "") {
-		preferredRegion = &ConfigRequest_PreferredRegion{
-			Country: preferredServerLocation.Country,
-			City:    preferredServerLocation.City,
-		}
+func (f *fetcher) fetchConfig(preferredServerLocation *C.ServerLocation) (*C.ConfigResponse, error) {
+	confReq := C.ConfigRequest{
+		ClientVersion:     app.ClientVersion,
+		SingboxVersion:    singVersion(),
+		UserID:            strconv.FormatInt(f.user.LegacyID(), 10),
+		OS:                app.Platform,
+		AppName:           app.Name,
+		DeviceID:          f.user.DeviceID(),
+		PreferredLocation: *preferredServerLocation,
 	}
-	confReq := ConfigRequest{
-		ClientInfo: &ConfigRequest_ClientInfo{
-			SingboxVersion: singVersion(),
-			ClientVersion:  app.ClientVersion,
-			UserId:         strconv.FormatInt(f.user.LegacyID(), 10),
-			ProToken:       f.user.LegacyToken(),
-			Country:        "",
-			Ip:             "",
-		},
-		PreferredRegion: preferredRegion,
-		Proxy:           &ConfigRequest_Proxy{},
-	}
-	buf, err := proto.Marshal(&confReq)
+	buf, err := json.Marshal(&confReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
@@ -70,8 +60,8 @@ func (f *fetcher) fetchConfig(preferredServerLocation *serverLocation) (*ConfigR
 		return nil, nil
 	}
 
-	newConf := &ConfigResponse{}
-	if err := proto.Unmarshal(buf, newConf); err != nil {
+	newConf := &C.ConfigResponse{}
+	if err := json.Unmarshal(buf, newConf); err != nil {
 		return nil, fmt.Errorf("unmarshal config response: %w", err)
 	}
 	return newConf, nil
@@ -83,8 +73,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
-
-	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("content-type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 	resp, err := f.httpClient.Do(req)
 	if err != nil {

@@ -50,6 +50,12 @@ var (
 	userDataLocation = ".userData"
 )
 
+type BaseUser interface {
+	DeviceID() string
+	LegacyID() int64
+	LegacyToken() string
+}
+
 // User represents a user account. This may be a free user, associated only with this device or a
 // paid user with a full account.
 type User struct {

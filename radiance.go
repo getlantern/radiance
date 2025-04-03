@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/getlantern/appdir"
+	C "github.com/getlantern/common"
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
@@ -39,7 +40,7 @@ const configPollInterval = 10 * time.Minute
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
 	// GetConfig returns the current proxy configuration and the country.
-	GetConfig(ctx context.Context) ([]*config.Config, string, error)
+	GetConfig(ctx context.Context) (*C.ConfigResponse, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
 
@@ -47,7 +48,7 @@ type configHandler interface {
 	SetPreferredServerLocation(country, city string)
 
 	// ListAvailableServers lists the available server locations to choose from.
-	ListAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error)
+	ListAvailableServers(ctx context.Context) ([]C.AvailableServerLocations, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -55,7 +56,7 @@ type Radiance struct {
 	client.VPNClient
 
 	confHandler  configHandler
-	activeConfig *atomic.Value
+	activeServer *atomic.Value
 	stopChan     chan struct{}
 
 	user *user.User
@@ -120,7 +121,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	return &Radiance{
 		VPNClient:     vpnC,
 		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
-		activeConfig:  new(atomic.Value),
+		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
@@ -131,7 +132,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 
 // TODO: the server stuff should probably be moved to the VPNClient as well..
 
-func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
+func (r *Radiance) GetAvailableServers(ctx context.Context) ([]C.AvailableServerLocations, error) {
 	return r.confHandler.ListAvailableServers(ctx)
 }
 
@@ -154,13 +155,10 @@ func (r *Radiance) Close() {
 	})
 }
 
-// ServerLocation is the location of a remote VPN server.
-type ServerLocation config.ProxyConnectConfig_ProxyLocation
-
 // Server represents a remote VPN server.
 type Server struct {
 	Address  string
-	Location ServerLocation
+	Location C.ServerLocation
 	Protocol string
 }
 
@@ -170,17 +168,11 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 	if !r.ConnectionStatus() {
 		return nil, nil
 	}
-	activeConfig := r.activeConfig.Load()
-	if activeConfig == nil {
+	activeServer := r.activeServer.Load()
+	if activeServer == nil {
 		return nil, fmt.Errorf("no active server config")
 	}
-	config := activeConfig.(*config.Config)
-
-	return &Server{
-		Address:  config.GetAddr(),
-		Location: ServerLocation(*config.GetLocation()),
-		Protocol: config.GetProtocol(),
-	}, nil
+	return activeServer.(*Server), nil
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
@@ -223,11 +215,14 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		log.Error("Unknown issue type: %s, set to Other", "type", report.Type)
 		typeInt = 9
 	}
+	var country string
 	// get country from the config returned by the backend
-	_, country, err := r.confHandler.GetConfig(eventual.DontWait)
+	cfg, err := r.confHandler.GetConfig(eventual.DontWait)
 	if err != nil {
 		log.Error("Failed to get country", "error", err)
 		country = ""
+	} else {
+		country = cfg.Country
 	}
 
 	return r.issueReporter.Report(

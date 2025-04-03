@@ -21,7 +21,7 @@ func TestNewRadiance(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, r.VPNClient)
 		assert.NotNil(t, r.confHandler)
-		assert.NotNil(t, r.activeConfig)
+		assert.NotNil(t, r.activeServer)
 		assert.NotNil(t, r.stopChan)
 		assert.NotNil(t, r.user)
 		assert.NotNil(t, r.issueReporter)
@@ -51,7 +51,7 @@ func TestGetActiveServer(t *testing.T) {
 				vpn.On("ConnectionStatus").Return(true)
 				return &Radiance{
 					VPNClient:    vpn,
-					activeConfig: &atomic.Value{},
+					activeServer: &atomic.Value{},
 				}
 			},
 			assertErr: assert.Error,
@@ -68,14 +68,14 @@ func TestGetActiveServer(t *testing.T) {
 				vpn.On("ConnectionStatus").Return(true)
 				r := &Radiance{
 					VPNClient:    vpn,
-					activeConfig: &atomic.Value{},
+					activeServer: &atomic.Value{},
 				}
 				c := &config.Config{
 					Addr:     s.Address,
 					Location: &config.ProxyConnectConfig_ProxyLocation{City: s.Location.City},
 					Protocol: s.Protocol,
 				}
-				r.activeConfig.Store(c)
+				r.activeServer.Store(c)
 				return r
 			},
 			assertErr: assert.NoError,
