@@ -147,7 +147,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	if resp == nil {
 		slog.Debug("no new config available")
-		return fmt.Errorf("%w: no new config available", ErrFetchingConfig)
+		return nil
 	}
 
 	// Otherwise, we keep the previous config and store any error that might have occurred.
@@ -160,7 +160,9 @@ func (ch *ConfigHandler) fetchConfig() error {
 	return nil
 }
 
-// mergeConfig sets the configuration and notifies the listeners.
+// mergeConfig merges the new config with the existing config. If the existing config is nil, it sets the new config.
+// The new config overwrites any existing values in the old config.
+// It returns an error if the merge fails.
 func (ch *ConfigHandler) mergeConfig(cfg *C.ConfigResponse) error {
 	slog.Debug("Merging config")
 	if cfg == nil {
