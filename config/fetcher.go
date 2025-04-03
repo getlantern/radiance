@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"time"
 
 	"slices"
 
@@ -23,8 +24,9 @@ const configURL = "https://api.iantem.io/v1/config"
 
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
-	httpClient *http.Client
-	user       user.BaseUser
+	httpClient   *http.Client
+	user         user.BaseUser
+	lastModified time.Time
 }
 
 // newFetcher creates a new fetcher with the given http client.
@@ -64,10 +66,11 @@ func (f *fetcher) fetchConfig(preferredServerLocation *C.ServerLocation) (*C.Con
 	if err := json.Unmarshal(buf, newConf); err != nil {
 		return nil, fmt.Errorf("unmarshal config response: %w", err)
 	}
+	f.lastModified = time.Now()
 	return newConf, nil
 }
 
-// send sends a request to the server with the given body and returns the response.
+// send sends a request to the server ith the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
 	if err != nil {
@@ -75,6 +78,15 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
+
+	// Add If-Modified-Since header to the request
+	// Note that on the first run, lastModified is zero, so the server will return the latest config.
+	// If the server returns a 304 Not Modified response, we return nil.
+	// If the server returns a 200 OK response, we update the lastModified time.
+	// If the server returns a 204 No Content response, we return nil.
+	// If the server returns any other response, we return nil.
+	req.Header.Set("If-Modified-Since", f.lastModified.Format(http.TimeFormat))
+
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return nil, err
