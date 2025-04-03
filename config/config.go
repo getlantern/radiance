@@ -106,14 +106,7 @@ func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]C.ServerLo
 	}
 
 	availableServers := make([]C.ServerLocation, 0, len(cfgRes.Servers))
-	for _, server := range cfgRes.Servers {
-		availableServers = append(availableServers, C.ServerLocation{
-			Country: server.Country,
-			City:    server.City,
-		})
-	}
-	return availableServers, nil
-
+	return append(availableServers, cfgRes.Servers...), nil
 }
 
 // AddConfigListener adds a listener for new ConfigResponses.
