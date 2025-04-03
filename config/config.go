@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"dario.cat/mergo"
 	"github.com/getlantern/eventual/v2"
 
 	C "github.com/getlantern/common"
@@ -107,23 +108,25 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 	}()
 }
 
-func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]AvailableServerLocation, error) {
-	var resp ListAvailableResponse
-	if err := ch.apiClient.GetPROTOC(ctx, "/available-servers", nil, &resp); err != nil {
-		return nil, err
+func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]C.ServerLocation, error) {
+	cfg, err := ch.config.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting config: %w", err)
 	}
-	res := make([]AvailableServerLocation, len(resp.GetRegions()))
-	for i, region := range resp.GetRegions() {
-		res[i] = AvailableServerLocation{
-			Country:     region.GetCountry(),
-			City:        region.GetCity(),
-			Longitude:   region.Latitude,
-			Latitude:    region.Longitude,
-			CountryCode: region.CountryCode,
-		}
+	cfgRes := cfg.(*C.ConfigResponse)
+	if cfgRes == nil {
+		return nil, fmt.Errorf("config is nil")
 	}
 
-	return res, nil
+	availableServers := make([]C.ServerLocation, 0, len(cfgRes.Servers))
+	for _, server := range cfgRes.Servers {
+		availableServers = append(availableServers, C.ServerLocation{
+			Country: server.Country,
+			City:    server.City,
+		})
+	}
+	return availableServers, nil
+
 }
 
 // AddConfigListener adds a listener for new ConfigResponses.
@@ -165,13 +168,24 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	ch.setConfig(resp)
+
+	ch.mergeConfig(resp)
 	return nil
 }
 
-// setConfig sets the configuration and notifies the listeners.
-func (ch *ConfigHandler) setConfig(cfg *C.ConfigResponse) {
-	slog.Debug("Setting config")
+// mergeConfig sets the configuration and notifies the listeners.
+func (ch *ConfigHandler) mergeConfig(cfg *C.ConfigResponse) {
+	slog.Debug("Merging config")
+
+	existingConfig, _ := ch.config.Get(eventual.DontWait)
+	if existingConfig != nil {
+		mergedConfig := existingConfig.(*C.ConfigResponse)
+		if err := mergo.Merge(&mergedConfig, cfg); err != nil {
+			slog.Error("merging config", "error", err)
+			return
+		}
+		cfg = mergedConfig
+	}
 	ch.config.Set(cfg)
 	ch.notifyListeners(cfg)
 	slog.Debug("Config set")
@@ -229,7 +243,7 @@ func (ch *ConfigHandler) loadConfig() error {
 		return nil
 	}
 	slog.Debug("Setting config")
-	ch.setConfig(cfg)
+	ch.mergeConfig(cfg)
 	return nil
 }
 

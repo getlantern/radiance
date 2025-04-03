@@ -47,8 +47,8 @@ type configHandler interface {
 	// SetPreferredServerLocation sets the preferred server location. If not set - it's auto selected by the API
 	SetPreferredServerLocation(country, city string)
 
-	// ListAvailableServers lists the available server locations to choose from.
-	ListAvailableServers(ctx context.Context) ([]C.AvailableServerLocations, error)
+	// ListAvailableServers returns a list of available server locations.
+	ListAvailableServers(ctx context.Context) ([]C.ServerLocation, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -132,7 +132,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 
 // TODO: the server stuff should probably be moved to the VPNClient as well..
 
-func (r *Radiance) GetAvailableServers(ctx context.Context) ([]C.AvailableServerLocations, error) {
+func (r *Radiance) GetAvailableServers(ctx context.Context) ([]C.ServerLocation, error) {
 	return r.confHandler.ListAvailableServers(ctx)
 }
 

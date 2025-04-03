@@ -11,20 +11,18 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 //replace github.com/sagernet/sing-box => ../sing-box-minimal
 
 require (
+	dario.cat/mergo v1.0.1
 	github.com/1Password/srp v0.2.0
 	github.com/Jigsaw-Code/outline-sdk v0.0.19
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.2
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/cmux/v2 v2.0.0-20230301223233-dac79088a4c0
-	github.com/getlantern/common v1.2.1-0.20250402192417-b36070b37ded
-	github.com/getlantern/errors v1.0.4
+	github.com/getlantern/common v1.2.1-0.20250403181608-a5642344d3c4
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6
-	github.com/getlantern/lantern-algeneva v0.0.0-20240930181006-6d3c00db1d5d
 	github.com/getlantern/sing-box-extensions v0.0.0-20250402200957-bb61b4768333
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/gobwas/ws v1.4.0
@@ -32,7 +30,6 @@ require (
 	github.com/sagernet/sing v0.6.4
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
-	github.com/xtaci/smux v1.5.31
 	go.opentelemetry.io/otel/log v0.11.0
 	go.opentelemetry.io/otel/sdk v1.35.0
 	go.opentelemetry.io/otel/sdk/metric v1.35.0
@@ -45,6 +42,7 @@ require (
 	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/caddyserver/zerossl v0.1.3 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
+	github.com/getlantern/errors v1.0.4 // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d // indirect
 	github.com/getlantern/tlsdialer/v3 v3.0.3 // indirect
 	github.com/goccy/go-yaml v1.15.13 // indirect
@@ -75,7 +73,6 @@ require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/caddyserver/certmagic v0.21.7 // indirect
 	github.com/cloudflare/circl v1.6.0 // indirect
-	github.com/coder/websocket v1.8.12 // indirect
 	github.com/cretz/bine v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
