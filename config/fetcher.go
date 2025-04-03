@@ -81,18 +81,11 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 
 	// Add If-Modified-Since header to the request
 	// Note that on the first run, lastModified is zero, so the server will return the latest config.
-	// If the server returns a 304 Not Modified response, we return nil.
-	// If the server returns a 200 OK response, we update the lastModified time.
-	// If the server returns a 204 No Content response, we return nil.
-	// If the server returns any other response, we return nil.
 	req.Header.Set("If-Modified-Since", f.lastModified.Format(http.TimeFormat))
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode == http.StatusNoContent {
-		return nil, nil
 	}
 
 	buf, err := io.ReadAll(resp.Body)
@@ -100,11 +93,22 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not read response body: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// 200 OK
+		return buf, nil
+	case http.StatusPartialContent:
+		// 206 Partial Content
+		return buf, nil
+	case http.StatusNotModified:
+		// 304 Not Modified
+		return nil, nil
+	case http.StatusNoContent:
+		// 204 No Content
+		return nil, nil
+	default:
 		return nil, fmt.Errorf("unexpected status code: %d. %s", resp.StatusCode, buf)
 	}
-
-	return buf, nil
 }
 
 // singVersion returns the version of the sing-box module.
