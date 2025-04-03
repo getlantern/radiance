@@ -51,19 +51,6 @@ type ConfigHandler struct {
 	configListenersMu       sync.RWMutex
 }
 
-type serverLocation struct {
-	Country string
-	City    string
-}
-
-type AvailableServerLocation struct {
-	City        string
-	Country     string
-	CountryCode string
-	Latitude    *float32
-	Longitude   *float32
-}
-
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
 	ch := &ConfigHandler{
@@ -83,7 +70,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		},
 	}
 	// Store an empty preferred location to avoid nil pointer dereference
-	ch.preferredServerLocation.Store(&serverLocation{})
+	ch.preferredServerLocation.Store(&C.ServerLocation{})
 
 	if err := ch.loadConfig(); err != nil {
 		slog.Error("failed to load config", "error", err)
