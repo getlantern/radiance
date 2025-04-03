@@ -88,6 +88,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 		return nil, err
 	}
 
+	// Note that Go's HTTP library should automatically have decompressed the response here.
 	buf, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
