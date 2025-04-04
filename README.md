@@ -8,8 +8,10 @@ Radiance is the backend core of the Lantern client that integrates [sing-box](ht
 What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 
 ## What's it do?
-`radiance` runs a TUN device on the user's device via [sing-tun](https://github.com/SagerNet/sing-tun/) and integrates all sing-box protocols (shadowsocks, vmess, anytls, etc) in addition to a proxyless dialer from the Outline SDK and [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/). Radiance also integrates [application layer Geneva](https://www.youtube.com/watch?v=b9F696-oax0), with more Lantern protocols coming soon.
+`radiance` runs a TUN device on the user's device via [sing-tun](https://github.com/SagerNet/sing-tun/) and integrates all sing-box protocols (shadowsocks, hysteria2, vmess, anytls, etc) in addition to a proxyless dialer from the Outline SDK and [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/). Radiance also integrates [application layer Geneva](https://www.youtube.com/watch?v=b9F696-oax0), compatibility with [WATER](https://github.com/refraction-networking/water-rs)/WASM-based transports, and a continuous stream of new Lantern protocols and approaches to stayin unblocked.
 
+## Interoperability
+Interoperability is at the core of Lantern and Radiance. Lantern is designed to interoperate with everything from Outline servers to sing-box to Lantern's own sing-box extensions. You can similarly run Lantern servers to interoperate with any of those clients. The addition of WATER means that Lantern can deliver new protocols written in any WASM-compatible language at runtime without client-side updates.
 
 ## Run
 
@@ -17,21 +19,3 @@ What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 go run cmd/main.go 
 ```
 Sudo/Admin privileges are required to run.
-
-## TODO
-- [x] Create an Outline transport StreamDialer using a proxy config.
-- [x] Connect to and route requests to backend proxy using a StreamDialer.
-- [x] Retrieve proxy config from backend.
-- [ ] Implement remaining protocols
-  - [x] tls w/ frag
-  - [x] algeneva
-  - [ ] tlsmasq
-  - [ ] water
-  - [ ] starbridge
-  - [x] vmess
-  - [ ] broflake?
-- [x] Implement VPN TUN 
-- [x] Add way to manage multiple proxies.
-- [ ] Switch from getlantern/golog to slog
-- [ ] Add PacketDialer (UDP) support
-- [x] Add support for split tunneling, using [v2ray's routing rule syntax](https://www.v2ray.com/en/configuration/routing.html)
