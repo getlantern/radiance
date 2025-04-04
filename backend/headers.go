@@ -20,15 +20,15 @@ const (
 	versionHeader           = "X-Lantern-Version"
 	platformHeader          = "X-Lantern-Platform"
 	appNameHeader           = "X-Lantern-App"
-	deviceIdHeader          = "X-Lantern-Device-Id"
-	userIdHeader            = "X-Lantern-User-Id"
+	deviceIDHeader          = "X-Lantern-Device-Id"
+	userIDHeader            = "X-Lantern-User-Id"
 	supportedDataCapsHeader = "X-Lantern-Supported-Data-Caps"
 	timeZoneHeader          = "X-Lantern-Time-Zone"
 	randomNoiseHeader       = "X-Lantern-Rand"
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
-func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader, user *user.User) (*http.Request, error) {
+func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader, user user.BaseUser) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
@@ -36,15 +36,15 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	// add required headers. Currently, all but the auth token are placeholders.
 	req.Header.Set(appVersionHeader, app.ClientVersion)
 	req.Header.Set(versionHeader, app.Version)
-	req.Header.Set(userIdHeader, strconv.FormatInt(user.LegacyID(), 10))
+	req.Header.Set(userIDHeader, strconv.FormatInt(user.LegacyID(), 10))
 	req.Header.Set(platformHeader, app.Platform)
 	req.Header.Set(appNameHeader, app.Name)
-	req.Header.Set(deviceIdHeader, user.DeviceID())
+	req.Header.Set(deviceIDHeader, user.DeviceID())
 	return req, nil
 }
 
 // NewIssueRequest creates a new HTTP request with the required headers for issue reporting.
-func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, user *user.User) (*http.Request, error) {
+func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, user user.BaseUser) (*http.Request, error) {
 	req, err := NewRequestWithHeaders(ctx, method, url, body, user)
 	if err != nil {
 		return nil, err

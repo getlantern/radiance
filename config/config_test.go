@@ -1,135 +1,291 @@
 package config
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
-	"sync/atomic"
+	"path/filepath"
 	"testing"
 	"time"
 
+	C "github.com/getlantern/common"
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/proto"
+
+	O "github.com/sagernet/sing-box/option"
 )
 
 func TestConfigHandler_GetConfig(t *testing.T) {
-	respProxy := testConfigResponse.Proxy.Proxies
 	tests := []struct {
 		name         string
-		configResult configResult
-		assert       func(t *testing.T, got []*Config, country string, err error)
+		configResult interface{}
+		expectedErr  error
+		expectedCfg  *C.ConfigResponse
 	}{
 		{
-			name:         "returns current config",
-			configResult: configResult{cfg: respProxy, country: testConfigResponse.Country, err: nil},
-			assert: func(t *testing.T, got []*Config, country string, err error) {
-				assert.NoError(t, err)
-				assert.Equal(t, testConfigResponse.Country, country)
-				for i := range got {
-					assert.True(t, proto.Equal(respProxy[i], got[i]), "GetConfig should return the current config")
-				}
+			name: "returns current config",
+			configResult: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectedErr: nil,
+			expectedCfg: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
 			},
 		},
 		{
-			name:         "error encountered during fetch",
-			configResult: configResult{cfg: nil, err: ErrFetchingConfig},
-			assert: func(t *testing.T, got []*Config, country string, err error) {
-				assert.ErrorIs(t, err, ErrFetchingConfig,
-					"GetConfig should return the error encountered during fetch",
-				)
-			},
+			name:         "context expired",
+			configResult: nil,
+			expectedErr:  context.DeadlineExceeded,
+			expectedCfg:  nil,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // prevent GetConfig from waiting for the context to expire
 			ch := &ConfigHandler{config: eventual.NewValue()}
-			ch.config.Set(tt.configResult)
-			got, country, err := ch.GetConfig(ctx)
-			tt.assert(t, got, country, err)
+			if tt.configResult != nil {
+				ch.config.Set(tt.configResult)
+			}
+
+			ctx := context.Background()
+			if tt.expectedErr == context.DeadlineExceeded {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-1*time.Second))
+				defer cancel()
+			}
+
+			got, err := ch.GetConfig(ctx)
+			if tt.expectedErr != nil {
+				assert.ErrorIs(t, err, tt.expectedErr)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, tt.expectedCfg, got)
 		})
 	}
 }
-
-func TestFetchLoop_UpdateConfig(t *testing.T) {
-	buf, _ := proto.Marshal(testConfigResponse)
-	confReader := io.NopCloser(bytes.NewReader(buf))
+func TestNewConfigHandler(t *testing.T) {
 	tests := []struct {
-		name     string
-		response *http.Response
-		err      error
-		assert   func(*testing.T, bool, error)
+		name          string
+		pollInterval  time.Duration
+		httpClient    *http.Client
+		user          *user.User
+		dataDir       string
+		expectedError bool
 	}{
 		{
-			name:     "received new config",
-			response: &http.Response{StatusCode: http.StatusOK, Body: confReader},
-			assert: func(t *testing.T, changed bool, err error) {
-				assert.NoError(t, err)
-				assert.True(t, changed, "fetchLoop should update the config if a new one is received")
-			},
+			name:         "valid inputs",
+			pollInterval: 1 * time.Second,
+			httpClient:   &http.Client{},
+			user:         &user.User{},
+			dataDir:      t.TempDir(),
 		},
 		{
-			name:     "no new config available and no error",
-			response: &http.Response{StatusCode: http.StatusNoContent},
-			assert: func(t *testing.T, changed bool, err error) {
-				assert.NoError(t, err)
-				assert.False(t, changed, "fetchLoop should not update the config if no new config is received")
-			},
-		},
-		{
-			name: "error fetching config",
-			err:  assert.AnError,
-			assert: func(t *testing.T, changed bool, err error) {
-				assert.NoError(t, err)
-				assert.False(t, changed, "fetchLoop should not update the config if no new config is received")
-			},
+			name:          "invalid data directory",
+			pollInterval:  1 * time.Second,
+			httpClient:    &http.Client{},
+			user:          &user.User{},
+			dataDir:       "/invalid/path",
+			expectedError: true,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			continueC := make(chan struct{}, 1)
-			ftr := newFetcher(&http.Client{
-				Transport: &mockRoundTripper{
-					resp:      tt.response,
-					err:       tt.err,
-					continueC: continueC,
-				},
-			}, &user.User{})
-			ch := &ConfigHandler{
-				config:                  eventual.NewValue(),
-				stopC:                   make(chan struct{}),
-				ftr:                     ftr,
-				preferredServerLocation: atomic.Value{},
+			ctx := context.Background()
+			ch := NewConfigHandler(ctx, tt.pollInterval, tt.httpClient, tt.user, tt.dataDir)
+
+			assert.NotNil(t, ch, "ConfigHandler should not be nil")
+			assert.NotNil(t, ch.config, "ConfigHandler.config should not be nil")
+			assert.NotNil(t, ch.stopC, "ConfigHandler.stopC should not be nil")
+			assert.NotNil(t, ch.closeOnce, "ConfigHandler.closeOnce should not be nil")
+			assert.Equal(t, filepath.Join(tt.dataDir, configFileName), ch.configPath, "ConfigHandler.configPath should be set correctly")
+			assert.NotNil(t, ch.apiClient, "ConfigHandler.apiClient should not be nil")
+			assert.NotNil(t, ch.ftr, "ConfigHandler.ftr should not be nil")
+			assert.NotNil(t, ch.preferredServerLocation.Load(), "ConfigHandler.preferredServerLocation should not be nil")
+			assert.Len(t, ch.configListeners, 1, "ConfigHandler.configListeners should have one listener")
+
+			// Check if the config was loaded correctly
+			cfg, _ := ch.config.Get(eventual.DontWait)
+			if tt.expectedError {
+				assert.Nil(t, cfg, "ConfigHandler.config should be nil")
+			} else {
+				assert.NoError(t, ch.loadConfig(), "ConfigHandler.loadConfig should not return an error")
 			}
-			ch.preferredServerLocation.Store(&serverLocation{})
-			conf := &Config{}
-			ch.config.Set(configResult{cfg: []*Config{conf}, err: nil})
 
-			go ch.fetchLoop(0)
-			<-continueC
-			close(ch.stopC)
-
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()                    // we don't want GetConfig to wait
-			time.Sleep(1 * time.Second) // waiting 1s until it fetches
-			_got, _ := ch.config.Get(ctx)
-			got := _got.(configResult)
-
-			tt.assert(t, !proto.Equal(conf, got.cfg[0]), got.err)
+			// Stop the fetch loop to clean up
+			ch.Stop()
 		})
 	}
 }
+func TestConfigHandler_mergeConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		existingConfig *C.ConfigResponse
+		newConfig      *C.ConfigResponse
+		expectedConfig *C.ConfigResponse
+		expectMergeErr bool
+	}{
+		{
+			name: "override existing outbound config",
+			existingConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "direct",
+						},
+					},
+				},
+			},
+			newConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectedConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "kill previous outbounds but keep other stuff",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "direct",
+						},
+						{
+							Tag:  "outbound2",
+							Type: "direct",
+						},
+						{
+							Tag:  "outbound3",
+							Type: "direct",
+						},
+					},
+				},
+			},
+			newConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "merge new config into existing config",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{IP: "192.168.1.1"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US", IP: "192.168.1.1"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "override existing value",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK", IP: "192.168.1.1"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK", IP: "192.168.1.1"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "keep existing values",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US", IP: "192.168.1.1"},
+			},
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "UK", IP: "192.168.1.1"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name:           "set new config when no existing config",
+			existingConfig: nil,
+			newConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "handle merge error gracefully",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			newConfig: nil, // Invalid new config to simulate merge error
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+			},
+			expectMergeErr: true,
+		},
+	}
 
-var testConfigResponse = &ConfigResponse{
-	Country: "US",
-	Proxy: &ConfigResponse_Proxy{
-		Proxies: []*ProxyConnectConfig{{
-			Track:    "track",
-			Protocol: "protocol",
-		}},
-	},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &ConfigHandler{
+				config: eventual.NewValue(),
+			}
+			if tt.existingConfig != nil {
+				ch.config.Set(tt.existingConfig)
+			}
+
+			err := ch.mergeConfig(tt.newConfig)
+			if tt.expectMergeErr {
+				assert.Error(t, err, "Expected an error but got none")
+			} else {
+				assert.NoError(t, err, "Expected no error but got one")
+			}
+
+			// Verify the resulting config
+			resultConfig, _ := ch.config.Get(eventual.DontWait)
+			assert.Equal(t, tt.expectedConfig, resultConfig)
+		})
+	}
 }

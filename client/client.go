@@ -47,6 +47,7 @@ type vpnClient struct {
 	splitTunnelHandler *SplitTunnel
 	started            bool
 	connected          bool
+	ctx                context.Context
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -54,11 +55,11 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(opts Options, logDir string) (VPNClient, error) {
+func NewVPNClient(opts Options, logDir string) (VPNClient, context.Context, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
-		return client, nil
+		return client, client.ctx, nil
 	}
 
 	// TODO: We should be fetching the options from the server.
@@ -68,7 +69,7 @@ func NewVPNClient(opts Options, logDir string) (VPNClient, error) {
 	rsMgr := ruleset.NewManager()
 	splitTun, stRule, stRuleset, err := initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
 	if err != nil {
-		return nil, fmt.Errorf("split tunnel handler: %w", err)
+		return nil, nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
 	// inject split tunnel routing rule and ruleset into the routing table
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
@@ -78,19 +79,20 @@ func NewVPNClient(opts Options, logDir string) (VPNClient, error) {
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
+	b, ctx, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	client = &vpnClient{
 		boxService:         b,
 		splitTunnelHandler: splitTun,
+		ctx:                ctx,
 	}
-	return client, nil
+	return client, ctx, nil
 }
 
 // Start starts the VPN client
@@ -195,7 +197,7 @@ func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*Split
 	}
 	rRule := ruleset.BaseRouteRule(SplitTunnelTag, "direct")
 	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, rs.RuleFilePath(), SplitTunnelFormat)
-	return (*SplitTunnel)(rs), &rRule, &rRuleset, nil
+	return rs, &rRule, &rRuleset, nil
 }
 
 // injectRouteRules injects the given rules and rulesets into routeOpts. atIdx specifies the index
