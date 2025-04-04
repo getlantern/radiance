@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/config"
 )
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
-		r, err := NewRadiance(t.TempDir(), nil)
+		r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 		assert.NotNil(t, r.VPNClient)
@@ -94,10 +95,11 @@ type mockVPNClient struct {
 	mock.Mock
 }
 
-func (m *mockVPNClient) StartVPN() error                  { panic("not implemented") }
-func (m *mockVPNClient) StopVPN() error                   { panic("not implemented") }
-func (m *mockVPNClient) PauseVPN(dur time.Duration) error { return nil }
-func (m *mockVPNClient) ResumeVPN()                       {}
+func (m *mockVPNClient) StartVPN() error                         { panic("not implemented") }
+func (m *mockVPNClient) StopVPN() error                          { panic("not implemented") }
+func (m *mockVPNClient) PauseVPN(dur time.Duration) error        { return nil }
+func (m *mockVPNClient) ResumeVPN()                              {}
+func (m *mockVPNClient) SplitTunnelHandler() *client.SplitTunnel { panic("not implemented") }
 
 func (m *mockVPNClient) ConnectionStatus() bool {
 	args := m.Called()
@@ -152,7 +154,7 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance(t.TempDir(), nil)
+			r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, &tt.report)
 			tt.assert(t, err)

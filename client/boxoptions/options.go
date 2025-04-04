@@ -3,12 +3,13 @@ package boxoptions
 import (
 	"net/netip"
 
-	"github.com/getlantern/radiance/constant"
-	"github.com/getlantern/radiance/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
+
+	"github.com/getlantern/radiance/constant"
+	"github.com/getlantern/radiance/option"
 )
 
 var BoxOptions = O.Options{

@@ -28,33 +28,37 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
+	"github.com/getlantern/sing-box-extensions/ruleset"
+
 	"github.com/getlantern/radiance/protocol"
 )
 
 // BoxService is a wrapper around libbox.BoxService
 type BoxService struct {
-	libbox       *libbox.BoxService
-	ctx          context.Context
-	config       string
-	platIfce     libbox.PlatformInterface
-	pauseManager pause.Manager
-	pauseAccess  sync.Mutex
-	pauseTimer   *time.Timer
-	mu           sync.Mutex
-	isRunning    bool
+	libbox            *libbox.BoxService
+	ctx               context.Context
+	config            string
+	platIfce          libbox.PlatformInterface
+	mutRuleSetManager *ruleset.Manager
+	pauseManager      pause.Manager
+	pauseAccess       sync.Mutex
+	pauseTimer        *time.Timer
+	mu                sync.Mutex
+	isRunning         bool
 
-	logFactory log.Factory
-
+	logFactory         log.Factory
 	customServersMutex sync.Locker
 	customServers      map[string]option.Options
 }
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface) (*BoxService, error) {
+func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager, logFactory log.Factory) (*BoxService, error) {
 	bs := &BoxService{
-		config:   config,
-		platIfce: platIfce,
+		config:            config,
+		platIfce:          platIfce,
+		mutRuleSetManager: rulesetManager,
+		logFactory:        logFactory,
 	}
 	setupOpts := &libbox.SetupOptions{
 		BasePath:    dataDir,
@@ -84,6 +88,13 @@ func (bs *BoxService) Start() error {
 	if err != nil {
 		return err
 	}
+
+	// we need to start the ruleset manager before starting the libbox service but after the libbox
+	// service has been initialized so that the ruleset manager can access the routing rules.
+	if err = bs.mutRuleSetManager.Start(ctx); err != nil {
+		return fmt.Errorf("start ruleset manager: %w", err)
+	}
+	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
 
 	bs.libbox = lb
 	bs.ctx = ctx
@@ -141,9 +152,9 @@ func (bs *BoxService) Close() error {
 	return nil
 }
 
-// Pause pauses the network for the specified duration. An error is returned if the network is
+// PauseVPN pauses the network for the specified duration. An error is returned if the network is
 // already paused
-func (bs *BoxService) Pause(dur time.Duration) error {
+func (bs *BoxService) PauseVPN(dur time.Duration) error {
 	bs.pauseAccess.Lock()
 	defer bs.pauseAccess.Unlock()
 
@@ -254,4 +265,8 @@ func (bs *BoxService) SelectCustomServer(tag string) error {
 		return fmt.Errorf("failed to select custom server %q", tag)
 	}
 	return nil
+}
+
+func (bs *BoxService) Ctx() context.Context {
+	return bs.ctx
 }

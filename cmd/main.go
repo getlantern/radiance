@@ -7,13 +7,15 @@ import (
 
 	"github.com/getlantern/golog"
 
+	"github.com/getlantern/radiance/client"
+
 	"github.com/getlantern/radiance"
 )
 
 var log = golog.LoggerFor("main")
 
 func main() {
-	rad, err := radiance.NewRadiance("", nil)
+	rad, err := radiance.NewRadiance(client.Options{})
 	if err != nil {
 		log.Fatalf("unable to create radiance: %v", err)
 	}

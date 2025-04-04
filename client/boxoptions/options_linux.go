@@ -19,7 +19,6 @@ func Options(logOutput string) option.Options {
 
 	if runtime.GOOS == "android" {
 		opts.Route.OverrideAndroidVPN = true
-		opts.Route.AutoDetectInterface = true
 	}
 	opts.Log.Output = logOutput
 	return opts
