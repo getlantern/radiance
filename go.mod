@@ -9,6 +9,7 @@ replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
 
 //replace github.com/sagernet/sing-box => ../sing-box-minimal
+replace github.com/getlantern/common => ../common
 
 require (
 	dario.cat/mergo v1.0.1
@@ -17,7 +18,7 @@ require (
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.2
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20250403181608-a5642344d3c4
+	github.com/getlantern/common v1.2.1-0.20250404213255-37d58e3e0fae
 	github.com/getlantern/eventual/v2 v2.0.2
 	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65

@@ -50,10 +50,14 @@ type ConfigHandler struct {
 	preferredServerLocation atomic.Value
 	configListeners         []func(*C.ConfigResponse)
 	configListenersMu       sync.RWMutex
+
+	// This is the context used in sing-box where the various services are registered.
+	// It's required when unmarshalling the config responses.
+	ctx context.Context
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
+func NewConfigHandler(ctx context.Context, pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
 	ch := &ConfigHandler{
 		config:                  eventual.NewValue(),
 		stopC:                   make(chan struct{}),
@@ -69,6 +73,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 				}
 			},
 		},
+		ctx: ctx,
 	}
 	// Store an empty preferred location to avoid nil pointer dereference
 	ch.preferredServerLocation.Store(&C.ServerLocation{})
@@ -96,6 +101,8 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 	}()
 }
 
+// ListAvailableServers returns a list of available servers from the current configuration.
+// If no configuration is available, it returns an error.
 func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]C.ServerLocation, error) {
 	cfg, err := ch.config.Get(ctx)
 	if err != nil {
@@ -135,7 +142,7 @@ func (ch *ConfigHandler) notifyListeners(cfg *C.ConfigResponse) {
 func (ch *ConfigHandler) fetchConfig() error {
 	slog.Debug("Fetching config")
 	preferredServerLocation := ch.preferredServerLocation.Load().(*C.ServerLocation)
-	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
+	resp, err := ch.ftr.fetchConfig(ch.ctx, preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}

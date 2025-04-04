@@ -3,7 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+
 	"io"
 	"net/http"
 	"strconv"
@@ -14,6 +14,9 @@ import (
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	O "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 )
 
 type mockRoundTripper struct {
@@ -64,6 +67,9 @@ func TestFetchConfig(t *testing.T) {
 						UserInfo: C.UserInfo{
 							ProToken: "mock-token",
 						},
+						Options: O.Options{
+							RawMessage: json.RawMessage(`{}`),
+						},
 					}
 					data, _ := json.Marshal(resp)
 					return data
@@ -72,6 +78,9 @@ func TestFetchConfig(t *testing.T) {
 			expectedConfig: &C.ConfigResponse{
 				UserInfo: C.UserInfo{
 					ProToken: "mock-token",
+				},
+				Options: O.Options{
+					RawMessage: json.RawMessage(`{}`),
 				},
 			},
 		},
@@ -117,7 +126,8 @@ func TestFetchConfig(t *testing.T) {
 				Transport: mockRT,
 			}, mockUser)
 
-			gotConfig, err := fetcher.fetchConfig(tt.preferredServerLoc)
+			ctx := context.Background()
+			gotConfig, err := fetcher.fetchConfig(ctx, tt.preferredServerLoc)
 
 			if tt.expectedErrorMessage != "" {
 				require.Error(t, err)

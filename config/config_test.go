@@ -92,7 +92,8 @@ func TestNewConfigHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ch := NewConfigHandler(tt.pollInterval, tt.httpClient, tt.user, tt.dataDir)
+			ctx := context.Background()
+			ch := NewConfigHandler(ctx, tt.pollInterval, tt.httpClient, tt.user, tt.dataDir)
 
 			assert.NotNil(t, ch, "ConfigHandler should not be nil")
 			assert.NotNil(t, ch.config, "ConfigHandler.config should not be nil")

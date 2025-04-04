@@ -43,7 +43,7 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
+func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, context.Context, error) {
 	bs := &BoxService{
 		config:            config,
 		platIfce:          platIfce,
@@ -58,10 +58,21 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 		setupOpts.FixAndroidStack = true
 	}
 	if err := libbox.Setup(setupOpts); err != nil {
-		return nil, fmt.Errorf("setup libbox: %w", err)
+		return nil, nil, fmt.Errorf("setup libbox: %w", err)
 	}
 
-	return bs, nil
+	// (re)-initialize the libbox service
+	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
+	bs.libbox = lb
+	bs.ctx = ctx
+
+	bs.pauseManager = service.FromContext[pause.Manager](ctx)
+
+	return bs, ctx, nil
 }
 
 func (bs *BoxService) Start() error {
@@ -72,27 +83,17 @@ func (bs *BoxService) Start() error {
 		return errors.New("service is already running")
 	}
 
-	// (re)-initialize the libbox service
-	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
-	if err != nil {
-		return err
-	}
-
 	// we need to start the ruleset manager before starting the libbox service but after the libbox
 	// service has been initialized so that the ruleset manager can access the routing rules.
-	if err = bs.mutRuleSetManager.Start(ctx); err != nil {
+	if err := bs.mutRuleSetManager.Start(bs.ctx); err != nil {
 		return fmt.Errorf("start ruleset manager: %w", err)
 	}
-	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
 
-	bs.libbox = lb
-	bs.ctx = ctx
-	bs.pauseManager = service.FromContext[pause.Manager](ctx)
-
-	if err = lb.Start(); err == nil {
-		bs.isRunning = true
+	if err := bs.libbox.Start(); err != nil {
+		return fmt.Errorf("error starting libbox service: %w", err)
 	}
-	return err
+	bs.isRunning = true
+	return nil
 }
 
 // newLibboxService creates a new libbox service with the given config and platform interface

@@ -94,7 +94,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	}
 
 	opts.DataDir = dataDirPath
-	vpnC, err := client.NewVPNClient(opts, logDir)
+	vpnC, ctx, err := client.NewVPNClient(opts, logDir)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
@@ -120,7 +120,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 
 	return &Radiance{
 		VPNClient:     vpnC,
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
+		confHandler:   config.NewConfigHandler(ctx, configPollInterval, k.NewHTTPClient(), u, dataDirPath),
 		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
 		user:          u,
