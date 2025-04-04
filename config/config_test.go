@@ -11,6 +11,8 @@ import (
 	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
+
+	O "github.com/sagernet/sing-box/option"
 )
 
 func TestConfigHandler_GetConfig(t *testing.T) {
@@ -48,9 +50,8 @@ func TestConfigHandler_GetConfig(t *testing.T) {
 			ctx := context.Background()
 			if tt.expectedErr == context.DeadlineExceeded {
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 1*time.Millisecond)
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-1*time.Second))
 				defer cancel()
-				time.Sleep(2 * time.Millisecond) // Ensure context expires
 			}
 
 			got, err := ch.GetConfig(ctx)
@@ -124,6 +125,84 @@ func TestConfigHandler_mergeConfig(t *testing.T) {
 		expectedConfig *C.ConfigResponse
 		expectMergeErr bool
 	}{
+		{
+			name: "override existing outbound config",
+			existingConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "direct",
+						},
+					},
+				},
+			},
+			newConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectedConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectMergeErr: false,
+		},
+		{
+			name: "kill previous outbounds but keep other stuff",
+			existingConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "direct",
+						},
+						{
+							Tag:  "outbound2",
+							Type: "direct",
+						},
+						{
+							Tag:  "outbound3",
+							Type: "direct",
+						},
+					},
+				},
+			},
+			newConfig: &C.ConfigResponse{
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectedConfig: &C.ConfigResponse{
+				UserInfo: C.UserInfo{Country: "US"},
+				Options: O.Options{
+					Outbounds: []O.Outbound{
+						{
+							Tag:  "outbound",
+							Type: "proxied",
+						},
+					},
+				},
+			},
+			expectMergeErr: false,
+		},
 		{
 			name: "merge new config into existing config",
 			existingConfig: &C.ConfigResponse{

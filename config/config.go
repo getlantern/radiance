@@ -5,7 +5,6 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,6 +21,8 @@ import (
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
+
+	"github.com/sagernet/sing/common/json"
 )
 
 const (
@@ -163,7 +164,7 @@ func (ch *ConfigHandler) mergeConfig(cfg *C.ConfigResponse) error {
 	existingConfig, _ := ch.config.Get(eventual.DontWait)
 	if existingConfig != nil {
 		mergedConfig := existingConfig.(*C.ConfigResponse)
-		if err := mergo.MergeWithOverwrite(mergedConfig, cfg); err != nil {
+		if err := mergo.Merge(mergedConfig, cfg, mergo.WithOverride); err != nil {
 			slog.Error("merging config", "error", err)
 			return fmt.Errorf("merging config: %w", err)
 		}

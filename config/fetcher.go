@@ -3,7 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +18,8 @@ import (
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/user"
+
+	"github.com/sagernet/sing/common/json"
 )
 
 const configURL = "https://api.iantem.io/v1/config"
