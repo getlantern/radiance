@@ -1,9 +1,7 @@
 [![Go](https://github.com/getlantern/radiance/actions/workflows/go.yml/badge.svg)](https://github.com/getlantern/radiance/actions/workflows/go.yml)
 
 # Radiance
-_(WIP)_
-
-Radiance is the backend core of the Lantern client that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the [Outline SDK ](https://github.com/Jigsaw-Code/outline-sdk)in addition to Lantern's own protocols and techniques.
+Radiance is the backend core of the Lantern client that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the [Outline SDK ](https://github.com/Jigsaw-Code/outline-sdk)in addition to Lantern's own protocols and techniques. This is still under development and is not ready or even functional for production use.
 
 What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 
