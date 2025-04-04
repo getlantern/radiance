@@ -70,7 +70,7 @@ func (f *fetcher) fetchConfig(preferredServerLocation *C.ServerLocation) (*C.Con
 	return newConf, nil
 }
 
-// send sends a request to the server ith the given body and returns the response.
+// send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
 	if err != nil {
