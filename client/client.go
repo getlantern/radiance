@@ -28,6 +28,7 @@ var (
 
 type Options struct {
 	DataDir  string
+	LogDir   string
 	PlatIfce libbox.PlatformInterface
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
@@ -40,6 +41,7 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
+	OnNewConfig(oldConfig, newConfig []byte) error
 }
 
 type vpnClient struct {
@@ -47,7 +49,6 @@ type vpnClient struct {
 	splitTunnelHandler *SplitTunnel
 	started            bool
 	connected          bool
-	ctx                context.Context
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -55,21 +56,21 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(opts Options, logDir string) (VPNClient, context.Context, error) {
+func NewVPNClient(opts Options) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
-		return client, client.ctx, nil
+		return client, nil
 	}
 
 	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(logDir, "lantern-box.log")
+	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
 	rsMgr := ruleset.NewManager()
 	splitTun, stRule, stRuleset, err := initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
 	if err != nil {
-		return nil, nil, fmt.Errorf("split tunnel handler: %w", err)
+		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
 	// inject split tunnel routing rule and ruleset into the routing table
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
@@ -79,20 +80,19 @@ func NewVPNClient(opts Options, logDir string) (VPNClient, context.Context, erro
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	b, ctx, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
+	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	client = &vpnClient{
 		boxService:         b,
 		splitTunnelHandler: splitTun,
-		ctx:                ctx,
 	}
-	return client, ctx, nil
+	return client, nil
 }
 
 // Start starts the VPN client
@@ -151,14 +151,6 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 	c.connected = connected
 }
 
-func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
-	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(configContent))
-	if err != nil {
-		return option.Options{}, fmt.Errorf("unmarshal config: %w", err)
-	}
-	return options, nil
-}
-
 // Pause pauses the VPN client for the specified duration
 func (c *vpnClient) PauseVPN(dur time.Duration) error {
 	slog.Info("Pausing VPN for", "duration", dur)
@@ -214,4 +206,8 @@ func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.
 		routeOpts.RuleSet = append(routeOpts.RuleSet, rulesets...)
 	}
 	return routeOpts
+}
+
+func (c *vpnClient) OnNewConfig(oldConfigRaw, newConfigRaw []byte) error {
+	return c.boxService.OnNewConfig(oldConfigRaw, newConfigRaw)
 }

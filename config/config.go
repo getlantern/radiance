@@ -11,18 +11,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	reflect "reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"dario.cat/mergo"
 	"github.com/getlantern/eventual/v2"
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
-
-	"github.com/sagernet/sing/common/json"
 )
 
 const (
@@ -36,6 +34,9 @@ var (
 	ErrFetchingConfig = errors.New("failed to fetch config")
 )
 
+// ListenerFunc is a function that is called when the configuration changes.
+type ListenerFunc func(oldConfig, newConfig []byte) error
+
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
 // to the most recent configuration.
 type ConfigHandler struct {
@@ -48,32 +49,30 @@ type ConfigHandler struct {
 
 	configPath              string
 	preferredServerLocation atomic.Value
-	configListeners         []func(*C.ConfigResponse)
+	configListeners         []ListenerFunc
 	configListenersMu       sync.RWMutex
-
-	// This is the context used in sing-box where the various services are registered.
-	// It's required when unmarshalling the config responses.
-	ctx context.Context
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(ctx context.Context, pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
+	configPath := filepath.Join(dataDir, configFileName)
 	ch := &ConfigHandler{
 		config:                  eventual.NewValue(),
 		stopC:                   make(chan struct{}),
 		closeOnce:               &sync.Once{},
-		configPath:              filepath.Join(dataDir, configFileName),
+		configPath:              configPath,
 		apiClient:               common.NewWebClient(httpClient),
 		preferredServerLocation: atomic.Value{}, // initially, no preference
 		// prepoulate the configListeners with the save listener
-		configListeners: []func(*C.ConfigResponse){
-			func(cfg *C.ConfigResponse) {
-				if err := saveConfig(dataDir, cfg); err != nil {
-					slog.Error("failed to save config: %v", "error", err)
+		configListeners: []ListenerFunc{
+			func(_, newConfig []byte) error {
+				if err := saveConfig(configPath, newConfig); err != nil {
+					return fmt.Errorf("saving config: %w", err)
 				}
+				slog.Debug("saved config to disk")
+				return nil
 			},
 		},
-		ctx: ctx,
 	}
 	// Store an empty preferred location to avoid nil pointer dereference
 	ch.preferredServerLocation.Store(&C.ServerLocation{})
@@ -118,31 +117,31 @@ func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]C.ServerLo
 }
 
 // AddConfigListener adds a listener for new ConfigResponses.
-func (ch *ConfigHandler) AddConfigListener(listener func(*C.ConfigResponse)) {
+func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
 	ch.configListenersMu.Lock()
 	ch.configListeners = append(ch.configListeners, listener)
 	ch.configListenersMu.Unlock()
 	// if we have a config already, call the listener with it
 	if cfgRes, err := ch.config.Get(eventual.DontWait); err == nil {
-		cfg, ok := cfgRes.(*C.ConfigResponse)
+		cfg, ok := cfgRes.([]byte)
 		if ok && cfg != nil {
-			listener(cfg)
+			listener(nil, cfg)
 		}
 	}
 }
 
-func (ch *ConfigHandler) notifyListeners(cfg *C.ConfigResponse) {
+func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig []byte) {
 	ch.configListenersMu.RLock()
 	defer ch.configListenersMu.RUnlock()
 	for _, listener := range ch.configListeners {
-		listener(cfg)
+		go listener(oldConfig, newConfig)
 	}
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
 	slog.Debug("Fetching config")
 	preferredServerLocation := ch.preferredServerLocation.Load().(*C.ServerLocation)
-	resp, err := ch.ftr.fetchConfig(ch.ctx, preferredServerLocation)
+	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -156,31 +155,50 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	return ch.mergeConfig(resp)
+	//return ch.mergeConfig(resp)
+	oldConfig, err := ch.config.Get(eventual.DontWait)
+	var oldConfigBytes []byte
+	if oldConfig != nil {
+		var ok bool
+		oldConfigBytes, ok = oldConfig.([]byte)
+		if !ok {
+			slog.Error("failed to cast old config to bytes", "error", err)
+		}
+	}
+	ch.config.Set(resp)
+	ch.notifyListeners(oldConfigBytes, resp)
+	slog.Debug("Config fetched")
+	return nil
 }
 
-// mergeConfig merges the new config with the existing config. If the existing config is nil, it sets the new config.
-// The new config overwrites any existing values in the old config.
-// It returns an error if the merge fails.
-func (ch *ConfigHandler) mergeConfig(cfg *C.ConfigResponse) error {
-	slog.Debug("Merging config")
-	if cfg == nil {
-		return fmt.Errorf("config is nil")
+func (ch *ConfigHandler) setConfig(cfg []byte) {
+	slog.Debug("Setting config")
+	ch.config.Set(cfg)
+	ch.notifyListeners(cfg, cfg)
+	slog.Debug("Config set")
+}
+
+func hasNewOutbounds(oldCfg, newCfg *C.ConfigResponse) bool {
+	if newCfg == nil {
+		return false
+	}
+	if oldCfg == nil && len(newCfg.Options.Outbounds) > 0 {
+		return true
+	}
+	if len(newCfg.Options.Outbounds) == 0 {
+		return false
+	}
+	if len(oldCfg.Options.Outbounds) != len(newCfg.Options.Outbounds) {
+		return true
+	}
+	for i, oldOutbound := range oldCfg.Options.Outbounds {
+		newOutbound := newCfg.Options.Outbounds[i]
+		if !reflect.DeepEqual(oldOutbound, newOutbound) {
+			return true
+		}
 	}
 
-	existingConfig, _ := ch.config.Get(eventual.DontWait)
-	if existingConfig != nil {
-		mergedConfig := existingConfig.(*C.ConfigResponse)
-		if err := mergo.Merge(mergedConfig, cfg, mergo.WithOverride); err != nil {
-			slog.Error("merging config", "error", err)
-			return fmt.Errorf("merging config: %w", err)
-		}
-		cfg = mergedConfig
-	}
-	ch.config.Set(cfg)
-	ch.notifyListeners(cfg)
-	slog.Debug("Config set")
-	return nil
+	return false
 }
 
 // fetchLoop fetches the configuration every pollInterval.
@@ -235,13 +253,13 @@ func (ch *ConfigHandler) loadConfig() error {
 		return nil
 	}
 	slog.Debug("Setting config")
-	ch.mergeConfig(cfg)
+	ch.setConfig(cfg)
 	return nil
 }
 
 // loadConfig loads the config file from the disk. If the config file is not found, it returns
 // nil.
-func loadConfig(path string) (*C.ConfigResponse, error) {
+func loadConfig(path string) ([]byte, error) {
 	slog.Debug("reading config file at", "path", path)
 	buf, err := os.ReadFile(path)
 	slog.Debug("config file read")
@@ -251,19 +269,10 @@ func loadConfig(path string) (*C.ConfigResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
-	var cfg C.ConfigResponse
-	err = json.Unmarshal(buf, &cfg)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshaling config: %w", err)
-	}
-	return &cfg, nil
+	return buf, nil
 }
 
 // saveConfig saves the configuration to the disk.
-func saveConfig(path string, cfg *C.ConfigResponse) error {
-	buf, err := json.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-	return os.WriteFile(path, buf, 0o600)
+func saveConfig(path string, cfg []byte) error {
+	return os.WriteFile(path, cfg, 0o600)
 }

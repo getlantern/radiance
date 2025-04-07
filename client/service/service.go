@@ -12,13 +12,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
 
+	C "github.com/getlantern/common"
+
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
@@ -43,7 +47,7 @@ type BoxService struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, context.Context, error) {
+func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
 	bs := &BoxService{
 		config:            config,
 		platIfce:          platIfce,
@@ -58,13 +62,13 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 		setupOpts.FixAndroidStack = true
 	}
 	if err := libbox.Setup(setupOpts); err != nil {
-		return nil, nil, fmt.Errorf("setup libbox: %w", err)
+		return nil, fmt.Errorf("setup libbox: %w", err)
 	}
 
 	// (re)-initialize the libbox service
 	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
 	bs.libbox = lb
@@ -72,7 +76,7 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 
 	bs.pauseManager = service.FromContext[pause.Manager](ctx)
 
-	return bs, ctx, nil
+	return bs, nil
 }
 
 func (bs *BoxService) Start() error {
@@ -174,4 +178,21 @@ func (bs *BoxService) Wake() {
 
 func (bs *BoxService) Ctx() context.Context {
 	return bs.ctx
+}
+
+// OnNewConfig is called when a new configuration is received. It updates the VPN client with the
+// new configuration and restarts the VPN client if necessary.
+func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw []byte) error {
+	slog.Debug("Received new config")
+
+	_, err := json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, oldConfigRaw)
+	if err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+	_, err = json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, oldConfigRaw)
+	if err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	return nil
 }

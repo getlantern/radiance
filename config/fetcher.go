@@ -3,8 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
-
-	//"encoding/json"
+	"encoding/json"
 
 	"fmt"
 	"io"
@@ -20,7 +19,6 @@ import (
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/user"
-	"github.com/sagernet/sing/common/json"
 )
 
 const configURL = "https://api.iantem.io/v1/config"
@@ -41,7 +39,7 @@ func newFetcher(client *http.Client, user user.BaseUser) *fetcher {
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(ctx context.Context, preferredServerLocation *C.ServerLocation) (*C.ConfigResponse, error) {
+func (f *fetcher) fetchConfig(preferredServerLocation *C.ServerLocation) ([]byte, error) {
 	confReq := C.ConfigRequest{
 		ClientVersion:     app.ClientVersion,
 		SingboxVersion:    singVersion(),
@@ -66,13 +64,8 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferredServerLocation *C.Se
 	}
 	slog.Info("fetched config", "config", string(buf))
 
-	newConf, err := json.UnmarshalExtendedContext[C.ConfigResponse](ctx, buf)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal config response: %w", err)
-	}
-	slog.Info("unmarshalled config", "config", newConf)
 	f.lastModified = time.Now()
-	return &newConf, nil
+	return buf, nil
 }
 
 // send sends a request to the server with the given body and returns the response.

@@ -126,8 +126,7 @@ func TestFetchConfig(t *testing.T) {
 				Transport: mockRT,
 			}, mockUser)
 
-			ctx := context.Background()
-			gotConfig, err := fetcher.fetchConfig(ctx, tt.preferredServerLoc)
+			gotConfig, err := fetcher.fetchConfig(tt.preferredServerLoc)
 
 			if tt.expectedErrorMessage != "" {
 				require.Error(t, err)
