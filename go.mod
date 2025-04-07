@@ -9,10 +9,9 @@ replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
 
 //replace github.com/sagernet/sing-box => ../sing-box-minimal
-replace github.com/getlantern/common => ../common
+//replace github.com/getlantern/common => ../common
 
 require (
-	dario.cat/mergo v1.0.1
 	github.com/1Password/srp v0.2.0
 	github.com/Jigsaw-Code/outline-sdk v0.0.19
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.2
