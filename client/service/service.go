@@ -189,7 +189,7 @@ func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw []byte) error {
 	if err != nil {
 		return fmt.Errorf("parse config: %w", err)
 	}
-	_, err = json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, oldConfigRaw)
+	_, err = json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, newConfigRaw)
 	if err != nil {
 		return fmt.Errorf("parse config: %w", err)
 	}
