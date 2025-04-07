@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	reflect "reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,17 +102,7 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 // ListAvailableServers returns a list of available servers from the current configuration.
 // If no configuration is available, it returns an error.
 func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]C.ServerLocation, error) {
-	cfg, err := ch.config.Get(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("getting config: %w", err)
-	}
-	cfgRes := cfg.(*C.ConfigResponse)
-	if cfgRes == nil {
-		return nil, fmt.Errorf("config is nil")
-	}
-
-	availableServers := make([]C.ServerLocation, 0, len(cfgRes.Servers))
-	return append(availableServers, cfgRes.Servers...), nil
+	return nil, fmt.Errorf("not implemented")
 }
 
 // AddConfigListener adds a listener for new ConfigResponses.
@@ -134,7 +123,12 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig []byte) {
 	ch.configListenersMu.RLock()
 	defer ch.configListenersMu.RUnlock()
 	for _, listener := range ch.configListeners {
-		go listener(oldConfig, newConfig)
+		go func() {
+			err := listener(oldConfig, newConfig)
+			if err != nil {
+				slog.Error("Listener error", "error", err)
+			}
+		}()
 	}
 }
 
@@ -155,7 +149,6 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	//return ch.mergeConfig(resp)
 	oldConfig, err := ch.config.Get(eventual.DontWait)
 	var oldConfigBytes []byte
 	if oldConfig != nil {
@@ -176,29 +169,6 @@ func (ch *ConfigHandler) setConfig(cfg []byte) {
 	ch.config.Set(cfg)
 	ch.notifyListeners(cfg, cfg)
 	slog.Debug("Config set")
-}
-
-func hasNewOutbounds(oldCfg, newCfg *C.ConfigResponse) bool {
-	if newCfg == nil {
-		return false
-	}
-	if oldCfg == nil && len(newCfg.Options.Outbounds) > 0 {
-		return true
-	}
-	if len(newCfg.Options.Outbounds) == 0 {
-		return false
-	}
-	if len(oldCfg.Options.Outbounds) != len(newCfg.Options.Outbounds) {
-		return true
-	}
-	for i, oldOutbound := range oldCfg.Options.Outbounds {
-		newOutbound := newCfg.Options.Outbounds[i]
-		if !reflect.DeepEqual(oldOutbound, newOutbound) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // fetchLoop fetches the configuration every pollInterval.
