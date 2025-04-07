@@ -3,7 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
-
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,9 +14,6 @@ import (
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	O "github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/json"
 )
 
 type mockRoundTripper struct {
@@ -52,7 +49,7 @@ func TestFetchConfig(t *testing.T) {
 		preferredServerLoc   *C.ServerLocation
 		mockResponse         *http.Response
 		mockError            error
-		expectedConfig       *C.ConfigResponse
+		expectedConfig       []byte
 		expectedErrorMessage string
 	}{
 		{
@@ -63,26 +60,11 @@ func TestFetchConfig(t *testing.T) {
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
 				Body: io.NopCloser(bytes.NewReader(func() []byte {
-					resp := &C.ConfigResponse{
-						UserInfo: C.UserInfo{
-							ProToken: "mock-token",
-						},
-						Options: O.Options{
-							RawMessage: json.RawMessage(`{}`),
-						},
-					}
-					data, _ := json.Marshal(resp)
+					data := []byte(`{"key":"value"}`)
 					return data
 				}())),
 			},
-			expectedConfig: &C.ConfigResponse{
-				UserInfo: C.UserInfo{
-					ProToken: "mock-token",
-				},
-				Options: O.Options{
-					RawMessage: json.RawMessage(`{}`),
-				},
-			},
+			expectedConfig: []byte(`{"key":"value"}`),
 		},
 		{
 			name: "no new config available",
@@ -90,7 +72,7 @@ func TestFetchConfig(t *testing.T) {
 				Country: "US",
 			},
 			mockResponse: &http.Response{
-				StatusCode: http.StatusNoContent,
+				StatusCode: http.StatusNotModified,
 				Body:       io.NopCloser(bytes.NewReader(nil)),
 			},
 			expectedConfig: nil,
@@ -102,17 +84,6 @@ func TestFetchConfig(t *testing.T) {
 			},
 			mockError:            context.DeadlineExceeded,
 			expectedErrorMessage: "context deadline exceeded",
-		},
-		{
-			name: "invalid response body",
-			preferredServerLoc: &C.ServerLocation{
-				Country: "US",
-			},
-			mockResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte("invalid-json"))),
-			},
-			expectedErrorMessage: "unmarshal config response: invalid character 'i' looking for beginning of value",
 		},
 	}
 
