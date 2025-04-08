@@ -84,15 +84,17 @@ func TestGetConfig(t *testing.T) {
 
 	// Test case: Valid config set
 	t.Run("ValidConfigSet", func(t *testing.T) {
-		expectedConfig := &C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "US", City: "New York"},
-				{Country: "UK", City: "London"},
+		expectedConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "US", City: "New York"},
+					{Country: "UK", City: "London"},
+				},
 			},
 		}
 
 		// Set the config
-		ch.config.Set(expectedConfig)
+		ch.setConfig(expectedConfig)
 
 		// Retrieve the config
 		actualConfig, err := ch.GetConfig()
@@ -133,7 +135,7 @@ func TestSetConfig(t *testing.T) {
 			},
 		}
 
-		ch.setConfig(newConfig)
+		ch.setConfigAndNotify(newConfig)
 
 		// Verify the config is set
 		actualConfig, err := ch.GetConfig()
@@ -163,7 +165,7 @@ func TestSetConfig(t *testing.T) {
 				},
 			},
 		}
-		ch.setConfig(existingConfig)
+		ch.setConfigAndNotify(existingConfig)
 		tries := 0
 		for !notified.Load() && tries < 1000 {
 			// Wait for the notification
@@ -181,7 +183,7 @@ func TestSetConfig(t *testing.T) {
 				},
 			},
 		}
-		ch.setConfig(updatedConfig)
+		ch.setConfigAndNotify(updatedConfig)
 
 		// Verify the config is updated
 		actualConfig, err := ch.GetConfig()
@@ -216,8 +218,8 @@ func TestSetConfig(t *testing.T) {
 				},
 			},
 		}
-		ch.setConfig(newConfig)
-		ch.setConfig(nil)
+		ch.setConfigAndNotify(newConfig)
+		ch.setConfigAndNotify(nil)
 
 		// Verify the config remains unchanged
 		actualConfig, err := ch.GetConfig()

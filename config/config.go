@@ -177,13 +177,13 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	ch.setConfig(cfg)
+	ch.setConfigAndNotify(cfg)
 
 	slog.Debug("Config fetched")
 	return nil
 }
 
-func (ch *ConfigHandler) setConfig(cfg *Config) {
+func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	slog.Debug("Setting config")
 	if cfg == nil {
 		slog.Debug("Config is nil, not setting")
@@ -212,10 +212,18 @@ func (ch *ConfigHandler) setConfig(cfg *Config) {
 		cfg = &oldConfigCopy
 	}
 
-	ch.config.Set(cfg)
+	ch.setConfig(cfg)
 	ch.saveConfig(cfg)
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Debug("Config set")
+}
+
+// setConfig just adds type safety to setting the config.
+func (ch *ConfigHandler) setConfig(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	ch.config.Set(cfg)
 }
 
 // fetchLoop fetches the configuration every pollInterval.
@@ -258,7 +266,7 @@ func (ch *ConfigHandler) loadConfig() error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	ch.setConfig(cfg)
+	ch.setConfigAndNotify(cfg)
 	return nil
 }
 
@@ -313,5 +321,5 @@ func (ch *ConfigHandler) saveWithConfig(fn func(cfg *Config)) {
 	// Call the function with the config
 	// and save the config to the disk.
 	fn(cfg)
-	ch.setConfig(cfg)
+	ch.setConfigAndNotify(cfg)
 }
