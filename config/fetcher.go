@@ -39,7 +39,7 @@ func newFetcher(client *http.Client, user user.BaseUser) *fetcher {
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(preferredServerLocation *C.ServerLocation) ([]byte, error) {
+func (f *fetcher) fetchConfig(preferredServerLocation C.ServerLocation) ([]byte, error) {
 	confReq := C.ConfigRequest{
 		ClientVersion:     app.ClientVersion,
 		SingboxVersion:    singVersion(),
@@ -47,7 +47,7 @@ func (f *fetcher) fetchConfig(preferredServerLocation *C.ServerLocation) ([]byte
 		OS:                app.Platform,
 		AppName:           app.Name,
 		DeviceID:          f.user.DeviceID(),
-		PreferredLocation: *preferredServerLocation,
+		PreferredLocation: preferredServerLocation,
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {

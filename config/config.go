@@ -73,7 +73,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		configParser:            configParser,
 	}
 	// Store an empty preferred location to avoid nil pointer dereference
-	ch.preferredServerLocation.Store(&C.ServerLocation{})
+	ch.preferredServerLocation.Store(C.ServerLocation{})
 
 	if err := ch.loadConfig(); err != nil {
 		slog.Error("failed to load config", "error", err)
@@ -85,7 +85,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 }
 
 func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
-	ch.preferredServerLocation.Store(&C.ServerLocation{
+	ch.preferredServerLocation.Store(C.ServerLocation{
 		Country: country,
 		City:    city,
 	})
@@ -146,7 +146,7 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *C.ConfigResponse)
 
 func (ch *ConfigHandler) fetchConfig() error {
 	slog.Debug("Fetching config")
-	preferredServerLocation := ch.preferredServerLocation.Load().(*C.ServerLocation)
+	preferredServerLocation := ch.preferredServerLocation.Load().(C.ServerLocation)
 	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
