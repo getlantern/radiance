@@ -37,8 +37,11 @@ func (m *mockVPNClient) StopVPN() error                          { panic("not im
 func (m *mockVPNClient) PauseVPN(dur time.Duration) error        { return nil }
 func (m *mockVPNClient) ResumeVPN()                              {}
 func (m *mockVPNClient) SplitTunnelHandler() *client.SplitTunnel { panic("not implemented") }
-func (m *mockVPNClient) OnNewConfig(oldConfig, newConfig []byte) error {
+func (m *mockVPNClient) OnNewConfig(oldConfig, newConfig *C.ConfigResponse) error {
 	return nil
+}
+func (m *mockVPNClient) ParseConfig(config []byte) (*C.ConfigResponse, error) {
+	return nil, nil
 }
 
 func (m *mockVPNClient) ConnectionStatus() bool {

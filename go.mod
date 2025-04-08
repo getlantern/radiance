@@ -69,6 +69,7 @@ require (
 )
 
 require (
+	dario.cat/mergo v1.0.1
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/caddyserver/certmagic v0.21.7 // indirect

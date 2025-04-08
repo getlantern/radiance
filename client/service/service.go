@@ -182,17 +182,16 @@ func (bs *BoxService) Ctx() context.Context {
 
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
 // new configuration and restarts the VPN client if necessary.
-func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw []byte) error {
+func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw *C.ConfigResponse) error {
 	slog.Debug("Received new config")
 
-	_, err := json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, oldConfigRaw)
-	if err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-	_, err = json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, newConfigRaw)
-	if err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
 	return nil
+}
+
+func (bs *BoxService) ParseConfig(configRaw []byte) (*C.ConfigResponse, error) {
+	config, err := json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, configRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	return config, nil
 }

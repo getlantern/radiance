@@ -1,117 +1,214 @@
 package config
 
 import (
-	"context"
-	"net/http"
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	C "github.com/getlantern/common"
 	"github.com/getlantern/eventual/v2"
-	"github.com/getlantern/radiance/user"
-	"github.com/stretchr/testify/assert"
 )
 
-func TestConfigHandler_GetConfig(t *testing.T) {
-	tests := []struct {
-		name         string
-		configResult interface{}
-		expectedErr  error
-		expectedCfg  *C.ConfigResponse
-	}{
-		{
-			name: "returns current config",
-			configResult: &C.ConfigResponse{
-				UserInfo: C.UserInfo{Country: "US"},
-			},
-			expectedErr: nil,
-			expectedCfg: &C.ConfigResponse{
-				UserInfo: C.UserInfo{Country: "US"},
-			},
-		},
-		{
-			name:         "context expired",
-			configResult: nil,
-			expectedErr:  context.DeadlineExceeded,
-			expectedCfg:  nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ch := &ConfigHandler{config: eventual.NewValue()}
-			if tt.configResult != nil {
-				ch.config.Set(tt.configResult)
-			}
-
-			ctx := context.Background()
-			if tt.expectedErr == context.DeadlineExceeded {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-1*time.Second))
-				defer cancel()
-			}
-
-			got, err := ch.GetConfig(ctx)
-			if tt.expectedErr != nil {
-				assert.ErrorIs(t, err, tt.expectedErr)
-			} else {
-				assert.NoError(t, err)
-			}
-			assert.Equal(t, tt.expectedCfg, got)
-		})
-	}
+// Mock implementation of ConfigParser for testing
+func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
+	var cfg C.ConfigResponse
+	err := json.Unmarshal(data, &cfg)
+	return &cfg, err
 }
-func TestNewConfigHandler(t *testing.T) {
-	tests := []struct {
-		name          string
-		pollInterval  time.Duration
-		httpClient    *http.Client
-		user          *user.User
-		dataDir       string
-		expectedError bool
-	}{
-		{
-			name:         "valid inputs",
-			pollInterval: 1 * time.Second,
-			httpClient:   &http.Client{},
-			user:         &user.User{},
-			dataDir:      t.TempDir(),
-		},
-		{
-			name:          "invalid data directory",
-			pollInterval:  1 * time.Second,
-			httpClient:    &http.Client{},
-			user:          &user.User{},
-			dataDir:       "/invalid/path",
-			expectedError: true,
+
+func TestSaveConfig(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+	}
+
+	// Create a sample config to save
+	expectedConfig := &C.ConfigResponse{
+		// Populate with sample data
+		Servers: []C.ServerLocation{
+			{Country: "US", City: "New York"},
+			{Country: "UK", City: "London"},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ch := NewConfigHandler(tt.pollInterval, tt.httpClient, tt.user, tt.dataDir)
+	// Save the config
+	ch.saveConfig(expectedConfig)
 
-			assert.NotNil(t, ch, "ConfigHandler should not be nil")
-			assert.NotNil(t, ch.config, "ConfigHandler.config should not be nil")
-			assert.NotNil(t, ch.stopC, "ConfigHandler.stopC should not be nil")
-			assert.NotNil(t, ch.closeOnce, "ConfigHandler.closeOnce should not be nil")
-			assert.Equal(t, filepath.Join(tt.dataDir, configFileName), ch.configPath, "ConfigHandler.configPath should be set correctly")
-			assert.NotNil(t, ch.apiClient, "ConfigHandler.apiClient should not be nil")
-			assert.NotNil(t, ch.ftr, "ConfigHandler.ftr should not be nil")
-			assert.NotNil(t, ch.preferredServerLocation.Load(), "ConfigHandler.preferredServerLocation should not be nil")
-			assert.Len(t, ch.configListeners, 1, "ConfigHandler.configListeners should have one listener")
+	// Verify the file exists
+	_, err := os.Stat(configPath)
+	require.NoError(t, err, "Config file should exist")
 
-			// Check if the config was loaded correctly
-			cfg, _ := ch.config.Get(eventual.DontWait)
-			if tt.expectedError {
-				assert.Nil(t, cfg, "ConfigHandler.config should be nil")
-			} else {
-				assert.NoError(t, ch.loadConfig(), "ConfigHandler.loadConfig should not return an error")
-			}
+	// Read the file content
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err, "Should be able to read the config file")
 
-			// Stop the fetch loop to clean up
-			ch.Stop()
-		})
+	// Parse the content using the mock parser
+	actualConfig, err := ch.configParser(data)
+	require.NoError(t, err, "Should be able to parse the config file")
+
+	// Verify the content matches the expected config
+	assert.Equal(t, expectedConfig, actualConfig, "Saved config should match the expected config")
+}
+func TestGetConfig(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+		config:       eventual.NewValue(),
 	}
+
+	// Test case: No config set
+	t.Run("NoConfigSet", func(t *testing.T) {
+		_, err := ch.GetConfig()
+		require.Error(t, err, "Expected error when no config is set")
+		assert.Contains(t, err.Error(), "context canceled", "Error message should indicate nil config")
+	})
+
+	// Test case: Valid config set
+	t.Run("ValidConfigSet", func(t *testing.T) {
+		expectedConfig := &C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+				{Country: "UK", City: "London"},
+			},
+		}
+
+		// Set the config
+		ch.config.Set(expectedConfig)
+
+		// Retrieve the config
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when config is set")
+		assert.Equal(t, expectedConfig, actualConfig, "Retrieved config should match the expected config")
+	})
+}
+func TestSetConfig(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+		config:       eventual.NewValue(),
+	}
+
+	// Mock listener to verify notifications
+	var notifiedOldConfig, notifiedNewConfig *C.ConfigResponse
+	var notified atomic.Bool
+	mockListener := func(oldConfig, newConfig *C.ConfigResponse) error {
+		notifiedOldConfig = oldConfig
+		notifiedNewConfig = newConfig
+		notified.Store(true)
+		return nil
+	}
+	ch.AddConfigListener(mockListener)
+
+	// Test case: Setting a new config
+	t.Run("SetNewConfig", func(t *testing.T) {
+		newConfig := &C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+		}
+
+		ch.setConfig(newConfig)
+
+		// Verify the config is set
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when config is set")
+		assert.Equal(t, newConfig, actualConfig, "Config should match the newly set config")
+
+		// Verify the listener was notified
+		tries := 0
+		for !notified.Load() && tries < 1000 {
+			// Wait for the notification
+			time.Sleep(10 * time.Millisecond)
+			tries++
+		}
+		assert.Nil(t, notifiedOldConfig, "Old config should be nil for the first set")
+		assert.Equal(t, newConfig, notifiedNewConfig, "New config should match the newly set config")
+	})
+
+	// Test case: Updating an existing config
+	t.Run("UpdateExistingConfig", func(t *testing.T) {
+		notified.Store(false) // Reset notification flag
+		notifiedNewConfig = nil
+		notifiedOldConfig = nil
+		existingConfig := &C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+		}
+		ch.setConfig(existingConfig)
+		tries := 0
+		for !notified.Load() && tries < 1000 {
+			// Wait for the notification
+			time.Sleep(10 * time.Millisecond)
+			tries++
+		}
+
+		notified.Store(false) // Reset notification flag
+		notifiedNewConfig = nil
+		notifiedOldConfig = nil
+		updatedConfig := &C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+		}
+		ch.setConfig(updatedConfig)
+
+		// Verify the config is updated
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when config is updated")
+		expectedConfig := &C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+		}
+		assert.Equal(t, expectedConfig, actualConfig, "Config should be merged with the updated config")
+
+		// Verify the listener was notified
+		tries = 0
+		for !notified.Load() && tries < 1000 {
+			// Wait for the notification
+			time.Sleep(10 * time.Millisecond)
+			tries++
+		}
+		assert.True(t, notified.Load(), "Listener should be notified after setting config")
+		assert.Equal(t, existingConfig, notifiedOldConfig, "Old config should match the previous config")
+		assert.Equal(t, expectedConfig, notifiedNewConfig, "New config should match the merged config")
+	})
+
+	// Test case: Handling nil config
+	t.Run("NilConfig", func(t *testing.T) {
+		newConfig := &C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+		}
+		ch.setConfig(newConfig)
+		ch.setConfig(nil)
+
+		// Verify the config remains unchanged
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when setting nil config")
+		assert.NotNil(t, actualConfig, "Config should not be nil after setting nil config")
+	})
 }

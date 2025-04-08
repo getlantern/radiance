@@ -18,7 +18,6 @@ import (
 
 	"github.com/getlantern/appdir"
 	C "github.com/getlantern/common"
-	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
@@ -39,8 +38,6 @@ const configPollInterval = 10 * time.Minute
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
-	// GetConfig returns the current proxy configuration and the country.
-	GetConfig(ctx context.Context) (*C.ConfigResponse, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
 
@@ -48,7 +45,9 @@ type configHandler interface {
 	SetPreferredServerLocation(country, city string)
 
 	// ListAvailableServers returns a list of available server locations.
-	ListAvailableServers(ctx context.Context) ([]C.ServerLocation, error)
+	ListAvailableServers() ([]C.ServerLocation, error)
+
+	GetConfig() (*C.ConfigResponse, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -118,7 +117,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath)
+	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath, vpnC.ParseConfig)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
@@ -135,8 +134,8 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 
 // TODO: the server stuff should probably be moved to the VPNClient as well..
 
-func (r *Radiance) GetAvailableServers(ctx context.Context) ([]C.ServerLocation, error) {
-	return r.confHandler.ListAvailableServers(ctx)
+func (r *Radiance) GetAvailableServers() ([]C.ServerLocation, error) {
+	return r.confHandler.ListAvailableServers()
 }
 
 // SetPreferredServer sets the preferred server location for the VPN connection.
@@ -220,7 +219,7 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	}
 	var country string
 	// get country from the config returned by the backend
-	cfg, err := r.confHandler.GetConfig(eventual.DontWait)
+	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		log.Error("Failed to get country", "error", err)
 		country = ""
