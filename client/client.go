@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	C "github.com/getlantern/common"
-
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
@@ -21,6 +19,7 @@ import (
 
 	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
+	"github.com/getlantern/radiance/config"
 )
 
 var (
@@ -43,8 +42,8 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
-	OnNewConfig(oldConfig, newConfig *C.ConfigResponse) error
-	ParseConfig(config []byte) (*C.ConfigResponse, error)
+	OnNewConfig(oldConfig, newConfig *config.Config) error
+	ParseConfig(config []byte) (*config.Config, error)
 }
 
 type vpnClient struct {
@@ -211,10 +210,10 @@ func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.
 	return routeOpts
 }
 
-func (c *vpnClient) ParseConfig(configRaw []byte) (*C.ConfigResponse, error) {
+func (c *vpnClient) ParseConfig(configRaw []byte) (*config.Config, error) {
 	return c.boxService.ParseConfig(configRaw)
 }
 
-func (c *vpnClient) OnNewConfig(oldConfig, newConfig *C.ConfigResponse) error {
+func (c *vpnClient) OnNewConfig(oldConfig, newConfig *config.Config) error {
 	return c.boxService.OnNewConfig(oldConfig, newConfig)
 }

@@ -16,8 +16,8 @@ import (
 )
 
 // Mock implementation of ConfigParser for testing
-func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
-	var cfg C.ConfigResponse
+func mockConfigParser(data []byte) (*Config, error) {
+	var cfg Config
 	err := json.Unmarshal(data, &cfg)
 	return &cfg, err
 }
@@ -34,14 +34,15 @@ func TestSaveConfig(t *testing.T) {
 	}
 
 	// Create a sample config to save
-	expectedConfig := &C.ConfigResponse{
-		// Populate with sample data
-		Servers: []C.ServerLocation{
-			{Country: "US", City: "New York"},
-			{Country: "UK", City: "London"},
+	expectedConfig := &Config{
+		ConfigResponse: C.ConfigResponse{
+			// Populate with sample data
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+				{Country: "UK", City: "London"},
+			},
 		},
 	}
-
 	// Save the config
 	ch.saveConfig(expectedConfig)
 
@@ -110,9 +111,9 @@ func TestSetConfig(t *testing.T) {
 	}
 
 	// Mock listener to verify notifications
-	var notifiedOldConfig, notifiedNewConfig *C.ConfigResponse
+	var notifiedOldConfig, notifiedNewConfig *Config
 	var notified atomic.Bool
-	mockListener := func(oldConfig, newConfig *C.ConfigResponse) error {
+	mockListener := func(oldConfig, newConfig *Config) error {
 		notifiedOldConfig = oldConfig
 		notifiedNewConfig = newConfig
 		notified.Store(true)
@@ -122,9 +123,11 @@ func TestSetConfig(t *testing.T) {
 
 	// Test case: Setting a new config
 	t.Run("SetNewConfig", func(t *testing.T) {
-		newConfig := &C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "US", City: "New York"},
+		newConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "US", City: "New York"},
+				},
 			},
 		}
 
@@ -151,9 +154,11 @@ func TestSetConfig(t *testing.T) {
 		notified.Store(false) // Reset notification flag
 		notifiedNewConfig = nil
 		notifiedOldConfig = nil
-		existingConfig := &C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "US", City: "New York"},
+		existingConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "US", City: "New York"},
+				},
 			},
 		}
 		ch.setConfig(existingConfig)
@@ -167,9 +172,11 @@ func TestSetConfig(t *testing.T) {
 		notified.Store(false) // Reset notification flag
 		notifiedNewConfig = nil
 		notifiedOldConfig = nil
-		updatedConfig := &C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "UK", City: "London"},
+		updatedConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "UK", City: "London"},
+				},
 			},
 		}
 		ch.setConfig(updatedConfig)
@@ -177,9 +184,11 @@ func TestSetConfig(t *testing.T) {
 		// Verify the config is updated
 		actualConfig, err := ch.GetConfig()
 		require.NoError(t, err, "Should not return an error when config is updated")
-		expectedConfig := &C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "UK", City: "London"},
+		expectedConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "UK", City: "London"},
+				},
 			},
 		}
 		assert.Equal(t, expectedConfig, actualConfig, "Config should be merged with the updated config")
@@ -198,9 +207,11 @@ func TestSetConfig(t *testing.T) {
 
 	// Test case: Handling nil config
 	t.Run("NilConfig", func(t *testing.T) {
-		newConfig := &C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "US", City: "New York"},
+		newConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "US", City: "New York"},
+				},
 			},
 		}
 		ch.setConfig(newConfig)

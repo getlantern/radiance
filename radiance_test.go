@@ -12,6 +12,7 @@ import (
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/client"
+	"github.com/getlantern/radiance/config"
 )
 
 func TestNewRadiance(t *testing.T) {
@@ -37,10 +38,10 @@ func (m *mockVPNClient) StopVPN() error                          { panic("not im
 func (m *mockVPNClient) PauseVPN(dur time.Duration) error        { return nil }
 func (m *mockVPNClient) ResumeVPN()                              {}
 func (m *mockVPNClient) SplitTunnelHandler() *client.SplitTunnel { panic("not implemented") }
-func (m *mockVPNClient) OnNewConfig(oldConfig, newConfig *C.ConfigResponse) error {
+func (m *mockVPNClient) OnNewConfig(oldConfig, newConfig *config.Config) error {
 	return nil
 }
-func (m *mockVPNClient) ParseConfig(config []byte) (*C.ConfigResponse, error) {
+func (m *mockVPNClient) ParseConfig(config []byte) (*config.Config, error) {
 	return nil, nil
 }
 

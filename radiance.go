@@ -47,7 +47,9 @@ type configHandler interface {
 	// ListAvailableServers returns a list of available server locations.
 	ListAvailableServers() ([]C.ServerLocation, error)
 
-	GetConfig() (*C.ConfigResponse, error)
+	// GetConfig returns the current configuration.
+	// It returns an error if the configuration is not yet available.
+	GetConfig() (*config.Config, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -231,7 +233,7 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		log.Error("Failed to get country", "error", err)
 		country = ""
 	} else {
-		country = cfg.Country
+		country = cfg.ConfigResponse.Country
 	}
 
 	return r.issueReporter.Report(

@@ -18,8 +18,6 @@ import (
 	"sync"
 	"time"
 
-	C "github.com/getlantern/common"
-
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing/common/json"
@@ -28,6 +26,7 @@ import (
 
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/protocol"
 )
 
@@ -182,14 +181,14 @@ func (bs *BoxService) Ctx() context.Context {
 
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
 // new configuration and restarts the VPN client if necessary.
-func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw *C.ConfigResponse) error {
+func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw *config.Config) error {
 	slog.Debug("Received new config")
 
 	return nil
 }
 
-func (bs *BoxService) ParseConfig(configRaw []byte) (*C.ConfigResponse, error) {
-	config, err := json.UnmarshalExtendedContext[*C.ConfigResponse](bs.ctx, configRaw)
+func (bs *BoxService) ParseConfig(configRaw []byte) (*config.Config, error) {
+	config, err := json.UnmarshalExtendedContext[*config.Config](bs.ctx, configRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
