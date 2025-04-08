@@ -63,7 +63,7 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string,
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user user.BaseUser, dataDir string,
 	configParser Unmarshaller) *ConfigHandler {
 	configPath := filepath.Join(dataDir, configFileName)
 	ch := &ConfigHandler{
@@ -85,6 +85,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 	return ch
 }
 
+// SetPreferredServerLocation sets the preferred server location to connect to
 func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 	preferred := C.ServerLocation{
 		Country: country,
@@ -304,18 +305,13 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 // saveWithConfig saves the config to the disk with the given config. It creates the config file
 // if it doesn't exist.
 func (ch *ConfigHandler) saveWithConfig(fn func(cfg *Config)) {
-	ch.configMu.Lock()
-	defer ch.configMu.Unlock()
-	cfgRes, err := ch.config.Get(eventual.DontWait)
+	cfg, err := ch.GetConfig()
 	if err != nil {
 		slog.Error("getting config", "error", err)
 		return
 	}
-	cfg, ok := cfgRes.(*Config)
-	if !ok || cfg == nil {
-		slog.Error("config is nil")
-		return
-	}
+	// Call the function with the config
+	// and save the config to the disk.
 	fn(cfg)
 	ch.setConfig(cfg)
 }

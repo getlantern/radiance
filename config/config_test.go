@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/eventual/v2"
+	"github.com/getlantern/radiance/user"
 )
 
 // Mock implementation of ConfigParser for testing
@@ -222,4 +224,60 @@ func TestSetConfig(t *testing.T) {
 		require.NoError(t, err, "Should not return an error when setting nil config")
 		assert.NotNil(t, actualConfig, "Config should not be nil after setting nil config")
 	})
+}
+func TestSetPreferredServerLocation(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+		config:       eventual.NewValue(),
+		ftr:          newFetcher(http.DefaultClient, &UserStub{}),
+	}
+
+	ch.config.Set(&Config{
+		ConfigResponse: C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+				{Country: "UK", City: "London"},
+			},
+		},
+		PreferredLocation: C.ServerLocation{
+			Country: "US",
+			City:    "New York",
+		},
+	})
+
+	// Test case: Set preferred server location
+	t.Run("SetPreferredServerLocation", func(t *testing.T) {
+		country := "US"
+		city := "Los Angeles"
+
+		// Call SetPreferredServerLocation
+		ch.SetPreferredServerLocation(country, city)
+
+		// Verify the preferred location is updated
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when getting config")
+		assert.Equal(t, country, actualConfig.PreferredLocation.Country, "Preferred country should match")
+		assert.Equal(t, city, actualConfig.PreferredLocation.City, "Preferred city should match")
+	})
+}
+
+type UserStub struct{}
+
+// Verify that a UserStub implements the User interface
+var _ user.BaseUser = (*UserStub)(nil)
+
+func (u *UserStub) DeviceID() string {
+	return "test-device-id"
+}
+func (u *UserStub) LegacyID() int64 {
+	return 123456789
+}
+func (u *UserStub) LegacyToken() string {
+	return "test-legacy-token"
 }
