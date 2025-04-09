@@ -170,20 +170,14 @@ type Server struct {
 // It returns nil when VPN is disconnected
 func (r *Radiance) GetActiveServer() (*Server, error) {
 	if !r.ConnectionStatus() {
-		return nil, nil
+		return nil, fmt.Errorf("VPN is not connected")
 	}
 	activeServer := r.activeServer.Load()
 	if activeServer == nil {
 		return nil, fmt.Errorf("no active server config")
 	}
 
-	log.Debug("Retrieving active server")
-	// Check if the active server is of type *Server
-	if as, ok := activeServer.(*Server); !ok {
-		return nil, fmt.Errorf("active server is not of type *Server")
-	} else {
-		return as, nil
-	}
+	return activeServer.(*Server), nil
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

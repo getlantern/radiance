@@ -193,16 +193,7 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	// Lock config access
 	ch.configMu.Lock()
 	defer ch.configMu.Unlock()
-	var oldConfig *Config
-	oldConfigRaw, _ := ch.config.Get(eventual.DontWait)
-	if oldConfigRaw != nil {
-		var ok bool
-		oldConfig, ok = oldConfigRaw.(*Config)
-		if !ok {
-			slog.Error("Failed to assert oldConfigRaw to *Config")
-			oldConfig = nil
-		}
-	}
+	oldConfig, _ := ch.GetConfig()
 	// Create a deep copy of the old config to avoid modifying it while merging
 	if oldConfig != nil {
 		oldConfigCopy := *oldConfig
