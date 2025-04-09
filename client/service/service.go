@@ -64,17 +64,6 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 		return nil, fmt.Errorf("setup libbox: %w", err)
 	}
 
-	// (re)-initialize the libbox service
-	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
-	if err != nil {
-		return nil, err
-	}
-	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
-	bs.libbox = lb
-	bs.ctx = ctx
-
-	bs.pauseManager = service.FromContext[pause.Manager](ctx)
-
 	return bs, nil
 }
 
@@ -85,6 +74,16 @@ func (bs *BoxService) Start() error {
 	if bs.isRunning {
 		return errors.New("service is already running")
 	}
+
+	// (re)-initialize the libbox service
+	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
+	if err != nil {
+		return fmt.Errorf("create libbox service: %w", err)
+	}
+	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
+	bs.libbox = lb
+	bs.ctx = ctx
+	bs.pauseManager = service.FromContext[pause.Manager](ctx)
 
 	// we need to start the ruleset manager before starting the libbox service but after the libbox
 	// service has been initialized so that the ruleset manager can access the routing rules.
@@ -183,8 +182,7 @@ func (bs *BoxService) Ctx() context.Context {
 // new configuration and restarts the VPN client if necessary.
 func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw *config.Config) error {
 	slog.Debug("Received new config")
-
-	return nil
+	return errors.New("not implemented")
 }
 
 func (bs *BoxService) ParseConfig(configRaw []byte) (*config.Config, error) {
