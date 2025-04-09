@@ -4,7 +4,6 @@ Package config provides a handler for fetching and storing proxy configurations.
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,6 +19,8 @@ import (
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
+
+	"github.com/sagernet/sing/common/json"
 )
 
 const (
