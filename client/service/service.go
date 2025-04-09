@@ -80,16 +80,17 @@ func (bs *BoxService) Start() error {
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
-	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
-	bs.libbox = lb
-	bs.ctx = ctx
-	bs.pauseManager = service.FromContext[pause.Manager](ctx)
 
 	// we need to start the ruleset manager before starting the libbox service but after the libbox
 	// service has been initialized so that the ruleset manager can access the routing rules.
 	if err := bs.mutRuleSetManager.Start(bs.ctx); err != nil {
 		return fmt.Errorf("start ruleset manager: %w", err)
 	}
+
+	ctx = service.ContextWithPtr(ctx, bs.mutRuleSetManager)
+	bs.libbox = lb
+	bs.ctx = ctx
+	bs.pauseManager = service.FromContext[pause.Manager](ctx)
 
 	if err := bs.libbox.Start(); err != nil {
 		return fmt.Errorf("error starting libbox service: %w", err)
