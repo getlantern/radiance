@@ -69,7 +69,7 @@ func TestUpdateOutbounds(t *testing.T) {
 			error: true,
 		},
 	}
-	for _, tt := range tests[1:] {
+	for _, tt := range tests {
 		ctx := context.Background()
 		logger := log.NewNOPFactory()
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestUpdateEndpoints(t *testing.T) {
 			error: true,
 		},
 	}
-	for _, tt := range tests[1:] {
+	for _, tt := range tests {
 		ctx := context.Background()
 		logger := log.NewNOPFactory()
 		t.Run(tt.name, func(t *testing.T) {
