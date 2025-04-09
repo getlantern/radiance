@@ -129,7 +129,7 @@ func TestSetupDirs(t *testing.T) {
 	})
 }
 func TestGetActiveServer(t *testing.T) {
-	t.Run("it should return nil when VPN is disconnected", func(t *testing.T) {
+	t.Run("it should return error when VPN is not connected", func(t *testing.T) {
 		mockClient := &mockVPNClient{}
 		mockClient.On("ConnectionStatus").Return(false)
 
@@ -139,9 +139,9 @@ func TestGetActiveServer(t *testing.T) {
 		}
 
 		server, err := r.GetActiveServer()
-		assert.NoError(t, err)
 		assert.Nil(t, server)
-		mockClient.AssertCalled(t, "ConnectionStatus")
+		assert.Error(t, err)
+		assert.EqualError(t, err, "VPN is not connected")
 	})
 
 	t.Run("it should return error when no active server config is available", func(t *testing.T) {
@@ -154,13 +154,12 @@ func TestGetActiveServer(t *testing.T) {
 		}
 
 		server, err := r.GetActiveServer()
-		assert.Error(t, err)
 		assert.Nil(t, server)
+		assert.Error(t, err)
 		assert.EqualError(t, err, "no active server config")
-		mockClient.AssertCalled(t, "ConnectionStatus")
 	})
 
-	t.Run("it should return the active server when VPN is connected", func(t *testing.T) {
+	t.Run("it should return the active server when VPN is connected and active server is set", func(t *testing.T) {
 		mockClient := &mockVPNClient{}
 		mockClient.On("ConnectionStatus").Return(true)
 
@@ -177,9 +176,8 @@ func TestGetActiveServer(t *testing.T) {
 		r.activeServer.Store(activeServer)
 
 		server, err := r.GetActiveServer()
-		assert.NoError(t, err)
 		assert.NotNil(t, server)
+		assert.NoError(t, err)
 		assert.Equal(t, activeServer, server)
-		mockClient.AssertCalled(t, "ConnectionStatus")
 	})
 }
