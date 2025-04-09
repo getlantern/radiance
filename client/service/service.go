@@ -282,7 +282,7 @@ func updateEndpoints(
 		return it.Tag
 	})
 
-	if nToRemove := len(endpointMgr.Endpoints()) - len(endpoints); nToRemove > 0 {
+	if nToRemove := len(endpointMgr.Endpoints()) - len(newItems); nToRemove > 0 {
 		errs = errors.Join(errs, removeItems(
 			endpointMgr.Endpoints(),
 			newItems,
