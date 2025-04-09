@@ -242,17 +242,15 @@ func updateOutbounds(
 		return it.Tag
 	})
 
-	if nToRemove := len(outboundMgr.Outbounds()) - len(newItems); nToRemove > 0 {
-		errs = errors.Join(errs, removeItems(
-			outboundMgr.Outbounds(),
-			newItems,
-			excludeTags,
-			outboundMgr.Remove,
-			func(it adapter.Outbound) string {
-				return it.Tag()
-			},
-		))
-	}
+	errs = errors.Join(errs, removeItems(
+		outboundMgr.Outbounds(),
+		newItems,
+		excludeTags,
+		outboundMgr.Remove,
+		func(it adapter.Outbound) string {
+			return it.Tag()
+		},
+	))
 
 	for tag, outbound := range newItems {
 		logger := logFactory.NewLogger(fmt.Sprintf("outbound/%s[%s]", outbound.Type, tag))
@@ -332,20 +330,17 @@ func removeItems[T any, O any](
 	remove func(string) error,
 	getTag func(T) string,
 ) error {
-	var errs error
-	nToRemove := len(items) - len(newItems)
+	var removeTags []string
 	for _, it := range items {
 		tag := getTag(it)
-		if _, ok := newItems[tag]; ok || slices.Contains(excludeTags, tag) {
-			continue
+		if _, ok := newItems[tag]; !ok && !slices.Contains(excludeTags, tag) {
+			removeTags = append(removeTags, tag)
 		}
+	}
+	var errs error
+	for _, tag := range removeTags {
 		if err := remove(tag); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("remove [%v]: %w", tag, err))
-		}
-		// still decrease nToRemove even if we get an error and move on
-		nToRemove--
-		if nToRemove == 0 {
-			break
 		}
 	}
 	return errs
