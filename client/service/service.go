@@ -14,11 +14,15 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
@@ -173,4 +177,176 @@ func (bs *BoxService) Wake() {
 
 func (bs *BoxService) Ctx() context.Context {
 	return bs.ctx
+}
+
+var (
+	permanentOutbounds = []string{
+		"direct",
+		"dns",
+		"block",
+	}
+	permanentEndpoints = []string{}
+)
+
+// updateOutboundsEndpoints updates the outbounds and endpoints in the router, skipping any present in
+// [permanentOutbounds] and [permanentEndpoints]. updateOutboundsEndpoints will continue processing
+// the remaining outbounds and endpoints even if an error occurs, returning a single error of all
+// errors encountered.
+func updateOutboundsEndpoints(ctx context.Context, outbounds []option.Outbound, endpoints []option.Endpoint) error {
+	router := service.FromContext[adapter.Router](ctx)
+	if router == nil {
+		return errors.New("router missing from context")
+	}
+	// TODO: reaallyy need to be able to get that logFactory.. -_-
+	//			we need to create our own and add it to the context
+	logFactory := service.FromContext[log.Factory](ctx)
+	var errs error
+	if len(outbounds) > 0 {
+		outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
+		if outboundMgr == nil {
+			errs = errors.Join(errs, errors.New("outbound manager missing from context"))
+		} else {
+			err := updateOutbounds(ctx, outboundMgr, router, logFactory, outbounds, permanentOutbounds)
+			if err != nil {
+				errs = fmt.Errorf("update outbounds: %w", err)
+			}
+		}
+	}
+	if len(endpoints) > 0 {
+		endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
+		if endpointMgr == nil {
+			errs = errors.Join(errs, errors.New("endpoint manager missing from context"))
+		} else {
+			err := updateEndpoints(ctx, endpointMgr, router, logFactory, endpoints, permanentEndpoints)
+			if err != nil {
+				errs = errors.Join(errs, fmt.Errorf("update endpoints: %w", err))
+			}
+		}
+	}
+	return errs
+}
+
+// updateOutbounds syncs the [adapter.OutboundManager] with the provided outbounds. It skips excluded
+// or untagged entries, removes outdated ones, and creates or updates the rest. If any error occurs,
+// updateOutbounds will continue processing the remaining outbounds and return a single error of
+// all errors encountered.
+func updateOutbounds(
+	ctx context.Context,
+	outboundMgr adapter.OutboundManager,
+	router adapter.Router,
+	logFactory log.Factory,
+	outbounds []option.Outbound,
+	excludeTags []string,
+) error {
+	newItems, errs := filterItems(outbounds, excludeTags, func(it option.Outbound) string {
+		return it.Tag
+	})
+
+	if nToRemove := len(outboundMgr.Outbounds()) - len(newItems); nToRemove > 0 {
+		errs = errors.Join(errs, removeItems(
+			outboundMgr.Outbounds(),
+			newItems,
+			excludeTags,
+			outboundMgr.Remove,
+			func(it adapter.Outbound) string {
+				return it.Tag()
+			},
+		))
+	}
+
+	for tag, outbound := range newItems {
+		logger := logFactory.NewLogger(fmt.Sprintf("outbound/%s[%s]", outbound.Type, tag))
+		err := outboundMgr.Create(ctx, router, logger, tag, outbound.Type, outbound.Options)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("initialize [%v]: %w", tag, err))
+		}
+	}
+
+	return errs
+}
+
+// updateEndpoints syncs the [adapter.EndpointManager] with the provided [option.Endpoint]s. It skips
+// excluded or untagged entries, removes outdated ones, and creates or updates the rest. If any error
+// occurs, updateEndpoints will continue processing the remaining endpoints and return a single error
+// of all errors encountered.
+func updateEndpoints(
+	ctx context.Context,
+	endpointMgr adapter.EndpointManager,
+	router adapter.Router,
+	logFactory log.Factory,
+	endpoints []option.Endpoint,
+	excludeTags []string,
+) error {
+	// filter endpoints that are missing a tag or are excluded
+	newItems, errs := filterItems(endpoints, excludeTags, func(it option.Endpoint) string {
+		return it.Tag
+	})
+
+	if nToRemove := len(endpointMgr.Endpoints()) - len(endpoints); nToRemove > 0 {
+		errs = errors.Join(errs, removeItems(
+			endpointMgr.Endpoints(),
+			newItems,
+			excludeTags,
+			endpointMgr.Remove,
+			func(it adapter.Endpoint) string {
+				return it.Tag()
+			},
+		))
+	}
+
+	for tag, endpoint := range newItems {
+		logger := logFactory.NewLogger(fmt.Sprintf("endpoint/%s[%s]", endpoint.Type, tag))
+		err := endpointMgr.Create(ctx, router, logger, tag, endpoint.Type, endpoint.Options)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("initialize [%v]: %w", tag, err))
+		}
+	}
+
+	return errs
+}
+
+// filterItems returns a map of items with tags as keys. It filters out items that are missing a tag
+// or are present in excludeTags. An error is returned listing all items that are missing a tag.
+func filterItems[T any](items []T, excludeTags []string, getTag func(T) string) (map[string]T, error) {
+	var errs error
+	filtered := make(map[string]T)
+	for idx, it := range items {
+		switch tag := getTag(it); {
+		case tag == "":
+			errs = errors.Join(errs, fmt.Errorf("missing tag for %T[%d]", it, idx))
+		case slices.Contains(excludeTags, tag):
+		default:
+			filtered[tag] = it
+		}
+	}
+	return filtered, errs
+}
+
+// removeItems removes items not present in newItems or excludeTags using the provided remove function.
+// If an error occurs, it continues processing the remaining items and returns a single error of all
+// errors encountered.
+func removeItems[T any, O any](
+	items []T,
+	newItems map[string]O,
+	excludeTags []string,
+	remove func(string) error,
+	getTag func(T) string,
+) error {
+	var errs error
+	nToRemove := len(items) - len(newItems)
+	for _, it := range items {
+		tag := getTag(it)
+		if _, ok := newItems[tag]; ok || slices.Contains(excludeTags, tag) {
+			continue
+		}
+		if err := remove(tag); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("remove [%v]: %w", tag, err))
+		}
+		// still decrease nToRemove even if we get an error and move on
+		nToRemove--
+		if nToRemove == 0 {
+			break
+		}
+	}
+	return errs
 }
