@@ -305,6 +305,8 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 // modifyConfig saves the config to the disk with the given config. It creates the config file
 // if it doesn't exist.
 func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
+	ch.configMu.Lock()
+	defer ch.configMu.Unlock()
 	cfg, err := ch.GetConfig()
 	if err != nil {
 		slog.Error("getting config", "error", err)
