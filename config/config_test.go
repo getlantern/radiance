@@ -1,135 +1,158 @@
 package config
 
 import (
-	"bytes"
-	"context"
-	"io"
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/getlantern/eventual/v2"
-	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/proto"
+	"github.com/stretchr/testify/require"
+
+	C "github.com/getlantern/common"
+	"github.com/getlantern/radiance/user"
 )
 
-func TestConfigHandler_GetConfig(t *testing.T) {
-	respProxy := testConfigResponse.Proxy.Proxies
-	tests := []struct {
-		name         string
-		configResult configResult
-		assert       func(t *testing.T, got []*Config, country string, err error)
-	}{
-		{
-			name:         "returns current config",
-			configResult: configResult{cfg: respProxy, country: testConfigResponse.Country, err: nil},
-			assert: func(t *testing.T, got []*Config, country string, err error) {
-				assert.NoError(t, err)
-				assert.Equal(t, testConfigResponse.Country, country)
-				for i := range got {
-					assert.True(t, proto.Equal(respProxy[i], got[i]), "GetConfig should return the current config")
-				}
-			},
-		},
-		{
-			name:         "error encountered during fetch",
-			configResult: configResult{cfg: nil, err: ErrFetchingConfig},
-			assert: func(t *testing.T, got []*Config, country string, err error) {
-				assert.ErrorIs(t, err, ErrFetchingConfig,
-					"GetConfig should return the error encountered during fetch",
-				)
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // prevent GetConfig from waiting for the context to expire
-			ch := &ConfigHandler{config: eventual.NewValue()}
-			ch.config.Set(tt.configResult)
-			got, country, err := ch.GetConfig(ctx)
-			tt.assert(t, got, country, err)
-		})
-	}
+// Mock implementation of ConfigParser for testing
+func mockConfigParser(data []byte) (*Config, error) {
+	var cfg Config
+	err := json.Unmarshal(data, &cfg)
+	return &cfg, err
 }
 
-func TestFetchLoop_UpdateConfig(t *testing.T) {
-	buf, _ := proto.Marshal(testConfigResponse)
-	confReader := io.NopCloser(bytes.NewReader(buf))
-	tests := []struct {
-		name     string
-		response *http.Response
-		err      error
-		assert   func(*testing.T, bool, error)
-	}{
-		{
-			name:     "received new config",
-			response: &http.Response{StatusCode: http.StatusOK, Body: confReader},
-			assert: func(t *testing.T, changed bool, err error) {
-				assert.NoError(t, err)
-				assert.True(t, changed, "fetchLoop should update the config if a new one is received")
-			},
-		},
-		{
-			name:     "no new config available and no error",
-			response: &http.Response{StatusCode: http.StatusNoContent},
-			assert: func(t *testing.T, changed bool, err error) {
-				assert.NoError(t, err)
-				assert.False(t, changed, "fetchLoop should not update the config if no new config is received")
-			},
-		},
-		{
-			name: "error fetching config",
-			err:  assert.AnError,
-			assert: func(t *testing.T, changed bool, err error) {
-				assert.NoError(t, err)
-				assert.False(t, changed, "fetchLoop should not update the config if no new config is received")
+func TestSaveConfig(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+	}
+
+	// Create a sample config to save
+	expectedConfig := &Config{
+		ConfigResponse: C.ConfigResponse{
+			// Populate with sample data
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+				{Country: "UK", City: "London"},
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			continueC := make(chan struct{}, 1)
-			ftr := newFetcher(&http.Client{
-				Transport: &mockRoundTripper{
-					resp:      tt.response,
-					err:       tt.err,
-					continueC: continueC,
+	// Save the config
+	ch.saveConfig(expectedConfig)
+
+	// Verify the file exists
+	_, err := os.Stat(configPath)
+	require.NoError(t, err, "Config file should exist")
+
+	// Read the file content
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err, "Should be able to read the config file")
+
+	// Parse the content using the mock parser
+	actualConfig, err := ch.configParser(data)
+	require.NoError(t, err, "Should be able to parse the config file")
+
+	// Verify the content matches the expected config
+	assert.Equal(t, expectedConfig, actualConfig, "Saved config should match the expected config")
+}
+func TestGetConfig(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+		config:       atomic.Value{},
+	}
+
+	// Test case: No config set
+	t.Run("NoConfigSet", func(t *testing.T) {
+		_, err := ch.GetConfig()
+		require.Error(t, err, "Expected error when no config is set")
+		assert.Contains(t, err.Error(), "no config", "Error message should indicate nil config")
+	})
+
+	// Test case: Valid config set
+	t.Run("ValidConfigSet", func(t *testing.T) {
+		expectedConfig := &Config{
+			ConfigResponse: C.ConfigResponse{
+				Servers: []C.ServerLocation{
+					{Country: "US", City: "New York"},
+					{Country: "UK", City: "London"},
 				},
-			}, &user.User{})
-			ch := &ConfigHandler{
-				config:                  eventual.NewValue(),
-				stopC:                   make(chan struct{}),
-				ftr:                     ftr,
-				preferredServerLocation: atomic.Value{},
-			}
-			ch.preferredServerLocation.Store(&serverLocation{})
-			conf := &Config{}
-			ch.config.Set(configResult{cfg: []*Config{conf}, err: nil})
+			},
+		}
 
-			go ch.fetchLoop(0)
-			<-continueC
-			close(ch.stopC)
+		ch.config.Store(expectedConfig)
 
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()                    // we don't want GetConfig to wait
-			time.Sleep(1 * time.Second) // waiting 1s until it fetches
-			_got, _ := ch.config.Get(ctx)
-			got := _got.(configResult)
-
-			tt.assert(t, !proto.Equal(conf, got.cfg[0]), got.err)
-		})
-	}
+		// Retrieve the config
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when config is set")
+		assert.Equal(t, expectedConfig, actualConfig, "Retrieved config should match the expected config")
+	})
 }
 
-var testConfigResponse = &ConfigResponse{
-	Country: "US",
-	Proxy: &ConfigResponse_Proxy{
-		Proxies: []*ProxyConnectConfig{{
-			Track:    "track",
-			Protocol: "protocol",
-		}},
-	},
+func TestSetPreferredServerLocation(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Create a ConfigHandler with the mock parser
+	ch := &ConfigHandler{
+		configPath:   configPath,
+		configParser: mockConfigParser,
+		config:       atomic.Value{},
+		ftr:          newFetcher(http.DefaultClient, &UserStub{}),
+	}
+
+	ch.config.Store(&Config{
+		ConfigResponse: C.ConfigResponse{
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+				{Country: "UK", City: "London"},
+			},
+		},
+		PreferredLocation: C.ServerLocation{
+			Country: "US",
+			City:    "New York",
+		},
+	})
+
+	// Test case: Set preferred server location
+	t.Run("SetPreferredServerLocation", func(t *testing.T) {
+		country := "US"
+		city := "Los Angeles"
+
+		// Call SetPreferredServerLocation
+		ch.SetPreferredServerLocation(country, city)
+
+		// Verify the preferred location is updated
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when getting config")
+		assert.Equal(t, country, actualConfig.PreferredLocation.Country, "Preferred country should match")
+		assert.Equal(t, city, actualConfig.PreferredLocation.City, "Preferred city should match")
+	})
+}
+
+type UserStub struct{}
+
+// Verify that a UserStub implements the User interface
+var _ user.BaseUser = (*UserStub)(nil)
+
+func (u *UserStub) DeviceID() string {
+	return "test-device-id"
+}
+func (u *UserStub) LegacyID() int64 {
+	return 123456789
+}
+func (u *UserStub) LegacyToken() string {
+	return "test-legacy-token"
 }
