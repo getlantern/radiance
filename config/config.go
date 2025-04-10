@@ -112,7 +112,7 @@ func (ch *ConfigHandler) ListAvailableServers() ([]C.ServerLocation, error) {
 	}
 	cfg, ok := cfgRes.(*Config)
 	if !ok || cfg == nil {
-		return nil, fmt.Errorf("config is not a ")
+		return nil, fmt.Errorf("config is not the expected type")
 	}
 	return cfg.ConfigResponse.Servers, nil
 }
