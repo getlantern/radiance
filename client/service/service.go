@@ -247,9 +247,6 @@ func updateOutbounds(
 		newItems,
 		excludeTags,
 		outboundMgr.Remove,
-		func(it adapter.Outbound) string {
-			return it.Tag()
-		},
 	))
 
 	for tag, outbound := range newItems {
@@ -286,9 +283,6 @@ func updateEndpoints(
 			newItems,
 			excludeTags,
 			endpointMgr.Remove,
-			func(it adapter.Endpoint) string {
-				return it.Tag()
-			},
 		))
 	}
 
@@ -320,27 +314,35 @@ func filterItems[T any](items []T, excludeTags []string, getTag func(T) string) 
 	return filtered, errs
 }
 
+// bA is a one-off interface to allow for generic handling of both [adapter.Outbound] and
+// [adapter.Endpoint] types.
+type bA interface {
+	Tag() string
+	Type() string
+}
+
 // removeItems removes items not present in newItems or excludeTags using the provided remove function.
 // If an error occurs, it continues processing the remaining items and returns a single error of all
 // errors encountered.
-func removeItems[T any, O any](
-	items []T,
+func removeItems[I ~[]T, T bA, O any](
+	items I,
 	newItems map[string]O,
 	excludeTags []string,
 	remove func(string) error,
-	getTag func(T) string,
 ) error {
-	var removeTags []string
-	for _, it := range items {
-		tag := getTag(it)
-		if _, ok := newItems[tag]; !ok && !slices.Contains(excludeTags, tag) {
-			removeTags = append(removeTags, tag)
-		}
-	}
 	var errs error
-	for _, tag := range removeTags {
-		if err := remove(tag); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("remove [%v]: %w", tag, err))
+	for i := 0; i < len(items); {
+		it := items[i]
+		if bA(it) == bA(nil) {
+			break
+		}
+		tag := it.Tag()
+		if _, ok := newItems[tag]; !ok && !slices.Contains(excludeTags, tag) {
+			if err := remove(tag); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("remove [%v]: %w", tag, err))
+			}
+		} else {
+			i++
 		}
 	}
 	return errs
