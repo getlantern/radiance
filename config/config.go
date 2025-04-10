@@ -204,18 +204,10 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 		cfg = &oldConfigCopy
 	}
 
-	ch.setConfig(cfg)
+	ch.config.Set(cfg)
 	ch.saveConfig(cfg)
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Debug("Config set")
-}
-
-// setConfig just adds type safety to setting the config.
-func (ch *ConfigHandler) setConfig(cfg *Config) {
-	if cfg == nil {
-		return
-	}
-	ch.config.Set(cfg)
 }
 
 // fetchLoop fetches the configuration every pollInterval.

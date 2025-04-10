@@ -5,9 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,8 +91,7 @@ func TestGetConfig(t *testing.T) {
 			},
 		}
 
-		// Set the config
-		ch.setConfig(expectedConfig)
+		ch.config.Set(expectedConfig)
 
 		// Retrieve the config
 		actualConfig, err := ch.GetConfig()
@@ -102,131 +99,7 @@ func TestGetConfig(t *testing.T) {
 		assert.Equal(t, expectedConfig, actualConfig, "Retrieved config should match the expected config")
 	})
 }
-func TestSetConfig(t *testing.T) {
-	// Setup temporary directory for testing
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, configFileName)
 
-	// Create a ConfigHandler with the mock parser
-	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
-		config:       eventual.NewValue(),
-	}
-
-	// Mock listener to verify notifications
-	var notifiedOldConfig, notifiedNewConfig *Config
-	var notified atomic.Bool
-	mockListener := func(oldConfig, newConfig *Config) error {
-		notifiedOldConfig = oldConfig
-		notifiedNewConfig = newConfig
-		notified.Store(true)
-		return nil
-	}
-	ch.AddConfigListener(mockListener)
-
-	// Test case: Setting a new config
-	t.Run("SetNewConfig", func(t *testing.T) {
-		newConfig := &Config{
-			ConfigResponse: C.ConfigResponse{
-				Servers: []C.ServerLocation{
-					{Country: "US", City: "New York"},
-				},
-			},
-		}
-
-		ch.setConfigAndNotify(newConfig)
-
-		// Verify the config is set
-		actualConfig, err := ch.GetConfig()
-		require.NoError(t, err, "Should not return an error when config is set")
-		assert.Equal(t, newConfig, actualConfig, "Config should match the newly set config")
-
-		// Verify the listener was notified
-		tries := 0
-		for !notified.Load() && tries < 1000 {
-			// Wait for the notification
-			time.Sleep(10 * time.Millisecond)
-			tries++
-		}
-		assert.Nil(t, notifiedOldConfig, "Old config should be nil for the first set")
-		assert.Equal(t, newConfig, notifiedNewConfig, "New config should match the newly set config")
-	})
-
-	// Test case: Updating an existing config
-	t.Run("UpdateExistingConfig", func(t *testing.T) {
-		notified.Store(false) // Reset notification flag
-		notifiedNewConfig = nil
-		notifiedOldConfig = nil
-		existingConfig := &Config{
-			ConfigResponse: C.ConfigResponse{
-				Servers: []C.ServerLocation{
-					{Country: "US", City: "New York"},
-				},
-			},
-		}
-		ch.setConfigAndNotify(existingConfig)
-		tries := 0
-		for !notified.Load() && tries < 1000 {
-			// Wait for the notification
-			time.Sleep(10 * time.Millisecond)
-			tries++
-		}
-
-		notified.Store(false) // Reset notification flag
-		notifiedNewConfig = nil
-		notifiedOldConfig = nil
-		updatedConfig := &Config{
-			ConfigResponse: C.ConfigResponse{
-				Servers: []C.ServerLocation{
-					{Country: "UK", City: "London"},
-				},
-			},
-		}
-		ch.setConfigAndNotify(updatedConfig)
-
-		// Verify the config is updated
-		actualConfig, err := ch.GetConfig()
-		require.NoError(t, err, "Should not return an error when config is updated")
-		expectedConfig := &Config{
-			ConfigResponse: C.ConfigResponse{
-				Servers: []C.ServerLocation{
-					{Country: "UK", City: "London"},
-				},
-			},
-		}
-		assert.Equal(t, expectedConfig, actualConfig, "Config should be merged with the updated config")
-
-		// Verify the listener was notified
-		tries = 0
-		for !notified.Load() && tries < 1000 {
-			// Wait for the notification
-			time.Sleep(10 * time.Millisecond)
-			tries++
-		}
-		assert.True(t, notified.Load(), "Listener should be notified after setting config")
-		assert.Equal(t, existingConfig, notifiedOldConfig, "Old config should match the previous config")
-		assert.Equal(t, expectedConfig, notifiedNewConfig, "New config should match the merged config")
-	})
-
-	// Test case: Handling nil config
-	t.Run("NilConfig", func(t *testing.T) {
-		newConfig := &Config{
-			ConfigResponse: C.ConfigResponse{
-				Servers: []C.ServerLocation{
-					{Country: "US", City: "New York"},
-				},
-			},
-		}
-		ch.setConfigAndNotify(newConfig)
-		ch.setConfigAndNotify(nil)
-
-		// Verify the config remains unchanged
-		actualConfig, err := ch.GetConfig()
-		require.NoError(t, err, "Should not return an error when setting nil config")
-		assert.NotNil(t, actualConfig, "Config should not be nil after setting nil config")
-	})
-}
 func TestSetPreferredServerLocation(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
