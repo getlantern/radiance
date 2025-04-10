@@ -92,7 +92,7 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 		Country: country,
 		City:    city,
 	}
-	ch.saveWithConfig(func(cfg *Config) {
+	ch.modifyConfig(func(cfg *Config) {
 		cfg.PreferredLocation = preferred
 	})
 	// fetch the config with the new preferred location on a separate goroutine
@@ -302,9 +302,9 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 	return cfg, nil
 }
 
-// saveWithConfig saves the config to the disk with the given config. It creates the config file
+// modifyConfig saves the config to the disk with the given config. It creates the config file
 // if it doesn't exist.
-func (ch *ConfigHandler) saveWithConfig(fn func(cfg *Config)) {
+func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
 	cfg, err := ch.GetConfig()
 	if err != nil {
 		slog.Error("getting config", "error", err)
