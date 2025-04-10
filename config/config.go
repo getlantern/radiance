@@ -4,7 +4,6 @@ Package config provides a handler for fetching and storing proxy configurations.
 package config
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,11 +14,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/eventual/v2"
-	"google.golang.org/protobuf/encoding/protojson"
+	"dario.cat/mergo"
 
+	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
+
+	"github.com/sagernet/sing/common/json"
 )
 
 const (
@@ -33,70 +34,67 @@ var (
 	ErrFetchingConfig = errors.New("failed to fetch config")
 )
 
-// alias for convenience
-type Config = ProxyConnectConfig
-
-type configResult struct {
-	cfg     []*Config
-	country string
-	err     error
+// Config includes all configuration data from the Lantern API as well as any stored local preferences.
+type Config struct {
+	ConfigResponse    C.ConfigResponse
+	PreferredLocation C.ServerLocation
 }
+
+// ListenerFunc is a function that is called when the configuration changes.
+type ListenerFunc func(oldConfig, newConfig *Config) error
+
+// Unmarshaller is a function that parses the configuration response from the server.
+type Unmarshaller func(config []byte) (*Config, error)
 
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config    eventual.Value
+	config    atomic.Value
 	ftr       *fetcher
 	apiClient common.WebClient
 	stopC     chan struct{}
 	closeOnce *sync.Once
 
-	configPath              string
-	preferredServerLocation atomic.Value
-}
-
-type serverLocation struct {
-	Country string
-	City    string
-}
-
-type AvailableServerLocation struct {
-	City        string
-	Country     string
-	CountryCode string
-	Latitude    *float32
-	Longitude   *float32
+	configPath        string
+	configListeners   []ListenerFunc
+	configListenersMu sync.RWMutex
+	configParser      Unmarshaller
+	configMu          sync.RWMutex
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user *user.User, dataDir string) *ConfigHandler {
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user user.BaseUser, dataDir string,
+	configParser Unmarshaller) *ConfigHandler {
+	configPath := filepath.Join(dataDir, configFileName)
 	ch := &ConfigHandler{
-		config:                  eventual.NewValue(),
-		stopC:                   make(chan struct{}),
-		closeOnce:               &sync.Once{},
-		configPath:              filepath.Join(dataDir, configFileName),
-		apiClient:               common.NewWebClient(httpClient),
-		preferredServerLocation: atomic.Value{}, // initially, no preference
+		config:          atomic.Value{},
+		stopC:           make(chan struct{}),
+		closeOnce:       &sync.Once{},
+		configPath:      configPath,
+		apiClient:       common.NewWebClient(httpClient),
+		configListeners: make([]ListenerFunc, 0),
+		configParser:    configParser,
 	}
-	// Store an empty preferred location to avoid nil pointer dereference
-	ch.preferredServerLocation.Store(&serverLocation{})
 
-	// if err := ch.loadConfig(); err != nil {
-	// 	slog.Error("failed to load config: %v", err)
-	// }
+	if err := ch.loadConfig(); err != nil {
+		slog.Error("failed to load config", "error", err)
+	}
 
 	ch.ftr = newFetcher(httpClient, user)
 	go ch.fetchLoop(pollInterval)
 	return ch
 }
 
+// SetPreferredServerLocation sets the preferred server location to connect to
 func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
-	ch.preferredServerLocation.Store(&serverLocation{
+	preferred := C.ServerLocation{
 		Country: country,
 		City:    city,
+	}
+	ch.modifyConfig(func(cfg *Config) {
+		cfg.PreferredLocation = preferred
 	})
-
 	// fetch the config with the new preferred location on a separate goroutine
 	go func() {
 		if err := ch.fetchConfig(); err != nil {
@@ -105,50 +103,67 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 	}()
 }
 
-func (ch *ConfigHandler) ListAvailableServers(ctx context.Context) ([]AvailableServerLocation, error) {
-	var resp ListAvailableResponse
-	if err := ch.apiClient.GetPROTOC(ctx, "/available-servers", nil, &resp); err != nil {
-		return nil, err
+// ListAvailableServers returns a list of available servers from the current configuration.
+// If no configuration is available, it returns an error.
+func (ch *ConfigHandler) ListAvailableServers() ([]C.ServerLocation, error) {
+	cfgRes := ch.config.Load()
+	if cfgRes == nil {
+		return nil, fmt.Errorf("getting config: %w", ErrFetchingConfig)
 	}
-	res := make([]AvailableServerLocation, len(resp.GetRegions()))
-	for i, region := range resp.GetRegions() {
-		res[i] = AvailableServerLocation{
-			Country:     region.GetCountry(),
-			City:        region.GetCity(),
-			Longitude:   region.Latitude,
-			Latitude:    region.Longitude,
-			CountryCode: region.CountryCode,
-		}
+	cfg, ok := cfgRes.(*Config)
+	if !ok || cfg == nil {
+		return nil, fmt.Errorf("config is not the expected type")
 	}
+	return cfg.ConfigResponse.Servers, nil
+}
 
-	return res, nil
+// AddConfigListener adds a listener for new Configs.
+func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
+	ch.configListenersMu.Lock()
+	ch.configListeners = append(ch.configListeners, listener)
+	ch.configListenersMu.Unlock()
+	cfg, err := ch.GetConfig()
+	if err != nil {
+		slog.Error("getting config", "error", err)
+		return
+	}
+	go func() {
+		err := listener(nil, cfg)
+		if err != nil {
+			slog.Error("Listener error", "error", err)
+		}
+	}()
+}
+
+func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
+	ch.configListenersMu.RLock()
+	defer ch.configListenersMu.RUnlock()
+	for _, listener := range ch.configListeners {
+		go func() {
+			err := listener(oldConfig, newConfig)
+			if err != nil {
+				slog.Error("Listener error", "error", err)
+			}
+		}()
+	}
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
 	slog.Debug("Fetching config")
-	proxies, country, _ := ch.GetConfig(eventual.DontWait)
-	preferredServerLocation := ch.preferredServerLocation.Load().(*serverLocation)
+	var preferredServerLocation C.ServerLocation
+	oldConfig, err := ch.GetConfig()
+	if err != nil {
+		slog.Info("Config not available yet", "error", err)
+	} else {
+		preferredServerLocation = oldConfig.PreferredLocation
+	}
 	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
-
-	if resp != nil {
-		slog.Debug("received config response")
-		country = resp.GetCountry()
-		// we got a new config and no error so we can update the current config
-		proxyList := resp.GetProxy()
-		// make sure we have at least one proxy
-		if proxyList != nil && len(proxyList.GetProxies()) > 0 {
-			slog.Debug("received new proxies", "proxies", len(proxyList.GetProxies()))
-			proxies = proxyList.GetProxies()
-			slog.Debug("new proxies", "proxies", proxies)
-			if sErr := saveConfig(ch.configPath, proxies[0]); sErr != nil {
-				slog.Error("failed to save config: %v", "error", sErr)
-			}
-		} else {
-			slog.Debug("proxy list is empty")
-		}
+	if resp == nil {
+		slog.Debug("no new config available")
+		return nil
 	}
 
 	// Otherwise, we keep the previous config and store any error that might have occurred.
@@ -156,9 +171,42 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	ch.config.Set(configResult{cfg: proxies, country: country, err: err})
+	cfg, err := ch.configParser(resp)
 
+	if err != nil {
+		slog.Error("failed to parse config", "error", err)
+		return fmt.Errorf("parsing config: %w", err)
+	}
+	ch.setConfigAndNotify(cfg)
+
+	slog.Debug("Config fetched")
 	return nil
+}
+
+func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
+	slog.Debug("Setting config")
+	if cfg == nil {
+		slog.Debug("Config is nil, not setting")
+		return
+	}
+	// Lock config access
+	ch.configMu.Lock()
+	defer ch.configMu.Unlock()
+	oldConfig, _ := ch.GetConfig()
+	// Create a deep copy of the old config to avoid modifying it while merging
+	if oldConfig != nil {
+		oldConfigCopy := *oldConfig
+		if err := mergo.Merge(&oldConfigCopy, cfg, mergo.WithOverride); err != nil {
+			slog.Error("merging config", "error", err)
+			return
+		}
+		cfg = &oldConfigCopy
+	}
+
+	ch.config.Store(cfg)
+	ch.saveConfig(cfg)
+	go ch.notifyListeners(oldConfig, cfg)
+	slog.Debug("Config set")
 }
 
 // fetchLoop fetches the configuration every pollInterval.
@@ -178,19 +226,6 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 	}
 }
 
-// GetConfig returns the current proxy configuration and the country. If no configuration is available, GetConfig
-// will wait until one is available or the context has expired. If an error occurred during the
-// last fetch, that error is returned, as a ErrFetchingConfig, along with the most recent
-// configuration, if available. GetConfig is a blocking call.
-func (ch *ConfigHandler) GetConfig(ctx context.Context) ([]*Config, string, error) {
-	_cfgRes, err := ch.config.Get(ctx)
-	if err != nil { // ctx expired
-		return nil, "", err
-	}
-	cfgRes := _cfgRes.(configResult)
-	return cfgRes.cfg, cfgRes.country, cfgRes.err
-}
-
 // Stop stops the ConfigHandler from fetching new configurations.
 func (ch *ConfigHandler) Stop() {
 	ch.closeOnce.Do(func() {
@@ -198,50 +233,79 @@ func (ch *ConfigHandler) Stop() {
 	})
 }
 
-// loadConfig loads the configuration from the disk and sets it in the ConfigHandler.
+// loadConfig loads the config file from the disk. If the config file is not found, it returns
+// nil.
 func (ch *ConfigHandler) loadConfig() error {
-	slog.Debug("Loading config")
-	cfg, err := loadConfig(ch.configPath)
-	if err != nil {
-		slog.Error("loading config", "error", err)
-		err = fmt.Errorf("loading config: %w", err)
-		return err
-	}
-	slog.Debug("Config loaded")
-	if cfg == nil { // no config file
-		slog.Debug("No config file found")
+	slog.Debug("reading config file")
+	buf, err := os.ReadFile(ch.configPath)
+	slog.Debug("config file read")
+	if os.IsNotExist(err) { // no config file
 		return nil
 	}
-	slog.Debug("Setting config")
-	ch.config.Set(configResult{cfg: []*Config{cfg}})
+	if err != nil {
+		return fmt.Errorf("reading config file: %w", err)
+	}
+	cfg, err := ch.configParser(buf)
+	if err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+	ch.setConfigAndNotify(cfg)
 	return nil
 }
 
-// loadConfig loads the config file from the disk. If the config file is not found, it returns
-// nil.
-func loadConfig(path string) (*Config, error) {
-	slog.Debug("reading config file at", "path", path)
-	buf, err := os.ReadFile(path)
-	slog.Debug("config file read")
-	if os.IsNotExist(err) { // no config file
-		return nil, nil
+// saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
+func (ch *ConfigHandler) saveConfig(cfg *Config) {
+	slog.Debug("Saving config")
+	if cfg == nil {
+		slog.Debug("Config is nil, not saving")
+		return
 	}
+	if err := os.MkdirAll(filepath.Dir(ch.configPath), 0o755); err != nil {
+		slog.Error("creating config directory", "error", err)
+		return
+	}
+	// Marshal the config to bytes
+	// and write it to the config file.
+	// If the config is nil, we don't write anything.
+	// This is important because we don't want to overwrite the config file with an empty file.
+
+	buf, err := json.Marshal(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
+		slog.Error("marshalling config", "error", err)
+		return
 	}
-	var cfg Config
-	err = protojson.Unmarshal(buf, &cfg)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	if err := os.WriteFile(ch.configPath, buf, 0o600); err != nil {
+		slog.Error("writing config file", "error", err)
 	}
-	return &cfg, nil
+	slog.Debug("Config saved")
 }
 
-// saveConfig saves the configuration to the disk.
-func saveConfig(path string, cfg *Config) error {
-	buf, err := protojson.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+// GetConfig returns the current configuration. It returns an error if the config is not yet available.
+func (ch *ConfigHandler) GetConfig() (*Config, error) {
+	cfgRes := ch.config.Load()
+	if cfgRes == nil {
+		return nil, fmt.Errorf("no config")
 	}
-	return os.WriteFile(path, buf, 0o644)
+	cfg, ok := cfgRes.(*Config)
+	if !ok || cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	return cfg, nil
+}
+
+// modifyConfig saves the config to the disk with the given config. It creates the config file
+// if it doesn't exist.
+func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
+	ch.configMu.Lock()
+	cfg, err := ch.GetConfig()
+	if err != nil {
+		slog.Error("getting config", "error", err)
+		ch.configMu.Unlock()
+		return
+	}
+	// Call the function with the config
+	// and save the config to the disk.
+	fn(cfg)
+	ch.configMu.Unlock()
+	ch.setConfigAndNotify(cfg)
 }
