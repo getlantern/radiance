@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
-	"github.com/getlantern/eventual/v2"
 	"github.com/getlantern/radiance/user"
 )
 
@@ -70,7 +70,7 @@ func TestGetConfig(t *testing.T) {
 	ch := &ConfigHandler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
-		config:       eventual.NewValue(),
+		config:       atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -91,7 +91,7 @@ func TestGetConfig(t *testing.T) {
 			},
 		}
 
-		ch.config.Set(expectedConfig)
+		ch.config.Store(expectedConfig)
 
 		// Retrieve the config
 		actualConfig, err := ch.GetConfig()
@@ -109,11 +109,11 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	ch := &ConfigHandler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
-		config:       eventual.NewValue(),
+		config:       atomic.Value{},
 		ftr:          newFetcher(http.DefaultClient, &UserStub{}),
 	}
 
-	ch.config.Set(&Config{
+	ch.config.Store(&Config{
 		ConfigResponse: C.ConfigResponse{
 			Servers: []C.ServerLocation{
 				{Country: "US", City: "New York"},
