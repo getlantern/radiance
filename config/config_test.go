@@ -77,7 +77,7 @@ func TestGetConfig(t *testing.T) {
 	t.Run("NoConfigSet", func(t *testing.T) {
 		_, err := ch.GetConfig()
 		require.Error(t, err, "Expected error when no config is set")
-		assert.Contains(t, err.Error(), "context canceled", "Error message should indicate nil config")
+		assert.Contains(t, err.Error(), "no config", "Error message should indicate nil config")
 	})
 
 	// Test case: Valid config set
