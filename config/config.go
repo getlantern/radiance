@@ -297,14 +297,15 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 // if it doesn't exist.
 func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
 	ch.configMu.Lock()
-	defer ch.configMu.Unlock()
 	cfg, err := ch.GetConfig()
 	if err != nil {
 		slog.Error("getting config", "error", err)
+		ch.configMu.Unlock()
 		return
 	}
 	// Call the function with the config
 	// and save the config to the disk.
 	fn(cfg)
+	ch.configMu.Unlock()
 	ch.setConfigAndNotify(cfg)
 }
