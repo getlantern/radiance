@@ -84,6 +84,7 @@ func (bs *BoxService) Start() error {
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
+	service.MustRegister(ctx, lb.LogFactory())
 
 	// we need to start the ruleset manager before starting the libbox service but after the libbox
 	// service has been initialized so that the ruleset manager can access the routing rules.
@@ -218,8 +219,7 @@ func updateOutboundsEndpoints(ctx context.Context, outbounds []option.Outbound, 
 	if router == nil {
 		return errors.New("router missing from context")
 	}
-	// TODO: reaallyy need to be able to get that logFactory.. -_-
-	//			we need to create our own and add it to the context
+
 	logFactory := service.FromContext[log.Factory](ctx)
 	var errs error
 	if len(outbounds) > 0 {
