@@ -4,6 +4,8 @@
 package deviceid
 
 import (
+	"log/slog"
+
 	"github.com/google/uuid"
 	"golang.org/x/sys/windows/registry"
 )
@@ -18,26 +20,26 @@ const (
 func Get() string {
 	key, _, err := registry.CreateKey(registry.CURRENT_USER, keyPath, registry.QUERY_VALUE|registry.SET_VALUE|registry.WRITE)
 	if err != nil {
-		log.Errorf("Unable to create registry entry to store deviceID, defaulting to old-style device ID: %v", err)
+		slog.Error("Unable to create registry entry to store deviceID, defaulting to old-style device ID: %v", "error", err)
 		return OldStyleDeviceID()
 	}
 
 	existing, _, err := key.GetStringValue("deviceid")
 	if err != nil {
 		if err != registry.ErrNotExist {
-			log.Errorf("Unexpected error reading deviceID, default to old-style device ID: %v", err)
+			slog.Error("Unexpected error reading deviceID, default to old-style device ID:", "error", err)
 			return OldStyleDeviceID()
 		}
-		log.Debug("Storing new deviceID")
+		slog.Debug("Storing new deviceID")
 		_deviceID, err := uuid.NewRandom()
 		if err != nil {
-			log.Errorf("Error generating new deviceID, defaulting to old-style device ID: %v", err)
+			slog.Error("Error generating new deviceID, defaulting to old-style device ID:", "error", err)
 			return OldStyleDeviceID()
 		}
 		deviceID := _deviceID.String()
 		err = key.SetStringValue("deviceid", deviceID)
 		if err != nil {
-			log.Errorf("Error storing new deviceID, defaulting to old-style device ID: %v", err)
+			slog.Error("Error storing new deviceID, defaulting to old-style device IDL", "error", err)
 			return OldStyleDeviceID()
 		}
 		return deviceID
