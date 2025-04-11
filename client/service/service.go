@@ -185,9 +185,11 @@ func (bs *BoxService) Ctx() context.Context {
 
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
 // new configuration and restarts the VPN client if necessary.
-func (bs *BoxService) OnNewConfig(oldConfigRaw, newConfigRaw *config.Config) error {
+func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	slog.Debug("Received new config")
-	return errors.New("not implemented")
+
+	return updateOutboundsEndpoints(bs.ctx, newConfig.ConfigResponse.Options.Outbounds,
+		newConfig.ConfigResponse.Options.Endpoints)
 }
 
 func (bs *BoxService) ParseConfig(configRaw []byte) (*config.Config, error) {
@@ -364,5 +366,5 @@ func removeItems[I ~[]T, T bA, O any](
 			i++
 		}
 	}
-  return errs
+	return errs
 }
