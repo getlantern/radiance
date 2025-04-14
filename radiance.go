@@ -66,6 +66,7 @@ type Radiance struct {
 	logsDir       string
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
+	httpClient    *http.Client
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -131,6 +132,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		issueReporter: issueReporter,
 		logsDir:       logDir,
 		shutdownFuncs: shutdownFuncs,
+		httpClient:    k.NewHTTPClient(),
 	}, nil
 }
 
@@ -178,6 +180,18 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 	}
 
 	return activeServer.(*Server), nil
+
+}
+
+// User returns the user object for this client
+func (r *Radiance) User() *user.User {
+	return r.user
+}
+
+// httpClient returns the HTTP client used by the Radiance client.
+// Expose http client
+func (r *Radiance) HttpClient() *http.Client {
+	return r.httpClient
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
