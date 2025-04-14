@@ -188,12 +188,6 @@ func (r *Radiance) User() *user.User {
 	return r.user
 }
 
-// httpClient returns the HTTP client used by the Radiance client.
-// Expose http client
-func (r *Radiance) HttpClient() *http.Client {
-	return r.httpClient
-}
-
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
 // via [Radiance.ReportIssue].
 type IssueReport struct {
