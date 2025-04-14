@@ -88,7 +88,7 @@ func (bs *BoxService) Start() error {
 
 	// we need to start the ruleset manager before starting the libbox service but after the libbox
 	// service has been initialized so that the ruleset manager can access the routing rules.
-	if err := bs.mutRuleSetManager.Start(bs.ctx); err != nil {
+	if err := bs.mutRuleSetManager.Start(ctx); err != nil {
 		return fmt.Errorf("start ruleset manager: %w", err)
 	}
 
