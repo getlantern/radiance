@@ -66,7 +66,6 @@ type Radiance struct {
 	logsDir       string
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
-	httpClient    *http.Client
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -132,7 +131,6 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		issueReporter: issueReporter,
 		logsDir:       logDir,
 		shutdownFuncs: shutdownFuncs,
-		httpClient:    k.NewHTTPClient(),
 	}, nil
 }
 
