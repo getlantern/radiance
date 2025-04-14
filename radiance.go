@@ -178,6 +178,12 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 	}
 
 	return activeServer.(*Server), nil
+
+}
+
+// User returns the user object for this client
+func (r *Radiance) User() *user.User {
+	return r.user
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
