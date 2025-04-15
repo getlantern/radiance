@@ -27,6 +27,7 @@ import (
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/metrics"
+	"github.com/getlantern/radiance/pro"
 	"github.com/getlantern/radiance/user"
 )
 
@@ -61,6 +62,7 @@ type Radiance struct {
 	stopChan     chan struct{}
 
 	user *user.User
+	pro  *pro.Pro
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
@@ -115,6 +117,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	u := user.New(k.NewHTTPClient())
+	pro := pro.New(k.NewHTTPClient())
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
@@ -128,6 +131,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
 		user:          u,
+		pro:           pro,
 		issueReporter: issueReporter,
 		logsDir:       logDir,
 		shutdownFuncs: shutdownFuncs,
@@ -184,6 +188,11 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 // User returns the user object for this client
 func (r *Radiance) User() *user.User {
 	return r.user
+}
+
+// Pro returns the pro object for this client
+func (r *Radiance) Pro() *pro.Pro {
+	return r.pro
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
