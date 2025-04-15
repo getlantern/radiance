@@ -67,12 +67,16 @@ type ConfigHandler struct {
 func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user user.BaseUser, dataDir string,
 	configParser Unmarshaller) *ConfigHandler {
 	configPath := filepath.Join(dataDir, configFileName)
+	opts := common.Opts{
+		BaseURL:    "",
+		HttpClient: httpClient}
+
 	ch := &ConfigHandler{
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
 		closeOnce:       &sync.Once{},
 		configPath:      configPath,
-		apiClient:       common.NewWebClient(httpClient),
+		apiClient:       common.NewWebClient(&opts),
 		configListeners: make([]ListenerFunc, 0),
 		configParser:    configParser,
 	}

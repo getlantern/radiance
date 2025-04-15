@@ -44,6 +44,7 @@ require (
 	github.com/getlantern/errors v1.0.4 // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d // indirect
 	github.com/getlantern/tlsdialer/v3 v3.0.3 // indirect
+	github.com/go-resty/resty/v2 v2.16.5 // indirect
 	github.com/goccy/go-yaml v1.15.13 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

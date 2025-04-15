@@ -139,6 +139,13 @@ func mockAuthClientNew(t *testing.T, email, password string) *mockAuthClient {
 	return m
 }
 
+// func TestSubscriptionPaymentRedirect(t *testing.T) {
+// 	user := New(&http.Client{})
+// 	resp, error := user.SubscriptionPaymentRedirect(context.Background(), nil)
+// 	assert.NoError(t, error)
+// 	assert.NotNil(t, resp)
+// }
+
 func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]byte, error) {
 	return []byte("salt"), nil
 }

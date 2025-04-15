@@ -112,8 +112,12 @@ func readSalt() ([]byte, error) {
 func New(httpClient *http.Client) *User {
 	salt, _ := readSalt()
 	userData, _ := readUserData()
+	opts := common.Opts{
+		HttpClient: httpClient,
+		BaseURL:    common.APIBaseUrl,
+	}
 	return &User{
-		authClient: &authClient{common.NewWebClient(httpClient)},
+		authClient: &authClient{common.NewWebClient(&opts)},
 		salt:       salt,
 		userData:   userData,
 		deviceId:   deviceid.Get(),
