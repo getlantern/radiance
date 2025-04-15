@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/user"
 )
 
 type proClient struct {
@@ -13,12 +14,13 @@ type proClient struct {
 
 type ProClient interface {
 	//Payment methods
-	SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (any, error)
+	SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (*SubscriptionPaymentRedirectResponse, error)
+	UserCreate(ctx context.Context) (*user.UserResponse, error)
 }
 
-func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (any, error) {
-	var resp SubscriptionPaymentRedirectResponse
-	err := c.Get(ctx, "/subscription/payment/redirect", map[string]any{
+func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (*SubscriptionPaymentRedirectResponse, error) {
+	var resp *SubscriptionPaymentRedirectResponse
+	err := c.Get(ctx, "subscription-payment-redirect", map[string]any{
 		"provider":         "stripe",
 		"plan":             "1y-usd",
 		"deviceName":       "test",
@@ -31,4 +33,16 @@ func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *Subsc
 	}
 	log.Printf("SubscriptionPaymentRedirect response: %v", resp)
 	return resp, nil
+}
+
+func (c *proClient) UserCreate(ctx context.Context) (*user.UserResponse, error) {
+	var resp *user.UserResponse
+	err := c.Post(ctx, "/user-create", nil, &resp)
+	if err != nil {
+		log.Fatalf("Error in UserCreate: %v", err)
+		return nil, err
+	}
+	log.Printf("UserCreate response: %v", resp)
+	return resp, nil
+
 }

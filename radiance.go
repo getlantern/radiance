@@ -117,7 +117,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	u := user.New(k.NewHTTPClient())
-	pro := pro.New(k.NewHTTPClient())
+	pro := pro.New(k.NewHTTPClient(),opts.DeviceID)
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)

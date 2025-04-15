@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/moul/http2curl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -27,8 +28,11 @@ type WebClient interface {
 	// PostPROTOC sends a POST request and parses the Protobuf response into the target object
 	PostPROTOC(ctx context.Context, path string, body protoreflect.ProtoMessage, target protoreflect.ProtoMessage) error
 
-	// GetPROTOC sends a GET request and parses the Protobuf response into the target object
+	// Get sends a GET request and parses the response into the target object
 	Get(ctx context.Context, path string, params map[string]any, target any) error
+
+	// Post sends a POST request and parses the response into the target object
+	Post(ctx context.Context, path string, params map[string]any, target any) error
 }
 
 type webClient struct {
@@ -96,32 +100,6 @@ func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[strin
 	return proto.Unmarshal(body, target)
 }
 
-// GetPROTOC sends a GET request and parses the Protobuf response into the target object
-// path - the URL. Must start with a forward slash (/)
-// params - the query parameters
-// target - the target object to parse the response into
-func (c *webClient) Get(ctx context.Context, path string, params map[string]any, target any) error {
-	req := c.R().SetContext(ctx)
-	if params != nil {
-		req.SetQueryParams(convertToStringMap(params))
-	}
-	req.Header.Set("Content-Type", ContentTypeJSON)
-	req.Header.Set("Accept", ContentTypeJSON)
-
-	resp, err := req.Get(path)
-
-	if err != nil {
-		return fmt.Errorf("error sending request: %w", err)
-	}
-
-	if resp.StatusCode() != http.StatusOK {
-		return fmt.Errorf("unexpected status code %v body %v", resp.StatusCode(), string(resp.Body()))
-	}
-
-	body := sanitizeResponseBody(resp.Body())
-	return json.Unmarshal(body, target)
-}
-
 // PostPROTOC sends a POST request and parses the Protobuf response into the target object
 // path - the URL. Must start with a forward slash (/)
 // msg - the message to send as body
@@ -151,6 +129,61 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 
 	respBodyBytes := sanitizeResponseBody(resp.Body())
 	return proto.Unmarshal(respBodyBytes, target)
+}
+
+// Get sends a GET request and parses the Protobuf response into the target object
+// path - the URL. Must start with a forward slash (/)
+// params - the query parameters
+// target - the target object to parse the response into
+func (c *webClient) Get(ctx context.Context, path string, params map[string]any, target any) error {
+	req := c.R().SetContext(ctx)
+	if params != nil {
+		req.SetQueryParams(convertToStringMap(params))
+	}
+	req.Header.Set("Content-Type", ContentTypeJSON)
+	req.Header.Set("Accept", ContentTypeJSON)
+
+	resp, err := req.Get(path)
+
+	command, _ := http2curl.GetCurlCommand(req.RawRequest)
+	fmt.Printf("curl command: %v", command)
+
+	if err != nil {
+		return fmt.Errorf("error sending request: %w", err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return fmt.Errorf("unexpected status code %v body %v url %v", resp.StatusCode(), string(resp.Body()), resp.Request.URL)
+	}
+
+	body := sanitizeResponseBody(resp.Body())
+	return json.Unmarshal(body, target)
+}
+
+// Post sends a POST request and parses the Protobuf response into the target object
+// path - the URL. Must start with a forward slash (/)
+// params - the query parameters
+// target - the target object to parse the response into
+func (c *webClient) Post(ctx context.Context, path string, params map[string]any, target any) error {
+	req := c.R().SetContext(ctx)
+	if params != nil {
+		req.SetBody(params)
+	}
+	req.Header.Set("Content-Type", ContentTypeJSON)
+	req.Header.Set("Accept", ContentTypeJSON)
+
+	resp, err := req.Post(path)
+
+	if err != nil {
+		return fmt.Errorf("error sending request: %w", err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return fmt.Errorf("unexpected status code %v body %v url %v", resp.StatusCode(), string(resp.Body()), resp.Request.URL)
+	}
+
+	body := sanitizeResponseBody(resp.Body())
+	return json.Unmarshal(body, target)
 }
 
 func convertToStringMap(params map[string]interface{}) map[string]string {

@@ -1,5 +1,9 @@
 package pro
 
+import (
+	"github.com/getlantern/radiance/user"
+)
+
 type SubscriptionType string
 
 const (
@@ -18,4 +22,9 @@ type SubscriptionPaymentRedirectRequest struct {
 
 type SubscriptionPaymentRedirectResponse struct {
 	Redirect string `json:"redirect"`
+}
+
+type UserDataResponse struct {
+	*user.BaseResponse `json:",inline"`
+	*user.UserResponse `json:",inline"`
 }
