@@ -311,6 +311,12 @@ func (bs *BoxService) loadCustomServer() (customServers, error) {
 		return cs, fmt.Errorf("decode custom servers file: %w", err)
 	}
 
+	bs.customServersMutex.Lock()
+	defer bs.customServersMutex.Unlock()
+	for _, v := range cs.CustomServers {
+		bs.customServers[v.Tag] = v.Options
+	}
+
 	return cs, nil
 }
 
