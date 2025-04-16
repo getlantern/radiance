@@ -307,11 +307,24 @@ func TestSelectCustomServer(t *testing.T) {
 		assert.True(t, exists)
 	})
 
+	t.Run("listing custom servers should return the stored list", func(t *testing.T) {
+		customServers, err := bs.ListCustomServers()
+		assert.NoError(t, err)
+		assert.Len(t, customServers, 1)
+		assert.Equal(t, "algeneva-out", customServers[0].Tag)
+	})
+
 	t.Run("it should remove the outbound tag", func(t *testing.T) {
 		err = bs.RemoveCustomServer("algeneva-out")
 		assert.NoError(t, err)
 		outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
 		_, exists := outboundManager.Outbound("algeneva-out")
 		assert.False(t, exists)
+	})
+
+	t.Run("listing custom servers should return a empty list because we've removed on the last test", func(t *testing.T) {
+		customServers, err := bs.ListCustomServers()
+		assert.NoError(t, err)
+		assert.Empty(t, customServers)
 	})
 }
