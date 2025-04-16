@@ -212,10 +212,6 @@ type ServerConnectConfig []byte
 // enpdoint/outbound to the instance. We're only expecting one endpoint or
 // outbound per call.
 func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error {
-	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
-	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
-	router := service.FromContext[adapter.Router](bs.ctx)
-
 	bs.customServersMutex.Lock()
 	loadedOptions, configExist := bs.customServers[tag]
 	if configExist {
@@ -228,32 +224,18 @@ func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error
 
 	loadedOptions, err := json.UnmarshalExtendedContext[option.Options](bs.ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("unmarshal config: %w", err)
+		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	if len(loadedOptions.Endpoints) > 0 {
-		for _, endpoint := range loadedOptions.Endpoints {
-			err = endpointManager.Create(bs.ctx, router, bs.logFactory.NewLogger(fmt.Sprintf("custom/%s/%s", tag, endpoint.Tag)), endpoint.Tag, endpoint.Type, endpoint.Options)
-			if err != nil {
-				return fmt.Errorf("failed to create endpoint %q: %w", endpoint.Tag, err)
-			}
-		}
-	}
-
-	if len(loadedOptions.Outbounds) > 0 {
-		for _, outbound := range loadedOptions.Outbounds {
-			err = outboundManager.Create(bs.ctx, router, bs.logFactory.NewLogger(fmt.Sprintf("custom/%s/%s", tag, outbound.Tag)), outbound.Tag, outbound.Type, outbound.Options)
-			if err != nil {
-				return fmt.Errorf("failed to create outbound %q: %w", outbound.Tag, err)
-			}
-		}
+	if err = updateOutboundsEndpoints(bs.ctx, loadedOptions.Outbounds, loadedOptions.Endpoints); err != nil {
+		return fmt.Errorf("failed to update outbounds/endpoints: %w", err)
 	}
 
 	bs.customServersMutex.Lock()
 	defer bs.customServersMutex.Unlock()
 	bs.customServers[tag] = loadedOptions
 	if err = bs.storeCustomServer(tag, loadedOptions); err != nil {
-		return fmt.Errorf("store custom server: %w", err)
+		return fmt.Errorf("failed to store custom server: %w", err)
 	}
 
 	return nil
