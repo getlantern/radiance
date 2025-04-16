@@ -235,8 +235,8 @@ func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error
 	}
 
 	bs.customServersMutex.Lock()
-	defer bs.customServersMutex.Unlock()
 	bs.customServers[tag] = loadedOptions
+	bs.customServersMutex.Unlock()
 	if err := bs.storeCustomServer(tag, loadedOptions); err != nil {
 		return fmt.Errorf("failed to store custom server: %w", err)
 	}
@@ -340,12 +340,12 @@ func (bs *BoxService) removeCustomServer(tag string) error {
 // RemoveCustomServer removes the custom server options from endpoints, outbounds
 // and the custom server file.
 func (bs *BoxService) RemoveCustomServer(tag string) error {
-	bs.customServersMutex.Lock()
-	defer bs.customServersMutex.Unlock()
 	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
 	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
 
+	bs.customServersMutex.Lock()
 	options := bs.customServers[tag]
+	bs.customServersMutex.Unlock()
 	// selector must be removed in order to remove dependent outbounds
 	if err := outboundManager.Remove(CustomSelectorTag); err != nil {
 		return fmt.Errorf("failed to remove selector outbound: %w", err)
@@ -362,7 +362,9 @@ func (bs *BoxService) RemoveCustomServer(tag string) error {
 		}
 	}
 
+	bs.customServersMutex.Lock()
 	delete(bs.customServers, tag)
+	bs.customServersMutex.Unlock()
 	if err := bs.removeCustomServer(tag); err != nil {
 		return fmt.Errorf("failed to remove custom server %q: %w", tag, err)
 	}
