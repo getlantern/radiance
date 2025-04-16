@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -21,74 +23,11 @@ func TestNewRadiance(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, r.VPNClient)
 		assert.NotNil(t, r.confHandler)
-		assert.NotNil(t, r.activeConfig)
+		assert.NotNil(t, r.activeServer)
 		assert.NotNil(t, r.stopChan)
 		assert.NotNil(t, r.user)
 		assert.NotNil(t, r.issueReporter)
 	})
-}
-
-func TestGetActiveServer(t *testing.T) {
-	var tests = []struct {
-		name      string
-		want      *Server
-		setup     func(*Server) *Radiance
-		assertErr func(assert.TestingT, error, ...interface{}) bool
-	}{
-		{
-			name: "it should return nil when VPN is disconnected",
-			setup: func(*Server) *Radiance {
-				vpn := &mockVPNClient{}
-				vpn.On("ConnectionStatus").Return(false)
-				return &Radiance{VPNClient: vpn}
-			},
-			assertErr: assert.NoError,
-		},
-		{
-			name: "it should return error when there is no current config",
-			setup: func(*Server) *Radiance {
-				vpn := &mockVPNClient{}
-				vpn.On("ConnectionStatus").Return(true)
-				return &Radiance{
-					VPNClient:    vpn,
-					activeConfig: &atomic.Value{},
-				}
-			},
-			assertErr: assert.Error,
-		},
-		{
-			name: "it should return the active server when VPN is connected",
-			want: &Server{
-				Address:  "1.2.3.4",
-				Protocol: "random",
-				Location: ServerLocation{City: "new york"},
-			},
-			setup: func(s *Server) *Radiance {
-				vpn := &mockVPNClient{}
-				vpn.On("ConnectionStatus").Return(true)
-				r := &Radiance{
-					VPNClient:    vpn,
-					activeConfig: &atomic.Value{},
-				}
-				c := &config.Config{
-					Addr:     s.Address,
-					Location: &config.ProxyConnectConfig_ProxyLocation{City: s.Location.City},
-					Protocol: s.Protocol,
-				}
-				r.activeConfig.Store(c)
-				return r
-			},
-			assertErr: assert.NoError,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := tt.setup(tt.want)
-			server, err := r.GetActiveServer()
-			assert.Equal(t, tt.want, server)
-			tt.assertErr(t, err)
-		})
-	}
 }
 
 type mockVPNClient struct {
@@ -100,6 +39,12 @@ func (m *mockVPNClient) StopVPN() error                          { panic("not im
 func (m *mockVPNClient) PauseVPN(dur time.Duration) error        { return nil }
 func (m *mockVPNClient) ResumeVPN()                              {}
 func (m *mockVPNClient) SplitTunnelHandler() *client.SplitTunnel { panic("not implemented") }
+func (m *mockVPNClient) OnNewConfig(oldConfig, newConfig *config.Config) error {
+	return nil
+}
+func (m *mockVPNClient) ParseConfig(config []byte) (*config.Config, error) {
+	return nil, nil
+}
 
 func (m *mockVPNClient) ConnectionStatus() bool {
 	args := m.Called()
@@ -108,6 +53,16 @@ func (m *mockVPNClient) ConnectionStatus() bool {
 func (m *mockVPNClient) GetActiveServer() (*Server, error) {
 	args := m.Called()
 	return args.Get(0).(*Server), args.Error(1)
+}
+
+func (m *mockVPNClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return nil
+}
+func (m *mockVPNClient) SelectCustomServer(tag string) error {
+	return nil
+}
+func (m *mockVPNClient) RemoveCustomServer(tag string) error {
+	return nil
 }
 
 func TestReportIssue(t *testing.T) {
@@ -182,5 +137,58 @@ func TestSetupDirs(t *testing.T) {
 		baseDir := "/invalid/path"
 		_, _, err := setupDirs(baseDir)
 		assert.Error(t, err)
+	})
+}
+func TestGetActiveServer(t *testing.T) {
+	t.Run("it should return error when VPN is not connected", func(t *testing.T) {
+		mockClient := &mockVPNClient{}
+		mockClient.On("ConnectionStatus").Return(false)
+
+		r := &Radiance{
+			VPNClient:    mockClient,
+			activeServer: new(atomic.Value),
+		}
+
+		server, err := r.GetActiveServer()
+		assert.Nil(t, server)
+		assert.Error(t, err)
+		assert.EqualError(t, err, "VPN is not connected")
+	})
+
+	t.Run("it should return error when no active server config is available", func(t *testing.T) {
+		mockClient := &mockVPNClient{}
+		mockClient.On("ConnectionStatus").Return(true)
+
+		r := &Radiance{
+			VPNClient:    mockClient,
+			activeServer: new(atomic.Value),
+		}
+
+		server, err := r.GetActiveServer()
+		assert.Nil(t, server)
+		assert.Error(t, err)
+		assert.EqualError(t, err, "no active server config")
+	})
+
+	t.Run("it should return the active server when VPN is connected and active server is set", func(t *testing.T) {
+		mockClient := &mockVPNClient{}
+		mockClient.On("ConnectionStatus").Return(true)
+
+		activeServer := &Server{
+			Address:  "127.0.0.1",
+			Location: C.ServerLocation{Country: "US", City: "New York"},
+			Protocol: "tcp",
+		}
+
+		r := &Radiance{
+			VPNClient:    mockClient,
+			activeServer: new(atomic.Value),
+		}
+		r.activeServer.Store(activeServer)
+
+		server, err := r.GetActiveServer()
+		assert.NotNil(t, server)
+		assert.NoError(t, err)
+		assert.Equal(t, activeServer, server)
 	})
 }

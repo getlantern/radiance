@@ -20,6 +20,7 @@ import (
 
 	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
+	"github.com/getlantern/radiance/config"
 )
 
 var (
@@ -29,6 +30,7 @@ var (
 
 type Options struct {
 	DataDir  string
+	LogDir   string
 	PlatIfce libbox.PlatformInterface
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
@@ -44,6 +46,8 @@ type VPNClient interface {
 	AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error
 	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
+	OnNewConfig(oldConfig, newConfig *config.Config) error
+	ParseConfig(config []byte) (*config.Config, error)
 }
 
 type vpnClient struct {
@@ -58,7 +62,7 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(opts Options, logDir string) (VPNClient, error) {
+func NewVPNClient(opts Options) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -66,7 +70,7 @@ func NewVPNClient(opts Options, logDir string) (VPNClient, error) {
 	}
 
 	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(logDir, "lantern-box.log")
+	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
 	logFactory, err := log.New(log.Options{
@@ -161,14 +165,6 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 	c.connected = connected
 }
 
-func parseConfig(ctx context.Context, configContent string) (option.Options, error) {
-	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(configContent))
-	if err != nil {
-		return option.Options{}, fmt.Errorf("unmarshal config: %w", err)
-	}
-	return options, nil
-}
-
 // Pause pauses the VPN client for the specified duration
 func (c *vpnClient) PauseVPN(dur time.Duration) error {
 	slog.Info("Pausing VPN for", "duration", dur)
@@ -247,4 +243,12 @@ func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.
 		routeOpts.RuleSet = append(routeOpts.RuleSet, rulesets...)
 	}
 	return routeOpts
+}
+
+func (c *vpnClient) ParseConfig(configRaw []byte) (*config.Config, error) {
+	return c.boxService.ParseConfig(configRaw)
+}
+
+func (c *vpnClient) OnNewConfig(oldConfig, newConfig *config.Config) error {
+	return c.boxService.OnNewConfig(oldConfig, newConfig)
 }

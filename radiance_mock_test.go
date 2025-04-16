@@ -13,7 +13,7 @@ import (
 	context "context"
 	reflect "reflect"
 
-	config "github.com/getlantern/radiance/config"
+	config "github.com/getlantern/common"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -42,13 +42,12 @@ func (m *MockconfigHandler) EXPECT() *MockconfigHandlerMockRecorder {
 }
 
 // GetConfig mocks base method.
-func (m *MockconfigHandler) GetConfig(ctx context.Context) ([]*config.ProxyConnectConfig, string, error) {
+func (m *MockconfigHandler) GetConfig(ctx context.Context) (*config.ConfigResponse, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetConfig", ctx)
-	ret0, _ := ret[0].([]*config.ProxyConnectConfig)
-	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret0, _ := ret[0].(*config.ConfigResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // GetConfig indicates an expected call of GetConfig.
@@ -58,10 +57,10 @@ func (mr *MockconfigHandlerMockRecorder) GetConfig(ctx any) *gomock.Call {
 }
 
 // ListAvailableServers mocks base method.
-func (m *MockconfigHandler) ListAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
+func (m *MockconfigHandler) ListAvailableServers(ctx context.Context) ([]config.ServerLocation, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListAvailableServers", ctx)
-	ret0, _ := ret[0].([]config.AvailableServerLocation)
+	ret0, _ := ret[0].([]config.ServerLocation)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

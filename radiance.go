@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/getlantern/appdir"
-	"github.com/getlantern/eventual/v2"
+	C "github.com/getlantern/common"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
@@ -36,20 +36,21 @@ var log *slog.Logger
 const configPollInterval = 10 * time.Minute
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
-//go:generate mockgen -destination=vpn_client_test.go -package=radiance github.com/getlantern/radiance/client VPNClient
 
 // configHandler is an interface that abstracts the config.ConfigHandler struct for easier testing.
 type configHandler interface {
-	// GetConfig returns the current proxy configuration and the country.
-	GetConfig(ctx context.Context) ([]*config.Config, string, error)
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
 
 	// SetPreferredServerLocation sets the preferred server location. If not set - it's auto selected by the API
 	SetPreferredServerLocation(country, city string)
 
-	// ListAvailableServers lists the available server locations to choose from.
-	ListAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error)
+	// ListAvailableServers returns a list of available server locations.
+	ListAvailableServers() ([]C.ServerLocation, error)
+
+	// GetConfig returns the current configuration.
+	// It returns an error if the configuration is not yet available.
+	GetConfig() (*config.Config, error)
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -57,7 +58,7 @@ type Radiance struct {
 	client.VPNClient
 
 	confHandler  configHandler
-	activeConfig *atomic.Value
+	activeServer *atomic.Value
 	stopChan     chan struct{}
 
 	user *user.User
@@ -97,12 +98,9 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
-<<<<<<< HEAD
-	vpnC, err := client.NewVPNClient(dataDirPath, logDir, platIfce)
-=======
 	opts.DataDir = dataDirPath
-	vpnC, err := client.NewVPNClient(opts, logDir)
->>>>>>> 4562ec67ed035c6e8316d1cdf36aa26ba819da97
+	opts.LogDir = logDir
+	vpnC, err := client.NewVPNClient(opts)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
@@ -125,11 +123,13 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
+	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath, vpnC.ParseConfig)
+	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
 		VPNClient:     vpnC,
-		confHandler:   config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath),
-		activeConfig:  new(atomic.Value),
+		confHandler:   confHandler,
+		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
@@ -137,15 +137,15 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		// for loading the configured servers and also the custom servers
 		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
 		configuredServersMutex: new(sync.Mutex),
-		logsDir:       logDir,
-		shutdownFuncs: shutdownFuncs,
+		logsDir:                logDir,
+		shutdownFuncs:          shutdownFuncs,
 	}, nil
 }
 
 // TODO: the server stuff should probably be moved to the VPNClient as well..
 
-func (r *Radiance) GetAvailableServers(ctx context.Context) ([]config.AvailableServerLocation, error) {
-	return r.confHandler.ListAvailableServers(ctx)
+func (r *Radiance) GetAvailableServers() ([]C.ServerLocation, error) {
+	return r.confHandler.ListAvailableServers()
 }
 
 // SetPreferredServer sets the preferred server location for the VPN connection.
@@ -167,13 +167,10 @@ func (r *Radiance) Close() {
 	})
 }
 
-// ServerLocation is the location of a remote VPN server.
-type ServerLocation config.ProxyConnectConfig_ProxyLocation
-
 // Server represents a remote VPN server.
 type Server struct {
 	Address  string
-	Location ServerLocation
+	Location C.ServerLocation
 	Protocol string
 }
 
@@ -181,19 +178,20 @@ type Server struct {
 // It returns nil when VPN is disconnected
 func (r *Radiance) GetActiveServer() (*Server, error) {
 	if !r.ConnectionStatus() {
-		return nil, nil
+		return nil, fmt.Errorf("VPN is not connected")
 	}
-	activeConfig := r.activeConfig.Load()
-	if activeConfig == nil {
+	activeServer := r.activeServer.Load()
+	if activeServer == nil {
 		return nil, fmt.Errorf("no active server config")
 	}
-	config := activeConfig.(*config.Config)
 
-	return &Server{
-		Address:  config.GetAddr(),
-		Location: ServerLocation(*config.GetLocation()),
-		Protocol: config.GetProtocol(),
-	}, nil
+	return activeServer.(*Server), nil
+
+}
+
+// User returns the user object for this client
+func (r *Radiance) User() *user.User {
+	return r.user
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
@@ -236,11 +234,14 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		log.Error("Unknown issue type: %s, set to Other", "type", report.Type)
 		typeInt = 9
 	}
+	var country string
 	// get country from the config returned by the backend
-	_, country, err := r.confHandler.GetConfig(eventual.DontWait)
+	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		log.Error("Failed to get country", "error", err)
 		country = ""
+	} else {
+		country = cfg.ConfigResponse.Country
 	}
 
 	return r.issueReporter.Report(
@@ -308,20 +309,19 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	), nil
 }
 
-<<<<<<< HEAD
 func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
-	return r.vpnClient.AddCustomServer(tag, cfg)
+	return r.VPNClient.AddCustomServer(tag, cfg)
 }
 
 func (r *Radiance) SelectCustomServer(tag string) error {
-	return r.vpnClient.SelectCustomServer(tag)
+	return r.VPNClient.SelectCustomServer(tag)
 }
 
 func (r *Radiance) RemoveCustomServer(tag string) error {
-	return r.vpnClient.RemoveCustomServer(tag)
-=======
+	return r.VPNClient.RemoveCustomServer(tag)
+}
+
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.
 func (r *Radiance) SplitTunnelHandler() *client.SplitTunnel {
 	return r.VPNClient.SplitTunnelHandler()
->>>>>>> 4562ec67ed035c6e8316d1cdf36aa26ba819da97
 }
