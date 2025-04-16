@@ -26,6 +26,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -214,27 +215,29 @@ type ServerConnectConfig []byte
 func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error {
 	bs.customServersMutex.Lock()
 	loadedOptions, configExist := bs.customServers[tag]
-	if configExist {
-		bs.customServersMutex.Unlock()
+	bs.customServersMutex.Unlock()
+	if configExist && cfg != nil {
 		if err := bs.RemoveCustomServer(tag); err != nil {
 			return err
 		}
 	}
-	bs.customServersMutex.Unlock()
 
-	loadedOptions, err := json.UnmarshalExtendedContext[option.Options](bs.ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal config: %w", err)
+	if cfg != nil {
+		var err error
+		loadedOptions, err = json.UnmarshalExtendedContext[option.Options](bs.ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal config: %w", err)
+		}
 	}
 
-	if err = updateOutboundsEndpoints(bs.ctx, loadedOptions.Outbounds, loadedOptions.Endpoints); err != nil {
+	if err := updateOutboundsEndpoints(bs.ctx, loadedOptions.Outbounds, loadedOptions.Endpoints); err != nil {
 		return fmt.Errorf("failed to update outbounds/endpoints: %w", err)
 	}
 
 	bs.customServersMutex.Lock()
 	defer bs.customServersMutex.Unlock()
 	bs.customServers[tag] = loadedOptions
-	if err = bs.storeCustomServer(tag, loadedOptions); err != nil {
+	if err := bs.storeCustomServer(tag, loadedOptions); err != nil {
 		return fmt.Errorf("failed to store custom server: %w", err)
 	}
 
@@ -424,6 +427,7 @@ var (
 		"direct",
 		"dns",
 		"block",
+		CustomSelectorTag,
 	}
 	permanentEndpoints = []string{}
 )
