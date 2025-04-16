@@ -209,7 +209,7 @@ func (bs *BoxService) Wake() {
 type ServerConnectConfig []byte
 
 // AddCustomServer load or parse the given configuration and add given
-// enpdoint/outbound to the instance. We're only expecting one endpoint or
+// endpdoint/outbound to the instance. We're only expecting one endpoint or
 // outbound per call.
 func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error {
 	bs.customServersMutex.Lock()
