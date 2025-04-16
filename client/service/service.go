@@ -393,13 +393,28 @@ func (bs *BoxService) SelectCustomServer(tag string) error {
 		return fmt.Errorf("failed to create selector outbound: %w", err)
 	}
 
+	outbound, ok := outboundManager.Outbound(CustomSelectorTag)
+	if !ok {
+		return fmt.Errorf("failed to get selector outbound: %w", err)
+	}
+	selector, ok := outbound.(*group.Selector)
+	if !ok {
+		return fmt.Errorf("expected outbound of type *group.Selector: %w", err)
+	}
+	if err = selector.Start(); err != nil {
+		return fmt.Errorf("failed to start selector outbound: %w", err)
+	}
+	if ok = selector.SelectOutbound(tag); !ok {
+		return fmt.Errorf("failed to select outbound %q: %w", tag, err)
+	}
+
 	return nil
 }
 
-func (bs *BoxService) newSelectorOutbound(outboundManager adapter.OutboundManager, tag string, options option.SelectorOutboundOptions) error {
+func (bs *BoxService) newSelectorOutbound(outboundManager adapter.OutboundManager, tag string, options *option.SelectorOutboundOptions) error {
 	router := service.FromContext[adapter.Router](bs.ctx)
-
-	if err := outboundManager.Create(bs.ctx, router, bs.logFactory.NewLogger(tag), tag, constant.TypeSelector, options); err != nil {
+	logFactory := service.FromContext[log.Factory](bs.ctx)
+	if err := outboundManager.Create(bs.ctx, router, logFactory.NewLogger(tag), tag, constant.TypeSelector, options); err != nil {
 		return fmt.Errorf("create selector outbound: %w", err)
 	}
 
