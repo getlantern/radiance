@@ -8,8 +8,12 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/route"
+	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
@@ -239,9 +243,24 @@ func TestSelectCustomServer(t *testing.T) {
 	cfg, err := json.MarshalContext(ctx, boxoptions.BoxOptions)
 	require.NoError(t, err)
 	dataDir, err := os.MkdirTemp("", "")
-	bs, err := New(string(cfg), dataDir, nil, nil, log.NewNOPFactory())
+	logFactory := log.NewNOPFactory()
+	bs, err := New(string(cfg), dataDir, nil, nil, logFactory)
 	require.NoError(t, err)
 	require.NotNil(t, bs)
+
+	// add router to context
+	router, err := route.NewRouter(ctx, logFactory, option.RouteOptions{}, common.PtrValueOrDefault(options.DNS))
+	require.NoError(t, err)
+	service.ContextWithPtr(ctx, router)
+	service.ContextWithPtr(ctx, &logFactory)
+
+	// add outbound manager to context
+	endpointManager := endpoint.NewManager(logFactory.NewLogger("endpoint"), endpointRegistry)
+	outboundManager := outbound.NewManager(logFactory.NewLogger("outbound"), outboundRegistry, endpointManager, "")
+	service.MustRegister[adapter.EndpointManager](ctx, endpointManager)
+	service.MustRegister[adapter.OutboundManager](ctx, outboundManager)
+	service.MustRegister[log.Factory](ctx, logFactory)
+	bs.ctx = ctx
 
 	// If we're adding an endpoint with wireguard, a wireguard inbound is required
 	customConfig := `{
