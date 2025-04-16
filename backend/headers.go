@@ -16,15 +16,16 @@ import (
 
 const (
 	// Required common headers to send to the proxy server.
-	appVersionHeader        = "X-Lantern-App-Version"
-	versionHeader           = "X-Lantern-Version"
-	platformHeader          = "X-Lantern-Platform"
-	appNameHeader           = "X-Lantern-App"
-	deviceIDHeader          = "X-Lantern-Device-Id"
-	userIDHeader            = "X-Lantern-User-Id"
-	supportedDataCapsHeader = "X-Lantern-Supported-Data-Caps"
-	timeZoneHeader          = "X-Lantern-Time-Zone"
-	randomNoiseHeader       = "X-Lantern-Rand"
+	AppVersionHeader        = "X-Lantern-App-Version"
+	VersionHeader           = "X-Lantern-Version"
+	PlatformHeader          = "X-Lantern-Platform"
+	AppNameHeader           = "X-Lantern-App"
+	DeviceIDHeader          = "X-Lantern-Device-Id"
+	UserIDHeader            = "X-Lantern-User-Id"
+	SupportedDataCapsHeader = "X-Lantern-Supported-Data-Caps"
+	TimeZoneHeader          = "X-Lantern-Time-Zone"
+	RandomNoiseHeader       = "X-Lantern-Rand"
+	ProTokenHeader          = "X-Lantern-Pro-Token"
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
@@ -34,12 +35,12 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 		return nil, err
 	}
 	// add required headers. Currently, all but the auth token are placeholders.
-	req.Header.Set(appVersionHeader, app.ClientVersion)
-	req.Header.Set(versionHeader, app.Version)
-	req.Header.Set(userIDHeader, strconv.FormatInt(user.LegacyID(), 10))
-	req.Header.Set(platformHeader, app.Platform)
-	req.Header.Set(appNameHeader, app.Name)
-	req.Header.Set(deviceIDHeader, user.DeviceID())
+	req.Header.Set(AppVersionHeader, app.ClientVersion)
+	req.Header.Set(VersionHeader, app.Version)
+	req.Header.Set(UserIDHeader, strconv.FormatInt(user.LegacyID(), 10))
+	req.Header.Set(PlatformHeader, app.Platform)
+	req.Header.Set(AppNameHeader, app.Name)
+	req.Header.Set(DeviceIDHeader, user.DeviceID())
 	return req, nil
 }
 
@@ -53,16 +54,16 @@ func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, us
 	req.Header.Set("content-type", "application/x-protobuf")
 
 	// data caps
-	req.Header.Set(supportedDataCapsHeader, "monthly,weekly,daily")
+	req.Header.Set(SupportedDataCapsHeader, "monthly,weekly,daily")
 
 	// time zone
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
-		req.Header.Set(timeZoneHeader, tz)
+		req.Header.Set(TimeZoneHeader, tz)
 	}
 
 	// We include a random length string here to make it harder for censors to identify lantern
 	// based on consistent packet lengths.
-	req.Header.Add(randomNoiseHeader, randomizedString())
+	req.Header.Add(RandomNoiseHeader, randomizedString())
 
 	return req, nil
 }

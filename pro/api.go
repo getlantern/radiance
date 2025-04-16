@@ -5,21 +5,22 @@ import (
 	"log"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/user/protos"
 )
 
 type proClient struct {
 	common.WebClient
+	common.UserConfig
 }
 
 type ProClient interface {
 	//Payment methods
-	SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (*SubscriptionPaymentRedirectResponse, error)
-	UserCreate(ctx context.Context) (*user.UserResponse, error)
+	SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error)
+	UserCreate(ctx context.Context) (*protos.UserDataResponse, error)
 }
 
-func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (*SubscriptionPaymentRedirectResponse, error) {
-	var resp *SubscriptionPaymentRedirectResponse
+func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	var resp *protos.SubscriptionPaymentRedirectResponse
 	err := c.Get(ctx, "subscription-payment-redirect", map[string]any{
 		"provider":         "stripe",
 		"plan":             "1y-usd",
@@ -35,14 +36,28 @@ func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *Subsc
 	return resp, nil
 }
 
-func (c *proClient) UserCreate(ctx context.Context) (*user.UserResponse, error) {
-	var resp *user.UserResponse
+func (c *proClient) UserCreate(ctx context.Context) (*protos.UserDataResponse, error) {
+	var resp *protos.UserDataResponse
 	err := c.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		log.Fatalf("Error in UserCreate: %v", err)
 		return nil, err
 	}
 	log.Printf("UserCreate response: %v", resp)
+	// Store data
+	// login := &protos.LoginResponse{
+	// 	LegacyID:       resp.LoginResponse_UserData.UserId,
+	// 	LegacyToken:    resp.LoginResponse_UserData.Token,
+	// 	LegacyUserData: resp.LoginResponse_UserData,
+	// }
+	// /// Write user data to file
+
+	// // err = common.WriteUserData(login)
+
+	// // if err != nil {
+	// // 	log.Fatalf("Error writing user data: %v", err)
+	// // 	return nil, err
+	// // }
 	return resp, nil
 
 }

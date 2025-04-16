@@ -1,8 +1,4 @@
-package pro
-
-import (
-	"github.com/getlantern/radiance/user"
-)
+package protos
 
 type SubscriptionType string
 
@@ -25,6 +21,6 @@ type SubscriptionPaymentRedirectResponse struct {
 }
 
 type UserDataResponse struct {
-	*user.BaseResponse `json:",inline"`
-	*user.UserResponse `json:",inline"`
+	*BaseResponse           `json:",inline"`
+	*LoginResponse_UserData `json:",inline"`
 }

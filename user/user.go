@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/1Password/srp"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user/deviceid"
-	"google.golang.org/protobuf/proto"
+	"github.com/getlantern/radiance/user/protos"
 )
 
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
@@ -45,11 +44,6 @@ type Device struct {
 	Name string
 }
 
-var (
-	saltLocation     = ".salt" // TODO: we need to think about properly storing data. Right now both configFetcher and this module just dump things in the current directory. Instead there should be a 'data writer' that knows where to put things.
-	userDataLocation = ".userData"
-)
-
 type BaseUser interface {
 	DeviceID() string
 	LegacyID() int64
@@ -60,7 +54,7 @@ type BaseUser interface {
 // paid user with a full account.
 type User struct {
 	salt       []byte
-	userData   *LoginResponse
+	userData   *protos.LoginResponse
 	deviceId   string
 	authClient AuthClient
 }
@@ -83,44 +77,42 @@ func (u *User) LegacyToken() string {
 	return u.userData.LegacyToken
 }
 
-func writeUserData(data *LoginResponse) error {
-	return os.WriteFile(userDataLocation, []byte(data.String()), 0600)
-
-}
-
-func readUserData() (*LoginResponse, error) {
-	data, err := os.ReadFile(userDataLocation)
-	if err != nil {
-		return nil, err
-	}
-	var resp LoginResponse
-	if err := proto.Unmarshal(data, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
 func writeSalt(salt []byte) error {
-	return os.WriteFile(saltLocation, salt, 0600)
+	return common.WriteSalt(salt)
 }
-
 func readSalt() ([]byte, error) {
-	return os.ReadFile(saltLocation)
+	return common.ReadSalt()
+}
+func readUserData() (*protos.LoginResponse, error) {
+	return common.ReadUserData()
+}
+func writeUserData(userData *protos.LoginResponse) error {
+	return common.WriteUserData(userData)
 }
 
 // New returns the object handling anything user-account related
-func New(httpClient *http.Client) *User {
+// Device ID is optional. for macos, linux, and windows
+// Device id mendatory for android and ios
+func New(httpClient *http.Client, deviceId string) *User {
 	salt, _ := readSalt()
 	userData, _ := readUserData()
 	opts := common.Opts{
 		HttpClient: httpClient,
 		BaseURL:    common.APIBaseUrl,
 	}
+
+	var platformDeviceId string
+	if common.IsAndoid() || common.IsIOS() {
+		platformDeviceId = deviceId
+	} else {
+		platformDeviceId = deviceid.Get()
+	}
+
 	return &User{
 		authClient: &authClient{common.NewWebClient(&opts)},
 		salt:       salt,
 		userData:   userData,
-		deviceId:   deviceid.Get(),
+		deviceId:   platformDeviceId,
 	}
 }
 
@@ -172,7 +164,7 @@ func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
 	if u.salt == nil {
 		return ErrNoSalt
 	}
-	return u.authClient.SignupEmailResendCode(ctx, &SignupEmailResendRequest{
+	return u.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
 		Email: email,
 		Salt:  u.salt,
 	})
@@ -180,7 +172,7 @@ func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
 
 // SignupEmailConfirmation confirms the new account using the sign-up code received via email.
 func (u *User) SignupEmailConfirmation(ctx context.Context, email, code string) error {
-	return u.authClient.SignupEmailConfirmation(ctx, &ConfirmSignupRequest{
+	return u.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -218,7 +210,7 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (u *User) Logout(ctx context.Context) error {
-	return u.authClient.SignOut(ctx, &LogoutRequest{
+	return u.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        u.userData.Id,
 		DeviceId:     u.deviceId,
 		LegacyUserID: u.userData.LegacyID,
@@ -228,7 +220,7 @@ func (u *User) Logout(ctx context.Context) error {
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
 func (u *User) StartRecoveryByEmail(ctx context.Context, email string) error {
-	return u.authClient.StartRecoveryByEmail(ctx, &StartRecoveryByEmailRequest{
+	return u.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
 	})
 }
@@ -249,7 +241,7 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 		return err
 	}
 
-	err = u.authClient.CompleteRecoveryByEmail(ctx, &CompleteRecoveryByEmailRequest{
+	err = u.authClient.CompleteRecoveryByEmail(ctx, &protos.CompleteRecoveryByEmailRequest{
 		Email:       email,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -263,7 +255,7 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 
 // ValidateEmailRecoveryCode validates the recovery code received via email.
 func (u *User) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
-	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &ValidateRecoveryCodeRequest{
+	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -301,7 +293,7 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 	A := client.EphemeralPublic()
 
 	//Create body
-	prepareRequestBody := &PrepareRequest{
+	prepareRequestBody := &protos.PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -333,7 +325,7 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 		return fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
 
-	changeEmailRequestBody := &ChangeEmailRequest{
+	changeEmailRequestBody := &protos.ChangeEmailRequest{
 		OldEmail: lowerCaseEmail,
 		NewEmail: lowerCaseNewEmail,
 		Proof:    clientProof,
@@ -361,7 +353,7 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 		return err
 	}
 
-	if err := u.authClient.CompleteChangeEmail(ctx, &CompleteChangeEmailRequest{
+	if err := u.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
 		OldEmail:    u.userData.Id,
 		NewEmail:    newEmail,
 		Code:        code,
@@ -405,7 +397,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	A := client.EphemeralPublic()
 
 	//Create body
-	prepareRequestBody := &PrepareRequest{
+	prepareRequestBody := &protos.PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -437,7 +429,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		return fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
 
-	changeEmailRequestBody := &DeleteUserRequest{
+	changeEmailRequestBody := &protos.DeleteUserRequest{
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,

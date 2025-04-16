@@ -5,41 +5,31 @@ import (
 	"net/http"
 
 	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/user/protos"
 	"github.com/go-resty/resty/v2"
 )
 
 // Pro represents pro server apis
 type Pro struct {
-	proClient ProClient
-	headers   *HeaderStore
-}
-type HeaderStore struct {
-	Token    string
-	UserID   string
-	DeviceID string
+	proClient  ProClient
+	userconfig common.UserConfig
 }
 
 // New returns the object handling anything user-account related
-func New(httpClient *http.Client, deviceId string) *Pro {
-	headerStore := &HeaderStore{
-		DeviceID: deviceId,
-	}
+func New(httpClient *http.Client, userConfig common.UserConfig) *Pro {
 	opts := common.Opts{
 		HttpClient: httpClient,
 		BaseURL:    common.ProServerUrl,
 		OnBeforeRequest: func(client *resty.Client, req *http.Request) error {
 			// Add any headers or modifications to the request here
-			req.Header.Set(common.AppHeader, app.Name)
-			req.Header.Set(common.Version, app.Version)
-			req.Header.Set(common.PlatformHeader, app.Platform)
-			req.Header.Set(common.DeviceIdHeader, headerStore.DeviceID)
-			if headerStore.Token != "" {
-				req.Header.Set(common.TokenHeader, headerStore.Token)
-			}
-			if headerStore.UserID != "" {
-				req.Header.Set(common.UserIdHeader, headerStore.UserID)
+			req.Header.Set(backend.AppNameHeader, app.Name)
+			req.Header.Set(backend.VersionHeader, app.Version)
+			req.Header.Set(backend.PlatformHeader, app.Platform)
+			req.Header.Set(backend.DeviceIDHeader, userConfig.DeviceID())
+			if userConfig.LegacyToken() != "" {
+				req.Header.Set(backend.ProTokenHeader, userConfig.LegacyToken())
 			}
 
 			return nil
@@ -49,21 +39,17 @@ func New(httpClient *http.Client, deviceId string) *Pro {
 		proClient: &proClient{
 			WebClient: common.NewWebClient(&opts),
 		},
-		headers: headerStore,
+		userconfig: userConfig,
 	}
 }
 
-func (p *Pro) SetHeaders(token, userID string) {
-	p.headers.Token = token
-	p.headers.UserID = userID
-}
-
 // Create a new user account
-func (u *Pro) UserCreate(ctx context.Context) (*user.UserResponse, error) {
+func (u *Pro) UserCreate(ctx context.Context) (*protos.UserDataResponse, error) {
 	return u.proClient.UserCreate(ctx)
+
 }
 
 // SignUpEmailResendCode requests that the sign-up code be resent via email.
-func (u *Pro) SubscriptionPaymentRedirect(ctx context.Context, data *SubscriptionPaymentRedirectRequest) (*SubscriptionPaymentRedirectResponse, error) {
+func (u *Pro) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	return u.proClient.SubscriptionPaymentRedirect(ctx, data)
 }

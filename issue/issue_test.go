@@ -18,7 +18,7 @@ func TestSendReport(t *testing.T) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	u := user.New(k.NewHTTPClient())
+	u := user.New(k.NewHTTPClient(), "")
 	reporter, err := NewIssueReporter(k.NewHTTPClient(), u)
 	require.NoError(t, err)
 	// Grab a temporary directory

@@ -23,6 +23,7 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -116,8 +117,9 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	u := user.New(k.NewHTTPClient())
-	pro := pro.New(k.NewHTTPClient(),opts.DeviceID)
+	userConfig, err := common.NewUserConfig(opts.DeviceID)
+	u := user.New(k.NewHTTPClient(), opts.DeviceID)
+	pro := pro.New(k.NewHTTPClient(), userConfig)
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)

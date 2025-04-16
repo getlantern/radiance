@@ -6,11 +6,12 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSubscriptionPaymentRedirect(t *testing.T) {
-	proServer := New(&http.Client{}, "test-device-id")
+	proServer := New(&http.Client{}, nil)
 	resp, error := proServer.SubscriptionPaymentRedirect(context.Background(), nil)
 	assert.NoError(t, error)
 	assert.NotNil(t, resp.Redirect)
@@ -18,7 +19,8 @@ func TestSubscriptionPaymentRedirect(t *testing.T) {
 }
 
 func TestCreateUser(t *testing.T) {
-	proServer := New(&http.Client{}, "test-device-id")
+	userConfig, _ := common.NewUserConfig("HFJDFJ-75885F")
+	proServer := New(&http.Client{}, userConfig)
 	resp, error := proServer.UserCreate(context.Background())
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
