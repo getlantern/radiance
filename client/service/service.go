@@ -12,8 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -58,10 +58,10 @@ type BoxService struct {
 const CustomSelectorTag = "custom_selector"
 
 type customServers struct {
-	CustomServers []customServer `json:"custom_servers"`
+	CustomServers []CustomServerInfo `json:"custom_servers"`
 }
 
-type customServer struct {
+type CustomServerInfo struct {
 	Tag     string         `json:"tag"`
 	Options option.Options `json:"options"`
 }
@@ -259,6 +259,15 @@ func (bs *BoxService) AddCustomServer(tag string, cfg ServerConnectConfig) error
 	return nil
 }
 
+func (bs *BoxService) ListCustomServers() ([]CustomServerInfo, error) {
+	loadedServers, err := bs.loadCustomServer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load custom servers: %w", err)
+	}
+
+	return loadedServers.CustomServers, nil
+}
+
 // storeCustomServer stores the custom server configuration to a JSON file.
 func (bs *BoxService) storeCustomServer(tag string, options option.Options) error {
 	servers, err := bs.loadCustomServer()
@@ -267,8 +276,8 @@ func (bs *BoxService) storeCustomServer(tag string, options option.Options) erro
 	}
 
 	if len(servers.CustomServers) == 0 {
-		servers.CustomServers = make([]customServer, 0)
-		servers.CustomServers = append(servers.CustomServers, customServer{
+		servers.CustomServers = make([]CustomServerInfo, 0)
+		servers.CustomServers = append(servers.CustomServers, CustomServerInfo{
 			Tag:     tag,
 			Options: options,
 		})
