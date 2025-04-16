@@ -168,7 +168,7 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 // Pause pauses the VPN client for the specified duration
 func (c *vpnClient) PauseVPN(dur time.Duration) error {
 	slog.Info("Pausing VPN for", "duration", dur)
-	return c.boxService.PauseVPN(dur)
+	return c.boxService.Pause(dur)
 }
 
 // Resume resumes the VPN client
