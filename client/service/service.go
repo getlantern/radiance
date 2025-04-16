@@ -340,6 +340,10 @@ func (bs *BoxService) RemoveCustomServer(tag string) error {
 	endpointManager := service.FromContext[adapter.EndpointManager](bs.ctx)
 
 	options := bs.customServers[tag]
+	// selector must be removed in order to remove dependent outbounds
+	if err := outboundManager.Remove(CustomSelectorTag); err != nil {
+		return fmt.Errorf("failed to remove selector outbound: %w", err)
+	}
 	for _, outbounds := range options.Outbounds {
 		if err := outboundManager.Remove(outbounds.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
 			return fmt.Errorf("failed to remove %q outbound: %w", tag, err)
@@ -365,21 +369,22 @@ func (bs *BoxService) RemoveCustomServer(tag string) error {
 func (bs *BoxService) SelectCustomServer(tag string) error {
 	outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
 	outbounds := outboundManager.Outbounds()
-	tags := make([]string, len(outbounds)-1)
-	for i, outbound := range outbounds {
+	tags := make([]string, 0)
+	for _, outbound := range outbounds {
 		// ignoring selector because it'll be removed and re-added with the new tags
 		if outbound.Tag() == CustomSelectorTag {
 			continue
 		}
-		tags[i] = outbound.Tag()
+		tags = append(tags, outbound.Tag())
 	}
 
-	// removing custom selector for re-adding with new fresh outbound tags
-	if err := outboundManager.Remove(CustomSelectorTag); err != nil {
-		return fmt.Errorf("failed to remove selector outbound: %w", err)
+	if _, exists := outboundManager.Outbound(CustomSelectorTag); exists {
+		if err := outboundManager.Remove(CustomSelectorTag); err != nil {
+			return fmt.Errorf("failed to remove selector outbound: %w", err)
+		}
 	}
 
-	err := bs.newSelectorOutbound(outboundManager, CustomSelectorTag, option.SelectorOutboundOptions{
+	err := bs.newSelectorOutbound(outboundManager, CustomSelectorTag, &option.SelectorOutboundOptions{
 		Outbounds:                 tags,
 		Default:                   tag,
 		InterruptExistConnections: true,
