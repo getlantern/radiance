@@ -3,8 +3,10 @@ package common
 // this file contains the user config interface and the methods to read and write user data
 // use this acrosss the app to read and write user data in sync
 import (
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/getlantern/radiance/user/protos"
 	"google.golang.org/protobuf/proto"
@@ -15,11 +17,13 @@ type UserConfig interface {
 	DeviceID() string
 	LegacyID() int64
 	LegacyToken() string
+	Save(*protos.LoginResponse) error
 }
 
 type userConfig struct {
 	deviceID string
 	resp     *protos.LoginResponse
+	dataDir  string
 }
 
 var (
@@ -28,9 +32,9 @@ var (
 	activeConfig     *userConfig
 )
 
-func NewUserConfig(deviceID string) (UserConfig, error) {
-	resp, _ := ReadUserData()
-	u := &userConfig{deviceID: deviceID, resp: resp}
+func NewUserConfig(deviceID, dataDir string) (UserConfig, error) {
+	resp, _ := ReadUserData(dataDir)
+	u := &userConfig{deviceID: deviceID, resp: resp, dataDir: dataDir}
 	activeConfig = u
 	return u, nil
 }
@@ -53,6 +57,19 @@ func (u *userConfig) LegacyToken() string {
 	return ""
 }
 
+func (u *userConfig) Save(data *protos.LoginResponse) error {
+	log.Printf("Saving user data to %s", filepath.Join(u.dataDir, "userData"))
+	bytes, err := proto.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal user data: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(u.dataDir, "userData"), bytes, 0600); err != nil {
+		return fmt.Errorf("failed to write user data: %w", err)
+	}
+	u.resp = data
+	return nil
+}
+
 func WriteUserData(data *protos.LoginResponse) error {
 	activeConfig.resp = data
 	bytes, err := proto.Marshal(data)
@@ -63,8 +80,8 @@ func WriteUserData(data *protos.LoginResponse) error {
 
 }
 
-func ReadUserData() (*protos.LoginResponse, error) {
-	data, err := os.ReadFile(userDataLocation)
+func ReadUserData(dataDir string) (*protos.LoginResponse, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, "userData"))
 	if err != nil {
 		return nil, err
 	}

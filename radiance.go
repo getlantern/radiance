@@ -62,8 +62,9 @@ type Radiance struct {
 	activeServer *atomic.Value
 	stopChan     chan struct{}
 
-	user *user.User
-	pro  *pro.Pro
+	user       *user.User
+	pro        *pro.Pro
+	userConfig common.UserConfig
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
@@ -117,7 +118,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	userConfig, err := common.NewUserConfig(opts.DeviceID)
+	userConfig, err := common.NewUserConfig(opts.DeviceID, opts.DataDir)
 	u := user.New(k.NewHTTPClient(), opts.DeviceID)
 	pro := pro.New(k.NewHTTPClient(), userConfig)
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
@@ -134,6 +135,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		user:          u,
 		pro:           pro,
+		userConfig:    userConfig,
 		issueReporter: issueReporter,
 		logsDir:       logDir,
 		shutdownFuncs: shutdownFuncs,
@@ -195,6 +197,11 @@ func (r *Radiance) User() *user.User {
 // Pro returns the pro object for this client
 func (r *Radiance) Pro() *pro.Pro {
 	return r.pro
+}
+
+// Pro returns the pro object for this client
+func (r *Radiance) UserConfig() *common.UserConfig {
+	return &r.userConfig
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

@@ -43,21 +43,17 @@ func (c *proClient) UserCreate(ctx context.Context) (*protos.UserDataResponse, e
 		log.Fatalf("Error in UserCreate: %v", err)
 		return nil, err
 	}
-	log.Printf("UserCreate response: %v", resp)
-	// Store data
-	// login := &protos.LoginResponse{
-	// 	LegacyID:       resp.LoginResponse_UserData.UserId,
-	// 	LegacyToken:    resp.LoginResponse_UserData.Token,
-	// 	LegacyUserData: resp.LoginResponse_UserData,
-	// }
-	// /// Write user data to file
-
-	// // err = common.WriteUserData(login)
-
-	// // if err != nil {
-	// // 	log.Fatalf("Error writing user data: %v", err)
-	// // 	return nil, err
-	// // }
+	login := &protos.LoginResponse{
+		LegacyID:       resp.LoginResponse_UserData.UserId,
+		LegacyToken:    resp.LoginResponse_UserData.Token,
+		LegacyUserData: resp.LoginResponse_UserData,
+	}
+	/// Write user data to file
+	err = c.UserConfig.Save(login)
+	if err != nil {
+		log.Fatalf("Error writing user data: %v", err)
+		return nil, err
+	}
 	return resp, nil
 
 }

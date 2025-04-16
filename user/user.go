@@ -84,7 +84,7 @@ func readSalt() ([]byte, error) {
 	return common.ReadSalt()
 }
 func readUserData() (*protos.LoginResponse, error) {
-	return common.ReadUserData()
+	return nil, nil
 }
 func writeUserData(userData *protos.LoginResponse) error {
 	return common.WriteUserData(userData)

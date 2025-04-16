@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 	"unicode"
 
@@ -183,6 +184,8 @@ func (c *webClient) Post(ctx context.Context, path string, params map[string]any
 	}
 
 	body := sanitizeResponseBody(resp.Body())
+	slog.Info("Post response", "body", string(body), "url", resp.Request.URL)
+
 	return json.Unmarshal(body, target)
 }
 

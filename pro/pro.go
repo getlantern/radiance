@@ -3,6 +3,7 @@ package pro
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -13,8 +14,7 @@ import (
 
 // Pro represents pro server apis
 type Pro struct {
-	proClient  ProClient
-	userconfig common.UserConfig
+	proClient ProClient
 }
 
 // New returns the object handling anything user-account related
@@ -31,15 +31,18 @@ func New(httpClient *http.Client, userConfig common.UserConfig) *Pro {
 			if userConfig.LegacyToken() != "" {
 				req.Header.Set(backend.ProTokenHeader, userConfig.LegacyToken())
 			}
+			if userConfig.LegacyID() != 0 {
+				req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userConfig.LegacyID(), 10))
+			}
 
 			return nil
 		},
 	}
 	return &Pro{
 		proClient: &proClient{
-			WebClient: common.NewWebClient(&opts),
+			WebClient:  common.NewWebClient(&opts),
+			UserConfig: userConfig,
 		},
-		userconfig: userConfig,
 	}
 }
 
