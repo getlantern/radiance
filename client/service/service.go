@@ -176,9 +176,9 @@ func (bs *BoxService) Close() error {
 	return nil
 }
 
-// PauseVPN pauses the network for the specified duration. An error is returned if the network is
+// Pause pauses the network for the specified duration. An error is returned if the network is
 // already paused
-func (bs *BoxService) PauseVPN(dur time.Duration) error {
+func (bs *BoxService) Pause(dur time.Duration) error {
 	bs.pauseAccess.Lock()
 	defer bs.pauseAccess.Unlock()
 
