@@ -184,7 +184,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	if err = settingWGPrivateKeyAtConfig(cfg, privateKey); err != nil {
+	if err = settingWGPrivateKeyInConfig(cfg, privateKey); err != nil {
 		slog.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
@@ -194,7 +194,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	return nil
 }
 
-func settingWGPrivateKeyAtConfig(cfg *Config, privateKey wgtypes.Key) error {
+func settingWGPrivateKeyInConfig(cfg *Config, privateKey wgtypes.Key) error {
 	for _, endpoint := range cfg.ConfigResponse.Options.Endpoints {
 		if endpoint.Type == constant.TypeWireGuard {
 			options, ok := endpoint.Options.(*option.WireGuardEndpointOptions)
