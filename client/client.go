@@ -25,7 +25,7 @@ import (
 var (
 	client   *vpnClient
 	clientMu sync.Mutex
-	serverMu sync.Mutex
+	statusMu sync.Mutex
 )
 
 type Options struct {
@@ -151,8 +151,8 @@ func (c *vpnClient) ConnectionStatus() bool {
 }
 
 func (c *vpnClient) setConnectionStatus(connected bool) {
-	serverMu.Lock()
-	defer serverMu.Unlock()
+	statusMu.Lock()
+	defer statusMu.Unlock()
 	c.connected = connected
 }
 
