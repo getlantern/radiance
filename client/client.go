@@ -12,6 +12,7 @@ import (
 
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
@@ -43,6 +44,9 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
+	AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error
+	SelectCustomServer(tag string) error
+	RemoveCustomServer(tag string) error
 	OnNewConfig(oldConfig, newConfig *config.Config) error
 	ParseConfig(config []byte) (*config.Config, error)
 }
@@ -70,30 +74,38 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
+	logFactory, err := log.New(log.Options{
+		Options: *boxOpts.Log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log factory: %w", err)
+	}
+
 	rsMgr := ruleset.NewManager()
-	splitTun, stRule, stRuleset, err := initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
+	tunnel, err := initTunnel(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
+
 	// inject split tunnel routing rule and ruleset into the routing table
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
 	// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
 	// index 1
-	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{*stRule}, []option.RuleSet{*stRuleset})
+	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{tunnel.ruleOption, ruleset.BaseRouteRule(CustomServerTag, boxservice.CustomSelectorTag)}, []option.RuleSet{tunnel.rulesetOption})
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
+	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr, logFactory)
 	if err != nil {
 		return nil, err
 	}
 
 	client = &vpnClient{
 		boxService:         b,
-		splitTunnelHandler: splitTun,
+		splitTunnelHandler: tunnel.mutableRuleSet,
 	}
 	return client, nil
 }
@@ -168,33 +180,56 @@ func (c *vpnClient) ResumeVPN() {
 	c.boxService.Wake()
 }
 
+func (c *vpnClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return c.boxService.AddCustomServer(tag, cfg)
+}
+
+func (c *vpnClient) SelectCustomServer(tag string) error {
+	return c.boxService.SelectCustomServer(tag)
+}
+
+func (c *vpnClient) RemoveCustomServer(tag string) error {
+	return c.boxService.RemoveCustomServer(tag)
+}
+
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
 	return c.splitTunnelHandler
 }
 
 const (
-	SplitTunnelTag    = "split-tunnel"
-	SplitTunnelFormat = constant.RuleSetFormatSource // file will be saved as json
+	SplitTunnelTag     = "split-tunnel"
+	SplitTunnelFormat  = constant.RuleSetFormatSource // file will be saved as json
+	CustomServerTag    = "custom-server"
+	CustomServerFormat = constant.RuleSetFormatSource // file will be saved as json
 )
 
 type SplitTunnel = ruleset.MutableRuleSet
+type CustomServer = ruleset.MutableRuleSet
 
-// initSplitTunnel initializes the split tunnel ruleset handler. It retrieves an existing mutable
-// ruleset associated with the SplitTunnelTag or creates a new one if it doesn't exist. dataDir is
-// the directory where the ruleset data is stored. The initial state is determined by the enabled
-// parameter.
-func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*SplitTunnel, *option.Rule, *option.RuleSet, error) {
-	rs := mgr.MutableRuleSet(SplitTunnelTag)
+type tunnel struct {
+	mutableRuleSet *ruleset.MutableRuleSet
+	ruleOption     option.Rule
+	rulesetOption  option.RuleSet
+}
+
+// initTunnel initializes the ruleset handler. It retrieves an existing mutable
+// ruleset associated with the provided tag or cerates a new one if it doesn't
+// exist. dataDir is the directory where the ruleset data is stored. The initial
+// state is determined by the enabled parameter.
+func initTunnel(dataDir, tag, format string, mgr *ruleset.Manager, enabled bool) (tunnel, error) {
+	rs := mgr.MutableRuleSet(tag)
 	if rs == nil {
 		var err error
-		rs, err = mgr.NewMutableRuleSet(dataDir, SplitTunnelTag, SplitTunnelFormat, enabled)
+		rs, err = mgr.NewMutableRuleSet(dataDir, tag, format, enabled)
 		if err != nil {
-			return nil, nil, nil, err
+			return tunnel{}, err
 		}
 	}
-	rRule := ruleset.BaseRouteRule(SplitTunnelTag, "direct")
-	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, rs.RuleFilePath(), SplitTunnelFormat)
-	return rs, &rRule, &rRuleset, nil
+	return tunnel{
+		mutableRuleSet: rs,
+		ruleOption:     ruleset.BaseRouteRule(tag, "direct"),
+		rulesetOption:  ruleset.LocalRuleSet(tag, rs.RuleFilePath(), format),
+	}, nil
 }
 
 // injectRouteRules injects the given rules and rulesets into routeOpts. atIdx specifies the index

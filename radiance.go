@@ -23,6 +23,7 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -66,6 +67,9 @@ type Radiance struct {
 	logsDir       string
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
+
+	configuredServersMutex sync.Locker
+	configuredServers      map[string]boxservice.ServerConnectConfig
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -129,8 +133,12 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
-		logsDir:       logDir,
-		shutdownFuncs: shutdownFuncs,
+		// TODO: after we start to persist data, we should update this implementation
+		// for loading the configured servers and also the custom servers
+		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
+		configuredServersMutex: new(sync.Mutex),
+		logsDir:                logDir,
+		shutdownFuncs:          shutdownFuncs,
 	}, nil
 }
 
@@ -299,6 +307,18 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
 	), nil
+}
+
+func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+	return r.VPNClient.AddCustomServer(tag, cfg)
+}
+
+func (r *Radiance) SelectCustomServer(tag string) error {
+	return r.VPNClient.SelectCustomServer(tag)
+}
+
+func (r *Radiance) RemoveCustomServer(tag string) error {
+	return r.VPNClient.RemoveCustomServer(tag)
 }
 
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.
