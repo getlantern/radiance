@@ -23,12 +23,13 @@ type ProClient interface {
 
 func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	var resp *protos.SubscriptionPaymentRedirectResponse
+
 	err := c.Get(ctx, "subscription-payment-redirect", map[string]any{
-		"provider":         "stripe",
-		"plan":             "1y-usd",
-		"deviceName":       "test",
-		"email":            "jigar+test2@getlantern.org",
-		"subscriptionType": "monthly",
+		"provider":         data.Provider,
+		"plan":             data.Plan,
+		"deviceName":       data.DeviceName,
+		"email":            data.Email,
+		"subscriptionType": data.SubscriptionType,
 	}, &resp)
 	if err != nil {
 		log.Fatalf("Error in SubscriptionPaymentRedirect: %v", err)
