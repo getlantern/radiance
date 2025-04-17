@@ -24,3 +24,15 @@ type UserDataResponse struct {
 	*BaseResponse           `json:",inline"`
 	*LoginResponse_UserData `json:",inline"`
 }
+
+type SubscriptionRequest struct {
+	Email   string `json:"email" validate:"required"`
+	Name    string `json:"name" validate:"required"`
+	PriceId string `json:"priceId" validate:"required"`
+}
+
+type SubscriptionResponse struct {
+	CustomerId     string `json:"customerId"`
+	SubscriptionId string `json:"subscriptionId"`
+	ClientSecret   string `json:"clientSecret"`
+}

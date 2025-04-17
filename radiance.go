@@ -30,6 +30,7 @@ import (
 	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/pro"
 	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/user/deviceid"
 )
 
 var log *slog.Logger
@@ -118,7 +119,13 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	userConfig, err := common.NewUserConfig(opts.DeviceID, opts.DataDir)
+	var platformDeviceId string
+	if common.IsAndoid() || common.IsIOS() {
+		platformDeviceId = opts.DeviceID
+	} else {
+		platformDeviceId = deviceid.Get()
+	}
+	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir)
 	u := user.New(k.NewHTTPClient(), opts.DeviceID)
 	pro := pro.New(k.NewHTTPClient(), userConfig)
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
@@ -196,12 +203,13 @@ func (r *Radiance) User() *user.User {
 
 // Pro returns the pro object for this client
 func (r *Radiance) Pro() *pro.Pro {
+
 	return r.pro
 }
 
 // Pro returns the pro object for this client
-func (r *Radiance) UserConfig() *common.UserConfig {
-	return &r.userConfig
+func (r *Radiance) UserConfig() common.UserConfig {
+	return r.userConfig
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

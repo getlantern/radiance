@@ -32,11 +32,11 @@ var (
 	activeConfig     *userConfig
 )
 
-func NewUserConfig(deviceID, dataDir string) (UserConfig, error) {
+func NewUserConfig(deviceID, dataDir string) UserConfig {
 	resp, _ := ReadUserData(dataDir)
 	u := &userConfig{deviceID: deviceID, resp: resp, dataDir: dataDir}
 	activeConfig = u
-	return u, nil
+	return u
 }
 
 func (u *userConfig) DeviceID() string {
@@ -58,12 +58,13 @@ func (u *userConfig) LegacyToken() string {
 }
 
 func (u *userConfig) Save(data *protos.LoginResponse) error {
-	log.Printf("Saving user data to %s", filepath.Join(u.dataDir, "userData"))
+	savePath := filepath.Join(u.dataDir, userDataLocation)
+	log.Printf("Saving user data to %s", savePath)
 	bytes, err := proto.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal user data: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(u.dataDir, "userData"), bytes, 0600); err != nil {
+	if err := os.WriteFile(savePath, bytes, 0600); err != nil {
 		return fmt.Errorf("failed to write user data: %w", err)
 	}
 	u.resp = data
@@ -81,7 +82,8 @@ func WriteUserData(data *protos.LoginResponse) error {
 }
 
 func ReadUserData(dataDir string) (*protos.LoginResponse, error) {
-	data, err := os.ReadFile(filepath.Join(dataDir, "userData"))
+	readPath := filepath.Join(dataDir, userDataLocation)
+	data, err := os.ReadFile(readPath)
 	if err != nil {
 		return nil, err
 	}

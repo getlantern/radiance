@@ -2,6 +2,7 @@ package pro
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -52,7 +53,19 @@ func (u *Pro) UserCreate(ctx context.Context) (*protos.UserDataResponse, error) 
 
 }
 
-// SignUpEmailResendCode requests that the sign-up code be resent via email.
+// SubscriptionPaymentRedirect creates a new subscription with url
 func (u *Pro) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	return u.proClient.SubscriptionPaymentRedirect(ctx, data)
+}
+
+// StripeSubscription creates a new subscription using Stripe SDK
+// For Android only
+func (u *Pro) StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error) {
+	slog.Debug("StripeSubscription", "data", data)
+	resp, err := u.proClient.StripeSubscription(ctx, data)
+	if err != nil {
+		slog.Error("Error in StripeSubscription", "error", err)
+		return nil, err
+	}
+	return resp, nil
 }
