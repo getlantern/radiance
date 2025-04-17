@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"dario.cat/mergo"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/option"
 	"github.com/getlantern/radiance/user"
 
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing/common/json"
 )
 
@@ -157,7 +160,12 @@ func (ch *ConfigHandler) fetchConfig() error {
 	} else {
 		preferredServerLocation = oldConfig.PreferredLocation
 	}
-	resp, err := ch.ftr.fetchConfig(preferredServerLocation)
+	privateKey, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		return fmt.Errorf("failed to generate wg keys: %w", err)
+	}
+
+	resp, err := ch.ftr.fetchConfig(preferredServerLocation, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -172,14 +180,30 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
 	cfg, err := ch.configParser(resp)
-
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	if err = settingWGPrivateKeyAtConfig(cfg, privateKey); err != nil {
+		slog.Error("failed to replace private key", "error", err)
+		return fmt.Errorf("setting wireguard private key: %w", err)
+	}
 	ch.setConfigAndNotify(cfg)
 
 	slog.Debug("Config fetched")
+	return nil
+}
+
+func settingWGPrivateKeyAtConfig(cfg *Config, privateKey wgtypes.Key) error {
+	for _, endpoint := range cfg.ConfigResponse.Options.Endpoints {
+		if endpoint.Type == constant.TypeWireGuard {
+			options, ok := endpoint.Options.(*option.WireGuardEndpointOptions)
+			if !ok {
+				return fmt.Errorf("invalid wireguard endpoint options")
+			}
+			options.PrivateKey = privateKey.String()
+		}
+	}
 	return nil
 }
 
