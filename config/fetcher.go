@@ -18,7 +18,7 @@ import (
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
 )
 
 const configURL = "https://api.iantem.io/v1/config"
@@ -26,12 +26,12 @@ const configURL = "https://api.iantem.io/v1/config"
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
-	user         user.BaseUser
+	user         common.UserConfig
 	lastModified time.Time
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user user.BaseUser) *fetcher {
+func newFetcher(client *http.Client, user common.UserConfig) *fetcher {
 	return &fetcher{
 		httpClient: client,
 		user:       user,

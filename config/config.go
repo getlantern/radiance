@@ -18,7 +18,6 @@ import (
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user"
 
 	"github.com/sagernet/sing/common/json"
 )
@@ -64,15 +63,19 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user user.BaseUser, dataDir string,
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user common.UserConfig, dataDir string,
 	configParser Unmarshaller) *ConfigHandler {
 	configPath := filepath.Join(dataDir, configFileName)
+	opts := common.Opts{
+		BaseURL:    "",
+		HttpClient: httpClient}
+
 	ch := &ConfigHandler{
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
 		closeOnce:       &sync.Once{},
 		configPath:      configPath,
-		apiClient:       common.NewWebClient(httpClient),
+		apiClient:       common.NewWebClient(&opts),
 		configListeners: make([]ListenerFunc, 0),
 		configParser:    configParser,
 	}

@@ -23,11 +23,14 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/metrics"
+	"github.com/getlantern/radiance/pro"
 	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/user/deviceid"
 )
 
 var log *slog.Logger
@@ -60,7 +63,9 @@ type Radiance struct {
 	activeServer *atomic.Value
 	stopChan     chan struct{}
 
-	user *user.User
+	user       *user.User
+	pro        *pro.Pro
+	userConfig common.UserConfig
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
@@ -114,12 +119,20 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	u := user.New(k.NewHTTPClient())
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
+	var platformDeviceId string
+	if common.IsAndoid() || common.IsIOS() {
+		platformDeviceId = opts.DeviceID
+	} else {
+		platformDeviceId = deviceid.Get()
+	}
+	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir)
+	u := user.New(k.NewHTTPClient(), userConfig)
+	pro := pro.New(k.NewHTTPClient(), userConfig)
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath, vpnC.ParseConfig)
+	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), userConfig, dataDirPath, vpnC.ParseConfig)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
@@ -128,6 +141,8 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
 		user:          u,
+		pro:           pro,
+		userConfig:    userConfig,
 		issueReporter: issueReporter,
 		logsDir:       logDir,
 		shutdownFuncs: shutdownFuncs,
@@ -184,6 +199,17 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 // User returns the user object for this client
 func (r *Radiance) User() *user.User {
 	return r.user
+}
+
+// Pro returns the pro object for this client
+func (r *Radiance) Pro() *pro.Pro {
+
+	return r.pro
+}
+
+// Pro returns the pro object for this client
+func (r *Radiance) UserConfig() common.UserConfig {
+	return r.userConfig
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

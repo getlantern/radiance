@@ -32,6 +32,7 @@ type Options struct {
 	DataDir  string
 	LogDir   string
 	PlatIfce libbox.PlatformInterface
+	DeviceID string
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
 }
