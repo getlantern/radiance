@@ -115,6 +115,7 @@ func (c *vpnClient) StartVPN() error {
 	}
 
 	c.started = true
+	c.setConnectionStatus(true)
 	return nil
 }
 
@@ -137,6 +138,7 @@ func (c *vpnClient) StopVPN() error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return errors.New("box did not stop in time")
 	}
+	c.setConnectionStatus(false)
 	return err
 }
 
@@ -148,8 +150,6 @@ func (c *vpnClient) ConnectionStatus() bool {
 }
 
 func (c *vpnClient) setConnectionStatus(connected bool) {
-	clientMu.Lock()
-	defer clientMu.Unlock()
 	c.connected = connected
 }
 
