@@ -126,13 +126,13 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		platformDeviceId = deviceid.Get()
 	}
 	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir)
-	u := user.New(k.NewHTTPClient(), opts.DeviceID)
+	u := user.New(k.NewHTTPClient(), userConfig)
 	pro := pro.New(k.NewHTTPClient(), userConfig)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u)
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, dataDirPath, vpnC.ParseConfig)
+	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), userConfig, dataDirPath, vpnC.ParseConfig)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{

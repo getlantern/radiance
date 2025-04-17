@@ -11,7 +11,6 @@ import (
 
 	"github.com/1Password/srp"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/deviceid"
 	"github.com/getlantern/radiance/user/protos"
 )
 
@@ -44,12 +43,6 @@ type Device struct {
 	Name string
 }
 
-type BaseUser interface {
-	DeviceID() string
-	LegacyID() int64
-	LegacyToken() string
-}
-
 // User represents a user account. This may be a free user, associated only with this device or a
 // paid user with a full account.
 type User struct {
@@ -57,62 +50,26 @@ type User struct {
 	userData   *protos.LoginResponse
 	deviceId   string
 	authClient AuthClient
-}
-
-func (u *User) DeviceID() string {
-	return u.deviceId
-}
-
-func (u *User) LegacyID() int64 {
-	if u.userData == nil {
-		return 0
-	}
-	return u.userData.LegacyID
-}
-
-func (u *User) LegacyToken() string {
-	if u.userData == nil {
-		return ""
-	}
-	return u.userData.LegacyToken
-}
-
-func writeSalt(salt []byte) error {
-	return common.WriteSalt(salt)
-}
-func readSalt() ([]byte, error) {
-	return common.ReadSalt()
-}
-func readUserData() (*protos.LoginResponse, error) {
-	return nil, nil
-}
-func writeUserData(userData *protos.LoginResponse) error {
-	return common.WriteUserData(userData)
+	userConfig common.UserConfig
 }
 
 // New returns the object handling anything user-account related
 // Device ID is optional. for macos, linux, and windows
 // Device id mendatory for android and ios
-func New(httpClient *http.Client, deviceId string) *User {
-	salt, _ := readSalt()
-	userData, _ := readUserData()
+func New(httpClient *http.Client, userConfig common.UserConfig) *User {
+	salt, _ := userConfig.ReadSalt()
+	userData, _ := userConfig.GetUserData()
 	opts := common.Opts{
 		HttpClient: httpClient,
 		BaseURL:    common.APIBaseUrl,
-	}
-
-	var platformDeviceId string
-	if common.IsAndoid() || common.IsIOS() {
-		platformDeviceId = deviceId
-	} else {
-		platformDeviceId = deviceid.Get()
 	}
 
 	return &User{
 		authClient: &authClient{common.NewWebClient(&opts)},
 		salt:       salt,
 		userData:   userData,
-		deviceId:   platformDeviceId,
+		deviceId:   userConfig.DeviceID(),
+		userConfig: userConfig,
 	}
 }
 
@@ -149,7 +106,7 @@ func (u *User) SignUp(ctx context.Context, email, password string) error {
 	salt, err := u.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		u.salt = salt
-		return writeSalt(salt)
+		return u.userConfig.WriteSalt(salt)
 	}
 
 	return err
@@ -188,7 +145,7 @@ func (u *User) getSalt(ctx context.Context, email string) ([]byte, error) {
 		return nil, ErrNoSalt
 	}
 	u.salt = resp.Salt
-	if err := writeSalt(resp.Salt); err != nil {
+	if err := u.userConfig.WriteSalt(resp.Salt); err != nil {
 		return nil, err
 	}
 	return resp.Salt, nil
@@ -202,7 +159,7 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 	}
 	resp, err := u.authClient.Login(ctx, email, password, deviceId, salt)
 	if err == nil {
-		writeUserData(resp)
+		u.userConfig.Save(resp)
 		u.userData = resp
 	}
 	return err
@@ -248,7 +205,7 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 		NewVerifier: verifierKey.Bytes(),
 	})
 	if err == nil {
-		err = writeSalt(newSalt)
+		err = u.userConfig.WriteSalt(newSalt)
 	}
 	return err
 }
@@ -362,11 +319,11 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 	}); err != nil {
 		return err
 	}
-	if err := writeSalt(newSalt); err != nil {
+	if err := u.userConfig.WriteSalt(newSalt); err != nil {
 		return err
 	}
 
-	if err := writeUserData(u.userData); err != nil {
+	if err := u.userConfig.Save(u.userData); err != nil {
 		return err
 	}
 
@@ -441,5 +398,5 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	}
 
 	u.userData = nil
-	return writeUserData(nil)
+	return u.userConfig.Save(nil)
 }

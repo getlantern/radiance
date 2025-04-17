@@ -18,6 +18,9 @@ type UserConfig interface {
 	LegacyID() int64
 	LegacyToken() string
 	Save(*protos.LoginResponse) error
+	GetUserData() (*protos.LoginResponse, error)
+	ReadSalt() ([]byte, error)
+	WriteSalt([]byte) error
 }
 
 type userConfig struct {
@@ -71,16 +74,18 @@ func (u *userConfig) Save(data *protos.LoginResponse) error {
 	return nil
 }
 
-func WriteUserData(data *protos.LoginResponse) error {
-	activeConfig.resp = data
-	bytes, err := proto.Marshal(data)
+func (u *userConfig) GetUserData() (*protos.LoginResponse, error) {
+	readPath := filepath.Join(u.dataDir, userDataLocation)
+	data, err := os.ReadFile(readPath)
 	if err != nil {
-		log.Printf("Error marshalling user data: %v", err)
+		return nil, err
 	}
-	return os.WriteFile(userDataLocation, bytes, 0600)
-
+	var resp protos.LoginResponse
+	if err := proto.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
-
 func ReadUserData(dataDir string) (*protos.LoginResponse, error) {
 	readPath := filepath.Join(dataDir, userDataLocation)
 	data, err := os.ReadFile(readPath)
@@ -94,10 +99,22 @@ func ReadUserData(dataDir string) (*protos.LoginResponse, error) {
 	return &resp, nil
 }
 
-func WriteSalt(salt []byte) error {
-	return os.WriteFile(saltLocation, salt, 0600)
+func WriteUserData(data *protos.LoginResponse) error {
+	activeConfig.resp = data
+	bytes, err := proto.Marshal(data)
+	if err != nil {
+		log.Printf("Error marshalling user data: %v", err)
+	}
+	return os.WriteFile(userDataLocation, bytes, 0600)
+
 }
 
-func ReadSalt() ([]byte, error) {
-	return os.ReadFile(saltLocation)
+func (u *userConfig) WriteSalt(salt []byte) error {
+	savePath := filepath.Join(u.dataDir, saltLocation)
+	return os.WriteFile(savePath, salt, 0600)
+}
+
+func (u *userConfig) ReadSalt() ([]byte, error) {
+	readPath := filepath.Join(u.dataDir, saltLocation)
+	return os.ReadFile(readPath)
 }

@@ -16,6 +16,7 @@ import (
 func TestSignUp(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
 	}
 	err := u.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
@@ -41,6 +42,7 @@ func TestSignupEmailConfirmation(t *testing.T) {
 func TestLogin(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
 	}
 	err := u.Login(context.Background(), "test@example.com", "password", "deviceId")
 	assert.NoError(t, err)
@@ -59,6 +61,7 @@ func TestLogout(t *testing.T) {
 func TestStartRecoveryByEmail(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
 	}
 	err := u.StartRecoveryByEmail(context.Background(), "test@example.com")
 	assert.NoError(t, err)
@@ -67,6 +70,7 @@ func TestStartRecoveryByEmail(t *testing.T) {
 func TestCompleteRecoveryByEmail(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
 	}
 	err := u.CompleteRecoveryByEmail(context.Background(), "test@example.com", "newPassword", "code")
 	assert.NoError(t, err)
@@ -75,6 +79,7 @@ func TestCompleteRecoveryByEmail(t *testing.T) {
 func TestValidateEmailRecoveryCode(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
 	}
 	err := u.ValidateEmailRecoveryCode(context.Background(), "test@example.com", "code")
 	assert.NoError(t, err)
@@ -96,6 +101,7 @@ func TestCompleteChangeEmail(t *testing.T) {
 	u := &User{
 		userData:   &protos.LoginResponse{Id: "test@example.com"},
 		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
 	}
 	err := u.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
 	assert.NoError(t, err)
@@ -109,6 +115,7 @@ func TestDeleteAccount(t *testing.T) {
 		authClient: authClient,
 		deviceId:   "deviceId",
 		salt:       authClient.salt[email],
+		userConfig: &mockUserConfig{},
 	}
 	err := u.DeleteAccount(context.Background(), "password")
 	assert.NoError(t, err)
@@ -139,13 +146,6 @@ func mockAuthClientNew(t *testing.T, email, password string) *mockAuthClient {
 	}
 	return m
 }
-
-// func TestSubscriptionPaymentRedirect(t *testing.T) {
-// 	user := New(&http.Client{})
-// 	resp, error := user.SubscriptionPaymentRedirect(context.Background(), nil)
-// 	assert.NoError(t, error)
-// 	assert.NotNil(t, resp)
-// }
 
 func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]byte, error) {
 	return []byte("salt"), nil
@@ -220,4 +220,39 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 	}
 	m.cache[req.Email] = hex.EncodeToString(state)
 	return &protos.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
+}
+
+// Mock implementation of User config for testing purposes
+type mockUserConfig struct {
+}
+
+// DeviceID() string
+//
+//	LegacyID() int64
+//	LegacyToken() string
+//	Save(*protos.LoginResponse) error
+//	GetUserData() (*protos.LoginResponse, error)
+//	ReadSalt() ([]byte, error)
+//	WriteSalt([]byte) error
+func (m *mockUserConfig) GetUserData() (*protos.LoginResponse, error) {
+	return &protos.LoginResponse{}, nil
+}
+
+func (m *mockUserConfig) Save(userData *protos.LoginResponse) error {
+	return nil
+}
+func (m *mockUserConfig) ReadSalt() ([]byte, error) {
+	return []byte("salt"), nil
+}
+func (m *mockUserConfig) WriteSalt(salt []byte) error {
+	return nil
+}
+func (m *mockUserConfig) DeviceID() string {
+	return "deviceId"
+}
+func (m *mockUserConfig) LegacyID() int64 {
+	return 1
+}
+func (m *mockUserConfig) LegacyToken() string {
+	return "legacyToken"
 }

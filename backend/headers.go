@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/getlantern/radiance/app"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/timezone"
 )
 
@@ -29,7 +29,7 @@ const (
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
-func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader, user user.BaseUser) (*http.Request, error) {
+func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader, user common.UserConfig) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
@@ -45,7 +45,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 }
 
 // NewIssueRequest creates a new HTTP request with the required headers for issue reporting.
-func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, user user.BaseUser) (*http.Request, error) {
+func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, user common.UserConfig) (*http.Request, error) {
 	req, err := NewRequestWithHeaders(ctx, method, url, body, user)
 	if err != nil {
 		return nil, err

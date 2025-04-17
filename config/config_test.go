@@ -12,7 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/user/protos"
 )
 
 // Mock implementation of ConfigParser for testing
@@ -145,7 +146,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 type UserStub struct{}
 
 // Verify that a UserStub implements the User interface
-var _ user.BaseUser = (*UserStub)(nil)
+var _ common.UserConfig = (*UserStub)(nil)
 
 func (u *UserStub) DeviceID() string {
 	return "test-device-id"
@@ -155,4 +156,19 @@ func (u *UserStub) LegacyID() int64 {
 }
 func (u *UserStub) LegacyToken() string {
 	return "test-legacy-token"
+}
+func (u *UserStub) Save(data *protos.LoginResponse) error {
+	return nil
+}
+func (u *UserStub) GetUserData() (*protos.LoginResponse, error) {
+	return &protos.LoginResponse{
+		LegacyID:    123456789,
+		LegacyToken: "test-legacy-token",
+	}, nil
+}
+func (u *UserStub) ReadSalt() ([]byte, error) {
+	return []byte("test-salt"), nil
+}
+func (u *UserStub) WriteSalt(salt []byte) error {
+	return nil
 }
