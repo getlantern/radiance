@@ -28,10 +28,10 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
+	"github.com/getlantern/sing-box-extensions/protocol"
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/protocol"
 )
 
 // BoxService is a wrapper around libbox.BoxService
