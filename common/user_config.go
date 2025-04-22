@@ -29,16 +29,15 @@ type userConfig struct {
 	dataDir  string
 }
 
+// append file name to location path
 var (
-	saltLocation     = ".salt" // TODO: we need to think about properly storing data. Right now both configFetcher and this module just dump things in the current directory. Instead there should be a 'data writer' that knows where to put things.
-	userDataLocation = ".userData"
-	activeConfig     *userConfig
+	saltFileName     = ".salt"
+	userDataFileName = ".userData"
 )
 
 func NewUserConfig(deviceID, dataDir string) UserConfig {
 	resp, _ := ReadUserData(dataDir)
 	u := &userConfig{deviceID: deviceID, resp: resp, dataDir: dataDir}
-	activeConfig = u
 	return u
 }
 
@@ -61,7 +60,7 @@ func (u *userConfig) LegacyToken() string {
 }
 
 func (u *userConfig) Save(data *protos.LoginResponse) error {
-	savePath := filepath.Join(u.dataDir, userDataLocation)
+	savePath := filepath.Join(u.dataDir, userDataFileName)
 	log.Printf("Saving user data to %s", savePath)
 	bytes, err := proto.Marshal(data)
 	if err != nil {
@@ -75,7 +74,7 @@ func (u *userConfig) Save(data *protos.LoginResponse) error {
 }
 
 func (u *userConfig) GetUserData() (*protos.LoginResponse, error) {
-	readPath := filepath.Join(u.dataDir, userDataLocation)
+	readPath := filepath.Join(u.dataDir, userDataFileName)
 	data, err := os.ReadFile(readPath)
 	if err != nil {
 		return nil, err
@@ -85,36 +84,28 @@ func (u *userConfig) GetUserData() (*protos.LoginResponse, error) {
 		return nil, err
 	}
 	return &resp, nil
-}
-func ReadUserData(dataDir string) (*protos.LoginResponse, error) {
-	readPath := filepath.Join(dataDir, userDataLocation)
-	data, err := os.ReadFile(readPath)
-	if err != nil {
-		return nil, err
-	}
-	var resp protos.LoginResponse
-	if err := proto.Unmarshal(data, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func WriteUserData(data *protos.LoginResponse) error {
-	activeConfig.resp = data
-	bytes, err := proto.Marshal(data)
-	if err != nil {
-		log.Printf("Error marshalling user data: %v", err)
-	}
-	return os.WriteFile(userDataLocation, bytes, 0600)
-
 }
 
 func (u *userConfig) WriteSalt(salt []byte) error {
-	savePath := filepath.Join(u.dataDir, saltLocation)
+	savePath := filepath.Join(u.dataDir, saltFileName)
 	return os.WriteFile(savePath, salt, 0600)
 }
 
 func (u *userConfig) ReadSalt() ([]byte, error) {
-	readPath := filepath.Join(u.dataDir, saltLocation)
+	readPath := filepath.Join(u.dataDir, saltFileName)
 	return os.ReadFile(readPath)
+}
+
+// Utils mthod to read user data from file
+func ReadUserData(dataDir string) (*protos.LoginResponse, error) {
+	readPath := filepath.Join(dataDir, userDataFileName)
+	data, err := os.ReadFile(readPath)
+	if err != nil {
+		return nil, err
+	}
+	var resp protos.LoginResponse
+	if err := proto.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
