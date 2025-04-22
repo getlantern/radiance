@@ -73,7 +73,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	boxOpts := boxoptions.Options(logOutput)
 
 	rsMgr := ruleset.NewManager()
-	tunnel, err := initTunnel(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
+	splitTunnel, err := initTunnel(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
@@ -82,7 +82,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
 	// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
 	// index 1
-	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{tunnel.ruleOption, ruleset.BaseRouteRule(CustomServerTag, boxservice.CustomSelectorTag)}, []option.RuleSet{tunnel.rulesetOption})
+	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{splitTunnel.ruleOption, ruleset.BaseRouteRule(CustomServerTag, boxservice.CustomSelectorTag)}, []option.RuleSet{splitTunnel.rulesetOption})
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
@@ -96,7 +96,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 
 	client = &vpnClient{
 		boxService:         b,
-		splitTunnelHandler: tunnel.mutableRuleSet,
+		splitTunnelHandler: splitTunnel.mutableRuleSet,
 	}
 	return client, nil
 }
