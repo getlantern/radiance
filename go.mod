@@ -31,6 +31,7 @@ require (
 	github.com/sagernet/sing v0.6.5
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
+	github.com/zeebo/assert v1.1.0
 	go.opentelemetry.io/otel/log v0.11.0
 	go.opentelemetry.io/otel/sdk v1.35.0
 	go.opentelemetry.io/otel/sdk/metric v1.35.0

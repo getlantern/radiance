@@ -148,6 +148,9 @@ type UserStub struct{}
 // Verify that a UserStub implements the User interface
 var _ common.UserConfig = (*UserStub)(nil)
 
+func (u *UserStub) Locale() string {
+	return "en-US"
+}
 func (u *UserStub) DeviceID() string {
 	return "test-device-id"
 }

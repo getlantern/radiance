@@ -19,6 +19,7 @@ type ProClient interface {
 	SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error)
 	StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error)
 	UserCreate(ctx context.Context) (*protos.UserDataResponse, error)
+	Plans(ctx context.Context) (*protos.PlansResponse, error)
 }
 
 func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
@@ -76,4 +77,16 @@ func (c *proClient) StripeSubscription(ctx context.Context, data *protos.Subscri
 	}
 	return resp, nil
 
+}
+func (c *proClient) Plans(ctx context.Context) (*protos.PlansResponse, error) {
+	var resp *protos.PlansResponse
+	params := map[string]interface{}{
+		"locale": c.UserConfig.Locale(),
+	}
+	err := c.Get(ctx, "/plans-v4", params, &resp)
+	if err != nil {
+		log.Fatalf("Error in Plans: %v", err)
+		return nil, err
+	}
+	return resp, nil
 }

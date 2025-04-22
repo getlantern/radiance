@@ -19,7 +19,7 @@ func TestSendReport(t *testing.T) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	userConfig := common.NewUserConfig("radiance-test", "")
+	userConfig := common.NewUserConfig("radiance-test", "","")
 	u := user.New(k.NewHTTPClient(), userConfig)
 	reporter, err := NewIssueReporter(k.NewHTTPClient(), u, userConfig)
 	require.NoError(t, err)

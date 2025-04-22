@@ -125,7 +125,11 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	} else {
 		platformDeviceId = deviceid.Get()
 	}
-	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir)
+	if opts.Locale == "" {
+		log.Debug("Locale not set, using default en-US")
+		opts.Locale = "en-US"
+	}
+	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir, opts.DataDir)
 	u := user.New(k.NewHTTPClient(), userConfig)
 	pro := pro.New(k.NewHTTPClient(), userConfig)
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userConfig)

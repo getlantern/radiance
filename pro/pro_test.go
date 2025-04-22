@@ -17,7 +17,7 @@ package pro
 // }
 
 // func TestCreateUser(t *testing.T) {
-// 	userConfig := common.NewUserConfig("HFJDFJ-75885F", "")
+// 	userConfig := common.NewUserConfig("HFJDFJ-75885F", "", "en-US")
 // 	proServer := New(&http.Client{}, userConfig)
 // 	resp, error := proServer.UserCreate(context.Background())
 // 	assert.NoError(t, error)
@@ -38,4 +38,14 @@ package pro
 // 	assert.NoError(t, error)
 // 	assert.NotNil(t, resp)
 // 	fmt.Printf("Stripe Subscription response: %v", resp)
+// }
+
+// func TestStripeSubscription(t *testing.T) {
+// 	userConfig := common.NewUserConfig("HFJDFJ-75885F", "", "en-US")
+// 	proServer := New(&http.Client{}, userConfig)
+
+// 	resp, error := proServer.Plans(context.Background())
+// 	assert.NoError(t, error)
+// 	assert.NotNil(t, resp)
+// 	fmt.Printf("Plans response: %v", resp)
 // }

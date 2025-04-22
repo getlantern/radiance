@@ -21,12 +21,14 @@ type UserConfig interface {
 	GetUserData() (*protos.LoginResponse, error)
 	ReadSalt() ([]byte, error)
 	WriteSalt([]byte) error
+	Locale() string
 }
 
 type userConfig struct {
 	deviceID string
 	resp     *protos.LoginResponse
 	dataDir  string
+	locale   string
 }
 
 // append file name to location path
@@ -35,10 +37,17 @@ var (
 	userDataFileName = ".userData"
 )
 
-func NewUserConfig(deviceID, dataDir string) UserConfig {
+func NewUserConfig(deviceID, dataDir, locale string) UserConfig {
 	resp, _ := ReadUserData(dataDir)
-	u := &userConfig{deviceID: deviceID, resp: resp, dataDir: dataDir}
+	u := &userConfig{deviceID: deviceID, resp: resp, dataDir: dataDir, locale: locale}
 	return u
+}
+
+func (u *userConfig) Locale() string {
+	if u.locale != "" {
+		return u.locale
+	}
+	return ""
 }
 
 func (u *userConfig) DeviceID() string {

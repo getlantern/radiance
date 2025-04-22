@@ -226,14 +226,7 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 type mockUserConfig struct {
 }
 
-// DeviceID() string
-//
-//	LegacyID() int64
-//	LegacyToken() string
-//	Save(*protos.LoginResponse) error
-//	GetUserData() (*protos.LoginResponse, error)
-//	ReadSalt() ([]byte, error)
-//	WriteSalt([]byte) error
+
 func (m *mockUserConfig) GetUserData() (*protos.LoginResponse, error) {
 	return &protos.LoginResponse{}, nil
 }
@@ -255,4 +248,7 @@ func (m *mockUserConfig) LegacyID() int64 {
 }
 func (m *mockUserConfig) LegacyToken() string {
 	return "legacyToken"
+}
+func (m *mockUserConfig) Locale() string {
+	return "en-US"
 }

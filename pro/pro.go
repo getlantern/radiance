@@ -2,6 +2,7 @@ package pro
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -61,11 +62,24 @@ func (u *Pro) SubscriptionPaymentRedirect(ctx context.Context, data *protos.Subs
 // StripeSubscription creates a new subscription using Stripe SDK
 // For Android only
 func (u *Pro) StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error) {
-	slog.Debug("StripeSubscription", "data", data)
 	resp, err := u.proClient.StripeSubscription(ctx, data)
 	if err != nil {
 		slog.Error("Error in StripeSubscription", "error", err)
 		return nil, err
+	}
+	return resp, nil
+}
+
+// Plans returns the list of plans
+func (u *Pro) Plans(ctx context.Context) (*protos.PlansResponse, error) {
+	resp, err := u.proClient.Plans(ctx)
+	if err != nil {
+		slog.Error("Error in Plans", "error", err)
+		return nil, err
+	}
+	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
+		slog.Error("Error in Plans", "error", resp.BaseResponse.Error)
+		return nil, fmt.Errorf("error in Plans: %s", resp.BaseResponse.Error)
 	}
 	return resp, nil
 }

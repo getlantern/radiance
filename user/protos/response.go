@@ -36,3 +36,10 @@ type SubscriptionResponse struct {
 	SubscriptionId string `json:"subscriptionId"`
 	ClientSecret   string `json:"clientSecret"`
 }
+
+type PlansResponse struct {
+	*BaseResponse `json:",inline"`
+	Providers     map[string][]*PaymentMethod `json:"providers"`
+	Plans         []*Plan                     `json:"plans"`
+	Logo          map[string]interface{}      `json:"icons"`
+}
