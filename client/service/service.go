@@ -50,7 +50,6 @@ type BoxService struct {
 	mu                sync.Mutex
 	isRunning         bool
 
-	logFactory            log.Factory
 	customServersMutex    sync.Locker
 	customServers         map[string]option.Options
 	customServersFilePath string
@@ -69,12 +68,11 @@ type CustomServerInfo struct {
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager, logFactory log.Factory) (*BoxService, error) {
+func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
 	bs := &BoxService{
 		config:                config,
 		platIfce:              platIfce,
 		mutRuleSetManager:     rulesetManager,
-		logFactory:            logFactory,
 		customServersMutex:    new(sync.Mutex),
 		customServers:         make(map[string]option.Options),
 		customServersFilePath: filepath.Join(dataDir, "data", "custom_servers.json"),

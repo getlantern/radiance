@@ -12,7 +12,6 @@ import (
 
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
@@ -73,13 +72,6 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
-	logFactory, err := log.New(log.Options{
-		Options: *boxOpts.Log,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create log factory: %w", err)
-	}
-
 	rsMgr := ruleset.NewManager()
 	tunnel, err := initTunnel(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
 	if err != nil {
@@ -97,7 +89,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr, logFactory)
+	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
 	if err != nil {
 		return nil, err
 	}
