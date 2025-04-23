@@ -89,18 +89,21 @@ func (m *CustomServerManager) storeCustomServer(tag string, options option.Optio
 
 	if len(servers.CustomServers) == 0 {
 		servers.CustomServers = make([]CustomServerInfo, 0)
+	}
+	added := false
+	for i, server := range servers.CustomServers {
+		if server.Tag == tag {
+			server.Options = options
+			servers.CustomServers[i] = server
+			added = true
+			break
+		}
+	}
+	if !added {
 		servers.CustomServers = append(servers.CustomServers, CustomServerInfo{
 			Tag:     tag,
 			Options: options,
 		})
-	} else {
-		for i, server := range servers.CustomServers {
-			if server.Tag == tag {
-				server.Options = options
-				servers.CustomServers[i] = server
-				break
-			}
-		}
 	}
 
 	if err = m.writeChanges(servers); err != nil {
