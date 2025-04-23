@@ -25,6 +25,7 @@ import (
 var (
 	client   *vpnClient
 	clientMu sync.Mutex
+	statusMu sync.Mutex
 )
 
 type Options struct {
@@ -121,6 +122,7 @@ func (c *vpnClient) StartVPN() error {
 	}
 
 	c.started = true
+	c.setConnectionStatus(true)
 	return nil
 }
 
@@ -143,6 +145,7 @@ func (c *vpnClient) StopVPN() error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return errors.New("box did not stop in time")
 	}
+	c.setConnectionStatus(false)
 	return err
 }
 
@@ -154,8 +157,8 @@ func (c *vpnClient) ConnectionStatus() bool {
 }
 
 func (c *vpnClient) setConnectionStatus(connected bool) {
-	clientMu.Lock()
-	defer clientMu.Unlock()
+	statusMu.Lock()
+	defer statusMu.Unlock()
 	c.connected = connected
 }
 
