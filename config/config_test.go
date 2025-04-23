@@ -13,7 +13,7 @@ import (
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/protos"
+	"github.com/getlantern/radiance/api/protos"
 )
 
 // Mock implementation of ConfigParser for testing

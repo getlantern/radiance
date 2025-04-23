@@ -1,4 +1,4 @@
-package pro
+package api
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/protos"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -20,7 +20,7 @@ type Pro struct {
 }
 
 // New returns the object handling anything user-account related
-func New(httpClient *http.Client, userConfig common.UserConfig) *Pro {
+func NewPro(httpClient *http.Client, userConfig common.UserConfig) *Pro {
 	opts := common.Opts{
 		HttpClient: httpClient,
 		BaseURL:    common.ProServerUrl,

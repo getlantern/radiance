@@ -13,10 +13,11 @@ import (
 	"github.com/getlantern/golog"
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/osversion"
+	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user"
+
 	"google.golang.org/protobuf/proto"
 )
 
@@ -38,13 +39,13 @@ type Attachment struct {
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
 	httpClient *http.Client
-	user       *user.User
+	user       *api.User
 	userConfig common.UserConfig
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(httpClient *http.Client, user *user.User, userConfig common.UserConfig) (*IssueReporter, error) {
+func NewIssueReporter(httpClient *http.Client, user *api.User, userConfig common.UserConfig) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
@@ -83,7 +84,8 @@ func (ir *IssueReporter) Report(
 	sub, err := ir.user.Subscription()
 	if err != nil {
 		log.Errorf("Error while getting user subscription info: %v", err)
-	} else if sub.Tier == user.TierPro {
+
+	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
 

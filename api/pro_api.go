@@ -1,12 +1,12 @@
-package pro
+package api
 
 import (
 	"context"
 	"log"
 	"log/slog"
 
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/protos"
 )
 
 type proClient struct {

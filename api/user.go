@@ -1,4 +1,4 @@
-package user
+package api
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/1Password/srp"
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/protos"
 )
 
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
@@ -56,7 +56,7 @@ type User struct {
 // New returns the object handling anything user-account related
 // Device ID is optional. for macos, linux, and windows
 // Device id mendatory for android and ios
-func New(httpClient *http.Client, userConfig common.UserConfig) *User {
+func NewUser(httpClient *http.Client, userConfig common.UserConfig) *User {
 	salt, _ := userConfig.ReadSalt()
 	userData, _ := userConfig.GetUserData()
 	opts := common.Opts{

@@ -1,4 +1,4 @@
-package user
+package api
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/1Password/srp"
-	"github.com/getlantern/radiance/user/protos"
+	"github.com/getlantern/radiance/api/protos"
 	"golang.org/x/crypto/pbkdf2"
 )
 

@@ -21,16 +21,16 @@ import (
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
+	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
+
 	"github.com/getlantern/radiance/metrics"
-	"github.com/getlantern/radiance/pro"
-	"github.com/getlantern/radiance/user"
-	"github.com/getlantern/radiance/user/deviceid"
 )
 
 var log *slog.Logger
@@ -63,8 +63,8 @@ type Radiance struct {
 	activeServer *atomic.Value
 	stopChan     chan struct{}
 
-	user       *user.User
-	pro        *pro.Pro
+	user       *api.User
+	pro        *api.Pro
 	userConfig common.UserConfig
 
 	issueReporter *issue.IssueReporter
@@ -130,8 +130,8 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		opts.Locale = "en-US"
 	}
 	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir, opts.DataDir)
-	u := user.New(k.NewHTTPClient(), userConfig)
-	pro := pro.New(k.NewHTTPClient(), userConfig)
+	u := api.NewUser(k.NewHTTPClient(), userConfig)
+	pro := api.NewPro(k.NewHTTPClient(), userConfig)
 	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
@@ -201,12 +201,12 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 }
 
 // User returns the user object for this client
-func (r *Radiance) User() *user.User {
+func (r *Radiance) User() *api.User {
 	return r.user
 }
 
 // Pro returns the pro object for this client
-func (r *Radiance) Pro() *pro.Pro {
+func (r *Radiance) Pro() *api.Pro {
 
 	return r.pro
 }

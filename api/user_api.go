@@ -1,11 +1,11 @@
-package user
+package api
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/protos"
+	"github.com/getlantern/radiance/api/protos"
 )
 
 type AuthClient interface {

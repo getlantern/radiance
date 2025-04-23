@@ -1,4 +1,4 @@
-package pro
+package api
 
 // func TestSubscriptionPaymentRedirect(t *testing.T) {
 // 	userConfig := common.NewUserConfig("HFJDFJ-75885F", "")

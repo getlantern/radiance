@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/getlantern/radiance/user/protos"
+	"github.com/getlantern/radiance/api/protos"
 	"google.golang.org/protobuf/proto"
 )
 

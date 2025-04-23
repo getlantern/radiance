@@ -1,4 +1,4 @@
-package user
+package api
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/1Password/srp"
-	"github.com/getlantern/radiance/user/protos"
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -225,7 +225,6 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 // Mock implementation of User config for testing purposes
 type mockUserConfig struct {
 }
-
 
 func (m *mockUserConfig) GetUserData() (*protos.LoginResponse, error) {
 	return &protos.LoginResponse{}, nil
