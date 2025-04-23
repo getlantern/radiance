@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/getlantern/radiance/client/boxoptions"
-	"github.com/getlantern/radiance/protocol"
+	"github.com/getlantern/sing-box-extensions/protocol"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
