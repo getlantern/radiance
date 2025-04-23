@@ -61,37 +61,27 @@ func TestSelectCustomServer(t *testing.T) {
 
 	// If we're adding an endpoint with wireguard, a wireguard inbound is required
 	customConfig := `{
-		"outbounds": [
-			{
-				"type": "algeneva",
-				"tag": "algeneva-out",
-				"server": "103.104.245.192",
-				"server_port": 80,
-				"headers": {
-					"x-auth-token": "token"
-				},
-				"tls": {
-					"enabled": true,
-					"disable_sni": false,
-					"server_name": "",
-					"insecure": false,
-					"min_version": "",
-					"max_version": "",
-					"cipher_suites": [],
-					"certificate": ""
-				},
-				"strategy": "[HTTP:method:*]-insert{%0A:end:value:4}-|"
-			}
-		],
-		"route": {
-			"rules": [
-				{
-					"inbound": "tun-in",
-					"action": "route",
-					"outbound": "algeneva-out"
-				}
-			]
-		} 
+		"tag": "custom-algeneva",
+		"outbound": {
+			"type": "algeneva",
+			"tag": "algeneva-out",
+			"server": "103.104.245.192",
+			"server_port": 80,
+			"headers": {
+				"x-auth-token": "token"
+			},
+			"tls": {
+				"enabled": true,
+				"disable_sni": false,
+				"server_name": "",
+				"insecure": false,
+				"min_version": "",
+				"max_version": "",
+				"cipher_suites": [],
+				"certificate": ""
+			},
+			"strategy": "[HTTP:method:*]-insert{%0A:end:value:4}-|"
+		}
 	}`
 	outboundTag := "algeneva-out"
 

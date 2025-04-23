@@ -50,15 +50,6 @@ type BoxService struct {
 
 const CustomSelectorTag = "custom_selector"
 
-type customServers struct {
-	CustomServers []CustomServerInfo `json:"custom_servers"`
-}
-
-type CustomServerInfo struct {
-	Tag     string         `json:"tag"`
-	Options option.Options `json:"options"`
-}
-
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
 func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {

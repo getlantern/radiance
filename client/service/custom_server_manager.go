@@ -20,17 +20,28 @@ import (
 type CustomServerManager struct {
 	ctx                   context.Context
 	customServersMutex    *sync.RWMutex
-	customServers         map[string]option.Options
+	customServers         map[string]CustomServerInfo
 	customServersFilePath string
 }
 
 func NewCustomServerManager(ctx context.Context, dataDir string) *CustomServerManager {
 	return &CustomServerManager{
 		ctx:                   ctx,
-		customServers:         make(map[string]option.Options),
+		customServers:         make(map[string]CustomServerInfo),
 		customServersMutex:    new(sync.RWMutex),
 		customServersFilePath: filepath.Join(dataDir, "data", "custom_servers.json"),
 	}
+}
+
+type customServers struct {
+	CustomServers []CustomServerInfo `json:"custom_servers"`
+}
+
+// CustomServerInfo represents a custom server configuration.
+type CustomServerInfo struct {
+	Tag      string           `json:"tag"`
+	Outbound *option.Outbound `json:"outbound,omitempty"`
+	Endpoint *option.Endpoint `json:"endpoint,omitempty"`
 }
 
 // ServerConnectConfig represents configuration for connecting to a custom server.
@@ -51,13 +62,23 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 
 	if cfg != nil {
 		var err error
-		loadedOptions, err = json.UnmarshalExtendedContext[option.Options](m.ctx, cfg)
+		loadedOptions, err = json.UnmarshalExtendedContext[CustomServerInfo](m.ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal config: %w", err)
 		}
 	}
 
-	if err := updateOutboundsEndpoints(m.ctx, loadedOptions.Outbounds, loadedOptions.Endpoints); err != nil {
+	outbounds := make([]option.Outbound, 0)
+	if loadedOptions.Outbound != nil {
+		outbounds = append(outbounds, *loadedOptions.Outbound)
+	}
+
+	endpoints := make([]option.Endpoint, 0)
+	if loadedOptions.Endpoint != nil {
+		endpoints = append(endpoints, *loadedOptions.Endpoint)
+	}
+
+	if err := updateOutboundsEndpoints(m.ctx, outbounds, endpoints); err != nil {
 		return fmt.Errorf("failed to update outbounds/endpoints: %w", err)
 	}
 
@@ -81,7 +102,7 @@ func (m *CustomServerManager) ListCustomServers() ([]CustomServerInfo, error) {
 }
 
 // storeCustomServer stores the custom server configuration to a JSON file.
-func (m *CustomServerManager) storeCustomServer(tag string, options option.Options) error {
+func (m *CustomServerManager) storeCustomServer(tag string, options CustomServerInfo) error {
 	servers, err := m.loadCustomServer()
 	if err != nil {
 		return fmt.Errorf("load custom servers: %w", err)
@@ -90,19 +111,21 @@ func (m *CustomServerManager) storeCustomServer(tag string, options option.Optio
 	if len(servers.CustomServers) == 0 {
 		servers.CustomServers = make([]CustomServerInfo, 0)
 	}
-	added := false
+	updated := false
 	for i, server := range servers.CustomServers {
 		if server.Tag == tag {
-			server.Options = options
+			server.Outbound = options.Outbound
+			server.Endpoint = options.Endpoint
 			servers.CustomServers[i] = server
-			added = true
+			updated = true
 			break
 		}
 	}
-	if !added {
+	if !updated {
 		servers.CustomServers = append(servers.CustomServers, CustomServerInfo{
-			Tag:     tag,
-			Options: options,
+			Tag:      tag,
+			Outbound: options.Outbound,
+			Endpoint: options.Endpoint,
 		})
 	}
 
@@ -147,7 +170,7 @@ func (m *CustomServerManager) loadCustomServer() (customServers, error) {
 	m.customServersMutex.Lock()
 	defer m.customServersMutex.Unlock()
 	for _, v := range cs.CustomServers {
-		m.customServers[v.Tag] = v.Options
+		m.customServers[v.Tag] = v
 	}
 
 	return cs, nil
@@ -180,25 +203,25 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 	options := m.customServers[tag]
 	m.customServersMutex.Unlock()
 
-	for _, outbounds := range options.Outbounds {
-		if _, exists := outboundManager.Outbound(outbounds.Tag); exists {
+	if options.Outbound != nil {
+		if _, exists := outboundManager.Outbound(options.Outbound.Tag); exists {
 			// selector must be removed in order to remove dependent outbounds/endpoints
 			if err := outboundManager.Remove(CustomSelectorTag); err != nil && !errors.Is(err, os.ErrInvalid) {
 				return fmt.Errorf("failed to remove selector outbound: %w", err)
 			}
-			if err := outboundManager.Remove(outbounds.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
+			if err := outboundManager.Remove(options.Outbound.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
 				return fmt.Errorf("failed to remove %q outbound: %w", tag, err)
 			}
 		}
 	}
 
-	for _, endpoints := range options.Endpoints {
-		if _, exists := endpointManager.Get(endpoints.Tag); exists {
+	if options.Endpoint != nil {
+		if _, exists := endpointManager.Get(options.Endpoint.Tag); exists {
 			// selector must be removed in order to remove dependent outbounds/endpoints
 			if err := outboundManager.Remove(CustomSelectorTag); err != nil && !errors.Is(err, os.ErrInvalid) {
 				return fmt.Errorf("failed to remove selector outbound: %w", err)
 			}
-			if err := endpointManager.Remove(endpoints.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
+			if err := endpointManager.Remove(options.Endpoint.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
 				return fmt.Errorf("failed to remove %q endpoint: %w", tag, err)
 			}
 		}
