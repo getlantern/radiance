@@ -179,19 +179,28 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 	m.customServersMutex.Lock()
 	options := m.customServers[tag]
 	m.customServersMutex.Unlock()
-	// selector must be removed in order to remove dependent outbounds
-	if err := outboundManager.Remove(CustomSelectorTag); err != nil {
-		return fmt.Errorf("failed to remove selector outbound: %w", err)
-	}
+
 	for _, outbounds := range options.Outbounds {
-		if err := outboundManager.Remove(outbounds.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
-			return fmt.Errorf("failed to remove %q outbound: %w", tag, err)
+		if _, exists := outboundManager.Outbound(outbounds.Tag); exists {
+			// selector must be removed in order to remove dependent outbounds/endpoints
+			if err := outboundManager.Remove(CustomSelectorTag); err != nil && !errors.Is(err, os.ErrInvalid) {
+				return fmt.Errorf("failed to remove selector outbound: %w", err)
+			}
+			if err := outboundManager.Remove(outbounds.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
+				return fmt.Errorf("failed to remove %q outbound: %w", tag, err)
+			}
 		}
 	}
 
 	for _, endpoints := range options.Endpoints {
-		if err := endpointManager.Remove(endpoints.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
-			return fmt.Errorf("failed to remove %q endpoint: %w", tag, err)
+		if _, exists := endpointManager.Get(endpoints.Tag); exists {
+			// selector must be removed in order to remove dependent outbounds/endpoints
+			if err := outboundManager.Remove(CustomSelectorTag); err != nil && !errors.Is(err, os.ErrInvalid) {
+				return fmt.Errorf("failed to remove selector outbound: %w", err)
+			}
+			if err := endpointManager.Remove(endpoints.Tag); err != nil && !errors.Is(err, os.ErrInvalid) {
+				return fmt.Errorf("failed to remove %q endpoint: %w", tag, err)
+			}
 		}
 	}
 
