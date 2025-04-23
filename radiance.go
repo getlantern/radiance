@@ -67,9 +67,6 @@ type Radiance struct {
 	logsDir       string
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
-
-	configuredServersMutex sync.Locker
-	configuredServers      map[string]boxservice.ServerConnectConfig
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
@@ -133,12 +130,8 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		user:          u,
 		issueReporter: issueReporter,
-		// TODO: after we start to persist data, we should update this implementation
-		// for loading the configured servers and also the custom servers
-		configuredServers:      make(map[string]boxservice.ServerConnectConfig),
-		configuredServersMutex: new(sync.Mutex),
-		logsDir:                logDir,
-		shutdownFuncs:          shutdownFuncs,
+		logsDir:       logDir,
+		shutdownFuncs: shutdownFuncs,
 	}, nil
 }
 
