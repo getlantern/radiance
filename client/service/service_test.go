@@ -2,27 +2,13 @@ package boxservice
 
 import (
 	"context"
-	"os"
 	"slices"
 	"testing"
 
-	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/adapter/endpoint"
-	"github.com/sagernet/sing-box/adapter/outbound"
-	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/protocol/group"
-	"github.com/sagernet/sing-box/route"
-	"github.com/sagernet/sing/common"
-	"github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/getlantern/radiance/client/boxoptions"
-	"github.com/getlantern/radiance/protocol"
 )
 
 func TestUpdateOutbounds(t *testing.T) {
@@ -229,123 +215,3 @@ type mockEndpoint struct {
 
 func (m *mockEndpoint) Type() string { return m.typ }
 func (m *mockEndpoint) Tag() string  { return m.tag }
-
-func TestSelectCustomServer(t *testing.T) {
-	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
-		context.Background(),
-		inboundRegistry,
-		outboundRegistry,
-		endpointRegistry,
-	)
-
-	options := boxoptions.Options("stderr")
-	options.Outbounds = append(options.Outbounds, option.Outbound{Type: "direct", Tag: "testing-out"})
-
-	cfg, err := json.MarshalContext(ctx, boxoptions.BoxOptions)
-	require.NoError(t, err)
-	dataDir, err := os.MkdirTemp("", "")
-	logFactory := log.NewNOPFactory()
-	bs, err := New(string(cfg), dataDir, nil, nil, logFactory)
-	require.NoError(t, err)
-	require.NotNil(t, bs)
-
-	// add router to context
-	router, err := route.NewRouter(ctx, logFactory, option.RouteOptions{}, common.PtrValueOrDefault(options.DNS))
-	require.NoError(t, err)
-	service.ContextWithPtr(ctx, router)
-	service.ContextWithPtr(ctx, &logFactory)
-
-	// add outbound manager to context
-	endpointManager := endpoint.NewManager(logFactory.NewLogger("endpoint"), endpointRegistry)
-	outboundManager := outbound.NewManager(logFactory.NewLogger("outbound"), outboundRegistry, endpointManager, "")
-	require.NoError(t, outboundManager.Create(ctx, router, logFactory.NewLogger("direct"), "direct", constant.TypeDirect, &option.DirectOutboundOptions{}))
-	require.NoError(t, outboundManager.Create(ctx, router, logFactory.NewLogger("selector"), CustomSelectorTag, constant.TypeSelector, &option.SelectorOutboundOptions{
-		Outbounds:                 []string{"direct"},
-		Default:                   "direct",
-		InterruptExistConnections: true,
-	}))
-	service.MustRegister[adapter.EndpointManager](ctx, endpointManager)
-	service.MustRegister[adapter.OutboundManager](ctx, outboundManager)
-	service.MustRegister[log.Factory](ctx, logFactory)
-	bs.ctx = ctx
-
-	// If we're adding an endpoint with wireguard, a wireguard inbound is required
-	customConfig := `{
-		"outbounds": [
-			{
-				"type": "algeneva",
-				"tag": "algeneva-out",
-				"server": "103.104.245.192",
-				"server_port": 80,
-				"headers": {
-					"x-auth-token": "token"
-				},
-				"tls": {
-					"enabled": true,
-					"disable_sni": false,
-					"server_name": "",
-					"insecure": false,
-					"min_version": "",
-					"max_version": "",
-					"cipher_suites": [],
-					"certificate": ""
-				},
-				"strategy": "[HTTP:method:*]-insert{%0A:end:value:4}-|"
-			}
-		],
-		"route": {
-			"rules": [
-				{
-					"inbound": "tun-in",
-					"action": "route",
-					"outbound": "algeneva-out"
-				}
-			]
-		} 
-	}`
-	outboundTag := "algeneva-out"
-
-	t.Run("it should successfully add algeneva outbound", func(t *testing.T) {
-		err = bs.AddCustomServer(outboundTag, []byte(customConfig))
-		assert.NoError(t, err)
-
-		// checking if algeneva-out was included as an outbound and route
-		outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
-		_, exists := outboundManager.Outbound(outboundTag)
-		assert.True(t, exists)
-	})
-
-	t.Run("listing custom servers should return the stored list", func(t *testing.T) {
-		customServers, err := bs.ListCustomServers()
-		assert.NoError(t, err)
-		assert.Len(t, customServers, 1)
-		assert.Equal(t, outboundTag, customServers[0].Tag)
-	})
-
-	t.Run("selecting custom server should set the default outbound", func(t *testing.T) {
-		err = bs.SelectCustomServer(outboundTag)
-		require.NoError(t, err)
-
-		outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
-		outbound, ok := outboundManager.Outbound(CustomSelectorTag)
-		assert.True(t, ok)
-		selector, ok := outbound.(*group.Selector)
-		assert.True(t, ok)
-		assert.Equal(t, outboundTag, selector.Now())
-	})
-
-	t.Run("it should remove the outbound tag", func(t *testing.T) {
-		err = bs.RemoveCustomServer(outboundTag)
-		assert.NoError(t, err)
-		outboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
-		_, exists := outboundManager.Outbound(outboundTag)
-		assert.False(t, exists)
-	})
-
-	t.Run("listing custom servers should return a empty list because we've removed on the last test", func(t *testing.T) {
-		customServers, err := bs.ListCustomServers()
-		assert.NoError(t, err)
-		assert.Empty(t, customServers)
-	})
-}

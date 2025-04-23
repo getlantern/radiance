@@ -50,10 +50,11 @@ type VPNClient interface {
 }
 
 type vpnClient struct {
-	boxService         *boxservice.BoxService
-	splitTunnelHandler *SplitTunnel
-	started            bool
-	connected          bool
+	boxService          *boxservice.BoxService
+	splitTunnelHandler  *SplitTunnel
+	customServerManager *boxservice.CustomServerManager
+	started             bool
+	connected           bool
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -95,8 +96,9 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	}
 
 	client = &vpnClient{
-		boxService:         b,
-		splitTunnelHandler: splitTunnel.mutableRuleSet,
+		boxService:          b,
+		customServerManager: boxservice.NewCustomServerManager(b.Ctx(), opts.DataDir),
+		splitTunnelHandler:  splitTunnel.mutableRuleSet,
 	}
 	return client, nil
 }
@@ -170,15 +172,15 @@ func (c *vpnClient) ResumeVPN() {
 }
 
 func (c *vpnClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
-	return c.boxService.AddCustomServer(tag, cfg)
+	return c.customServerManager.AddCustomServer(tag, cfg)
 }
 
 func (c *vpnClient) SelectCustomServer(tag string) error {
-	return c.boxService.SelectCustomServer(tag)
+	return c.customServerManager.SelectCustomServer(tag)
 }
 
 func (c *vpnClient) RemoveCustomServer(tag string) error {
-	return c.boxService.RemoveCustomServer(tag)
+	return c.customServerManager.RemoveCustomServer(tag)
 }
 
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
