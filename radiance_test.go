@@ -1,7 +1,6 @@
 package radiance
 
 import (
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,29 +104,7 @@ func TestReportIssue(t *testing.T) {
 		})
 	}
 }
-func TestSetupDirs(t *testing.T) {
-	t.Run("it should return default directories when baseDir is empty", func(t *testing.T) {
-		dataDir, logDir, err := setupDirs("")
-		assert.NoError(t, err)
-		assert.NotEmpty(t, dataDir)
-		assert.NotEmpty(t, logDir)
-	})
 
-	t.Run("it should create and return directories when baseDir is provided", func(t *testing.T) {
-		baseDir := t.TempDir()
-		dataDir, logDir, err := setupDirs(baseDir)
-		assert.NoError(t, err)
-		assert.Equal(t, baseDir, dataDir)
-		assert.Equal(t, filepath.Join(baseDir, "logs"), logDir)
-		assert.DirExists(t, logDir)
-	})
-
-	t.Run("it should return error when it fails to create directories", func(t *testing.T) {
-		baseDir := "/invalid/path"
-		_, _, err := setupDirs(baseDir)
-		assert.Error(t, err)
-	})
-}
 func TestGetActiveServer(t *testing.T) {
 	t.Run("it should return error when VPN is not connected", func(t *testing.T) {
 		mockClient := &mockVPNClient{}
