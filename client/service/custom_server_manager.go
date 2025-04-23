@@ -140,7 +140,7 @@ func (m *CustomServerManager) loadCustomServer() (customServers, error) {
 		return cs, fmt.Errorf("read custom servers file: %w", err)
 	}
 
-	if err := json.UnmarshalContext(m.ctx, storedCustomServers, &cs); err != nil {
+	if cs, err = json.UnmarshalExtendedContext[customServers](m.ctx, storedCustomServers); err != nil {
 		return cs, fmt.Errorf("decode custom servers file: %w", err)
 	}
 
