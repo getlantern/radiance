@@ -52,13 +52,8 @@ type ServerConnectConfig []byte
 // outbound per call.
 func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfig) error {
 	m.customServersMutex.Lock()
-	loadedOptions, configExist := m.customServers[tag]
+	loadedOptions := m.customServers[tag]
 	m.customServersMutex.Unlock()
-	if configExist && cfg != nil {
-		if err := m.RemoveCustomServer(tag); err != nil {
-			return err
-		}
-	}
 
 	if cfg != nil {
 		var err error
