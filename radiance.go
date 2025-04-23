@@ -74,7 +74,7 @@ type Radiance struct {
 func NewRadiance(opts client.Options) (*Radiance, error) {
 	reporting.Init()
 	if opts.DataDir == "" {
-		return nil, fmt.Errorf("dataDir is required")
+		opts.DataDir = appdir.General(app.Name)
 	}
 	if opts.LogDir == "" {
 		opts.LogDir = appdir.Logs(app.Name)
