@@ -21,7 +21,9 @@ require (
 	github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6
 	github.com/getlantern/sing-box-extensions v0.0.0-20250417225118-49a27a638120
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
+	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
+	github.com/moul/http2curl v1.0.0
 	github.com/sagernet/sing v0.6.6-0.20250406121928-926a5a1e8bb7
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
@@ -58,6 +60,7 @@ require (
 	github.com/pivotal-cf-experimental/jibber_jabber v0.0.0-20151120183258-bcc4c8345a21 // indirect
 	github.com/refraction-networking/utls v1.6.7 // indirect
 	github.com/sagernet/cloudflare-tls v0.0.0-20231208171750-a4483c1b7cd1 // indirect
+	github.com/smartystreets/goconvey v1.8.1 // indirect
 	github.com/tevino/abool/v2 v2.1.0 // indirect
 	github.com/tkuchiki/go-timezone v0.2.0 // indirect
 	github.com/ulikunitz/xz v0.5.10 // indirect

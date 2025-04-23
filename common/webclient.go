@@ -174,7 +174,7 @@ func (c *webClient) Post(ctx context.Context, path string, params map[string]any
 	req.Header.Set("Accept", ContentTypeJSON)
 
 	resp, err := req.Post(path)
-	
+
 	command, _ := http2curl.GetCurlCommand(req.RawRequest)
 	fmt.Printf("curl command: %v", command)
 
