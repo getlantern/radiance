@@ -84,6 +84,10 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 		return fmt.Errorf("failed to store custom server: %w", err)
 	}
 
+	if err := m.reinitializeCustomSelector("direct"); err != nil {
+		return fmt.Errorf("failed to reinitialize custom selector: %w", err)
+	}
+
 	return nil
 }
 
@@ -228,6 +232,10 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 	if err := m.removeCustomServer(tag); err != nil {
 		return fmt.Errorf("failed to remove custom server %q: %w", tag, err)
 	}
+
+	if err := m.reinitializeCustomSelector("direct"); err != nil {
+		return fmt.Errorf("failed to reinitialize custom selector: %w", err)
+	}
 	return nil
 }
 
@@ -235,6 +243,26 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 // outbound based on provided tag. A selector outbound must exist before
 // calling this function, otherwise it'll return a error.
 func (m *CustomServerManager) SelectCustomServer(tag string) error {
+	outboundManager := service.FromContext[adapter.OutboundManager](m.ctx)
+	if _, exists := outboundManager.Outbound(tag); !exists {
+		return fmt.Errorf("outbound %q not found", tag)
+	}
+	outbound, ok := outboundManager.Outbound(CustomSelectorTag)
+	if !ok {
+		return fmt.Errorf("custom selector not found")
+	}
+	selector, ok := outbound.(*group.Selector)
+	if !ok {
+		return fmt.Errorf("expected outbound of type *group.Selector: %T", selector)
+	}
+	if ok = selector.SelectOutbound(tag); !ok {
+		return fmt.Errorf("failed to select outbound %q", tag)
+	}
+
+	return nil
+}
+
+func (m *CustomServerManager) reinitializeCustomSelector(defaultTag string) error {
 	outboundManager := service.FromContext[adapter.OutboundManager](m.ctx)
 	outbounds := outboundManager.Outbounds()
 	tags := make([]string, 0)
@@ -251,31 +279,25 @@ func (m *CustomServerManager) SelectCustomServer(tag string) error {
 			return fmt.Errorf("failed to remove selector outbound: %w", err)
 		}
 	}
-
 	err := m.newSelectorOutbound(outboundManager, CustomSelectorTag, &option.SelectorOutboundOptions{
 		Outbounds:                 tags,
-		Default:                   tag,
+		Default:                   defaultTag,
 		InterruptExistConnections: true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create selector outbound: %w", err)
 	}
-
 	outbound, ok := outboundManager.Outbound(CustomSelectorTag)
 	if !ok {
-		return fmt.Errorf("failed to get selector outbound: %w", err)
+		return fmt.Errorf("custom selector not found")
 	}
 	selector, ok := outbound.(*group.Selector)
 	if !ok {
-		return fmt.Errorf("expected outbound of type *group.Selector: %w", err)
+		return fmt.Errorf("expected outbound of type *group.Selector: %T", selector)
 	}
 	if err = selector.Start(); err != nil {
 		return fmt.Errorf("failed to start selector outbound: %w", err)
 	}
-	if ok = selector.SelectOutbound(tag); !ok {
-		return fmt.Errorf("failed to select outbound %q: %w", tag, err)
-	}
-
 	return nil
 }
 
