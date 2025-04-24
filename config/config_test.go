@@ -29,7 +29,7 @@ func TestSaveConfig(t *testing.T) {
 	configPath := filepath.Join(tempDir, configFileName)
 
 	// Create a ConfigHandler with the mock parser
-	ch := &Handler{
+	ch := &ConfigHandler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
 	}
@@ -68,7 +68,7 @@ func TestGetConfig(t *testing.T) {
 	configPath := filepath.Join(tempDir, configFileName)
 
 	// Create a ConfigHandler with the mock parser
-	ch := &Handler{
+	ch := &ConfigHandler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
 		config:       atomic.Value{},
@@ -107,7 +107,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	configPath := filepath.Join(tempDir, configFileName)
 
 	// Create a ConfigHandler with the mock parser
-	ch := &Handler{
+	ch := &ConfigHandler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
 		config:       atomic.Value{},
@@ -152,7 +152,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 	mockFetcher := &MockFetcher{}
 
 	// Create a ConfigHandler with the mock parser and fetcher
-	ch := &Handler{
+	ch := &ConfigHandler{
 		configPath:        configPath,
 		configParser:      mockConfigParser,
 		config:            atomic.Value{},
