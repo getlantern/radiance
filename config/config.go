@@ -218,7 +218,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 	if err = settingWGPrivateKeyInConfig(cfg, privateKey); err != nil {
-		slog.Error("failed to replace private key", "error", err)
+		slog.Error("failed to replace private key", slog.Any("error", err))
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
 	ch.setConfigAndNotify(cfg)
