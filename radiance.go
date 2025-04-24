@@ -78,15 +78,17 @@ type Radiance struct {
 // can be nil.
 func NewRadiance(opts client.Options) (*Radiance, error) {
 	reporting.Init()
-
-	dataDirPath, logDir, err := setupDirs(opts.DataDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup directories: %w", err)
+	if opts.DataDir == "" {
+		opts.DataDir = appdir.General(app.Name)
 	}
+	if opts.LogDir == "" {
+		opts.LogDir = appdir.Logs(app.Name)
+	}
+	mkdirs(&opts)
 
-	logPath := filepath.Join(logDir, app.LogFileName)
 	var logWriter io.Writer
-	log, logWriter, err = newLog(logPath)
+	var err error
+	log, logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
 	if err != nil {
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
@@ -99,8 +101,6 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
-	opts.DataDir = dataDirPath
-	opts.LogDir = logDir
 	vpnC, err := client.NewVPNClient(opts)
 	if err != nil {
 		log.Error("Failed to create VPN client", "error", err)
@@ -108,7 +108,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	}
 
 	// TODO: Ideally we would know the user locale to set the country on fronted startup.
-	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(dataDirPath, "fronted_cache.json"))
+	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(opts.DataDir, "fronted_cache.json"))
 	if err != nil {
 		log.Error("Failed to create fronted", "error", err)
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
@@ -136,7 +136,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), userConfig, dataDirPath, vpnC.ParseConfig)
+	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), userConfig, opts.DataDir, vpnC.ParseConfig)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
@@ -148,7 +148,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		pro:           pro,
 		userConfig:    userConfig,
 		issueReporter: issueReporter,
-		logsDir:       logDir,
+		logsDir:       opts.LogDir,
 		shutdownFuncs: shutdownFuncs,
 	}, nil
 }
@@ -277,17 +277,13 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		country)
 }
 
-func setupDirs(baseDir string) (dataDir, logDir string, err error) {
-	// On Windows, Mac, and Linux, we can easily determine the user directories in Go. Typically mobile will have
-	// to pass the base directory to use.
-	if baseDir == "" {
-		return appdir.General(app.Name), appdir.Logs(app.Name), nil
+func mkdirs(opts *client.Options) {
+	// Make sure the data and logs dirs exist
+	for _, dir := range []string{opts.DataDir, opts.LogDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Error("Failed to create data directory", "dir", dir, "error", err)
+		}
 	}
-	logDir = filepath.Join(baseDir, "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return "", "", fmt.Errorf("failed to setup data directory: %w", err)
-	}
-	return baseDir, logDir, nil
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
