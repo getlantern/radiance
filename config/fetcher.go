@@ -23,6 +23,15 @@ import (
 
 const configURL = "https://api.iantem.io/v1/config-new"
 
+type Fetcher interface {
+	// fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
+	// It returns an error if the request fails.
+	// The preferredServerLocation is used to select the server location.
+	// If the preferredServerLocation is empty, the server will select the best location.
+	// The lastModified time is used to check if the configuration has changed since the last request.
+	fetchConfig(preferredServerLocation C.ServerLocation) ([]byte, error)
+}
+
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
@@ -31,7 +40,7 @@ type fetcher struct {
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user user.BaseUser) *fetcher {
+func newFetcher(client *http.Client, user user.BaseUser) Fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,

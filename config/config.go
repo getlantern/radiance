@@ -46,12 +46,12 @@ type ListenerFunc func(oldConfig, newConfig *Config) error
 // Unmarshaller is a function that parses the configuration response from the server.
 type Unmarshaller func(config []byte) (*Config, error)
 
-// ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
+// Handler handles fetching the proxy configuration from the proxy server. It provides access
 // to the most recent configuration.
-type ConfigHandler struct {
+type Handler struct {
 	// config holds a configResult.
 	config    atomic.Value
-	ftr       *fetcher
+	ftr       Fetcher
 	apiClient common.WebClient
 	stopC     chan struct{}
 	closeOnce *sync.Once
@@ -66,9 +66,9 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user user.BaseUser, dataDir string,
-	configParser Unmarshaller) *ConfigHandler {
+	configParser Unmarshaller) *Handler {
 	configPath := filepath.Join(dataDir, configFileName)
-	ch := &ConfigHandler{
+	ch := &Handler{
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
 		closeOnce:       &sync.Once{},
@@ -88,7 +88,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 }
 
 // SetPreferredServerLocation sets the preferred server location to connect to
-func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
+func (ch *Handler) SetPreferredServerLocation(country, city string) {
 	preferred := C.ServerLocation{
 		Country: country,
 		City:    city,
@@ -108,7 +108,7 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 
 // ListAvailableServers returns a list of available servers from the current configuration.
 // If no configuration is available, it returns an error.
-func (ch *ConfigHandler) ListAvailableServers() ([]C.ServerLocation, error) {
+func (ch *Handler) ListAvailableServers() ([]C.ServerLocation, error) {
 	cfgRes := ch.config.Load()
 	if cfgRes == nil {
 		return nil, fmt.Errorf("getting config: %w", ErrFetchingConfig)
@@ -121,7 +121,7 @@ func (ch *ConfigHandler) ListAvailableServers() ([]C.ServerLocation, error) {
 }
 
 // AddConfigListener adds a listener for new Configs.
-func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
+func (ch *Handler) AddConfigListener(listener ListenerFunc) {
 	ch.configListenersMu.Lock()
 	ch.configListeners = append(ch.configListeners, listener)
 	ch.configListenersMu.Unlock()
@@ -139,7 +139,7 @@ func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
 	}()
 }
 
-func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
+func (ch *Handler) notifyListeners(oldConfig, newConfig *Config) {
 	ch.configListenersMu.RLock()
 	defer ch.configListenersMu.RUnlock()
 	for _, listener := range ch.configListeners {
@@ -152,13 +152,16 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
 	}
 }
 
-func (ch *ConfigHandler) fetchConfig() error {
+func (ch *Handler) fetchConfig() error {
 	slog.Debug("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
 		slog.Info("No stored config yet -- using in-memory server location", "error", err)
-		preferred = ch.preferredLocation.Load().(C.ServerLocation)
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			preferred = storedLocation.(C.ServerLocation)
+		}
 	} else {
 		preferred = oldConfig.PreferredLocation
 	}
@@ -188,7 +191,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	return nil
 }
 
-func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
+func (ch *Handler) setConfigAndNotify(cfg *Config) {
 	slog.Debug("Setting config")
 	if cfg == nil {
 		slog.Debug("Config is nil, not setting")
@@ -210,7 +213,10 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	// If the merged config has no server location, use the preferred location
 	// stored in memory, if any.
 	if cfg.PreferredLocation == (C.ServerLocation{}) {
-		cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			cfg.PreferredLocation = storedLocation.(C.ServerLocation)
+		}
 	}
 
 	ch.config.Store(cfg)
@@ -220,7 +226,7 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 }
 
 // fetchLoop fetches the configuration every pollInterval.
-func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
+func (ch *Handler) fetchLoop(pollInterval time.Duration) {
 	if err := ch.fetchConfig(); err != nil {
 		slog.Error("Failed to fetch config. Retrying", "error", err, "interval", pollInterval)
 	}
@@ -237,7 +243,7 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 }
 
 // Stop stops the ConfigHandler from fetching new configurations.
-func (ch *ConfigHandler) Stop() {
+func (ch *Handler) Stop() {
 	ch.closeOnce.Do(func() {
 		close(ch.stopC)
 	})
@@ -245,7 +251,7 @@ func (ch *ConfigHandler) Stop() {
 
 // loadConfig loads the config file from the disk. If the config file is not found, it returns
 // nil.
-func (ch *ConfigHandler) loadConfig() error {
+func (ch *Handler) loadConfig() error {
 	slog.Debug("reading config file")
 	buf, err := os.ReadFile(ch.configPath)
 	slog.Debug("config file read")
@@ -264,7 +270,7 @@ func (ch *ConfigHandler) loadConfig() error {
 }
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
-func (ch *ConfigHandler) saveConfig(cfg *Config) {
+func (ch *Handler) saveConfig(cfg *Config) {
 	slog.Debug("Saving config")
 	if cfg == nil {
 		slog.Debug("Config is nil, not saving")
@@ -291,7 +297,7 @@ func (ch *ConfigHandler) saveConfig(cfg *Config) {
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.
-func (ch *ConfigHandler) GetConfig() (*Config, error) {
+func (ch *Handler) GetConfig() (*Config, error) {
 	cfgRes := ch.config.Load()
 	if cfgRes == nil {
 		return nil, fmt.Errorf("no config")
@@ -305,7 +311,7 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 
 // modifyConfig saves the config to the disk with the given config. It creates the config file
 // if it doesn't exist.
-func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
+func (ch *Handler) modifyConfig(fn func(cfg *Config)) {
 	ch.configMu.Lock()
 	cfg, err := ch.GetConfig()
 	if err != nil {

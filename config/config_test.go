@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func TestSaveConfig(t *testing.T) {
 	configPath := filepath.Join(tempDir, configFileName)
 
 	// Create a ConfigHandler with the mock parser
-	ch := &ConfigHandler{
+	ch := &Handler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
 	}
@@ -67,7 +68,7 @@ func TestGetConfig(t *testing.T) {
 	configPath := filepath.Join(tempDir, configFileName)
 
 	// Create a ConfigHandler with the mock parser
-	ch := &ConfigHandler{
+	ch := &Handler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
 		config:       atomic.Value{},
@@ -106,7 +107,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	configPath := filepath.Join(tempDir, configFileName)
 
 	// Create a ConfigHandler with the mock parser
-	ch := &ConfigHandler{
+	ch := &Handler{
 		configPath:   configPath,
 		configParser: mockConfigParser,
 		config:       atomic.Value{},
@@ -140,6 +141,105 @@ func TestSetPreferredServerLocation(t *testing.T) {
 		assert.Equal(t, country, actualConfig.PreferredLocation.Country, "Preferred country should match")
 		assert.Equal(t, city, actualConfig.PreferredLocation.City, "Preferred city should match")
 	})
+}
+
+func TestHandlerFetchConfig(t *testing.T) {
+	// Setup temporary directory for testing
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+
+	// Mock fetcher
+	mockFetcher := &MockFetcher{}
+
+	// Create a ConfigHandler with the mock parser and fetcher
+	ch := &Handler{
+		configPath:        configPath,
+		configParser:      mockConfigParser,
+		config:            atomic.Value{},
+		preferredLocation: atomic.Value{},
+		ftr:               mockFetcher,
+	}
+
+	// Test case: No server location set
+	t.Run("NoServerLocationSet", func(t *testing.T) {
+		mockFetcher.response = []byte(`{
+			"ConfigResponse": {
+				"Servers": [
+					{"Country": "US", "City": "New York"},
+					{"Country": "UK", "City": "London"}
+				]
+			}
+		}`)
+
+		err := ch.fetchConfig()
+		require.NoError(t, err, "Should not return an error when no server location is set")
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when getting config")
+		assert.Equal(t, "US", actualConfig.ConfigResponse.Servers[0].Country, "First server country should match")
+		assert.Equal(t, "New York", actualConfig.ConfigResponse.Servers[0].City, "First server city should match")
+	})
+
+	// Test case: No stored config, fetch succeeds
+	t.Run("NoStoredConfigFetchSuccess", func(t *testing.T) {
+		mockFetcher.response = []byte(`{
+			"ConfigResponse": {
+				"Servers": [
+					{"Country": "US", "City": "New York"},
+					{"Country": "UK", "City": "London"}
+				]
+			}
+		}`)
+		mockFetcher.err = nil
+
+		ch.preferredLocation.Store(C.ServerLocation{Country: "US", City: "New York"})
+
+		err := ch.fetchConfig()
+		require.NoError(t, err, "Should not return an error when fetch succeeds")
+
+		actualConfig, err := ch.GetConfig()
+		require.NoError(t, err, "Should not return an error when getting config")
+		assert.Equal(t, "US", actualConfig.ConfigResponse.Servers[0].Country, "First server country should match")
+		assert.Equal(t, "New York", actualConfig.ConfigResponse.Servers[0].City, "First server city should match")
+	})
+
+	// Test case: Fetch fails
+	t.Run("FetchFails", func(t *testing.T) {
+		mockFetcher.response = nil
+		mockFetcher.err = errors.New("fetch error")
+
+		err := ch.fetchConfig()
+		require.Error(t, err, "Should return an error when fetch fails")
+		assert.Contains(t, err.Error(), "fetch error", "Error message should contain fetch error")
+	})
+
+	// Test case: Fetch returns nil response
+	t.Run("FetchReturnsNilResponse", func(t *testing.T) {
+		mockFetcher.response = nil
+		mockFetcher.err = nil
+
+		err := ch.fetchConfig()
+		require.NoError(t, err, "Should not return an error when fetch returns nil response")
+	})
+
+	// Test case: Config parsing fails
+	t.Run("ConfigParsingFails", func(t *testing.T) {
+		mockFetcher.response = []byte(`invalid json`)
+		mockFetcher.err = nil
+
+		err := ch.fetchConfig()
+		require.Error(t, err, "Should return an error when config parsing fails")
+		assert.Contains(t, err.Error(), "parsing config", "Error message should indicate parsing error")
+	})
+}
+
+// MockFetcher is a mock implementation of the fetcher used for testing
+type MockFetcher struct {
+	response []byte
+	err      error
+}
+
+func (mf *MockFetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
+	return mf.response, mf.err
 }
 
 type UserStub struct{}
