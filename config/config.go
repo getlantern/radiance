@@ -64,6 +64,9 @@ type ConfigHandler struct {
 	configListenersMu sync.RWMutex
 	configParser      Unmarshaller
 	configMu          sync.RWMutex
+
+	// wgKeyPath is the path to the WireGuard private key file.
+	wgKeyPath string
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
@@ -78,6 +81,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		apiClient:       common.NewWebClient(httpClient),
 		configListeners: make([]ListenerFunc, 0),
 		configParser:    configParser,
+		wgKeyPath:       filepath.Join(dataDir, "wg.key"),
 	}
 
 	if err := ch.loadConfig(); err != nil {
@@ -87,6 +91,23 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 	ch.ftr = newFetcher(httpClient, user)
 	go ch.fetchLoop(pollInterval)
 	return ch
+}
+
+var ErrNoWGKey = errors.New("no wg key")
+
+func (ch *ConfigHandler) loadWGKey() (wgtypes.Key, error) {
+	buf, err := os.ReadFile(ch.wgKeyPath)
+	if os.IsNotExist(err) {
+		return wgtypes.Key{}, ErrNoWGKey
+	}
+	if err != nil {
+		return wgtypes.Key{}, fmt.Errorf("reading wg key file: %w", err)
+	}
+	key, err := wgtypes.ParseKey(string(buf))
+	if err != nil {
+		return wgtypes.Key{}, fmt.Errorf("parsing wg key: %w", err)
+	}
+	return key, nil
 }
 
 // SetPreferredServerLocation sets the preferred server location to connect to
@@ -160,9 +181,21 @@ func (ch *ConfigHandler) fetchConfig() error {
 	} else {
 		preferredServerLocation = oldConfig.PreferredLocation
 	}
-	privateKey, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		return fmt.Errorf("failed to generate wg keys: %w", err)
+
+	privateKey, err := ch.loadWGKey()
+	if err != nil && !errors.Is(err, ErrNoWGKey) {
+		return fmt.Errorf("loading wg key: %w", err)
+	}
+
+	if errors.Is(err, ErrNoWGKey) {
+		privateKey, err = wgtypes.GeneratePrivateKey()
+		if err != nil {
+			return fmt.Errorf("failed to generate wg keys: %w", err)
+		}
+
+		if err := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); err != nil {
+			return fmt.Errorf("writing wg key file: %w", err)
+		}
 	}
 
 	resp, err := ch.ftr.fetchConfig(preferredServerLocation, privateKey.PublicKey().String())
