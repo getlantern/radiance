@@ -25,7 +25,7 @@ type ProClient interface {
 func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	var resp *protos.SubscriptionPaymentRedirectResponse
 
-	err := c.Get(ctx, "subscription-payment-redirect", map[string]any{
+	err := c.Get(ctx, "/subscription-payment-redirect", map[string]any{
 		"provider":         data.Provider,
 		"plan":             data.Plan,
 		"deviceName":       data.DeviceName,

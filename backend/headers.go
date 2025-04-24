@@ -26,6 +26,7 @@ const (
 	TimeZoneHeader          = "X-Lantern-Time-Zone"
 	RandomNoiseHeader       = "X-Lantern-Rand"
 	ProTokenHeader          = "X-Lantern-Pro-Token"
+	RefererHeader           = "referer"
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.

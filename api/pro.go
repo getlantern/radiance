@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/app"
@@ -36,7 +37,9 @@ func NewPro(httpClient *http.Client, userConfig common.UserConfig) *Pro {
 			if userConfig.LegacyID() != 0 {
 				req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userConfig.LegacyID(), 10))
 			}
-
+			if req.URL != nil && strings.HasSuffix(req.URL.Path, "/subscription-payment-redirect") {
+				req.Header.Set(backend.RefererHeader, "https://lantern.io/")
+			}
 			return nil
 		},
 	}
