@@ -124,7 +124,7 @@ func TestFetchConfig(t *testing.T) {
 				assert.Equal(t, app.Name, confReq.AppName)
 				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
 				if tt.preferredServerLoc != nil {
-					assert.Equal(t, *tt.preferredServerLoc, confReq.PreferredLocation)
+					assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 				}
 			}
 		})
