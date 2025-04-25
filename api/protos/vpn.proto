@@ -34,7 +34,7 @@ message LogLine {
   int64 timestamp = 2;
 }
   
-service Lantern {
+service LanternService {
   rpc StreamLogs(google.protobuf.Empty) returns (stream LogLine);
 }
 

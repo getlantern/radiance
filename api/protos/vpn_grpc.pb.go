@@ -20,27 +20,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Lantern_StreamLogs_FullMethodName = "/Lantern/StreamLogs"
+	LanternService_StreamLogs_FullMethodName = "/LanternService/StreamLogs"
 )
 
-// LanternClient is the client API for Lantern service.
+// LanternServiceClient is the client API for LanternService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type LanternClient interface {
+type LanternServiceClient interface {
 	StreamLogs(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
 }
 
-type lanternClient struct {
+type lanternServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewLanternClient(cc grpc.ClientConnInterface) LanternClient {
-	return &lanternClient{cc}
+func NewLanternServiceClient(cc grpc.ClientConnInterface) LanternServiceClient {
+	return &lanternServiceClient{cc}
 }
 
-func (c *lanternClient) StreamLogs(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
+func (c *lanternServiceClient) StreamLogs(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Lantern_ServiceDesc.Streams[0], Lantern_StreamLogs_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &LanternService_ServiceDesc.Streams[0], LanternService_StreamLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -55,69 +55,69 @@ func (c *lanternClient) StreamLogs(ctx context.Context, in *emptypb.Empty, opts 
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Lantern_StreamLogsClient = grpc.ServerStreamingClient[LogLine]
+type LanternService_StreamLogsClient = grpc.ServerStreamingClient[LogLine]
 
-// LanternServer is the server API for Lantern service.
-// All implementations must embed UnimplementedLanternServer
+// LanternServiceServer is the server API for LanternService service.
+// All implementations must embed UnimplementedLanternServiceServer
 // for forward compatibility.
-type LanternServer interface {
+type LanternServiceServer interface {
 	StreamLogs(*emptypb.Empty, grpc.ServerStreamingServer[LogLine]) error
-	mustEmbedUnimplementedLanternServer()
+	mustEmbedUnimplementedLanternServiceServer()
 }
 
-// UnimplementedLanternServer must be embedded to have
+// UnimplementedLanternServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedLanternServer struct{}
+type UnimplementedLanternServiceServer struct{}
 
-func (UnimplementedLanternServer) StreamLogs(*emptypb.Empty, grpc.ServerStreamingServer[LogLine]) error {
+func (UnimplementedLanternServiceServer) StreamLogs(*emptypb.Empty, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamLogs not implemented")
 }
-func (UnimplementedLanternServer) mustEmbedUnimplementedLanternServer() {}
-func (UnimplementedLanternServer) testEmbeddedByValue()                 {}
+func (UnimplementedLanternServiceServer) mustEmbedUnimplementedLanternServiceServer() {}
+func (UnimplementedLanternServiceServer) testEmbeddedByValue()                        {}
 
-// UnsafeLanternServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to LanternServer will
+// UnsafeLanternServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to LanternServiceServer will
 // result in compilation errors.
-type UnsafeLanternServer interface {
-	mustEmbedUnimplementedLanternServer()
+type UnsafeLanternServiceServer interface {
+	mustEmbedUnimplementedLanternServiceServer()
 }
 
-func RegisterLanternServer(s grpc.ServiceRegistrar, srv LanternServer) {
-	// If the following call pancis, it indicates UnimplementedLanternServer was
+func RegisterLanternServiceServer(s grpc.ServiceRegistrar, srv LanternServiceServer) {
+	// If the following call pancis, it indicates UnimplementedLanternServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&Lantern_ServiceDesc, srv)
+	s.RegisterService(&LanternService_ServiceDesc, srv)
 }
 
-func _Lantern_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
+func _LanternService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(emptypb.Empty)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(LanternServer).StreamLogs(m, &grpc.GenericServerStream[emptypb.Empty, LogLine]{ServerStream: stream})
+	return srv.(LanternServiceServer).StreamLogs(m, &grpc.GenericServerStream[emptypb.Empty, LogLine]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Lantern_StreamLogsServer = grpc.ServerStreamingServer[LogLine]
+type LanternService_StreamLogsServer = grpc.ServerStreamingServer[LogLine]
 
-// Lantern_ServiceDesc is the grpc.ServiceDesc for Lantern service.
+// LanternService_ServiceDesc is the grpc.ServiceDesc for LanternService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var Lantern_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "Lantern",
-	HandlerType: (*LanternServer)(nil),
+var LanternService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "LanternService",
+	HandlerType: (*LanternServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "StreamLogs",
-			Handler:       _Lantern_StreamLogs_Handler,
+			Handler:       _LanternService_StreamLogs_Handler,
 			ServerStreams: true,
 		},
 	},
