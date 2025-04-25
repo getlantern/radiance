@@ -2,7 +2,7 @@ package common
 
 import "runtime"
 
-func IsAndoid() bool {
+func IsAndroid() bool {
 	return runtime.GOOS == "android"
 }
 

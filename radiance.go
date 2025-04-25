@@ -122,7 +122,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	)
 	// deviceid is a optional for macos, windows and linux
 	var platformDeviceId string
-	if common.IsAndoid() || common.IsIOS() {
+	if common.IsAndroid() || common.IsIOS() {
 		platformDeviceId = opts.DeviceID
 	} else {
 		platformDeviceId = deviceid.Get()
