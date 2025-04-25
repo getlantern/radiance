@@ -145,7 +145,7 @@ func (ir *IssueReporter) Report(
 		return err
 	}
 
-	req, err := backend.NewIssueRequest(context.Background(), http.MethodPost, requestURL, bytes.NewReader(out), ir.user)
+	req, err := backend.NewIssueRequest(context.Background(), http.MethodPost, requestURL, bytes.NewReader(out))
 	if err != nil {
 		return log.Errorf("creating request: %w", err)
 	}

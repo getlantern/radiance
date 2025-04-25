@@ -51,13 +51,12 @@ func newFetcher(client *http.Client, user user.BaseUser) Fetcher {
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
 	confReq := C.ConfigRequest{
-		ClientVersion:     app.ClientVersion,
 		SingboxVersion:    singVersion(),
 		UserID:            strconv.FormatInt(f.user.LegacyID(), 10),
 		OS:                app.Platform,
 		AppName:           app.Name,
 		DeviceID:          f.user.DeviceID(),
-		PreferredLocation: preferred,
+		PreferredLocation: &preferred,
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {
@@ -80,7 +79,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
+	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
