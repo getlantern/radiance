@@ -40,12 +40,12 @@ type Attachment struct {
 type IssueReporter struct {
 	httpClient *http.Client
 	user       *api.User
-	userConfig common.UserConfig
+	userConfig common.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(httpClient *http.Client, user *api.User, userConfig common.UserConfig) (*IssueReporter, error) {
+func NewIssueReporter(httpClient *http.Client, user *api.User, userConfig common.UserInfo) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
@@ -88,7 +88,6 @@ func (ir *IssueReporter) Report(
 	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
-
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		log.Errorf("Unable to get OS version: %v", err)

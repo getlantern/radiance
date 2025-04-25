@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"log"
 	"log/slog"
 
 	"github.com/getlantern/radiance/api/protos"
@@ -11,17 +10,18 @@ import (
 
 type proClient struct {
 	common.WebClient
-	common.UserConfig
+	common.UserInfo
 }
 
 type ProClient interface {
 	//Payment methods
 	SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error)
 	StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error)
-	UserCreate(ctx context.Context) (*protos.UserDataResponse, error)
+	CreateUser(ctx context.Context) (*protos.UserDataResponse, error)
 	Plans(ctx context.Context) (*protos.PlansResponse, error)
 }
 
+//
 func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	var resp *protos.SubscriptionPaymentRedirectResponse
 
@@ -33,18 +33,18 @@ func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *proto
 		"subscriptionType": data.SubscriptionType,
 	}, &resp)
 	if err != nil {
-		log.Fatalf("Error in SubscriptionPaymentRedirect: %v", err)
+		slog.Error("Error in SubscriptionPaymentRedirect: %v", "err", err)
 		return nil, err
 	}
-	log.Printf("SubscriptionPaymentRedirect response: %v", resp)
+	slog.Error("SubscriptionPaymentRedirect response", "resp", resp)
 	return resp, nil
 }
 
-func (c *proClient) UserCreate(ctx context.Context) (*protos.UserDataResponse, error) {
+func (c *proClient) CreateUser(ctx context.Context) (*protos.UserDataResponse, error) {
 	var resp *protos.UserDataResponse
 	err := c.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
-		log.Fatalf("Error in UserCreate: %v", err)
+		slog.Error("Error in UserCreate: %v", "err", err)
 		return nil, err
 	}
 	login := &protos.LoginResponse{
@@ -53,9 +53,9 @@ func (c *proClient) UserCreate(ctx context.Context) (*protos.UserDataResponse, e
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
 	/// Write user data to file
-	err = c.UserConfig.Save(login)
+	err = c.UserInfo.Save(login)
 	if err != nil {
-		log.Fatalf("Error writing user data: %v", err)
+		slog.Error("Error writing user data: %v", "err", err)
 		return nil, err
 	}
 	return resp, nil
@@ -72,7 +72,7 @@ func (c *proClient) StripeSubscription(ctx context.Context, data *protos.Subscri
 	}
 	err := c.Post(ctx, "/stripe-subscription", mapping, &resp)
 	if err != nil {
-		log.Fatalf("Error in UserCreate: %v", err)
+		slog.Error("Error in UserCreate: %v", "err", err)
 		return nil, err
 	}
 	return resp, nil
@@ -81,11 +81,11 @@ func (c *proClient) StripeSubscription(ctx context.Context, data *protos.Subscri
 func (c *proClient) Plans(ctx context.Context) (*protos.PlansResponse, error) {
 	var resp *protos.PlansResponse
 	params := map[string]interface{}{
-		"locale": c.UserConfig.Locale(),
+		"locale": c.UserInfo.Locale(),
 	}
 	err := c.Get(ctx, "/plans-v4", params, &resp)
 	if err != nil {
-		log.Fatalf("Error in Plans: %v", err)
+		slog.Error("Error in Plans: %v", "err", err)
 		return nil, err
 	}
 	return resp, nil

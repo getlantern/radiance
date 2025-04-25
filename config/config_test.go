@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/common"
 )
 
 // Mock implementation of ConfigParser for testing
@@ -146,7 +146,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 type UserStub struct{}
 
 // Verify that a UserStub implements the User interface
-var _ common.UserConfig = (*UserStub)(nil)
+var _ common.UserInfo = (*UserStub)(nil)
 
 func (u *UserStub) Locale() string {
 	return "en-US"

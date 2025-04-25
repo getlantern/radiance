@@ -63,10 +63,10 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
-func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user common.UserConfig, dataDir string,
+func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user common.UserInfo, dataDir string,
 	configParser Unmarshaller) *ConfigHandler {
 	configPath := filepath.Join(dataDir, configFileName)
-	opts := common.Opts{
+	opts := common.WebClientOptions{
 		BaseURL:    "",
 		HttpClient: httpClient}
 

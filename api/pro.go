@@ -20,9 +20,9 @@ type Pro struct {
 	proClient ProClient
 }
 
-// New returns the object handling anything user-account related
-func NewPro(httpClient *http.Client, userConfig common.UserConfig) *Pro {
-	opts := common.Opts{
+// New returns the object handling anything pro-server related
+func NewPro(httpClient *http.Client, userConfig common.UserInfo) *Pro {
+	opts := common.WebClientOptions{
 		HttpClient: httpClient,
 		BaseURL:    common.ProServerUrl,
 		OnBeforeRequest: func(client *resty.Client, req *http.Request) error {
@@ -45,15 +45,15 @@ func NewPro(httpClient *http.Client, userConfig common.UserConfig) *Pro {
 	}
 	return &Pro{
 		proClient: &proClient{
-			WebClient:  common.NewWebClient(&opts),
-			UserConfig: userConfig,
+			WebClient: common.NewWebClient(&opts),
+			UserInfo:  userConfig,
 		},
 	}
 }
 
 // Create a new user account
 func (u *Pro) UserCreate(ctx context.Context) (*protos.UserDataResponse, error) {
-	return u.proClient.UserCreate(ctx)
+	return u.proClient.CreateUser(ctx)
 
 }
 

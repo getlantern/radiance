@@ -28,7 +28,7 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 type mockUser struct {
-	common.UserConfig
+	common.UserInfo
 }
 
 func (m *mockUser) DeviceID() string {

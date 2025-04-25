@@ -11,15 +11,15 @@ import (
 	"net/http"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/moul/http2curl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var (
-	APIBaseUrl      = "https://iantem.io/api/v1"
-	ProServerUrl    = "https://api.getiantem.org"
-	ContentTypeJSON = "application/json"
+	APIBaseUrl       = "https://iantem.io/api/v1"
+	ProServerUrl     = "https://api.getiantem.org"
+	ContentTypeJSON  = "application/json"
+	ContentTypeProto = "application/x-protobuf"
 )
 
 type WebClient interface {
@@ -40,8 +40,8 @@ type webClient struct {
 	*resty.Client
 }
 
-// Opts are common options that RESTClient may be configured with
-type Opts struct {
+// WebClientOptions are common options that RESTClient may be configured with
+type WebClientOptions struct {
 	// The OnAfterResponse option sets response middleware
 	OnAfterResponse resty.ResponseMiddleware
 	// BaseURL is the primary URL the client is configured with
@@ -55,7 +55,7 @@ type Opts struct {
 }
 
 // Construct an api client using the given httpClient (kindling)
-func NewWebClient(opts *Opts) WebClient {
+func NewWebClient(opts *WebClientOptions) WebClient {
 	if opts.HttpClient == nil {
 		opts.HttpClient = &http.Client{}
 	}
@@ -86,8 +86,8 @@ func (c *webClient) GetPROTOC(ctx context.Context, path string, params map[strin
 	}
 	//Overide the default content type
 	// to application/x-protobuf
-	req.Header.Set("Content-Type", ContentTypeJSON)
-	req.Header.Set("Accept", ContentTypeJSON)
+	req.Header.Set("Content-Type", ContentTypeProto)
+	req.Header.Set("Accept", ContentTypeProto)
 	resp, err := req.Get(path)
 
 	if err != nil {
@@ -115,8 +115,8 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 		SetContext(ctx).
 		SetBody(bodyBytes)
 
-	req.Header.Set("Content-Type", "application/x-protobuf")
-	req.Header.Set("Accept", "application/x-protobuf")
+	req.Header.Set("Content-Type", ContentTypeProto)
+	req.Header.Set("Accept", ContentTypeProto)
 
 	// Execute request
 	resp, err := req.Post(path)
@@ -146,9 +146,6 @@ func (c *webClient) Get(ctx context.Context, path string, params map[string]any,
 
 	resp, err := req.Get(path)
 
-	command, _ := http2curl.GetCurlCommand(req.RawRequest)
-	fmt.Printf("curl command: %v", command)
-
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
@@ -174,9 +171,6 @@ func (c *webClient) Post(ctx context.Context, path string, params map[string]any
 	req.Header.Set("Accept", ContentTypeJSON)
 
 	resp, err := req.Post(path)
-
-	command, _ := http2curl.GetCurlCommand(req.RawRequest)
-	fmt.Printf("curl command: %v", command)
 
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)

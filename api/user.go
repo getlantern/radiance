@@ -50,16 +50,16 @@ type User struct {
 	userData   *protos.LoginResponse
 	deviceId   string
 	authClient AuthClient
-	userConfig common.UserConfig
+	userConfig common.UserInfo
 }
 
 // New returns the object handling anything user-account related
 // Device ID is optional. for macos, linux, and windows
 // Device id mendatory for android and ios
-func NewUser(httpClient *http.Client, userConfig common.UserConfig) *User {
+func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
 	salt, _ := userConfig.ReadSalt()
 	userData, _ := userConfig.GetUserData()
-	opts := common.Opts{
+	opts := common.WebClientOptions{
 		HttpClient: httpClient,
 		BaseURL:    common.APIBaseUrl,
 	}

@@ -65,7 +65,7 @@ type Radiance struct {
 
 	user       *api.User
 	pro        *api.Pro
-	userConfig common.UserConfig
+	userConfig common.UserInfo
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
@@ -207,12 +207,12 @@ func (r *Radiance) User() *api.User {
 
 // Pro returns the pro object for this client
 func (r *Radiance) Pro() *api.Pro {
-
 	return r.pro
 }
 
-// Pro returns the pro object for this client
-func (r *Radiance) UserConfig() common.UserConfig {
+// UserInfo returns the user info object for this client
+// This is the user config object that contains the device ID and other user data
+func (r *Radiance) UserInfo() common.UserInfo {
 	return r.userConfig
 }
 

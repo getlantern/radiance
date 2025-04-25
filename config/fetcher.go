@@ -26,12 +26,12 @@ const configURL = "https://api.iantem.io/v1/config-new"
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
-	user         common.UserConfig
+	user         common.UserInfo
 	lastModified time.Time
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserConfig) *fetcher {
+func newFetcher(client *http.Client, user common.UserInfo) *fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,
