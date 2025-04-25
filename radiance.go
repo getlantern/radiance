@@ -63,8 +63,9 @@ type Radiance struct {
 	activeServer *atomic.Value
 	stopChan     chan struct{}
 
-	user       *api.User
-	pro        *api.Pro
+	user *api.User
+	pro  *api.Pro
+	//user config is the user config object that contains the device ID and other user data
 	userConfig common.UserInfo
 
 	issueReporter *issue.IssueReporter
@@ -119,12 +120,14 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
+	// deviceid is a optional for macos, windows and linux
 	var platformDeviceId string
 	if common.IsAndoid() || common.IsIOS() {
 		platformDeviceId = opts.DeviceID
 	} else {
 		platformDeviceId = deviceid.Get()
 	}
+	// If no local setup from client options, use the default locale
 	if opts.Locale == "" {
 		log.Debug("Locale not set, using default en-US")
 		opts.Locale = "en-US"

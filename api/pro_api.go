@@ -8,6 +8,8 @@ import (
 	"github.com/getlantern/radiance/common"
 )
 
+// ProClient is the interface for the Pro API
+// It contains methods for subscription and user management
 type proClient struct {
 	common.WebClient
 	common.UserInfo
@@ -17,11 +19,13 @@ type ProClient interface {
 	//Payment methods
 	SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error)
 	StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error)
-	CreateUser(ctx context.Context) (*protos.UserDataResponse, error)
 	Plans(ctx context.Context) (*protos.PlansResponse, error)
+	// User methods
+	CreateUser(ctx context.Context) (*protos.UserDataResponse, error)
 }
 
-//
+// SubscriptionPaymentRedirect is used to get the subscription payment redirect URL with SubscriptionPaymentRedirectRequest
+// this is is used only in desktop app
 func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	var resp *protos.SubscriptionPaymentRedirectResponse
 
@@ -40,6 +44,7 @@ func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *proto
 	return resp, nil
 }
 
+// CreateUser is used to create a new user
 func (c *proClient) CreateUser(ctx context.Context) (*protos.UserDataResponse, error) {
 	var resp *protos.UserDataResponse
 	err := c.Post(ctx, "/user-create", nil, &resp)
@@ -62,6 +67,9 @@ func (c *proClient) CreateUser(ctx context.Context) (*protos.UserDataResponse, e
 
 }
 
+// StripeSubscription is used to create a new subscription with SubscriptionRequest
+// and return the subscription data
+// this is used only in android app
 func (c *proClient) StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error) {
 	slog.Debug("StripeSubscription api", "data", data)
 	var resp *protos.SubscriptionResponse
@@ -76,8 +84,9 @@ func (c *proClient) StripeSubscription(ctx context.Context, data *protos.Subscri
 		return nil, err
 	}
 	return resp, nil
-
 }
+
+// Plans is used to get the list of plans
 func (c *proClient) Plans(ctx context.Context) (*protos.PlansResponse, error) {
 	var resp *protos.PlansResponse
 	params := map[string]interface{}{

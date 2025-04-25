@@ -53,9 +53,8 @@ type User struct {
 	userConfig common.UserInfo
 }
 
-// New returns the object handling anything user-account related
-// Device ID is optional. for macos, linux, and windows
-// Device id mendatory for android and ios
+// NewUser returns the object handling anything user-auth related
+// It takes a httpClient and a userConfig object.
 func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
 	salt, _ := userConfig.ReadSalt()
 	userData, _ := userConfig.GetUserData()
