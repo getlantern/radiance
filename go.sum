@@ -42,8 +42,8 @@ github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01/go.mod h1:3vR6+j
 github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4/go.mod h1:4WCQkaCIwta0KlF9bQZA1jYqp8bzIS2PeCqjnef8nZ8=
 github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd h1:0xt9OTbV50a/+ZarMcr86ybWiN1v+bbwzdnVuXHzR/o=
 github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd/go.mod h1:oD9q9NB1LNBLHk3WAwza4tivxV7tm7jKFlCNCAv3+M8=
-github.com/getlantern/common v1.2.1-0.20250404213255-37d58e3e0fae h1:uRuUGf1TgBRCWelqxKC1aa7gqTsQ6u4dPwMyRGDZ5x4=
-github.com/getlantern/common v1.2.1-0.20250404213255-37d58e3e0fae/go.mod h1:ucQSLeHpC4ns6VvlWBinK7BI8LrUWlhZUHArs6VRvXI=
+github.com/getlantern/common v1.2.1-0.20250425211416-ce0caf588106 h1:C5uVnt2aocxC7E3xUxn0M3olo+spc+f8uyEvyw5PQ0Y=
+github.com/getlantern/common v1.2.1-0.20250425211416-ce0caf588106/go.mod h1:ucQSLeHpC4ns6VvlWBinK7BI8LrUWlhZUHArs6VRvXI=
 github.com/getlantern/context v0.0.0-20190109183933-c447772a6520/go.mod h1:L+mq6/vvYHKjCX2oez0CgEAJmbq1fbb/oNJIWQkBybY=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
