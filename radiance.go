@@ -343,3 +343,18 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	lz.smartTransportMu.Unlock()
 	return lz.smartTransport.RoundTrip(req)
 }
+
+// AddServerManagerInstance will fetch VPN connection information from the server manager instance and add it to the VPN client as a custom server
+func (r *Radiance) AddServerManagerInstance(tag string, ip string, port int, accessToken string) error {
+	return r.VPNClient.AddServerManagerInstance(tag, ip, port, accessToken)
+}
+
+// InviteToServerManagerInstance will invite another user (identified by inviteName) to the server manager instance and return the token that can be used to connect to the server manager instance
+func (r *Radiance) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
+	return r.VPNClient.InviteToServerManagerInstance(ip, port, accessToken, inviteName)
+}
+
+// RevokeServerManagerInvite will revoke an invite to the server manager instance
+func (r *Radiance) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
+	return r.VPNClient.RevokeServerManagerInvite(ip, port, accessToken, inviteName)
+}

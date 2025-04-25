@@ -2,8 +2,11 @@ package boxservice
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -67,7 +70,7 @@ func (m *CustomServerManager) AddCustomServer(cfg ServerConnectConfig) error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	if (loadedOptions.Endpoint == nil && loadedOptions.Outbound == nil) || loadedOptions.Tag == "" {
+	if loadedOptions.Endpoint == nil && loadedOptions.Outbound == nil {
 		return fmt.Errorf("invalid custom server provided")
 	}
 
@@ -285,5 +288,94 @@ func (m *CustomServerManager) newSelectorOutbound(outboundManager adapter.Outbou
 		return fmt.Errorf("create selector outbound: %w", err)
 	}
 
+	return nil
+}
+
+func insecureHttpClient() http.Client {
+	transport := http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+	return http.Client{
+		Transport: &transport,
+	}
+}
+
+func (m *CustomServerManager) AddServerManagerInstance(tag string, ip string, port int, accessToken string) error {
+	client := insecureHttpClient()
+
+	resp, err := client.Get(fmt.Sprintf("https://%s:%d/api/v1/connect-config?token=%s", ip, port, accessToken))
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("failed to get connect config: %w", err)
+	}
+	type connectInfo struct {
+		Outbounds []*option.Outbound `json:"outbounds,omitempty"`
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var cs connectInfo
+	if cs, err = json.UnmarshalExtendedContext[connectInfo](m.ctx, body); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(cs.Outbounds) == 0 {
+		return fmt.Errorf("no outbounds found")
+	}
+
+	cs.Outbounds[0].Tag = tag
+
+	customServerConfig := CustomServerInfo{
+		Outbound: cs.Outbounds[0],
+	}
+	data, err := json.MarshalContext(m.ctx, customServerConfig)
+	if err != nil {
+		return fmt.Errorf("marshal custom server config: %w", err)
+	}
+	return m.AddCustomServer(data)
+}
+
+func (m *CustomServerManager) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
+	client := insecureHttpClient()
+	resp, err := client.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("failed to get connect config: %w", err)
+	}
+	type tokenResp struct {
+		Token string
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var cs tokenResp
+	if cs, err = json.UnmarshalExtendedContext[tokenResp](m.ctx, body); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	return cs.Token, nil
+}
+
+func (m *CustomServerManager) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
+	client := insecureHttpClient()
+	resp, err := client.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("failed to revoke invite: %w", err)
+	}
 	return nil
 }
