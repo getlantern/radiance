@@ -25,6 +25,7 @@ import (
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -159,6 +160,17 @@ func initCommon(opts client.Options) (*sharedConfig, error) {
 		if opts.LogDir == "" {
 			opts.LogDir = appdir.Logs(app.Name)
 		}
+		if opts.Locale == "" {
+			opts.Locale = "en-US"
+		}
+
+		var platformDeviceID string
+		if common.IsAndroid() || common.IsIOS() {
+			platformDeviceID = opts.DeviceID
+		} else {
+			platformDeviceID = deviceid.Get()
+		}
+
 		mkdirs(&opts)
 		var logWriter io.Writer
 		log, logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
@@ -172,10 +184,6 @@ func initCommon(opts client.Options) (*sharedConfig, error) {
 			return
 		}
 		// If no local setup from client options, use the default locale
-		if opts.Locale == "" {
-			log.Debug("Locale not set, using default en-US")
-			opts.Locale = "en-US"
-		}
 
 		k := kindling.NewKindling(
 			kindling.WithPanicListener(reporting.PanicListener),
@@ -185,7 +193,7 @@ func initCommon(opts client.Options) (*sharedConfig, error) {
 
 		sharedInit = &sharedConfig{
 			logWriter:  logWriter,
-			userConfig: common.NewUserConfig(opts.DeviceID, opts.DataDir, opts.DataDir),
+			userConfig: common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale),
 			kindling:   k,
 		}
 	})
