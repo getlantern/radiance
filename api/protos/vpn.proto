@@ -1,29 +1,40 @@
 syntax = "proto3";
 option go_package = "/protos";
 
-message Plan {
-    string id = 1;
-    string description = 2;
-    bool bestValue = 3;
-    int64 usdPrice = 4;
-    map<string, int64> price = 5;
-    map<string, int64> expectedMonthlyPrice = 6;
-    string totalCostBilledOneTime = 7;
-    string oneMonthCost = 8;
-    string totalCost = 9;
-    string formattedBonus = 10;
-    string renewalText = 11;
-    map<string, int64> renewalBonusExpected = 13;
-  }
+import "google/protobuf/empty.proto";
 
-  message PaymentProviders {
-    string name = 1;
-    repeated string logoUrls = 3;
-    map<string, string> data = 4;
-  }
+message Plan {
+  string id = 1;
+  string description = 2;
+  bool bestValue = 3;
+  int64 usdPrice = 4;
+  map<string, int64> price = 5;
+  map<string, int64> expectedMonthlyPrice = 6;
+  string totalCostBilledOneTime = 7;
+  string oneMonthCost = 8;
+  string totalCost = 9;
+  string formattedBonus = 10;
+  string renewalText = 11;
+  map<string, int64> renewalBonusExpected = 13;
+}
+
+message PaymentProviders {
+  string name = 1;
+  repeated string logoUrls = 3;
+  map<string, string> data = 4;
+}
+
+message PaymentMethod {
+  string method = 1;
+  repeated PaymentProviders providers = 2;
+}
+
+message LogLine {
+  string message = 1;
+  int64 timestamp = 2;
+}
   
-  message PaymentMethod {
-    string method = 1;
-    repeated PaymentProviders providers = 2;
-  }
-  
+service Lantern {
+  rpc StreamLogs(google.protobuf.Empty) returns (stream LogLine);
+}
+

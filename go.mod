@@ -67,6 +67,7 @@ require (
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.5.1 // indirect
 )
 
 require (
