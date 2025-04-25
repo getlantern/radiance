@@ -15,6 +15,7 @@ import (
 
 	"slices"
 
+	"github.com/getlantern/common"
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -57,6 +58,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
 		AppName:           app.Name,
 		DeviceID:          f.user.DeviceID(),
 		PreferredLocation: &preferred,
+		Backend:           common.SINGBOX,
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {

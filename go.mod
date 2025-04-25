@@ -14,7 +14,7 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20250425202034-b7b1907c0c8c
+	github.com/getlantern/common v1.2.1-0.20250425211416-ce0caf588106
 	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
