@@ -50,6 +50,12 @@ type VPNClient interface {
 	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
 	OnNewConfig(oldConfig, newConfig *config.Config) error
+
+	// Lantern Server Manager Integration
+
+	AddServerManagerInstance(tag string, ip string, port int, accessToken string) error
+	InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error)
+	RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error
 }
 
 type vpnClient struct {
@@ -121,7 +127,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	return client, nil
 }
 
-// Start starts the VPN client
+// StartVPN Start starts the VPN client
 func (c *vpnClient) StartVPN() error {
 	if c.running.Load() {
 		return errors.New("VPN client is already running")
@@ -147,7 +153,7 @@ func (c *vpnClient) StartVPN() error {
 	return nil
 }
 
-// Stop stops the VPN client and closes the TUN device
+// StopVPN Stop stops the VPN client and closes the TUN device
 func (c *vpnClient) StopVPN() error {
 	if !c.running.Load() {
 		return errors.New("VPN client is not running")
@@ -185,16 +191,30 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 	c.connected = connected
 }
 
-// Pause pauses the VPN client for the specified duration
+// PauseVPN Pause pauses the VPN client for the specified duration
 func (c *vpnClient) PauseVPN(dur time.Duration) error {
 	slog.Info("Pausing VPN for", "duration", dur)
 	return c.boxService.Pause(dur)
 }
 
-// Resume resumes the VPN client
+// ResumeVPN Resume resumes the VPN client
 func (c *vpnClient) ResumeVPN() {
 	slog.Info("Resuming VPN client")
 	c.boxService.Wake()
+}
+
+// Lantern Server Manager Integration
+
+func (c *vpnClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string) error {
+	return c.customServerManager.AddServerManagerInstance(tag, ip, port, accessToken)
+}
+
+func (c *vpnClient) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
+	return c.customServerManager.InviteToServerManagerInstance(ip, port, accessToken, inviteName)
+}
+
+func (c *vpnClient) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
+	return c.customServerManager.RevokeServerManagerInvite(ip, port, accessToken, inviteName)
 }
 
 func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
