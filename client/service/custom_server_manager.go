@@ -58,6 +58,10 @@ func (m *CustomServerManager) SetContext(ctx context.Context) {
 // endpdoint/outbound to the instance. We're only expecting one endpoint or
 // outbound per call.
 func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfig) error {
+	if _, err := m.loadCustomServer(); err != nil {
+		return fmt.Errorf("failed to load custom server configs: %w", err)
+	}
+
 	m.customServersMutex.Lock()
 	loadedOptions := m.customServers[tag]
 	m.customServersMutex.Unlock()
@@ -68,6 +72,10 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal config: %w", err)
 		}
+	}
+
+	if (loadedOptions.Endpoint == nil && loadedOptions.Outbound == nil) || loadedOptions.Tag == "" {
+		return fmt.Errorf("invalid custom server provided")
 	}
 
 	outbounds := make([]option.Outbound, 0)
@@ -85,7 +93,7 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 	m.customServersMutex.Lock()
 	m.customServers[tag] = loadedOptions
 	m.customServersMutex.Unlock()
-	if err := m.storeCustomServer(tag, loadedOptions); err != nil {
+	if err := m.writeChanges(customServers{CustomServers: m.customServersMapToList(m.customServers)}); err != nil {
 		return fmt.Errorf("failed to store custom server: %w", err)
 	}
 
@@ -96,49 +104,18 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 	return nil
 }
 
-func (m *CustomServerManager) ListCustomServers() ([]CustomServerInfo, error) {
-	customServers := make([]CustomServerInfo, 0)
+func (m *CustomServerManager) customServersMapToList(a map[string]CustomServerInfo) []CustomServerInfo {
 	m.customServersMutex.RLock()
 	defer m.customServersMutex.RUnlock()
-	for _, v := range m.customServers {
+	customServers := make([]CustomServerInfo, 0)
+	for _, v := range a {
 		customServers = append(customServers, v)
 	}
-	return customServers, nil
+	return customServers
 }
 
-// storeCustomServer stores the custom server configuration to a JSON file.
-func (m *CustomServerManager) storeCustomServer(tag string, options CustomServerInfo) error {
-	servers, err := m.loadCustomServer()
-	if err != nil {
-		return fmt.Errorf("load custom servers: %w", err)
-	}
-
-	if len(servers.CustomServers) == 0 {
-		servers.CustomServers = make([]CustomServerInfo, 0)
-	}
-	updated := false
-	for i, server := range servers.CustomServers {
-		if server.Tag == tag {
-			server.Outbound = options.Outbound
-			server.Endpoint = options.Endpoint
-			servers.CustomServers[i] = server
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		servers.CustomServers = append(servers.CustomServers, CustomServerInfo{
-			Tag:      tag,
-			Outbound: options.Outbound,
-			Endpoint: options.Endpoint,
-		})
-	}
-
-	if err = m.writeChanges(servers); err != nil {
-		return fmt.Errorf("failed to add custom server %q: %w", tag, err)
-	}
-
-	return nil
+func (m *CustomServerManager) ListCustomServers() ([]CustomServerInfo, error) {
+	return m.customServersMapToList(m.customServers), nil
 }
 
 func (m *CustomServerManager) writeChanges(customServers customServers) error {
@@ -201,6 +178,10 @@ func (m *CustomServerManager) removeCustomServer(tag string) error {
 // RemoveCustomServer removes the custom server options from endpoints, outbounds
 // and the custom server file.
 func (m *CustomServerManager) RemoveCustomServer(tag string) error {
+	if _, err := m.loadCustomServer(); err != nil {
+		return fmt.Errorf("failed to load custom server configs: %w", err)
+	}
+
 	outboundManager := service.FromContext[adapter.OutboundManager](m.ctx)
 	endpointManager := service.FromContext[adapter.EndpointManager](m.ctx)
 
@@ -233,7 +214,7 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 	m.customServersMutex.Lock()
 	delete(m.customServers, tag)
 	m.customServersMutex.Unlock()
-	if err := m.removeCustomServer(tag); err != nil {
+	if err := m.writeChanges(customServers{CustomServers: m.customServersMapToList(m.customServers)}); err != nil {
 		return fmt.Errorf("failed to remove custom server %q: %w", tag, err)
 	}
 

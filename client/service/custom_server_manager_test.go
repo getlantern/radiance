@@ -2,7 +2,6 @@ package boxservice
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/getlantern/radiance/client/boxoptions"
@@ -34,7 +33,7 @@ func TestSelectCustomServer(t *testing.T) {
 	options := boxoptions.Options("stderr")
 	options.Outbounds = append(options.Outbounds, option.Outbound{Type: "direct", Tag: "testing-out"})
 
-	dataDir, err := os.MkdirTemp("", "")
+	dataDir := t.TempDir()
 	logFactory := log.NewNOPFactory()
 	manager := NewCustomServerManager(ctx, dataDir)
 	require.NotNil(t, manager)
@@ -64,7 +63,7 @@ func TestSelectCustomServer(t *testing.T) {
 		"tag": "custom-algeneva",
 		"outbound": {
 			"type": "algeneva",
-			"tag": "algeneva-out",
+			"tag": "custom-algeneva",
 			"server": "103.104.245.192",
 			"server_port": 80,
 			"headers": {
@@ -83,7 +82,7 @@ func TestSelectCustomServer(t *testing.T) {
 			"strategy": "[HTTP:method:*]-insert{%0A:end:value:4}-|"
 		}
 	}`
-	outboundTag := "algeneva-out"
+	outboundTag := "custom-algeneva"
 
 	t.Run("it should successfully add algeneva outbound", func(t *testing.T) {
 		err = manager.AddCustomServer(outboundTag, []byte(customConfig))
