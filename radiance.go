@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
+	"github.com/Xuanwo/go-locale"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common/reporting"
@@ -79,6 +80,14 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if opts.LogDir == "" {
 		opts.LogDir = appdir.Logs(app.Name)
 	}
+	if opts.Locale == "" {
+		if tag, err := locale.Detect(); err != nil {
+			log.Info("Failed to detect locale", "error", err)
+			opts.Locale = "en-US"
+		} else {
+			opts.Locale = tag.String()
+		}
+	}
 	mkdirs(&opts)
 
 	var logWriter io.Writer
@@ -119,7 +128,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, opts.DataDir, vpnC.ParseConfig)
+	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, opts.DataDir, vpnC.ParseConfig, opts.Locale)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{

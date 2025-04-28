@@ -66,7 +66,7 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user user.BaseUser, dataDir string,
-	configParser Unmarshaller) *ConfigHandler {
+	configParser Unmarshaller, locale string) *ConfigHandler {
 	configPath := filepath.Join(dataDir, configFileName)
 	ch := &ConfigHandler{
 		config:          atomic.Value{},
@@ -82,7 +82,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		slog.Error("failed to load config", "error", err)
 	}
 
-	ch.ftr = newFetcher(httpClient, user)
+	ch.ftr = newFetcher(httpClient, user, locale)
 	go ch.fetchLoop(pollInterval)
 	return ch
 }
@@ -300,7 +300,7 @@ func (ch *ConfigHandler) saveConfig(cfg *Config) {
 func (ch *ConfigHandler) GetConfig() (*Config, error) {
 	cfgRes := ch.config.Load()
 	if cfgRes == nil {
-		return nil, fmt.Errorf("no config")
+		return nil, fmt.Errorf("no config yet -- first run?")
 	}
 	cfg, ok := cfgRes.(*Config)
 	if !ok || cfg == nil {

@@ -38,14 +38,16 @@ type fetcher struct {
 	httpClient   *http.Client
 	user         user.BaseUser
 	lastModified time.Time
+	locale       string
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user user.BaseUser) Fetcher {
+func newFetcher(client *http.Client, user user.BaseUser, locale string) Fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,
 		lastModified: time.Time{},
+		locale:       locale,
 	}
 }
 
@@ -59,6 +61,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
 		DeviceID:          f.user.DeviceID(),
 		PreferredLocation: &preferred,
 		Backend:           common.SINGBOX,
+		Locale:            f.locale,
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {

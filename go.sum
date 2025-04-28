@@ -6,6 +6,8 @@ github.com/Jigsaw-Code/outline-sdk v0.0.19 h1:/OpMz+3B/9ypjq/UyEvwZSflzJ4jXFginU
 github.com/Jigsaw-Code/outline-sdk v0.0.19/go.mod h1:CFDKyGZA4zatKE4vMLe8TyQpZCyINOeRFbMAmYHxodw=
 github.com/Jigsaw-Code/outline-sdk/x v0.0.2 h1:NUJwSzL2XdvmcVtoY9xwU6LwptI9kZOaVWI9kTMvVng=
 github.com/Jigsaw-Code/outline-sdk/x v0.0.2/go.mod h1:8vMQ+QKz62lVkUcPDc276yvopDreniYZQPvhqOn27b0=
+github.com/Xuanwo/go-locale v1.1.3 h1:EWZZJJt5rqPHHbqPRH1zFCn5D7xHjjebODctA4aUO3A=
+github.com/Xuanwo/go-locale v1.1.3/go.mod h1:REn+F/c+AtGSWYACBSYZgl23AP+0lfQC+SEFPN+hj30=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=
 github.com/alitto/pond/v2 v2.1.5 h1:2pp/KAPcb02NSpHsjjnxnrTDzogMLsq+vFf/L0DB84A=
@@ -42,8 +44,8 @@ github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01/go.mod h1:3vR6+j
 github.com/getlantern/byteexec v0.0.0-20170405023437-4cfb26ec74f4/go.mod h1:4WCQkaCIwta0KlF9bQZA1jYqp8bzIS2PeCqjnef8nZ8=
 github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd h1:0xt9OTbV50a/+ZarMcr86ybWiN1v+bbwzdnVuXHzR/o=
 github.com/getlantern/byteexec v0.0.0-20220903142956-e6ed20032cfd/go.mod h1:oD9q9NB1LNBLHk3WAwza4tivxV7tm7jKFlCNCAv3+M8=
-github.com/getlantern/common v1.2.1-0.20250425211416-ce0caf588106 h1:C5uVnt2aocxC7E3xUxn0M3olo+spc+f8uyEvyw5PQ0Y=
-github.com/getlantern/common v1.2.1-0.20250425211416-ce0caf588106/go.mod h1:ucQSLeHpC4ns6VvlWBinK7BI8LrUWlhZUHArs6VRvXI=
+github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf h1:80UKl8jRxwJ6Tts6mOqxMIoAM0ioMAe4+Ax0aKdG/iY=
+github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf/go.mod h1:ucQSLeHpC4ns6VvlWBinK7BI8LrUWlhZUHArs6VRvXI=
 github.com/getlantern/context v0.0.0-20190109183933-c447772a6520/go.mod h1:L+mq6/vvYHKjCX2oez0CgEAJmbq1fbb/oNJIWQkBybY=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=

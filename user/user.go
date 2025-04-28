@@ -85,7 +85,6 @@ func (u *User) LegacyToken() string {
 
 func writeUserData(data *LoginResponse) error {
 	return os.WriteFile(userDataLocation, []byte(data.String()), 0600)
-
 }
 
 func readUserData() (*LoginResponse, error) {
