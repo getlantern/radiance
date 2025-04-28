@@ -34,6 +34,10 @@ type Options struct {
 	PlatIfce libbox.PlatformInterface
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
+
+	// Frontend frameworks typically have the most reliable access to the user's locale,
+	// so we use that to determine the user's locale.
+	Locale string
 }
 
 type VPNClient interface {

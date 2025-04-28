@@ -95,7 +95,7 @@ func TestFetchConfig(t *testing.T) {
 			}
 			fetcher := newFetcher(&http.Client{
 				Transport: mockRT,
-			}, mockUser)
+			}, mockUser, "en-US")
 
 			gotConfig, err := fetcher.fetchConfig(*tt.preferredServerLoc)
 
