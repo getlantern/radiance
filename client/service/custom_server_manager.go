@@ -97,12 +97,13 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 }
 
 func (m *CustomServerManager) ListCustomServers() ([]CustomServerInfo, error) {
-	loadedServers, err := m.loadCustomServer()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load custom servers: %w", err)
+	customServers := make([]CustomServerInfo, 0)
+	m.customServersMutex.RLock()
+	defer m.customServersMutex.RUnlock()
+	for _, v := range m.customServers {
+		customServers = append(customServers, v)
 	}
-
-	return loadedServers.CustomServers, nil
+	return customServers, nil
 }
 
 // storeCustomServer stores the custom server configuration to a JSON file.
@@ -203,9 +204,9 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 	outboundManager := service.FromContext[adapter.OutboundManager](m.ctx)
 	endpointManager := service.FromContext[adapter.EndpointManager](m.ctx)
 
-	m.customServersMutex.Lock()
+	m.customServersMutex.RLock()
 	options := m.customServers[tag]
-	m.customServersMutex.Unlock()
+	m.customServersMutex.RUnlock()
 
 	if options.Outbound != nil {
 		if _, exists := outboundManager.Outbound(options.Outbound.Tag); exists {
