@@ -6,34 +6,20 @@ package radiance
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/appdir"
 	C "github.com/getlantern/common"
-	"github.com/getlantern/fronted"
-	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/deviceid"
-	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 
 	"github.com/getlantern/radiance/metrics"
 )
-
-var log *slog.Logger
 
 const configPollInterval = 10 * time.Minute
 
@@ -53,24 +39,6 @@ type configHandler interface {
 	// GetConfig returns the current configuration.
 	// It returns an error if the configuration is not yet available.
 	GetConfig() (*config.Config, error)
-}
-
-var (
-	sharedInitOnce sync.Once
-	sharedInit     *sharedConfig
-)
-
-// sharedConfig is a struct that contains the shared configuration for the Radiance client and API handler.
-type sharedConfig struct {
-	logWriter  io.Writer
-	userConfig common.UserInfo
-	kindling   kindling.Kindling
-}
-
-// APIHandler is a struct that contains the API clients for User and Pro.
-type APIHandler struct {
-	User      *api.User
-	ProServer *api.Pro
 }
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
@@ -93,7 +61,7 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(opts client.Options) (*Radiance, error) {
-	init, err := initCommon(opts)
+	init, err := InitCommon(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize common: %w", err)
 	}
@@ -136,69 +104,14 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 // The User and Pro fields are API clients used to communicate with the respective endpoints.
 //
 // Note: This separation is necessary because the iOS tunnel runs in a different isolated process.
-func NewAPIHandler(opts client.Options) (*APIHandler, error) {
-	init, err := initCommon(opts)
+// and we need access to the API in the main process.
+func NewAPIHandler(opts client.Options) (*api.APIHandler, error) {
+	init, err := InitCommon(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize common: %w", err)
 	}
-	u := api.NewUser(init.kindling.NewHTTPClient(), init.userConfig)
-	pro := api.NewPro(init.kindling.NewHTTPClient(), init.userConfig)
-	return &APIHandler{
-		User:      u,
-		ProServer: pro,
-	}, nil
-}
-
-// initCommon initializes the common configuration for the Radiance client and API handler.
-func initCommon(opts client.Options) (*sharedConfig, error) {
-	var err error
-	sharedInitOnce.Do(func() {
-		reporting.Init()
-		if opts.DataDir == "" {
-			opts.DataDir = appdir.General(app.Name)
-		}
-		if opts.LogDir == "" {
-			opts.LogDir = appdir.Logs(app.Name)
-		}
-		if opts.Locale == "" {
-			opts.Locale = "en-US"
-		}
-
-		var platformDeviceID string
-		if common.IsAndroid() || common.IsIOS() {
-			platformDeviceID = opts.DeviceID
-		} else {
-			platformDeviceID = deviceid.Get()
-		}
-
-		mkdirs(&opts)
-		var logWriter io.Writer
-		log, logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
-		if err != nil {
-			err = fmt.Errorf("could not create log: %w", err)
-			return
-		}
-		f, ferr := newFronted(logWriter, reporting.PanicListener, filepath.Join(opts.DataDir, "fronted_cache.json"))
-		if ferr != nil {
-			err = fmt.Errorf("failed to create fronted: %w", err)
-			return
-		}
-		// If no local setup from client options, use the default locale
-
-		k := kindling.NewKindling(
-			kindling.WithPanicListener(reporting.PanicListener),
-			kindling.WithLogWriter(logWriter),
-			kindling.WithDomainFronting(f),
-			kindling.WithProxyless("api.iantem.io"))
-
-		sharedInit = &sharedConfig{
-			logWriter:  logWriter,
-			userConfig: common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale),
-			kindling:   k,
-		}
-	})
-	return sharedInit, err
-
+	apiHandler := api.NewAPIHandlerInternal(init.kindling.NewHTTPClient(), init.userConfig)
+	return apiHandler, nil
 }
 
 // TODO: the server stuff should probably be moved to the VPNClient as well..
@@ -313,56 +226,6 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		report.Device,
 		report.Model,
 		country)
-}
-
-func mkdirs(opts *client.Options) {
-	// Make sure the data and logs dirs exist
-	for _, dir := range []string{opts.DataDir, opts.LogDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Error("Failed to create data directory", "dir", dir, "error", err)
-		}
-	}
-}
-
-// Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (*slog.Logger, io.Writer, error) {
-	// If the log file does not exist, create it.
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-	// defer f.Close() - file should be closed externally when logger is no longer needed
-	logWriter := io.MultiWriter(os.Stdout, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, nil))
-	slog.SetDefault(logger)
-	return logger, logWriter, nil
-}
-
-func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {
-	// Parse the domain from the URL.
-	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
-	u, err := url.Parse(configURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
-	}
-	// Extract the domain from the URL.
-	domain := u.Host
-
-	// First, download the file from the specified URL using the smart dialer.
-	// Then, create a new fronted instance with the downloaded file.
-	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
-	}
-	httpClient := &http.Client{
-		Transport: trans,
-	}
-	return fronted.NewFronted(
-		fronted.WithPanicListener(panicListener),
-		fronted.WithCacheFile(cacheFile),
-		fronted.WithHTTPClient(httpClient),
-		fronted.WithConfigURL(configURL),
-	), nil
 }
 
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.
