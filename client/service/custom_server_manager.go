@@ -47,6 +47,11 @@ type CustomServerInfo struct {
 // ServerConnectConfig represents configuration for connecting to a custom server.
 type ServerConnectConfig []byte
 
+// SetContext update the context with the latest changes.
+func (m *CustomServerManager) SetContext(ctx context.Context) {
+	m.ctx = ctx
+}
+
 // AddCustomServer load or parse the given configuration and add given
 // endpdoint/outbound to the instance. We're only expecting one endpoint or
 // outbound per call.

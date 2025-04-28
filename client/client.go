@@ -121,6 +121,8 @@ func (c *vpnClient) StartVPN() error {
 		return err
 	}
 
+	c.customServerManager.SetContext(c.boxService.Ctx())
+
 	c.started = true
 	c.setConnectionStatus(true)
 	return nil
