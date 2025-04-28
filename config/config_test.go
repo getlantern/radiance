@@ -111,7 +111,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 		configPath:   configPath,
 		configParser: mockConfigParser,
 		config:       atomic.Value{},
-		ftr:          newFetcher(http.DefaultClient, &UserStub{}),
+		ftr:          newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
 	}
 
 	ch.config.Store(&Config{
