@@ -217,9 +217,7 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 				return fmt.Errorf("failed to remove %q outbound: %w", tag, err)
 			}
 		}
-	}
-
-	if options.Endpoint != nil {
+	} else if options.Endpoint != nil {
 		if _, exists := endpointManager.Get(options.Endpoint.Tag); exists {
 			// selector must be removed in order to remove dependent outbounds/endpoints
 			if err := outboundManager.Remove(CustomSelectorTag); err != nil && !errors.Is(err, os.ErrInvalid) {
