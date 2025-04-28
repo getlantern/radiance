@@ -38,6 +38,8 @@ type customServers struct {
 }
 
 // CustomServerInfo represents a custom server configuration.
+// Outbound and Endpoint options are mutually exclusive and there can only be
+// one of those fields nil.
 type CustomServerInfo struct {
 	Tag      string           `json:"tag"`
 	Outbound *option.Outbound `json:"outbound,omitempty"`
