@@ -114,8 +114,8 @@ func NewAPIHandler(opts client.Options) (*api.APIHandler, error) {
 	return apiHandler, nil
 }
 
-// TODO: the server stuff should probably be moved to the VPNClient as well..
-// eventual this will be moved to the api handler as well
+// TODO: The server-related functionality should probably be moved to the VPNClient as well.
+// Eventually, this functionality will be moved to the API handler for better separation of concerns.
 func (r *Radiance) GetAvailableServers() ([]C.ServerLocation, error) {
 	return r.confHandler.ListAvailableServers()
 }
