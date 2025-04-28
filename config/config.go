@@ -54,7 +54,7 @@ type Unmarshaller func(config []byte) (*Config, error)
 type ConfigHandler struct {
 	// config holds a configResult.
 	config    atomic.Value
-	ftr       *fetcher
+	ftr       Fetcher
 	apiClient common.WebClient
 	stopC     chan struct{}
 	closeOnce *sync.Once
@@ -67,6 +67,7 @@ type ConfigHandler struct {
 
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath string
+	preferredLocation atomic.Value
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
@@ -116,6 +117,8 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 		Country: country,
 		City:    city,
 	}
+	// We store the preferred location in memory in case we haven't fetched a config yet.
+	ch.preferredLocation.Store(preferred)
 	ch.modifyConfig(func(cfg *Config) {
 		cfg.PreferredLocation = preferred
 	})
@@ -148,7 +151,8 @@ func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
 	ch.configListenersMu.Unlock()
 	cfg, err := ch.GetConfig()
 	if err != nil {
-		slog.Error("getting config", "error", err)
+		// There is no config yet, so we can't notify the listener.
+		slog.Info("getting config", "error", err)
 		return
 	}
 	go func() {
@@ -174,12 +178,16 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
 
 func (ch *ConfigHandler) fetchConfig() error {
 	slog.Debug("Fetching config")
-	var preferredServerLocation C.ServerLocation
+	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
-		slog.Info("Config not available yet", "error", err)
+		slog.Info("No stored config yet -- using in-memory server location", "error", err)
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			preferred = storedLocation.(C.ServerLocation)
+		}
 	} else {
-		preferredServerLocation = oldConfig.PreferredLocation
+		preferred = oldConfig.PreferredLocation
 	}
 
 	privateKey, err := ch.loadWGKey()
@@ -198,7 +206,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		}
 	}
 
-	resp, err := ch.ftr.fetchConfig(preferredServerLocation, privateKey.PublicKey().String())
+	resp, err := ch.ftr.fetchConfig(preferred, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -258,6 +266,14 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 			return
 		}
 		cfg = &oldConfigCopy
+	}
+	// If the merged config has no server location, use the preferred location
+	// stored in memory, if any.
+	if cfg.PreferredLocation == (C.ServerLocation{}) {
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			cfg.PreferredLocation = storedLocation.(C.ServerLocation)
+		}
 	}
 
 	ch.config.Store(cfg)
@@ -356,6 +372,7 @@ func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
 	ch.configMu.Lock()
 	cfg, err := ch.GetConfig()
 	if err != nil {
+		// This could happen if we haven't successfully fetched the config yet.
 		slog.Error("getting config", "error", err)
 		ch.configMu.Unlock()
 		return
