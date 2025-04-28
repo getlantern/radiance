@@ -71,12 +71,10 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 	}
 
 	outbounds := make([]option.Outbound, 0)
+	endpoints := make([]option.Endpoint, 0)
 	if loadedOptions.Outbound != nil {
 		outbounds = append(outbounds, *loadedOptions.Outbound)
-	}
-
-	endpoints := make([]option.Endpoint, 0)
-	if loadedOptions.Endpoint != nil {
+	} else if loadedOptions.Endpoint != nil {
 		endpoints = append(endpoints, *loadedOptions.Endpoint)
 	}
 
