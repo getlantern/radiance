@@ -93,7 +93,7 @@ func (m *CustomServerManager) AddCustomServer(cfg ServerConnectConfig) error {
 		return fmt.Errorf("failed to store custom server: %w", err)
 	}
 
-	if err := m.reinitializeCustomSelector("direct"); err != nil {
+	if err := m.reinitializeCustomSelector("direct", []string{"direct", loadedOptions.Tag}); err != nil {
 		return fmt.Errorf("failed to reinitialize custom selector: %w", err)
 	}
 
@@ -214,7 +214,7 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 		return fmt.Errorf("failed to remove custom server %q: %w", tag, err)
 	}
 
-	if err := m.reinitializeCustomSelector("direct"); err != nil {
+	if err := m.reinitializeCustomSelector("direct", []string{"direct"}); err != nil {
 		return fmt.Errorf("failed to reinitialize custom selector: %w", err)
 	}
 	return nil
@@ -248,18 +248,8 @@ func (m *CustomServerManager) SelectCustomServer(tag string) error {
 	return nil
 }
 
-func (m *CustomServerManager) reinitializeCustomSelector(defaultTag string) error {
+func (m *CustomServerManager) reinitializeCustomSelector(defaultTag string, tags []string) error {
 	outboundManager := service.FromContext[adapter.OutboundManager](m.ctx)
-	outbounds := outboundManager.Outbounds()
-	tags := make([]string, 0)
-	for _, outbound := range outbounds {
-		// ignoring selector because it'll be removed and re-added with the new tags
-		if outbound.Tag() == CustomSelectorTag {
-			continue
-		}
-		tags = append(tags, outbound.Tag())
-	}
-
 	if _, exists := outboundManager.Outbound(CustomSelectorTag); exists {
 		if err := outboundManager.Remove(CustomSelectorTag); err != nil {
 			return fmt.Errorf("failed to remove selector outbound: %w", err)
