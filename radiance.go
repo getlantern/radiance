@@ -298,8 +298,8 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	), nil
 }
 
-func (r *Radiance) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
-	return r.VPNClient.AddCustomServer(tag, cfg)
+func (r *Radiance) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return r.VPNClient.AddCustomServer(cfg)
 }
 
 func (r *Radiance) SelectCustomServer(tag string) error {
