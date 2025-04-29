@@ -9,11 +9,9 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
-	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/route"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/service"
@@ -46,7 +44,8 @@ func TestSelectCustomServer(t *testing.T) {
 
 	// add outbound manager to context
 	endpointManager := endpoint.NewManager(logFactory.NewLogger("endpoint"), endpointRegistry)
-	outboundManager := outbound.NewManager(logFactory.NewLogger("outbound"), outboundRegistry, endpointManager, "")
+	// outboundManager := outbound.NewManager(logFactory.NewLogger("outbound"), outboundRegistry, endpointManager, "")
+	outboundManager := &mockOutboundManager{}
 	require.NoError(t, outboundManager.Create(ctx, router, logFactory.NewLogger("direct"), "direct", constant.TypeDirect, &option.DirectOutboundOptions{}))
 	require.NoError(t, outboundManager.Create(ctx, router, logFactory.NewLogger("selector"), CustomSelectorTag, constant.TypeSelector, &option.SelectorOutboundOptions{
 		Outbounds:                 []string{"direct"},
@@ -108,7 +107,7 @@ func TestSelectCustomServer(t *testing.T) {
 		outboundManager := service.FromContext[adapter.OutboundManager](manager.ctx)
 		outbound, ok := outboundManager.Outbound(CustomSelectorTag)
 		assert.True(t, ok)
-		selector, ok := outbound.(*group.Selector)
+		selector, ok := outbound.(selector)
 		assert.True(t, ok)
 		assert.Equal(t, outboundTag, selector.Now())
 	})

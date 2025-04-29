@@ -12,7 +12,6 @@ import (
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 )
@@ -221,6 +220,11 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 	return nil
 }
 
+type selector interface {
+	SelectOutbound(tag string) bool
+	Now() string
+}
+
 // SelectCustomServer update the selector outbound to use the selected
 // outbound based on provided tag. A selector outbound must exist before
 // calling this function, otherwise it'll return a error.
@@ -233,9 +237,9 @@ func (m *CustomServerManager) SelectCustomServer(tag string) error {
 	if !ok {
 		return fmt.Errorf("custom selector not found")
 	}
-	selector, ok := outbound.(*group.Selector)
+	selector, ok := outbound.(selector)
 	if !ok {
-		return fmt.Errorf("expected outbound of type *group.Selector: %T", selector)
+		return fmt.Errorf("expected outbound that implements selector but got %T", outbound)
 	}
 	if ok = selector.SelectOutbound(tag); !ok {
 		return fmt.Errorf("failed to select outbound %q", tag)
@@ -268,17 +272,6 @@ func (m *CustomServerManager) reinitializeCustomSelector(defaultTag string) erro
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create selector outbound: %w", err)
-	}
-	outbound, ok := outboundManager.Outbound(CustomSelectorTag)
-	if !ok {
-		return fmt.Errorf("custom selector not found")
-	}
-	selector, ok := outbound.(*group.Selector)
-	if !ok {
-		return fmt.Errorf("expected outbound of type *group.Selector: %T", selector)
-	}
-	if err = selector.Start(); err != nil {
-		return fmt.Errorf("failed to start selector outbound: %w", err)
 	}
 	return nil
 }
