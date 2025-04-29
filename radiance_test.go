@@ -54,7 +54,7 @@ func (m *mockVPNClient) GetActiveServer() (*Server, error) {
 	return args.Get(0).(*Server), args.Error(1)
 }
 
-func (m *mockVPNClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
+func (m *mockVPNClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
 	return nil
 }
 func (m *mockVPNClient) SelectCustomServer(tag string) error {
