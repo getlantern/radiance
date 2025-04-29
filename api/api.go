@@ -10,6 +10,7 @@ import (
 type APIHandler struct {
 	User      *User
 	ProServer *Pro
+	UserInfo  common.UserInfo
 }
 
 func NewAPIHandlerInternal(httpClient *http.Client, userinfo common.UserInfo) *APIHandler {
@@ -18,5 +19,6 @@ func NewAPIHandlerInternal(httpClient *http.Client, userinfo common.UserInfo) *A
 	return &APIHandler{
 		User:      u,
 		ProServer: pro,
+		UserInfo:  userinfo,
 	}
 }
