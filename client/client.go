@@ -43,7 +43,7 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
-	AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error
+	AddCustomServer(cfg boxservice.ServerConnectConfig) error
 	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
 	OnNewConfig(oldConfig, newConfig *config.Config) error
@@ -176,8 +176,8 @@ func (c *vpnClient) ResumeVPN() {
 	c.boxService.Wake()
 }
 
-func (c *vpnClient) AddCustomServer(tag string, cfg boxservice.ServerConnectConfig) error {
-	return c.customServerManager.AddCustomServer(tag, cfg)
+func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return c.customServerManager.AddCustomServer(cfg)
 }
 
 func (c *vpnClient) SelectCustomServer(tag string) error {
