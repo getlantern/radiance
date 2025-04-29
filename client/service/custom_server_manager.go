@@ -57,21 +57,10 @@ func (m *CustomServerManager) SetContext(ctx context.Context) {
 // AddCustomServer load or parse the given configuration and add given
 // endpdoint/outbound to the instance. We're only expecting one endpoint or
 // outbound per call.
-func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfig) error {
-	if _, err := m.loadCustomServer(); err != nil {
-		return fmt.Errorf("failed to load custom server configs: %w", err)
-	}
-
-	m.customServersMutex.Lock()
-	loadedOptions := m.customServers[tag]
-	m.customServersMutex.Unlock()
-
-	if cfg != nil {
-		var err error
-		loadedOptions, err = json.UnmarshalExtendedContext[CustomServerInfo](m.ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal config: %w", err)
-		}
+func (m *CustomServerManager) AddCustomServer(cfg ServerConnectConfig) error {
+	loadedOptions, err := json.UnmarshalExtendedContext[CustomServerInfo](m.ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
 	if (loadedOptions.Endpoint == nil && loadedOptions.Outbound == nil) || loadedOptions.Tag == "" {
@@ -80,14 +69,22 @@ func (m *CustomServerManager) AddCustomServer(tag string, cfg ServerConnectConfi
 
 	outbounds := make([]option.Outbound, 0)
 	endpoints := make([]option.Endpoint, 0)
+	var tag string
 	if loadedOptions.Outbound != nil {
 		outbounds = append(outbounds, *loadedOptions.Outbound)
+		tag = loadedOptions.Outbound.Tag
 	} else if loadedOptions.Endpoint != nil {
 		endpoints = append(endpoints, *loadedOptions.Endpoint)
+		tag = loadedOptions.Endpoint.Tag
 	}
+	loadedOptions.Tag = tag
 
 	if err := updateOutboundsEndpoints(m.ctx, outbounds, endpoints); err != nil {
 		return fmt.Errorf("failed to update outbounds/endpoints: %w", err)
+	}
+
+	if _, err := m.loadCustomServer(); err != nil {
+		return fmt.Errorf("failed to load custom server configs: %w", err)
 	}
 
 	m.customServersMutex.Lock()

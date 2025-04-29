@@ -85,7 +85,7 @@ func TestSelectCustomServer(t *testing.T) {
 	outboundTag := "custom-algeneva"
 
 	t.Run("it should successfully add algeneva outbound", func(t *testing.T) {
-		err = manager.AddCustomServer(outboundTag, []byte(customConfig))
+		err = manager.AddCustomServer([]byte(customConfig))
 		assert.NoError(t, err)
 
 		// checking if algeneva-out was included as an outbound and route
