@@ -162,6 +162,15 @@ type mockOutboundManager struct {
 	outbounds []adapter.Outbound
 }
 
+func (m *mockOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	for _, outbound := range m.outbounds {
+		if outbound.Tag() == tag {
+			return outbound, true
+		}
+	}
+	return nil, false
+}
+
 func (m *mockOutboundManager) Outbounds() []adapter.Outbound {
 	return m.outbounds
 }
@@ -173,7 +182,14 @@ func (m *mockOutboundManager) Remove(tag string) error {
 
 func (m *mockOutboundManager) Create(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag, outboundType string, options any) error {
 	m.Remove(tag)
-	m.outbounds = append(m.outbounds, &mockEndpoint{typ: outboundType, tag: tag})
+	outbound := &mockEndpoint{typ: outboundType, tag: tag}
+	m.outbounds = append(m.outbounds, outbound)
+
+	for _, stage := range adapter.ListStartStages {
+		if err := adapter.LegacyStart(outbound, stage); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -209,8 +225,22 @@ func testRemove[T adapter.Outbound](list []T, tag string) []T {
 
 type mockEndpoint struct {
 	adapter.Endpoint
-	typ string
-	tag string
+	typ              string
+	tag              string
+	selectedOutbound string
+}
+
+func (m *mockEndpoint) Start(stage adapter.StartStage) error {
+	return nil
+}
+
+func (m *mockEndpoint) SelectOutbound(tag string) bool {
+	m.selectedOutbound = tag
+	return true
+}
+
+func (m *mockEndpoint) Now() string {
+	return m.selectedOutbound
 }
 
 func (m *mockEndpoint) Type() string { return m.typ }
