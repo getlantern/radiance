@@ -110,7 +110,6 @@ func (c *webClient) PostPROTOC(ctx context.Context, path string, msg, target pro
 	if err != nil {
 		return err
 	}
-
 	req := c.R().
 		SetContext(ctx).
 		SetBody(bodyBytes)
@@ -149,13 +148,16 @@ func (c *webClient) Get(ctx context.Context, path string, params map[string]any,
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
-
 	if resp.StatusCode() != http.StatusOK {
 		return fmt.Errorf("unexpected status code %v body %v url %v", resp.StatusCode(), string(resp.Body()), resp.Request.URL)
 	}
-
 	body := sanitizeResponseBody(resp.Body())
-	return json.Unmarshal(body, target)
+	slog.Info("Get response", "body", string(body), "url", resp.Request.URL, "status", resp.StatusCode())
+	jsonErr := json.Unmarshal(body, target)
+	if jsonErr != nil {
+		return fmt.Errorf("error decoding response body: %w", jsonErr)
+	}
+	return nil
 }
 
 // Post sends a POST request and parses the Protobuf response into the target object

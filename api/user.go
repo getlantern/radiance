@@ -399,3 +399,13 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	u.userData = nil
 	return u.userConfig.Save(nil)
 }
+
+// OAuthProvider returns the list of OAuth providers available for login.
+func (u *User) OAuthProvider(ctx context.Context) (*protos.OAuthProviderNames, error) {
+	return u.authClient.OAuthProvider(ctx)
+}
+
+// OAuthLogin initiates the OAuth login process for the specified provider.
+func (u *User) OAuthLogin(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	return u.authClient.OAuthLogin(ctx, provider)
+}

@@ -121,6 +121,15 @@ func TestDeleteAccount(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestOAuthProvider(t *testing.T) {
+	u := &User{
+		authClient: &mockAuthClient{},
+		userConfig: &mockUserConfig{},
+	}
+	_, err := u.authClient.OAuthProvider(context.Background())
+	assert.NoError(t, err)
+}
+
 // Mock implementation of AuthClient for testing purposes
 type mockAuthClient struct {
 	cache    map[string]string
@@ -220,6 +229,16 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 	}
 	m.cache[req.Email] = hex.EncodeToString(state)
 	return &protos.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
+}
+
+func (m *mockAuthClient) OAuthProvider(ctx context.Context) (*protos.OAuthProviderNames, error) {
+	return &protos.OAuthProviderNames{
+		"google",
+		"apple",
+	}, nil
+}
+func (m *mockAuthClient) OAuthLogin(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	return &protos.SubscriptionPaymentRedirectResponse{"https://example.com"}, nil
 }
 
 // Mock implementation of User config for testing purposes

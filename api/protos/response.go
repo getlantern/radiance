@@ -43,3 +43,5 @@ type PlansResponse struct {
 	Plans         []*Plan                     `json:"plans"`
 	Logo          map[string]interface{}      `json:"icons"`
 }
+
+type OAuthProviderNames []string
