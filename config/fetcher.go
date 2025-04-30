@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 	"time"
 
 	"slices"
@@ -30,7 +29,7 @@ type Fetcher interface {
 	// preferred is used to select the server location.
 	// If preferred is empty, the server will select the best location.
 	// The lastModified time is used to check if the configuration has changed since the last request.
-	fetchConfig(preferred C.ServerLocation) ([]byte, error)
+	fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error)
 }
 
 // fetcher is responsible for fetching the configuration from the server.
@@ -52,13 +51,13 @@ func newFetcher(client *http.Client, user user.BaseUser, locale string) Fetcher 
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
+func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	confReq := C.ConfigRequest{
 		SingboxVersion:    singVersion(),
-		UserID:            strconv.FormatInt(f.user.LegacyID(), 10),
 		OS:                app.Platform,
 		AppName:           app.Name,
 		DeviceID:          f.user.DeviceID(),
+		WGPublicKey:       wgPublicKey,
 		PreferredLocation: &preferred,
 		Backend:           common.SINGBOX,
 		Locale:            f.locale,
@@ -68,6 +67,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
+	slog.Debug("fetching config", "request", string(buf))
 	buf, err = f.send(bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)

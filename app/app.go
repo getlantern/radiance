@@ -6,8 +6,8 @@ const (
 	Name = "lantern"
 
 	// Placeholders to use in the request headers.
-	ClientVersion = "7.6.47"
-	Version       = "7.6.47"
+	ClientVersion = "9.0.0"
+	Version       = "9.0.0"
 
 	Platform = runtime.GOOS
 
