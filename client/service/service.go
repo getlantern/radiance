@@ -34,6 +34,11 @@ import (
 	"github.com/getlantern/radiance/config"
 )
 
+var (
+	baseCtx   context.Context
+	ctxAccess sync.Mutex
+)
+
 // BoxService is a wrapper around libbox.BoxService
 type BoxService struct {
 	libbox            *libbox.BoxService
@@ -104,18 +109,32 @@ func (bs *BoxService) Start() error {
 	return nil
 }
 
-// newLibboxService creates a new libbox service with the given config and platform interface
-func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox.BoxService, context.Context, error) {
+func BaseContext() context.Context {
+	ctxAccess.Lock()
+	defer ctxAccess.Unlock()
+	if baseCtx == nil {
+		baseCtx = newBaseContext()
+	}
+	return baseCtx
+}
+
+func newBaseContext() context.Context {
 	// Retrieve protocol registries
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
+	return box.Context(
 		context.Background(),
 		inboundRegistry,
 		outboundRegistry,
 		endpointRegistry,
 	)
+}
 
+// newLibboxService creates a new libbox service with the given config and platform interface
+func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox.BoxService, context.Context, error) {
 	// initialize the libbox service
+	// we need to create a new context each time so we have a fresh context, free of all the values
+	// that the sing-box instance adds to it
+	ctx := newBaseContext()
 	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create libbox service: %w", err)
@@ -193,8 +212,8 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 		newConfig.ConfigResponse.Options.Endpoints)
 }
 
-func (bs *BoxService) ParseConfig(configRaw []byte) (*config.Config, error) {
-	config, err := json.UnmarshalExtendedContext[*config.Config](bs.ctx, configRaw)
+func ParseConfig(configRaw []byte) (*config.Config, error) {
+	config, err := json.UnmarshalExtendedContext[*config.Config](BaseContext(), configRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}

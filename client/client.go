@@ -48,7 +48,6 @@ type VPNClient interface {
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
 	OnNewConfig(oldConfig, newConfig *config.Config) error
-	ParseConfig(config []byte) (*config.Config, error)
 }
 
 type vpnClient struct {
@@ -215,10 +214,6 @@ func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.
 		routeOpts.RuleSet = append(routeOpts.RuleSet, rulesets...)
 	}
 	return routeOpts
-}
-
-func (c *vpnClient) ParseConfig(configRaw []byte) (*config.Config, error) {
-	return c.boxService.ParseConfig(configRaw)
 }
 
 func (c *vpnClient) OnNewConfig(oldConfig, newConfig *config.Config) error {

@@ -22,8 +22,10 @@ import (
 	"github.com/getlantern/kindling"
 
 	"github.com/Xuanwo/go-locale"
+
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -128,7 +130,13 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), u, opts.DataDir, vpnC.ParseConfig, opts.Locale)
+	confHandler := config.NewConfigHandler(
+		configPollInterval,
+		k.NewHTTPClient(),
+		u, opts.DataDir,
+		boxservice.ParseConfig,
+		opts.Locale,
+	)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{

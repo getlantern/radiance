@@ -10,13 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/config"
 )
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
-		r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
+		dir := t.TempDir()
+		r, err := NewRadiance(client.Options{DataDir: dir})
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 		assert.NotNil(t, r.VPNClient)
