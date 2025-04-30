@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -36,7 +37,7 @@ func TestOnNewConfig(t *testing.T) {
 
 		bs := &BoxService{
 			ctx:       newBaseContext(),
-			config:    "",
+			config:    atomic.Value{},
 			isRunning: true,
 			mu:        sync.Mutex{},
 		}
@@ -46,7 +47,7 @@ func TestOnNewConfig(t *testing.T) {
 			err = nil
 		}
 		require.NoError(t, err)
-		assert.NotEmpty(t, bs.config)
+		assert.NotEmpty(t, bs.config.Load())
 	})
 
 	t.Run("does nothing if service is not running", func(t *testing.T) {
