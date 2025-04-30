@@ -20,6 +20,7 @@ func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
 		dir := t.TempDir()
 		r, err := NewRadiance(client.Options{DataDir: dir})
+		defer r.Close()
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 		assert.NotNil(t, r.VPNClient)
@@ -111,6 +112,7 @@ func TestReportIssue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
+			defer r.Close()
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, &tt.report)
 			tt.assert(t, err)

@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	box "github.com/sagernet/sing-box"
@@ -43,7 +44,7 @@ var (
 type BoxService struct {
 	libbox            *libbox.BoxService
 	ctx               context.Context
-	config            string
+	config            atomic.Value
 	platIfce          libbox.PlatformInterface
 	mutRuleSetManager *ruleset.Manager
 	pauseManager      pause.Manager
@@ -59,7 +60,7 @@ const CustomSelectorTag = "custom_selector"
 // to interact with the underlying platform
 func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
 	bs := &BoxService{
-		config:            config,
+		config:            atomic.Value{},
 		platIfce:          platIfce,
 		mutRuleSetManager: rulesetManager,
 	}
@@ -89,7 +90,8 @@ func (bs *BoxService) Start() error {
 	}
 
 	// (re)-initialize the libbox service
-	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
+	conf := bs.config.Load().(string)
+	lb, ctx, err := newLibboxService(conf, bs.platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
@@ -209,12 +211,25 @@ func (bs *BoxService) Ctx() context.Context {
 }
 
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
-// new configuration and restarts the VPN client if necessary.
+// new configuration
 func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	slog.Debug("Received new config")
 
-	return updateOutboundsEndpoints(bs.ctx, newConfig.ConfigResponse.Options.Outbounds,
-		newConfig.ConfigResponse.Options.Endpoints)
+	opts := newConfig.ConfigResponse.Options
+	conf, err := json.MarshalContext(bs.ctx, opts)
+	if err != nil {
+		return fmt.Errorf("marshal options: %w", err)
+	}
+	bs.config.Store(string(conf))
+
+	bs.mu.Lock()
+	if !bs.isRunning {
+		bs.mu.Unlock()
+		return nil
+	}
+	bs.mu.Unlock()
+
+	return updateOutboundsEndpoints(bs.ctx, opts.Outbounds, opts.Endpoints)
 }
 
 func ParseConfig(configRaw []byte) (*config.Config, error) {
