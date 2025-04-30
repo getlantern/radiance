@@ -73,17 +73,24 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	// TODO: We should be fetching the options from the server.
 	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
+	var splitTun *SplitTunnel
 
 	rsMgr := ruleset.NewManager()
-	splitTun, stRule, stRuleset, err := initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
-	if err != nil {
-		return nil, fmt.Errorf("split tunnel handler: %w", err)
+	if opts.EnableSplitTunneling {
+		var stRule *option.Rule
+		var stRuleset *option.RuleSet
+		var err error
+		splitTun, stRule, stRuleset, err = initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
+		if err != nil {
+			return nil, fmt.Errorf("split tunnel handler: %w", err)
+		}
+
+		// inject split tunnel routing rule and ruleset into the routing table
+		// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
+		// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
+		// index 1
+		boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{*stRule}, []option.RuleSet{*stRuleset})
 	}
-	// inject split tunnel routing rule and ruleset into the routing table
-	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
-	// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
-	// index 1
-	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{*stRule}, []option.RuleSet{*stRuleset})
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
@@ -197,7 +204,7 @@ func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*Split
 		}
 	}
 	rRule := ruleset.BaseRouteRule(SplitTunnelTag, "direct")
-	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, dataDir, SplitTunnelFormat)
+	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, rs.RuleFilePath(), SplitTunnelFormat)
 	return rs, &rRule, &rRuleset, nil
 }
 
