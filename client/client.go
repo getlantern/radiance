@@ -197,7 +197,7 @@ func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*Split
 		}
 	}
 	rRule := ruleset.BaseRouteRule(SplitTunnelTag, "direct")
-	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, rs.RuleFilePath(), SplitTunnelFormat)
+	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, dataDir, SplitTunnelFormat)
 	return rs, &rRule, &rRuleset, nil
 }
 
