@@ -209,7 +209,7 @@ func (bs *BoxService) Ctx() context.Context {
 }
 
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
-// new configuration and restarts the VPN client if necessary.
+// new configuration
 func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	slog.Debug("Received new config")
 
