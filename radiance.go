@@ -31,8 +31,6 @@ import (
 	"github.com/getlantern/radiance/user"
 )
 
-var log *slog.Logger
-
 const configPollInterval = 10 * time.Minute
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
@@ -85,7 +83,6 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		// of frontend code and therefore is more reliably supported there.
 		// However, if the frontend locale is not available, we can use the system locale as a fallback.
 		if tag, err := locale.Detect(); err != nil {
-			log.Info("Failed to detect locale", "error", err)
 			opts.Locale = "en-US"
 		} else {
 			opts.Locale = tag.String()
@@ -95,29 +92,29 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 
 	var logWriter io.Writer
 	var err error
-	log, logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
+	logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
 	if err != nil {
 		return nil, fmt.Errorf("could not create log: %w", err)
 	}
 	shutdownFuncs := []func(context.Context) error{}
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
 	if err != nil {
-		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
+		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)
 	} else if shutdownMetrics != nil {
 		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
-		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
+		slog.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
 	vpnC, err := client.NewVPNClient(opts)
 	if err != nil {
-		log.Error("Failed to create VPN client", "error", err)
+		slog.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
 	// TODO: Ideally we would know the user locale to set the country on fronted startup.
 	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(opts.DataDir, "fronted_cache.json"))
 	if err != nil {
-		log.Error("Failed to create fronted", "error", err)
+		slog.Error("Failed to create fronted", "error", err)
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 	k := kindling.NewKindling(
@@ -160,12 +157,12 @@ func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string)
 
 func (r *Radiance) Close() {
 	r.closeOnce.Do(func() {
-		log.Debug("Closing Radiance")
+		slog.Debug("Closing Radiance")
 		r.confHandler.Stop()
 		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
 			if err := shutdown(context.Background()); err != nil {
-				log.Error("Failed to shutdown", "error", err)
+				slog.Error("Failed to shutdown", "error", err)
 			}
 		}
 	})
@@ -235,14 +232,14 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	// get issue type as integer
 	typeInt, ok := issueTypeMap[report.Type]
 	if !ok {
-		log.Error("Unknown issue type: %s, set to Other", "type", report.Type)
+		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
 		typeInt = 9
 	}
 	var country string
 	// get country from the config returned by the backend
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		log.Error("Failed to get country", "error", err)
+		slog.Error("Failed to get country", "error", err)
 		country = ""
 	} else {
 		country = cfg.ConfigResponse.Country
@@ -263,23 +260,26 @@ func mkdirs(opts *client.Options) {
 	// Make sure the data and logs dirs exist
 	for _, dir := range []string{opts.DataDir, opts.LogDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Error("Failed to create data directory", "dir", dir, "error", err)
+			slog.Error("Failed to create data directory", "dir", dir, "error", err)
 		}
 	}
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (*slog.Logger, io.Writer, error) {
+func newLog(logPath string) (io.Writer, error) {
 	// If the log file does not exist, create it.
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open log file: %w", err)
+		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logWriter := io.MultiWriter(os.Stdout, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, nil))
+	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelDebug,
+	}))
 	slog.SetDefault(logger)
-	return logger, logWriter, nil
+	return logWriter, nil
 }
 
 func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {

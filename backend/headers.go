@@ -13,13 +13,6 @@ import (
 )
 
 const (
-	// Required common headers to send to the proxy server.
-	appVersionHeader        = "X-Lantern-App-Version"
-	versionHeader           = "X-Lantern-Version"
-	platformHeader          = "X-Lantern-Platform"
-	appNameHeader           = "X-Lantern-App"
-	deviceIDHeader          = "X-Lantern-Device-Id"
-	userIDHeader            = "X-Lantern-User-Id"
 	supportedDataCapsHeader = "X-Lantern-Supported-Data-Caps"
 	timeZoneHeader          = "X-Lantern-Time-Zone"
 	randomNoiseHeader       = "X-Lantern-Rand"
@@ -32,6 +25,9 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Lantern/"+app.ClientVersion)
+	// We include a random length string here to make it harder for censors to identify lantern
+	// based on consistent packet lengths.
+	req.Header.Add(randomNoiseHeader, randomizedString())
 
 	// add required headers. Currently, all but the auth token are placeholders.
 	return req, nil
@@ -53,10 +49,6 @@ func NewIssueRequest(ctx context.Context, method, url string, body io.Reader) (*
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
 		req.Header.Set(timeZoneHeader, tz)
 	}
-
-	// We include a random length string here to make it harder for censors to identify lantern
-	// based on consistent packet lengths.
-	req.Header.Add(randomNoiseHeader, randomizedString())
 
 	return req, nil
 }

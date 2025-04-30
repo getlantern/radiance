@@ -67,6 +67,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
+	slog.Debug("fetching config", "request", string(buf))
 	buf, err = f.send(bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
