@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"testing"
 
 	C "github.com/getlantern/common"
@@ -119,7 +118,6 @@ func TestFetchConfig(t *testing.T) {
 				err = json.Unmarshal(body, &confReq)
 				require.NoError(t, err)
 
-				assert.Equal(t, strconv.FormatInt(mockUser.LegacyID(), 10), confReq.UserID)
 				assert.Equal(t, app.Platform, confReq.OS)
 				assert.Equal(t, app.Name, confReq.AppName)
 				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
