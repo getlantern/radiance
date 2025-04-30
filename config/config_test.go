@@ -158,6 +158,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 		config:            atomic.Value{},
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,
+		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
 	}
 
 	// Test case: No server location set
@@ -238,7 +239,7 @@ type MockFetcher struct {
 	err      error
 }
 
-func (mf *MockFetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
+func (mf *MockFetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	return mf.response, mf.err
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/getlantern/radiance/user"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 type mockRoundTripper struct {
@@ -43,6 +44,8 @@ func (m *mockUser) AuthToken() string {
 
 func TestFetchConfig(t *testing.T) {
 	mockUser := &mockUser{}
+	privateKey, err := wgtypes.GenerateKey()
+	require.NoError(t, err)
 
 	tests := []struct {
 		name                 string
@@ -97,7 +100,7 @@ func TestFetchConfig(t *testing.T) {
 				Transport: mockRT,
 			}, mockUser, "en-US")
 
-			gotConfig, err := fetcher.fetchConfig(*tt.preferredServerLoc)
+			gotConfig, err := fetcher.fetchConfig(*tt.preferredServerLoc, privateKey.PublicKey().String())
 
 			if tt.expectedErrorMessage != "" {
 				require.Error(t, err)
@@ -123,6 +126,7 @@ func TestFetchConfig(t *testing.T) {
 				assert.Equal(t, app.Platform, confReq.OS)
 				assert.Equal(t, app.Name, confReq.AppName)
 				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
+				assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
 				if tt.preferredServerLoc != nil {
 					assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 				}

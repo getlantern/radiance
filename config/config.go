@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"dario.cat/mergo"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/option"
 	"github.com/getlantern/radiance/user"
 
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing/common/json"
 )
 
@@ -61,6 +64,9 @@ type ConfigHandler struct {
 	configListenersMu sync.RWMutex
 	configParser      Unmarshaller
 	configMu          sync.RWMutex
+
+	// wgKeyPath is the path to the WireGuard private key file.
+	wgKeyPath string
 	preferredLocation atomic.Value
 }
 
@@ -76,6 +82,7 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 		apiClient:       common.NewWebClient(httpClient),
 		configListeners: make([]ListenerFunc, 0),
 		configParser:    configParser,
+		wgKeyPath:       filepath.Join(dataDir, "wg.key"),
 	}
 
 	if err := ch.loadConfig(); err != nil {
@@ -85,6 +92,23 @@ func NewConfigHandler(pollInterval time.Duration, httpClient *http.Client, user 
 	ch.ftr = newFetcher(httpClient, user, locale)
 	go ch.fetchLoop(pollInterval)
 	return ch
+}
+
+var ErrNoWGKey = errors.New("no wg key")
+
+func (ch *ConfigHandler) loadWGKey() (wgtypes.Key, error) {
+	buf, err := os.ReadFile(ch.wgKeyPath)
+	if os.IsNotExist(err) {
+		return wgtypes.Key{}, ErrNoWGKey
+	}
+	if err != nil {
+		return wgtypes.Key{}, fmt.Errorf("reading wg key file: %w", err)
+	}
+	key, err := wgtypes.ParseKey(string(buf))
+	if err != nil {
+		return wgtypes.Key{}, fmt.Errorf("parsing wg key: %w", err)
+	}
+	return key, nil
 }
 
 // SetPreferredServerLocation sets the preferred server location to connect to
@@ -165,7 +189,24 @@ func (ch *ConfigHandler) fetchConfig() error {
 	} else {
 		preferred = oldConfig.PreferredLocation
 	}
-	resp, err := ch.ftr.fetchConfig(preferred)
+
+	privateKey, err := ch.loadWGKey()
+	if err != nil && !errors.Is(err, ErrNoWGKey) {
+		return fmt.Errorf("loading wg key: %w", err)
+	}
+
+	if errors.Is(err, ErrNoWGKey) {
+		privateKey, err = wgtypes.GeneratePrivateKey()
+		if err != nil {
+			return fmt.Errorf("failed to generate wg keys: %w", err)
+		}
+
+		if err := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); err != nil {
+			return fmt.Errorf("writing wg key file: %w", err)
+		}
+	}
+
+	resp, err := ch.ftr.fetchConfig(preferred, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -180,14 +221,30 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
 	cfg, err := ch.configParser(resp)
-
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	if err = settingWGPrivateKeyInConfig(cfg, privateKey); err != nil {
+		slog.Error("failed to replace private key", slog.Any("error", err))
+		return fmt.Errorf("setting wireguard private key: %w", err)
+	}
 	ch.setConfigAndNotify(cfg)
 
 	slog.Debug("Config fetched")
+	return nil
+}
+
+func settingWGPrivateKeyInConfig(cfg *Config, privateKey wgtypes.Key) error {
+	for _, endpoint := range cfg.ConfigResponse.Options.Endpoints {
+		if endpoint.Type == constant.TypeWireGuard {
+			options, ok := endpoint.Options.(*option.WireGuardEndpointOptions)
+			if !ok {
+				return fmt.Errorf("invalid wireguard endpoint options")
+			}
+			options.PrivateKey = privateKey.String()
+		}
+	}
 	return nil
 }
 
