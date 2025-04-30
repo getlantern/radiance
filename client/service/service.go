@@ -132,6 +132,8 @@ func newBaseContext() context.Context {
 // newLibboxService creates a new libbox service with the given config and platform interface
 func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox.BoxService, context.Context, error) {
 	// initialize the libbox service
+	// we need to create a new context each time so we have a fresh context, free of all the values
+	// that the sing-box instance adds to it
 	ctx := newBaseContext()
 	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
 	if err != nil {
