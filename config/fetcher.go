@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 	"time"
 
 	"slices"
@@ -55,7 +54,6 @@ func newFetcher(client *http.Client, user user.BaseUser, locale string) Fetcher 
 func (f *fetcher) fetchConfig(preferred C.ServerLocation) ([]byte, error) {
 	confReq := C.ConfigRequest{
 		SingboxVersion:    singVersion(),
-		UserID:            strconv.FormatInt(f.user.LegacyID(), 10),
 		OS:                app.Platform,
 		AppName:           app.Name,
 		DeviceID:          f.user.DeviceID(),
