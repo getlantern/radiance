@@ -15,10 +15,10 @@ require (
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf
-	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
+	github.com/getlantern/fronted v0.0.0-20250430221313-c26c49cec4a6
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
-	github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6
+	github.com/getlantern/kindling v0.0.0-20250430221348-ec2191570965
 	github.com/getlantern/sing-box-extensions v0.0.0-20250417225118-49a27a638120
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/google/uuid v1.6.0
@@ -29,6 +29,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.35.0
 	go.opentelemetry.io/otel/sdk/metric v1.35.0
 	go.uber.org/mock v0.5.0
+	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/protobuf v1.36.5
 )
 
@@ -65,7 +66,6 @@ require (
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
-	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10 // indirect
 )
 
 require (

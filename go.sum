@@ -61,8 +61,8 @@ github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731/go.mod h1:XZwE+
 github.com/getlantern/filepersist v0.0.0-20160317154340-c5f0cd24e799/go.mod h1:8DGAx0LNUfXNnEH+fXI0s3OCBA/351kZCiz/8YSK3i8=
 github.com/getlantern/filepersist v0.0.0-20210901195658-ed29a1cb0b7c h1:mcz27xtAkb1OuOLBct/uFfL1p3XxAIcFct82GbT+UZM=
 github.com/getlantern/filepersist v0.0.0-20210901195658-ed29a1cb0b7c/go.mod h1:8DGAx0LNUfXNnEH+fXI0s3OCBA/351kZCiz/8YSK3i8=
-github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd h1:wuxJjlaR/aUgQp1Hmiw4yP0Uz0MW799AwJidOIvm/tc=
-github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd/go.mod h1:/4g6lEMXHzkF/6WBr3vod4wh3tos632qSZGh7L/fIdg=
+github.com/getlantern/fronted v0.0.0-20250430221313-c26c49cec4a6 h1:eCA/OzolS4rns7CxYyR8aLIE2Yx18MBJzKhMGrdaO3A=
+github.com/getlantern/fronted v0.0.0-20250430221313-c26c49cec4a6/go.mod h1:66ePVEpsOGseZtSIMNnTD8uC9kuVcSxEmc7UH4zpnqY=
 github.com/getlantern/golog v0.0.0-20210606115803-bce9f9fe5a5f/go.mod h1:ZyIjgH/1wTCl+B+7yH1DqrWp6MPJqESmwmEQ89ZfhvA=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 h1:NlQedYmPI3pRAXJb+hLVVDGqfvvXGRPV8vp7XOjKAZ0=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65/go.mod h1:+ZU1h+iOVqWReBpky6d5Y2WL0sF2Llxu+QcxJFs2+OU=
@@ -82,8 +82,8 @@ github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d/go.mod h1:e
 github.com/getlantern/keyman v0.0.0-20200819205636-76fef27c39f1/go.mod h1:FMf0g72BHs14jVcD8i8ubEk4sMB6JdidBn67d44i3ws=
 github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b h1:iyEuk8ARQC9HfraqC4r3leBhU55R1TV7bAiyPYE54kA=
 github.com/getlantern/keyman v0.0.0-20230503155501-4e864ca2175b/go.mod h1:ZJ+yDaZkJ/JU9j7EQa3UUh6ouedrNDDLA5OiowS1Iuk=
-github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6 h1:XGMyQsQmKWGqTJWyC2JbRgKNaFZUpWjIEoPIVZC98bQ=
-github.com/getlantern/kindling v0.0.0-20250401200447-f536cbd057e6/go.mod h1:DT+qhZi7l4ji5FAXH3b4C5WYJmdBevQZUGT+KtS729A=
+github.com/getlantern/kindling v0.0.0-20250430221348-ec2191570965 h1:yy/9ERQg8ptM6njYuvXI6ibLrhCRpWCgP/+T/S5emG4=
+github.com/getlantern/kindling v0.0.0-20250430221348-ec2191570965/go.mod h1:yYqYCo4jdBTxdwPmKMT0RnK3U4mst9wNh/UsitRKE+E=
 github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848 h1:2MhMMVBTnaHrst6HyWFDhwQCaJ05PZuOv1bE2gN8WFY=
 github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848/go.mod h1:+F5GJ7qGpQ03DBtcOEyQpM30ix4BLswdaojecFtsdy8=
 github.com/getlantern/mtime v0.0.0-20200417132445-23682092d1f7 h1:03J6Cb42EG06lHgpOFGm5BOax4qFqlSbSeKO2RGrj2g=
@@ -456,7 +456,6 @@ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8T
 golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
 golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 h1:B82qJJgjvYKsXS9jeunTOisW56dUokqW/FOteYJJ/yg=
 golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2/go.mod h1:deeaetjYA+DHMHg+sMSMI58GrEteJUUzzw7en6TJQcI=
-golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 h1:/jFs0duh4rdb8uIfPMv78iAJGcPKDeqAFnaLBropIC4=
 golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10 h1:3GDAcqdIg1ozBNLgPy4SLT84nfcBjr6rhGtXYtrkWLU=
 golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10/go.mod h1:T97yPqesLiNrOYxkwmhMI0ZIlJDm+p0PMR8eRVeR5tQ=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20241202173237-19429a94021a h1:hgh8P4EuoxpsuKMXX/To36nOFD7vixReXgn8lPGnt+o=

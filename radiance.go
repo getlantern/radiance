@@ -284,7 +284,6 @@ func newLog(logPath string) (io.Writer, error) {
 	logWriter := io.MultiWriter(os.Stdout, f)
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
-		Level:     slog.LevelDebug,
 	}))
 	slog.SetDefault(logger)
 	return logWriter, nil
