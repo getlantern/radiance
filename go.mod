@@ -14,7 +14,7 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20250404213255-37d58e3e0fae
+	github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf
 	github.com/getlantern/fronted v0.0.0-20250330001402-75899df1c2cd
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
@@ -65,10 +65,12 @@ require (
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
+	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10 // indirect
 )
 
 require (
 	dario.cat/mergo v1.0.1
+	github.com/Xuanwo/go-locale v1.1.3
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/caddyserver/certmagic v0.21.7 // indirect

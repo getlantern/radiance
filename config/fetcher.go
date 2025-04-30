@@ -10,11 +10,11 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 	"time"
 
 	"slices"
 
+	"github.com/getlantern/common"
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -23,38 +23,51 @@ import (
 
 const configURL = "https://api.iantem.io/v1/config-new"
 
+type Fetcher interface {
+	// fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
+	// It returns an error if the request fails.
+	// preferred is used to select the server location.
+	// If preferred is empty, the server will select the best location.
+	// The lastModified time is used to check if the configuration has changed since the last request.
+	fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error)
+}
+
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
 	user         user.BaseUser
 	lastModified time.Time
+	locale       string
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user user.BaseUser) *fetcher {
+func newFetcher(client *http.Client, user user.BaseUser, locale string) Fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,
 		lastModified: time.Time{},
+		locale:       locale,
 	}
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(preferredServerLocation C.ServerLocation) ([]byte, error) {
+func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	confReq := C.ConfigRequest{
-		ClientVersion:     app.ClientVersion,
 		SingboxVersion:    singVersion(),
-		UserID:            strconv.FormatInt(f.user.LegacyID(), 10),
 		OS:                app.Platform,
 		AppName:           app.Name,
 		DeviceID:          f.user.DeviceID(),
-		PreferredLocation: preferredServerLocation,
+		WGPublicKey:       wgPublicKey,
+		PreferredLocation: &preferred,
+		Backend:           common.SINGBOX,
+		Locale:            f.locale,
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
+	slog.Debug("fetching config", "request", string(buf))
 	buf, err = f.send(bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -71,7 +84,7 @@ func (f *fetcher) fetchConfig(preferredServerLocation C.ServerLocation) ([]byte,
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
+	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
