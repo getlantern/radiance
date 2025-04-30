@@ -14,7 +14,6 @@ import (
 
 	"slices"
 
-	"github.com/getlantern/common"
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -53,14 +52,16 @@ func newFetcher(client *http.Client, user user.BaseUser, locale string) Fetcher 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	confReq := C.ConfigRequest{
-		SingboxVersion:    singVersion(),
-		OS:                app.Platform,
-		AppName:           app.Name,
-		DeviceID:          f.user.DeviceID(),
-		WGPublicKey:       wgPublicKey,
-		PreferredLocation: &preferred,
-		Backend:           common.SINGBOX,
-		Locale:            f.locale,
+		SingboxVersion: singVersion(),
+		OS:             app.Platform,
+		AppName:        app.Name,
+		DeviceID:       f.user.DeviceID(),
+		WGPublicKey:    wgPublicKey,
+		Backend:        C.SINGBOX,
+		Locale:         f.locale,
+	}
+	if preferred.Country != "" {
+		confReq.PreferredLocation = &preferred
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {
