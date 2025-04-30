@@ -29,9 +29,9 @@ type AuthClient interface {
 	// Logout
 	SignOut(ctx context.Context, logoutData *protos.LogoutRequest) error
 
-	//OAuth
-	OAuthProvider(ctx context.Context) (*protos.OAuthProviderNames, error)
-	OAuthLogin(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error)
+	// //OAuth
+	// OAuthProvider(ctx context.Context) (*protos.OAuthProviderNames, error)
+	// OAuthLogin(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error)
 }
 
 type authClient struct {
@@ -145,20 +145,20 @@ func (c *authClient) SignOut(ctx context.Context, logoutData *protos.LogoutReque
 	return c.PostPROTOC(ctx, "/users/logout", logoutData, &resp)
 }
 
-func (c *authClient) OAuthProvider(ctx context.Context) (*protos.OAuthProviderNames, error) {
-	var resp *protos.OAuthProviderNames
-	err := c.Get(ctx, "/users/oauth2/providers", nil, &resp)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
+// func (c *authClient) OAuthProvider(ctx context.Context) (*protos.OAuthProviderNames, error) {
+// 	var resp *protos.OAuthProviderNames
+// 	err := c.Get(ctx, "/users/oauth2/providers", nil, &resp)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return resp, nil
+// }
 
-func (c *authClient) OAuthLogin(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
-	var resp *protos.SubscriptionPaymentRedirectResponse
-	err := c.Get(ctx, "/users/oauth2/google", nil, &resp)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
+// func (c *authClient) OAuthLogin(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
+// 	var resp *protos.SubscriptionPaymentRedirectResponse
+// 	err := c.Get(ctx, "/users/oauth2/google", nil, &resp)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return resp, nil
+// }
