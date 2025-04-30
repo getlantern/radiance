@@ -221,6 +221,7 @@ func (m *CustomServerManager) RemoveCustomServer(tag string) error {
 }
 
 type selector interface {
+	All() []string
 	SelectOutbound(tag string) bool
 	Now() string
 }
@@ -250,13 +251,19 @@ func (m *CustomServerManager) SelectCustomServer(tag string) error {
 
 func (m *CustomServerManager) reinitializeCustomSelector(defaultTag string, tags []string) error {
 	outboundManager := service.FromContext[adapter.OutboundManager](m.ctx)
-	if _, exists := outboundManager.Outbound(CustomSelectorTag); exists {
+	newTags := make([]string, 0)
+	if outbound, exists := outboundManager.Outbound(CustomSelectorTag); exists {
+		if selector, ok := outbound.(selector); ok {
+			newTags = append(newTags, selector.All()...)
+		}
 		if err := outboundManager.Remove(CustomSelectorTag); err != nil {
 			return fmt.Errorf("failed to remove selector outbound: %w", err)
 		}
 	}
+
+	newTags = append(newTags, tags...)
 	err := m.newSelectorOutbound(outboundManager, CustomSelectorTag, &option.SelectorOutboundOptions{
-		Outbounds:                 tags,
+		Outbounds:                 newTags,
 		Default:                   defaultTag,
 		InterruptExistConnections: true,
 	})

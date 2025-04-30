@@ -239,6 +239,10 @@ func (m *mockEndpoint) SelectOutbound(tag string) bool {
 	return true
 }
 
+func (m *mockEndpoint) All() []string {
+	return []string{m.tag}
+}
+
 func (m *mockEndpoint) Now() string {
 	return m.selectedOutbound
 }
