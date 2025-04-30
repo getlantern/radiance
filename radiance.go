@@ -6,34 +6,20 @@ package radiance
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/appdir"
 	C "github.com/getlantern/common"
-	"github.com/getlantern/fronted"
-	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/deviceid"
-	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 
 	"github.com/getlantern/radiance/metrics"
 )
-
-var log *slog.Logger
 
 const configPollInterval = 10 * time.Minute
 
@@ -62,9 +48,6 @@ type Radiance struct {
 	confHandler  configHandler
 	activeServer *atomic.Value
 	stopChan     chan struct{}
-
-	user *api.User
-	pro  *api.Pro
 	//user config is the user config object that contains the device ID and other user data
 	userConfig common.UserInfo
 
@@ -78,20 +61,9 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(opts client.Options) (*Radiance, error) {
-	reporting.Init()
-	if opts.DataDir == "" {
-		opts.DataDir = appdir.General(app.Name)
-	}
-	if opts.LogDir == "" {
-		opts.LogDir = appdir.Logs(app.Name)
-	}
-	mkdirs(&opts)
-
-	var logWriter io.Writer
-	var err error
-	log, logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
+	init, err := initialize(opts)
 	if err != nil {
-		return nil, fmt.Errorf("could not create log: %w", err)
+		return nil, fmt.Errorf("failed to initialize common: %w", err)
 	}
 	shutdownFuncs := []func(context.Context) error{}
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
@@ -108,38 +80,12 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
-	// TODO: Ideally we would know the user locale to set the country on fronted startup.
-	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(opts.DataDir, "fronted_cache.json"))
-	if err != nil {
-		log.Error("Failed to create fronted", "error", err)
-		return nil, fmt.Errorf("failed to create fronted: %w", err)
-	}
-	k := kindling.NewKindling(
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(logWriter),
-		kindling.WithDomainFronting(f),
-		kindling.WithProxyless("api.iantem.io"),
-	)
-	// deviceid is a optional for macos, windows and linux
-	var platformDeviceId string
-	if common.IsAndroid() || common.IsIOS() {
-		platformDeviceId = opts.DeviceID
-	} else {
-		platformDeviceId = deviceid.Get()
-	}
-	// If no local setup from client options, use the default locale
-	if opts.Locale == "" {
-		log.Debug("Locale not set, using default en-US")
-		opts.Locale = "en-US"
-	}
-	userConfig := common.NewUserConfig(platformDeviceId, opts.DataDir, opts.DataDir)
-	u := api.NewUser(k.NewHTTPClient(), userConfig)
-	pro := api.NewPro(k.NewHTTPClient(), userConfig)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userConfig)
+	u := api.NewUser(init.kindling.NewHTTPClient(), init.userConfig)
+	issueReporter, err := issue.NewIssueReporter(init.kindling.NewHTTPClient(), u, init.userConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, k.NewHTTPClient(), userConfig, opts.DataDir, vpnC.ParseConfig)
+	confHandler := config.NewConfigHandler(configPollInterval, init.kindling.NewHTTPClient(), init.userConfig, opts.DataDir, vpnC.ParseConfig)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
@@ -147,17 +93,27 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		confHandler:   confHandler,
 		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
-		user:          u,
-		pro:           pro,
-		userConfig:    userConfig,
+		userConfig:    init.userConfig,
 		issueReporter: issueReporter,
 		logsDir:       opts.LogDir,
 		shutdownFuncs: shutdownFuncs,
 	}, nil
 }
 
-// TODO: the server stuff should probably be moved to the VPNClient as well..
+// NewAPIHandler creates a new APIHandler instance. This is used to interact with the API.
+func NewAPIHandler(opts client.Options) (*api.APIHandler, error) {
+	// Note: This separation is necessary because the iOS tunnel runs in a different isolated process.
+	// and we need access to the API in the main process.
+	init, err := initialize(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize common: %w", err)
+	}
+	apiHandler := api.NewAPIHandlerInternal(init.kindling.NewHTTPClient(), init.userConfig)
+	return apiHandler, nil
+}
 
+// TODO: The server-related functionality should probably be moved to the VPNClient as well.
+// Eventually, this functionality will be moved to the API handler for better separation of concerns.
 func (r *Radiance) GetAvailableServers() ([]C.ServerLocation, error) {
 	return r.confHandler.ListAvailableServers()
 }
@@ -201,16 +157,6 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 
 	return activeServer.(*Server), nil
 
-}
-
-// User returns the user object for this client
-func (r *Radiance) User() *api.User {
-	return r.user
-}
-
-// Pro returns the pro object for this client
-func (r *Radiance) Pro() *api.Pro {
-	return r.pro
 }
 
 // UserInfo returns the user info object for this client
@@ -278,56 +224,6 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		report.Device,
 		report.Model,
 		country)
-}
-
-func mkdirs(opts *client.Options) {
-	// Make sure the data and logs dirs exist
-	for _, dir := range []string{opts.DataDir, opts.LogDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Error("Failed to create data directory", "dir", dir, "error", err)
-		}
-	}
-}
-
-// Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (*slog.Logger, io.Writer, error) {
-	// If the log file does not exist, create it.
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-	// defer f.Close() - file should be closed externally when logger is no longer needed
-	logWriter := io.MultiWriter(os.Stdout, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, nil))
-	slog.SetDefault(logger)
-	return logger, logWriter, nil
-}
-
-func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {
-	// Parse the domain from the URL.
-	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
-	u, err := url.Parse(configURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
-	}
-	// Extract the domain from the URL.
-	domain := u.Host
-
-	// First, download the file from the specified URL using the smart dialer.
-	// Then, create a new fronted instance with the downloaded file.
-	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
-	}
-	httpClient := &http.Client{
-		Transport: trans,
-	}
-	return fronted.NewFronted(
-		fronted.WithPanicListener(panicListener),
-		fronted.WithCacheFile(cacheFile),
-		fronted.WithHTTPClient(httpClient),
-		fronted.WithConfigURL(configURL),
-	), nil
 }
 
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.

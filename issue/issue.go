@@ -13,6 +13,7 @@ import (
 	"github.com/getlantern/golog"
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/osversion"
+
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
