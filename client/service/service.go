@@ -53,6 +53,8 @@ type BoxService struct {
 	isRunning         bool
 }
 
+const CustomSelectorTag = "custom_selector"
+
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
 func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
@@ -61,6 +63,7 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 		platIfce:          platIfce,
 		mutRuleSetManager: rulesetManager,
 	}
+
 	setupOpts := &libbox.SetupOptions{
 		BasePath:    dataDir,
 		WorkingPath: filepath.Join(dataDir, "data"),
@@ -76,6 +79,7 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 	return bs, nil
 }
 
+// Start re-initialize the libbox service and start it. It will also start the ruleset manager
 func (bs *BoxService) Start() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -143,6 +147,7 @@ func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox
 	return lb, ctx, nil
 }
 
+// Close stops the libbox service and clears the pause timer
 func (bs *BoxService) Close() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -225,6 +230,7 @@ var (
 		"direct",
 		"dns",
 		"block",
+		CustomSelectorTag,
 	}
 	permanentEndpoints = []string{}
 )

@@ -12,6 +12,7 @@ import (
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -53,6 +54,16 @@ func (m *mockVPNClient) ConnectionStatus() bool {
 func (m *mockVPNClient) GetActiveServer() (*Server, error) {
 	args := m.Called()
 	return args.Get(0).(*Server), args.Error(1)
+}
+
+func (m *mockVPNClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return nil
+}
+func (m *mockVPNClient) SelectCustomServer(tag string) error {
+	return nil
+}
+func (m *mockVPNClient) RemoveCustomServer(tag string) error {
+	return nil
 }
 
 func TestReportIssue(t *testing.T) {

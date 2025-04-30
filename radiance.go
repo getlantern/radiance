@@ -317,6 +317,18 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	), nil
 }
 
+func (r *Radiance) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return r.VPNClient.AddCustomServer(cfg)
+}
+
+func (r *Radiance) SelectCustomServer(tag string) error {
+	return r.VPNClient.SelectCustomServer(tag)
+}
+
+func (r *Radiance) RemoveCustomServer(tag string) error {
+	return r.VPNClient.RemoveCustomServer(tag)
+}
+
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.
 func (r *Radiance) SplitTunnelHandler() *client.SplitTunnel {
 	return r.VPNClient.SplitTunnelHandler()
