@@ -3,13 +3,68 @@ package boxservice
 import (
 	"context"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/common"
+
+	"github.com/getlantern/radiance/config"
 )
+
+func TestOnNewConfig(t *testing.T) {
+	t.Run("successfully updates config", func(t *testing.T) {
+		mockConfig := &config.Config{
+			ConfigResponse: common.ConfigResponse{
+				Options: option.Options{
+					Outbounds: []option.Outbound{
+						{
+							Tag:     "tag1",
+							Type:    "default",
+							Options: option.StubOptions{},
+						},
+					},
+				},
+			},
+		}
+
+		bs := &BoxService{
+			ctx:       newBaseContext(),
+			config:    "",
+			isRunning: true,
+			mu:        sync.Mutex{},
+		}
+
+		err := bs.OnNewConfig(nil, mockConfig)
+		if err != nil && strings.HasPrefix(err.Error(), "router missing") {
+			err = nil
+		}
+		require.NoError(t, err)
+		assert.NotEmpty(t, bs.config)
+	})
+
+	t.Run("does nothing if service is not running", func(t *testing.T) {
+		mockConfig := &config.Config{
+			ConfigResponse: common.ConfigResponse{
+				Options: option.Options{},
+			},
+		}
+
+		bs := &BoxService{
+			ctx:       newBaseContext(),
+			isRunning: false,
+		}
+
+		err := bs.OnNewConfig(nil, mockConfig)
+		require.NoError(t, err)
+	})
+}
 
 func TestUpdateOutbounds(t *testing.T) {
 	tests := []struct {

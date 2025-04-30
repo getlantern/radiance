@@ -213,8 +213,21 @@ func (bs *BoxService) Ctx() context.Context {
 func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	slog.Debug("Received new config")
 
-	return updateOutboundsEndpoints(bs.ctx, newConfig.ConfigResponse.Options.Outbounds,
-		newConfig.ConfigResponse.Options.Endpoints)
+	opts := newConfig.ConfigResponse.Options
+	conf, err := json.MarshalContext(bs.ctx, opts)
+	if err != nil {
+		return fmt.Errorf("marshal options: %w", err)
+	}
+	bs.config = string(conf)
+
+	bs.mu.Lock()
+	if !bs.isRunning {
+		bs.mu.Unlock()
+		return nil
+	}
+	bs.mu.Unlock()
+
+	return updateOutboundsEndpoints(bs.ctx, opts.Outbounds, opts.Endpoints)
 }
 
 func ParseConfig(configRaw []byte) (*config.Config, error) {
