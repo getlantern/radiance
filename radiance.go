@@ -61,7 +61,7 @@ type Radiance struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(opts client.Options) (*Radiance, error) {
-	init, err := InitCommon(opts)
+	init, err := initialize(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize common: %w", err)
 	}
@@ -101,12 +101,10 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 }
 
 // NewAPIHandler creates a new APIHandler instance. This is used to interact with the API.
-// The User and Pro fields are API clients used to communicate with the respective endpoints.
-//
-// Note: This separation is necessary because the iOS tunnel runs in a different isolated process.
-// and we need access to the API in the main process.
 func NewAPIHandler(opts client.Options) (*api.APIHandler, error) {
-	init, err := InitCommon(opts)
+	// Note: This separation is necessary because the iOS tunnel runs in a different isolated process.
+	// and we need access to the API in the main process.
+	init, err := initialize(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize common: %w", err)
 	}

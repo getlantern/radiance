@@ -34,9 +34,11 @@ type sharedConfig struct {
 }
 
 // initCommon initializes the common configuration for the Radiance client and API handler.
-func InitCommon(opts client.Options) (*sharedConfig, error) {
+func initialize(opts client.Options) (*sharedConfig, error) {
 	var err error
+
 	sharedInitOnce.Do(func() {
+
 		reporting.Init()
 		if opts.DataDir == "" {
 			opts.DataDir = appdir.General(app.Name)
@@ -62,9 +64,11 @@ func InitCommon(opts client.Options) (*sharedConfig, error) {
 			err = fmt.Errorf("could not create log: %w", err)
 			return
 		}
+			
+		
 		f, ferr := newFronted(logWriter, reporting.PanicListener, filepath.Join(opts.DataDir, "fronted_cache.json"))
 		if ferr != nil {
-			err = fmt.Errorf("failed to create fronted: %w", err)
+			err = fmt.Errorf("failed to create fronted: %w", ferr)
 			return
 		}
 
@@ -79,6 +83,7 @@ func InitCommon(opts client.Options) (*sharedConfig, error) {
 			userConfig: common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale),
 			kindling:   k,
 		}
+		log.Debug("Initialized shared config", "dataDir", opts.DataDir, "logDir", opts.LogDir, "locale", opts.Locale)
 	})
 	return sharedInit, err
 
