@@ -65,6 +65,8 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 		mutRuleSetManager: rulesetManager,
 	}
 
+	bs.config.Store(config)
+
 	setupOpts := &libbox.SetupOptions{
 		BasePath:    dataDir,
 		WorkingPath: filepath.Join(dataDir, "data"),
