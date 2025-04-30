@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -399,4 +401,22 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 
 	u.userData = nil
 	return u.userConfig.Save(nil)
+}
+
+// OAuthLogin initiates the OAuth login process for the specified provider.
+func (u *User) OAuthLoginUrl(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	loginUrl, err := url.Parse(fmt.Sprintf("%s/%s/%s", common.APIBaseUrl, "users/oauth2", provider))
+	// https: //df.iantem.io/api/v1/users/oauth2/google'
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+	query := loginUrl.Query()
+	query.Set("deviceId", u.deviceId)
+	query.Set("userId", strconv.FormatInt(u.userConfig.LegacyID(), 10))
+	query.Set("proToken", u.userData.LegacyToken)
+	loginUrl.RawQuery = query.Encode()
+
+	return &protos.SubscriptionPaymentRedirectResponse{
+		Redirect: loginUrl.String(),
+	}, nil
 }

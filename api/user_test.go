@@ -121,6 +121,19 @@ func TestDeleteAccount(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestOAuthLoginUrl(t *testing.T) {
+	u := &User{
+		userData:   &protos.LoginResponse{Id: "test@example.com"},
+		authClient: nil,
+		deviceId:   "deviceId",
+		salt:       nil,
+		userConfig: &mockUserConfig{},
+	}
+	url, err := u.OAuthLoginUrl(context.Background(), "google")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, url)
+}
+
 // Mock implementation of AuthClient for testing purposes
 type mockAuthClient struct {
 	cache    map[string]string
