@@ -19,10 +19,13 @@ import (
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
 		dir := t.TempDir()
-		r, err := NewRadiance(client.Options{DataDir: dir})
+		r, err := NewRadiance(client.Options{
+			DataDir: dir,
+			Locale:  "en-US",
+		})
+		assert.NoError(t, err)
 		defer r.Close()
 		assert.NotNil(t, r)
-		assert.NoError(t, err)
 		assert.NotNil(t, r.VPNClient)
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.activeServer)
