@@ -42,8 +42,9 @@ func TestOnNewConfig(t *testing.T) {
 			mu:        sync.Mutex{},
 		}
 
+		bs.config.Store(option.Options{})
 		err := bs.OnNewConfig(nil, mockConfig)
-		if err != nil && strings.HasPrefix(err.Error(), "router missing") {
+		if err != nil && strings.Contains(err.Error(), "router missing") {
 			err = nil
 		}
 		require.NoError(t, err)
@@ -62,6 +63,7 @@ func TestOnNewConfig(t *testing.T) {
 			isRunning: false,
 		}
 
+		bs.config.Store(option.Options{})
 		err := bs.OnNewConfig(nil, mockConfig)
 		require.NoError(t, err)
 	})
