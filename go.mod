@@ -1,6 +1,6 @@
 module github.com/getlantern/radiance
 
-go 1.23.6
+go 1.24
 
 toolchain go1.24.1
 
@@ -15,10 +15,10 @@ require (
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf
-	github.com/getlantern/fronted v0.0.0-20250430221313-c26c49cec4a6
+	github.com/getlantern/fronted v0.0.0-20250501185902-0f6c04a1b15d
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
-	github.com/getlantern/kindling v0.0.0-20250430221348-ec2191570965
+	github.com/getlantern/kindling v0.0.0-20250501190705-a18e51da1a62
 	github.com/getlantern/sing-box-extensions v0.0.0-20250417225118-49a27a638120
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/google/uuid v1.6.0
@@ -57,7 +57,7 @@ require (
 	github.com/onsi/gomega v1.36.2 // indirect
 	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
 	github.com/pivotal-cf-experimental/jibber_jabber v0.0.0-20151120183258-bcc4c8345a21 // indirect
-	github.com/refraction-networking/utls v1.6.7 // indirect
+	github.com/refraction-networking/utls v1.7.1 // indirect
 	github.com/sagernet/cloudflare-tls v0.0.0-20231208171750-a4483c1b7cd1 // indirect
 	github.com/tevino/abool/v2 v2.1.0 // indirect
 	github.com/tkuchiki/go-timezone v0.2.0 // indirect
@@ -65,7 +65,7 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 )
 
 require (
@@ -156,12 +156,12 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.36.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/sys v0.30.0
+	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
+	golang.org/x/sys v0.31.0
 	golang.org/x/time v0.7.0 // indirect
 	golang.org/x/tools v0.28.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
