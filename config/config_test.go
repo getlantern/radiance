@@ -13,12 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/user"
 )
 
 // Mock implementation of ConfigParser for testing
-func mockConfigParser(data []byte) (*Config, error) {
-	var cfg Config
+func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
+	var cfg C.ConfigResponse
 	err := json.Unmarshal(data, &cfg)
 	return &cfg, err
 }
@@ -30,8 +31,8 @@ func TestSaveConfig(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
+		configPath:     configPath,
+		confRespParser: mockConfigParser,
 	}
 
 	// Create a sample config to save
@@ -56,7 +57,7 @@ func TestSaveConfig(t *testing.T) {
 	require.NoError(t, err, "Should be able to read the config file")
 
 	// Parse the content using the mock parser
-	actualConfig, err := ch.configParser(data)
+	actualConfig, err := ch.unmarshalConfig(data)
 	require.NoError(t, err, "Should be able to parse the config file")
 
 	// Verify the content matches the expected config
@@ -69,9 +70,9 @@ func TestGetConfig(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
-		config:       atomic.Value{},
+		configPath:     configPath,
+		confRespParser: mockConfigParser,
+		config:         atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -108,10 +109,10 @@ func TestSetPreferredServerLocation(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
-		config:       atomic.Value{},
-		ftr:          newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		configPath:     configPath,
+		confRespParser: mockConfigParser,
+		config:         atomic.Value{},
+		ftr:            newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
 	}
 
 	ch.config.Store(&Config{
@@ -154,7 +155,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser and fetcher
 	ch := &ConfigHandler{
 		configPath:        configPath,
-		configParser:      mockConfigParser,
+		confRespParser:    mockConfigParser,
 		config:            atomic.Value{},
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,
@@ -164,12 +165,10 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Test case: No server location set
 	t.Run("NoServerLocationSet", func(t *testing.T) {
 		mockFetcher.response = []byte(`{
-			"ConfigResponse": {
 				"Servers": [
 					{"Country": "US", "City": "New York"},
 					{"Country": "UK", "City": "London"}
 				]
-			}
 		}`)
 
 		err := ch.fetchConfig()
@@ -183,12 +182,10 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Test case: No stored config, fetch succeeds
 	t.Run("NoStoredConfigFetchSuccess", func(t *testing.T) {
 		mockFetcher.response = []byte(`{
-			"ConfigResponse": {
 				"Servers": [
 					{"Country": "US", "City": "New York"},
 					{"Country": "UK", "City": "London"}
 				]
-			}
 		}`)
 		mockFetcher.err = nil
 

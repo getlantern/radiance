@@ -69,7 +69,6 @@ require (
 )
 
 require (
-	dario.cat/mergo v1.0.1
 	github.com/Xuanwo/go-locale v1.1.3
 	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect

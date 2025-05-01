@@ -130,13 +130,15 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(
-		configPollInterval,
-		k.NewHTTPClient(),
-		u, opts.DataDir,
-		boxservice.ParseConfig,
-		opts.Locale,
-	)
+	cOpts := config.Options{
+		PollInterval:     configPollInterval,
+		HTTPClient:       k.NewHTTPClient(),
+		User:             u,
+		DataDir:          opts.DataDir,
+		ConfigRespParser: boxservice.UnmarshalConfig,
+		Locale:           opts.Locale,
+	}
+	confHandler := config.NewConfigHandler(cOpts)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
@@ -174,6 +176,7 @@ func (r *Radiance) Close() {
 			}
 		}
 	})
+	<-r.stopChan
 }
 
 // Server represents a remote VPN server.
