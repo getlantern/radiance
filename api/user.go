@@ -405,8 +405,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 
 // OAuthLogin initiates the OAuth login process for the specified provider.
 func (u *User) OAuthLoginUrl(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
-	loginUrl, err := url.Parse(fmt.Sprintf("%s/%s/%s", common.APIBaseUrl, "users/oauth2", provider))
-	// https: //df.iantem.io/api/v1/users/oauth2/google'
+	loginUrl, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://df.iantem.io/api/v1", "users/oauth2", provider))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL: %w", err)
 	}
