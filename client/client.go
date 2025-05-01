@@ -91,7 +91,7 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 		true, // TODO: maybe this should be saved and restored to remember the user's last choice
 	)
 	if err != nil {
-		return nil, fmt.Errorf("split tunnel handler: %w", err)
+		return nil, fmt.Errorf("customServerSelector ruleset: %w", err)
 	}
 
 	// inject split tunnel routing rule and ruleset into the routing table
