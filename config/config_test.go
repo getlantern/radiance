@@ -262,11 +262,8 @@ func TestMergeResp(t *testing.T) {
 			},
 		}
 
-		t.Logf("New config:    %+v", newConfig)
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		t.Logf("New config:    %+v", newConfig)
-		t.Logf("Merged config: %+v", mergedConfig)
 		assert.Equal(t, newConfig.Servers, mergedConfig.Servers, "Merged servers should match newConfig servers")
 		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
 		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
@@ -301,11 +298,8 @@ func TestMergeResp(t *testing.T) {
 			},
 		}
 
-		t.Logf("New config:    %+v", newConfig)
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		t.Logf("New config:    %+v", newConfig)
-		t.Logf("Merged config: %+v", mergedConfig)
 		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
 		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
 		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
@@ -348,11 +342,8 @@ func TestMergeResp(t *testing.T) {
 			},
 		}
 
-		t.Logf("New config:    %+v", newConfig)
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		t.Logf("New config:    %+v", newConfig)
-		t.Logf("Merged config: %+v", mergedConfig)
 		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
 		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged options should match newConfig options")
 		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
@@ -396,11 +387,8 @@ func TestMergeResp(t *testing.T) {
 			},
 		}
 
-		t.Logf("New config:    %+v", newConfig)
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		t.Logf("New config:    %+v", newConfig)
-		t.Logf("Merged config: %+v", mergedConfig)
 		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
 		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged Outbounds should match newConfig Outbounds")
 		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")

@@ -19,6 +19,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
+	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
@@ -289,11 +290,12 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 // mergeResp merges the old and new configuration responses. The merged response is returned
 // along with any error that occurred during the merge.
 func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
-	if err := mergo.Merge(oldConfig, newConfig, mergo.WithOverride); err != nil {
+	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
+	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride); err != nil {
 		slog.Error("merging config", "error", err)
 		return newConfig, err
 	}
-	return oldConfig, nil
+	return &oldConfigCopy, nil
 }
 
 // fetchLoop fetches the configuration every pollInterval.
