@@ -24,12 +24,13 @@ type CustomServerManager struct {
 }
 
 func NewCustomServerManager(ctx context.Context, dataDir string) *CustomServerManager {
-	return &CustomServerManager{
-		ctx:                   ctx,
+	csm := &CustomServerManager{
 		customServers:         make(map[string]CustomServerInfo),
 		customServersMutex:    new(sync.RWMutex),
 		customServersFilePath: filepath.Join(dataDir, "data", "custom_servers.json"),
 	}
+	csm.SetContext(ctx)
+	return csm
 }
 
 type customServers struct {
@@ -38,7 +39,7 @@ type customServers struct {
 
 // CustomServerInfo represents a custom server configuration.
 // Outbound and Endpoint options are mutually exclusive and there can only be
-// one of those fields nil.
+// one of those fields non-nil.
 type CustomServerInfo struct {
 	Tag      string           `json:"tag"`
 	Outbound *option.Outbound `json:"outbound,omitempty"`
@@ -50,6 +51,10 @@ type ServerConnectConfig []byte
 
 // SetContext update the context with the latest changes.
 func (m *CustomServerManager) SetContext(ctx context.Context) {
+	csm := service.PtrFromContext[CustomServerManager](ctx)
+	if csm == nil {
+		ctx = service.ContextWith(ctx, m)
+	}
 	m.ctx = ctx
 }
 
