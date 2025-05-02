@@ -77,17 +77,32 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
+	slog.Debug("Creating new VPN client")
 	rsMgr := ruleset.NewManager()
-	splitTunnel, err := initTunnel(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
+	splitTunnel, err := initMutRuleSet(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
+	}
+	customServerSelector, err := initMutRuleSet(
+		opts.DataDir,
+		CustomSelectorTag,
+		CustomSelectorFormat,
+		rsMgr,
+		true, // TODO: maybe this should be saved and restored to remember the user's last choice
+	)
+	if err != nil {
+		return nil, fmt.Errorf("customServerSelector ruleset: %w", err)
 	}
 
 	// inject split tunnel routing rule and ruleset into the routing table
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
 	// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
 	// index 1
-	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{splitTunnel.ruleOption, ruleset.BaseRouteRule(CustomServerTag, boxservice.CustomSelectorTag)}, []option.RuleSet{splitTunnel.rulesetOption})
+	boxOpts.Route = injectRouteRules(
+		boxOpts.Route, 1,
+		[]option.Rule{splitTunnel.ruleOption, customServerSelector.ruleOption},
+		[]option.RuleSet{splitTunnel.rulesetOption, customServerSelector.rulesetOption},
+	)
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
@@ -196,10 +211,10 @@ func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
 }
 
 const (
-	SplitTunnelTag     = "split-tunnel"
-	SplitTunnelFormat  = constant.RuleSetFormatSource // file will be saved as json
-	CustomServerTag    = "custom-server"
-	CustomServerFormat = constant.RuleSetFormatSource // file will be saved as json
+	SplitTunnelTag       = "split-tunnel"
+	SplitTunnelFormat    = constant.RuleSetFormatSource // file will be saved as json
+	CustomSelectorTag    = "custom-server"
+	CustomSelectorFormat = constant.RuleSetFormatSource // file will be saved as json
 )
 
 type SplitTunnel = ruleset.MutableRuleSet
@@ -211,11 +226,11 @@ type tunnel struct {
 	rulesetOption  option.RuleSet
 }
 
-// initTunnel initializes the ruleset handler. It retrieves an existing mutable
+// initMutRuleSet initializes the ruleset handler. It retrieves an existing mutable
 // ruleset associated with the provided tag or cerates a new one if it doesn't
 // exist. dataDir is the directory where the ruleset data is stored. The initial
 // state is determined by the enabled parameter.
-func initTunnel(dataDir, tag, format string, mgr *ruleset.Manager, enabled bool) (tunnel, error) {
+func initMutRuleSet(dataDir, tag, format string, mgr *ruleset.Manager, enabled bool) (tunnel, error) {
 	rs := mgr.MutableRuleSet(tag)
 	if rs == nil {
 		var err error
