@@ -462,6 +462,80 @@ func TestMergeResp(t *testing.T) {
 		require.NoError(t, err, "Should not return an error when merging configs")
 		assert.Equal(t, mergedConfig, want)
 	})
+
+	t.Run("DoNotOverwriteAllOptions", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "8.8.8.8",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+					{
+						Tag: "outbound4",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "1.1.1.1",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		want := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "1.1.1.1",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, mergedConfig, want)
+	})
 }
 
 // MockFetcher is a mock implementation of the fetcher used for testing
