@@ -54,7 +54,16 @@ func NewPro(httpClient *http.Client, userConfig common.UserInfo) *Pro {
 // Create a new user account
 func (u *Pro) UserCreate(ctx context.Context) (*protos.UserDataResponse, error) {
 	return u.proClient.CreateUser(ctx)
+}
 
+// UserData returns the user data
+func (u *Pro) UserData(ctx context.Context) (*protos.UserDataResponse, error) {
+	resp, err := u.proClient.UserData(ctx)
+	if err != nil {
+		slog.Error("Error in UserData", "error", err)
+		return nil, err
+	}
+	return resp, nil
 }
 
 // SubscriptionPaymentRedirect creates a new subscription with url
