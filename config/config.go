@@ -15,9 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"dario.cat/mergo"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
+	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
@@ -267,13 +269,13 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	}
 	oldConfig, _ := ch.GetConfig()
 	if oldConfig != nil {
-		merged, err := mergeResp(oldConfig.ConfigResponse, cfg.ConfigResponse)
+		merged, err := mergeResp(&oldConfig.ConfigResponse, &cfg.ConfigResponse)
 		if err != nil {
 			slog.Error("failed to merge config", "error", err)
 			return
 		}
-
 		cfg.ConfigResponse = *merged
+
 		if cfg.PreferredLocation == (C.ServerLocation{}) {
 			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
 		}
@@ -287,45 +289,13 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 
 // mergeResp merges the old and new configuration responses. The merged response is returned
 // along with any error that occurred during the merge.
-func mergeResp(oldConfig, newConfig C.ConfigResponse) (*C.ConfigResponse, error) {
-	if newConfig.Date != "" {
-		oldConfig.Date = newConfig.Date
+func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
+	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
+	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride); err != nil {
+		slog.Error("merging config", "error", err)
+		return newConfig, err
 	}
-	if newConfig.UserInfo.ProToken != "" {
-		oldConfig.UserInfo.ProToken = newConfig.UserInfo.ProToken
-	}
-	if newConfig.UserInfo.Country != "" {
-		oldConfig.UserInfo.Country = newConfig.UserInfo.Country
-	}
-	if newConfig.UserInfo.IP != "" {
-		oldConfig.UserInfo.IP = newConfig.UserInfo.IP
-	}
-	if newConfig.UserInfo.ID != "" {
-		oldConfig.UserInfo.ID = newConfig.UserInfo.ID
-	}
-
-	opts := oldConfig.Options
-	newOpts := newConfig.Options
-	if newOpts.DNS != nil {
-		opts.DNS = newOpts.DNS
-	}
-	if newOpts.Outbounds != nil {
-		opts.Outbounds = newOpts.Outbounds
-		opts.Endpoints = newOpts.Endpoints
-
-		if newConfig.Servers == nil {
-			return nil, errors.New("server locations missing")
-		}
-		if newConfig.OutboundLocations == nil {
-			return nil, errors.New("outbound locations missing")
-		}
-
-		oldConfig.Servers = newConfig.Servers
-		oldConfig.OutboundLocations = newConfig.OutboundLocations
-	}
-
-	oldConfig.Options = opts
-	return &oldConfig, nil
+	return &oldConfigCopy, nil
 }
 
 // fetchLoop fetches the configuration every pollInterval.
