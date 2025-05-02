@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	C "github.com/getlantern/common"
+
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -266,13 +268,13 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	return nil
 }
 
-func ParseConfig(configRaw []byte) (*config.Config, error) {
-	config, err := json.UnmarshalExtendedContext[*config.Config](BaseContext(), configRaw)
+func UnmarshalConfig(configRaw []byte) (*C.ConfigResponse, error) {
+	config, err := json.UnmarshalExtendedContext[C.ConfigResponse](BaseContext(), configRaw)
 	if err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return nil, fmt.Errorf("unmarshal options: %w", err)
 	}
 
-	return config, nil
+	return &config, nil
 }
 
 var (
