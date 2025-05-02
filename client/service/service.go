@@ -225,6 +225,9 @@ func (bs *BoxService) Ctx() context.Context {
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
 // new configuration
 func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
+	// TODO:
+	//		- restart libbox if options change that can't be updated while running (routing, etc)
+	//		- update all options. make sure to include base/default options where needed (DNS)
 	slog.Debug("Received new config")
 
 	newOpts := newConfig.ConfigResponse.Options
@@ -232,6 +235,19 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 
 	currOpts.Outbounds = append(boxoptions.BaseOutbounds, newOpts.Outbounds...)
 	currOpts.Endpoints = append(boxoptions.BaseEndpoints, newOpts.Endpoints...)
+
+	// add custom server outbounds/endpoints
+	csm := service.PtrFromContext[CustomServerManager](bs.ctx)
+	if csm != nil {
+		servers, _ := csm.ListCustomServers()
+		for _, server := range servers {
+			if server.Outbound != nil {
+				currOpts.Outbounds = append(currOpts.Outbounds, *server.Outbound)
+			} else if server.Endpoint != nil {
+				currOpts.Endpoints = append(currOpts.Endpoints, *server.Endpoint)
+			}
+		}
+	}
 
 	bs.config.Store(currOpts)
 
