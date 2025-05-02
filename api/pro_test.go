@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/zeebo/assert"
+
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
-	"github.com/zeebo/assert"
 )
 
 func TestSubscriptionPaymentRedirect(t *testing.T) {
@@ -23,7 +23,6 @@ func TestSubscriptionPaymentRedirect(t *testing.T) {
 	resp, error := proServer.SubscriptionPaymentRedirect(context.Background(), body)
 	assert.NoError(t, error)
 	assert.NotNil(t, resp.Redirect)
-	fmt.Printf("SubscriptionPaymentRedirect response: %v", resp)
 }
 
 func TestCreateUser(t *testing.T) {
@@ -31,7 +30,6 @@ func TestCreateUser(t *testing.T) {
 	resp, error := proServer.UserCreate(context.Background())
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
-	fmt.Printf("UserCreate response: %v", resp)
 }
 
 func TestStripeSubscription(t *testing.T) {
@@ -44,7 +42,6 @@ func TestStripeSubscription(t *testing.T) {
 	resp, error := proServer.StripeSubscription(context.Background(), body)
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
-	fmt.Printf("Stripe Subscription response: %v", resp)
 }
 
 func TestPlans(t *testing.T) {
@@ -52,7 +49,6 @@ func TestPlans(t *testing.T) {
 	resp, error := proServer.Plans(context.Background())
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
-	fmt.Printf("Plans response: %v", resp)
 }
 
 func commonConfig() common.UserInfo {
