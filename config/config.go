@@ -4,7 +4,6 @@ Package config provides a handler for fetching and storing proxy configurations.
 package config
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +21,6 @@ import (
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/common/json/badjson"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
@@ -269,12 +267,7 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	}
 	oldConfig, _ := ch.GetConfig()
 	if oldConfig != nil {
-		merged, err := mergeResp(oldConfig.ConfigResponse, cfg.ConfigResponse)
-		if err != nil {
-			slog.Error("merging config", "error", err)
-			return
-		}
-		cfg.ConfigResponse = merged
+		cfg.ConfigResponse = mergeResp(oldConfig.ConfigResponse, cfg.ConfigResponse)
 
 		if cfg.PreferredLocation == (C.ServerLocation{}) {
 			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
@@ -289,19 +282,38 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 
 // mergeResp merges the old and new configuration responses. The merged response is returned
 // along with any error that occurred during the merge.
-func mergeResp(oldConfig, newConfig C.ConfigResponse) (C.ConfigResponse, error) {
-	newOpts := newConfig.Options
-	// we set the options to empty since we want to use the new options. we replace them later
-	oldConfig.Options = option.Options{}
-	newConfig.Options = option.Options{}
-
-	// badjson.Merge ensures a deep copy of the old config is made
-	merged, err := badjson.Merge(context.Background(), oldConfig, newConfig, false)
-	if err != nil {
-		return C.ConfigResponse{}, err
+func mergeResp(oldConfig, newConfig C.ConfigResponse) C.ConfigResponse {
+	if newConfig.Date != "" {
+		oldConfig.Date = newConfig.Date
 	}
-	merged.Options = newOpts
-	return merged, nil
+	if newConfig.UserInfo.ProToken != "" {
+		oldConfig.UserInfo.ProToken = newConfig.UserInfo.ProToken
+	}
+	if newConfig.UserInfo.Country != "" {
+		oldConfig.UserInfo.Country = newConfig.UserInfo.Country
+	}
+	if newConfig.UserInfo.IP != "" {
+		oldConfig.UserInfo.IP = newConfig.UserInfo.IP
+	}
+	if newConfig.UserInfo.ID != "" {
+		oldConfig.UserInfo.ID = newConfig.UserInfo.ID
+	}
+
+	opts := oldConfig.Options
+	newOpts := newConfig.Options
+	if newOpts.DNS != nil {
+		opts.DNS = newOpts.DNS
+	}
+	if newOpts.Outbounds != nil {
+		opts.Outbounds = newOpts.Outbounds
+		opts.Endpoints = newOpts.Endpoints
+
+		oldConfig.Servers = newConfig.Servers
+		oldConfig.OutboundLocations = newConfig.OutboundLocations
+	}
+
+	oldConfig.Options = opts
+	return oldConfig
 }
 
 // fetchLoop fetches the configuration every pollInterval.
