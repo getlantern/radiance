@@ -271,7 +271,7 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	if oldConfig != nil {
 		merged, err := mergeResp(&oldConfig.ConfigResponse, &cfg.ConfigResponse)
 		if err != nil {
-			slog.Error("merging config", "error", err)
+			slog.Error("failed to merge config", "error", err)
 			return
 		}
 		cfg.ConfigResponse = *merged
