@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/getlantern/radiance/api/protos"
@@ -22,6 +23,7 @@ type ProClient interface {
 	Plans(ctx context.Context) (*protos.PlansResponse, error)
 	// User methods
 	CreateUser(ctx context.Context) (*protos.UserDataResponse, error)
+	UserData(ctx context.Context) (*protos.UserDataResponse, error)
 }
 
 // SubscriptionPaymentRedirect is used to get the subscription payment redirect URL with SubscriptionPaymentRedirectRequest
@@ -51,6 +53,33 @@ func (c *proClient) CreateUser(ctx context.Context) (*protos.UserDataResponse, e
 	if err != nil {
 		slog.Error("Error in UserCreate: %v", "err", err)
 		return nil, err
+	}
+	login := &protos.LoginResponse{
+		LegacyID:       resp.LoginResponse_UserData.UserId,
+		LegacyToken:    resp.LoginResponse_UserData.Token,
+		LegacyUserData: resp.LoginResponse_UserData,
+	}
+	/// Write user data to file
+	err = c.UserInfo.Save(login)
+	if err != nil {
+		slog.Error("Error writing user data: %v", "err", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+// UserData is used to get user data
+// this will be also save data to user config
+func (c *proClient) UserData(ctx context.Context) (*protos.UserDataResponse, error) {
+	var resp *protos.UserDataResponse
+	err := c.Get(ctx, "/user-data", nil, &resp)
+	if err != nil {
+		slog.Error("Error in UserCreate: %v", "err", err)
+		return nil, err
+	}
+	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
+		slog.Error("Error in UserData: %v", "err", resp.BaseResponse.Error)
+		return nil, fmt.Errorf("error in UserData: %s", resp.BaseResponse.Error)
 	}
 	login := &protos.LoginResponse{
 		LegacyID:       resp.LoginResponse_UserData.UserId,
