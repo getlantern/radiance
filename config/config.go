@@ -4,7 +4,6 @@ Package config provides a handler for fetching and storing proxy configurations.
 package config
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,13 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"dario.cat/mergo"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/common/json/badjson"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/user"
@@ -269,14 +268,14 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	}
 	oldConfig, _ := ch.GetConfig()
 	if oldConfig != nil {
-		merged, err := mergeResp(oldConfig.ConfigResponse, cfg.ConfigResponse)
+		merged, err := mergeResp(&oldConfig.ConfigResponse, &cfg.ConfigResponse)
 		if err != nil {
 			slog.Error("merging config", "error", err)
 			return
 		}
-		cfg.ConfigResponse = merged
+		cfg.ConfigResponse = *merged
 
-		if cfg.PreferredLocation != (C.ServerLocation{}) {
+		if cfg.PreferredLocation == (C.ServerLocation{}) {
 			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
 		}
 	}
@@ -289,19 +288,12 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 
 // mergeResp merges the old and new configuration responses. The merged response is returned
 // along with any error that occurred during the merge.
-func mergeResp(oldConfig, newConfig C.ConfigResponse) (C.ConfigResponse, error) {
-	newOpts := newConfig.Options
-	// we set the options to empty since we want to use the new options. we replace them later
-	oldConfig.Options = option.Options{}
-	newConfig.Options = option.Options{}
-
-	// badjson.Merge ensures a deep copy of the old config is made
-	merged, err := badjson.Merge(context.Background(), oldConfig, newConfig, false)
-	if err != nil {
-		return C.ConfigResponse{}, err
+func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
+	if err := mergo.Merge(oldConfig, newConfig, mergo.WithOverride); err != nil {
+		slog.Error("merging config", "error", err)
+		return newConfig, err
 	}
-	merged.Options = newOpts
-	return merged, nil
+	return oldConfig, nil
 }
 
 // fetchLoop fetches the configuration every pollInterval.

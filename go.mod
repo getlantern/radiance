@@ -12,6 +12,7 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 //replace github.com/getlantern/common => ../common
 
 require (
+	dario.cat/mergo v1.0.1
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf

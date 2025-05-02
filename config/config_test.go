@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	O "github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -227,6 +228,184 @@ func TestHandlerFetchConfig(t *testing.T) {
 		err := ch.fetchConfig()
 		require.Error(t, err, "Should return an error when config parsing fails")
 		assert.Contains(t, err.Error(), "parsing config", "Error message should indicate parsing error")
+	})
+}
+
+func TestMergeResp(t *testing.T) {
+	t.Run("SuccessfulMerge", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		t.Logf("New config:    %+v", newConfig)
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		t.Logf("New config:    %+v", newConfig)
+		t.Logf("Merged config: %+v", mergedConfig)
+		assert.Equal(t, newConfig.Servers, mergedConfig.Servers, "Merged servers should match newConfig servers")
+		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+	})
+
+	t.Run("NoNewServerLocations", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		t.Logf("New config:    %+v", newConfig)
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		t.Logf("New config:    %+v", newConfig)
+		t.Logf("Merged config: %+v", mergedConfig)
+		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
+		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+	})
+	t.Run("OverwriteOutbounds", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound3",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		t.Logf("New config:    %+v", newConfig)
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		t.Logf("New config:    %+v", newConfig)
+		t.Logf("Merged config: %+v", mergedConfig)
+		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
+		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged options should match newConfig options")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+	})
+	t.Run("KeepDNSOptions", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "8.8.8.8",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		t.Logf("New config:    %+v", newConfig)
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		t.Logf("New config:    %+v", newConfig)
+		t.Logf("Merged config: %+v", mergedConfig)
+		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
+		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged Outbounds should match newConfig Outbounds")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+		assert.Equal(t, oldConfig.Options.DNS, mergedConfig.Options.DNS, "Merged DNS options should match oldConfig DNS options")
 	})
 }
 
