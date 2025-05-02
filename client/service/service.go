@@ -61,6 +61,7 @@ const CustomSelectorTag = "custom_selector"
 // to interact with the underlying platform
 func New(config, baseDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
 	bs := &BoxService{
+		ctx:               newBaseContext(),
 		config:            atomic.Value{},
 		platIfce:          platIfce,
 		mutRuleSetManager: rulesetManager,
