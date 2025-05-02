@@ -9,16 +9,18 @@ import (
 	"sync/atomic"
 	"testing"
 
+	O "github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/user"
 )
 
 // Mock implementation of ConfigParser for testing
-func mockConfigParser(data []byte) (*Config, error) {
-	var cfg Config
+func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
+	var cfg C.ConfigResponse
 	err := json.Unmarshal(data, &cfg)
 	return &cfg, err
 }
@@ -30,8 +32,8 @@ func TestSaveConfig(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
+		configPath:     configPath,
+		confRespParser: mockConfigParser,
 	}
 
 	// Create a sample config to save
@@ -56,7 +58,7 @@ func TestSaveConfig(t *testing.T) {
 	require.NoError(t, err, "Should be able to read the config file")
 
 	// Parse the content using the mock parser
-	actualConfig, err := ch.configParser(data)
+	actualConfig, err := ch.unmarshalConfig(data)
 	require.NoError(t, err, "Should be able to parse the config file")
 
 	// Verify the content matches the expected config
@@ -69,9 +71,9 @@ func TestGetConfig(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
-		config:       atomic.Value{},
+		configPath:     configPath,
+		confRespParser: mockConfigParser,
+		config:         atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -108,10 +110,10 @@ func TestSetPreferredServerLocation(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:   configPath,
-		configParser: mockConfigParser,
-		config:       atomic.Value{},
-		ftr:          newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		configPath:     configPath,
+		confRespParser: mockConfigParser,
+		config:         atomic.Value{},
+		ftr:            newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
 	}
 
 	ch.config.Store(&Config{
@@ -154,7 +156,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser and fetcher
 	ch := &ConfigHandler{
 		configPath:        configPath,
-		configParser:      mockConfigParser,
+		confRespParser:    mockConfigParser,
 		config:            atomic.Value{},
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,
@@ -164,12 +166,10 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Test case: No server location set
 	t.Run("NoServerLocationSet", func(t *testing.T) {
 		mockFetcher.response = []byte(`{
-			"ConfigResponse": {
 				"Servers": [
 					{"Country": "US", "City": "New York"},
 					{"Country": "UK", "City": "London"}
 				]
-			}
 		}`)
 
 		err := ch.fetchConfig()
@@ -183,12 +183,10 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Test case: No stored config, fetch succeeds
 	t.Run("NoStoredConfigFetchSuccess", func(t *testing.T) {
 		mockFetcher.response = []byte(`{
-			"ConfigResponse": {
 				"Servers": [
 					{"Country": "US", "City": "New York"},
 					{"Country": "UK", "City": "London"}
 				]
-			}
 		}`)
 		mockFetcher.err = nil
 
@@ -230,6 +228,313 @@ func TestHandlerFetchConfig(t *testing.T) {
 		err := ch.fetchConfig()
 		require.Error(t, err, "Should return an error when config parsing fails")
 		assert.Contains(t, err.Error(), "parsing config", "Error message should indicate parsing error")
+	})
+}
+
+func TestMergeResp(t *testing.T) {
+	t.Run("SuccessfulMerge", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, newConfig.Servers, mergedConfig.Servers, "Merged servers should match newConfig servers")
+		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+	})
+
+	t.Run("NoNewServerLocations", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
+		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+	})
+	t.Run("OverwriteOutbounds", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound3",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
+		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged options should match newConfig options")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+	})
+	t.Run("KeepDNSOptions", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "8.8.8.8",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
+		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged Outbounds should match newConfig Outbounds")
+		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
+		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+		assert.Equal(t, oldConfig.Options.DNS, mergedConfig.Options.DNS, "Merged DNS options should match oldConfig DNS options")
+	})
+	t.Run("SuccessfulRemovedUnassignedOutbounds", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+					{
+						Tag: "outbound4",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		want := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "2.2.2.2",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, mergedConfig, want)
+	})
+
+	t.Run("DoNotOverwriteAllOptions", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "8.8.8.8",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+					{
+						Tag: "outbound4",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "1.1.1.1",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		want := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "1.1.1.1",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, mergedConfig, want)
 	})
 }
 
