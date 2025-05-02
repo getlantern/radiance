@@ -395,6 +395,73 @@ func TestMergeResp(t *testing.T) {
 		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
 		assert.Equal(t, oldConfig.Options.DNS, mergedConfig.Options.DNS, "Merged DNS options should match oldConfig DNS options")
 	})
+	t.Run("SuccessfulRemovedUnassignedOutbounds", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "1.1.1.1",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+					{
+						Tag: "outbound4",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		want := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP:       "2.2.2.2",
+				ProToken: "test-pro-token",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, mergedConfig, want)
+	})
 }
 
 // MockFetcher is a mock implementation of the fetcher used for testing
