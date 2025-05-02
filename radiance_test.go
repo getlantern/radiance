@@ -10,15 +10,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/client"
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 )
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
-		r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
-		assert.NotNil(t, r)
+		dir := t.TempDir()
+		r, err := NewRadiance(client.Options{
+			DataDir: dir,
+			Locale:  "en-US",
+		})
 		assert.NoError(t, err)
+		defer r.Close()
+		assert.NotNil(t, r)
 		assert.NotNil(t, r.VPNClient)
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.activeServer)
@@ -61,6 +68,16 @@ func (m *mockVPNClient) ConnectionStatus() bool {
 func (m *mockVPNClient) GetActiveServer() (*Server, error) {
 	args := m.Called()
 	return args.Get(0).(*Server), args.Error(1)
+}
+
+func (m *mockVPNClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return nil
+}
+func (m *mockVPNClient) SelectCustomServer(tag string) error {
+	return nil
+}
+func (m *mockVPNClient) RemoveCustomServer(tag string) error {
+	return nil
 }
 
 func TestReportIssue(t *testing.T) {
@@ -108,6 +125,7 @@ func TestReportIssue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r, err := NewRadiance(client.Options{DataDir: t.TempDir()})
+			defer r.Close()
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, &tt.report)
 			tt.assert(t, err)

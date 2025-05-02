@@ -9,9 +9,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/getlantern/timezone"
+
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/timezone"
 )
 
 const (
@@ -35,7 +36,11 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	if err != nil {
 		return nil, err
 	}
-	// add required headers. Currently, all but the auth token are placeholders.
+	req.Header.Set("User-Agent", "Lantern/"+app.ClientVersion)
+	// We include a random length string here to make it harder for censors to identify lantern
+	// based on consistent packet lengths.
+	req.Header.Add(RandomNoiseHeader, randomizedString())
+
 	req.Header.Set(AppVersionHeader, app.ClientVersion)
 	req.Header.Set(VersionHeader, app.Version)
 	req.Header.Set(UserIDHeader, strconv.FormatInt(user.LegacyID(), 10))
@@ -61,10 +66,6 @@ func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, us
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
 		req.Header.Set(TimeZoneHeader, tz)
 	}
-
-	// We include a random length string here to make it harder for censors to identify lantern
-	// based on consistent packet lengths.
-	req.Header.Add(RandomNoiseHeader, randomizedString())
 
 	return req, nil
 }

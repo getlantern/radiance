@@ -6,6 +6,7 @@ package radiance
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
+
+	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 
@@ -68,15 +71,15 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	shutdownFuncs := []func(context.Context) error{}
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
 	if err != nil {
-		log.Error("Failed to setup OpenTelemetry SDK", "error", err)
+		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)
 	} else if shutdownMetrics != nil {
 		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
-		log.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
+		slog.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
 	vpnC, err := client.NewVPNClient(opts)
 	if err != nil {
-		log.Error("Failed to create VPN client", "error", err)
+		slog.Error("Failed to create VPN client", "error", err)
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
@@ -85,7 +88,15 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	confHandler := config.NewConfigHandler(configPollInterval, init.kindling.NewHTTPClient(), init.userConfig, opts.DataDir, vpnC.ParseConfig)
+	cOpts := config.Options{
+		PollInterval:     configPollInterval,
+		HTTPClient:       init.kindling.NewHTTPClient(),
+		User:             init.userConfig,
+		DataDir:          opts.DataDir,
+		ConfigRespParser: boxservice.UnmarshalConfig,
+		Locale:           opts.Locale,
+	}
+	confHandler := config.NewConfigHandler(cOpts)
 	confHandler.AddConfigListener(vpnC.OnNewConfig)
 
 	return &Radiance{
@@ -126,15 +137,16 @@ func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string)
 
 func (r *Radiance) Close() {
 	r.closeOnce.Do(func() {
-		log.Debug("Closing Radiance")
+		slog.Debug("Closing Radiance")
 		r.confHandler.Stop()
 		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
 			if err := shutdown(context.Background()); err != nil {
-				log.Error("Failed to shutdown", "error", err)
+				slog.Error("Failed to shutdown", "error", err)
 			}
 		}
 	})
+	<-r.stopChan
 }
 
 // Server represents a remote VPN server.
@@ -202,14 +214,14 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	// get issue type as integer
 	typeInt, ok := issueTypeMap[report.Type]
 	if !ok {
-		log.Error("Unknown issue type: %s, set to Other", "type", report.Type)
+		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
 		typeInt = 9
 	}
 	var country string
 	// get country from the config returned by the backend
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		log.Error("Failed to get country", "error", err)
+		slog.Error("Failed to get country", "error", err)
 		country = ""
 	} else {
 		country = cfg.ConfigResponse.Country
@@ -224,6 +236,18 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		report.Device,
 		report.Model,
 		country)
+}
+
+func (r *Radiance) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return r.VPNClient.AddCustomServer(cfg)
+}
+
+func (r *Radiance) SelectCustomServer(tag string) error {
+	return r.VPNClient.SelectCustomServer(tag)
+}
+
+func (r *Radiance) RemoveCustomServer(tag string) error {
+	return r.VPNClient.RemoveCustomServer(tag)
 }
 
 // SplitTunnelHandler returns the split tunnel handler for the VPN client.

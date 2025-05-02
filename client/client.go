@@ -45,15 +45,18 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
+	AddCustomServer(cfg boxservice.ServerConnectConfig) error
+	SelectCustomServer(tag string) error
+	RemoveCustomServer(tag string) error
 	OnNewConfig(oldConfig, newConfig *config.Config) error
-	ParseConfig(config []byte) (*config.Config, error)
 }
 
 type vpnClient struct {
-	boxService         *boxservice.BoxService
-	splitTunnelHandler *SplitTunnel
-	started            bool
-	connected          bool
+	boxService          *boxservice.BoxService
+	splitTunnelHandler  *SplitTunnel
+	customServerManager *boxservice.CustomServerManager
+	started             bool
+	connected           bool
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -72,16 +75,32 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
+	slog.Debug("Creating new VPN client")
 	rsMgr := ruleset.NewManager()
-	splitTun, stRule, stRuleset, err := initSplitTunnel(rsMgr, opts.DataDir, opts.EnableSplitTunneling)
+	splitTunnel, err := initMutRuleSet(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
+	customServerSelector, err := initMutRuleSet(
+		opts.DataDir,
+		CustomSelectorTag,
+		CustomSelectorFormat,
+		rsMgr,
+		true, // TODO: maybe this should be saved and restored to remember the user's last choice
+	)
+	if err != nil {
+		return nil, fmt.Errorf("customServerSelector ruleset: %w", err)
+	}
+
 	// inject split tunnel routing rule and ruleset into the routing table
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
 	// evaluated first. we're assuming the sniff action rule is at index 0, so we're inserting at
 	// index 1
-	boxOpts.Route = injectRouteRules(boxOpts.Route, 1, []option.Rule{*stRule}, []option.RuleSet{*stRuleset})
+	boxOpts.Route = injectRouteRules(
+		boxOpts.Route, 1,
+		[]option.Rule{splitTunnel.ruleOption, customServerSelector.ruleOption},
+		[]option.RuleSet{splitTunnel.rulesetOption, customServerSelector.rulesetOption},
+	)
 
 	buf, err := json.Marshal(boxOpts)
 	if err != nil {
@@ -94,8 +113,9 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	}
 
 	client = &vpnClient{
-		boxService:         b,
-		splitTunnelHandler: splitTun,
+		boxService:          b,
+		customServerManager: boxservice.NewCustomServerManager(b.Ctx(), opts.DataDir),
+		splitTunnelHandler:  splitTunnel.mutableRuleSet,
 	}
 	return client, nil
 }
@@ -116,6 +136,8 @@ func (c *vpnClient) StartVPN() error {
 	if err != nil {
 		return err
 	}
+
+	c.customServerManager.SetContext(c.boxService.Ctx())
 
 	c.started = true
 	c.setConnectionStatus(true)
@@ -170,33 +192,56 @@ func (c *vpnClient) ResumeVPN() {
 	c.boxService.Wake()
 }
 
+func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return c.customServerManager.AddCustomServer(cfg)
+}
+
+func (c *vpnClient) SelectCustomServer(tag string) error {
+	return c.customServerManager.SelectCustomServer(tag)
+}
+
+func (c *vpnClient) RemoveCustomServer(tag string) error {
+	return c.customServerManager.RemoveCustomServer(tag)
+}
+
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
 	return c.splitTunnelHandler
 }
 
 const (
-	SplitTunnelTag    = "split-tunnel"
-	SplitTunnelFormat = constant.RuleSetFormatSource // file will be saved as json
+	SplitTunnelTag       = "split-tunnel"
+	SplitTunnelFormat    = constant.RuleSetFormatSource // file will be saved as json
+	CustomSelectorTag    = "custom-server"
+	CustomSelectorFormat = constant.RuleSetFormatSource // file will be saved as json
 )
 
 type SplitTunnel = ruleset.MutableRuleSet
+type CustomServer = ruleset.MutableRuleSet
 
-// initSplitTunnel initializes the split tunnel ruleset handler. It retrieves an existing mutable
-// ruleset associated with the SplitTunnelTag or creates a new one if it doesn't exist. dataDir is
-// the directory where the ruleset data is stored. The initial state is determined by the enabled
-// parameter.
-func initSplitTunnel(mgr *ruleset.Manager, dataDir string, enabled bool) (*SplitTunnel, *option.Rule, *option.RuleSet, error) {
-	rs := mgr.MutableRuleSet(SplitTunnelTag)
+type tunnel struct {
+	mutableRuleSet *ruleset.MutableRuleSet
+	ruleOption     option.Rule
+	rulesetOption  option.RuleSet
+}
+
+// initMutRuleSet initializes the ruleset handler. It retrieves an existing mutable
+// ruleset associated with the provided tag or cerates a new one if it doesn't
+// exist. dataDir is the directory where the ruleset data is stored. The initial
+// state is determined by the enabled parameter.
+func initMutRuleSet(dataDir, tag, format string, mgr *ruleset.Manager, enabled bool) (tunnel, error) {
+	rs := mgr.MutableRuleSet(tag)
 	if rs == nil {
 		var err error
-		rs, err = mgr.NewMutableRuleSet(dataDir, SplitTunnelTag, SplitTunnelFormat, enabled)
+		rs, err = mgr.NewMutableRuleSet(dataDir, tag, format, enabled)
 		if err != nil {
-			return nil, nil, nil, err
+			return tunnel{}, err
 		}
 	}
-	rRule := ruleset.BaseRouteRule(SplitTunnelTag, "direct")
-	rRuleset := ruleset.LocalRuleSet(SplitTunnelTag, rs.RuleFilePath(), SplitTunnelFormat)
-	return rs, &rRule, &rRuleset, nil
+	return tunnel{
+		mutableRuleSet: rs,
+		ruleOption:     ruleset.BaseRouteRule(tag, "direct"),
+		rulesetOption:  ruleset.LocalRuleSet(tag, rs.RuleFilePath(), format),
+	}, nil
 }
 
 // injectRouteRules injects the given rules and rulesets into routeOpts. atIdx specifies the index
@@ -213,10 +258,6 @@ func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.
 		routeOpts.RuleSet = append(routeOpts.RuleSet, rulesets...)
 	}
 	return routeOpts
-}
-
-func (c *vpnClient) ParseConfig(configRaw []byte) (*config.Config, error) {
-	return c.boxService.ParseConfig(configRaw)
 }
 
 func (c *vpnClient) OnNewConfig(oldConfig, newConfig *config.Config) error {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/1Password/srp"
+
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 )

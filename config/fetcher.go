@@ -10,12 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 	"time"
 
 	"slices"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
@@ -23,38 +23,53 @@ import (
 
 const configURL = "https://api.iantem.io/v1/config-new"
 
+type Fetcher interface {
+	// fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
+	// It returns an error if the request fails.
+	// preferred is used to select the server location.
+	// If preferred is empty, the server will select the best location.
+	// The lastModified time is used to check if the configuration has changed since the last request.
+	fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error)
+}
+
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
 	user         common.UserInfo
 	lastModified time.Time
+	locale       string
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserInfo) *fetcher {
+func newFetcher(client *http.Client, user common.UserInfo, locale string) Fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,
 		lastModified: time.Time{},
+		locale:       locale,
 	}
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(preferredServerLocation C.ServerLocation) ([]byte, error) {
+func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	confReq := C.ConfigRequest{
-		ClientVersion:     app.ClientVersion,
-		SingboxVersion:    singVersion(),
-		UserID:            strconv.FormatInt(f.user.LegacyID(), 10),
-		OS:                app.Platform,
-		AppName:           app.Name,
-		DeviceID:          f.user.DeviceID(),
-		PreferredLocation: preferredServerLocation,
+		SingboxVersion: singVersion(),
+		OS:             app.Platform,
+		AppName:        app.Name,
+		DeviceID:       f.user.DeviceID(),
+		WGPublicKey:    wgPublicKey,
+		Backend:        C.SINGBOX,
+		Locale:         f.locale,
+	}
+	if preferred.Country != "" {
+		confReq.PreferredLocation = &preferred
 	}
 	buf, err := json.Marshal(&confReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
+	slog.Info("fetching config", "request", string(buf))
 	buf, err = f.send(bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)

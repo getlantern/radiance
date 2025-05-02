@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/Xuanwo/go-locale"
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
+
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
@@ -24,7 +26,6 @@ var (
 	sharedInitOnce sync.Once
 	sharedInit     *sharedConfig
 )
-var log *slog.Logger
 
 // sharedConfig is a struct that contains the shared configuration for the Radiance client and API handler.
 type sharedConfig struct {
@@ -36,9 +37,7 @@ type sharedConfig struct {
 // initCommon initializes the common configuration for the Radiance client and API handler.
 func initialize(opts client.Options) (*sharedConfig, error) {
 	var err error
-
 	sharedInitOnce.Do(func() {
-
 		reporting.Init()
 		if opts.DataDir == "" {
 			opts.DataDir = appdir.General(app.Name)
@@ -47,7 +46,14 @@ func initialize(opts client.Options) (*sharedConfig, error) {
 			opts.LogDir = appdir.Logs(app.Name)
 		}
 		if opts.Locale == "" {
-			opts.Locale = "en-US"
+			// It is preferable to use the locale from the frontend, as locale is a requirement for lots
+			// of frontend code and therefore is more reliably supported there.
+			// However, if the frontend locale is not available, we can use the system locale as a fallback.
+			if tag, err := locale.Detect(); err != nil {
+				opts.Locale = "en-US"
+			} else {
+				opts.Locale = tag.String()
+			}
 		}
 
 		var platformDeviceID string
@@ -59,13 +65,12 @@ func initialize(opts client.Options) (*sharedConfig, error) {
 
 		mkdirs(&opts)
 		var logWriter io.Writer
-		log, logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
+		logWriter, err = newLog(filepath.Join(opts.LogDir, app.LogFileName))
 		if err != nil {
 			err = fmt.Errorf("could not create log: %w", err)
 			return
 		}
-			
-		
+
 		f, ferr := newFronted(logWriter, reporting.PanicListener, filepath.Join(opts.DataDir, "fronted_cache.json"))
 		if ferr != nil {
 			err = fmt.Errorf("failed to create fronted: %w", ferr)
@@ -83,8 +88,12 @@ func initialize(opts client.Options) (*sharedConfig, error) {
 			userConfig: common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale),
 			kindling:   k,
 		}
-		log.Debug("Initialized shared config", "dataDir", opts.DataDir, "logDir", opts.LogDir, "locale", opts.Locale)
+		slog.Debug("Initialized shared config", "dataDir", opts.DataDir, "logDir", opts.LogDir, "locale", opts.Locale)
 	})
+
+	if err != nil {
+		slog.Error("Failed to initialize shared config", "error", err)
+	}
 	return sharedInit, err
 
 }
@@ -93,23 +102,25 @@ func mkdirs(opts *client.Options) {
 	// Make sure the data and logs dirs exist
 	for _, dir := range []string{opts.DataDir, opts.LogDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Error("Failed to create data directory", "dir", dir, "error", err)
+			slog.Error("Failed to create data directory", "dir", dir, "error", err)
 		}
 	}
 }
 
 // Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (*slog.Logger, io.Writer, error) {
+func newLog(logPath string) (io.Writer, error) {
 	// If the log file does not exist, create it.
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open log file: %w", err)
+		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logWriter := io.MultiWriter(os.Stdout, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, nil))
+	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
+		AddSource: true,
+	}))
 	slog.SetDefault(logger)
-	return logger, logWriter, nil
+	return logWriter, nil
 }
 
 func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {

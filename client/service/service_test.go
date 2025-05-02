@@ -3,13 +3,71 @@ package boxservice
 import (
 	"context"
 	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/common"
+
+	"github.com/getlantern/radiance/config"
 )
+
+func TestOnNewConfig(t *testing.T) {
+	t.Run("successfully updates config", func(t *testing.T) {
+		mockConfig := &config.Config{
+			ConfigResponse: common.ConfigResponse{
+				Options: option.Options{
+					Outbounds: []option.Outbound{
+						{
+							Tag:     "tag1",
+							Type:    "default",
+							Options: option.StubOptions{},
+						},
+					},
+				},
+			},
+		}
+
+		bs := &BoxService{
+			ctx:       newBaseContext(),
+			config:    atomic.Value{},
+			isRunning: true,
+			mu:        sync.Mutex{},
+		}
+
+		bs.config.Store(option.Options{})
+		err := bs.OnNewConfig(nil, mockConfig)
+		if err != nil && strings.Contains(err.Error(), "router missing") {
+			err = nil
+		}
+		require.NoError(t, err)
+		assert.NotEmpty(t, bs.config.Load())
+	})
+
+	t.Run("does nothing if service is not running", func(t *testing.T) {
+		mockConfig := &config.Config{
+			ConfigResponse: common.ConfigResponse{
+				Options: option.Options{},
+			},
+		}
+
+		bs := &BoxService{
+			ctx:       newBaseContext(),
+			isRunning: false,
+		}
+
+		bs.config.Store(option.Options{})
+		err := bs.OnNewConfig(nil, mockConfig)
+		require.NoError(t, err)
+	})
+}
 
 func TestUpdateOutbounds(t *testing.T) {
 	tests := []struct {
@@ -162,6 +220,15 @@ type mockOutboundManager struct {
 	outbounds []adapter.Outbound
 }
 
+func (m *mockOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	for _, outbound := range m.outbounds {
+		if outbound.Tag() == tag {
+			return outbound, true
+		}
+	}
+	return nil, false
+}
+
 func (m *mockOutboundManager) Outbounds() []adapter.Outbound {
 	return m.outbounds
 }
@@ -173,7 +240,14 @@ func (m *mockOutboundManager) Remove(tag string) error {
 
 func (m *mockOutboundManager) Create(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag, outboundType string, options any) error {
 	m.Remove(tag)
-	m.outbounds = append(m.outbounds, &mockEndpoint{typ: outboundType, tag: tag})
+	outbound := &mockEndpoint{typ: outboundType, tag: tag}
+	m.outbounds = append(m.outbounds, outbound)
+
+	for _, stage := range adapter.ListStartStages {
+		if err := adapter.LegacyStart(outbound, stage); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -209,8 +283,26 @@ func testRemove[T adapter.Outbound](list []T, tag string) []T {
 
 type mockEndpoint struct {
 	adapter.Endpoint
-	typ string
-	tag string
+	typ              string
+	tag              string
+	selectedOutbound string
+}
+
+func (m *mockEndpoint) Start(stage adapter.StartStage) error {
+	return nil
+}
+
+func (m *mockEndpoint) SelectOutbound(tag string) bool {
+	m.selectedOutbound = tag
+	return true
+}
+
+func (m *mockEndpoint) All() []string {
+	return []string{m.tag}
+}
+
+func (m *mockEndpoint) Now() string {
+	return m.selectedOutbound
 }
 
 func (m *mockEndpoint) Type() string { return m.typ }

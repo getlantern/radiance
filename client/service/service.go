@@ -17,7 +17,10 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	C "github.com/getlantern/common"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
@@ -28,16 +31,23 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
-	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/sing-box-extensions/protocol"
 	"github.com/getlantern/sing-box-extensions/ruleset"
+
+	"github.com/getlantern/radiance/client/boxoptions"
+	"github.com/getlantern/radiance/config"
+)
+
+var (
+	baseCtx   context.Context
+	ctxAccess sync.Mutex
 )
 
 // BoxService is a wrapper around libbox.BoxService
 type BoxService struct {
 	libbox            *libbox.BoxService
 	ctx               context.Context
-	config            string
+	config            atomic.Value
 	platIfce          libbox.PlatformInterface
 	mutRuleSetManager *ruleset.Manager
 	pauseManager      pause.Manager
@@ -47,18 +57,29 @@ type BoxService struct {
 	isRunning         bool
 }
 
+const CustomSelectorTag = "custom_selector"
+
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
+func New(config, baseDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
 	bs := &BoxService{
-		config:            config,
+		ctx:               newBaseContext(),
+		config:            atomic.Value{},
 		platIfce:          platIfce,
 		mutRuleSetManager: rulesetManager,
 	}
+
+	slog.Info("Creating libbox service with config", slog.String("config", config))
+	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(config))
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal options: %w", err)
+	}
+
+	bs.config.Store(opts)
 	setupOpts := &libbox.SetupOptions{
-		BasePath:    dataDir,
-		WorkingPath: filepath.Join(dataDir, "data"),
-		TempPath:    filepath.Join(dataDir, "temp"),
+		BasePath:    baseDir,
+		WorkingPath: filepath.Join(baseDir, "data"),
+		TempPath:    filepath.Join(baseDir, "temp"),
 	}
 	if runtime.GOOS == "android" {
 		setupOpts.FixAndroidStack = true
@@ -70,6 +91,7 @@ func New(config, dataDir string, platIfce libbox.PlatformInterface, rulesetManag
 	return bs, nil
 }
 
+// Start re-initialize the libbox service and start it. It will also start the ruleset manager
 func (bs *BoxService) Start() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -79,7 +101,8 @@ func (bs *BoxService) Start() error {
 	}
 
 	// (re)-initialize the libbox service
-	lb, ctx, err := newLibboxService(bs.config, bs.platIfce)
+	conf := bs.config.Load().(option.Options)
+	lb, ctx, err := newLibboxService(conf, bs.platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
@@ -103,19 +126,37 @@ func (bs *BoxService) Start() error {
 	return nil
 }
 
-// newLibboxService creates a new libbox service with the given config and platform interface
-func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox.BoxService, context.Context, error) {
+func BaseContext() context.Context {
+	ctxAccess.Lock()
+	defer ctxAccess.Unlock()
+	if baseCtx == nil {
+		baseCtx = newBaseContext()
+	}
+	return baseCtx
+}
+
+func newBaseContext() context.Context {
 	// Retrieve protocol registries
 	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	ctx := box.Context(
+	return box.Context(
 		context.Background(),
 		inboundRegistry,
 		outboundRegistry,
 		endpointRegistry,
 	)
+}
 
+// newLibboxService creates a new libbox service with the given config and platform interface
+func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*libbox.BoxService, context.Context, error) {
 	// initialize the libbox service
-	lb, err := libbox.NewServiceWithContext(ctx, config, platIfce)
+	// we need to create a new context each time so we have a fresh context, free of all the values
+	// that the sing-box instance adds to it
+	ctx := newBaseContext()
+	conf, err := json.MarshalContext(ctx, opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal options: %w", err)
+	}
+	lb, err := libbox.NewServiceWithContext(ctx, string(conf), platIfce)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create libbox service: %w", err)
 	}
@@ -123,6 +164,7 @@ func newLibboxService(config string, platIfce libbox.PlatformInterface) (*libbox
 	return lb, ctx, nil
 }
 
+// Close stops the libbox service and clears the pause timer
 func (bs *BoxService) Close() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -184,20 +226,55 @@ func (bs *BoxService) Ctx() context.Context {
 }
 
 // OnNewConfig is called when a new configuration is received. It updates the VPN client with the
-// new configuration and restarts the VPN client if necessary.
+// new configuration
 func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
+	// TODO:
+	//		- restart libbox if options change that can't be updated while running (routing, etc)
+	//		- update all options. make sure to include base/default options where needed (DNS)
 	slog.Debug("Received new config")
 
-	return updateOutboundsEndpoints(bs.ctx, newConfig.ConfigResponse.Options.Outbounds,
-		newConfig.ConfigResponse.Options.Endpoints)
+	newOpts := newConfig.ConfigResponse.Options
+	currOpts := bs.config.Load().(option.Options)
+
+	currOpts.Outbounds = append(boxoptions.BaseOutbounds, newOpts.Outbounds...)
+	currOpts.Endpoints = append(boxoptions.BaseEndpoints, newOpts.Endpoints...)
+
+	// add custom server outbounds/endpoints
+	csm := service.PtrFromContext[CustomServerManager](bs.ctx)
+	if csm != nil {
+		servers, _ := csm.ListCustomServers()
+		for _, server := range servers {
+			if server.Outbound != nil {
+				currOpts.Outbounds = append(currOpts.Outbounds, *server.Outbound)
+			} else if server.Endpoint != nil {
+				currOpts.Endpoints = append(currOpts.Endpoints, *server.Endpoint)
+			}
+		}
+	}
+
+	bs.config.Store(currOpts)
+
+	bs.mu.Lock()
+	if !bs.isRunning {
+		bs.mu.Unlock()
+		return nil
+	}
+	bs.mu.Unlock()
+
+	err := updateOutboundsEndpoints(bs.ctx, newOpts.Outbounds, newOpts.Endpoints)
+	if err != nil {
+		return fmt.Errorf("update outbounds/endpoints: %w", err)
+	}
+	return nil
 }
 
-func (bs *BoxService) ParseConfig(configRaw []byte) (*config.Config, error) {
-	config, err := json.UnmarshalExtendedContext[*config.Config](bs.ctx, configRaw)
+func UnmarshalConfig(configRaw []byte) (*C.ConfigResponse, error) {
+	config, err := json.UnmarshalExtendedContext[C.ConfigResponse](BaseContext(), configRaw)
 	if err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return nil, fmt.Errorf("unmarshal options: %w", err)
 	}
-	return config, nil
+
+	return &config, nil
 }
 
 var (
@@ -205,6 +282,7 @@ var (
 		"direct",
 		"dns",
 		"block",
+		CustomSelectorTag,
 	}
 	permanentEndpoints = []string{}
 )
