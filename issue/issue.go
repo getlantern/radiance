@@ -85,7 +85,6 @@ func (ir *IssueReporter) Report(
 	sub, err := ir.user.Subscription()
 	if err != nil {
 		log.Errorf("Error while getting user subscription info: %v", err)
-
 	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
