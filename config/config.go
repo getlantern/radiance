@@ -25,7 +25,6 @@ import (
 	singjson "github.com/sagernet/sing/common/json"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user"
 )
 
 const (
@@ -54,7 +53,7 @@ type Unmarshaller func(configRaw []byte) (*C.ConfigResponse, error)
 type Options struct {
 	PollInterval     time.Duration
 	HTTPClient       *http.Client
-	User             user.BaseUser
+	User             common.UserInfo
 	DataDir          string
 	ConfigRespParser Unmarshaller
 	Locale           string
@@ -84,12 +83,16 @@ type ConfigHandler struct {
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
 	configPath := filepath.Join(options.DataDir, configFileName)
+	opts := common.WebClientOptions{
+		BaseURL:    "",
+		HttpClient: options.HTTPClient,
+	}
 	ch := &ConfigHandler{
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
 		closeOnce:       &sync.Once{},
 		configPath:      configPath,
-		apiClient:       common.NewWebClient(options.HTTPClient),
+		apiClient:       common.NewWebClient(&opts),
 		configListeners: make([]ListenerFunc, 0),
 		confRespParser:  options.ConfigRespParser,
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),

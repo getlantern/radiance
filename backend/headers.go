@@ -6,20 +6,32 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/timezone"
+
+	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common"
 )
 
 const (
-	supportedDataCapsHeader = "X-Lantern-Supported-Data-Caps"
-	timeZoneHeader          = "X-Lantern-Time-Zone"
-	randomNoiseHeader       = "X-Lantern-Rand"
+	// Required common headers to send to the proxy server.
+	AppVersionHeader        = "X-Lantern-App-Version"
+	VersionHeader           = "X-Lantern-Version"
+	PlatformHeader          = "X-Lantern-Platform"
+	AppNameHeader           = "X-Lantern-App"
+	DeviceIDHeader          = "X-Lantern-Device-Id"
+	UserIDHeader            = "X-Lantern-User-Id"
+	SupportedDataCapsHeader = "X-Lantern-Supported-Data-Caps"
+	TimeZoneHeader          = "X-Lantern-Time-Zone"
+	RandomNoiseHeader       = "X-Lantern-Rand"
+	ProTokenHeader          = "X-Lantern-Pro-Token"
+	RefererHeader           = "referer"
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
-func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader, user common.UserInfo) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
@@ -27,15 +39,20 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	req.Header.Set("User-Agent", "Lantern/"+app.ClientVersion)
 	// We include a random length string here to make it harder for censors to identify lantern
 	// based on consistent packet lengths.
-	req.Header.Add(randomNoiseHeader, randomizedString())
+	req.Header.Add(RandomNoiseHeader, randomizedString())
 
-	// add required headers. Currently, all but the auth token are placeholders.
+	req.Header.Set(AppVersionHeader, app.ClientVersion)
+	req.Header.Set(VersionHeader, app.Version)
+	req.Header.Set(UserIDHeader, strconv.FormatInt(user.LegacyID(), 10))
+	req.Header.Set(PlatformHeader, app.Platform)
+	req.Header.Set(AppNameHeader, app.Name)
+	req.Header.Set(DeviceIDHeader, user.DeviceID())
 	return req, nil
 }
 
 // NewIssueRequest creates a new HTTP request with the required headers for issue reporting.
-func NewIssueRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
-	req, err := NewRequestWithHeaders(ctx, method, url, body)
+func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, user common.UserInfo) (*http.Request, error) {
+	req, err := NewRequestWithHeaders(ctx, method, url, body, user)
 	if err != nil {
 		return nil, err
 	}
@@ -43,11 +60,11 @@ func NewIssueRequest(ctx context.Context, method, url string, body io.Reader) (*
 	req.Header.Set("content-type", "application/x-protobuf")
 
 	// data caps
-	req.Header.Set(supportedDataCapsHeader, "monthly,weekly,daily")
+	req.Header.Set(SupportedDataCapsHeader, "monthly,weekly,daily")
 
 	// time zone
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
-		req.Header.Set(timeZoneHeader, tz)
+		req.Header.Set(TimeZoneHeader, tz)
 	}
 
 	return req, nil

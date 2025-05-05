@@ -22,10 +22,12 @@ require (
 	github.com/getlantern/kindling v0.0.0-20250501190705-a18e51da1a62
 	github.com/getlantern/sing-box-extensions v0.0.0-20250417225118-49a27a638120
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
+	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.6.6-0.20250406121928-926a5a1e8bb7
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
+	github.com/zeebo/assert v1.1.0
 	go.opentelemetry.io/otel/log v0.11.0
 	go.opentelemetry.io/otel/sdk v1.35.0
 	go.opentelemetry.io/otel/sdk/metric v1.35.0

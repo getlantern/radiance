@@ -1,4 +1,4 @@
-package user
+package api
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/1Password/srp"
+	"github.com/getlantern/radiance/api/protos"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -64,7 +65,7 @@ func (c *authClient) SignUp(ctx context.Context, email string, password string) 
 	if err != nil {
 		return nil, err
 	}
-	signUpRequestBody := &SignupRequest{
+	signUpRequestBody := &protos.SignupRequest{
 		Email:                 lowerCaseEmail,
 		Salt:                  salt,
 		Verifier:              verifierKey.Bytes(),
@@ -78,7 +79,7 @@ func (c *authClient) SignUp(ctx context.Context, email string, password string) 
 }
 
 // Todo find way to optimize this method
-func (c *authClient) Login(ctx context.Context, email string, password string, deviceId string, salt []byte) (*LoginResponse, error) {
+func (c *authClient) Login(ctx context.Context, email string, password string, deviceId string, salt []byte) (*protos.LoginResponse, error) {
 	lowerCaseEmail := strings.ToLower(email)
 
 	// Prepare login request body
@@ -89,7 +90,7 @@ func (c *authClient) Login(ctx context.Context, email string, password string, d
 	//Send this key to client
 	A := client.EphemeralPublic()
 	//Create body
-	prepareRequestBody := &PrepareRequest{
+	prepareRequestBody := &protos.PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -124,7 +125,7 @@ func (c *authClient) Login(ctx context.Context, email string, password string, d
 	if err != nil {
 		return nil, fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
-	loginRequestBody := &LoginRequest{
+	loginRequestBody := &protos.LoginRequest{
 		Email:    lowerCaseEmail,
 		Proof:    clientProof,
 		DeviceId: deviceId,

@@ -13,9 +13,12 @@ import (
 	"github.com/getlantern/golog"
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/osversion"
+
+	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
+
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,19 +40,20 @@ type Attachment struct {
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
 	httpClient *http.Client
-	user       *user.User
+	user       *api.User
+	userConfig common.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(httpClient *http.Client, user *user.User) (*IssueReporter, error) {
+func NewIssueReporter(httpClient *http.Client, user *api.User, userConfig common.UserInfo) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
 	if user == nil {
 		return nil, fmt.Errorf("user is nil")
 	}
-	return &IssueReporter{httpClient: httpClient, user: user}, nil
+	return &IssueReporter{httpClient: httpClient, user: user, userConfig: userConfig}, nil
 }
 
 func randStr(n int) string {
@@ -81,10 +85,9 @@ func (ir *IssueReporter) Report(
 	sub, err := ir.user.Subscription()
 	if err != nil {
 		log.Errorf("Error while getting user subscription info: %v", err)
-	} else if sub.Tier == user.TierPro {
+	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
-
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		log.Errorf("Unable to get OS version: %v", err)
@@ -103,8 +106,8 @@ func (ir *IssueReporter) Report(
 	r.Platform = app.Platform
 	r.Description = description
 	r.UserEmail = userEmail
-	r.DeviceId = ir.user.DeviceID()
-	r.UserId = strconv.FormatInt(ir.user.LegacyID(), 10)
+	r.DeviceId = ir.userConfig.DeviceID()
+	r.UserId = strconv.FormatInt(ir.userConfig.LegacyID(), 10)
 	r.Device = device
 	r.Model = model
 	r.OsVersion = osVersion
@@ -145,7 +148,13 @@ func (ir *IssueReporter) Report(
 		return err
 	}
 
-	req, err := backend.NewIssueRequest(context.Background(), http.MethodPost, requestURL, bytes.NewReader(out))
+	req, err := backend.NewIssueRequest(
+		context.Background(),
+		http.MethodPost,
+		requestURL,
+		bytes.NewReader(out),
+		ir.userConfig,
+	)
 	if err != nil {
 		return log.Errorf("creating request: %w", err)
 	}

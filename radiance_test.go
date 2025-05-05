@@ -30,8 +30,19 @@ func TestNewRadiance(t *testing.T) {
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.activeServer)
 		assert.NotNil(t, r.stopChan)
-		assert.NotNil(t, r.user)
 		assert.NotNil(t, r.issueReporter)
+	})
+}
+
+func TestNewAPIHandler(t *testing.T) {
+	t.Run("it should create a new APIHandler instance successfully", func(t *testing.T) {
+		h, err := NewAPIHandler(client.Options{DataDir: t.TempDir()})
+		assert.NoError(t, err)
+		require.NotNil(t, h)
+
+		assert.NotNil(t, h.ProServer)
+		assert.NotNil(t, h.User)
+
 	})
 }
 
