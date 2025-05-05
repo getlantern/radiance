@@ -9,11 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	C "github.com/getlantern/common"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
@@ -48,11 +47,8 @@ func TestSaveConfig(t *testing.T) {
 		},
 	}
 	// Save the config
-	ch.saveConfig(expectedConfig)
-
-	// Verify the file exists
-	_, err := os.Stat(configPath)
-	require.NoError(t, err, "Config file should exist")
+	err := saveConfig(expectedConfig, configPath)
+	require.NoError(t, err, "Should not return an error when saving config")
 
 	// Read the file content
 	data, err := os.ReadFile(configPath)

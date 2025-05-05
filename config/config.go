@@ -20,9 +20,10 @@ import (
 
 	C "github.com/getlantern/common"
 	"github.com/qdm12/reprint"
-	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
+
+	exO "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
 )
@@ -251,14 +252,13 @@ func (ch *ConfigHandler) fetchConfig() error {
 }
 
 func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
-	for i, endpoint := range endpoints {
-		if endpoint.Type == constant.TypeWireGuard {
-			options, ok := endpoint.Options.(*option.WireGuardEndpointOptions)
-			if !ok {
-				return fmt.Errorf("invalid wireguard endpoint options")
-			}
-			options.PrivateKey = privateKey.String()
-			endpoints[i].Options = options
+	for _, endpoint := range endpoints {
+		switch opts := endpoint.Options.(type) {
+		case *option.WireGuardEndpointOptions:
+			opts.PrivateKey = privateKey.String()
+		case *exO.AmneziaWGEndpointOptions:
+			opts.PrivateKey = privateKey.String()
+		default:
 		}
 	}
 	return nil
@@ -285,7 +285,11 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	}
 
 	ch.config.Store(cfg)
-	ch.saveConfig(cfg)
+	if err := saveConfig(cfg, ch.configPath); err != nil {
+		slog.Error("saving config", "error", err)
+		return
+	}
+	slog.Debug("saved new config")
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Debug("Config set")
 }
@@ -366,28 +370,20 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 }
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
-func (ch *ConfigHandler) saveConfig(cfg *Config) {
+func saveConfig(cfg *Config, path string) error {
 	slog.Debug("Saving config")
-	if cfg == nil {
-		slog.Debug("Config is nil, not saving")
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(ch.configPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Error("creating config directory", "error", err)
-		return
+		return fmt.Errorf("creating config directory: %w", err)
 	}
 	// Marshal the config to bytes and write it to the config file.
 	// If the config is nil, we don't write anything.
 	// This is important because we don't want to overwrite the config file with an empty file.
 	buf, err := singjson.Marshal(cfg)
 	if err != nil {
-		slog.Error("marshalling config", "error", err)
-		return
+		return fmt.Errorf("marshalling config: %w", err)
 	}
-	if err := os.WriteFile(ch.configPath, buf, 0o600); err != nil {
-		slog.Error("writing config file", "error", err)
-	}
-	slog.Debug("Config saved")
+	return os.WriteFile(path, buf, 0o600)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.
