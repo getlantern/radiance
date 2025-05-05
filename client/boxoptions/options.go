@@ -73,7 +73,7 @@ var (
 					},
 					AutoRoute:              true,
 					StrictRoute:            true,
-					EndpointIndependentNat: true,
+					EndpointIndependentNat: false,
 					Stack:                  "system",
 				},
 			},

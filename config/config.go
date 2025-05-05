@@ -99,6 +99,9 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),
 	}
 
+	// Set the preferred location to an empty struct to define the underlying type.
+	ch.preferredLocation.Store(C.ServerLocation{})
+
 	if err := ch.loadConfig(); err != nil {
 		slog.Error("failed to load config", "error", err)
 	}
@@ -280,10 +283,7 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 		cfg.ConfigResponse = *merged
 
 		if cfg.PreferredLocation == (C.ServerLocation{}) {
-			location := ch.preferredLocation.Load()
-			if location != nil {
-				cfg.PreferredLocation = location.(C.ServerLocation)
-			}
+			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
 		}
 	}
 

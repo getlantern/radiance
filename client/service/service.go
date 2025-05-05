@@ -34,6 +34,8 @@ import (
 	"github.com/getlantern/sing-box-extensions/protocol"
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
+	exO "github.com/getlantern/sing-box-extensions/option"
+
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/config"
 )
@@ -152,6 +154,13 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	// we need to create a new context each time so we have a fresh context, free of all the values
 	// that the sing-box instance adds to it
 	ctx := newBaseContext()
+
+	// TEMP: only use first wg endpoint and clear tun name
+	opts.Endpoints = opts.Endpoints[:0]
+	patchWGName(opts.Endpoints)
+
+	optsStr, _ := json.MarshalContext(ctx, opts)
+	slog.Info("Creating libbox service", slog.String("opts", string(optsStr)))
 	conf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal options: %w", err)
@@ -162,6 +171,18 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	}
 
 	return lb, ctx, nil
+}
+
+func patchWGName(endpoints []option.Endpoint) {
+	for _, endpoint := range endpoints {
+		switch opts := endpoint.Options.(type) {
+		case *option.WireGuardEndpointOptions:
+			opts.Name = ""
+		case *exO.AmneziaWGEndpointOptions:
+			opts.Name = ""
+		default:
+		}
+	}
 }
 
 // Close stops the libbox service and clears the pause timer
@@ -349,6 +370,7 @@ func updateOutbounds(
 
 	for tag, outbound := range newItems {
 		logger := logFactory.NewLogger(fmt.Sprintf("outbound/%s[%s]", outbound.Type, tag))
+		logger.Debug("Creating outbound", tag, "[", outbound.Type, "]")
 		err := outboundMgr.Create(ctx, router, logger, tag, outbound.Type, outbound.Options)
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("initialize [%v]: %w", tag, err))
@@ -386,6 +408,7 @@ func updateEndpoints(
 
 	for tag, endpoint := range newItems {
 		logger := logFactory.NewLogger(fmt.Sprintf("endpoint/%s[%s]", endpoint.Type, tag))
+		logger.Debug("Creating endpoint", tag, "[", endpoint.Type, "]")
 		err := endpointMgr.Create(ctx, router, logger, tag, endpoint.Type, endpoint.Options)
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("initialize [%v]: %w", tag, err))
