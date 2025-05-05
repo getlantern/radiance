@@ -280,7 +280,10 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 		cfg.ConfigResponse = *merged
 
 		if cfg.PreferredLocation == (C.ServerLocation{}) {
-			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
+			location := ch.preferredLocation.Load()
+			if location != nil {
+				cfg.PreferredLocation = location.(C.ServerLocation)
+			}
 		}
 	}
 
