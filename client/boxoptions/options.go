@@ -8,7 +8,8 @@ import (
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
 
-	"github.com/getlantern/radiance/constant"
+	exC "github.com/getlantern/sing-box-extensions/constant"
+
 	"github.com/getlantern/radiance/option"
 )
 
@@ -89,7 +90,7 @@ var (
 				Options: &O.DNSOptions{},
 			},
 			{
-				Type: constant.TypeOutline,
+				Type: exC.TypeOutline,
 				Tag:  "outline-out",
 				Options: &option.OutboundOutlineOptions{
 					DNSResolvers: []option.DNSEntryConfig{
