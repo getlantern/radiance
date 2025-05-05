@@ -282,7 +282,11 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	}
 
 	ch.config.Store(cfg)
-	ch.saveConfig(cfg)
+	if err := saveConfig(cfg, ch.configPath); err != nil {
+		slog.Error("saving config", "error", err)
+		return
+	}
+	slog.Debug("saved new config")
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Debug("Config set")
 }
@@ -363,24 +367,12 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 }
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
-func (ch *ConfigHandler) saveConfig(cfg *Config) {
-	slog.Debug("Saving config")
-	if cfg == nil {
-		slog.Debug("Config is nil, not saving")
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(ch.configPath), 0o755); err != nil {
-		slog.Error("creating config directory", "error", err)
-		return
-	}
-	if err := saveConfig(cfg, ch.configPath); err != nil {
-		slog.Error("saving config", "error", err)
-		return
-	}
-	slog.Debug("Config saved")
-}
-
 func saveConfig(cfg *Config, path string) error {
+	slog.Debug("Saving config")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		slog.Error("creating config directory", "error", err)
+		return fmt.Errorf("creating config directory: %w", err)
+	}
 	// Marshal the config to bytes and write it to the config file.
 	// If the config is nil, we don't write anything.
 	// This is important because we don't want to overwrite the config file with an empty file.
