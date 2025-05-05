@@ -10,7 +10,7 @@ import (
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -28,7 +28,7 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 type mockUser struct {
-	user.BaseUser
+	common.UserInfo
 }
 
 func (m *mockUser) DeviceID() string {

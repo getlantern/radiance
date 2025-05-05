@@ -1,4 +1,4 @@
-package user
+package api
 
 import (
 	"context"
@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/1Password/srp"
+
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/user/deviceid"
-	"google.golang.org/protobuf/proto"
 )
 
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
@@ -45,77 +44,32 @@ type Device struct {
 	Name string
 }
 
-var (
-	saltLocation     = ".salt" // TODO: we need to think about properly storing data. Right now both configFetcher and this module just dump things in the current directory. Instead there should be a 'data writer' that knows where to put things.
-	userDataLocation = ".userData"
-)
-
-type BaseUser interface {
-	DeviceID() string
-	LegacyID() int64
-	LegacyToken() string
-}
-
 // User represents a user account. This may be a free user, associated only with this device or a
 // paid user with a full account.
 type User struct {
 	salt       []byte
-	userData   *LoginResponse
+	userData   *protos.LoginResponse
 	deviceId   string
 	authClient AuthClient
+	userConfig common.UserInfo
 }
 
-func (u *User) DeviceID() string {
-	return u.deviceId
-}
-
-func (u *User) LegacyID() int64 {
-	if u.userData == nil {
-		return 0
+// NewUser returns the object handling anything user-auth related
+// It takes a httpClient and a userConfig object.
+func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
+	salt, _ := userConfig.ReadSalt()
+	userData, _ := userConfig.GetUserData()
+	opts := common.WebClientOptions{
+		HttpClient: httpClient,
+		BaseURL:    common.APIBaseUrl,
 	}
-	return u.userData.LegacyID
-}
 
-func (u *User) LegacyToken() string {
-	if u.userData == nil {
-		return ""
-	}
-	return u.userData.LegacyToken
-}
-
-func writeUserData(data *LoginResponse) error {
-	return os.WriteFile(userDataLocation, []byte(data.String()), 0600)
-}
-
-func readUserData() (*LoginResponse, error) {
-	data, err := os.ReadFile(userDataLocation)
-	if err != nil {
-		return nil, err
-	}
-	var resp LoginResponse
-	if err := proto.Unmarshal(data, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func writeSalt(salt []byte) error {
-	return os.WriteFile(saltLocation, salt, 0600)
-}
-
-func readSalt() ([]byte, error) {
-	return os.ReadFile(saltLocation)
-}
-
-// New returns the object handling anything user-account related
-func New(httpClient *http.Client) *User {
-	salt, _ := readSalt()
-	userData, _ := readUserData()
 	return &User{
-		authClient: &authClient{common.NewWebClient(httpClient)},
+		authClient: &authClient{common.NewWebClient(&opts)},
 		salt:       salt,
 		userData:   userData,
-		deviceId:   deviceid.Get(),
+		deviceId:   userConfig.DeviceID(),
+		userConfig: userConfig,
 	}
 }
 
@@ -152,7 +106,7 @@ func (u *User) SignUp(ctx context.Context, email, password string) error {
 	salt, err := u.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		u.salt = salt
-		return writeSalt(salt)
+		return u.userConfig.WriteSalt(salt)
 	}
 
 	return err
@@ -167,7 +121,7 @@ func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
 	if u.salt == nil {
 		return ErrNoSalt
 	}
-	return u.authClient.SignupEmailResendCode(ctx, &SignupEmailResendRequest{
+	return u.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
 		Email: email,
 		Salt:  u.salt,
 	})
@@ -175,7 +129,7 @@ func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
 
 // SignupEmailConfirmation confirms the new account using the sign-up code received via email.
 func (u *User) SignupEmailConfirmation(ctx context.Context, email, code string) error {
-	return u.authClient.SignupEmailConfirmation(ctx, &ConfirmSignupRequest{
+	return u.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -191,7 +145,7 @@ func (u *User) getSalt(ctx context.Context, email string) ([]byte, error) {
 		return nil, ErrNoSalt
 	}
 	u.salt = resp.Salt
-	if err := writeSalt(resp.Salt); err != nil {
+	if err := u.userConfig.WriteSalt(resp.Salt); err != nil {
 		return nil, err
 	}
 	return resp.Salt, nil
@@ -205,7 +159,7 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 	}
 	resp, err := u.authClient.Login(ctx, email, password, deviceId, salt)
 	if err == nil {
-		writeUserData(resp)
+		u.userConfig.Save(resp)
 		u.userData = resp
 	}
 	return err
@@ -213,7 +167,7 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (u *User) Logout(ctx context.Context) error {
-	return u.authClient.SignOut(ctx, &LogoutRequest{
+	return u.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        u.userData.Id,
 		DeviceId:     u.deviceId,
 		LegacyUserID: u.userData.LegacyID,
@@ -223,7 +177,7 @@ func (u *User) Logout(ctx context.Context) error {
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
 func (u *User) StartRecoveryByEmail(ctx context.Context, email string) error {
-	return u.authClient.StartRecoveryByEmail(ctx, &StartRecoveryByEmailRequest{
+	return u.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
 	})
 }
@@ -244,21 +198,21 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 		return err
 	}
 
-	err = u.authClient.CompleteRecoveryByEmail(ctx, &CompleteRecoveryByEmailRequest{
+	err = u.authClient.CompleteRecoveryByEmail(ctx, &protos.CompleteRecoveryByEmailRequest{
 		Email:       email,
 		Code:        code,
 		NewSalt:     newSalt,
 		NewVerifier: verifierKey.Bytes(),
 	})
 	if err == nil {
-		err = writeSalt(newSalt)
+		err = u.userConfig.WriteSalt(newSalt)
 	}
 	return err
 }
 
 // ValidateEmailRecoveryCode validates the recovery code received via email.
 func (u *User) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
-	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &ValidateRecoveryCodeRequest{
+	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -296,7 +250,7 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 	A := client.EphemeralPublic()
 
 	//Create body
-	prepareRequestBody := &PrepareRequest{
+	prepareRequestBody := &protos.PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -328,7 +282,7 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 		return fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
 
-	changeEmailRequestBody := &ChangeEmailRequest{
+	changeEmailRequestBody := &protos.ChangeEmailRequest{
 		OldEmail: lowerCaseEmail,
 		NewEmail: lowerCaseNewEmail,
 		Proof:    clientProof,
@@ -356,7 +310,7 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 		return err
 	}
 
-	if err := u.authClient.CompleteChangeEmail(ctx, &CompleteChangeEmailRequest{
+	if err := u.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
 		OldEmail:    u.userData.Id,
 		NewEmail:    newEmail,
 		Code:        code,
@@ -365,11 +319,11 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 	}); err != nil {
 		return err
 	}
-	if err := writeSalt(newSalt); err != nil {
+	if err := u.userConfig.WriteSalt(newSalt); err != nil {
 		return err
 	}
 
-	if err := writeUserData(u.userData); err != nil {
+	if err := u.userConfig.Save(u.userData); err != nil {
 		return err
 	}
 
@@ -400,7 +354,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	A := client.EphemeralPublic()
 
 	//Create body
-	prepareRequestBody := &PrepareRequest{
+	prepareRequestBody := &protos.PrepareRequest{
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
@@ -432,7 +386,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		return fmt.Errorf("user_not_found error while generating client proof %w", err)
 	}
 
-	changeEmailRequestBody := &DeleteUserRequest{
+	changeEmailRequestBody := &protos.DeleteUserRequest{
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,
@@ -444,5 +398,5 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	}
 
 	u.userData = nil
-	return writeUserData(nil)
+	return u.userConfig.Save(nil)
 }

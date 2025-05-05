@@ -1,5 +1,5 @@
 syntax = "proto3";
-option go_package = "/user";
+option go_package = "/protos";
 
 // POST /users/signup
 message SignupRequest {
@@ -48,6 +48,8 @@ message LoginRequest {
   string deviceId = 3;
 }
 
+
+
 message LoginResponse {
   int64 legacyID = 1;
   string legacyToken = 2;
@@ -71,7 +73,7 @@ message LoginResponse {
     int64 expiration = 10;
     repeated string servers = 11;
     string subscription = 12;
-    repeated string purchases = 13;
+    repeated Purchase purchases = 13;
     string bonusDays = 14;
     string bonusMonths = 15;
     repeated string inviters = 16;
@@ -142,4 +144,15 @@ message LogoutRequest {
   string deviceId = 2;
   int64 legacyUserID = 3;
   string legacyToken = 4;
+}
+
+// API
+message BaseResponse {
+  string status = 1;
+  string error = 2;
+  string errorId = 3;
+}
+
+message Purchase  {
+  string plan = 1;
 }

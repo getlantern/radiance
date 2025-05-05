@@ -6,7 +6,9 @@ import (
 
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/api"
+	"github.com/getlantern/radiance/common"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,8 +20,9 @@ func TestSendReport(t *testing.T) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-	u := user.New(k.NewHTTPClient())
-	reporter, err := NewIssueReporter(k.NewHTTPClient(), u)
+	userConfig := common.NewUserConfig("radiance-test", "", "")
+	u := api.NewUser(k.NewHTTPClient(), userConfig)
+	reporter, err := NewIssueReporter(k.NewHTTPClient(), u, userConfig)
 	require.NoError(t, err)
 	// Grab a temporary directory
 	dir, err := os.MkdirTemp("", "lantern")

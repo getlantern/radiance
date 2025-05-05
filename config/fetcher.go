@@ -15,9 +15,10 @@ import (
 	"slices"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/user"
+	"github.com/getlantern/radiance/common"
 )
 
 const configURL = "https://api.iantem.io/v1/config-new"
@@ -34,13 +35,13 @@ type Fetcher interface {
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
-	user         user.BaseUser
+	user         common.UserInfo
 	lastModified time.Time
 	locale       string
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user user.BaseUser, locale string) Fetcher {
+func newFetcher(client *http.Client, user common.UserInfo, locale string) Fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,
@@ -85,7 +86,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body)
+	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
