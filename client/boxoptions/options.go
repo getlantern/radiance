@@ -11,7 +11,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
-const LanternURLTestTag = "lantern_servers"
+const LanternAutoTag = "lantern-auto"
 
 var (
 	BoxOptions = O.Options{
@@ -114,7 +114,7 @@ var (
 						RuleAction: O.RuleAction{
 							Action: C.RuleActionTypeRoute,
 							RouteOptions: O.RouteActionOptions{
-								Outbound: LanternURLTestTag,
+								Outbound: LanternAutoTag,
 							},
 						},
 					},
@@ -149,7 +149,7 @@ var (
 func URLTestOutbound(tags []string) O.Outbound {
 	return option.Outbound{
 		Type: constant.TypeURLTest,
-		Tag:  LanternURLTestTag,
+		Tag:  LanternAutoTag,
 		Options: &option.URLTestOutboundOptions{
 			Outbounds: tags,
 		},

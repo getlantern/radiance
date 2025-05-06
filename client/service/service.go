@@ -249,7 +249,7 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	// update the lanter URLTest outbound with the new tags
 	newTags := collectTags(newOpts.Outbounds, newOpts.Endpoints)
 	idx := slices.IndexFunc(currOpts.Outbounds, func(it option.Outbound) bool {
-		return it.Tag == boxoptions.LanternURLTestTag
+		return it.Tag == boxoptions.LanternAutoTag
 	})
 	if idx != -1 {
 		opts := currOpts.Outbounds[idx].Options.(*option.URLTestOutboundOptions)
@@ -363,11 +363,11 @@ func collectTags(outbounds []option.Outbound, endpoints []option.Endpoint) []str
 // all tags are present in the existing URLTest outbound. If they are, it does nothing.
 func reinitializeURLTest(ctx context.Context, newTags []string) error {
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
-	outbound, fnd := outboundMgr.Outbound(boxoptions.LanternURLTestTag)
+	outbound, fnd := outboundMgr.Outbound(boxoptions.LanternAutoTag)
 	if fnd {
 		urlTest, ok := outbound.(*group.URLTest)
 		if !ok {
-			return fmt.Errorf("outbound %s is not a URLTest", boxoptions.LanternURLTestTag)
+			return fmt.Errorf("outbound %s is not a URLTest", boxoptions.LanternAutoTag)
 		}
 		tags := urlTest.All()
 		slices.Sort(newTags)
@@ -382,8 +382,8 @@ func reinitializeURLTest(ctx context.Context, newTags []string) error {
 	err := outboundMgr.Create(
 		ctx,
 		router,
-		logFactory.NewLogger(boxoptions.LanternURLTestTag),
-		boxoptions.LanternURLTestTag,
+		logFactory.NewLogger(boxoptions.LanternAutoTag),
+		boxoptions.LanternAutoTag,
 		constant.TypeURLTest,
 		&option.URLTestOutboundOptions{
 			Outbounds: newTags,
