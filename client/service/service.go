@@ -155,7 +155,7 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 
 	// TEMP: only use first wg endpoint
 	// TODO: remove this when the config API is updated to only return one endpoint
-	opts.Endpoints = opts.Endpoints[:0]
+	opts.Endpoints = opts.Endpoints[:1]
 
 	optsStr, _ := json.MarshalContext(ctx, opts)
 	slog.Debug("Creating libbox service", slog.String("opts", string(optsStr)))
