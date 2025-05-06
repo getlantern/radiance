@@ -74,7 +74,7 @@ func (c *proClient) UserData(ctx context.Context) (*protos.UserDataResponse, err
 	var resp *protos.UserDataResponse
 	err := c.Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
-		slog.Error("Error in UserCreate: %v", "err", err)
+		slog.Error("Error in UserData: %v", "err", err)
 		return nil, err
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
