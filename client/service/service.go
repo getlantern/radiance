@@ -158,7 +158,7 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	opts.Endpoints = opts.Endpoints[:0]
 
 	optsStr, _ := json.MarshalContext(ctx, opts)
-	slog.Info("Creating libbox service", slog.String("opts", string(optsStr)))
+	slog.Debug("Creating libbox service", slog.String("opts", string(optsStr)))
 	conf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal options: %w", err)
