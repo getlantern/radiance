@@ -71,10 +71,8 @@ var (
 					Address: badoption.Listable[netip.Prefix]{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
-					AutoRoute:              true,
-					StrictRoute:            true,
-					EndpointIndependentNat: true,
-					Stack:                  "system",
+					AutoRoute:   true,
+					StrictRoute: true,
 				},
 			},
 		},

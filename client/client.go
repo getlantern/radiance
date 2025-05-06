@@ -134,6 +134,7 @@ func (c *vpnClient) StartVPN() error {
 	}
 	err := c.boxService.Start()
 	if err != nil {
+		slog.Error("Failed to start boxService", "error", err)
 		return err
 	}
 
