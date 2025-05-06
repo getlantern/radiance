@@ -34,8 +34,6 @@ import (
 	"github.com/getlantern/sing-box-extensions/protocol"
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
-	exO "github.com/getlantern/sing-box-extensions/option"
-
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/config"
 )
@@ -155,9 +153,9 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	// that the sing-box instance adds to it
 	ctx := newBaseContext()
 
-	// TEMP: only use first wg endpoint and clear tun name
+	// TEMP: only use first wg endpoint
+	// TODO: remove this when the config API is updated to only return one endpoint
 	opts.Endpoints = opts.Endpoints[:0]
-	patchWGName(opts.Endpoints)
 
 	optsStr, _ := json.MarshalContext(ctx, opts)
 	slog.Info("Creating libbox service", slog.String("opts", string(optsStr)))
@@ -171,18 +169,6 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	}
 
 	return lb, ctx, nil
-}
-
-func patchWGName(endpoints []option.Endpoint) {
-	for _, endpoint := range endpoints {
-		switch opts := endpoint.Options.(type) {
-		case *option.WireGuardEndpointOptions:
-			opts.Name = ""
-		case *exO.AmneziaWGEndpointOptions:
-			opts.Name = ""
-		default:
-		}
-	}
 }
 
 // Close stops the libbox service and clears the pause timer
