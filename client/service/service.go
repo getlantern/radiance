@@ -156,12 +156,11 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	// TODO: remove this when the config API is updated to only return one endpoint
 	opts.Endpoints = opts.Endpoints[:1]
 
-	optsStr, _ := json.MarshalContext(ctx, opts)
-	slog.Debug("Creating libbox service", slog.String("opts", string(optsStr)))
 	conf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal options: %w", err)
 	}
+	slog.Debug("Creating libbox service", slog.String("options", string(conf)))
 	lb, err := libbox.NewServiceWithContext(ctx, string(conf), platIfce)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create libbox service: %w", err)
