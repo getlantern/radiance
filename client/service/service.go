@@ -69,7 +69,6 @@ func New(config, baseDir string, platIfce libbox.PlatformInterface, rulesetManag
 		mutRuleSetManager: rulesetManager,
 	}
 
-	slog.Info("Creating libbox service with config", slog.String("config", config))
 	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(config))
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal options: %w", err)
