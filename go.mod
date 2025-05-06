@@ -17,10 +17,10 @@ require (
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20250428204107-678e5e36cbbf
-	github.com/getlantern/fronted v0.0.0-20250501185902-0f6c04a1b15d
+	github.com/getlantern/fronted v0.0.0-20250506001345-27e1daa0a25e
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
-	github.com/getlantern/kindling v0.0.0-20250501190705-a18e51da1a62
+	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
 	github.com/getlantern/sing-box-extensions v0.0.0-20250505165831-60e20ae95309
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
