@@ -24,11 +24,9 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -246,18 +244,6 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	currOpts.Outbounds = append(boxoptions.BaseOutbounds, newOpts.Outbounds...)
 	currOpts.Endpoints = append(boxoptions.BaseEndpoints, newOpts.Endpoints...)
 
-	// update the lanter URLTest outbound with the new tags
-	newTags := collectTags(newOpts.Outbounds, newOpts.Endpoints)
-	idx := slices.IndexFunc(currOpts.Outbounds, func(it option.Outbound) bool {
-		return it.Tag == boxoptions.LanternAutoTag
-	})
-	if idx != -1 {
-		opts := currOpts.Outbounds[idx].Options.(*option.URLTestOutboundOptions)
-		opts.Outbounds = newTags
-	} else { // this should never happen but just in case
-		currOpts.Outbounds = append(currOpts.Outbounds, boxoptions.URLTestOutbound(newTags))
-	}
-
 	// add custom server outbounds/endpoints
 	csm := service.PtrFromContext[CustomServerManager](bs.ctx)
 	if csm != nil {
@@ -285,10 +271,6 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 		return fmt.Errorf("update outbounds/endpoints: %w", err)
 	}
 
-	if err = reinitializeURLTest(bs.ctx, newTags); err != nil {
-		return fmt.Errorf("reinitialize urltest: %w", err)
-	}
-
 	return nil
 }
 
@@ -307,6 +289,7 @@ var (
 		"dns",
 		"block",
 		CustomSelectorTag,
+		boxoptions.LanternAutoTag,
 	}
 	permanentEndpoints = []string{}
 )
@@ -346,53 +329,6 @@ func updateOutboundsEndpoints(ctx context.Context, outbounds []option.Outbound, 
 		}
 	}
 	return errs
-}
-
-func collectTags(outbounds []option.Outbound, endpoints []option.Endpoint) []string {
-	tags := make([]string, 0, len(outbounds)+len(endpoints))
-	for _, outbound := range outbounds {
-		tags = append(tags, outbound.Tag)
-	}
-	for _, endpoint := range endpoints {
-		tags = append(tags, endpoint.Tag)
-	}
-	return tags
-}
-
-// reinitializeURLTest reinitializes the URLTest outbound with the provided tags. It checks if the
-// all tags are present in the existing URLTest outbound. If they are, it does nothing.
-func reinitializeURLTest(ctx context.Context, newTags []string) error {
-	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
-	outbound, fnd := outboundMgr.Outbound(boxoptions.LanternAutoTag)
-	if fnd {
-		urlTest, ok := outbound.(*group.URLTest)
-		if !ok {
-			return fmt.Errorf("outbound %s is not a URLTest", boxoptions.LanternAutoTag)
-		}
-		tags := urlTest.All()
-		slices.Sort(newTags)
-		slices.Sort(tags)
-		if slices.Equal(tags, newTags) {
-			return nil
-		}
-	}
-	slog.Debug("Reinitializing URLTest outbound", "tags:", newTags)
-	router := service.FromContext[adapter.Router](ctx)
-	logFactory := service.FromContext[log.Factory](ctx)
-	err := outboundMgr.Create(
-		ctx,
-		router,
-		logFactory.NewLogger(boxoptions.LanternAutoTag),
-		boxoptions.LanternAutoTag,
-		constant.TypeURLTest,
-		&option.URLTestOutboundOptions{
-			Outbounds: newTags,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("create urltest outbound: %w", err)
-	}
-	return nil
 }
 
 // updateOutbounds syncs the [adapter.OutboundManager] with the provided outbounds. It skips excluded

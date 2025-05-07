@@ -76,7 +76,8 @@ var (
 				},
 			},
 		},
-		Outbounds: BaseOutbounds,
+		// use direct as the default outbound for URLTest so sing-box starts
+		Outbounds: append(BaseOutbounds, URLTestOutbound([]string{"direct"})),
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []O.Rule{
@@ -122,7 +123,6 @@ var (
 			},
 		},
 	}
-
 	BaseOutbounds = []O.Outbound{
 		{
 			Type:    "direct",
@@ -139,10 +139,7 @@ var (
 			Tag:     "block",
 			Options: &O.StubOptions{},
 		},
-		// use direct as the default outbound so sing-box starts
-		URLTestOutbound([]string{"direct"}),
 	}
-
 	BaseEndpoints = []O.Endpoint{}
 )
 
