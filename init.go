@@ -29,9 +29,9 @@ var (
 
 // sharedConfig is a struct that contains the shared configuration for the Radiance client and API handler.
 type sharedConfig struct {
-	logWriter  io.Writer
-	userConfig common.UserInfo
-	kindling   kindling.Kindling
+	logWriter io.Writer
+	userInfo  common.UserInfo
+	kindling  kindling.Kindling
 }
 
 // initCommon initializes the common configuration for the Radiance client and API handler.
@@ -84,9 +84,9 @@ func initialize(opts client.Options) (*sharedConfig, error) {
 			kindling.WithProxyless("api.iantem.io"))
 
 		sharedInit = &sharedConfig{
-			logWriter:  logWriter,
-			userConfig: common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale),
-			kindling:   k,
+			logWriter: logWriter,
+			userInfo:  common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale),
+			kindling:  k,
 		}
 		slog.Debug("Initialized shared config", "dataDir", opts.DataDir, "logDir", opts.LogDir, "locale", opts.Locale)
 	})

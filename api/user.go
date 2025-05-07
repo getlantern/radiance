@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -58,9 +59,12 @@ type User struct {
 
 // NewUser returns the object handling anything user-auth related
 // It takes a httpClient and a userConfig object.
-func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
-	salt, _ := userConfig.ReadSalt()
-	userData, _ := userConfig.GetUserData()
+func NewUser(httpClient *http.Client, userInfo common.UserInfo) *User {
+	salt, _ := userInfo.ReadSalt()
+	userData, err := userInfo.GetUserData()
+	if err != nil {
+		slog.Error("failed to get user data", "error", err)
+	}
 	opts := common.WebClientOptions{
 		HttpClient: httpClient,
 		BaseURL:    common.APIBaseUrl,
@@ -70,8 +74,8 @@ func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
 		authClient: &authClient{common.NewWebClient(&opts)},
 		salt:       salt,
 		userData:   userData,
-		deviceId:   userConfig.DeviceID(),
-		userConfig: userConfig,
+		deviceId:   userInfo.DeviceID(),
+		userConfig: userInfo,
 	}
 }
 
@@ -410,9 +414,9 @@ func (u *User) OAuthLoginUrl(ctx context.Context, provider string) (*protos.Subs
 		return nil, fmt.Errorf("failed to parse URL: %w", err)
 	}
 	query := loginUrl.Query()
-	query.Set("deviceId", u.deviceId)
+	query.Set("deviceId", u.userConfig.DeviceID())
 	query.Set("userId", strconv.FormatInt(u.userConfig.LegacyID(), 10))
-	query.Set("proToken", u.userData.LegacyToken)
+	query.Set("proToken", u.userConfig.LegacyToken())
 	loginUrl.RawQuery = query.Encode()
 
 	return &protos.SubscriptionPaymentRedirectResponse{

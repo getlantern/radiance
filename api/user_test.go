@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/big"
+	"net/http"
 	"testing"
 
 	"github.com/1Password/srp"
@@ -122,14 +123,8 @@ func TestDeleteAccount(t *testing.T) {
 }
 
 func TestOAuthLoginUrl(t *testing.T) {
-	u := &User{
-		userData:   &protos.LoginResponse{Id: "test@example.com"},
-		authClient: nil,
-		deviceId:   "deviceId",
-		salt:       nil,
-		userConfig: &mockUserConfig{},
-	}
-	url, err := u.OAuthLoginUrl(context.Background(), "google")
+	user := NewUser(&http.Client{}, commonConfig())
+	url, err := user.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, url)
 }

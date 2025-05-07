@@ -52,7 +52,7 @@ type Radiance struct {
 	activeServer *atomic.Value
 	stopChan     chan struct{}
 	//user config is the user config object that contains the device ID and other user data
-	userConfig common.UserInfo
+	userInfo common.UserInfo
 
 	issueReporter *issue.IssueReporter
 	logsDir       string
@@ -83,15 +83,15 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
-	u := api.NewUser(init.kindling.NewHTTPClient(), init.userConfig)
-	issueReporter, err := issue.NewIssueReporter(init.kindling.NewHTTPClient(), u, init.userConfig)
+	u := api.NewUser(init.kindling.NewHTTPClient(), init.userInfo)
+	issueReporter, err := issue.NewIssueReporter(init.kindling.NewHTTPClient(), u, init.userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
 	cOpts := config.Options{
 		PollInterval:     configPollInterval,
 		HTTPClient:       init.kindling.NewHTTPClient(),
-		User:             init.userConfig,
+		User:             init.userInfo,
 		DataDir:          opts.DataDir,
 		ConfigRespParser: boxservice.UnmarshalConfig,
 		Locale:           opts.Locale,
@@ -104,7 +104,7 @@ func NewRadiance(opts client.Options) (*Radiance, error) {
 		confHandler:   confHandler,
 		activeServer:  new(atomic.Value),
 		stopChan:      make(chan struct{}),
-		userConfig:    init.userConfig,
+		userInfo:    init.userInfo,
 		issueReporter: issueReporter,
 		logsDir:       opts.LogDir,
 		shutdownFuncs: shutdownFuncs,
@@ -119,7 +119,7 @@ func NewAPIHandler(opts client.Options) (*api.APIHandler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize common: %w", err)
 	}
-	apiHandler := api.NewAPIHandlerInternal(init.kindling.NewHTTPClient(), init.userConfig)
+	apiHandler := api.NewAPIHandlerInternal(init.kindling.NewHTTPClient(), init.userInfo)
 	return apiHandler, nil
 }
 
@@ -174,7 +174,7 @@ func (r *Radiance) GetActiveServer() (*Server, error) {
 // UserInfo returns the user info object for this client
 // This is the user config object that contains the device ID and other user data
 func (r *Radiance) UserInfo() common.UserInfo {
-	return r.userConfig
+	return r.userInfo
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

@@ -21,7 +21,7 @@ type Pro struct {
 }
 
 // New returns the object handling anything pro-server related
-func NewPro(httpClient *http.Client, userConfig common.UserInfo) *Pro {
+func NewPro(httpClient *http.Client, userInfo common.UserInfo) *Pro {
 	opts := common.WebClientOptions{
 		HttpClient: httpClient,
 		BaseURL:    common.ProServerUrl,
@@ -30,12 +30,12 @@ func NewPro(httpClient *http.Client, userConfig common.UserInfo) *Pro {
 			req.Header.Set(backend.AppNameHeader, app.Name)
 			req.Header.Set(backend.VersionHeader, app.Version)
 			req.Header.Set(backend.PlatformHeader, app.Platform)
-			req.Header.Set(backend.DeviceIDHeader, userConfig.DeviceID())
-			if userConfig.LegacyToken() != "" {
-				req.Header.Set(backend.ProTokenHeader, userConfig.LegacyToken())
+			req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
+			if userInfo.LegacyToken() != "" {
+				req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
 			}
-			if userConfig.LegacyID() != 0 {
-				req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userConfig.LegacyID(), 10))
+			if userInfo.LegacyID() != 0 {
+				req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
 			}
 			if req.URL != nil && strings.HasSuffix(req.URL.Path, "/subscription-payment-redirect") {
 				req.Header.Set(backend.RefererHeader, "https://lantern.io/")
@@ -46,7 +46,7 @@ func NewPro(httpClient *http.Client, userConfig common.UserInfo) *Pro {
 	return &Pro{
 		proClient: &proClient{
 			WebClient: common.NewWebClient(&opts),
-			UserInfo:  userConfig,
+			UserInfo:  userInfo,
 		},
 	}
 }
