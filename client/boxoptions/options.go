@@ -3,15 +3,15 @@ package boxoptions
 import (
 	"net/netip"
 
+	"github.com/sagernet/sing-box/constant"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
-
-	exC "github.com/getlantern/sing-box-extensions/constant"
-
-	"github.com/getlantern/radiance/option"
 )
+
+const LanternAutoTag = "lantern-auto"
 
 var (
 	BoxOptions = O.Options{
@@ -76,55 +76,8 @@ var (
 				},
 			},
 		},
-		Outbounds: []O.Outbound{
-			{
-				Type:    "direct",
-				Tag:     "direct",
-				Options: &O.DirectOutboundOptions{},
-			},
-			{
-				Type:    "dns",
-				Tag:     "dns-out",
-				Options: &O.DNSOptions{},
-			},
-			{
-				Type: exC.TypeOutline,
-				Tag:  "outline-out",
-				Options: &option.OutboundOutlineOptions{
-					DNSResolvers: []option.DNSEntryConfig{
-						{
-							TLS: &option.TLSEntryConfig{
-								Name:    "dns.google",
-								Address: "8.8.8.8:853",
-							},
-						},
-						{
-							HTTPS: &option.HTTPSEntryConfig{
-								Name: "dns.google",
-							},
-						},
-						{
-							HTTPS: &option.HTTPSEntryConfig{
-								Name:    "cloudflare-dns.com.",
-								Address: "cloudflare.net.",
-							},
-						},
-						{
-							HTTPS: &option.HTTPSEntryConfig{
-								Name:    "doh.dns.sb",
-								Address: "https://doh.dns.sb/dns-query",
-							},
-						},
-						{
-							System: &struct{}{},
-						},
-					},
-					TLS:         []string{"", "split:1", "split:2,20*5", "split:200|disorder:1", "tlsfrag:1"},
-					Domains:     []string{"api.iantem.io", "google.com"},
-					TestTimeout: "10s",
-				},
-			},
-		},
+		// use direct as the default outbound for URLTest so sing-box starts
+		Outbounds: append(BaseOutbounds, URLTestOutbound([]string{"direct"})),
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []O.Rule{
@@ -158,40 +111,11 @@ var (
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{
 							Inbound: badoption.Listable[string]{"tun-in"},
-							Domain:  badoption.Listable[string]{"api.iantem.io", "google.com"},
 						},
 						RuleAction: O.RuleAction{
 							Action: C.RuleActionTypeRoute,
 							RouteOptions: O.RouteActionOptions{
-								Outbound: "outline-out",
-							},
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							Protocol: badoption.Listable[string]{"ssh"},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
-							},
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							Inbound: badoption.Listable[string]{"tun-in"},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
+								Outbound: LanternAutoTag,
 							},
 						},
 					},
@@ -199,7 +123,6 @@ var (
 			},
 		},
 	}
-
 	BaseOutbounds = []O.Outbound{
 		{
 			Type:    "direct",
@@ -217,6 +140,15 @@ var (
 			Options: &O.StubOptions{},
 		},
 	}
-
 	BaseEndpoints = []O.Endpoint{}
 )
+
+func URLTestOutbound(tags []string) O.Outbound {
+	return option.Outbound{
+		Type: constant.TypeURLTest,
+		Tag:  LanternAutoTag,
+		Options: &option.URLTestOutboundOptions{
+			Outbounds: tags,
+		},
+	}
+}

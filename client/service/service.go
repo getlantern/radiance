@@ -270,6 +270,7 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("update outbounds/endpoints: %w", err)
 	}
+
 	return nil
 }
 
@@ -288,6 +289,7 @@ var (
 		"dns",
 		"block",
 		CustomSelectorTag,
+		boxoptions.LanternAutoTag,
 	}
 	permanentEndpoints = []string{}
 )
