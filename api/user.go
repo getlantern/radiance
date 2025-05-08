@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,9 +59,12 @@ type User struct {
 
 // NewUser returns the object handling anything user-auth related
 // It takes a httpClient and a userConfig object.
-func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
-	salt, _ := userConfig.ReadSalt()
-	userData, _ := userConfig.GetUserData()
+func NewUser(httpClient *http.Client, userInfo common.UserInfo) *User {
+	salt, _ := userInfo.ReadSalt()
+	userData, err := userInfo.GetUserData()
+	if err != nil {
+		slog.Error("failed to get user data", "error", err)
+	}
 	opts := common.WebClientOptions{
 		HttpClient: httpClient,
 		BaseURL:    common.APIBaseUrl,
@@ -68,8 +74,8 @@ func NewUser(httpClient *http.Client, userConfig common.UserInfo) *User {
 		authClient: &authClient{common.NewWebClient(&opts)},
 		salt:       salt,
 		userData:   userData,
-		deviceId:   userConfig.DeviceID(),
-		userConfig: userConfig,
+		deviceId:   userInfo.DeviceID(),
+		userConfig: userInfo,
 	}
 }
 
@@ -399,4 +405,21 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 
 	u.userData = nil
 	return u.userConfig.Save(nil)
+}
+
+// OAuthLogin initiates the OAuth login process for the specified provider.
+func (u *User) OAuthLoginUrl(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	loginUrl, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://df.iantem.io/api/v1", "users/oauth2", provider))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+	query := loginUrl.Query()
+	query.Set("deviceId", u.userConfig.DeviceID())
+	query.Set("userId", strconv.FormatInt(u.userConfig.LegacyID(), 10))
+	query.Set("proToken", u.userConfig.LegacyToken())
+	loginUrl.RawQuery = query.Encode()
+
+	return &protos.SubscriptionPaymentRedirectResponse{
+		Redirect: loginUrl.String(),
+	}, nil
 }
