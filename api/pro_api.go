@@ -68,18 +68,19 @@ func (c *proClient) CreateUser(ctx context.Context) (*protos.UserDataResponse, e
 	return resp, nil
 }
 
-// UserData is used to get user data
-// this will be also save data to user config
+// UserData will request the user data and return the response.
 func (c *proClient) UserData(ctx context.Context) (*protos.UserDataResponse, error) {
 	var resp *protos.UserDataResponse
 	err := c.Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
-		slog.Error("Error in UserData: %v", "err", err)
+		err = fmt.Errorf("seding user data request: %v", err)
+		slog.Error("", "err", err)
 		return nil, err
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
-		slog.Error("Error in UserData: %v", "err", resp.BaseResponse.Error)
-		return nil, fmt.Errorf("error in UserData: %s", resp.BaseResponse.Error)
+		err = fmt.Errorf("recevied bad response: %s", resp.BaseResponse.Error)
+		slog.Error("", "err", err)
+		return nil, err
 	}
 	login := &protos.LoginResponse{
 		LegacyID:       resp.LoginResponse_UserData.UserId,
@@ -89,7 +90,8 @@ func (c *proClient) UserData(ctx context.Context) (*protos.UserDataResponse, err
 	/// Write user data to file
 	err = c.UserInfo.Save(login)
 	if err != nil {
-		slog.Error("Error writing user data: %v", "err", err)
+		err = fmt.Errorf("writing user data: %v", err)
+		slog.Error("", "err", err)
 		return nil, err
 	}
 	return resp, nil
