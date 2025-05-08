@@ -123,11 +123,12 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 
 // Start starts the VPN client
 func (c *vpnClient) StartVPN() error {
-	clientMu.Lock()
-	defer clientMu.Unlock()
 	if c.running.Load() {
 		return errors.New("VPN client is already running")
 	}
+
+	clientMu.Lock()
+	defer clientMu.Unlock()
 
 	slog.Debug("Starting VPN client")
 	if c.boxService == nil {
@@ -148,11 +149,12 @@ func (c *vpnClient) StartVPN() error {
 
 // Stop stops the VPN client and closes the TUN device
 func (c *vpnClient) StopVPN() error {
-	clientMu.Lock()
-	defer clientMu.Unlock()
 	if !c.running.Load() {
 		return errors.New("VPN client is not running")
 	}
+
+	clientMu.Lock()
+	defer clientMu.Unlock()
 
 	slog.Debug("Stopping VPN client")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
