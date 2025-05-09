@@ -17,9 +17,9 @@ import (
 
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
+	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
-	"github.com/getlantern/radiance/config"
 )
 
 var (
@@ -32,8 +32,6 @@ type Options struct {
 	DataDir  string
 	LogDir   string
 	PlatIfce libbox.PlatformInterface
-	DeviceID string
-	Locale   string
 	// EnableSplitTunneling is the initial state of split tunneling when the service starts
 	EnableSplitTunneling bool
 }
@@ -48,7 +46,6 @@ type VPNClient interface {
 	AddCustomServer(cfg boxservice.ServerConnectConfig) error
 	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
-	OnNewConfig(oldConfig, newConfig *config.Config) error
 }
 
 type vpnClient struct {
@@ -64,7 +61,7 @@ type vpnClient struct {
 // set to "stdout" to write logs to stdout. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewVPNClient(opts Options) (VPNClient, error) {
+func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, enableSplitTunnel bool) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if client != nil {
@@ -72,17 +69,17 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 	}
 
 	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(opts.LogDir, "lantern-box.log")
+	logOutput := filepath.Join(logDir, "lantern-box.log")
 	boxOpts := boxoptions.Options(logOutput)
 
 	slog.Debug("Creating new VPN client")
 	rsMgr := ruleset.NewManager()
-	splitTunnel, err := initMutRuleSet(opts.DataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, opts.EnableSplitTunneling)
+	splitTunnel, err := initMutRuleSet(dataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, enableSplitTunnel)
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
 	customServerSelector, err := initMutRuleSet(
-		opts.DataDir,
+		dataDir,
 		CustomSelectorTag,
 		CustomSelectorFormat,
 		rsMgr,
@@ -107,14 +104,14 @@ func NewVPNClient(opts Options) (VPNClient, error) {
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), opts.DataDir, opts.PlatIfce, rsMgr)
+	b, err := boxservice.New(string(buf), dataDir, app.ConfigFileName, platIfce, rsMgr)
 	if err != nil {
 		return nil, err
 	}
 
 	client = &vpnClient{
 		boxService:          b,
-		customServerManager: boxservice.NewCustomServerManager(b.Ctx(), opts.DataDir),
+		customServerManager: boxservice.NewCustomServerManager(b.Ctx(), dataDir),
 		splitTunnelHandler:  splitTunnel.mutableRuleSet,
 	}
 	return client, nil
@@ -163,6 +160,7 @@ func (c *vpnClient) StopVPN() error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return errors.New("box did not stop in time")
 	}
+	c.started = false
 	c.setConnectionStatus(false)
 	return err
 }
@@ -190,6 +188,18 @@ func (c *vpnClient) PauseVPN(dur time.Duration) error {
 func (c *vpnClient) ResumeVPN() {
 	slog.Info("Resuming VPN client")
 	c.boxService.Wake()
+}
+
+// ActiveServer returns the current connected server as a [boxservice.Server].
+func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
+	if !c.ConnectionStatus() {
+		return nil, fmt.Errorf("VPN is not connected")
+	}
+	activeServer, err := c.boxService.ActiveServer()
+	if err != nil {
+		return nil, fmt.Errorf("get active server: %w", err)
+	}
+	return &activeServer, nil
 }
 
 func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
@@ -258,8 +268,4 @@ func injectRouteRules(routeOpts *option.RouteOptions, atIdx int, rules []option.
 		routeOpts.RuleSet = append(routeOpts.RuleSet, rulesets...)
 	}
 	return routeOpts
-}
-
-func (c *vpnClient) OnNewConfig(oldConfig, newConfig *config.Config) error {
-	return c.boxService.OnNewConfig(oldConfig, newConfig)
 }
