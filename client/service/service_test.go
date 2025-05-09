@@ -2,71 +2,101 @@ package boxservice
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/common"
 
-	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/client/boxoptions"
+	"github.com/getlantern/radiance/internal"
 )
 
-func TestOnNewConfig(t *testing.T) {
-	t.Run("successfully updates config", func(t *testing.T) {
-		mockConfig := &config.Config{
-			ConfigResponse: common.ConfigResponse{
-				Options: option.Options{
-					Outbounds: []option.Outbound{
-						{
-							Tag:     "tag1",
-							Type:    "default",
-							Options: option.StubOptions{},
+func TestReloadOptions(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "test-opts.json")
+	writeConfig := func(config common.ConfigResponse) {
+		buf, err := json.MarshalContext(BaseContext(), config)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, buf, 0644))
+	}
+
+	baseOptions := boxoptions.BoxOptions
+	assertFn := func(newOptions, got option.Options) {
+		want := reprint.This(baseOptions).(option.Options)
+		want.Outbounds = append(want.Outbounds, newOptions.Outbounds...)
+		got.RawMessage = nil
+		assert.Equal(t, want, got)
+	}
+
+	confResp := common.ConfigResponse{
+		Options: option.Options{
+			Outbounds: []option.Outbound{
+				{
+					Type: constant.TypeHTTP,
+					Tag:  "http-out",
+					Options: &option.HTTPOutboundOptions{
+						ServerOptions: option.ServerOptions{
+							Server:     "1.1.1.1",
+							ServerPort: 80,
 						},
 					},
 				},
 			},
-		}
+		},
+	}
+	writeConfig(confResp)
 
-		bs := &BoxService{
-			ctx:       newBaseContext(),
-			config:    atomic.Value{},
-			isRunning: true,
-			mu:        sync.Mutex{},
-		}
+	bs := &BoxService{
+		ctx:        newBaseContext(),
+		isRunning:  false,
+		mu:         sync.Mutex{},
+		configPath: path,
+		options:    baseOptions,
+	}
 
-		bs.config.Store(option.Options{})
-		err := bs.OnNewConfig(nil, mockConfig)
-		if err != nil && strings.Contains(err.Error(), "router missing") {
-			err = nil
-		}
-		require.NoError(t, err)
-		assert.NotEmpty(t, bs.config.Load())
+	require.NoError(t, bs.reloadOptions())
+	assertFn(confResp.Options, bs.options)
+
+	watcher := internal.NewFileWatcher(path, func() {
+		require.NoError(t, bs.reloadOptions())
 	})
+	bs.optsFileWatcher = watcher
+	require.NoError(t, watcher.Start())
+	defer watcher.Close()
 
-	t.Run("does nothing if service is not running", func(t *testing.T) {
-		mockConfig := &config.Config{
-			ConfigResponse: common.ConfigResponse{
-				Options: option.Options{},
+	confResp.Options.Outbounds = []option.Outbound{
+		{
+			Type: constant.TypeSOCKS,
+			Tag:  "socks-out",
+			Options: &option.SOCKSOutboundOptions{
+				ServerOptions: option.ServerOptions{
+					Server:     "0.0.0.0",
+					ServerPort: 8080,
+				},
+				Version: "5",
 			},
-		}
+		},
+	}
+	writeConfig(confResp)
+	time.Sleep(150 * time.Millisecond) // wait for watcher to trigger
+	assertFn(confResp.Options, bs.options)
+}
 
-		bs := &BoxService{
-			ctx:       newBaseContext(),
-			isRunning: false,
-		}
+func TestActiveServer(t *testing.T) {
 
-		bs.config.Store(option.Options{})
-		err := bs.OnNewConfig(nil, mockConfig)
-		require.NoError(t, err)
-	})
 }
 
 func TestUpdateOutbounds(t *testing.T) {
