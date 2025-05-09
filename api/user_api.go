@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/common"
 )
 
 type AuthClient interface {

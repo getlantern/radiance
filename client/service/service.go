@@ -176,10 +176,16 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	// we need to create a new context each time so we have a fresh context, free of all the values
 	// that the sing-box instance adds to it
 	ctx := newBaseContext()
+
+	// TEMP: only use first wg endpoint
+	// TODO: remove this when the config API is updated to only return one endpoint
+	opts.Endpoints = opts.Endpoints[:1]
+
 	conf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal options: %w", err)
 	}
+	slog.Debug("Creating libbox service", slog.String("options", string(conf)))
 	lb, err := libbox.NewServiceWithContext(ctx, string(conf), platIfce)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create libbox service: %w", err)
@@ -314,6 +320,7 @@ func (bs *BoxService) reloadOptions() error {
 	if err != nil {
 		return fmt.Errorf("update outbounds/endpoints: %w", err)
 	}
+
 	return nil
 }
 
@@ -332,6 +339,7 @@ var (
 		"dns",
 		"block",
 		CustomSelectorTag,
+		boxoptions.LanternAutoTag,
 	}
 	permanentEndpoints = []string{}
 )
@@ -398,6 +406,7 @@ func updateOutbounds(
 
 	for tag, outbound := range newItems {
 		logger := logFactory.NewLogger(fmt.Sprintf("outbound/%s[%s]", outbound.Type, tag))
+		logger.Debug("Creating outbound", tag, "[", outbound.Type, "]")
 		err := outboundMgr.Create(ctx, router, logger, tag, outbound.Type, outbound.Options)
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("initialize [%v]: %w", tag, err))
@@ -435,6 +444,7 @@ func updateEndpoints(
 
 	for tag, endpoint := range newItems {
 		logger := logFactory.NewLogger(fmt.Sprintf("endpoint/%s[%s]", endpoint.Type, tag))
+		logger.Debug("Creating endpoint", tag, "[", endpoint.Type, "]")
 		err := endpointMgr.Create(ctx, router, logger, tag, endpoint.Type, endpoint.Options)
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("initialize [%v]: %w", tag, err))

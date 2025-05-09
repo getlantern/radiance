@@ -3,11 +3,15 @@ package boxoptions
 import (
 	"net/netip"
 
+	"github.com/sagernet/sing-box/constant"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
 )
+
+const LanternAutoTag = "lantern-auto"
 
 var (
 	BoxOptions = O.Options{
@@ -67,15 +71,14 @@ var (
 					Address: badoption.Listable[netip.Prefix]{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
-					AutoRoute:              true,
-					StrictRoute:            true,
-					EndpointIndependentNat: true,
-					Stack:                  "system",
+					AutoRoute:   true,
+					StrictRoute: true,
 				},
 			},
 		},
 		Endpoints: BaseEndpoints,
-		Outbounds: BaseOutbounds,
+		// use direct as the default outbound for URLTest so sing-box starts
+		Outbounds: append(BaseOutbounds, URLTestOutbound([]string{"direct"})),
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []O.Rule{
@@ -109,40 +112,11 @@ var (
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{
 							Inbound: badoption.Listable[string]{"tun-in"},
-							Domain:  badoption.Listable[string]{"api.iantem.io", "google.com"},
 						},
 						RuleAction: O.RuleAction{
 							Action: C.RuleActionTypeRoute,
 							RouteOptions: O.RouteActionOptions{
-								Outbound: "outline-out",
-							},
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							Protocol: badoption.Listable[string]{"ssh"},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
-							},
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							Inbound: badoption.Listable[string]{"tun-in"},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
+								Outbound: LanternAutoTag,
 							},
 						},
 					},
@@ -169,3 +143,13 @@ var (
 	}
 	BaseEndpoints = []O.Endpoint{}
 )
+
+func URLTestOutbound(tags []string) O.Outbound {
+	return option.Outbound{
+		Type: constant.TypeURLTest,
+		Tag:  LanternAutoTag,
+		Options: &option.URLTestOutboundOptions{
+			Outbounds: tags,
+		},
+	}
+}

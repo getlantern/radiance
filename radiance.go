@@ -63,10 +63,10 @@ type Radiance struct {
 	apiHandler    *api.APIHandler
 
 	//user config is the user config object that contains the device ID and other user data
-	userConfig common.UserInfo
-	logDir     string
-	dataDir    string
-	locale     string
+	userInfo common.UserInfo
+	logDir   string
+	dataDir  string
+	locale   string
 
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
@@ -137,27 +137,27 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
 	}
 
-	userConfig := common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale)
-	u := api.NewUser(k.NewHTTPClient(), userConfig)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userConfig)
+	userInfo := common.NewUserConfig(platformDeviceID, opts.DataDir, opts.Locale)
+	u := api.NewUser(k.NewHTTPClient(), userInfo)
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
 	cOpts := config.Options{
 		PollInterval:     configPollInterval,
 		HTTPClient:       k.NewHTTPClient(),
-		User:             userConfig,
+		User:             userInfo,
 		DataDir:          opts.DataDir,
 		ConfigRespParser: boxservice.UnmarshalConfig,
 		Locale:           opts.Locale,
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-	apiHandler := api.NewAPIHandlerInternal(k.NewHTTPClient(), userConfig)
+	apiHandler := api.NewAPIHandlerInternal(k.NewHTTPClient(), userInfo)
 	return &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
-		userConfig:    userConfig,
+		userInfo:      userInfo,
 		logDir:        opts.LogDir,
 		dataDir:       opts.DataDir,
 		locale:        opts.Locale,
@@ -209,7 +209,7 @@ func (r *Radiance) VPNClient(platIfce libbox.PlatformInterface, enableSplitTunne
 // UserInfo returns the user info object for this client
 // This is the user config object that contains the device ID and other user data
 func (r *Radiance) UserInfo() common.UserInfo {
-	return r.userConfig
+	return r.userInfo
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

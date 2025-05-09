@@ -16,6 +16,8 @@ import (
 
 	C "github.com/getlantern/common"
 
+	"github.com/getlantern/sing-box-extensions/protocol"
+
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
@@ -60,6 +62,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
+		Protocols:      protocol.SupportedProtocols(),
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred
