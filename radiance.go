@@ -20,11 +20,9 @@ import (
 	C "github.com/getlantern/common"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
-	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/app"
-	"github.com/getlantern/radiance/client"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/reporting"
@@ -196,14 +194,6 @@ func (r *Radiance) Close() {
 		}
 	})
 	<-r.stopChan
-}
-
-// VPNClient returns the [client.VPNClient] instance. The client will be initialized with the provided
-// [libbox.PlatformInterface] if has not been initialized yet, or will return the existing client instance.
-// platIfce used to interact with the underlying platform on iOS and Android. On other platforms, it
-// is ignored and can be nil. enableSplitTunnel is the initial state of split tunneling when the service starts.
-func (r *Radiance) VPNClient(platIfce libbox.PlatformInterface, enableSplitTunnel bool) (client.VPNClient, error) {
-	return client.NewVPNClient(r.dataDir, r.logDir, platIfce, enableSplitTunnel)
 }
 
 // UserInfo returns the user info object for this client

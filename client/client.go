@@ -58,10 +58,10 @@ type vpnClient struct {
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
-// the existing instance. logDir is the path where the log file will be written. logDir can be
-// set to "stdout" to write logs to stdout. platIfce is the platform interface used to
+// the existing instance. The client will be initialized with the provided [libbox.PlatformInterface]
+// if has not been initialized yet, or will return the existing client instance. platIfce used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
-// can be nil.
+// can be nil. enableSplitTunnel is the initial state of split tunneling when the service starts.
 func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, enableSplitTunnel bool) (VPNClient, error) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
