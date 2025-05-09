@@ -123,7 +123,7 @@ func (c *proClient) Plans(ctx context.Context) (*protos.PlansResponse, error) {
 	params := map[string]interface{}{
 		"locale": c.UserInfo.Locale(),
 	}
-	err := c.Get(ctx, "/plans-v4", params, &resp)
+	err := c.Get(ctx, "/plans-v5", params, &resp)
 	if err != nil {
 		slog.Error("Error in Plans: %v", "err", err)
 		return nil, err

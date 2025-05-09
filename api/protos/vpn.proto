@@ -18,12 +18,12 @@ message Plan {
 
   message PaymentProviders {
     string name = 1;
-    repeated string logoUrls = 3;
+    repeated string icons = 3;
     map<string, string> data = 4;
   }
   
   message PaymentMethod {
     string method = 1;
-    repeated PaymentProviders providers = 2;
+    PaymentProviders provider = 2;
   }
   
