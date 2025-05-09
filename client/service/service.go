@@ -13,14 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	C "github.com/getlantern/common"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
@@ -34,8 +33,11 @@ import (
 	"github.com/getlantern/sing-box-extensions/protocol"
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
+	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/client/boxoptions"
-	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
 )
 
 var (
@@ -47,35 +49,56 @@ var (
 type BoxService struct {
 	libbox            *libbox.BoxService
 	ctx               context.Context
-	config            atomic.Value
 	platIfce          libbox.PlatformInterface
 	mutRuleSetManager *ruleset.Manager
-	pauseManager      pause.Manager
-	pauseAccess       sync.Mutex
-	pauseTimer        *time.Timer
-	mu                sync.Mutex
-	isRunning         bool
+
+	pauseManager pause.Manager
+	pauseAccess  sync.Mutex
+	pauseTimer   *time.Timer
+
+	options         option.Options
+	optionsAccess   sync.Mutex
+	configPath      string
+	optsFileWatcher *internal.FileWatcher
+
+	activeServer atomic.Value
+
+	mu        sync.Mutex
+	isRunning bool
 }
 
 const CustomSelectorTag = "custom_selector"
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(config, baseDir string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
-	bs := &BoxService{
-		ctx:               newBaseContext(),
-		config:            atomic.Value{},
-		platIfce:          platIfce,
-		mutRuleSetManager: rulesetManager,
-	}
-
-	slog.Info("Creating libbox service with config", slog.String("config", config))
-	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(config))
+func New(options, baseDir, configFilename string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
+	slog.Info("Creating libbox service with config", slog.String("config", options))
+	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(options))
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal options: %w", err)
 	}
 
-	bs.config.Store(opts)
+	bs := &BoxService{
+		ctx:               newBaseContext(),
+		options:           opts,
+		platIfce:          platIfce,
+		mutRuleSetManager: rulesetManager,
+		configPath:        filepath.Join(baseDir, configFilename),
+	}
+	bs.activeServer.Store(Server{})
+
+	// create the config file watcher to reload the options when the config file changes
+	watcher := internal.NewFileWatcher(bs.configPath, func() {
+		err := bs.reloadOptions()
+		if err != nil {
+			slog.Error("Failed to reload options", "error", err)
+		}
+	})
+	if err := watcher.Start(); err != nil {
+		return nil, fmt.Errorf("start config file watcher: %w", err)
+	}
+	bs.optsFileWatcher = watcher
+
 	setupOpts := &libbox.SetupOptions{
 		BasePath:    baseDir,
 		WorkingPath: filepath.Join(baseDir, "data"),
@@ -87,7 +110,6 @@ func New(config, baseDir string, platIfce libbox.PlatformInterface, rulesetManag
 	if err := libbox.Setup(setupOpts); err != nil {
 		return nil, fmt.Errorf("setup libbox: %w", err)
 	}
-
 	return bs, nil
 }
 
@@ -101,8 +123,10 @@ func (bs *BoxService) Start() error {
 	}
 
 	// (re)-initialize the libbox service
-	conf := bs.config.Load().(option.Options)
-	lb, ctx, err := newLibboxService(conf, bs.platIfce)
+	bs.optionsAccess.Lock()
+	options := bs.options
+	bs.optionsAccess.Unlock()
+	lb, ctx, err := newLibboxService(options, bs.platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
@@ -225,19 +249,43 @@ func (bs *BoxService) Ctx() context.Context {
 	return bs.ctx
 }
 
-// OnNewConfig is called when a new configuration is received. It updates the VPN client with the
-// new configuration
-func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
+type Server struct {
+	Name     string
+	Location C.ServerLocation
+	Config   string // option.Outbound
+	Protocol string
+}
+
+// TODO: need to retrieve which outbound is currently being used..
+
+// ActiveServer returns the currently active server.
+// Not Implemented
+func (bs *BoxService) ActiveServer() (Server, error) {
+	return Server{}, common.ErrNotImplemented
+}
+
+// reloadOptions reloads the options from the config file. If boxservice is running, the outbounds
+// and endpoints are updated in the router.
+func (bs *BoxService) reloadOptions() error {
 	// TODO:
 	//		- restart libbox if options change that can't be updated while running (routing, etc)
 	//		- update all options. make sure to include base/default options where needed (DNS)
-	slog.Debug("Received new config")
+	slog.Debug("reloading options")
+	content, err := os.ReadFile(bs.configPath)
+	if err != nil {
+		return fmt.Errorf("read config file: %w", err)
+	}
+	conf, err := UnmarshalConfig(content)
+	if err != nil {
+		return fmt.Errorf("unmarshal config: %w", err)
+	}
 
-	newOpts := newConfig.ConfigResponse.Options
-	currOpts := bs.config.Load().(option.Options)
+	opts := conf.Options
+	bs.optionsAccess.Lock()
+	currOpts := bs.options
 
-	currOpts.Outbounds = append(boxoptions.BaseOutbounds, newOpts.Outbounds...)
-	currOpts.Endpoints = append(boxoptions.BaseEndpoints, newOpts.Endpoints...)
+	currOpts.Outbounds = append(boxoptions.BaseOutbounds, opts.Outbounds...)
+	currOpts.Endpoints = append(boxoptions.BaseEndpoints, opts.Endpoints...)
 
 	// add custom server outbounds/endpoints
 	csm := service.PtrFromContext[CustomServerManager](bs.ctx)
@@ -252,7 +300,8 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 		}
 	}
 
-	bs.config.Store(currOpts)
+	bs.options = currOpts
+	bs.optionsAccess.Unlock()
 
 	bs.mu.Lock()
 	if !bs.isRunning {
@@ -261,7 +310,7 @@ func (bs *BoxService) OnNewConfig(_, newConfig *config.Config) error {
 	}
 	bs.mu.Unlock()
 
-	err := updateOutboundsEndpoints(bs.ctx, newOpts.Outbounds, newOpts.Endpoints)
+	err = updateOutboundsEndpoints(bs.ctx, opts.Outbounds, opts.Endpoints)
 	if err != nil {
 		return fmt.Errorf("update outbounds/endpoints: %w", err)
 	}

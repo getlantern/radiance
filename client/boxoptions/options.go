@@ -7,10 +7,6 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json/badoption"
-
-	exC "github.com/getlantern/sing-box-extensions/constant"
-
-	"github.com/getlantern/radiance/option"
 )
 
 var (
@@ -78,55 +74,8 @@ var (
 				},
 			},
 		},
-		Outbounds: []O.Outbound{
-			{
-				Type:    "direct",
-				Tag:     "direct",
-				Options: &O.DirectOutboundOptions{},
-			},
-			{
-				Type:    "dns",
-				Tag:     "dns-out",
-				Options: &O.DNSOptions{},
-			},
-			{
-				Type: exC.TypeOutline,
-				Tag:  "outline-out",
-				Options: &option.OutboundOutlineOptions{
-					DNSResolvers: []option.DNSEntryConfig{
-						{
-							TLS: &option.TLSEntryConfig{
-								Name:    "dns.google",
-								Address: "8.8.8.8:853",
-							},
-						},
-						{
-							HTTPS: &option.HTTPSEntryConfig{
-								Name: "dns.google",
-							},
-						},
-						{
-							HTTPS: &option.HTTPSEntryConfig{
-								Name:    "cloudflare-dns.com.",
-								Address: "cloudflare.net.",
-							},
-						},
-						{
-							HTTPS: &option.HTTPSEntryConfig{
-								Name:    "doh.dns.sb",
-								Address: "https://doh.dns.sb/dns-query",
-							},
-						},
-						{
-							System: &struct{}{},
-						},
-					},
-					TLS:         []string{"", "split:1", "split:2,20*5", "split:200|disorder:1", "tlsfrag:1"},
-					Domains:     []string{"api.iantem.io", "google.com"},
-					TestTimeout: "10s",
-				},
-			},
-		},
+		Endpoints: BaseEndpoints,
+		Outbounds: BaseOutbounds,
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []O.Rule{
@@ -201,7 +150,6 @@ var (
 			},
 		},
 	}
-
 	BaseOutbounds = []O.Outbound{
 		{
 			Type:    "direct",
@@ -219,6 +167,5 @@ var (
 			Options: &O.StubOptions{},
 		},
 	}
-
 	BaseEndpoints = []O.Endpoint{}
 )
