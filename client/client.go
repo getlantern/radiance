@@ -165,7 +165,7 @@ func (c *vpnClient) StopVPN() error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return errors.New("box did not stop in time")
 	}
-	c.started = false
+	c.running.Store(false)
 	c.setConnectionStatus(false)
 	return err
 }
