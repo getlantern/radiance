@@ -80,7 +80,7 @@ func (m *mockVPNClient) SelectCustomServer(tag string) error {
 func (m *mockVPNClient) RemoveCustomServer(tag string) error {
 	return nil
 }
-func (m *mockVPNClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string) error {
+func (m *mockVPNClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error {
 	return nil
 }
 func (m *mockVPNClient) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {

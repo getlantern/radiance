@@ -176,8 +176,11 @@ func TestServerManagerIntegration(t *testing.T) {
 	parsedURL, _ := url.Parse(srv.URL)
 	port, _ := strconv.Atoi(parsedURL.Port())
 
+	trustingCallback := func(ip string, details []CertDetail) *CertDetail {
+		return &details[0]
+	}
 	t.Run("convert a token into a custom server", func(t *testing.T) {
-		require.NoError(t, manager.AddServerManagerInstance("s1", parsedURL.Hostname(), port, "rootToken"))
+		require.NoError(t, manager.AddServerManagerInstance("s1", parsedURL.Hostname(), port, "rootToken", trustingCallback))
 		customServers, err := manager.ListCustomServers()
 		assert.NoError(t, err)
 		assert.Len(t, customServers, 1)
@@ -189,7 +192,7 @@ func TestServerManagerIntegration(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, inviteToken)
 
-		require.NoError(t, manager.AddServerManagerInstance("s2", parsedURL.Hostname(), port, inviteToken))
+		require.NoError(t, manager.AddServerManagerInstance("s2", parsedURL.Hostname(), port, inviteToken, trustingCallback))
 		customServers, err := manager.ListCustomServers()
 		assert.NoError(t, err)
 		assert.Len(t, customServers, 2)
@@ -198,7 +201,7 @@ func TestServerManagerIntegration(t *testing.T) {
 		t.Run("revoke user access", func(t *testing.T) {
 			require.NoError(t, manager.RevokeServerManagerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
-			require.Error(t, manager.AddServerManagerInstance("s1", parsedURL.Hostname(), port, inviteToken))
+			require.Error(t, manager.AddServerManagerInstance("s1", parsedURL.Hostname(), port, inviteToken, trustingCallback))
 		})
 	})
 

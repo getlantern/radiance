@@ -53,7 +53,7 @@ type VPNClient interface {
 
 	// Lantern Server Manager Integration
 
-	AddServerManagerInstance(tag string, ip string, port int, accessToken string) error
+	AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error
 	InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error)
 	RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error
 }
@@ -205,8 +205,8 @@ func (c *vpnClient) ResumeVPN() {
 
 // Lantern Server Manager Integration
 
-func (c *vpnClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string) error {
-	return c.customServerManager.AddServerManagerInstance(tag, ip, port, accessToken)
+func (c *vpnClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error {
+	return c.customServerManager.AddServerManagerInstance(tag, ip, port, accessToken, callback)
 }
 
 func (c *vpnClient) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
