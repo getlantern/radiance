@@ -177,10 +177,6 @@ func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*
 	// that the sing-box instance adds to it
 	ctx := newBaseContext()
 
-	// TEMP: only use first wg endpoint
-	// TODO: remove this when the config API is updated to only return one endpoint
-	opts.Endpoints = opts.Endpoints[:1]
-
 	conf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal options: %w", err)
