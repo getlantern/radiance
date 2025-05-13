@@ -99,7 +99,7 @@ func (fw *FileWatcher) watchLoop() {
 			if !ok {
 				return
 			}
-			slog.Error("Error watching file:", err)
+			slog.Error("Error watching file:", err.Error())
 		case <-fw.closeC:
 			return
 		}
