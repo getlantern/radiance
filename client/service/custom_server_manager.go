@@ -27,7 +27,7 @@ func NewCustomServerManager(ctx context.Context, dataDir string) *CustomServerMa
 	csm := &CustomServerManager{
 		customServers:         make(map[string]CustomServerInfo),
 		customServersMutex:    new(sync.RWMutex),
-		customServersFilePath: filepath.Join(dataDir, "data", "custom_servers.json"),
+		customServersFilePath: filepath.Join(dataDir, "custom_servers.json"),
 	}
 	csm.SetContext(ctx)
 	return csm

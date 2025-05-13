@@ -98,6 +98,10 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(C.ServerLocation{})
 
+	if err := os.MkdirAll(filepath.Dir(options.DataDir), 0o755); err != nil {
+		slog.Error("creating config directory", "error", err)
+	}
+
 	if err := ch.loadConfig(); err != nil {
 		slog.Error("failed to load config", "error", err)
 	}
@@ -370,11 +374,7 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
 func saveConfig(cfg *Config, path string) error {
-	slog.Debug("Saving config")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		slog.Error("creating config directory", "error", err)
-		return fmt.Errorf("creating config directory: %w", err)
-	}
+	slog.Debug("Saving config", "path", path)
 	// Marshal the config to bytes and write it to the config file.
 	// If the config is nil, we don't write anything.
 	// This is important because we don't want to overwrite the config file with an empty file.

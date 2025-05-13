@@ -32,8 +32,10 @@ func NewFileWatcher(path string, callback func()) *FileWatcher {
 
 func (fw *FileWatcher) Start() error {
 	if !fw.started.CompareAndSwap(false, true) {
+		slog.Debug("File watcher already started")
 		return nil
 	}
+	slog.Debug("Starting file watcher for " + fw.path)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		fw.started.Store(false)

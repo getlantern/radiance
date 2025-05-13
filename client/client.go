@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/client/boxoptions"
 	boxservice "github.com/getlantern/radiance/client/service"
+	"github.com/getlantern/radiance/common"
 )
 
 var (
@@ -67,6 +68,11 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 	defer clientMu.Unlock()
 	if client != nil {
 		return client, nil
+	}
+
+	dataDir, logDir, err := common.SetupDirectories(dataDir, logDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup directories: %w", err)
 	}
 
 	// TODO: We should be fetching the options from the server.

@@ -72,7 +72,7 @@ const CustomSelectorTag = "custom_selector"
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
 func New(options, baseDir, configFilename string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
-	slog.Info("Creating libbox service with config", slog.String("config", options))
+	slog.Info("Creating boxservice", slog.String("options", options))
 	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(options))
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal options: %w", err)
@@ -93,6 +93,7 @@ func New(options, baseDir, configFilename string, platIfce libbox.PlatformInterf
 		if err != nil {
 			slog.Error("Failed to reload options", "error", err)
 		}
+		slog.Debug("Reloaded options")
 	})
 	if err := watcher.Start(); err != nil {
 		return nil, fmt.Errorf("start config file watcher: %w", err)
@@ -101,7 +102,7 @@ func New(options, baseDir, configFilename string, platIfce libbox.PlatformInterf
 
 	setupOpts := &libbox.SetupOptions{
 		BasePath:    baseDir,
-		WorkingPath: filepath.Join(baseDir, "data"),
+		WorkingPath: baseDir,
 		TempPath:    filepath.Join(baseDir, "temp"),
 	}
 	if runtime.GOOS == "android" {
@@ -274,6 +275,10 @@ func (bs *BoxService) reloadOptions() error {
 	//		- update all options. make sure to include base/default options where needed (DNS)
 	slog.Debug("reloading options")
 	content, err := os.ReadFile(bs.configPath)
+	if os.IsNotExist(err) {
+		slog.Debug("config file not found, skipping reload")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read config file: %w", err)
 	}
@@ -312,6 +317,7 @@ func (bs *BoxService) reloadOptions() error {
 	}
 	bs.mu.Unlock()
 
+	slog.Debug("updating outbounds/endpoints")
 	err = updateOutboundsEndpoints(bs.ctx, opts.Outbounds, opts.Endpoints)
 	if err != nil {
 		return fmt.Errorf("update outbounds/endpoints: %w", err)
@@ -389,6 +395,7 @@ func updateOutbounds(
 	outbounds []option.Outbound,
 	excludeTags []string,
 ) error {
+	slog.Debug("Updating outbounds", slog.Any("outbounds", outbounds))
 	newItems, errs := filterItems(outbounds, excludeTags, func(it option.Outbound) string {
 		return it.Tag
 	})
@@ -424,6 +431,7 @@ func updateEndpoints(
 	endpoints []option.Endpoint,
 	excludeTags []string,
 ) error {
+	slog.Debug("Updating endpoints", slog.Any("endpoints", endpoints))
 	// filter endpoints that are missing a tag or are excluded
 	newItems, errs := filterItems(endpoints, excludeTags, func(it option.Endpoint) string {
 		return it.Tag
