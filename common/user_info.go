@@ -8,8 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/getlantern/radiance/api/protos"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/getlantern/radiance/api/protos"
 )
 
 // UserInfo is an interface that defines the methods for user configuration
