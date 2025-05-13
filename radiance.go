@@ -292,8 +292,17 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
 	}
+	lz := &lazyDialingRoundTripper{
+		smartTransportMu: sync.Mutex{},
+		logWriter:        logWriter,
+		domain:           domain,
+	}
+	if trans != nil {
+		lz.smartTransport = trans
+	}
+
 	httpClient := &http.Client{
-		Transport: trans,
+		Transport: lz,
 	}
 	return fronted.NewFronted(
 		fronted.WithPanicListener(panicListener),
@@ -301,4 +310,36 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
 	), nil
+}
+
+// This is a lazy RoundTripper that allows radiance to start without an error
+// when it's offline.
+type lazyDialingRoundTripper struct {
+	smartTransport   http.RoundTripper
+	smartTransportMu sync.Mutex
+
+	logWriter io.Writer
+	domain    string
+}
+
+// Make sure lazyDialingRoundTripper implements http.RoundTripper
+var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
+
+func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	lz.smartTransportMu.Lock()
+
+	if lz.smartTransport == nil {
+		slog.Info("Smart transport is nil")
+		var err error
+		lz.smartTransport, err = kindling.NewSmartHTTPTransport(lz.logWriter, lz.domain)
+		if err != nil {
+			slog.Info("Error creating smart transport", "error", err)
+			lz.smartTransportMu.Unlock()
+			// This typically just means we're offline
+			return nil, fmt.Errorf("could not create smart transport -- offline? %v", err)
+		}
+	}
+
+	lz.smartTransportMu.Unlock()
+	return lz.smartTransport.RoundTrip(req)
 }
