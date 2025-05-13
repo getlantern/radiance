@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"golang.org/x/exp/slog"
+	"log/slog"
 )
 
 // FileWatcher watches a file for changes and calls a callback function when the file is modified.
