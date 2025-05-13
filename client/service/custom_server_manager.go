@@ -28,9 +28,9 @@ type CustomServerManager struct {
 
 func NewCustomServerManager(ctx context.Context, dataDir string) *CustomServerManager {
 	csm := &CustomServerManager{
-		customServers:         make(map[string]CustomServerInfo),
-		customServersMutex:    new(sync.RWMutex),
-		customServersFilePath: filepath.Join(dataDir, "custom_servers.json"),
+		customServers:             make(map[string]CustomServerInfo),
+		customServersMutex:        new(sync.RWMutex),
+		customServersFilePath:     filepath.Join(dataDir, "custom_servers.json"),
 		trustedServerFingerprints: filepath.Join(dataDir, "data", "trusted_server_fingerprints.json"),
 	}
 	csm.SetContext(ctx)
@@ -293,7 +293,7 @@ func (m *CustomServerManager) newSelectorOutbound(outboundManager adapter.Outbou
 }
 func (m *CustomServerManager) getClientForTrustedFingerprint(ip string, port int, trustFingerprintCallback TrustFingerprintCallback) (*http.Client, error) {
 	// get server fingerprints via TLS
-	details, err := getServerFingerprints(fmt.Sprintf("%s:%d", ip, port))
+	details, err := getServerFingerprints(ip, port)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get server fingerprints: %w", err)
 	}

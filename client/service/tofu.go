@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -89,14 +88,10 @@ func getTOFUClient(fingerprint string) (*http.Client, error) {
 }
 
 // getServerFingerprints connects to an untrusted server, and get cert information about it
-// the addr must be a valid address, including port
-func getServerFingerprints(addr string) ([]CertDetail, error) {
+func getServerFingerprints(host string, port int) ([]CertDetail, error) {
 	var ret []CertDetail
 
-	// If the port isn't specified, assume https standard port
-	if !strings.Contains(addr, ":") {
-		addr = addr + ":443"
-	}
+	addr := fmt.Sprintf("%s:%d", host, port)
 	slog.Debug("Performing TOFU check", "addr", addr)
 
 	config := &tls.Config{
@@ -131,15 +126,12 @@ type TrustFingerprintCallback func(ip string, details []CertDetail) *CertDetail
 
 func readTrustedServerFingerprints(fingerprintsJSON string) (map[string]string, error) {
 	fingerprints := map[string]string{}
-	if _, err := os.Stat(fingerprintsJSON); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fingerprints, nil
-		}
-		return nil, fmt.Errorf("failed to check trusted server fingerprints: %w", err)
-	}
 
 	data, err := os.ReadFile(fingerprintsJSON)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fingerprints, nil
+		}
 		return nil, fmt.Errorf("failed to read trusted server fingerprints: %w", err)
 	}
 
@@ -159,7 +151,7 @@ func writeTrustedServerFingerprints(fingerprintsJSON string, fingerprints map[st
 		return err
 	}
 
-	if err := os.WriteFile(fingerprintsJSON, data, 0644); err != nil {
+	if err := os.WriteFile(fingerprintsJSON, data, 0600); err != nil {
 		return fmt.Errorf("failed to write trusted server fingerprints: %w", err)
 	}
 	return nil
