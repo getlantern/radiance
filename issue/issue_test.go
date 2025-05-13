@@ -1,7 +1,6 @@
 package issue
 
 import (
-	"os"
 	"testing"
 
 	"github.com/getlantern/fronted"
@@ -25,7 +24,7 @@ func TestSendReport(t *testing.T) {
 	reporter, err := NewIssueReporter(k.NewHTTPClient(), u, userConfig)
 	require.NoError(t, err)
 	// Grab a temporary directory
-	dir, err := os.MkdirTemp("", "lantern")
+	dir := t.TempDir()
 	require.NoError(t, err)
 	err = reporter.Report(
 		dir,
