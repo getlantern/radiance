@@ -25,15 +25,11 @@ import (
 
 	exO "github.com/getlantern/sing-box-extensions/option"
 
+	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 )
 
-const (
-	configFileName = "proxy.conf"
-)
-
 var (
-
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when if there was an error
 	// fetching the configuration.
 	ErrFetchingConfig = errors.New("failed to fetch config")
@@ -83,7 +79,7 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
-	configPath := filepath.Join(options.DataDir, configFileName)
+	configPath := filepath.Join(options.DataDir, app.ConfigFileName)
 	opts := common.WebClientOptions{
 		BaseURL:    "",
 		HttpClient: options.HTTPClient,
@@ -101,6 +97,10 @@ func NewConfigHandler(options Options) *ConfigHandler {
 
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(C.ServerLocation{})
+
+	if err := os.MkdirAll(filepath.Dir(options.DataDir), 0o755); err != nil {
+		slog.Error("creating config directory", "error", err)
+	}
 
 	if err := ch.loadConfig(); err != nil {
 		slog.Error("failed to load config", "error", err)
@@ -374,11 +374,7 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
 func saveConfig(cfg *Config, path string) error {
-	slog.Debug("Saving config")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		slog.Error("creating config directory", "error", err)
-		return fmt.Errorf("creating config directory: %w", err)
-	}
+	slog.Debug("Saving config", "path", path)
 	// Marshal the config to bytes and write it to the config file.
 	// If the config is nil, we don't write anything.
 	// This is important because we don't want to overwrite the config file with an empty file.

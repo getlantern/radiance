@@ -17,8 +17,8 @@ var (
 	BoxOptions = O.Options{
 		Log: &O.LogOptions{
 			Disabled:     false,
-			Level:        "trace",
-			Output:       "lantern.log",
+			Level:        "debug",
+			Output:       "lantern-box.log",
 			Timestamp:    true,
 			DisableColor: true,
 		},
@@ -76,8 +76,8 @@ var (
 				},
 			},
 		},
-		// use direct as the default outbound for URLTest so sing-box starts
-		Outbounds: append(BaseOutbounds, URLTestOutbound([]string{"direct"})),
+		Endpoints: BaseEndpoints,
+		Outbounds: BaseOutbounds,
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules: []O.Rule{
@@ -139,6 +139,8 @@ var (
 			Tag:     "block",
 			Options: &O.StubOptions{},
 		},
+		// use direct as the default outbound for URLTest so sing-box starts
+		URLTestOutbound([]string{"direct"}),
 	}
 	BaseEndpoints = []O.Endpoint{}
 )
