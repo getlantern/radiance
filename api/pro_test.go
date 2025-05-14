@@ -49,6 +49,7 @@ func TestPlans(t *testing.T) {
 	resp, error := proServer.Plans(context.Background())
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
+	assert.NotNil(t, resp.Plans)
 }
 
 func commonConfig() common.UserInfo {
