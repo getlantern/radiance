@@ -26,9 +26,9 @@ type UserDataResponse struct {
 }
 
 type SubscriptionRequest struct {
-	Email   string `json:"email" validate:"required"`
-	Name    string `json:"name" validate:"required"`
-	PriceId string `json:"priceId" validate:"required"`
+	Email  string `json:"email" validate:"required"`
+	Name   string `json:"name" validate:"required"`
+	PlanId string `json:"planId" validate:"required"`
 }
 
 type SubscriptionResponse struct {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 // Pro represents pro server apis
 type Pro struct {
 	proClient ProClient
+	userInfo  common.UserInfo
 }
 
 // New returns the object handling anything pro-server related
@@ -44,6 +46,7 @@ func NewPro(httpClient *http.Client, userInfo common.UserInfo) *Pro {
 		},
 	}
 	return &Pro{
+		userInfo: userInfo,
 		proClient: &proClient{
 			WebClient: common.NewWebClient(&opts),
 			UserInfo:  userInfo,
@@ -94,4 +97,19 @@ func (u *Pro) Plans(ctx context.Context) (*protos.PlansResponse, error) {
 		return nil, fmt.Errorf("error in Plans: %s", resp.BaseResponse.Error)
 	}
 	return resp, nil
+}
+
+func (u *Pro) StripeBilingPortalUrl() (*protos.SubscriptionPaymentRedirectResponse, error) {
+	portalUrl, err := url.Parse(fmt.Sprintf("%s/%s", common.ProServerUrl, "stripe-billing-portal"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+	query := portalUrl.Query()
+	query.Set("referer", "https://lantern.io/")
+	query.Set("userId", strconv.FormatInt(u.userInfo.LegacyID(), 10))
+	portalUrl.RawQuery = query.Encode()
+
+	return &protos.SubscriptionPaymentRedirectResponse{
+		Redirect: portalUrl.String(),
+	}, nil
 }
