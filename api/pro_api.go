@@ -106,7 +106,6 @@ func (c *proClient) StripeSubscription(ctx context.Context, data *protos.Subscri
 	var resp *protos.SubscriptionResponse
 	mapping := map[string]any{
 		"email":  data.Email,
-		"name":   data.Name,
 		"planId": data.PlanId,
 	}
 	err := c.Post(ctx, "/stripe-subscription", mapping, &resp)

@@ -36,7 +36,6 @@ func TestStripeSubscription(t *testing.T) {
 	proServer := NewPro(&http.Client{}, commonConfig())
 	body := &protos.SubscriptionRequest{
 		Email:  "test@getlantern.org",
-		Name:   "Test User",
 		PlanId: "1y-usd",
 	}
 	resp, error := proServer.StripeSubscription(context.Background(), body)
