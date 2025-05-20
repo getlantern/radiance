@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -49,6 +51,17 @@ func TestPlans(t *testing.T) {
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.Plans)
+}
+
+func TestGoogleSubscription(t *testing.T) {
+	var resp = "{\"status\":\"ok\",\"subscriptionId\":\"pefnihpbnllffpggfoldejgf.AO-J1OxJq7zbGLPRXDWsglwAIaQZCkrIL3XQK7iMJsl_2aR6OQ5tDGgHbyYwEjUkxEbiTM-KOnUTELLC2t1WKmdKAikBx_SA_jhPP5zblcPfsHSYb-ZQDIM\"}"
+	var ack protos.AcknowledgmentResponse
+	if err := json.Unmarshal([]byte(resp), &ack); err != nil {
+		fmt.Println("Error unmarshalling JSON:", err)
+		return
+	}
+	fmt.Println("Status:", ack.Status)
+
 }
 
 func commonConfig() common.UserInfo {

@@ -182,8 +182,12 @@ func (c *webClient) Post(ctx context.Context, path string, params map[string]any
 
 	body := sanitizeResponseBody(resp.Body())
 	slog.Info("Post response", "body", string(body), "url", resp.Request.URL)
+	jsonErr := json.Unmarshal(body, target)
+	if jsonErr != nil {
+		return fmt.Errorf("error unmarshalling response: %w", err)
+	}
+	return nil
 
-	return json.Unmarshal(body, target)
 }
 
 func convertToStringMap(params map[string]interface{}) map[string]string {

@@ -113,3 +113,23 @@ func (u *Pro) StripeBilingPortalUrl() (*protos.SubscriptionPaymentRedirectRespon
 		Redirect: portalUrl.String(),
 	}, nil
 }
+
+// GoogleSubscription creates a new subscription using Google Play SDK
+// For Android only
+func (u *Pro) GoogleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error) {
+	resp, err := u.proClient.GoogleSubscription(ctx, purchaseToken, planId)
+	if err != nil {
+		slog.Error("Error in GoogleSubscription", "error", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (u *Pro) AppleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error) {
+	resp, err := u.proClient.AppleSubscription(ctx, purchaseToken, planId)
+	if err != nil {
+		slog.Error("error in apple subscription", "error", err)
+		return nil, err
+	}
+	return resp, nil
+}

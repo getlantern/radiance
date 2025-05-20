@@ -41,3 +41,8 @@ type PlansResponse struct {
 	Providers     map[string][]*PaymentMethod `json:"providers"`
 	Plans         []*Plan                     `json:"plans"`
 }
+
+type AcknowledgmentResponse struct {
+	Status         string `json:"status"`
+	SubscriptionId string `json:"subscriptionId"`
+}
