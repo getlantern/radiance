@@ -99,7 +99,7 @@ func (u *Pro) Plans(ctx context.Context) (*protos.PlansResponse, error) {
 	return resp, nil
 }
 
-func (u *Pro) StripeBilingPortalUrl() (*protos.SubscriptionPaymentRedirectResponse, error) {
+func (u *Pro) StripeBillingPortalUrl() (*protos.SubscriptionPaymentRedirectResponse, error) {
 	portalUrl, err := url.Parse(fmt.Sprintf("%s/%s", common.ProServerUrl, "stripe-billing-portal"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL: %w", err)

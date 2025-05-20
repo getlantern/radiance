@@ -149,7 +149,6 @@ func (c *webClient) Get(ctx context.Context, path string, params map[string]any,
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
-
 	if resp.StatusCode() != http.StatusOK {
 		return fmt.Errorf("unexpected status code %v body %v url %v", resp.StatusCode(), string(resp.Body()), resp.Request.URL)
 	}
@@ -184,10 +183,9 @@ func (c *webClient) Post(ctx context.Context, path string, params map[string]any
 	slog.Info("Post response", "body", string(body), "url", resp.Request.URL)
 	jsonErr := json.Unmarshal(body, target)
 	if jsonErr != nil {
-		return fmt.Errorf("error unmarshalling response: %w", err)
+		return fmt.Errorf("error unmarshalling response: %w", jsonErr)
 	}
 	return nil
-
 }
 
 func convertToStringMap(params map[string]interface{}) map[string]string {

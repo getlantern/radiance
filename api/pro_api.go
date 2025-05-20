@@ -86,7 +86,6 @@ func (c *proClient) UserData(ctx context.Context) (*protos.UserDataResponse, err
 // this is is used only in desktop app
 func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
 	var resp *protos.SubscriptionPaymentRedirectResponse
-
 	err := c.Get(ctx, "/subscription-payment-redirect", map[string]any{
 		"provider":         data.Provider,
 		"plan":             data.Plan,
@@ -98,7 +97,6 @@ func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *proto
 		slog.Error("Error in SubscriptionPaymentRedirect: %v", "err", err)
 		return nil, err
 	}
-	slog.Error("SubscriptionPaymentRedirect response", "resp", resp)
 	return resp, nil
 }
 
@@ -106,7 +104,6 @@ func (c *proClient) SubscriptionPaymentRedirect(ctx context.Context, data *proto
 // and return the subscription data
 // this is used only in android app
 func (c *proClient) StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error) {
-	slog.Debug("StripeSubscription api", "data", data)
 	var resp *protos.SubscriptionResponse
 	mapping := map[string]any{
 		"email":  data.Email,
