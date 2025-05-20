@@ -268,7 +268,7 @@ func newLog(logPath string) (io.Writer, error) {
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logWriter := io.MultiWriter(os.Stdout, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
+	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelDebug,
 	}))
