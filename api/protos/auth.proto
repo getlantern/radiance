@@ -158,6 +158,7 @@ message LogoutRequest {
   string deviceId = 2;
   int64 legacyUserID = 3;
   string legacyToken = 4;
+  string token = 5;
 }
 
 // API
