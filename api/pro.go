@@ -86,8 +86,8 @@ func (u *Pro) StripeSubscription(ctx context.Context, data *protos.SubscriptionR
 }
 
 // Plans returns the list of plans
-func (u *Pro) Plans(ctx context.Context) (*protos.PlansResponse, error) {
-	resp, err := u.proClient.Plans(ctx)
+func (u *Pro) Plans(ctx context.Context, channel string) (*protos.PlansResponse, error) {
+	resp, err := u.proClient.Plans(ctx, channel)
 	if err != nil {
 		slog.Error("Error in Plans", "error", err)
 		return nil, err

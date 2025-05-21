@@ -45,7 +45,7 @@ func TestStripeSubscription(t *testing.T) {
 
 func TestPlans(t *testing.T) {
 	proServer := NewPro(&http.Client{}, commonConfig())
-	resp, error := proServer.Plans(context.Background())
+	resp, error := proServer.Plans(context.Background(), "store")
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.Plans)

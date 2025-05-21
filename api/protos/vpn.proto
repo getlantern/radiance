@@ -20,6 +20,8 @@ message Plan {
     string name = 1;
     repeated string icons = 3;
     map<string, string> data = 4;
+    bool supports_subscription = 2 [json_name = "supports-subscription"];
+
   }
   
   message PaymentMethod {

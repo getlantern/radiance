@@ -22,7 +22,7 @@ type ProClient interface {
 	//Payment methods
 	SubscriptionPaymentRedirect(ctx context.Context, data *protos.SubscriptionPaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error)
 	StripeSubscription(ctx context.Context, data *protos.SubscriptionRequest) (*protos.SubscriptionResponse, error)
-	Plans(ctx context.Context) (*protos.PlansResponse, error)
+	Plans(ctx context.Context, channel string) (*protos.PlansResponse, error)
 	GoogleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error)
 	AppleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error)
 	// User methods
@@ -118,10 +118,11 @@ func (c *proClient) StripeSubscription(ctx context.Context, data *protos.Subscri
 }
 
 // Plans is used to get the list of plans
-func (c *proClient) Plans(ctx context.Context) (*protos.PlansResponse, error) {
+func (c *proClient) Plans(ctx context.Context, channel string) (*protos.PlansResponse, error) {
 	var resp *protos.PlansResponse
 	params := map[string]interface{}{
-		"locale": c.UserInfo.Locale(),
+		"locale":              c.UserInfo.Locale(),
+		"distributionChannel": channel,
 	}
 	err := c.Get(ctx, "/plans-v5", params, &resp)
 	if err != nil {

@@ -139,6 +139,7 @@ message DeleteUserRequest {
   bool permanent = 2;
   bytes proof = 3;
   string deviceId = 4;
+  string token = 5;
 }
 
 // POST /users/recovery/validate/email
