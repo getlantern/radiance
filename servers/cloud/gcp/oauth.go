@@ -55,7 +55,7 @@ func RunOauth(openBrowser func(string) error) *common.OauthSession {
 }
 
 func startOauthFlow(ctx context.Context, openBrowser func(string) error, resultChan chan<- common.OauthResult) {
-	listener, listenErr := net.Listen("tcp", "127.0.0.0:0") // Listen on any available port
+	listener, listenErr := net.Listen("tcp", "127.0.0.1:0") // Listen on any available port
 	if listenErr != nil {
 		resultChan <- common.OauthResult{Err: fmt.Errorf("failed to listen on port: %w", listenErr)}
 		return

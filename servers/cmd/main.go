@@ -246,7 +246,7 @@ func testGCP() {
 		ip = sip.Address
 	}
 	if sc, err := common.InstallServer(ip, privateSSHKey, "ubuntu"); err != nil {
-		slog.Error("Failed to create SSH key", "err", err)
+		slog.Error("Failed to install server", "err", err)
 		return
 	} else {
 		slog.Debug("Installed server on instance", "instance", instance, "conf", sc)
