@@ -343,24 +343,3 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	lz.smartTransportMu.Unlock()
 	return lz.smartTransport.RoundTrip(req)
 }
-
-// AddServerManagerInstance will fetch VPN connection information from the server manager instance and add it to the VPN client as a custom server
-// The server manager instance is identified by the tag, ip, port and accessToken.
-// The accessToken is used to authenticate the connection to the server manager instance.
-// The callback is used to verify the server manager instance's certificate fingerprint.
-// If we don't have the fingerprint, we will use the default callback which will ask the user to trust the fingerprint.
-func (r *Radiance) AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error {
-	return r.VPNClient.AddServerManagerInstance(tag, ip, port, accessToken, callback)
-}
-
-// InviteToServerManagerInstance will invite another user (identified by inviteName) to the server manager instance and return the token that can be used to connect to the server manager instance
-// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
-func (r *Radiance) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
-	return r.VPNClient.InviteToServerManagerInstance(ip, port, accessToken, inviteName)
-}
-
-// RevokeServerManagerInvite will revoke an invite to the server manager instance
-// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
-func (r *Radiance) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
-	return r.VPNClient.RevokeServerManagerInvite(ip, port, accessToken, inviteName)
-}

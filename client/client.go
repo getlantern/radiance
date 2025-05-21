@@ -208,14 +208,23 @@ func (c *vpnClient) ResumeVPN() {
 
 // Lantern Server Manager Integration
 
+// AddServerManagerInstance will fetch VPN connection information from the server manager instance and add it to the VPN client as a custom server
+// The server manager instance is identified by the tag, ip, port and accessToken.
+// The accessToken is used to authenticate the connection to the server manager instance.
+// The callback is used to verify the server manager instance's certificate fingerprint.
+// If we don't have the fingerprint, we will use the default callback which will ask the user to trust the fingerprint.
 func (c *vpnClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error {
 	return c.customServerManager.AddServerManagerInstance(tag, ip, port, accessToken, callback)
 }
 
+// InviteToServerManagerInstance will invite another user (identified by inviteName) to the server manager instance and return the token that can be used to connect to the server manager instance
+// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
 func (c *vpnClient) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
 	return c.customServerManager.InviteToServerManagerInstance(ip, port, accessToken, inviteName)
 }
 
+// RevokeServerManagerInvite will revoke an invite to the server manager instance
+// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
 func (c *vpnClient) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
 	return c.customServerManager.RevokeServerManagerInvite(ip, port, accessToken, inviteName)
 }
@@ -231,7 +240,6 @@ func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
 	}
 	return &activeServer, nil
 }
-
 
 func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
 	return c.customServerManager.AddCustomServer(cfg)
