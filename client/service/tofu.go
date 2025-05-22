@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"time"
 )
@@ -146,9 +145,6 @@ func writeTrustedServerFingerprints(fingerprintsJSON string, fingerprints map[st
 	data, err := json.Marshal(fingerprints)
 	if err != nil {
 		return fmt.Errorf("failed to marshal trusted server fingerprints: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(fingerprintsJSON), 0755); err != nil {
-		return err
 	}
 
 	if err := os.WriteFile(fingerprintsJSON, data, 0600); err != nil {

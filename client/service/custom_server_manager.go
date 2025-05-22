@@ -31,7 +31,7 @@ func NewCustomServerManager(ctx context.Context, dataDir string) *CustomServerMa
 		customServers:             make(map[string]CustomServerInfo),
 		customServersMutex:        new(sync.RWMutex),
 		customServersFilePath:     filepath.Join(dataDir, "custom_servers.json"),
-		trustedServerFingerprints: filepath.Join(dataDir, "data", "trusted_server_fingerprints.json"),
+		trustedServerFingerprints: filepath.Join(dataDir, "trusted_server_fingerprints.json"),
 	}
 	csm.SetContext(ctx)
 	return csm
