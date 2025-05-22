@@ -133,3 +133,12 @@ func (u *Pro) AppleSubscription(ctx context.Context, purchaseToken, planId strin
 	}
 	return resp, nil
 }
+
+func (u *Pro) PaymentRedirect(ctx context.Context, data *protos.PaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	resp, err := u.proClient.PaymentRedirect(ctx, data)
+	if err != nil {
+		slog.Error("Error in PaymentRedirect", "error", err)
+		return nil, err
+	}
+	return resp, nil
+}

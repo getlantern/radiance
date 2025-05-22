@@ -25,6 +25,8 @@ type ProClient interface {
 	Plans(ctx context.Context, channel string) (*protos.PlansResponse, error)
 	GoogleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error)
 	AppleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error)
+	PaymentRedirect(ctx context.Context, req *protos.PaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error)
+
 	// User methods
 	CreateUser(ctx context.Context) (*protos.UserDataResponse, error)
 	UserData(ctx context.Context) (*protos.UserDataResponse, error)
@@ -66,11 +68,13 @@ func (c *proClient) UserData(ctx context.Context) (*protos.UserDataResponse, err
 		slog.Error("", "err", err)
 		return nil, err
 	}
+	fmt.Println("UserData response: ", resp)
 	login := &protos.LoginResponse{
 		LegacyID:       resp.LoginResponse_UserData.UserId,
 		LegacyToken:    resp.LoginResponse_UserData.Token,
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
+	fmt.Println("UserData login: ", login)
 	/// Write user data to file
 	err = c.UserInfo.Save(login)
 	if err != nil {
@@ -161,6 +165,21 @@ func (c *proClient) AppleSubscription(ctx context.Context, purchaseToken, planId
 	err := c.Post(ctx, "/purchase-apple-subscription", mapping, &resp)
 	if err != nil {
 		slog.Error("error in apple: %v", "err", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (c *proClient) PaymentRedirect(ctx context.Context, req *protos.PaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	var resp *protos.SubscriptionPaymentRedirectResponse
+	mapping := map[string]any{
+		"provider":   req.Provider,
+		"plan":       req.Plan,
+		"deviceName": req.DeviceName,
+		"email":      req.Email,
+	}
+	err := c.Get(ctx, "/payment-redirect", mapping, &resp)
+	if err != nil {
 		return nil, err
 	}
 	return resp, nil

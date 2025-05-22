@@ -20,7 +20,7 @@ message Plan {
     string name = 1;
     repeated string icons = 3;
     map<string, string> data = 4;
-    bool supports_subscription = 2 [json_name = "supports-subscription"];
+    bool supportsSubscription = 2 [json_name = "supportsSubscription"];
 
   }
   
@@ -30,3 +30,10 @@ message Plan {
   }
   
 
+
+message PaymentRedirectRequest {
+  string plan = 1;
+  string provider = 2;
+  string email = 4;
+  string deviceName = 5;
+}
