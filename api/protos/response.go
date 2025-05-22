@@ -26,9 +26,8 @@ type UserDataResponse struct {
 }
 
 type SubscriptionRequest struct {
-	Email   string `json:"email" validate:"required"`
-	Name    string `json:"name" validate:"required"`
-	PriceId string `json:"priceId" validate:"required"`
+	Email  string `json:"email" validate:"required"`
+	PlanId string `json:"planId" validate:"required"`
 }
 
 type SubscriptionResponse struct {
@@ -41,4 +40,9 @@ type PlansResponse struct {
 	*BaseResponse `json:",inline"`
 	Providers     map[string][]*PaymentMethod `json:"providers"`
 	Plans         []*Plan                     `json:"plans"`
+}
+
+type AcknowledgmentResponse struct {
+	Status         string `json:"status"`
+	SubscriptionId string `json:"subscriptionId"`
 }

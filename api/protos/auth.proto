@@ -80,6 +80,20 @@ message LoginResponse {
     repeated string invitees = 17;
     repeated Device devices = 18;
     bool yinbiEnabled = 19;
+  message SubscriptionData {
+    string              planID           =  1;
+    string              stripeCustomerID =  2;
+    string              startAt          =  3;
+    string              cancelledAt      =  4;
+    bool                autoRenew        =  5;
+    string              subscriptionID   =  6;
+    string              status           =  7;
+    string              provider         =  8;
+    string              createdAt        =  9;
+    string              endAt            = 10;
+  }
+  SubscriptionData subscriptionData = 20;
+
   }
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login
@@ -125,6 +139,7 @@ message DeleteUserRequest {
   bool permanent = 2;
   bytes proof = 3;
   string deviceId = 4;
+  string token = 5;
 }
 
 // POST /users/recovery/validate/email
@@ -144,6 +159,7 @@ message LogoutRequest {
   string deviceId = 2;
   int64 legacyUserID = 3;
   string legacyToken = 4;
+  string token = 5;
 }
 
 // API

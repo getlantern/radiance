@@ -35,9 +35,8 @@ func TestCreateUser(t *testing.T) {
 func TestStripeSubscription(t *testing.T) {
 	proServer := NewPro(&http.Client{}, commonConfig())
 	body := &protos.SubscriptionRequest{
-		Email:   "test@getlantern.org",
-		Name:    "Test User",
-		PriceId: "price_1RCg464XJ6zbDKY5T6kqbMC6",
+		Email:  "test@getlantern.org",
+		PlanId: "1y-usd-10",
 	}
 	resp, error := proServer.StripeSubscription(context.Background(), body)
 	assert.NoError(t, error)
@@ -46,7 +45,7 @@ func TestStripeSubscription(t *testing.T) {
 
 func TestPlans(t *testing.T) {
 	proServer := NewPro(&http.Client{}, commonConfig())
-	resp, error := proServer.Plans(context.Background())
+	resp, error := proServer.Plans(context.Background(), "store")
 	assert.NoError(t, error)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.Plans)

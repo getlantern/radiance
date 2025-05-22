@@ -54,7 +54,7 @@ type User struct {
 	userData   *protos.LoginResponse
 	deviceId   string
 	authClient AuthClient
-	userConfig common.UserInfo
+	userInfo   common.UserInfo
 }
 
 // NewUser returns the object handling anything user-auth related
@@ -75,7 +75,7 @@ func NewUser(httpClient *http.Client, userInfo common.UserInfo) *User {
 		salt:       salt,
 		userData:   userData,
 		deviceId:   userInfo.DeviceID(),
-		userConfig: userInfo,
+		userInfo:   userInfo,
 	}
 }
 
@@ -112,7 +112,7 @@ func (u *User) SignUp(ctx context.Context, email, password string) error {
 	salt, err := u.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		u.salt = salt
-		return u.userConfig.WriteSalt(salt)
+		return u.userInfo.WriteSalt(salt)
 	}
 
 	return err
@@ -151,7 +151,7 @@ func (u *User) getSalt(ctx context.Context, email string) ([]byte, error) {
 		return nil, ErrNoSalt
 	}
 	u.salt = resp.Salt
-	if err := u.userConfig.WriteSalt(resp.Salt); err != nil {
+	if err := u.userInfo.WriteSalt(resp.Salt); err != nil {
 		return nil, err
 	}
 	return resp.Salt, nil
@@ -165,19 +165,19 @@ func (u *User) Login(ctx context.Context, email string, password string, deviceI
 	}
 	resp, err := u.authClient.Login(ctx, email, password, deviceId, salt)
 	if err == nil {
-		u.userConfig.Save(resp)
+		u.userInfo.Save(resp)
 		u.userData = resp
 	}
 	return err
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
-func (u *User) Logout(ctx context.Context) error {
+func (u *User) Logout(ctx context.Context, email string) error {
 	return u.authClient.SignOut(ctx, &protos.LogoutRequest{
-		Email:        u.userData.Id,
-		DeviceId:     u.deviceId,
-		LegacyUserID: u.userData.LegacyID,
-		LegacyToken:  u.userData.LegacyToken,
+		Email:        email,
+		DeviceId:     u.userInfo.DeviceID(),
+		LegacyUserID: u.userInfo.LegacyID(),
+		LegacyToken:  u.userInfo.LegacyToken(),
 	})
 }
 
@@ -211,7 +211,7 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 		NewVerifier: verifierKey.Bytes(),
 	})
 	if err == nil {
-		err = u.userConfig.WriteSalt(newSalt)
+		err = u.userInfo.WriteSalt(newSalt)
 	}
 	return err
 }
@@ -325,11 +325,11 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 	}); err != nil {
 		return err
 	}
-	if err := u.userConfig.WriteSalt(newSalt); err != nil {
+	if err := u.userInfo.WriteSalt(newSalt); err != nil {
 		return err
 	}
 
-	if err := u.userConfig.Save(u.userData); err != nil {
+	if err := u.userInfo.Save(u.userData); err != nil {
 		return err
 	}
 
@@ -404,7 +404,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 	}
 
 	u.userData = nil
-	return u.userConfig.Save(nil)
+	return u.userInfo.Save(nil)
 }
 
 // OAuthLogin initiates the OAuth login process for the specified provider.
@@ -414,9 +414,9 @@ func (u *User) OAuthLoginUrl(ctx context.Context, provider string) (*protos.Subs
 		return nil, fmt.Errorf("failed to parse URL: %w", err)
 	}
 	query := loginUrl.Query()
-	query.Set("deviceId", u.userConfig.DeviceID())
-	query.Set("userId", strconv.FormatInt(u.userConfig.LegacyID(), 10))
-	query.Set("proToken", u.userConfig.LegacyToken())
+	query.Set("deviceId", u.userInfo.DeviceID())
+	query.Set("userId", strconv.FormatInt(u.userInfo.LegacyID(), 10))
+	query.Set("proToken", u.userInfo.LegacyToken())
 	loginUrl.RawQuery = query.Encode()
 
 	return &protos.SubscriptionPaymentRedirectResponse{

@@ -16,7 +16,7 @@ import (
 func TestSignUp(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
@@ -42,7 +42,7 @@ func TestSignupEmailConfirmation(t *testing.T) {
 func TestLogin(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.Login(context.Background(), "test@example.com", "password", "deviceId")
 	assert.NoError(t, err)
@@ -54,14 +54,14 @@ func TestLogout(t *testing.T) {
 		authClient: &mockAuthClient{},
 		deviceId:   "deviceId",
 	}
-	err := u.Logout(context.Background())
+	err := u.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
 }
 
 func TestStartRecoveryByEmail(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.StartRecoveryByEmail(context.Background(), "test@example.com")
 	assert.NoError(t, err)
@@ -70,7 +70,7 @@ func TestStartRecoveryByEmail(t *testing.T) {
 func TestCompleteRecoveryByEmail(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.CompleteRecoveryByEmail(context.Background(), "test@example.com", "newPassword", "code")
 	assert.NoError(t, err)
@@ -79,7 +79,7 @@ func TestCompleteRecoveryByEmail(t *testing.T) {
 func TestValidateEmailRecoveryCode(t *testing.T) {
 	u := &User{
 		authClient: &mockAuthClient{},
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.ValidateEmailRecoveryCode(context.Background(), "test@example.com", "code")
 	assert.NoError(t, err)
@@ -101,7 +101,7 @@ func TestCompleteChangeEmail(t *testing.T) {
 	u := &User{
 		userData:   &protos.LoginResponse{Id: "test@example.com"},
 		authClient: &mockAuthClient{},
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
 	assert.NoError(t, err)
@@ -115,7 +115,7 @@ func TestDeleteAccount(t *testing.T) {
 		authClient: authClient,
 		deviceId:   "deviceId",
 		salt:       authClient.salt[email],
-		userConfig: &mockUserConfig{},
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.DeleteAccount(context.Background(), "password")
 	assert.NoError(t, err)
@@ -123,7 +123,7 @@ func TestDeleteAccount(t *testing.T) {
 
 func TestOAuthLoginUrl(t *testing.T) {
 	user := &User{
-		userConfig: commonConfig(),
+		userInfo: commonConfig(),
 	}
 	url, err := user.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)

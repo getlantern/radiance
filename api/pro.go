@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 // Pro represents pro server apis
 type Pro struct {
 	proClient ProClient
+	userInfo  common.UserInfo
 }
 
 // New returns the object handling anything pro-server related
@@ -44,6 +46,7 @@ func NewPro(httpClient *http.Client, userInfo common.UserInfo) *Pro {
 		},
 	}
 	return &Pro{
+		userInfo: userInfo,
 		proClient: &proClient{
 			WebClient: common.NewWebClient(&opts),
 			UserInfo:  userInfo,
@@ -83,8 +86,8 @@ func (u *Pro) StripeSubscription(ctx context.Context, data *protos.SubscriptionR
 }
 
 // Plans returns the list of plans
-func (u *Pro) Plans(ctx context.Context) (*protos.PlansResponse, error) {
-	resp, err := u.proClient.Plans(ctx)
+func (u *Pro) Plans(ctx context.Context, channel string) (*protos.PlansResponse, error) {
+	resp, err := u.proClient.Plans(ctx, channel)
 	if err != nil {
 		slog.Error("Error in Plans", "error", err)
 		return nil, err
@@ -92,6 +95,50 @@ func (u *Pro) Plans(ctx context.Context) (*protos.PlansResponse, error) {
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
 		slog.Error("Error in Plans", "error", resp.BaseResponse.Error)
 		return nil, fmt.Errorf("error in Plans: %s", resp.BaseResponse.Error)
+	}
+	return resp, nil
+}
+
+func (u *Pro) StripeBillingPortalUrl() (*protos.SubscriptionPaymentRedirectResponse, error) {
+	portalUrl, err := url.Parse(fmt.Sprintf("%s/%s", common.ProServerUrl, "stripe-billing-portal"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+	query := portalUrl.Query()
+	query.Set("referer", "https://lantern.io/")
+	query.Set("userId", strconv.FormatInt(u.userInfo.LegacyID(), 10))
+	portalUrl.RawQuery = query.Encode()
+
+	return &protos.SubscriptionPaymentRedirectResponse{
+		Redirect: portalUrl.String(),
+	}, nil
+}
+
+// GoogleSubscription creates a new subscription using Google Play SDK
+// For Android only
+func (u *Pro) GoogleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error) {
+	resp, err := u.proClient.GoogleSubscription(ctx, purchaseToken, planId)
+	if err != nil {
+		slog.Error("Error in GoogleSubscription", "error", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (u *Pro) AppleSubscription(ctx context.Context, purchaseToken, planId string) (*protos.AcknowledgmentResponse, error) {
+	resp, err := u.proClient.AppleSubscription(ctx, purchaseToken, planId)
+	if err != nil {
+		slog.Error("error in apple subscription", "error", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (u *Pro) PaymentRedirect(ctx context.Context, data *protos.PaymentRedirectRequest) (*protos.SubscriptionPaymentRedirectResponse, error) {
+	resp, err := u.proClient.PaymentRedirect(ctx, data)
+	if err != nil {
+		slog.Error("Error in PaymentRedirect", "error", err)
+		return nil, err
 	}
 	return resp, nil
 }
