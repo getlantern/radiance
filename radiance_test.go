@@ -24,7 +24,7 @@ func TestNewRadiance(t *testing.T) {
 }
 
 func TestReportIssue(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		name   string
 		email  string
 		report IssueReport
@@ -68,6 +68,7 @@ func TestReportIssue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r, err := NewRadiance(Options{DataDir: t.TempDir()})
+			require.NoError(t, err)
 			defer r.Close()
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, &tt.report)
