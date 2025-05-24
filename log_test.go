@@ -29,8 +29,10 @@ func TestStringify(t *testing.T) {
 
 func TestLog(t *testing.T) {
 	slog.SetDefault(logger)
-	Info("")
-	Info("one")
-	Info("one", "two")
-	Info("one", "two", "three", "four")
+	log := NewRadLogger(logger)
+	log.Info("")
+	log.Info("one")
+	log.Info("one", "two")
+	log.Info("one", "two", "three")
+	log.Info("one", "two", "three", "four")
 }
