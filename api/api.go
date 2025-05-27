@@ -4,13 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"strconv"
-
-	"github.com/go-resty/resty/v2"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/app"
-	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 )
 
@@ -38,22 +33,8 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		slog.Warn("failed to read salt", "error", err)
 	}
 
-	proWC := newWebClient(httpClient, proServerURL)
-	proWC.client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
-		// Add any headers or modifications to the request here
-		req.Header.Set(backend.AppNameHeader, app.Name)
-		req.Header.Set(backend.VersionHeader, app.Version)
-		req.Header.Set(backend.PlatformHeader, app.Platform)
-		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
-		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
-		}
-		return nil
-	})
-	wc := newWebClient(httpClient, baseURL)
+	proWC := newWebClient(httpClient, proServerURL, userInfo)
+	wc := newWebClient(httpClient, baseURL, userInfo)
 	return &APIClient{
 		wc:         wc,
 		proWC:      proWC,

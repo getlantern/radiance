@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"unicode"
 
 	"fmt"
@@ -11,13 +12,17 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common"
 )
 
 type webClient struct {
 	client *resty.Client
 }
 
-func newWebClient(httpClient *http.Client, baseURL string) *webClient {
+func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserInfo) *webClient {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
@@ -26,6 +31,20 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 		client.SetBaseURL(baseURL)
 	}
 
+	// Set default headers for the client
+	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
+		req.Header.Set(backend.AppNameHeader, app.Name)
+		req.Header.Set(backend.VersionHeader, app.Version)
+		req.Header.Set(backend.PlatformHeader, app.Platform)
+		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
+		if userInfo.LegacyToken() != "" {
+			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
+		}
+		if userInfo.LegacyID() != 0 {
+			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
+		}
+		return nil
+	})
 	// Add a request middleware to marshal the request body to protobuf or JSON
 	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
 		if req.Body == nil {
