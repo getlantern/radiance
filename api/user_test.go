@@ -53,6 +53,7 @@ func TestLogout(t *testing.T) {
 		userData:   &protos.LoginResponse{Id: "test@example.com"},
 		authClient: &mockAuthClient{},
 		deviceId:   "deviceId",
+		userInfo:   &mockUserConfig{},
 	}
 	err := u.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
