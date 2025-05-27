@@ -74,7 +74,7 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
-	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers)
+	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
 }
 
 func (wc *webClient) Get(ctx context.Context, path string, req *resty.Request, res any) error {
