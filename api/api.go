@@ -10,8 +10,8 @@ import (
 )
 
 type APIClient struct {
-	wc    *webClient
-	proWC *webClient
+	authWc *webClient
+	proWC  *webClient
 
 	salt       []byte
 	saltPath   string
@@ -36,7 +36,7 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	proWC := newWebClient(httpClient, proServerURL, userInfo)
 	wc := newWebClient(httpClient, baseURL, userInfo)
 	return &APIClient{
-		wc:         wc,
+		authWc:     wc,
 		proWC:      proWC,
 		salt:       salt,
 		saltPath:   path,

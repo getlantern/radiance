@@ -120,14 +120,14 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 }
 
 // StripeBillingPortalUrl generates the Stripe billing portal URL for the given user ID.
-func (ac *APIClient) StripeBillingPortalUrl(userID int) (string, error) {
+func (ac *APIClient) StripeBillingPortalUrl() (string, error) {
 	portalURL, err := url.Parse(fmt.Sprintf("%s/%s", proServerURL, "stripe-billing-portal"))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
 	query := portalURL.Query()
 	query.Set("referer", "https://lantern.io/")
-	query.Set("userId", strconv.FormatInt(int64(userID), 10))
+	query.Set("userId", strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10))
 	portalURL.RawQuery = query.Encode()
 
 	return portalURL.String(), nil
