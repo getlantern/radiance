@@ -62,7 +62,6 @@ type ConfigHandler struct {
 	// config holds a configResult.
 	config    atomic.Value
 	ftr       Fetcher
-	apiClient common.WebClient
 	stopC     chan struct{}
 	closeOnce *sync.Once
 
@@ -80,16 +79,11 @@ type ConfigHandler struct {
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
 	configPath := filepath.Join(options.DataDir, app.ConfigFileName)
-	opts := common.WebClientOptions{
-		BaseURL:    "",
-		HttpClient: options.HTTPClient,
-	}
 	ch := &ConfigHandler{
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
 		closeOnce:       &sync.Once{},
 		configPath:      configPath,
-		apiClient:       common.NewWebClient(&opts),
 		configListeners: make([]ListenerFunc, 0),
 		confRespParser:  options.ConfigRespParser,
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),

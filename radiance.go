@@ -57,7 +57,7 @@ type configHandler interface {
 type Radiance struct {
 	confHandler   configHandler
 	issueReporter *issue.IssueReporter
-	apiHandler    *api.APIHandler
+	apiHandler    *api.APIClient
 
 	//user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
@@ -132,8 +132,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	u := api.NewUser(k.NewHTTPClient(), userInfo)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), u, userInfo)
+	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), apiHandler, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
@@ -146,7 +146,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		Locale:           opts.Locale,
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-	apiHandler := api.NewAPIHandlerInternal(k.NewHTTPClient(), userInfo)
 	return &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
@@ -162,7 +161,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 }
 
 // APIHandler returns the API handler for the Radiance client.
-func (r *Radiance) APIHandler() *api.APIHandler {
+func (r *Radiance) APIHandler() *api.APIClient {
 	return r.apiHandler
 }
 

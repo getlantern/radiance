@@ -1,11 +1,11 @@
 package issue
 
 import (
-	"os"
 	"testing"
 
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
+
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 
@@ -21,14 +21,10 @@ func TestSendReport(t *testing.T) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	userConfig := common.NewUserConfig("radiance-test", "", "")
-	u := api.NewUser(k.NewHTTPClient(), userConfig)
-	reporter, err := NewIssueReporter(k.NewHTTPClient(), u, userConfig)
-	require.NoError(t, err)
-	// Grab a temporary directory
-	dir, err := os.MkdirTemp("", "lantern")
+	reporter, err := NewIssueReporter(k.NewHTTPClient(), &mockSubscriptionHandler{}, userConfig)
 	require.NoError(t, err)
 	err = reporter.Report(
-		dir,
+		t.TempDir(),
 		"radiancetest@getlantern.org",
 		int(ReportIssueRequest_NO_ACCESS),
 		"Description placeholder-test only",
@@ -43,4 +39,10 @@ func TestSendReport(t *testing.T) {
 		"US",
 	)
 	require.NoError(t, err)
+}
+
+type mockSubscriptionHandler struct{}
+
+func (m *mockSubscriptionHandler) Subscription() (api.Subscription, error) {
+	return api.Subscription{}, nil
 }

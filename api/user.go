@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +33,10 @@ type Tier int
 const (
 	TierFree = 0
 	TierPro  = 1
+
+	saltFileName = ".salt"
+
+	baseURL = "https://iantem.io/api/v1"
 )
 
 // Subscription holds information about a user's paid subscription.
@@ -47,45 +51,77 @@ type Device struct {
 	Name string
 }
 
-// User represents a user account. This may be a free user, associated only with this device or a
-// paid user with a full account.
-type User struct {
-	salt       []byte
-	userData   *protos.LoginResponse
-	deviceId   string
-	authClient AuthClient
-	userInfo   common.UserInfo
+// pro-server requests
+
+type UserDataResponse struct {
+	*protos.BaseResponse           `json:",inline"`
+	*protos.LoginResponse_UserData `json:",inline"`
 }
 
-// NewUser returns the object handling anything user-auth related
-// It takes a httpClient and a userConfig object.
-func NewUser(httpClient *http.Client, userInfo common.UserInfo) *User {
-	salt, _ := userInfo.ReadSalt()
-	userData, err := userInfo.GetUserData()
+// Create a new user account
+func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
+	var resp UserDataResponse
+	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
-		slog.Error("failed to get user data", "error", err)
+		slog.Error("creating new user", "error", err)
+		return nil, err
 	}
-	opts := common.WebClientOptions{
-		HttpClient: httpClient,
-		BaseURL:    common.APIBaseUrl,
+	if resp.LoginResponse_UserData == nil {
+		slog.Error("creating new user", "error", "no user data in response")
+		return nil, fmt.Errorf("no user data in response")
 	}
-
-	return &User{
-		authClient: &authClient{common.NewWebClient(&opts)},
-		salt:       salt,
-		userData:   userData,
-		deviceId:   userInfo.DeviceID(),
-		userInfo:   userInfo,
+	login := &protos.LoginResponse{
+		LegacyID:       resp.UserId,
+		LegacyToken:    resp.Token,
+		LegacyUserData: resp.LoginResponse_UserData,
 	}
+	err = ac.userInfo.SetData(login)
+	if err != nil {
+		slog.Error("setting user data", "error", err)
+		return nil, err
+	}
+	return &resp, nil
 }
+
+// UserData returns the user data
+func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
+	var resp UserDataResponse
+	err := ac.proWC.Get(ctx, "/user-data", nil, &resp)
+	if err != nil {
+		slog.Error("user data", "error", err)
+		return nil, fmt.Errorf("getting user data: %w", err)
+	}
+	if resp.BaseResponse != nil && resp.Error != "" {
+		err = fmt.Errorf("recevied bad response: %s", resp.Error)
+		slog.Error("user data", "error", err)
+		return nil, err
+	}
+	if resp.LoginResponse_UserData == nil {
+		slog.Error("user data", "error", "no user data in response")
+		return nil, fmt.Errorf("no user data in response")
+	}
+	login := &protos.LoginResponse{
+		LegacyID:       resp.UserId,
+		LegacyToken:    resp.Token,
+		LegacyUserData: resp.LoginResponse_UserData,
+	}
+	err = ac.userInfo.SetData(login)
+	if err != nil {
+		slog.Error("setting user data", "error", err)
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// user-server requests
 
 // Devices returns a list of devices associated with this user account.
-func (u *User) Devices() ([]Device, error) {
-	if u.userData == nil {
+func (a *APIClient) Devices() ([]Device, error) {
+	if a.userData == nil {
 		return nil, ErrNotLoggedIn
 	}
 	ret := []Device{}
-	for _, d := range u.userData.Devices {
+	for _, d := range a.userData.Devices {
 		ret = append(ret, Device{
 			Name: d.Name,
 			ID:   d.Id,
@@ -95,24 +131,27 @@ func (u *User) Devices() ([]Device, error) {
 	return ret, nil
 }
 
+// TODO: do we want to store the subscription status in the user config?
+//			or should we just always request it from the server when needed?
+
 // Subscription returns the subscription status of this user account.
-func (u *User) Subscription() (Subscription, error) {
+func (a *APIClient) Subscription() (Subscription, error) {
 	// TODO: implement me!
 	return Subscription{}, common.ErrNotImplemented
 }
 
 // DataCapInfo returns information about this user's data cap. Only valid for free accounts.
-func (u *User) DataCapInfo() (*DataCapInfo, error) {
+func (a *APIClient) DataCapInfo() (*DataCapInfo, error) {
 	// TODO: implement me!
 	return nil, common.ErrNotImplemented
 }
 
 // SignUp signs the user up for an account.
-func (u *User) SignUp(ctx context.Context, email, password string) error {
-	salt, err := u.authClient.SignUp(ctx, email, password)
+func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
+	salt, err := a.authClient.SignUp(ctx, email, password)
 	if err == nil {
-		u.salt = salt
-		return u.userInfo.WriteSalt(salt)
+		a.salt = salt
+		return writeSalt(salt, a.saltPath)
 	}
 
 	return err
@@ -123,79 +162,94 @@ var ErrNotLoggedIn = errors.New("not logged in")
 var ErrInvalidCode = errors.New("invalid code")
 
 // SignUpEmailResendCode requests that the sign-up code be resent via email.
-func (u *User) SignupEmailResendCode(ctx context.Context, email string) error {
-	if u.salt == nil {
+func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) error {
+	if a.salt == nil {
 		return ErrNoSalt
 	}
-	return u.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
+	return a.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
 		Email: email,
-		Salt:  u.salt,
+		Salt:  a.salt,
 	})
 }
 
 // SignupEmailConfirmation confirms the new account using the sign-up code received via email.
-func (u *User) SignupEmailConfirmation(ctx context.Context, email, code string) error {
-	return u.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
+func (a *APIClient) SignupEmailConfirmation(ctx context.Context, email, code string) error {
+	return a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
 	})
 }
 
-// getSalt retrieves the salt for the given email address or it's cached value.
-func (u *User) getSalt(ctx context.Context, email string) ([]byte, error) {
-	if u.salt != nil {
-		return u.salt, nil // use cached value
+func writeSalt(salt []byte, path string) error {
+	if err := os.WriteFile(path, salt, 0600); err != nil {
+		return fmt.Errorf("writing salt to %s: %w", path, err)
 	}
-	resp, err := u.authClient.GetSalt(ctx, email)
+	return nil
+}
+
+func readSalt(path string) ([]byte, error) {
+	buf, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("reading salt from %s: %w", path, err)
+	}
+	return buf, nil
+}
+
+// getSalt retrieves the salt for the given email address or it's cached value.
+func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
+	if a.salt != nil {
+		return a.salt, nil // use cached value
+	}
+	resp, err := a.authClient.GetSalt(ctx, email)
 	if err != nil {
 		return nil, ErrNoSalt
 	}
-	u.salt = resp.Salt
-	if err := u.userInfo.WriteSalt(resp.Salt); err != nil {
+	a.salt = resp.Salt
+	if err := writeSalt(resp.Salt, a.saltPath); err != nil {
 		return nil, err
 	}
 	return resp.Salt, nil
 }
 
 // Login logs the user in.
-func (u *User) Login(ctx context.Context, email string, password string, deviceId string) error {
-	salt, err := u.getSalt(ctx, email)
+func (a *APIClient) Login(ctx context.Context, email string, password string, deviceId string) error {
+	salt, err := a.getSalt(ctx, email)
 	if err != nil {
 		return err
 	}
-	resp, err := u.authClient.Login(ctx, email, password, deviceId, salt)
+	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
 	if err == nil {
-		u.userInfo.Save(resp)
-		u.userData = resp
+		a.userInfo.SetData(resp)
+		a.userData = resp
 	}
 	return err
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
-func (u *User) Logout(ctx context.Context, email string) error {
-	return u.authClient.SignOut(ctx, &protos.LogoutRequest{
+func (a *APIClient) Logout(ctx context.Context, email string) error {
+	return a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
-		DeviceId:     u.userInfo.DeviceID(),
-		LegacyUserID: u.userInfo.LegacyID(),
-		LegacyToken:  u.userInfo.LegacyToken(),
+		DeviceId:     a.userInfo.DeviceID(),
+		LegacyUserID: a.userInfo.LegacyID(),
+		LegacyToken:  a.userInfo.LegacyToken(),
 	})
 }
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
-func (u *User) StartRecoveryByEmail(ctx context.Context, email string) error {
-	return u.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
+func (a *APIClient) StartRecoveryByEmail(ctx context.Context, email string) error {
+	return a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
 	})
 }
 
 // CompleteRecoveryByEmail completes account recovery using the code received via email.
-func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, code string) error {
+func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, code string) error {
 	lowerCaseEmail := strings.ToLower(email)
-	newSalt, err := GenerateSalt()
+	newSalt, err := generateSalt()
 	if err != nil {
 		return err
 	}
-	srpClient, err := NewSRPClient(lowerCaseEmail, newPassword, newSalt)
+	srpClient, err := newSRPClient(lowerCaseEmail, newPassword, newSalt)
 	if err != nil {
 		return err
 	}
@@ -204,21 +258,24 @@ func (u *User) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, 
 		return err
 	}
 
-	err = u.authClient.CompleteRecoveryByEmail(ctx, &protos.CompleteRecoveryByEmailRequest{
+	err = a.authClient.CompleteRecoveryByEmail(ctx, &protos.CompleteRecoveryByEmailRequest{
 		Email:       email,
 		Code:        code,
 		NewSalt:     newSalt,
 		NewVerifier: verifierKey.Bytes(),
 	})
-	if err == nil {
-		err = u.userInfo.WriteSalt(newSalt)
+	if err != nil {
+		return fmt.Errorf("failed to complete recovery by email: %w", err)
 	}
-	return err
+	if err = writeSalt(newSalt, a.saltPath); err != nil {
+		return fmt.Errorf("failed to write new salt: %w", err)
+	}
+	return nil
 }
 
 // ValidateEmailRecoveryCode validates the recovery code received via email.
-func (u *User) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
-	resp, err := u.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
+func (a *APIClient) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
+	resp, err := a.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
 	})
@@ -234,19 +291,19 @@ func (u *User) ValidateEmailRecoveryCode(ctx context.Context, email, code string
 const group = srp.RFC5054Group3072
 
 // StartChangeEmail initializes a change of the email address associated with this user account.
-func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
-	if u.userData == nil {
+func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
+	if a.userData == nil {
 		return ErrNotLoggedIn
 	}
-	lowerCaseEmail := strings.ToLower(u.userData.Id)
+	lowerCaseEmail := strings.ToLower(a.userData.Id)
 	lowerCaseNewEmail := strings.ToLower(newEmail)
-	salt, err := u.getSalt(ctx, lowerCaseEmail)
+	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return err
 	}
 
 	// Prepare login request body
-	encKey, err := GenerateEncryptedKey(password, lowerCaseEmail, salt)
+	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
 		return err
 	}
@@ -260,7 +317,7 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
-	srpB, err := u.authClient.LoginPrepare(ctx, prepareRequestBody)
+	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return err
 	}
@@ -294,18 +351,18 @@ func (u *User) StartChangeEmail(ctx context.Context, newEmail string, password s
 		Proof:    clientProof,
 	}
 
-	return u.authClient.ChangeEmail(ctx, changeEmailRequestBody)
+	return a.authClient.ChangeEmail(ctx, changeEmailRequestBody)
 }
 
 // CompleteChangeEmail completes a change of the email address associated with this user account,
 // using the code recieved via email.
-func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
-	newSalt, err := GenerateSalt()
+func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
+	newSalt, err := generateSalt()
 	if err != nil {
 		return err
 	}
 
-	encKey, err := GenerateEncryptedKey(password, newEmail, newSalt)
+	encKey, err := generateEncryptedKey(password, newEmail, newSalt)
 	if err != nil {
 		return err
 	}
@@ -316,8 +373,8 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 		return err
 	}
 
-	if err := u.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    u.userData.Id,
+	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
+		OldEmail:    a.userData.Id,
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -325,32 +382,32 @@ func (u *User) CompleteChangeEmail(ctx context.Context, newEmail, password, code
 	}); err != nil {
 		return err
 	}
-	if err := u.userInfo.WriteSalt(newSalt); err != nil {
+	if err := writeSalt(newSalt, a.saltPath); err != nil {
 		return err
 	}
 
-	if err := u.userInfo.Save(u.userData); err != nil {
+	if err := a.userInfo.SetData(a.userData); err != nil {
 		return err
 	}
 
-	u.salt = newSalt
-	u.userData.Id = newEmail
+	a.salt = newSalt
+	a.userData.Id = newEmail
 	return nil
 }
 
 // DeleteAccount deletes this user account.
-func (u *User) DeleteAccount(ctx context.Context, password string) error {
-	if u.userData == nil {
+func (a *APIClient) DeleteAccount(ctx context.Context, password string) error {
+	if a.userData == nil {
 		return ErrNotLoggedIn
 	}
-	lowerCaseEmail := strings.ToLower(u.userData.Id)
-	salt, err := u.getSalt(ctx, lowerCaseEmail)
+	lowerCaseEmail := strings.ToLower(a.userData.Id)
+	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return err
 	}
 
 	// Prepare login request body
-	encKey, err := GenerateEncryptedKey(password, lowerCaseEmail, salt)
+	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
 		return err
 	}
@@ -365,7 +422,7 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		A:     A.Bytes(),
 	}
 
-	srpB, err := u.authClient.LoginPrepare(ctx, prepareRequestBody)
+	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return err
 	}
@@ -396,30 +453,27 @@ func (u *User) DeleteAccount(ctx context.Context, password string) error {
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,
-		DeviceId:  u.deviceId,
+		DeviceId:  a.deviceID,
 	}
 
-	if err := u.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
+	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
 		return err
 	}
 
-	u.userData = nil
-	return u.userInfo.Save(nil)
+	a.userData = nil
+	return a.userInfo.SetData(nil)
 }
 
 // OAuthLogin initiates the OAuth login process for the specified provider.
-func (u *User) OAuthLoginUrl(ctx context.Context, provider string) (*protos.SubscriptionPaymentRedirectResponse, error) {
-	loginUrl, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://df.iantem.io/api/v1", "users/oauth2", provider))
+func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
+	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://df.iantem.io/api/v1", "users/oauth2", provider))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %w", err)
+		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
-	query := loginUrl.Query()
-	query.Set("deviceId", u.userInfo.DeviceID())
-	query.Set("userId", strconv.FormatInt(u.userInfo.LegacyID(), 10))
-	query.Set("proToken", u.userInfo.LegacyToken())
-	loginUrl.RawQuery = query.Encode()
-
-	return &protos.SubscriptionPaymentRedirectResponse{
-		Redirect: loginUrl.String(),
-	}, nil
+	query := loginURL.Query()
+	query.Set("deviceId", a.userInfo.DeviceID())
+	query.Set("userId", strconv.FormatInt(a.userInfo.LegacyID(), 10))
+	query.Set("proToken", a.userInfo.LegacyToken())
+	loginURL.RawQuery = query.Encode()
+	return loginURL.String(), nil
 }
