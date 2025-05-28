@@ -212,17 +212,22 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 }
 
 // Login logs the user in.
-func (a *APIClient) Login(ctx context.Context, email string, password string, deviceId string) error {
+func (a *APIClient) Login(ctx context.Context, email string, password string, deviceId string) (*protos.LoginResponse, error) {
 	salt, err := a.getSalt(ctx, email)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
-	if err == nil {
+	if err != nil {
+		return nil, err
+	}
+	// If login was successful, update the user info and cache the user data.
+	// We have device flow limit on login
+	if resp.Success {
 		a.userInfo.SetData(resp)
 		a.userData = resp
 	}
-	return err
+	return resp, nil
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.

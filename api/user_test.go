@@ -51,7 +51,7 @@ func TestLogin(t *testing.T) {
 		authClient: &mockAuthClient{},
 		userInfo:   &mockUserInfo{},
 	}
-	err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
+	_, err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
 	assert.NoError(t, err)
 }
 
