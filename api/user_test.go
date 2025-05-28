@@ -139,9 +139,8 @@ func TestDeleteAccount(t *testing.T) {
 func TestOAuthLoginUrl(t *testing.T) {
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userInfo: testUser(t.TempDir()),
+		userInfo: userInfo(t.TempDir()),
 	}
-
 	url, err := ac.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, url)
