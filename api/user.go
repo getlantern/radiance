@@ -232,6 +232,14 @@ func (a *APIClient) Logout(ctx context.Context) error {
 		DeviceId:     a.userInfo.DeviceID(),
 		LegacyUserID: a.userInfo.LegacyID(),
 		LegacyToken:  a.userInfo.LegacyToken(),
+	}
+}
+func (u *User) Logout(ctx context.Context, email string) error {
+	return u.authClient.SignOut(ctx, &protos.LogoutRequest{
+		Email:        email,
+		DeviceId:     u.userInfo.DeviceID(),
+		LegacyUserID: u.userInfo.LegacyID(),
+		LegacyToken:  u.userInfo.LegacyToken(),
 	})
 }
 
@@ -475,6 +483,5 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 	query.Set("userId", strconv.FormatInt(a.userInfo.LegacyID(), 10))
 	query.Set("proToken", a.userInfo.LegacyToken())
 	loginURL.RawQuery = query.Encode()
-
 	return loginURL.String(), nil
 }
