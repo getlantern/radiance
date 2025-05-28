@@ -157,3 +157,28 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 	}
 	return resp.Redirect, err
 }
+
+// SubscriptionPaymentRedirect is used to get the subscription payment redirect URL with SubscriptionPaymentRedirectRequest
+// this is is used only in desktop app
+func (ac *APIClient) PaymentRedirect(ctx context.Context, data *protos.PaymentRedirectRequest) (string, error) {
+	type response struct {
+		Redirect string
+	}
+	var resp response
+	headers := map[string]string{
+		backend.RefererHeader: "https://lantern.io/",
+	}
+	mapping := map[string]string{
+		"provider":   data.Provider,
+		"plan":       data.Plan,
+		"deviceName": data.DeviceName,
+		"email":      data.Email,
+	}
+	req := ac.proWC.NewRequest(mapping, headers, nil)
+	err := ac.proWC.Get(ctx, "/payment-redirect", req, &resp)
+	if err != nil {
+		slog.Error("subscription payment redirect", "error", err)
+		return "", fmt.Errorf("subscription payment redirect: %w", err)
+	}
+	return resp.Redirect, err
+}

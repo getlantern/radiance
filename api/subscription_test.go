@@ -31,12 +31,12 @@ func TestSubscriptionPaymentRedirect(t *testing.T) {
 func TestNewUser(t *testing.T) {
 	user := testUser(t.TempDir())
 	ac := NewAPIClient(&http.Client{}, user, t.TempDir())
-	resp, err := ac.NewUser(context.Background(), user)
+	resp, err := ac.NewUser(context.Background())
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 }
 
-func TestStripeSubscription(t *testing.T) {
+func TestVerifySubscription(t *testing.T) {
 	user := testUser(t.TempDir())
 	ac := NewAPIClient(&http.Client{}, user, t.TempDir())
 	email := "test@getlantern.org"
@@ -45,7 +45,7 @@ func TestStripeSubscription(t *testing.T) {
 		"email":  email,
 		"planID": planID,
 	}
-	status, subID, err := ac.VerifySubscription(context.Background(), StripeService, data)
+	status, subID, err := ac.VerifySubscription(context.Background(), AppleService, data)
 	require.NoError(t, err)
 	assert.NotEmpty(t, status)
 	assert.NotEmpty(t, subID)
@@ -56,7 +56,7 @@ func TestPlans(t *testing.T) {
 	ac := NewAPIClient(&http.Client{}, user, t.TempDir())
 
 	// TODO: remove this when we switch to a mock server
-	_, err := ac.NewUser(context.Background(), user)
+	_, err := ac.NewUser(context.Background())
 	require.NoError(t, err)
 
 	resp, err := ac.SubscriptionPlans(context.Background(), "store")

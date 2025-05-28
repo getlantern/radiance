@@ -20,7 +20,7 @@ func TestSignUp(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserConfig{},
+		userInfo:   &mockUserInfo{},
 	}
 	err := ac.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
@@ -49,7 +49,7 @@ func TestLogin(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserConfig{},
+		userInfo:   &mockUserInfo{},
 	}
 	err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
 	assert.NoError(t, err)
@@ -63,7 +63,7 @@ func TestLogout(t *testing.T) {
 		authClient: &mockAuthClient{},
 		deviceID:   "deviceId",
 	}
-	err := ac.Logout(context.Background())
+	err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
 }
 
@@ -131,7 +131,6 @@ func TestDeleteAccount(t *testing.T) {
 		deviceID:   "deviceId",
 		salt:       authClient.salt[email],
 		userInfo:   &mockUserInfo{},
-		userInfo:   &mockUserConfig{},
 	}
 	err := ac.DeleteAccount(context.Background(), "password")
 	assert.NoError(t, err)
@@ -141,9 +140,8 @@ func TestOAuthLoginUrl(t *testing.T) {
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
 		userInfo: testUser(t.TempDir()),
-	user := &User{
-		userInfo: commonConfig(),
 	}
+
 	url, err := ac.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, url)

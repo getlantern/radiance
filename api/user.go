@@ -59,7 +59,7 @@ type UserDataResponse struct {
 }
 
 // Create a new user account
-func (ac *APIClient) NewUser(ctx context.Context, user common.UserInfo) (*UserDataResponse, error) {
+func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	var resp UserDataResponse
 	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
@@ -226,20 +226,12 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
-func (a *APIClient) Logout(ctx context.Context) error {
+func (a *APIClient) Logout(ctx context.Context, email string) error {
 	return a.authClient.SignOut(ctx, &protos.LogoutRequest{
-		Email:        a.userData.Id,
+		Email:        email,
 		DeviceId:     a.userInfo.DeviceID(),
 		LegacyUserID: a.userInfo.LegacyID(),
 		LegacyToken:  a.userInfo.LegacyToken(),
-	}
-}
-func (u *User) Logout(ctx context.Context, email string) error {
-	return u.authClient.SignOut(ctx, &protos.LogoutRequest{
-		Email:        email,
-		DeviceId:     u.userInfo.DeviceID(),
-		LegacyUserID: u.userInfo.LegacyID(),
-		LegacyToken:  u.userInfo.LegacyToken(),
 	})
 }
 
