@@ -48,6 +48,11 @@ type VPNClient interface {
 	AddCustomServer(cfg boxservice.ServerConnectConfig) error
 	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
+	// Lantern Server Manager Integration
+
+	AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error
+	InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error)
+	RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error
 }
 
 type vpnClient struct {
@@ -124,7 +129,7 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 	return client, nil
 }
 
-// Start starts the VPN client
+// StartVPN Start starts the VPN client
 func (c *vpnClient) StartVPN() error {
 	if c.running.Load() {
 		return errors.New("VPN client is already running")
@@ -150,7 +155,7 @@ func (c *vpnClient) StartVPN() error {
 	return nil
 }
 
-// Stop stops the VPN client and closes the TUN device
+// StopVPN Stop stops the VPN client and closes the TUN device
 func (c *vpnClient) StopVPN() error {
 	if !c.running.Load() {
 		return errors.New("VPN client is not running")
@@ -189,16 +194,39 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 	c.connected = connected
 }
 
-// Pause pauses the VPN client for the specified duration
+// PauseVPN Pause pauses the VPN client for the specified duration
 func (c *vpnClient) PauseVPN(dur time.Duration) error {
 	slog.Info("Pausing VPN for", "duration", dur)
 	return c.boxService.Pause(dur)
 }
 
-// Resume resumes the VPN client
+// ResumeVPN Resume resumes the VPN client
 func (c *vpnClient) ResumeVPN() {
 	slog.Info("Resuming VPN client")
 	c.boxService.Wake()
+}
+
+// Lantern Server Manager Integration
+
+// AddServerManagerInstance will fetch VPN connection information from the server manager instance and add it to the VPN client as a custom server
+// The server manager instance is identified by the tag, ip, port and accessToken.
+// The accessToken is used to authenticate the connection to the server manager instance.
+// The callback is used to verify the server manager instance's certificate fingerprint.
+// If we don't have the fingerprint, we will use the default callback which will ask the user to trust the fingerprint.
+func (c *vpnClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error {
+	return c.customServerManager.AddServerManagerInstance(tag, ip, port, accessToken, callback)
+}
+
+// InviteToServerManagerInstance will invite another user (identified by inviteName) to the server manager instance and return the token that can be used to connect to the server manager instance
+// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
+func (c *vpnClient) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
+	return c.customServerManager.InviteToServerManagerInstance(ip, port, accessToken, inviteName)
+}
+
+// RevokeServerManagerInvite will revoke an invite to the server manager instance
+// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
+func (c *vpnClient) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
+	return c.customServerManager.RevokeServerManagerInvite(ip, port, accessToken, inviteName)
 }
 
 // ActiveServer returns the current connected server as a [boxservice.Server].

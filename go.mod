@@ -4,7 +4,7 @@ go 1.24
 
 toolchain go1.24.1
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.6-0.20250411173055-d82f542dfd3f
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.11-lantern
 
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
 
@@ -21,7 +21,7 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
-	github.com/getlantern/sing-box-extensions v0.0.3-0.20250513165743-4f40385f7529
+	github.com/getlantern/sing-box-extensions v0.0.3-0.20250527123041-ac84f0af290f
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
@@ -133,7 +133,7 @@ require (
 	github.com/sagernet/nftables v0.3.0-beta.4 // indirect
 	github.com/sagernet/quic-go v0.49.0-beta.1 // indirect
 	github.com/sagernet/reality v0.0.0-20230406110435-ee17307e7691 // indirect
-	github.com/sagernet/sing-dns v0.4.2
+	github.com/sagernet/sing-dns v0.4.3
 	github.com/sagernet/sing-mux v0.3.2 // indirect
 	github.com/sagernet/sing-quic v0.4.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect

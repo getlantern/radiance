@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,17 +19,19 @@ import (
 )
 
 type CustomServerManager struct {
-	ctx                   context.Context
-	customServersMutex    *sync.RWMutex
-	customServers         map[string]CustomServerInfo
-	customServersFilePath string
+	ctx                       context.Context
+	customServersMutex        *sync.RWMutex
+	customServers             map[string]CustomServerInfo
+	customServersFilePath     string
+	trustedServerFingerprints string
 }
 
 func NewCustomServerManager(ctx context.Context, dataDir string) *CustomServerManager {
 	csm := &CustomServerManager{
-		customServers:         make(map[string]CustomServerInfo),
-		customServersMutex:    new(sync.RWMutex),
-		customServersFilePath: filepath.Join(dataDir, "custom_servers.json"),
+		customServers:             make(map[string]CustomServerInfo),
+		customServersMutex:        new(sync.RWMutex),
+		customServersFilePath:     filepath.Join(dataDir, "custom_servers.json"),
+		trustedServerFingerprints: filepath.Join(dataDir, "trusted_server_fingerprints.json"),
 	}
 	csm.SetContext(ctx)
 	return csm
@@ -67,7 +71,7 @@ func (m *CustomServerManager) AddCustomServer(cfg ServerConnectConfig) error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	if (loadedOptions.Endpoint == nil && loadedOptions.Outbound == nil) || loadedOptions.Tag == "" {
+	if loadedOptions.Endpoint == nil && loadedOptions.Outbound == nil {
 		return fmt.Errorf("invalid custom server provided")
 	}
 
@@ -285,5 +289,129 @@ func (m *CustomServerManager) newSelectorOutbound(outboundManager adapter.Outbou
 		return fmt.Errorf("create selector outbound: %w", err)
 	}
 
+	return nil
+}
+func (m *CustomServerManager) getClientForTrustedFingerprint(ip string, port int, trustFingerprintCallback TrustFingerprintCallback) (*http.Client, error) {
+	// get server fingerprints via TLS
+	details, err := getServerFingerprints(ip, port)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get server fingerprints: %w", err)
+	}
+	// check if we already have the trusted fingerprint
+	fingerprints, trustedFingerprint, err := getTrustedServerFingerprint(m.trustedServerFingerprints, ip, details)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get trusted server fingerprint: %w", err)
+	}
+	// if not - attempt to ask the user to select a fingerprint
+	if trustedFingerprint == "" && trustFingerprintCallback != nil {
+		if ct := trustFingerprintCallback(ip, details); ct == nil {
+			return nil, ErrTrustCancelled
+		} else {
+			// user accepted the fingerprint. save it
+			fingerprints[ip] = ct.Fingerprint
+			if err := writeTrustedServerFingerprints(m.trustedServerFingerprints, fingerprints); err != nil {
+				return nil, fmt.Errorf("failed to write trusted server fingerprints: %w", err)
+			}
+			trustedFingerprint = ct.Fingerprint
+		}
+	}
+	// assemble an http client with the trusted fingerprint
+	client, err := getTOFUClient(trustedFingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tofu client: %w", err)
+	}
+	return client, nil
+}
+
+func (m *CustomServerManager) AddServerManagerInstance(tag string, ip string, port int, accessToken string, trustFingerprintCallback TrustFingerprintCallback) error {
+	if trustFingerprintCallback == nil {
+		return fmt.Errorf("trustFingerprintCallback is required")
+	}
+
+	client, err := m.getClientForTrustedFingerprint(ip, port, trustFingerprintCallback)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(fmt.Sprintf("https://%s:%d/api/v1/connect-config?token=%s", ip, port, accessToken))
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("failed to get connect config: %w", err)
+	}
+	type connectInfo struct {
+		Outbounds []*option.Outbound `json:"outbounds,omitempty"`
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var cs connectInfo
+	if cs, err = json.UnmarshalExtendedContext[connectInfo](m.ctx, body); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(cs.Outbounds) == 0 {
+		return fmt.Errorf("no outbounds found")
+	}
+
+	cs.Outbounds[0].Tag = tag
+
+	customServerConfig := CustomServerInfo{
+		Outbound: cs.Outbounds[0],
+	}
+	data, err := json.MarshalContext(m.ctx, customServerConfig)
+	if err != nil {
+		return fmt.Errorf("marshal custom server config: %w", err)
+	}
+	return m.AddCustomServer(data)
+}
+
+func (m *CustomServerManager) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
+	client, err := m.getClientForTrustedFingerprint(ip, port, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := client.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("failed to get connect config: %w", err)
+	}
+	type tokenResp struct {
+		Token string
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var cs tokenResp
+	if cs, err = json.UnmarshalExtendedContext[tokenResp](m.ctx, body); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	return cs.Token, nil
+}
+
+func (m *CustomServerManager) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
+	client, err := m.getClientForTrustedFingerprint(ip, port, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("failed to revoke invite: %w", err)
+	}
 	return nil
 }
