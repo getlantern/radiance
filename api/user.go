@@ -202,7 +202,7 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	}
 	resp, err := a.authClient.GetSalt(ctx, email)
 	if err != nil {
-		return nil, ErrNoSalt
+		return nil, err
 	}
 	a.salt = resp.Salt
 	if err := writeSalt(resp.Salt, a.saltPath); err != nil {

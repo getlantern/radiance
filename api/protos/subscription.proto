@@ -27,10 +27,3 @@ message PaymentMethod {
   string method = 1;
   PaymentProviders provider = 2;
 }
-
-message PaymentRedirectRequest {
-  string plan = 1;
-  string provider = 2;
-  string email = 4;
-  string deviceName = 5;
-}

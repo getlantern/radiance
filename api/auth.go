@@ -40,7 +40,11 @@ func (c *authClient) GetSalt(ctx context.Context, email string) (*protos.GetSalt
 	query := map[string]string{
 		"email": email,
 	}
-	req := c.wc.NewRequest(query, nil, nil)
+	header := map[string]string{
+		"Content-Type": "application/x-protobuf",
+		"Accept":       "application/x-protobuf",
+	}
+	req := c.wc.NewRequest(query, header, nil)
 	if err := c.wc.Get(ctx, "/users/salt", req, &resp); err != nil {
 		return nil, err
 	}

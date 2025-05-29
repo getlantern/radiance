@@ -75,14 +75,13 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 		if len(resp.Body()) == 0 || resp.Request.Result == nil {
 			return nil
 		}
-		switch ct := resp.Header().Get("Content-Type"); ct {
+		switch ct := resp.RawResponse.Header.Get("Content-Type"); ct {
 		case "application/x-protobuf":
 			pb, ok := resp.Request.Result.(proto.Message)
 			if !ok {
 				return fmt.Errorf("response body is not a protobuf message")
 			}
-			body := sanitizeResponseBody(resp.Body())
-			return proto.Unmarshal(body, pb)
+			return proto.Unmarshal(resp.Body(), pb)
 		case "application/json":
 			body := sanitizeResponseBody(resp.Body())
 			return json.Unmarshal(body, resp.Request.Result)
