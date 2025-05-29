@@ -158,9 +158,9 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 	return resp.Redirect, err
 }
 
-// SubscriptionPaymentRedirect is used to get the subscription payment redirect URL with SubscriptionPaymentRedirectRequest
-// this is is used only in desktop app
-func (ac *APIClient) PaymentRedirect(ctx context.Context, data *protos.PaymentRedirectRequest) (string, error) {
+// PaymentRedirect is used to get the payment redirect URL with PaymentRedirectData
+// this is used in desktop app and android app
+func (ac *APIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectData) (string, error) {
 	type response struct {
 		Redirect string
 	}

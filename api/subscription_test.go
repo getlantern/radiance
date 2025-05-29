@@ -12,8 +12,6 @@ import (
 	"github.com/getlantern/radiance/common"
 )
 
-// TODO: update tests to use a mock server instead of the real one
-
 func TestSubscriptionPaymentRedirect(t *testing.T) {
 	ac := mockAPIClient(t)
 	data := PaymentRedirectData{
@@ -24,6 +22,18 @@ func TestSubscriptionPaymentRedirect(t *testing.T) {
 		SubscriptionType: SubscriptionType("monthly"),
 	}
 	url, err := ac.SubscriptionPaymentRedirectURL(context.Background(), data)
+	require.NoError(t, err)
+	assert.NotEmpty(t, url)
+}
+func TestPaymentRedirect(t *testing.T) {
+	ac := mockAPIClient(t)
+	data := PaymentRedirectData{
+		Provider:   "stripe",
+		Plan:       "pro",
+		DeviceName: "test-device",
+		Email:      "",
+	}
+	url, err := ac.PaymentRedirect(context.Background(), data)
 	require.NoError(t, err)
 	assert.NotEmpty(t, url)
 }
@@ -93,7 +103,10 @@ func (m *MockAPIClient) SubscriptionPlans(ctx context.Context, channel string) (
 func (m *MockAPIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data PaymentRedirectData) (string, error) {
 	return "https://example.com/redirect", nil
 }
+
+func (m *MockAPIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectData) (string, error) {
+	return "https://example.com/redirect", nil
+}
 func (m *MockAPIClient) NewUser(ctx context.Context) (*protos.LoginResponse, error) {
 	return &protos.LoginResponse{}, nil
-
 }
