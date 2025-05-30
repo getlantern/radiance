@@ -71,14 +71,13 @@ message LoginResponse {
     int64 expiration = 10;
     repeated string servers = 11;
     string subscription = 12;
-    repeated Purchase purchases = 13;
+    repeated string purchases = 13;
     string bonusDays = 14;
     string bonusMonths = 15;
     repeated string inviters = 16;
     repeated string invitees = 17;
     repeated Device devices = 18;
     bool yinbiEnabled = 19;
-
     message SubscriptionData {
       string planID = 1;
       string stripeCustomerID = 2;
@@ -92,8 +91,9 @@ message LoginResponse {
       string endAt = 10;
     }
 
-    SubscriptionData subscriptionData = 20;
-  }
+  SubscriptionData subscriptionData = 20;
+  
+}
 
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login

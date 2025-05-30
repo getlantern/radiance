@@ -204,10 +204,6 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.salt = resp.Salt
-	if err := writeSalt(resp.Salt, a.saltPath); err != nil {
-		return nil, err
-	}
 	return resp.Salt, nil
 }
 
@@ -226,6 +222,10 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	if resp.Success {
 		a.userInfo.SetData(resp)
 		a.userData = resp
+	}
+	a.salt = salt
+	if err := writeSalt(salt, a.saltPath); err != nil {
+		return nil, err
 	}
 	return resp, nil
 }
