@@ -10,17 +10,18 @@ import (
 	"strings"
 
 	"github.com/1Password/srp"
-	"github.com/getlantern/radiance/api/protos"
 	"golang.org/x/crypto/pbkdf2"
+
+	"github.com/getlantern/radiance/api/protos"
 )
 
-func NewSRPClient(email string, password string, salt []byte) (*srp.SRP, error) {
+func newSRPClient(email string, password string, salt []byte) (*srp.SRP, error) {
 	if len(salt) == 0 || len(password) == 0 || len(email) == 0 {
 		return nil, errors.New("salt, password and email should not be empty")
 	}
 
 	lowerCaseEmail := strings.ToLower(email)
-	encryptedKey, err := GenerateEncryptedKey(password, lowerCaseEmail, salt)
+	encryptedKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate encrypted key: %w", err)
 	}
@@ -29,7 +30,7 @@ func NewSRPClient(email string, password string, salt []byte) (*srp.SRP, error) 
 }
 
 // Takes password and email, salt and returns encrypted key
-func GenerateEncryptedKey(password string, email string, salt []byte) (*big.Int, error) {
+func generateEncryptedKey(password string, email string, salt []byte) (*big.Int, error) {
 	if len(salt) == 0 || len(password) == 0 || len(email) == 0 {
 		return nil, errors.New("salt or password or email is empty")
 	}
@@ -40,7 +41,7 @@ func GenerateEncryptedKey(password string, email string, salt []byte) (*big.Int,
 	return encryptedKeyBigInt, nil
 }
 
-func GenerateSalt() ([]byte, error) {
+func generateSalt() ([]byte, error) {
 	salt := make([]byte, 16)
 	if n, err := rand.Read(salt); err != nil {
 		return nil, err
@@ -52,12 +53,12 @@ func GenerateSalt() ([]byte, error) {
 
 func (c *authClient) SignUp(ctx context.Context, email string, password string) ([]byte, error) {
 	lowerCaseEmail := strings.ToLower(email)
-	salt, err := GenerateSalt()
+	salt, err := generateSalt()
 	if err != nil {
 		return nil, err
 	}
 
-	srpClient, err := NewSRPClient(lowerCaseEmail, password, salt)
+	srpClient, err := newSRPClient(lowerCaseEmail, password, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +84,7 @@ func (c *authClient) Login(ctx context.Context, email string, password string, d
 	lowerCaseEmail := strings.ToLower(email)
 
 	// Prepare login request body
-	client, err := NewSRPClient(lowerCaseEmail, password, salt)
+	client, err := newSRPClient(lowerCaseEmail, password, salt)
 	if err != nil {
 		return nil, err
 	}

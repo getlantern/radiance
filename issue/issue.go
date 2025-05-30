@@ -31,6 +31,10 @@ const (
 	requestURL = "https://iantem.io/api/v1/issue"
 )
 
+type SubscriptionHandler interface {
+	Subscription() (api.Subscription, error)
+}
+
 // Attachment is a file attachment
 type Attachment struct {
 	Name string
@@ -40,20 +44,20 @@ type Attachment struct {
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
 	httpClient *http.Client
-	user       *api.User
+	subHandler SubscriptionHandler
 	userConfig common.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(httpClient *http.Client, user *api.User, userConfig common.UserInfo) (*IssueReporter, error) {
+func NewIssueReporter(httpClient *http.Client, subHandler SubscriptionHandler, userConfig common.UserInfo) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
-	if user == nil {
+	if subHandler == nil {
 		return nil, fmt.Errorf("user is nil")
 	}
-	return &IssueReporter{httpClient: httpClient, user: user, userConfig: userConfig}, nil
+	return &IssueReporter{httpClient: httpClient, subHandler: subHandler, userConfig: userConfig}, nil
 }
 
 func randStr(n int) string {
@@ -82,7 +86,7 @@ func (ir *IssueReporter) Report(
 
 	// get subscription level as string
 	subLevel := "free"
-	sub, err := ir.user.Subscription()
+	sub, err := ir.subHandler.Subscription()
 	if err != nil {
 		log.Errorf("Error while getting user subscription info: %v", err)
 	} else if sub.Tier == api.TierPro {

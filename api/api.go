@@ -1,24 +1,48 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
+	"path/filepath"
 
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 )
 
-// APIHandler is a struct that contains the API clients for User and Pro.
-type APIHandler struct {
-	User      *User
-	ProServer *Pro
-	UserInfo  common.UserInfo
+type APIClient struct {
+	authWc *webClient
+	proWC  *webClient
+
+	salt       []byte
+	saltPath   string
+	userData   *protos.LoginResponse
+	deviceID   string
+	authClient AuthClient
+	userInfo   common.UserInfo
 }
 
-func NewAPIHandlerInternal(httpClient *http.Client, userinfo common.UserInfo) *APIHandler {
-	u := NewUser(httpClient, userinfo)
-	pro := NewPro(httpClient, userinfo)
-	return &APIHandler{
-		User:      u,
-		ProServer: pro,
-		UserInfo:  userinfo,
+func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
+	userData, err := userInfo.GetData()
+	if err != nil {
+		slog.Warn("failed to get user data", "error", err)
+	}
+
+	path := filepath.Join(dataDir, saltFileName)
+	salt, err := readSalt(path)
+	if err != nil {
+		slog.Warn("failed to read salt", "error", err)
+	}
+
+	proWC := newWebClient(httpClient, proServerURL, userInfo)
+	wc := newWebClient(httpClient, baseURL, userInfo)
+	return &APIClient{
+		authWc:     wc,
+		proWC:      proWC,
+		salt:       salt,
+		saltPath:   path,
+		userData:   userData,
+		deviceID:   userInfo.DeviceID(),
+		authClient: &authClient{wc},
+		userInfo:   userInfo,
 	}
 }

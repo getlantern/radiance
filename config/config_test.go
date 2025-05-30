@@ -551,30 +551,15 @@ type UserStub struct{}
 // Verify that a UserStub implements the User interface
 var _ common.UserInfo = (*UserStub)(nil)
 
-func (u *UserStub) Locale() string {
-	return "en-US"
-}
-func (u *UserStub) DeviceID() string {
-	return "test-device-id"
-}
-func (u *UserStub) LegacyID() int64 {
-	return 123456789
-}
-func (u *UserStub) LegacyToken() string {
-	return "test-legacy-token"
-}
-func (u *UserStub) Save(data *protos.LoginResponse) error {
-	return nil
-}
-func (u *UserStub) GetUserData() (*protos.LoginResponse, error) {
+func (u *UserStub) GetData() (*protos.LoginResponse, error) {
 	return &protos.LoginResponse{
 		LegacyID:    123456789,
 		LegacyToken: "test-legacy-token",
 	}, nil
 }
-func (u *UserStub) ReadSalt() ([]byte, error) {
-	return []byte("test-salt"), nil
-}
-func (u *UserStub) WriteSalt(salt []byte) error {
-	return nil
-}
+func (u *UserStub) Locale() string                           { return "en-US" }
+func (u *UserStub) DeviceID() string                         { return "test-device-id" }
+func (u *UserStub) LegacyID() int64                          { return 123456789 }
+func (u *UserStub) LegacyToken() string                      { return "test-legacy-token" }
+func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
+func (u *UserStub) SetLocale(locale string)                  {}
