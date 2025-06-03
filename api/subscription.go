@@ -24,18 +24,17 @@ const (
 	AppleService  SubscriptionService = "apple"
 	GoogleService SubscriptionService = "google"
 
-	SubscriptionTypeOneTime SubscriptionType = "one_time"
-	SubscriptionTypeMonthly SubscriptionType = "monthly"
-	SubscriptionTypeYearly  SubscriptionType = "yearly"
+	SubscriptionTypeOneTime      SubscriptionType = "one_time"
+	SubscriptionTypeSubscription SubscriptionType = "subscription"
 )
 
 // PaymentRedirectData contains the data required to generate a payment redirect URL.
 type PaymentRedirectData struct {
-	Plan             string           `json:"plan" validate:"required"`
-	Provider         string           `json:"provider" validate:"required"`
-	Email            string           `json:"email"`
-	DeviceName       string           `json:"deviceName" validate:"required" errorId:"device-name"`
-	SubscriptionType SubscriptionType `json:"subscriptionType"`
+	Plan        string           `json:"plan" validate:"required"`
+	Provider    string           `json:"provider" validate:"required"`
+	Email       string           `json:"email"`
+	DeviceName  string           `json:"deviceName" validate:"required" errorId:"device-name"`
+	BillingType SubscriptionType `json:"billingType"`
 }
 
 // SubscriptionPlans contains information about available subscription plans and payment providers.
@@ -143,11 +142,11 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 		backend.RefererHeader: "https://lantern.io/",
 	}
 	params := map[string]string{
-		"provider":         data.Provider,
-		"plan":             data.Plan,
-		"deviceName":       data.DeviceName,
-		"email":            data.Email,
-		"subscriptionType": string(data.SubscriptionType),
+		"provider":    data.Provider,
+		"plan":        data.Plan,
+		"deviceName":  data.DeviceName,
+		"email":       data.Email,
+		"billingType": string(data.BillingType),
 	}
 	req := ac.proWC.NewRequest(params, headers, nil)
 	err := ac.proWC.Get(ctx, "/subscription-payment-redirect", req, &resp)

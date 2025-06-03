@@ -132,7 +132,7 @@ func TestDeleteAccount(t *testing.T) {
 		salt:       authClient.salt[email],
 		userInfo:   &mockUserInfo{},
 	}
-	err := ac.DeleteAccount(context.Background(), "password")
+	err := ac.DeleteAccount(context.Background(), "","password")
 	assert.NoError(t, err)
 }
 

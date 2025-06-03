@@ -80,6 +80,8 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("setting user data", "error", err)
 		return nil, err
 	}
+	// update the user data
+	ac.userData = login
 	return &resp, nil
 }
 
@@ -110,6 +112,8 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("setting user data", "error", err)
 		return nil, err
 	}
+	// update the user data
+	ac.userData = login
 	return &resp, nil
 }
 
@@ -153,7 +157,6 @@ func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
 		a.salt = salt
 		return writeSalt(salt, a.saltPath)
 	}
-
 	return err
 }
 
@@ -401,11 +404,8 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 }
 
 // DeleteAccount deletes this user account.
-func (a *APIClient) DeleteAccount(ctx context.Context, password string) error {
-	if a.userData == nil {
-		return ErrNotLoggedIn
-	}
-	lowerCaseEmail := strings.ToLower(a.userData.Id)
+func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) error {
+	lowerCaseEmail := strings.ToLower(email)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return err
@@ -464,8 +464,10 @@ func (a *APIClient) DeleteAccount(ctx context.Context, password string) error {
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
 		return err
 	}
-
+	// clean up local data
 	a.userData = nil
+	a.salt = nil
+	writeSalt(nil, a.saltPath)
 	return a.userInfo.SetData(nil)
 }
 
