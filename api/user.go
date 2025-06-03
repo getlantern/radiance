@@ -195,6 +195,9 @@ func readSalt(path string) ([]byte, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading salt from %s: %w", path, err)
 	}
+	if len(buf) == 0 {
+		return nil, fmt.Errorf("no salt found in %s", path)
+	}
 	return buf, nil
 }
 
@@ -235,12 +238,22 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (a *APIClient) Logout(ctx context.Context, email string) error {
-	return a.authClient.SignOut(ctx, &protos.LogoutRequest{
+	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     a.userInfo.DeviceID(),
 		LegacyUserID: a.userInfo.LegacyID(),
 		LegacyToken:  a.userInfo.LegacyToken(),
 	})
+	if err != nil {
+		return fmt.Errorf("logging out: %w", err)
+	}
+	// clean up local data
+	a.userData = nil
+	a.salt = nil
+	if err := writeSalt(nil, a.saltPath); err != nil {
+		return fmt.Errorf("writing salt after logout: %w", err)
+	}
+	return nil
 }
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
