@@ -28,13 +28,13 @@ require (
 	github.com/sagernet/sing v0.6.9
 	github.com/sagernet/sing-box v1.11.5
 	github.com/stretchr/testify v1.10.0
-	github.com/zeebo/assert v1.1.0
 	go.opentelemetry.io/otel/log v0.11.0
 	go.opentelemetry.io/otel/sdk v1.35.0
 	go.opentelemetry.io/otel/sdk/metric v1.35.0
 	go.uber.org/mock v0.5.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/protobuf v1.36.5
+	moul.io/http2curl v1.0.0
 )
 
 require (
@@ -63,6 +63,7 @@ require (
 	github.com/pivotal-cf-experimental/jibber_jabber v0.0.0-20151120183258-bcc4c8345a21 // indirect
 	github.com/refraction-networking/utls v1.7.1 // indirect
 	github.com/sagernet/cloudflare-tls v0.0.0-20231208171750-a4483c1b7cd1 // indirect
+	github.com/smartystreets/goconvey v1.8.1 // indirect
 	github.com/tevino/abool/v2 v2.1.0 // indirect
 	github.com/tkuchiki/go-timezone v0.2.0 // indirect
 	github.com/ulikunitz/xz v0.5.10 // indirect

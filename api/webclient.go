@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strconv"
 	"unicode"
 
 	"fmt"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"google.golang.org/protobuf/proto"
+	"moul.io/http2curl"
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -31,20 +31,6 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 		client.SetBaseURL(baseURL)
 	}
 
-	// Set default headers for the client
-	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
-		req.Header.Set(backend.AppNameHeader, app.Name)
-		req.Header.Set(backend.VersionHeader, app.Version)
-		req.Header.Set(backend.PlatformHeader, app.Platform)
-		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
-		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
-		}
-		return nil
-	})
 	// Add a request middleware to marshal the request body to protobuf or JSON
 	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
 		if req.Body == nil {
@@ -67,6 +53,10 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json")
 		}
+		req.Header.Set(backend.AppNameHeader, app.Name)
+		req.Header.Set(backend.VersionHeader, app.Version)
+		req.Header.Set(backend.PlatformHeader, app.Platform)
+
 		return nil
 	})
 
@@ -116,6 +106,8 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
+	command, _ := http2curl.GetCurlCommand(req.RawRequest)
+	fmt.Println(command)
 
 	if resp.StatusCode() != http.StatusOK {
 		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(resp.Body()))

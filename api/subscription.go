@@ -181,3 +181,33 @@ func (ac *APIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectDa
 	}
 	return resp.Redirect, err
 }
+
+type PurchaseResponse struct {
+	*protos.BaseResponse `json:",inline"`
+	PaymentStatus        string      `json:"paymentStatus"`
+	Plan                 protos.Plan `json:"plan"`
+	Status               string      `json:"status"`
+}
+
+// ActivationCode is used to purchase a subscription using a reseller code.
+func (ac *APIClient) ActivationCode(ctx context.Context, email, resellerCode string) (*PurchaseResponse, error) {
+	data := map[string]interface{}{
+		"idempotencyKey": strconv.FormatInt(time.Now().UnixNano(), 10),
+		"provider":       "reseller-code",
+		"email":          email,
+		"deviceName":     ac.userInfo.DeviceID(),
+		"resellerCode":   resellerCode,
+	}
+	var resp PurchaseResponse
+	req := ac.proWC.NewRequest(nil, nil, data)
+	err := ac.proWC.Post(ctx, "/purchase", req, &resp)
+	if err != nil {
+		slog.Error("retrieving subscription status", "error", err)
+		return nil, fmt.Errorf("retrieving subscription status: %w", err)
+	}
+	if resp.BaseResponse != nil && resp.Error != "" {
+		slog.Error("retrieving subscription status", "error", err)
+		return nil, fmt.Errorf("received bad response: %s", resp.Error)
+	}
+	return &resp, nil
+}
