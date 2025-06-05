@@ -126,13 +126,12 @@ func TestDeleteAccount(t *testing.T) {
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
-		userData:   &protos.LoginResponse{Id: "test@example.com"},
 		authClient: authClient,
 		deviceID:   "deviceId",
 		salt:       authClient.salt[email],
 		userInfo:   &mockUserInfo{},
 	}
-	err := ac.DeleteAccount(context.Background(), "","password")
+	err := ac.DeleteAccount(context.Background(), "test@example.com","password")
 	assert.NoError(t, err)
 }
 

@@ -107,7 +107,7 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 	}
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(resp.Body()))
-		return fmt.Errorf("unexpected response %v ", string(resp.Body()))
+		return fmt.Errorf("unexpected status %v body %s ", resp.StatusCode(), string(resp.Body()))
 	}
 	return nil
 }

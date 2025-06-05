@@ -50,6 +50,7 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	})
 	wc := newWebClient(httpClient, baseURL, userInfo)
 	wc.client.SetPreRequestHook(func(client *resty.Client, req *http.Request) error {
+		//pass device ID and ID and token only for signup endpoint
 		if req.URL != nil && strings.HasSuffix(req.URL.Path, "/users/signup") {
 			req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
 			if userInfo.LegacyToken() != "" {

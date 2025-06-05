@@ -480,7 +480,9 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 	// clean up local data
 	a.userData = nil
 	a.salt = nil
-	writeSalt(nil, a.saltPath)
+	if err := writeSalt(nil, a.saltPath); err != nil {
+		return fmt.Errorf("failed to write salt during account deletion cleanup: %w", err)
+	}
 	return a.userInfo.SetData(nil)
 }
 
