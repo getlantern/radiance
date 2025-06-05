@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"google.golang.org/protobuf/proto"
-	"moul.io/http2curl"
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
@@ -106,10 +105,7 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
-	command, _ := http2curl.GetCurlCommand(req.RawRequest)
-	fmt.Println(command)
-
-	if resp.StatusCode() != http.StatusOK {
+	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(resp.Body()))
 		return fmt.Errorf("unexpected response %v ", string(resp.Body()))
 	}
