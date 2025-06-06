@@ -78,7 +78,6 @@ message LoginResponse {
     repeated string invitees = 17;
     repeated Device devices = 18;
     bool yinbiEnabled = 19;
-
     message SubscriptionData {
       string planID = 1;
       string stripeCustomerID = 2;
@@ -92,8 +91,9 @@ message LoginResponse {
       string endAt = 10;
     }
 
-    SubscriptionData subscriptionData = 20;
-  }
+  SubscriptionData subscriptionData = 20;
+  
+}
 
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login

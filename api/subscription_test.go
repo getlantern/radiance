@@ -15,11 +15,11 @@ import (
 func TestSubscriptionPaymentRedirect(t *testing.T) {
 	ac := mockAPIClient(t)
 	data := PaymentRedirectData{
-		Provider:         "stripe",
-		Plan:             "pro",
-		DeviceName:       "test-device",
-		Email:            "",
-		SubscriptionType: SubscriptionType("monthly"),
+		Provider:    "stripe",
+		Plan:        "pro",
+		DeviceName:  "test-device",
+		Email:       "",
+		BillingType: SubscriptionTypeOneTime,
 	}
 	url, err := ac.SubscriptionPaymentRedirectURL(context.Background(), data)
 	require.NoError(t, err)
