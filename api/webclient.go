@@ -11,17 +11,17 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"google.golang.org/protobuf/proto"
+	"moul.io/http2curl"
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
 )
 
 type webClient struct {
 	client *resty.Client
 }
 
-func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserInfo) *webClient {
+func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
@@ -29,6 +29,12 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 	if baseURL != "" {
 		client.SetBaseURL(baseURL)
 	}
+
+	client.SetHeaders(map[string]string{
+backend.AppNameHeader:  app.Name,
+		backend.VersionHeader:  app.Version,
+		backend.PlatformHeader: app.Platform,
+	})
 
 	// Add a request middleware to marshal the request body to protobuf or JSON
 	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
@@ -52,9 +58,6 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json")
 		}
-		req.Header.Set(backend.AppNameHeader, app.Name)
-		req.Header.Set(backend.VersionHeader, app.Version)
-		req.Header.Set(backend.PlatformHeader, app.Platform)
 
 		return nil
 	})
@@ -105,6 +108,11 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
+
+	//Curl using htt2Curl
+	command, _ := http2curl.GetCurlCommand(req.RawRequest)
+	fmt.Println(command)
+
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(resp.Body()))
 		return fmt.Errorf("unexpected status %v body %s ", resp.StatusCode(), string(resp.Body()))

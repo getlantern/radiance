@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
@@ -30,15 +29,14 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	if err != nil {
 		slog.Warn("failed to get user data", "error", err)
 	}
-
 	path := filepath.Join(dataDir, saltFileName)
 	salt, err := readSalt(path)
 	if err != nil {
 		slog.Warn("failed to read salt", "error", err)
 	}
 
-	proWC := newWebClient(httpClient, proServerURL, userInfo)
-	proWC.client.SetPreRequestHook(func(client *resty.Client, req *http.Request) error {
+	proWC := newWebClient(httpClient, proServerURL)
+	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
 		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
 		if userInfo.LegacyToken() != "" {
 			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
@@ -48,21 +46,7 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		}
 		return nil
 	})
-	wc := newWebClient(httpClient, baseURL, userInfo)
-	wc.client.SetPreRequestHook(func(client *resty.Client, req *http.Request) error {
-		//pass device ID and ID and token only for signup endpoint
-		if req.URL != nil && strings.HasSuffix(req.URL.Path, "/users/signup") {
-			req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-			if userInfo.LegacyToken() != "" {
-				req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
-			}
-			if userInfo.LegacyID() != 0 {
-				req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
-			}
-		}
-		return nil
-	})
-
+	wc := newWebClient(httpClient, baseURL)
 	return &APIClient{
 		authWc:     wc,
 		proWC:      proWC,
@@ -70,7 +54,7 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		saltPath:   path,
 		userData:   userData,
 		deviceID:   userInfo.DeviceID(),
-		authClient: &authClient{wc},
+		authClient: &authClient{wc, userInfo},
 		userInfo:   userInfo,
 	}
 }

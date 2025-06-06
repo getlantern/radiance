@@ -196,7 +196,7 @@ func readSalt(path string) ([]byte, error) {
 		return nil, fmt.Errorf("reading salt from %s: %w", path, err)
 	}
 	if len(buf) == 0 {
-		return nil, fmt.Errorf("no salt found in %s", path)
+		return nil, nil
 	}
 	return buf, nil
 }
