@@ -34,7 +34,7 @@ type AuthClient interface {
 
 type authClient struct {
 	wc       *webClient
-	userIndo common.UserInfo
+	userInfo common.UserInfo
 }
 
 // Auth APIS
@@ -60,9 +60,9 @@ func (c *authClient) GetSalt(ctx context.Context, email string) (*protos.GetSalt
 func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupRequest) error {
 	var resp protos.EmptyResponse
 	header := map[string]string{
-		backend.DeviceIDHeader: c.userIndo.DeviceID(),
-		backend.UserIDHeader:   strconv.FormatInt(c.userIndo.LegacyID(), 10),
-		backend.ProTokenHeader: c.userIndo.LegacyToken(),
+		backend.DeviceIDHeader: c.userInfo.DeviceID(),
+		backend.UserIDHeader:   strconv.FormatInt(c.userInfo.LegacyID(), 10),
+		backend.ProTokenHeader: c.userInfo.LegacyToken(),
 	}
 	req := c.wc.NewRequest(nil, header, signupData)
 	return c.wc.Post(ctx, "/users/signup", req, &resp)
