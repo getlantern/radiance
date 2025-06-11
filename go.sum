@@ -100,6 +100,8 @@ github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175 h1:JWH5BB2o0e
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175/go.mod h1:h3S9LBmmzN/xM+lwYZHE4abzTtCTtidKtG+nxZcCZX0=
 github.com/getlantern/sing-box-extensions v0.0.3-0.20250527123041-ac84f0af290f h1:k6K+XIkna3A2IHJpT4S5kRTOeKinY32JGNakLoJRIXU=
 github.com/getlantern/sing-box-extensions v0.0.3-0.20250527123041-ac84f0af290f/go.mod h1:NFLIYOX8xslKewQojGUPB3f8ShTM0ZcLoce+wdrVb5U=
+github.com/getlantern/sing-box-extensions v0.0.3 h1:wYm9EPP+TCaEFXCxUHoXlJ/hGgrJKQHsvnRzvxK4xUY=
+github.com/getlantern/sing-box-extensions v0.0.3/go.mod h1:/6+EDo75oa/ZEUc0c+r7QPGiq6FxGSyUGD1ER41S82w=
 github.com/getlantern/sing-box-minimal v1.11.11-lantern h1:HZx3FukmeHTmtcYB7/E2eQQESDOoYjox/m0LGiQ0U6Y=
 github.com/getlantern/sing-box-minimal v1.11.11-lantern/go.mod h1:wrbdu8l5rj5q0LbxdMtUiT2cJ7kmtJ4pDkdreym41oA=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
