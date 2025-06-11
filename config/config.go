@@ -253,7 +253,7 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 		switch opts := endpoint.Options.(type) {
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
-		case *exO.AmneziaWGEndpointOptions:
+		case *exO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 		default:
 		}
