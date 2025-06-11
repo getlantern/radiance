@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strconv"
 	"unicode"
 
 	"fmt"
@@ -15,14 +14,13 @@ import (
 
 	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
 )
 
 type webClient struct {
 	client *resty.Client
 }
 
-func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserInfo) *webClient {
+func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
@@ -31,20 +29,12 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 		client.SetBaseURL(baseURL)
 	}
 
-	// Set default headers for the client
-	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
-		req.Header.Set(backend.AppNameHeader, app.Name)
-		req.Header.Set(backend.VersionHeader, app.Version)
-		req.Header.Set(backend.PlatformHeader, app.Platform)
-		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
-		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
-		}
-		return nil
+	client.SetHeaders(map[string]string{
+		backend.AppNameHeader:  app.Name,
+		backend.VersionHeader:  app.Version,
+		backend.PlatformHeader: app.Platform,
 	})
+
 	// Add a request middleware to marshal the request body to protobuf or JSON
 	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
 		if req.Body == nil {
@@ -67,6 +57,7 @@ func newWebClient(httpClient *http.Client, baseURL string, userInfo common.UserI
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json")
 		}
+
 		return nil
 	})
 
@@ -117,9 +108,12 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 		return fmt.Errorf("error sending request: %w", err)
 	}
 
-	if resp.StatusCode() != http.StatusOK {
+	// print cutl command for debugging
+	fmt.Println(req.GenerateCurlCommand())
+
+	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(resp.Body()))
-		return fmt.Errorf("unexpected status code %v", resp.StatusCode())
+		return fmt.Errorf("unexpected status %v body %s ", resp.StatusCode(), string(resp.Body()))
 	}
 	return nil
 }

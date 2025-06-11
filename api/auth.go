@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common"
 )
 
 type AuthClient interface {
@@ -30,7 +33,8 @@ type AuthClient interface {
 }
 
 type authClient struct {
-	wc *webClient
+	wc       *webClient
+	userInfo common.UserInfo
 }
 
 // Auth APIS
@@ -55,7 +59,12 @@ func (c *authClient) GetSalt(ctx context.Context, email string) (*protos.GetSalt
 // SignUp is used to sign up a new user with the SignupRequest
 func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, signupData)
+	header := map[string]string{
+		backend.DeviceIDHeader: c.userInfo.DeviceID(),
+		backend.UserIDHeader:   strconv.FormatInt(c.userInfo.LegacyID(), 10),
+		backend.ProTokenHeader: c.userInfo.LegacyToken(),
+	}
+	req := c.wc.NewRequest(nil, header, signupData)
 	return c.wc.Post(ctx, "/users/signup", req, &resp)
 }
 

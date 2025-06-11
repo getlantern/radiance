@@ -80,6 +80,8 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("setting user data", "error", err)
 		return nil, err
 	}
+	// update the user data
+	ac.userData = login
 	return &resp, nil
 }
 
@@ -110,6 +112,8 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("setting user data", "error", err)
 		return nil, err
 	}
+	// update the user data
+	ac.userData = login
 	return &resp, nil
 }
 
@@ -153,7 +157,6 @@ func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
 		a.salt = salt
 		return writeSalt(salt, a.saltPath)
 	}
-
 	return err
 }
 
@@ -192,6 +195,9 @@ func readSalt(path string) ([]byte, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading salt from %s: %w", path, err)
 	}
+	if len(buf) == 0 {
+		return nil, nil
+	}
 	return buf, nil
 }
 
@@ -202,10 +208,6 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	}
 	resp, err := a.authClient.GetSalt(ctx, email)
 	if err != nil {
-		return nil, err
-	}
-	a.salt = resp.Salt
-	if err := writeSalt(resp.Salt, a.saltPath); err != nil {
 		return nil, err
 	}
 	return resp.Salt, nil
@@ -227,17 +229,31 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 		a.userInfo.SetData(resp)
 		a.userData = resp
 	}
+	a.salt = salt
+	if err := writeSalt(salt, a.saltPath); err != nil {
+		return nil, err
+	}
 	return resp, nil
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (a *APIClient) Logout(ctx context.Context, email string) error {
-	return a.authClient.SignOut(ctx, &protos.LogoutRequest{
+	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     a.userInfo.DeviceID(),
 		LegacyUserID: a.userInfo.LegacyID(),
 		LegacyToken:  a.userInfo.LegacyToken(),
 	})
+	if err != nil {
+		return fmt.Errorf("logging out: %w", err)
+	}
+	// clean up local data
+	a.userData = nil
+	a.salt = nil
+	if err := writeSalt(nil, a.saltPath); err != nil {
+		return fmt.Errorf("writing salt after logout: %w", err)
+	}
+	return nil
 }
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
@@ -401,11 +417,8 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 }
 
 // DeleteAccount deletes this user account.
-func (a *APIClient) DeleteAccount(ctx context.Context, password string) error {
-	if a.userData == nil {
-		return ErrNotLoggedIn
-	}
-	lowerCaseEmail := strings.ToLower(a.userData.Id)
+func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) error {
+	lowerCaseEmail := strings.ToLower(email)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return err
@@ -464,8 +477,12 @@ func (a *APIClient) DeleteAccount(ctx context.Context, password string) error {
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
 		return err
 	}
-
+	// clean up local data
 	a.userData = nil
+	a.salt = nil
+	if err := writeSalt(nil, a.saltPath); err != nil {
+		return fmt.Errorf("failed to write salt during account deletion cleanup: %w", err)
+	}
 	return a.userInfo.SetData(nil)
 }
 
