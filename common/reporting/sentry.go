@@ -4,15 +4,14 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getsentry/sentry-go"
 )
 
-func Init() {
+func Init(version string) {
 	err := sentry.Init(sentry.ClientOptions{
 		Dsn:              "https://f0b8f24478c68542e418ba644051ef56@o75725.ingest.us.sentry.io/4508853370093568",
 		AttachStacktrace: true,
-		Release:          common.Version,
+		Release:          version,
 	})
 	if err != nil {
 		slog.Error("sentry.Init:", "error", err)

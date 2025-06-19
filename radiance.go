@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -21,7 +20,6 @@ import (
 	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/reporting"
@@ -61,8 +59,6 @@ type Radiance struct {
 
 	//user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
-	logDir   string
-	dataDir  string
 	locale   string
 
 	shutdownFuncs []func(context.Context) error
@@ -75,16 +71,16 @@ type Options struct {
 	LogDir   string
 	Locale   string
 	DeviceID string
+	// log level. This can be overridden by the RADIANCE_LOG_LEVEL env variable.
+	LogLevel string
 }
 
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(opts Options) (*Radiance, error) {
-	reporting.Init()
-	dataDir, logDir, err := common.SetupDirectories(opts.DataDir, opts.LogDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup directories: %w", err)
+	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
+		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 	if opts.Locale == "" {
 		// It is preferable to use the locale from the frontend, as locale is a requirement for lots
@@ -104,20 +100,15 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		platformDeviceID = deviceid.Get()
 	}
 
-	var logWriter io.Writer
-	logWriter, err = newLog(filepath.Join(logDir, app.LogFileName))
-	if err != nil {
-		return nil, fmt.Errorf("could not create log: %w", err)
-	}
-
-	f, err := newFronted(logWriter, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"))
+	dataDir := common.DataPath()
+	f, err := newFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(logWriter),
+		kindling.WithLogWriter(&slogWriter{Logger: slog.Default().With("module", "kindling")}),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
@@ -151,8 +142,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
 		userInfo:      userInfo,
-		logDir:        logDir,
-		dataDir:       dataDir,
 		locale:        opts.Locale,
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
@@ -248,34 +237,18 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
-		r.logDir,
+		common.LogPath(),
 		email,
 		typeInt,
 		report.Description,
 		report.Attachment,
 		report.Device,
 		report.Model,
-		country)
+		country,
+	)
 }
 
-// Return an slog logger configured to write to both stdout and the log file.
-func newLog(logPath string) (io.Writer, error) {
-	// If the log file does not exist, create it.
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-	// defer f.Close() - file should be closed externally when logger is no longer needed
-	logWriter := io.MultiWriter(os.Stdout, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     slog.LevelDebug,
-	}))
-	slog.SetDefault(logger)
-	return logWriter, nil
-}
-
-func newFronted(logWriter io.Writer, panicListener func(string), cacheFile string) (fronted.Fronted, error) {
+func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, error) {
 	// Parse the domain from the URL.
 	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
 	u, err := url.Parse(configURL)
@@ -284,6 +257,8 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	}
 	// Extract the domain from the URL.
 	domain := u.Host
+
+	logWriter := &slogWriter{Logger: slog.Default().With("module", "kindling", "group", "smartdialer")}
 
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.
@@ -303,6 +278,7 @@ func newFronted(logWriter io.Writer, panicListener func(string), cacheFile strin
 	httpClient := &http.Client{
 		Transport: lz,
 	}
+	fronted.SetLogger(slog.Default().With("module", "fronted"))
 	return fronted.NewFronted(
 		fronted.WithPanicListener(panicListener),
 		fronted.WithCacheFile(cacheFile),
@@ -341,4 +317,14 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 
 	lz.smartTransportMu.Unlock()
 	return lz.smartTransport.RoundTrip(req)
+}
+
+type slogWriter struct {
+	*slog.Logger
+}
+
+func (w *slogWriter) Write(p []byte) (n int, err error) {
+	// Convert the byte slice to a string and log it
+	w.Info(string(p))
+	return len(p), nil
 }

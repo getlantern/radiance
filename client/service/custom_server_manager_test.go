@@ -15,7 +15,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/log"
+	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/route"
 	"github.com/sagernet/sing/common"
@@ -35,11 +35,11 @@ func TestSelectCustomServer(t *testing.T) {
 		endpointRegistry,
 	)
 
-	options := boxoptions.Options("stderr")
+	options := boxoptions.Options()
 	options.Outbounds = append(options.Outbounds, option.Outbound{Type: "direct", Tag: "testing-out"})
 
 	dataDir := t.TempDir()
-	logFactory := log.NewNOPFactory()
+	logFactory := sblog.NewNOPFactory()
 	manager := NewCustomServerManager(ctx, dataDir)
 	require.NotNil(t, manager)
 
@@ -61,7 +61,7 @@ func TestSelectCustomServer(t *testing.T) {
 	}))
 	service.MustRegister[adapter.EndpointManager](ctx, endpointManager)
 	service.MustRegister[adapter.OutboundManager](ctx, outboundManager)
-	service.MustRegister[log.Factory](ctx, logFactory)
+	service.MustRegister[sblog.Factory](ctx, logFactory)
 	manager.ctx = ctx
 
 	// If we're adding an endpoint with wireguard, a wireguard inbound is required
@@ -143,10 +143,10 @@ func TestServerManagerIntegration(t *testing.T) {
 		endpointRegistry,
 	)
 
-	options := boxoptions.Options("stderr")
+	options := boxoptions.Options()
 
 	dataDir := t.TempDir()
-	logFactory := log.NewNOPFactory()
+	logFactory := sblog.NewNOPFactory()
 	manager := NewCustomServerManager(ctx, dataDir)
 	require.NotNil(t, manager)
 
@@ -168,7 +168,7 @@ func TestServerManagerIntegration(t *testing.T) {
 	}))
 	service.MustRegister[adapter.EndpointManager](ctx, endpointManager)
 	service.MustRegister[adapter.OutboundManager](ctx, outboundManager)
-	service.MustRegister[log.Factory](ctx, logFactory)
+	service.MustRegister[sblog.Factory](ctx, logFactory)
 	manager.ctx = ctx
 
 	srv := newLanternServerManagerMock()
