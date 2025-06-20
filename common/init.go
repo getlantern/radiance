@@ -53,15 +53,16 @@ func Init(dataDir, logDir, logLevel string) error {
 func initLogger(logPath, level string) error {
 	var lvl slog.Level
 	var err error
-	envLvl := os.Getenv(envLogLevel)
-	if envLvl != "" {
-		if lvl, err = internal.ParseLogLevel(envLvl); err != nil {
+	envLevelValue := os.Getenv(envLogLevel)
+	logLevelSet := false
+	if envLevelValue != "" {
+		if lvl, err = internal.ParseLogLevel(envLevelValue); err != nil {
 			slog.Warn("Failed to parse "+envLogLevel, "error", err)
 		} else {
-			envLvl = ""
+			logLevelSet = true
 		}
 	}
-	if envLvl == "" && level != "" {
+	if !logLevelSet && level != "" {
 		if lvl, err = internal.ParseLogLevel(level); err != nil {
 			slog.Warn("Failed to parse given log level", "error", err)
 		}
