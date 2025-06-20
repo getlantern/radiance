@@ -80,7 +80,7 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 	if err := common.Init(dataDir, logDir, "debug"); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
-	log = slog.Default().With("service", "vpn-client")
+	log = slog.Default().With("name", "vpn-client")
 	dataDir = common.DataPath()
 
 	boxOpts := boxoptions.Options()

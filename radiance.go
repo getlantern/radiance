@@ -108,7 +108,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(&slogWriter{Logger: slog.Default().With("module", "kindling")}),
+		kindling.WithLogWriter(&slogWriter{Logger: slog.Default().With("service", "kindling")}),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
@@ -258,7 +258,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	// Extract the domain from the URL.
 	domain := u.Host
 
-	logWriter := &slogWriter{Logger: slog.Default().With("module", "kindling", "group", "smartdialer")}
+	logWriter := &slogWriter{Logger: slog.Default().With("service", "kindling", "group", "smartdialer")}
 
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.

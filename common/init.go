@@ -13,11 +13,19 @@ import (
 	"github.com/getlantern/radiance/internal"
 )
 
+const (
+	// envLogLevel is the environment variable that can be used to override the log level.
+	envLogLevel     = "RADIANCE_LOG_LEVEL"
+	defaultLogLevel = "info"
+)
+
 var (
 	initMutex   sync.Mutex
 	initialized bool
 )
 
+// Init initializes the common components of the application. This includes setting up the directories
+// for data and logs, initializing the logger, and setting up reporting.
 func Init(dataDir, logDir, logLevel string) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
@@ -31,15 +39,7 @@ func Init(dataDir, logDir, logLevel string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	var level slog.Level
-	if lvl := os.Getenv("RADIANCE_LOG_LEVEL"); lvl != "" {
-		if parsedLevel, err := internal.ParseLogLevel(lvl); err == nil {
-			level = parsedLevel
-		} else {
-			slog.Warn("Failed to parse RADIANCE_LOG_LEVEL, using default level", "error", err)
-		}
-	}
-	err = initLogger(filepath.Join(logDir, app.LogFileName), level)
+	err = initLogger(filepath.Join(logDir, app.LogFileName), logLevel)
 	if err != nil {
 		return fmt.Errorf("initialize log: %w", err)
 	}
@@ -47,8 +47,27 @@ func Init(dataDir, logDir, logLevel string) error {
 	return nil
 }
 
-// initLogger reconfigures the default [slog.Logger] to log to both stdout and a file.
-func initLogger(logPath string, level slog.Level) error {
+// initLogger reconfigures the default slog.Logger to write to a file and stdout and sets the log level.
+// The log level is determined, first by the environment variable if set and valid, then by the provided level.
+// If both are invalid and/or not set, it defaults to "info".
+func initLogger(logPath, level string) error {
+	var lvl slog.Level
+	var err error
+	envLvl := os.Getenv(envLogLevel)
+	if envLvl != "" {
+		if lvl, err = internal.ParseLogLevel(envLvl); err != nil {
+			slog.Warn("Failed to parse "+envLogLevel, "error", err)
+		} else {
+			envLvl = ""
+		}
+	}
+	if envLvl == "" && level != "" {
+		if lvl, err = internal.ParseLogLevel(level); err != nil {
+			slog.Warn("Failed to parse given log level", "error", err)
+		}
+	}
+	slog.SetLogLoggerLevel(lvl)
+
 	// If the log file does not exist, create it.
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -58,7 +77,7 @@ func initLogger(logPath string, level slog.Level) error {
 	logWriter := io.MultiWriter(os.Stdout, f)
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
-		Level:     level,
+		Level:     lvl,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {
 			case slog.SourceKey:
