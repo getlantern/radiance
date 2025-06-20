@@ -61,6 +61,8 @@ github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731/go.mod h1:XZwE+
 github.com/getlantern/filepersist v0.0.0-20160317154340-c5f0cd24e799/go.mod h1:8DGAx0LNUfXNnEH+fXI0s3OCBA/351kZCiz/8YSK3i8=
 github.com/getlantern/filepersist v0.0.0-20210901195658-ed29a1cb0b7c h1:mcz27xtAkb1OuOLBct/uFfL1p3XxAIcFct82GbT+UZM=
 github.com/getlantern/filepersist v0.0.0-20210901195658-ed29a1cb0b7c/go.mod h1:8DGAx0LNUfXNnEH+fXI0s3OCBA/351kZCiz/8YSK3i8=
+github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4 h1:Yxnq3LLJnH4f8CTXpaM5jY7yITzSw8/LqgsjlS25ltE=
+github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4/go.mod h1:mgfW/mOz/Pg7WRbu8wG+rTO5GfBKp7j+vx1xbOgEl+E=
 github.com/getlantern/golog v0.0.0-20210606115803-bce9f9fe5a5f/go.mod h1:ZyIjgH/1wTCl+B+7yH1DqrWp6MPJqESmwmEQ89ZfhvA=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 h1:NlQedYmPI3pRAXJb+hLVVDGqfvvXGRPV8vp7XOjKAZ0=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65/go.mod h1:+ZU1h+iOVqWReBpky6d5Y2WL0sF2Llxu+QcxJFs2+OU=
@@ -96,6 +98,8 @@ github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNi
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534/go.mod h1:ZsLfOY6gKQOTyEcPYNA9ws5/XHZQFroxqCOhHjGcs9Y=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175 h1:JWH5BB2o0eAeGs0tZnFPpQGx+nMIo/WmxKnj2hnGjgE=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175/go.mod h1:h3S9LBmmzN/xM+lwYZHE4abzTtCTtidKtG+nxZcCZX0=
+github.com/getlantern/sing-box-extensions v0.0.5-0.20250619232457-1d3cda4cd28d h1:ms/NFaymB2DSCcJaoGqQewLhtsQvlXOOxOudq2/67PQ=
+github.com/getlantern/sing-box-extensions v0.0.5-0.20250619232457-1d3cda4cd28d/go.mod h1:Nmgtdh/kMroU/RDACurQCNB+FiB2fEq2EkhoXhW6U5k=
 github.com/getlantern/sing-box-minimal v1.11.12-0.20250616155750-74188abad925 h1:GRXMaFuhhc6oqeYRnIaQ2n7LatJPbs6VPSH11PGm2pk=
 github.com/getlantern/sing-box-minimal v1.11.12-0.20250616155750-74188abad925/go.mod h1:6NrpLFC56d9PfTPXWFvdtW9/POlXwpHXa/4lubD5FmY=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=

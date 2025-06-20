@@ -4,10 +4,6 @@ go 1.24
 
 toolchain go1.24.1
 
-replace github.com/getlantern/sing-box-extensions => ../sing-box-extensions
-
-replace github.com/getlantern/fronted => ../fronted
-
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.12-0.20250616155750-74188abad925
 
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
@@ -21,11 +17,11 @@ require (
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20250507184827-3e58a77acb6b
-	github.com/getlantern/fronted v0.0.0-20250506001345-27e1daa0a25e
+	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
-	github.com/getlantern/sing-box-extensions v0.0.3
+	github.com/getlantern/sing-box-extensions v0.0.5-0.20250619232457-1d3cda4cd28d
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
