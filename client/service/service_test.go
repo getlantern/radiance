@@ -134,7 +134,7 @@ func TestInsertUserServers(t *testing.T) {
 	outs := []option.Outbound{
 		{
 			Type: constant.TypeDirect,
-			Tag:  "sever1",
+			Tag:  "server1",
 		},
 		{
 			Type:    constant.TypeHTTP,
