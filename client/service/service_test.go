@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,115 @@ import (
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/internal"
 )
+
+func TestSelectServer_NotRunning(t *testing.T) {
+	testServerInfo := func(tag string) CustomServerInfo {
+		return CustomServerInfo{
+			Tag: tag,
+			Outbound: &option.Outbound{
+				Tag:     tag,
+				Type:    "direct",
+				Options: option.DirectOutboundOptions{},
+			},
+		}
+	}
+	tests := []struct {
+		name      string
+		tag       string
+		serverMgr *CustomServerManager
+		shouldErr bool
+	}{
+		{
+			name:      "EmptyTag",
+			tag:       "",
+			shouldErr: true,
+		},
+		{
+			name:      "UserServerManagerNil",
+			tag:       "tag1",
+			shouldErr: true,
+		},
+		{
+			name: "ServerNotFound",
+			tag:  "tag1",
+			serverMgr: &CustomServerManager{
+				customServers: map[string]CustomServerInfo{},
+			},
+			shouldErr: true,
+		},
+		{
+			name: "Success",
+			tag:  "tag1",
+			serverMgr: &CustomServerManager{
+				customServers: map[string]CustomServerInfo{
+					"tag1": testServerInfo("tag1"),
+				},
+			},
+			shouldErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &Server{Name: "default"}
+			bs := &BoxService{
+				ctx:               context.Background(),
+				activeServer:      atomic.Value{},
+				userServerManager: tt.serverMgr,
+			}
+			bs.activeServer.Store(server)
+
+			err := bs.SelectServer(boxoptions.ServerGroupUser, tt.tag)
+			got := bs.activeServer.Load().(*Server)
+			if tt.shouldErr {
+				assert.Error(t, err)
+				assert.Equal(t, server, got)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.tag, got.Name)
+			}
+		})
+	}
+}
+
+func TestSetInitialServer(t *testing.T) {
+	opts := boxoptions.BoxOptions
+	server := &Server{
+		Name:  "want",
+		Group: boxoptions.ServerGroupUser,
+	}
+	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
+		return o.Tag == server.Group && o.Type == constant.TypeSelector
+	})
+	require.Greater(t, idx, -1, "Expected selector outbound for group %s in options", server.Group)
+
+	outs := []option.Outbound{
+		{
+			Type: constant.TypeDirect,
+			Tag:  "init",
+		},
+		{
+			Type:    constant.TypeHTTP,
+			Tag:     server.Name,
+			Options: &option.HTTPOutboundOptions{},
+		},
+	}
+	opts.Outbounds = append(opts.Outbounds, outs...)
+	opts.Outbounds[idx] = boxoptions.SelectorOutbound(
+		[]string{outs[0].Tag, outs[1].Tag},
+		server.Group,
+		outs[0].Tag,
+	)
+
+	sopts := opts.Outbounds[idx].Options.(*option.SelectorOutboundOptions)
+	prevClashMode := opts.Experimental.ClashAPI.DefaultMode
+	if assert.NoError(t, setInitialServer(opts, server)) {
+		assert.Equal(t, server.Name, sopts.Default)
+		assert.Equal(t, opts.Experimental.ClashAPI.DefaultMode, server.Group)
+	} else {
+		assert.Equal(t, sopts.Default, outs[0].Tag)
+		assert.Equal(t, prevClashMode, opts.Experimental.ClashAPI.DefaultMode)
+	}
+}
 
 func TestReloadOptions(t *testing.T) {
 	tmp := t.TempDir()
@@ -93,10 +203,6 @@ func TestReloadOptions(t *testing.T) {
 	writeConfig(confResp)
 	time.Sleep(150 * time.Millisecond) // wait for watcher to trigger
 	assertFn(confResp.Options, bs.options)
-}
-
-func TestActiveServer(t *testing.T) {
-
 }
 
 func TestUpdateOutbounds(t *testing.T) {

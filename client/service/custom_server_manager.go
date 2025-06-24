@@ -16,7 +16,7 @@ import (
 )
 
 type CustomServerManager struct {
-	customServersMutex        *sync.RWMutex
+	customServersMutex        sync.RWMutex
 	customServers             map[string]CustomServerInfo
 	customServersFilePath     string
 	trustedServerFingerprints string
@@ -25,7 +25,6 @@ type CustomServerManager struct {
 func NewCustomServerManager(dataDir string) *CustomServerManager {
 	csm := &CustomServerManager{
 		customServers:             make(map[string]CustomServerInfo),
-		customServersMutex:        new(sync.RWMutex),
 		customServersFilePath:     filepath.Join(dataDir, "custom_servers.json"),
 		trustedServerFingerprints: filepath.Join(dataDir, "trusted_server_fingerprints.json"),
 	}
