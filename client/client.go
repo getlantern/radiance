@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -28,6 +27,8 @@ var (
 	client   *vpnClient
 	clientMu sync.Mutex
 	statusMu sync.Mutex
+
+	log = slog.Default()
 )
 
 type Options struct {
@@ -75,16 +76,16 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return client, nil
 	}
 
-	dataDir, logDir, err := common.SetupDirectories(dataDir, logDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup directories: %w", err)
+	// TODO: accept log level as an argument
+	if err := common.Init(dataDir, logDir, "debug"); err != nil {
+		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
+	log = slog.Default().With("name", "vpn-client")
+	dataDir = common.DataPath()
 
-	// TODO: We should be fetching the options from the server.
-	logOutput := filepath.Join(logDir, "lantern-box.log")
-	boxOpts := boxoptions.Options(logOutput)
+	boxOpts := boxoptions.Options()
 
-	slog.Debug("Creating new VPN client")
+	log.Debug("Creating new VPN client")
 	rsMgr := ruleset.NewManager()
 	splitTunnel, err := initMutRuleSet(dataDir, SplitTunnelTag, SplitTunnelFormat, rsMgr, enableSplitTunnel)
 	if err != nil {
@@ -116,7 +117,7 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), dataDir, app.ConfigFileName, platIfce, rsMgr)
+	b, err := boxservice.New(string(buf), app.ConfigFileName, platIfce, rsMgr, log)
 	if err != nil {
 		return nil, err
 	}
@@ -138,13 +139,13 @@ func (c *vpnClient) StartVPN() error {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	slog.Debug("Starting VPN client")
+	log.Debug("Starting VPN client")
 	if c.boxService == nil {
 		return errors.New("box service is not initialized")
 	}
 	err := c.boxService.Start()
 	if err != nil {
-		slog.Error("Failed to start boxService", "error", err)
+		log.Error("Failed to start boxService", "error", err)
 		return err
 	}
 
@@ -164,7 +165,7 @@ func (c *vpnClient) StopVPN() error {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	slog.Debug("Stopping VPN client")
+	log.Debug("Stopping VPN client")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	var err error
 	go func() {
@@ -196,13 +197,13 @@ func (c *vpnClient) setConnectionStatus(connected bool) {
 
 // PauseVPN Pause pauses the VPN client for the specified duration
 func (c *vpnClient) PauseVPN(dur time.Duration) error {
-	slog.Info("Pausing VPN for", "duration", dur)
+	log.Info("Pausing VPN for", "duration", dur)
 	return c.boxService.Pause(dur)
 }
 
 // ResumeVPN Resume resumes the VPN client
 func (c *vpnClient) ResumeVPN() {
-	slog.Info("Resuming VPN client")
+	log.Info("Resuming VPN client")
 	c.boxService.Wake()
 }
 

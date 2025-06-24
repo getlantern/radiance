@@ -12,7 +12,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/log"
+	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
@@ -284,7 +284,7 @@ func (m *CustomServerManager) reinitializeCustomSelector(defaultTag string, tags
 
 func (m *CustomServerManager) newSelectorOutbound(outboundManager adapter.OutboundManager, tag string, options *option.SelectorOutboundOptions) error {
 	router := service.FromContext[adapter.Router](m.ctx)
-	logFactory := service.FromContext[log.Factory](m.ctx)
+	logFactory := service.FromContext[sblog.Factory](m.ctx)
 	if err := outboundManager.Create(m.ctx, router, logFactory.NewLogger(tag), tag, constant.TypeSelector, options); err != nil {
 		return fmt.Errorf("create selector outbound: %w", err)
 	}
