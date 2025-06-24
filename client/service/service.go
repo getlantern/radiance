@@ -137,7 +137,9 @@ func (bs *BoxService) Start() error {
 	options := bs.options
 	bs.optionsAccess.Unlock()
 
-	insertUserServers(options, bs.userServerManager.ListCustomServers())
+	if err := insertUserServers(&options, bs.userServerManager.ListCustomServers()); err != nil {
+		return fmt.Errorf("insert user servers: %w", err)
+	}
 	if err := setInitialServer(options, bs.activeServer.Load().(*Server)); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
@@ -167,28 +169,31 @@ func (bs *BoxService) Start() error {
 	return nil
 }
 
+// setInitialServer sets the initial server for sing-box to use.
 func setInitialServer(opts option.Options, server *Server) error {
 	if server.Group != boxoptions.ServerGroupUser && server.Group != boxoptions.ServerGroupLantern {
 		return fmt.Errorf("invalid server group: %s", server.Group)
 	}
-	group := server.Group
-	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
-		return o.Tag == group && o.Type == constant.TypeSelector
-	})
-	if idx < 0 {
-		return fmt.Errorf("no selector outbound found for group %s", group)
+	sopts, err := findSelector(opts.Outbounds, server.Group)
+	if err != nil {
+		return err
 	}
-	out := opts.Outbounds[idx]
-	sOpts := out.Options.(*option.SelectorOutboundOptions)
-	sOpts.Default = server.Name
-	opts.Experimental.ClashAPI.DefaultMode = group
+	sopts.Default = server.Name
+	opts.Experimental.ClashAPI.DefaultMode = server.Group
 	return nil
 }
 
-func insertUserServers(opts option.Options, servers []CustomServerInfo) {
+// insertUserServers inserts the user-defined servers into the options. It will add the outbounds
+// and endpoints to the options if they are not already present. It will also update the selector
+func insertUserServers(opts *option.Options, servers []CustomServerInfo) error {
 	if len(servers) == 0 {
-		return
+		return nil
 	}
+	sopts, err := findSelector(opts.Outbounds, boxoptions.ServerGroupUser)
+	if err != nil {
+		return err
+	}
+
 	tags := make([]string, 0, len(servers))
 	for _, server := range servers {
 		// insert server outbounds/endpoints into the options if they are not already present
@@ -197,28 +202,32 @@ func insertUserServers(opts option.Options, servers []CustomServerInfo) {
 				return o.Tag == server.Outbound.Tag
 			}) {
 				opts.Outbounds = append(opts.Outbounds, *server.Outbound)
-				tags = append(tags, server.Outbound.Tag)
 			}
+			tags = append(tags, server.Outbound.Tag)
 		} else if server.Endpoint != nil {
 			if !slices.ContainsFunc(opts.Endpoints, func(e option.Endpoint) bool {
 				return e.Tag == server.Endpoint.Tag
 			}) {
 				opts.Endpoints = append(opts.Endpoints, *server.Endpoint)
-				tags = append(tags, server.Endpoint.Tag)
 			}
+			tags = append(tags, server.Endpoint.Tag)
 		}
 	}
 
-	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
-		return o.Tag == boxoptions.ServerGroupUser && o.Type == constant.TypeSelector
+	sopts.Outbounds = tags
+	sopts.Default = tags[0]
+	return nil
+}
+
+// helper function to retrieve the selector outbound options for a given group
+func findSelector(outs []option.Outbound, group string) (*option.SelectorOutboundOptions, error) {
+	idx := slices.IndexFunc(outs, func(o option.Outbound) bool {
+		return o.Tag == group && o.Type == constant.TypeSelector
 	})
-	selector := boxoptions.SelectorOutbound(tags, boxoptions.ServerGroupUser, "direct")
-	if idx >= 0 {
-		opts.Outbounds[idx] = selector
-	} else {
-		opts.Outbounds = append(opts.Outbounds, selector)
+	if idx < 0 {
+		return nil, fmt.Errorf("no selector outbound found for group %s", group)
 	}
-	return
+	return outs[idx].Options.(*option.SelectorOutboundOptions), nil
 }
 
 func BaseContext() context.Context {

@@ -100,11 +100,6 @@ func TestSetInitialServer(t *testing.T) {
 		Name:  "want",
 		Group: boxoptions.ServerGroupUser,
 	}
-	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
-		return o.Tag == server.Group && o.Type == constant.TypeSelector
-	})
-	require.Greater(t, idx, -1, "Expected selector outbound for group %s in options", server.Group)
-
 	outs := []option.Outbound{
 		{
 			Type: constant.TypeDirect,
@@ -117,21 +112,47 @@ func TestSetInitialServer(t *testing.T) {
 		},
 	}
 	opts.Outbounds = append(opts.Outbounds, outs...)
-	opts.Outbounds[idx] = boxoptions.SelectorOutbound(
-		[]string{outs[0].Tag, outs[1].Tag},
-		server.Group,
-		outs[0].Tag,
-	)
+	sopts, err := findSelector(opts.Outbounds, server.Group)
+	require.NoError(t, err)
 
-	sopts := opts.Outbounds[idx].Options.(*option.SelectorOutboundOptions)
+	sopts.Outbounds = []string{outs[0].Tag, outs[1].Tag}
+	sopts.Default = outs[0].Tag
+
 	prevClashMode := opts.Experimental.ClashAPI.DefaultMode
 	if assert.NoError(t, setInitialServer(opts, server)) {
 		assert.Equal(t, server.Name, sopts.Default)
-		assert.Equal(t, opts.Experimental.ClashAPI.DefaultMode, server.Group)
+		assert.Equal(t, server.Group, opts.Experimental.ClashAPI.DefaultMode)
 	} else {
 		assert.Equal(t, sopts.Default, outs[0].Tag)
 		assert.Equal(t, prevClashMode, opts.Experimental.ClashAPI.DefaultMode)
 	}
+}
+
+func TestInsertUserServers(t *testing.T) {
+	opts := boxoptions.BoxOptions
+	outs := []option.Outbound{
+		{
+			Type: constant.TypeDirect,
+			Tag:  "sever1",
+		},
+		{
+			Type:    constant.TypeHTTP,
+			Tag:     "server2",
+			Options: &option.HTTPOutboundOptions{},
+		},
+	}
+	servers := []CustomServerInfo{
+		{Tag: outs[0].Tag, Outbound: &outs[0]},
+		{Tag: outs[1].Tag, Outbound: &outs[1]},
+	}
+
+	insertUserServers(&opts, servers)
+	for _, server := range servers {
+		assert.Contains(t, opts.Outbounds, *server.Outbound, "Expected outbound %s to be inserted", server.Tag)
+	}
+	sopts, err := findSelector(opts.Outbounds, boxoptions.ServerGroupUser)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{outs[0].Tag, outs[1].Tag}, sopts.Outbounds, "selector outbound should include all user server tags")
 }
 
 func TestReloadOptions(t *testing.T) {
