@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,32 +26,33 @@ var (
 )
 
 // Init initializes the common components of the application. This includes setting up the directories
-// for data and logs, initializing the logger, and setting up reporting.
-func Init(dataDir, logDir, logLevel string) error {
+// for data and logs, initializing the logger, and setting up reporting. Init returns a shutdown
+// function that should be called to clean up resources when the application is shutting down.
+func Init(dataDir, logDir, logLevel string) (func(context.Context) error, error) {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if initialized {
-		return nil
+		return nil, nil
 	}
 
 	reporting.Init(Version)
 	dataDir, logDir, err := SetupDirectories(dataDir, logDir)
 	if err != nil {
-		return fmt.Errorf("failed to setup directories: %w", err)
+		return nil, fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	err = initLogger(filepath.Join(logDir, app.LogFileName), logLevel)
+	shutdown, err := initLogger(filepath.Join(logDir, app.LogFileName), logLevel)
 	if err != nil {
-		return fmt.Errorf("initialize log: %w", err)
+		return nil, fmt.Errorf("initialize log: %w", err)
 	}
 	initialized = true
-	return nil
+	return shutdown, nil
 }
 
 // initLogger reconfigures the default slog.Logger to write to a file and stdout and sets the log level.
 // The log level is determined, first by the environment variable if set and valid, then by the provided level.
 // If both are invalid and/or not set, it defaults to "info".
-func initLogger(logPath, level string) error {
+func initLogger(logPath, level string) (func(context.Context) error, error) {
 	var lvl slog.Level
 	var err error
 	envLevelValue := os.Getenv(envLogLevel)
@@ -72,7 +74,7 @@ func initLogger(logPath, level string) error {
 	// If the log file does not exist, create it.
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
+		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logWriter := io.MultiWriter(os.Stdout, f)
@@ -94,5 +96,7 @@ func initLogger(logPath, level string) error {
 		},
 	}))
 	slog.SetDefault(logger)
-	return nil
+	return func(ctx context.Context) error {
+		return f.Close()
+	}, nil
 }
