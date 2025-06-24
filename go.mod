@@ -8,6 +8,8 @@ replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v
 
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
 
+replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
+
 //replace github.com/sagernet/sing-box => ../sing-box-minimal
 //replace github.com/getlantern/common => ../common
 //replace github.com/getlantern/sing-box-extensions => ../sing-box-extensions
