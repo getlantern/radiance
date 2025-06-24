@@ -2,8 +2,8 @@ package boxoptions
 
 import (
 	"net/netip"
+	"slices"
 
-	"github.com/sagernet/sing-box/constant"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
@@ -11,7 +11,12 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 )
 
-const LanternAutoTag = "lantern-auto"
+const (
+	ServerGroupLantern = "lantern-servers"
+	ServerGroupUser    = "user-servers"
+
+	LanternAutoTag = "lantern-auto"
+)
 
 var (
 	BoxOptions = O.Options{
@@ -106,20 +111,42 @@ var (
 						},
 					},
 				},
-				{
+				{ // route to lantern servers
 					Type: C.RuleTypeDefault,
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{
-							Inbound: badoption.Listable[string]{"tun-in"},
+							Inbound:   badoption.Listable[string]{"tun-in"},
+							ClashMode: ServerGroupLantern,
 						},
 						RuleAction: O.RuleAction{
 							Action: C.RuleActionTypeRoute,
 							RouteOptions: O.RouteActionOptions{
-								Outbound: LanternAutoTag,
+								Outbound: ServerGroupLantern,
 							},
 						},
 					},
 				},
+				{ // route to user servers
+					Type: C.RuleTypeDefault,
+					DefaultOptions: O.DefaultRule{
+						RawDefaultRule: O.RawDefaultRule{
+							Inbound:   badoption.Listable[string]{"tun-in"},
+							ClashMode: ServerGroupUser,
+						},
+						RuleAction: O.RuleAction{
+							Action: C.RuleActionTypeRoute,
+							RouteOptions: O.RouteActionOptions{
+								Outbound: ServerGroupUser,
+							},
+						},
+					},
+				},
+			},
+		},
+		Experimental: &O.ExperimentalOptions{
+			ClashAPI: &O.ClashAPIOptions{
+				DefaultMode:        ServerGroupLantern,
+				ExternalController: "",
 			},
 		},
 	}
@@ -139,18 +166,51 @@ var (
 			Tag:     "block",
 			Options: &O.StubOptions{},
 		},
+		SelectorOutbound([]string{LanternAutoTag}, ServerGroupLantern, LanternAutoTag),
+		SelectorOutbound([]string{"direct"}, ServerGroupUser, "direct"),
 		// use direct as the default outbound for URLTest so sing-box starts
 		URLTestOutbound([]string{"direct"}),
 	}
 	BaseEndpoints = []O.Endpoint{}
 )
 
+var (
+	permanentOutbounds = []string{
+		"direct",
+		"dns",
+		"block",
+		ServerGroupLantern,
+		ServerGroupUser,
+		LanternAutoTag,
+	}
+	permanentEndpoints = []string{}
+)
+
 func URLTestOutbound(tags []string) O.Outbound {
 	return option.Outbound{
-		Type: constant.TypeURLTest,
+		Type: C.TypeURLTest,
 		Tag:  LanternAutoTag,
 		Options: &option.URLTestOutboundOptions{
 			Outbounds: tags,
 		},
 	}
+}
+
+func SelectorOutbound(outbounds []string, group, defaultO string) O.Outbound {
+	if !slices.Contains(outbounds, defaultO) {
+		outbounds = append(outbounds, defaultO)
+	}
+	return option.Outbound{
+		Type: C.TypeSelector,
+		Tag:  group,
+		Options: &option.SelectorOutboundOptions{
+			Outbounds:                 outbounds,
+			Default:                   defaultO,
+			InterruptExistConnections: false,
+		},
+	}
+}
+
+func PermanentOutboundsEndpoints() ([]string, []string) {
+	return append([]string{}, permanentOutbounds...), append([]string{}, permanentEndpoints...)
 }

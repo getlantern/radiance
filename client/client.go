@@ -45,8 +45,8 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
+	SelectServer(group, tag string) error
 	AddCustomServer(cfg boxservice.ServerConnectConfig) error
-	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
 	// Lantern Server Manager Integration
 
@@ -116,14 +116,15 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), dataDir, app.ConfigFileName, platIfce, rsMgr)
+	userSM := boxservice.NewCustomServerManager(dataDir)
+	b, err := boxservice.New(string(buf), dataDir, app.ConfigFileName, platIfce, rsMgr, userSM)
 	if err != nil {
 		return nil, err
 	}
 
 	client = &vpnClient{
 		boxService:          b,
-		customServerManager: boxservice.NewCustomServerManager(b.Ctx(), dataDir),
+		customServerManager: userSM,
 		splitTunnelHandler:  splitTunnel.mutableRuleSet,
 	}
 	return client, nil
@@ -147,8 +148,6 @@ func (c *vpnClient) StartVPN() error {
 		slog.Error("Failed to start boxService", "error", err)
 		return err
 	}
-
-	c.customServerManager.SetContext(c.boxService.Ctx())
 
 	c.running.Store(true)
 	c.setConnectionStatus(true)
@@ -241,12 +240,14 @@ func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
 	return &activeServer, nil
 }
 
-func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
-	return c.customServerManager.AddCustomServer(cfg)
+// SelectServer selects a server from the available servers in the specified group and tag.
+// Valid groups are [boxoptions.ServerGroupLantern] and [boxoptions.ServerGroupUser].
+func (c *vpnClient) SelectServer(group, tag string) error {
+	return c.boxService.SelectServer(group, tag)
 }
 
-func (c *vpnClient) SelectCustomServer(tag string) error {
-	return c.customServerManager.SelectCustomServer(tag)
+func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
+	return c.customServerManager.AddCustomServer(cfg)
 }
 
 func (c *vpnClient) RemoveCustomServer(tag string) error {

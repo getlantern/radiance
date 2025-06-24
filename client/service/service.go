@@ -23,6 +23,8 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -61,17 +63,23 @@ type BoxService struct {
 	configPath      string
 	optsFileWatcher *internal.FileWatcher
 
+	userServerManager *CustomServerManager
+	clashServer       *clashapi.Server
+
 	activeServer atomic.Value
 
 	mu        sync.Mutex
 	isRunning bool
 }
 
-const CustomSelectorTag = "custom_selector"
-
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
-func New(options, baseDir, configFilename string, platIfce libbox.PlatformInterface, rulesetManager *ruleset.Manager) (*BoxService, error) {
+func New(
+	options, baseDir, configFilename string,
+	platIfce libbox.PlatformInterface,
+	rulesetManager *ruleset.Manager,
+	userServerManager *CustomServerManager,
+) (*BoxService, error) {
 	slog.Info("Creating boxservice", slog.String("options", options))
 	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(options))
 	if err != nil {
@@ -84,8 +92,9 @@ func New(options, baseDir, configFilename string, platIfce libbox.PlatformInterf
 		platIfce:          platIfce,
 		mutRuleSetManager: rulesetManager,
 		configPath:        filepath.Join(baseDir, configFilename),
+		userServerManager: userServerManager,
 	}
-	bs.activeServer.Store(Server{})
+	bs.activeServer.Store(&Server{})
 
 	// create the config file watcher to reload the options when the config file changes
 	watcher := internal.NewFileWatcher(bs.configPath, func() {
@@ -127,6 +136,11 @@ func (bs *BoxService) Start() error {
 	bs.optionsAccess.Lock()
 	options := bs.options
 	bs.optionsAccess.Unlock()
+
+	if err := setInitialServer(options, bs.activeServer.Load().(*Server)); err != nil {
+		return fmt.Errorf("failed to select server: %w", err)
+	}
+
 	lb, ctx, err := newLibboxService(options, bs.platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
@@ -143,11 +157,66 @@ func (bs *BoxService) Start() error {
 	bs.libbox = lb
 	bs.ctx = ctx
 	bs.pauseManager = service.FromContext[pause.Manager](ctx)
+	bs.clashServer = service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
 
 	if err := bs.libbox.Start(); err != nil {
 		return fmt.Errorf("error starting libbox service: %w", err)
 	}
 	bs.isRunning = true
+	return nil
+}
+
+func setInitialServer(opts option.Options, server *Server) error {
+	if server.Group != boxoptions.ServerGroupUser && server.Group != boxoptions.ServerGroupLantern {
+		return fmt.Errorf("invalid server group: %s", server.Group)
+	}
+	group := server.Group
+	opts.Experimental.ClashAPI.DefaultMode = group
+	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
+		return o.Tag == group && o.Type == constant.TypeSelector
+	})
+	if idx < 0 {
+		return fmt.Errorf("no selector outbound found for group %s", group)
+	}
+	out := opts.Outbounds[idx]
+	sOpts := out.Options.(*option.SelectorOutboundOptions)
+	sOpts.Default = server.Name
+	return nil
+}
+
+func insertUserServers(opts option.Options, servers []CustomServerInfo) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	tags := make([]string, 0, len(servers))
+	for _, server := range servers {
+		// insert server outbounds/endpoints into the options if they are not already present
+		if server.Outbound != nil {
+			if !slices.ContainsFunc(opts.Outbounds, func(o option.Outbound) bool {
+				return o.Tag == server.Outbound.Tag
+			}) {
+				opts.Outbounds = append(opts.Outbounds, *server.Outbound)
+				tags = append(tags, server.Outbound.Tag)
+			}
+		} else if server.Endpoint != nil {
+			if !slices.ContainsFunc(opts.Endpoints, func(e option.Endpoint) bool {
+				return e.Tag == server.Endpoint.Tag
+			}) {
+				opts.Endpoints = append(opts.Endpoints, *server.Endpoint)
+				tags = append(tags, server.Endpoint.Tag)
+			}
+		}
+	}
+
+	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
+		return o.Tag == boxoptions.ServerGroupUser && o.Type == constant.TypeSelector
+	})
+	selector := boxoptions.SelectorOutbound(tags, boxoptions.ServerGroupUser, "direct")
+	if idx >= 0 {
+		opts.Outbounds[idx] = selector
+	} else {
+		opts.Outbounds = append(opts.Outbounds, selector)
+	}
 	return nil
 }
 
@@ -248,15 +317,73 @@ func (bs *BoxService) Wake() {
 	}
 }
 
-func (bs *BoxService) Ctx() context.Context {
-	return bs.ctx
+func (bs *BoxService) SelectServer(group, tag string) error {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	// TODO: handle the case where the group is ServerGroupLantern
+	if group == boxoptions.ServerGroupLantern {
+		return errors.New("lantern group is not supported for selecting servers yet")
+	}
+
+	if group != boxoptions.ServerGroupUser && group != boxoptions.ServerGroupLantern {
+		return fmt.Errorf("invalid group: %s, must be %s or %s", group, boxoptions.ServerGroupUser, boxoptions.ServerGroupLantern)
+	}
+	if tag == "" {
+		return errors.New("tag must be specified")
+	}
+	if bs.userServerManager == nil {
+		return errors.New("user server manager is not initialized")
+	}
+
+	server, fnd := bs.userServerManager.GetServerByTag(tag)
+	if !fnd {
+		return fmt.Errorf("server with tag %s not found", tag)
+	}
+	var selectedServer Server
+	switch server := server.(type) {
+	case option.Outbound:
+		config, err := json.MarshalContext(bs.ctx, server.Options)
+		if err != nil {
+			return fmt.Errorf("marshal outbound options: %w", err)
+		}
+		selectedServer = Server{
+			Name:     server.Tag,
+			Config:   string(config),
+			Protocol: server.Type,
+			Group:    group,
+		}
+	case option.Endpoint:
+		config, err := json.MarshalContext(bs.ctx, server.Options)
+		if err != nil {
+			return fmt.Errorf("marshal endpoint options: %w", err)
+		}
+		selectedServer = Server{
+			Name:     server.Tag,
+			Config:   string(config),
+			Protocol: server.Type,
+			Group:    group,
+		}
+	}
+	if !bs.isRunning {
+		bs.activeServer.Store(&selectedServer)
+		return nil
+	}
+
+	if err := libbox.NewStandaloneCommandClient().SelectOutbound(group, tag); err != nil {
+		return fmt.Errorf("select server: %w", err)
+	}
+	bs.activeServer.Store(&selectedServer)
+	bs.clashServer.SetMode(group)
+	return nil
 }
 
 type Server struct {
-	Name     string
+	Name     string // config.Tag
 	Location C.ServerLocation
-	Config   string // option.Outbound
-	Protocol string
+	Config   string // option.Outbound or option.Endpoint
+	Protocol string // config.Type
+	Group    string // lantern or user
 }
 
 // TODO: need to retrieve which outbound is currently being used..
@@ -297,7 +424,7 @@ func (bs *BoxService) reloadOptions() error {
 	// add custom server outbounds/endpoints
 	csm := service.PtrFromContext[CustomServerManager](bs.ctx)
 	if csm != nil {
-		servers, _ := csm.ListCustomServers()
+		servers := csm.ListCustomServers()
 		for _, server := range servers {
 			if server.Outbound != nil {
 				currOpts.Outbounds = append(currOpts.Outbounds, *server.Outbound)
@@ -335,17 +462,6 @@ func UnmarshalConfig(configRaw []byte) (*C.ConfigResponse, error) {
 	return &config, nil
 }
 
-var (
-	permanentOutbounds = []string{
-		"direct",
-		"dns",
-		"block",
-		CustomSelectorTag,
-		boxoptions.LanternAutoTag,
-	}
-	permanentEndpoints = []string{}
-)
-
 // updateOutboundsEndpoints updates the outbounds and endpoints in the router, skipping any present in
 // [permanentOutbounds] and [permanentEndpoints]. updateOutboundsEndpoints will continue processing
 // the remaining outbounds and endpoints even if an error occurs, returning a single error of all
@@ -357,13 +473,14 @@ func updateOutboundsEndpoints(ctx context.Context, outbounds []option.Outbound, 
 	}
 
 	logFactory := service.FromContext[log.Factory](ctx)
+	permOut, permEP := boxoptions.PermanentOutboundsEndpoints()
 	var errs error
 	if len(outbounds) > 0 {
 		outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 		if outboundMgr == nil {
 			errs = errors.Join(errs, errors.New("outbound manager missing from context"))
 		} else {
-			err := updateOutbounds(ctx, outboundMgr, router, logFactory, outbounds, permanentOutbounds)
+			err := updateOutbounds(ctx, outboundMgr, router, logFactory, outbounds, permOut)
 			if err != nil {
 				errs = fmt.Errorf("update outbounds: %w", err)
 			}
@@ -374,7 +491,7 @@ func updateOutboundsEndpoints(ctx context.Context, outbounds []option.Outbound, 
 		if endpointMgr == nil {
 			errs = errors.Join(errs, errors.New("endpoint manager missing from context"))
 		} else {
-			err := updateEndpoints(ctx, endpointMgr, router, logFactory, endpoints, permanentEndpoints)
+			err := updateEndpoints(ctx, endpointMgr, router, logFactory, endpoints, permEP)
 			if err != nil {
 				errs = errors.Join(errs, fmt.Errorf("update endpoints: %w", err))
 			}
