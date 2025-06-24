@@ -79,8 +79,7 @@ type Options struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(opts Options) (*Radiance, error) {
-	initShutdown, err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel)
-	if err != nil {
+	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 	if opts.Locale == "" {
@@ -114,7 +113,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 
-	shutdownFuncs := []func(context.Context) error{initShutdown}
+	shutdownFuncs := []func(context.Context) error{}
 	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
 	if err != nil {
 		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)

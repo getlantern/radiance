@@ -77,10 +77,7 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 	}
 
 	// TODO: accept log level as an argument
-	// we don't need to call the shutdown function returned by common.Init here, it will be called
-	// by radiance when it shuts down.
-	_, err := common.Init(dataDir, logDir, "debug")
-	if err != nil {
+	if err := common.Init(dataDir, logDir, "debug"); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 	log = slog.Default().With("name", "vpn-client")
