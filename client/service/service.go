@@ -137,6 +137,7 @@ func (bs *BoxService) Start() error {
 	options := bs.options
 	bs.optionsAccess.Unlock()
 
+	insertUserServers(options, bs.userServerManager.ListCustomServers())
 	if err := setInitialServer(options, bs.activeServer.Load().(*Server)); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
@@ -171,7 +172,6 @@ func setInitialServer(opts option.Options, server *Server) error {
 		return fmt.Errorf("invalid server group: %s", server.Group)
 	}
 	group := server.Group
-	opts.Experimental.ClashAPI.DefaultMode = group
 	idx := slices.IndexFunc(opts.Outbounds, func(o option.Outbound) bool {
 		return o.Tag == group && o.Type == constant.TypeSelector
 	})
@@ -181,12 +181,13 @@ func setInitialServer(opts option.Options, server *Server) error {
 	out := opts.Outbounds[idx]
 	sOpts := out.Options.(*option.SelectorOutboundOptions)
 	sOpts.Default = server.Name
+	opts.Experimental.ClashAPI.DefaultMode = group
 	return nil
 }
 
-func insertUserServers(opts option.Options, servers []CustomServerInfo) error {
+func insertUserServers(opts option.Options, servers []CustomServerInfo) {
 	if len(servers) == 0 {
-		return nil
+		return
 	}
 	tags := make([]string, 0, len(servers))
 	for _, server := range servers {
@@ -217,7 +218,7 @@ func insertUserServers(opts option.Options, servers []CustomServerInfo) error {
 	} else {
 		opts.Outbounds = append(opts.Outbounds, selector)
 	}
-	return nil
+	return
 }
 
 func BaseContext() context.Context {
@@ -342,7 +343,7 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 	}
 	var selectedServer Server
 	switch server := server.(type) {
-	case option.Outbound:
+	case *option.Outbound:
 		config, err := json.MarshalContext(bs.ctx, server.Options)
 		if err != nil {
 			return fmt.Errorf("marshal outbound options: %w", err)
@@ -353,7 +354,7 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 			Protocol: server.Type,
 			Group:    group,
 		}
-	case option.Endpoint:
+	case *option.Endpoint:
 		config, err := json.MarshalContext(bs.ctx, server.Options)
 		if err != nil {
 			return fmt.Errorf("marshal endpoint options: %w", err)
@@ -364,6 +365,8 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 			Protocol: server.Type,
 			Group:    group,
 		}
+	default:
+		return fmt.Errorf("unsupported server type: %T", server)
 	}
 	if !bs.isRunning {
 		bs.activeServer.Store(&selectedServer)
