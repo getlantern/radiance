@@ -21,18 +21,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing-box/log"
+	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 
-	"github.com/getlantern/sing-box-extensions/protocol"
+	sbx "github.com/getlantern/sing-box-extensions"
+	sbxlog "github.com/getlantern/sing-box-extensions/log"
 	"github.com/getlantern/sing-box-extensions/ruleset"
 
 	C "github.com/getlantern/common"
@@ -45,6 +45,8 @@ import (
 var (
 	baseCtx   context.Context
 	ctxAccess sync.Mutex
+
+	log = slog.Default()
 )
 
 // BoxService is a wrapper around libbox.BoxService
@@ -53,6 +55,7 @@ type BoxService struct {
 	ctx               context.Context
 	platIfce          libbox.PlatformInterface
 	mutRuleSetManager *ruleset.Manager
+	logFactory        sbxlog.Factory
 
 	pauseManager pause.Manager
 	pauseAccess  sync.Mutex
@@ -75,23 +78,28 @@ type BoxService struct {
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
 // to interact with the underlying platform
 func New(
-	options, baseDir, configFilename string,
+	options, configFilename string,
 	platIfce libbox.PlatformInterface,
 	rulesetManager *ruleset.Manager,
+	logger *slog.Logger,
 	userServerManager *CustomServerManager,
 ) (*BoxService, error) {
-	slog.Info("Creating boxservice", slog.String("options", options))
+	log = logger.With("module", "boxservice")
+	log.Info("Creating boxservice", slog.String("options", options))
 	opts, err := json.UnmarshalExtendedContext[option.Options](BaseContext(), []byte(options))
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal options: %w", err)
 	}
 
+	basePath := common.DataPath()
+	lhandler := logger.Handler().WithAttrs([]slog.Attr{slog.String("module", "sing-box")})
 	bs := &BoxService{
-		ctx:               newBaseContext(),
+		ctx:               sbx.BoxContext(),
 		options:           opts,
 		platIfce:          platIfce,
 		mutRuleSetManager: rulesetManager,
-		configPath:        filepath.Join(baseDir, configFilename),
+		configPath:        filepath.Join(basePath, configFilename),
+		logFactory:        sbxlog.NewFactory(lhandler),
 		userServerManager: userServerManager,
 	}
 	bs.activeServer.Store(&Server{})
@@ -100,9 +108,9 @@ func New(
 	watcher := internal.NewFileWatcher(bs.configPath, func() {
 		err := bs.reloadOptions()
 		if err != nil {
-			slog.Error("Failed to reload options", "error", err)
+			log.Error("Failed to reload options", "error", err)
 		}
-		slog.Debug("Reloaded options")
+		log.Debug("Reloaded options")
 	})
 	if err := watcher.Start(); err != nil {
 		return nil, fmt.Errorf("start config file watcher: %w", err)
@@ -110,9 +118,9 @@ func New(
 	bs.optsFileWatcher = watcher
 
 	setupOpts := &libbox.SetupOptions{
-		BasePath:    baseDir,
-		WorkingPath: baseDir,
-		TempPath:    filepath.Join(baseDir, "temp"),
+		BasePath:    basePath,
+		WorkingPath: basePath,
+		TempPath:    filepath.Join(basePath, "temp"),
 	}
 	if runtime.GOOS == "android" {
 		setupOpts.FixAndroidStack = true
@@ -144,11 +152,13 @@ func (bs *BoxService) Start() error {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
 
-	lb, ctx, err := newLibboxService(options, bs.platIfce)
+	ctx := sbx.BoxContext()
+	service.MustRegister(ctx, bs.logFactory)
+
+	lb, err := newLibboxService(ctx, options, bs.platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
-	service.MustRegister(ctx, lb.LogFactory())
 
 	// we need to start the ruleset manager before starting the libbox service but after the libbox
 	// service has been initialized so that the ruleset manager can access the routing rules.
@@ -234,40 +244,27 @@ func BaseContext() context.Context {
 	ctxAccess.Lock()
 	defer ctxAccess.Unlock()
 	if baseCtx == nil {
-		baseCtx = newBaseContext()
+		baseCtx = sbx.BoxContext()
 	}
 	return baseCtx
 }
 
-func newBaseContext() context.Context {
-	// Retrieve protocol registries
-	inboundRegistry, outboundRegistry, endpointRegistry := protocol.GetRegistries()
-	return box.Context(
-		context.Background(),
-		inboundRegistry,
-		outboundRegistry,
-		endpointRegistry,
-	)
-}
-
 // newLibboxService creates a new libbox service with the given config and platform interface
-func newLibboxService(opts option.Options, platIfce libbox.PlatformInterface) (*libbox.BoxService, context.Context, error) {
+func newLibboxService(ctx context.Context, opts option.Options, platIfce libbox.PlatformInterface) (*libbox.BoxService, error) {
 	// initialize the libbox service
 	// we need to create a new context each time so we have a fresh context, free of all the values
 	// that the sing-box instance adds to it
-	ctx := newBaseContext()
-
 	conf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal options: %w", err)
+		return nil, fmt.Errorf("marshal options: %w", err)
 	}
-	slog.Debug("Creating libbox service", slog.String("options", string(conf)))
+	log.Debug("Creating libbox service", slog.String("options", string(conf)))
 	lb, err := libbox.NewServiceWithContext(ctx, string(conf), platIfce)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create libbox service: %w", err)
+		return nil, fmt.Errorf("create libbox service: %w", err)
 	}
 
-	return lb, ctx, nil
+	return lb, nil
 }
 
 // Close stops the libbox service and clears the pause timer
@@ -412,10 +409,10 @@ func (bs *BoxService) reloadOptions() error {
 	// TODO:
 	//		- restart libbox if options change that can't be updated while running (routing, etc)
 	//		- update all options. make sure to include base/default options where needed (DNS)
-	slog.Debug("reloading options")
+	log.Debug("reloading options")
 	content, err := os.ReadFile(bs.configPath)
 	if os.IsNotExist(err) {
-		slog.Debug("config file not found, skipping reload")
+		log.Debug("config file not found, skipping reload")
 		return nil
 	}
 	if err != nil {
@@ -456,7 +453,7 @@ func (bs *BoxService) reloadOptions() error {
 	}
 	bs.mu.Unlock()
 
-	slog.Debug("updating outbounds/endpoints")
+	log.Debug("updating outbounds/endpoints")
 	err = updateOutboundsEndpoints(bs.ctx, opts.Outbounds, opts.Endpoints)
 	if err != nil {
 		return fmt.Errorf("update outbounds/endpoints: %w", err)
@@ -484,8 +481,8 @@ func updateOutboundsEndpoints(ctx context.Context, outbounds []option.Outbound, 
 		return errors.New("router missing from context")
 	}
 
-	logFactory := service.FromContext[log.Factory](ctx)
 	permOut, permEP := boxoptions.PermanentOutboundsEndpoints()
+	logFactory := service.FromContext[sblog.Factory](ctx)
 	var errs error
 	if len(outbounds) > 0 {
 		outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
@@ -520,11 +517,11 @@ func updateOutbounds(
 	ctx context.Context,
 	outboundMgr adapter.OutboundManager,
 	router adapter.Router,
-	logFactory log.Factory,
+	logFactory sblog.Factory,
 	outbounds []option.Outbound,
 	excludeTags []string,
 ) error {
-	slog.Debug("Updating outbounds", slog.Any("outbounds", outbounds))
+	log.Debug("Updating outbounds", slog.Any("outbounds", outbounds))
 	newItems, errs := filterItems(outbounds, excludeTags, func(it option.Outbound) string {
 		return it.Tag
 	})
@@ -556,11 +553,11 @@ func updateEndpoints(
 	ctx context.Context,
 	endpointMgr adapter.EndpointManager,
 	router adapter.Router,
-	logFactory log.Factory,
+	logFactory sblog.Factory,
 	endpoints []option.Endpoint,
 	excludeTags []string,
 ) error {
-	slog.Debug("Updating endpoints", slog.Any("endpoints", endpoints))
+	log.Debug("Updating endpoints", slog.Any("endpoints", endpoints))
 	// filter endpoints that are missing a tag or are excluded
 	newItems, errs := filterItems(endpoints, excludeTags, func(it option.Endpoint) string {
 		return it.Tag

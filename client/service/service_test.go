@@ -13,13 +13,14 @@ import (
 	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/log"
+	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/common"
+	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/internal"
@@ -191,7 +192,7 @@ func TestReloadOptions(t *testing.T) {
 	writeConfig(confResp)
 
 	bs := &BoxService{
-		ctx:        newBaseContext(),
+		ctx:        sbx.BoxContext(),
 		isRunning:  false,
 		mu:         sync.Mutex{},
 		configPath: path,
@@ -286,7 +287,7 @@ func TestUpdateOutbounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		ctx := context.Background()
-		logger := log.NewNOPFactory()
+		logger := sblog.NewNOPFactory()
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := mockOutboundManager{outbounds: tt.outbounds}
 			err := updateOutbounds(ctx, &mgr, nil, logger, tt.updates, tt.exclude)
@@ -359,7 +360,7 @@ func TestUpdateEndpoints(t *testing.T) {
 	}
 	for _, tt := range tests {
 		ctx := context.Background()
-		logger := log.NewNOPFactory()
+		logger := sblog.NewNOPFactory()
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := mockEndpointManager{endpoints: tt.endpoints}
 			err := updateEndpoints(ctx, &mgr, nil, logger, tt.updates, tt.exclude)
@@ -395,7 +396,7 @@ func (m *mockOutboundManager) Remove(tag string) error {
 	return nil
 }
 
-func (m *mockOutboundManager) Create(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag, outboundType string, options any) error {
+func (m *mockOutboundManager) Create(ctx context.Context, router adapter.Router, logger sblog.ContextLogger, tag, outboundType string, options any) error {
 	m.Remove(tag)
 	outbound := &mockEndpoint{typ: outboundType, tag: tag}
 	m.outbounds = append(m.outbounds, outbound)
@@ -422,7 +423,7 @@ func (m *mockEndpointManager) Remove(tag string) error {
 	return nil
 }
 
-func (m *mockEndpointManager) Create(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, typ string, options interface{}) error {
+func (m *mockEndpointManager) Create(ctx context.Context, router adapter.Router, logger sblog.ContextLogger, tag string, typ string, options interface{}) error {
 	m.Remove(tag)
 	m.endpoints = append(m.endpoints, &mockEndpoint{typ: typ, tag: tag})
 	return nil
