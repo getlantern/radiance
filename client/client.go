@@ -241,12 +241,18 @@ func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
 	return &activeServer, nil
 }
 
-// SelectServer selects a server from the available servers in the specified group and tag.
-// Valid groups are [boxoptions.ServerGroupLantern] and [boxoptions.ServerGroupUser].
+// SelectServer selects a server by its tag and group. Valid groups are [boxoptions.ServerGroupUser]
+// and [boxoptions.ServerGroupLantern]. An error is returned if a server config with the given group
+// and tag is not found.
+// SelectServer DOES NOT start the service, it only sets the server to connect to when the service
+// is started. If the service is already running and the selected server is valid, it will connect to
+// the server immediately.
 func (c *vpnClient) SelectServer(group, tag string) error {
 	return c.boxService.SelectServer(group, tag)
 }
 
+// AddCustomServer adds a user-defined server to the VPN client.
+// Note, if the service is running, it must be stopped before the new server can be selected.
 func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
 	return c.customServerManager.AddCustomServer(cfg)
 }

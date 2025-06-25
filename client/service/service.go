@@ -335,6 +335,7 @@ type Server struct {
 	Group    string // lantern or user
 }
 
+// RemoveUserServer removes a user-defined server identified by the given tag.
 func (bs *BoxService) RemoveUserServer(tag string) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -350,6 +351,12 @@ func (bs *BoxService) RemoveUserServer(tag string) error {
 	return nil
 }
 
+// SelectServer selects a server by its tag and group. Valid groups are [boxoptions.ServerGroupUser]
+// and [boxoptions.ServerGroupLantern]. An error is returned if a server config with the given group
+// and tag is not found.
+// SelectServer DOES NOT start the service, it only sets the server to connect to when the service
+// is started. If the service is already running and the selected server is valid, it will connect to
+// the server immediately.
 func (bs *BoxService) SelectServer(group, tag string) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
