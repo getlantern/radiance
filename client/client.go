@@ -252,7 +252,7 @@ func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
 }
 
 func (c *vpnClient) RemoveCustomServer(tag string) error {
-	return c.customServerManager.RemoveCustomServer(tag)
+	return c.boxService.RemoveUserServer(tag)
 }
 
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {

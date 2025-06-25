@@ -102,7 +102,7 @@ func New(
 		logFactory:        sbxlog.NewFactory(lhandler),
 		userServerManager: userServerManager,
 	}
-	bs.activeServer.Store(&Server{})
+	bs.activeServer.Store((*Server)(nil))
 
 	// create the config file watcher to reload the options when the config file changes
 	watcher := internal.NewFileWatcher(bs.configPath, func() {
@@ -148,8 +148,11 @@ func (bs *BoxService) Start() error {
 	if err := insertUserServers(&options, bs.userServerManager.ListCustomServers()); err != nil {
 		return fmt.Errorf("insert user servers: %w", err)
 	}
-	if err := setInitialServer(options, bs.activeServer.Load().(*Server)); err != nil {
-		return fmt.Errorf("failed to select server: %w", err)
+	server := bs.activeServer.Load().(*Server)
+	if server != nil {
+		if err := setInitialServer(options, bs.activeServer.Load().(*Server)); err != nil {
+			return fmt.Errorf("failed to select server: %w", err)
+		}
 	}
 
 	ctx := sbx.BoxContext()
@@ -324,6 +327,29 @@ func (bs *BoxService) Wake() {
 	}
 }
 
+type Server struct {
+	Name     string // config.Tag
+	Location C.ServerLocation
+	Config   string // option.Outbound or option.Endpoint
+	Protocol string // config.Type
+	Group    string // lantern or user
+}
+
+func (bs *BoxService) RemoveUserServer(tag string) error {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if bs.userServerManager == nil {
+		return errors.New("user server manager is not initialized")
+	}
+	if err := bs.userServerManager.RemoveCustomServer(tag); err != nil {
+		return fmt.Errorf("remove custom server: %w", err)
+	}
+	if bs.activeServer.Load().(*Server).Name == tag {
+		bs.activeServer.Store((*Server)(nil))
+	}
+	return nil
+}
+
 func (bs *BoxService) SelectServer(group, tag string) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -385,14 +411,6 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 	bs.activeServer.Store(&selectedServer)
 	bs.clashServer.SetMode(group)
 	return nil
-}
-
-type Server struct {
-	Name     string // config.Tag
-	Location C.ServerLocation
-	Config   string // option.Outbound or option.Endpoint
-	Protocol string // config.Type
-	Group    string // lantern or user
 }
 
 // TODO: need to retrieve which outbound is currently being used..
