@@ -117,7 +117,10 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return nil, err
 	}
 
-	userSM := boxservice.NewCustomServerManager(dataDir)
+	userSM, err := boxservice.NewCustomServerManager(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create custom server manager: %w", err)
+	}
 	b, err := boxservice.New(string(buf), app.ConfigFileName, platIfce, rsMgr, log, userSM)
 	if err != nil {
 		return nil, err

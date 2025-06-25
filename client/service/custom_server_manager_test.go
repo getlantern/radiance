@@ -15,8 +15,8 @@ import (
 
 func TestSelectCustomServer(t *testing.T) {
 	dataDir := t.TempDir()
-	manager := NewCustomServerManager(dataDir)
-	require.NotNil(t, manager)
+	manager, err := NewCustomServerManager(dataDir)
+	require.NoError(t, err)
 
 	// If we're adding an endpoint with wireguard, a wireguard inbound is required
 	customConfig := `{
@@ -85,8 +85,8 @@ func TestSelectCustomServer(t *testing.T) {
 
 func TestServerManagerIntegration(t *testing.T) {
 	dataDir := t.TempDir()
-	manager := NewCustomServerManager(dataDir)
-	require.NotNil(t, manager)
+	manager, err := NewCustomServerManager(dataDir)
+	require.NoError(t, err)
 
 	srv := newLanternServerManagerMock()
 	defer srv.Close()

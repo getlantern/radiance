@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 
 	sbx "github.com/getlantern/sing-box-extensions"
+
+	"github.com/getlantern/radiance/internal"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -20,15 +23,32 @@ type CustomServerManager struct {
 	customServers             map[string]CustomServerInfo
 	customServersFilePath     string
 	trustedServerFingerprints string
+
+	serverFileWatcher *internal.FileWatcher
 }
 
-func NewCustomServerManager(dataDir string) *CustomServerManager {
+func NewCustomServerManager(dataDir string) (*CustomServerManager, error) {
+	slog.Info("Initializing CustomServerManager", "dataDir", dataDir, "service", "CustomServerManager")
+	serverFile := filepath.Join(dataDir, "custom_servers.json")
 	csm := &CustomServerManager{
 		customServers:             make(map[string]CustomServerInfo),
-		customServersFilePath:     filepath.Join(dataDir, "custom_servers.json"),
+		customServersFilePath:     serverFile,
 		trustedServerFingerprints: filepath.Join(dataDir, "trusted_server_fingerprints.json"),
 	}
-	return csm
+
+	if err := csm.loadServers(); err != nil {
+		return nil, fmt.Errorf("failed to load servers from file: %w", err)
+	}
+	watcher := internal.NewFileWatcher(serverFile, func() {
+		if err := csm.loadServers(); err != nil {
+			slog.Error("Failed to reload custom servers from file", "error", err, "file", serverFile, "service", "CustomServerManager")
+		}
+	})
+	if err := watcher.Start(); err != nil {
+		return nil, fmt.Errorf("starting server file watcher: %w", err)
+	}
+	csm.serverFileWatcher = watcher
+	return csm, nil
 }
 
 type customServers struct {
@@ -73,10 +93,6 @@ func (m *CustomServerManager) AddCustomServer(cfg ServerConnectConfig) error {
 		tag = loadedOptions.Endpoint.Tag
 	}
 	loadedOptions.Tag = tag
-
-	if _, err := m.loadCustomServer(); err != nil {
-		return fmt.Errorf("failed to load custom server configs: %w", err)
-	}
 
 	m.customServersMutex.Lock()
 	m.customServers[tag] = loadedOptions
@@ -127,25 +143,25 @@ func (m *CustomServerManager) writeChanges(customServers customServers) error {
 	return nil
 }
 
-// loadCustomServer loads the custom server configuration from a JSON file.
-func (m *CustomServerManager) loadCustomServer() (customServers, error) {
-	var cs customServers
+// loadServers loads the custom server configuration from a JSON file.
+func (m *CustomServerManager) loadServers() error {
 	if err := os.MkdirAll(filepath.Dir(m.customServersFilePath), 0755); err != nil {
-		return cs, err
+		return err
 	}
 	// read file and generate []byte
 	storedCustomServers, err := os.ReadFile(m.customServersFilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// file not exist, return empty custom servers
-			return cs, nil
+			return nil
 		}
-		return cs, fmt.Errorf("read custom servers file: %w", err)
+		return err
 	}
 
 	ctx := sbx.BoxContext()
-	if cs, err = json.UnmarshalExtendedContext[customServers](ctx, storedCustomServers); err != nil {
-		return cs, fmt.Errorf("decode custom servers file: %w", err)
+	cs, err := json.UnmarshalExtendedContext[customServers](ctx, storedCustomServers)
+	if err != nil {
+		return fmt.Errorf("decoding servers file: %w", err)
 	}
 
 	m.customServersMutex.Lock()
@@ -154,16 +170,12 @@ func (m *CustomServerManager) loadCustomServer() (customServers, error) {
 		m.customServers[v.Tag] = v
 	}
 
-	return cs, nil
+	return nil
 }
 
 // RemoveCustomServer removes the custom server options from endpoints, outbounds
 // and the custom server file.
 func (m *CustomServerManager) RemoveCustomServer(tag string) error {
-	if _, err := m.loadCustomServer(); err != nil {
-		return fmt.Errorf("failed to load custom server configs: %w", err)
-	}
-
 	m.customServersMutex.Lock()
 	delete(m.customServers, tag)
 	m.customServersMutex.Unlock()
