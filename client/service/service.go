@@ -27,6 +27,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	sbgroup "github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -412,9 +413,16 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 		return nil
 	}
 
-	if err := libbox.NewStandaloneCommandClient().SelectOutbound(group, tag); err != nil {
-		return fmt.Errorf("select server: %w", err)
+	ouboundManager := service.FromContext[adapter.OutboundManager](bs.ctx)
+	outboundGroup, fnd := ouboundManager.Outbound(group)
+	if !fnd {
+		return fmt.Errorf("outbound group %s not found", group)
 	}
+	selector := outboundGroup.(*sbgroup.Selector)
+	if !selector.SelectOutbound(selectedServer.Name) {
+		return fmt.Errorf("outbound %s not found in group %s", selectedServer.Name, group)
+	}
+
 	bs.activeServer.Store(&selectedServer)
 	bs.clashServer.SetMode(group)
 	return nil
