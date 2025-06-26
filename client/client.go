@@ -46,8 +46,8 @@ type VPNClient interface {
 	PauseVPN(dur time.Duration) error
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
+	SelectServer(group, tag string) error
 	AddCustomServer(cfg boxservice.ServerConnectConfig) error
-	SelectCustomServer(tag string) error
 	RemoveCustomServer(tag string) error
 	// Lantern Server Manager Integration
 
@@ -117,14 +117,18 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return nil, err
 	}
 
-	b, err := boxservice.New(string(buf), app.ConfigFileName, platIfce, rsMgr, log)
+	userSM, err := boxservice.NewCustomServerManager(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create custom server manager: %w", err)
+	}
+	b, err := boxservice.New(string(buf), app.ConfigFileName, platIfce, rsMgr, log, userSM)
 	if err != nil {
 		return nil, err
 	}
 
 	client = &vpnClient{
 		boxService:          b,
-		customServerManager: boxservice.NewCustomServerManager(b.Ctx(), dataDir),
+		customServerManager: userSM,
 		splitTunnelHandler:  splitTunnel.mutableRuleSet,
 	}
 	return client, nil
@@ -148,8 +152,6 @@ func (c *vpnClient) StartVPN() error {
 		log.Error("Failed to start boxService", "error", err)
 		return err
 	}
-
-	c.customServerManager.SetContext(c.boxService.Ctx())
 
 	c.running.Store(true)
 	c.setConnectionStatus(true)
@@ -242,16 +244,24 @@ func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
 	return &activeServer, nil
 }
 
+// SelectServer selects a server by its tag and group. Valid groups are [boxoptions.ServerGroupUser]
+// and [boxoptions.ServerGroupLantern]. An error is returned if a server config with the given group
+// and tag is not found.
+// SelectServer DOES NOT start the service, it only sets the server to connect to when the service
+// is started. If the service is already running and the selected server is valid, it will connect to
+// the server immediately.
+func (c *vpnClient) SelectServer(group, tag string) error {
+	return c.boxService.SelectServer(group, tag)
+}
+
+// AddCustomServer adds a user-defined server to the VPN client.
+// Note, if the service is running, it must be stopped before the new server can be selected.
 func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
 	return c.customServerManager.AddCustomServer(cfg)
 }
 
-func (c *vpnClient) SelectCustomServer(tag string) error {
-	return c.customServerManager.SelectCustomServer(tag)
-}
-
 func (c *vpnClient) RemoveCustomServer(tag string) error {
-	return c.customServerManager.RemoveCustomServer(tag)
+	return c.boxService.RemoveUserServer(tag)
 }
 
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {

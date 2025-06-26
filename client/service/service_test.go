@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,136 @@ import (
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/internal"
 )
+
+func TestSelectServer_NotRunning(t *testing.T) {
+	testServerInfo := func(tag string) CustomServerInfo {
+		return CustomServerInfo{
+			Tag: tag,
+			Outbound: &option.Outbound{
+				Tag:     tag,
+				Type:    "direct",
+				Options: option.DirectOutboundOptions{},
+			},
+		}
+	}
+	tests := []struct {
+		name      string
+		tag       string
+		serverMgr *CustomServerManager
+		shouldErr bool
+	}{
+		{
+			name:      "EmptyTag",
+			tag:       "",
+			shouldErr: true,
+		},
+		{
+			name:      "UserServerManagerNil",
+			tag:       "tag1",
+			shouldErr: true,
+		},
+		{
+			name: "ServerNotFound",
+			tag:  "tag1",
+			serverMgr: &CustomServerManager{
+				customServers: map[string]CustomServerInfo{},
+			},
+			shouldErr: true,
+		},
+		{
+			name: "Success",
+			tag:  "tag1",
+			serverMgr: &CustomServerManager{
+				customServers: map[string]CustomServerInfo{
+					"tag1": testServerInfo("tag1"),
+				},
+			},
+			shouldErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &Server{Name: "default"}
+			bs := &BoxService{
+				ctx:               context.Background(),
+				activeServer:      atomic.Value{},
+				userServerManager: tt.serverMgr,
+			}
+			bs.activeServer.Store(server)
+
+			err := bs.SelectServer(boxoptions.ServerGroupUser, tt.tag)
+			got := bs.activeServer.Load().(*Server)
+			if tt.shouldErr {
+				assert.Error(t, err)
+				assert.Equal(t, server, got)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.tag, got.Name)
+			}
+		})
+	}
+}
+
+func TestSetInitialServer(t *testing.T) {
+	opts := boxoptions.BoxOptions
+	server := &Server{
+		Name:  "want",
+		Group: boxoptions.ServerGroupUser,
+	}
+	outs := []option.Outbound{
+		{
+			Type: constant.TypeDirect,
+			Tag:  "init",
+		},
+		{
+			Type:    constant.TypeHTTP,
+			Tag:     server.Name,
+			Options: &option.HTTPOutboundOptions{},
+		},
+	}
+	opts.Outbounds = append(opts.Outbounds, outs...)
+	sopts, err := findSelector(opts.Outbounds, server.Group)
+	require.NoError(t, err)
+
+	sopts.Outbounds = []string{outs[0].Tag, outs[1].Tag}
+	sopts.Default = outs[0].Tag
+
+	prevClashMode := opts.Experimental.ClashAPI.DefaultMode
+	if assert.NoError(t, setInitialServer(opts, server)) {
+		assert.Equal(t, server.Name, sopts.Default)
+		assert.Equal(t, server.Group, opts.Experimental.ClashAPI.DefaultMode)
+	} else {
+		assert.Equal(t, sopts.Default, outs[0].Tag)
+		assert.Equal(t, prevClashMode, opts.Experimental.ClashAPI.DefaultMode)
+	}
+}
+
+func TestInsertUserServers(t *testing.T) {
+	opts := boxoptions.BoxOptions
+	outs := []option.Outbound{
+		{
+			Type: constant.TypeDirect,
+			Tag:  "server1",
+		},
+		{
+			Type:    constant.TypeHTTP,
+			Tag:     "server2",
+			Options: &option.HTTPOutboundOptions{},
+		},
+	}
+	servers := []CustomServerInfo{
+		{Tag: outs[0].Tag, Outbound: &outs[0]},
+		{Tag: outs[1].Tag, Outbound: &outs[1]},
+	}
+
+	insertUserServers(&opts, servers)
+	for _, server := range servers {
+		assert.Contains(t, opts.Outbounds, *server.Outbound, "Expected outbound %s to be inserted", server.Tag)
+	}
+	sopts, err := findSelector(opts.Outbounds, boxoptions.ServerGroupUser)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{outs[0].Tag, outs[1].Tag}, sopts.Outbounds, "selector outbound should include all user server tags")
+}
 
 func TestReloadOptions(t *testing.T) {
 	tmp := t.TempDir()
@@ -94,10 +225,6 @@ func TestReloadOptions(t *testing.T) {
 	writeConfig(confResp)
 	time.Sleep(150 * time.Millisecond) // wait for watcher to trigger
 	assertFn(confResp.Options, bs.options)
-}
-
-func TestActiveServer(t *testing.T) {
-
 }
 
 func TestUpdateOutbounds(t *testing.T) {
