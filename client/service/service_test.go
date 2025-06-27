@@ -24,23 +24,25 @@ import (
 
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/servers"
 )
 
 func TestSelectServer_NotRunning(t *testing.T) {
-	testServerInfo := func(tag string) CustomServerInfo {
-		return CustomServerInfo{
-			Tag: tag,
-			Outbound: &option.Outbound{
-				Tag:     tag,
-				Type:    "direct",
-				Options: option.DirectOutboundOptions{},
+	testServerInfo := func(tag string) servers.ServerOptions {
+		return servers.ServerOptions{
+			Outbounds: []option.Outbound{
+				{
+					Tag:     tag,
+					Type:    "direct",
+					Options: option.DirectOutboundOptions{},
+				},
 			},
 		}
 	}
 	tests := []struct {
 		name      string
 		tag       string
-		serverMgr *CustomServerManager
+		uServers  *userServers
 		shouldErr bool
 	}{
 		{
@@ -49,25 +51,18 @@ func TestSelectServer_NotRunning(t *testing.T) {
 			shouldErr: true,
 		},
 		{
-			name:      "UserServerManagerNil",
-			tag:       "tag1",
-			shouldErr: true,
-		},
-		{
 			name: "ServerNotFound",
 			tag:  "tag1",
-			serverMgr: &CustomServerManager{
-				customServers: map[string]CustomServerInfo{},
+			uServers: &userServers{
+				servers: testServerInfo("tag2"),
 			},
 			shouldErr: true,
 		},
 		{
 			name: "Success",
 			tag:  "tag1",
-			serverMgr: &CustomServerManager{
-				customServers: map[string]CustomServerInfo{
-					"tag1": testServerInfo("tag1"),
-				},
+			uServers: &userServers{
+				servers: testServerInfo("tag1"),
 			},
 			shouldErr: false,
 		},
@@ -76,9 +71,9 @@ func TestSelectServer_NotRunning(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := &Server{Name: "default"}
 			bs := &BoxService{
-				ctx:               context.Background(),
-				activeServer:      atomic.Value{},
-				userServerManager: tt.serverMgr,
+				ctx:          context.Background(),
+				activeServer: atomic.Value{},
+				userServers:  tt.uServers,
 			}
 			bs.activeServer.Store(server)
 
@@ -142,14 +137,13 @@ func TestInsertUserServers(t *testing.T) {
 			Options: &option.HTTPOutboundOptions{},
 		},
 	}
-	servers := []CustomServerInfo{
-		{Tag: outs[0].Tag, Outbound: &outs[0]},
-		{Tag: outs[1].Tag, Outbound: &outs[1]},
+	uServers := servers.ServerOptions{
+		Outbounds: outs,
 	}
 
-	insertUserServers(&opts, servers)
-	for _, server := range servers {
-		assert.Contains(t, opts.Outbounds, *server.Outbound, "Expected outbound %s to be inserted", server.Tag)
+	insertUserServers(&opts, uServers)
+	for _, server := range uServers.Outbounds {
+		assert.Contains(t, opts.Outbounds, server, "Expected outbound %s to be inserted", server.Tag)
 	}
 	sopts, err := findSelector(opts.Outbounds, boxoptions.ServerGroupUser)
 	require.NoError(t, err)
@@ -197,6 +191,9 @@ func TestReloadOptions(t *testing.T) {
 		mu:         sync.Mutex{},
 		configPath: path,
 		options:    baseOptions,
+		userServers: &userServers{
+			servers: servers.ServerOptions{},
+		},
 	}
 
 	require.NoError(t, bs.reloadOptions())

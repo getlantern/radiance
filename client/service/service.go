@@ -41,6 +41,7 @@ import (
 	"github.com/getlantern/radiance/client/boxoptions"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/servers"
 )
 
 var (
@@ -62,18 +63,18 @@ type BoxService struct {
 	pauseAccess  sync.Mutex
 	pauseTimer   *time.Timer
 
+	configPath      string
 	options         option.Options
 	optionsAccess   sync.Mutex
-	configPath      string
 	optsFileWatcher *internal.FileWatcher
 
-	userServerManager *CustomServerManager
-	clashServer       *clashapi.Server
-
 	activeServer atomic.Value
+	clashServer  *clashapi.Server
 
 	mu        sync.Mutex
 	isRunning bool
+
+	userServers *userServers
 }
 
 // New creates a new BoxService that wraps a [libbox.BoxService]. platformInterface is used
@@ -83,7 +84,6 @@ func New(
 	platIfce libbox.PlatformInterface,
 	rulesetManager *ruleset.Manager,
 	logger *slog.Logger,
-	userServerManager *CustomServerManager,
 ) (*BoxService, error) {
 	log = logger.With("module", "boxservice")
 	log.Info("Creating boxservice", slog.String("options", options))
@@ -101,7 +101,6 @@ func New(
 		mutRuleSetManager: rulesetManager,
 		configPath:        filepath.Join(basePath, configFilename),
 		logFactory:        sbxlog.NewFactory(lhandler),
-		userServerManager: userServerManager,
 	}
 	bs.activeServer.Store((*Server)(nil))
 
@@ -146,7 +145,7 @@ func (bs *BoxService) Start() error {
 	options := bs.options
 	bs.optionsAccess.Unlock()
 
-	if err := insertUserServers(&options, bs.userServerManager.ListCustomServers()); err != nil {
+	if err := insertUserServers(&options, bs.userServers.getServers()); err != nil {
 		return fmt.Errorf("insert user servers: %w", err)
 	}
 	server := bs.activeServer.Load().(*Server)
@@ -198,34 +197,33 @@ func setInitialServer(opts option.Options, server *Server) error {
 }
 
 // insertUserServers inserts the user-defined servers into the options. It will add the outbounds
-// and endpoints to the options if they are not already present. It will also update the selector
-func insertUserServers(opts *option.Options, servers []CustomServerInfo) error {
-	if len(servers) == 0 {
+// and endpoints to the options if they are not already present. It will also update the user
+// server selector.
+func insertUserServers(bOpts *option.Options, sOpts servers.ServerOptions) error {
+	if len(sOpts.Outbounds) == 0 && len(sOpts.Endpoints) == 0 {
 		return nil
 	}
-	sopts, err := findSelector(opts.Outbounds, boxoptions.ServerGroupUser)
+	sopts, err := findSelector(bOpts.Outbounds, boxoptions.ServerGroupUser)
 	if err != nil {
 		return err
 	}
 
-	tags := make([]string, 0, len(servers))
-	for _, server := range servers {
-		// insert server outbounds/endpoints into the options if they are not already present
-		if server.Outbound != nil {
-			if !slices.ContainsFunc(opts.Outbounds, func(o option.Outbound) bool {
-				return o.Tag == server.Outbound.Tag
-			}) {
-				opts.Outbounds = append(opts.Outbounds, *server.Outbound)
-			}
-			tags = append(tags, server.Outbound.Tag)
-		} else if server.Endpoint != nil {
-			if !slices.ContainsFunc(opts.Endpoints, func(e option.Endpoint) bool {
-				return e.Tag == server.Endpoint.Tag
-			}) {
-				opts.Endpoints = append(opts.Endpoints, *server.Endpoint)
-			}
-			tags = append(tags, server.Endpoint.Tag)
+	tags := make([]string, 0, len(sOpts.Outbounds)+len(sOpts.Endpoints))
+	for _, out := range sOpts.Outbounds {
+		if !slices.ContainsFunc(bOpts.Outbounds, func(o option.Outbound) bool {
+			return o.Tag == out.Tag
+		}) {
+			bOpts.Outbounds = append(bOpts.Outbounds, out)
 		}
+		tags = append(tags, out.Tag)
+	}
+	for _, ep := range sOpts.Endpoints {
+		if !slices.ContainsFunc(bOpts.Endpoints, func(e option.Endpoint) bool {
+			return e.Tag == ep.Tag
+		}) {
+			bOpts.Endpoints = append(bOpts.Endpoints, ep)
+		}
+		tags = append(tags, ep.Tag)
 	}
 
 	sopts.Outbounds = tags
@@ -336,22 +334,6 @@ type Server struct {
 	Group    string // lantern or user
 }
 
-// RemoveUserServer removes a user-defined server identified by the given tag.
-func (bs *BoxService) RemoveUserServer(tag string) error {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	if bs.userServerManager == nil {
-		return errors.New("user server manager is not initialized")
-	}
-	if err := bs.userServerManager.RemoveCustomServer(tag); err != nil {
-		return fmt.Errorf("remove custom server: %w", err)
-	}
-	if bs.activeServer.Load().(*Server).Name == tag {
-		bs.activeServer.Store((*Server)(nil))
-	}
-	return nil
-}
-
 // SelectServer selects a server by its tag and group. Valid groups are [boxoptions.ServerGroupUser]
 // and [boxoptions.ServerGroupLantern]. An error is returned if a server config with the given group
 // and tag is not found.
@@ -373,17 +355,14 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 	if tag == "" {
 		return errors.New("tag must be specified")
 	}
-	if bs.userServerManager == nil {
-		return errors.New("user server manager is not initialized")
-	}
 
-	server, fnd := bs.userServerManager.GetServerByTag(tag)
+	server, fnd := bs.userServers.GetServerByTag(tag)
 	if !fnd {
 		return fmt.Errorf("server with tag %s not found", tag)
 	}
 	var selectedServer Server
 	switch server := server.(type) {
-	case *option.Outbound:
+	case option.Outbound:
 		config, err := json.MarshalContext(bs.ctx, server.Options)
 		if err != nil {
 			return fmt.Errorf("marshal outbound options: %w", err)
@@ -394,7 +373,7 @@ func (bs *BoxService) SelectServer(group, tag string) error {
 			Protocol: server.Type,
 			Group:    group,
 		}
-	case *option.Endpoint:
+	case option.Endpoint:
 		config, err := json.MarshalContext(bs.ctx, server.Options)
 		if err != nil {
 			return fmt.Errorf("marshal endpoint options: %w", err)
@@ -463,17 +442,10 @@ func (bs *BoxService) reloadOptions() error {
 	currOpts.Outbounds = append(boxoptions.BaseOutbounds, opts.Outbounds...)
 	currOpts.Endpoints = append(boxoptions.BaseEndpoints, opts.Endpoints...)
 
-	// add custom server outbounds/endpoints
-	csm := service.PtrFromContext[CustomServerManager](bs.ctx)
-	if csm != nil {
-		servers := csm.ListCustomServers()
-		for _, server := range servers {
-			if server.Outbound != nil {
-				currOpts.Outbounds = append(currOpts.Outbounds, *server.Outbound)
-			} else if server.Endpoint != nil {
-				currOpts.Endpoints = append(currOpts.Endpoints, *server.Endpoint)
-			}
-		}
+	// add the user servers to the options
+	serverOpts := bs.userServers.getServers()
+	if err := insertUserServers(&currOpts, serverOpts); err != nil {
+		log.Warn("failed to insert user servers", "error", err)
 	}
 
 	bs.options = currOpts
@@ -666,4 +638,75 @@ func removeItems[I ~[]T, T bA, O any](
 		}
 	}
 	return errs
+}
+
+// TODO: this will be replaced as part of the next refactor
+// this is to ensure backwards compatibility for now
+type userServers struct {
+	servers    servers.ServerOptions
+	access     sync.Mutex
+	watcher    *internal.FileWatcher
+	serverFile string
+}
+
+func newUserServers(dataPath string) (*userServers, error) {
+	serversFile := filepath.Join(dataPath, "user_servers.json")
+	us := &userServers{
+		servers: servers.ServerOptions{
+			Endpoints: make([]option.Endpoint, 0),
+			Outbounds: make([]option.Outbound, 0),
+		},
+		serverFile: serversFile,
+	}
+	watcher := internal.NewFileWatcher(serversFile, func() {
+		log.Debug("Reloading user servers from file")
+		if err := us.loadServers(); err != nil {
+			log.Error("Failed to reload user servers", "error", err)
+		}
+	})
+	us.watcher = watcher
+	if err := us.loadServers(); err != nil {
+		return nil, fmt.Errorf("load user servers: %w", err)
+	}
+	return us, nil
+}
+
+func (us *userServers) getServers() servers.ServerOptions {
+	us.access.Lock()
+	defer us.access.Unlock()
+	return us.servers
+}
+
+func (us *userServers) GetServerByTag(tag string) (any, bool) {
+	us.access.Lock()
+	defer us.access.Unlock()
+	for _, out := range us.servers.Outbounds {
+		if out.Tag == tag {
+			return out, true
+		}
+	}
+	for _, ep := range us.servers.Endpoints {
+		if ep.Tag == tag {
+			return ep, true
+		}
+	}
+	return nil, false
+}
+
+func (us *userServers) loadServers() error {
+	us.access.Lock()
+	defer us.access.Unlock()
+	buf, err := os.ReadFile(us.serverFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // file doesn't exist
+	}
+	if err != nil {
+		return fmt.Errorf("read user servers file: %w", err)
+	}
+	opts, err := json.UnmarshalExtendedContext[servers.ServerOptions](sbx.BoxContext(), buf)
+	if err != nil {
+		return fmt.Errorf("unmarshal user servers: %w", err)
+	}
+	us.servers = opts
+	return nil
 }

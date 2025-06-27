@@ -23,6 +23,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/servers"
 
 	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
@@ -184,6 +185,11 @@ func (r *Radiance) Close() {
 // This is the user config object that contains the device ID and other user data
 func (r *Radiance) UserInfo() common.UserInfo {
 	return r.userInfo
+}
+
+// NewServerManager creates a new server manager for managing user and private servers.
+func (r *Radiance) NewServerManager() (*servers.Manager, error) {
+	return servers.NewManager(common.DataPath(), slog.Default().With("service", "server-manager"))
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted

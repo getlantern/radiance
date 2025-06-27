@@ -1,4 +1,4 @@
-package boxservice
+package servers
 
 import (
 	"bytes"

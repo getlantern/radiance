@@ -47,21 +47,13 @@ type VPNClient interface {
 	ResumeVPN()
 	SplitTunnelHandler() *SplitTunnel
 	SelectServer(group, tag string) error
-	AddCustomServer(cfg boxservice.ServerConnectConfig) error
-	RemoveCustomServer(tag string) error
-	// Lantern Server Manager Integration
-
-	AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error
-	InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error)
-	RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error
 }
 
 type vpnClient struct {
-	boxService          *boxservice.BoxService
-	splitTunnelHandler  *SplitTunnel
-	customServerManager *boxservice.CustomServerManager
-	running             atomic.Bool
-	connected           bool
+	boxService         *boxservice.BoxService
+	splitTunnelHandler *SplitTunnel
+	running            atomic.Bool
+	connected          bool
 }
 
 // NewVPNClient creates a new VPNClient instance if one does not already exist, otherwise returns
@@ -91,16 +83,6 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 	if err != nil {
 		return nil, fmt.Errorf("split tunnel handler: %w", err)
 	}
-	customServerSelector, err := initMutRuleSet(
-		dataDir,
-		CustomSelectorTag,
-		CustomSelectorFormat,
-		rsMgr,
-		true, // TODO: maybe this should be saved and restored to remember the user's last choice
-	)
-	if err != nil {
-		return nil, fmt.Errorf("customServerSelector ruleset: %w", err)
-	}
 
 	// inject split tunnel routing rule and ruleset into the routing table
 	// the split tunnel routing rule needs to be the first rule with the "route" rule action so it's
@@ -108,8 +90,8 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 	// index 1
 	boxOpts.Route = injectRouteRules(
 		boxOpts.Route, 1,
-		[]option.Rule{splitTunnel.ruleOption, customServerSelector.ruleOption},
-		[]option.RuleSet{splitTunnel.rulesetOption, customServerSelector.rulesetOption},
+		[]option.Rule{splitTunnel.ruleOption},
+		[]option.RuleSet{splitTunnel.rulesetOption},
 	)
 
 	buf, err := json.Marshal(boxOpts)
@@ -117,19 +99,14 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return nil, err
 	}
 
-	userSM, err := boxservice.NewCustomServerManager(dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create custom server manager: %w", err)
-	}
-	b, err := boxservice.New(string(buf), app.ConfigFileName, platIfce, rsMgr, log, userSM)
+	b, err := boxservice.New(string(buf), app.ConfigFileName, platIfce, rsMgr, log)
 	if err != nil {
 		return nil, err
 	}
 
 	client = &vpnClient{
-		boxService:          b,
-		customServerManager: userSM,
-		splitTunnelHandler:  splitTunnel.mutableRuleSet,
+		boxService:         b,
+		splitTunnelHandler: splitTunnel.mutableRuleSet,
 	}
 	return client, nil
 }
@@ -209,29 +186,6 @@ func (c *vpnClient) ResumeVPN() {
 	c.boxService.Wake()
 }
 
-// Lantern Server Manager Integration
-
-// AddServerManagerInstance will fetch VPN connection information from the server manager instance and add it to the VPN client as a custom server
-// The server manager instance is identified by the tag, ip, port and accessToken.
-// The accessToken is used to authenticate the connection to the server manager instance.
-// The callback is used to verify the server manager instance's certificate fingerprint.
-// If we don't have the fingerprint, we will use the default callback which will ask the user to trust the fingerprint.
-func (c *vpnClient) AddServerManagerInstance(tag string, ip string, port int, accessToken string, callback boxservice.TrustFingerprintCallback) error {
-	return c.customServerManager.AddServerManagerInstance(tag, ip, port, accessToken, callback)
-}
-
-// InviteToServerManagerInstance will invite another user (identified by inviteName) to the server manager instance and return the token that can be used to connect to the server manager instance
-// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
-func (c *vpnClient) InviteToServerManagerInstance(ip string, port int, accessToken string, inviteName string) (string, error) {
-	return c.customServerManager.InviteToServerManagerInstance(ip, port, accessToken, inviteName)
-}
-
-// RevokeServerManagerInvite will revoke an invite to the server manager instance
-// The server must be added to the VPN client as a custom server first and have a trusted fingerprint.
-func (c *vpnClient) RevokeServerManagerInvite(ip string, port int, accessToken string, inviteName string) error {
-	return c.customServerManager.RevokeServerManagerInvite(ip, port, accessToken, inviteName)
-}
-
 // ActiveServer returns the current connected server as a [boxservice.Server].
 func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
 	if !c.ConnectionStatus() {
@@ -254,29 +208,16 @@ func (c *vpnClient) SelectServer(group, tag string) error {
 	return c.boxService.SelectServer(group, tag)
 }
 
-// AddCustomServer adds a user-defined server to the VPN client.
-// Note, if the service is running, it must be stopped before the new server can be selected.
-func (c *vpnClient) AddCustomServer(cfg boxservice.ServerConnectConfig) error {
-	return c.customServerManager.AddCustomServer(cfg)
-}
-
-func (c *vpnClient) RemoveCustomServer(tag string) error {
-	return c.boxService.RemoveUserServer(tag)
-}
-
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
 	return c.splitTunnelHandler
 }
 
 const (
-	SplitTunnelTag       = "split-tunnel"
-	SplitTunnelFormat    = constant.RuleSetFormatSource // file will be saved as json
-	CustomSelectorTag    = "custom-server"
-	CustomSelectorFormat = constant.RuleSetFormatSource // file will be saved as json
+	SplitTunnelTag    = "split-tunnel"
+	SplitTunnelFormat = constant.RuleSetFormatSource // file will be saved as json
 )
 
 type SplitTunnel = ruleset.MutableRuleSet
-type CustomServer = ruleset.MutableRuleSet
 
 type tunnel struct {
 	mutableRuleSet *ruleset.MutableRuleSet
