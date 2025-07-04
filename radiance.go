@@ -137,6 +137,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		ConfigRespParser: boxservice.UnmarshalConfig,
 		Locale:           opts.Locale,
 	}
+	if fetch, ok := common.GetEnv[bool](common.EnvFetchConfig); ok && !fetch {
+		cOpts.PollInterval = -1
+		slog.Info("Disabling config fetch from the API")
+	}
 	confHandler := config.NewConfigHandler(cOpts)
 	return &Radiance{
 		confHandler:   confHandler,

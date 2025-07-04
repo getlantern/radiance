@@ -101,7 +101,9 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale)
-	go ch.fetchLoop(options.PollInterval)
+	if options.PollInterval > 0 {
+		go ch.fetchLoop(options.PollInterval)
+	}
 	return ch
 }
 
