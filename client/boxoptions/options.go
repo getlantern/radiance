@@ -148,8 +148,15 @@ var (
 				DefaultMode:        ServerGroupLantern,
 				ExternalController: "",
 			},
+			CacheFile: &O.CacheFileOptions{
+				Enabled: true,
+			},
 		},
 	}
+	// TODO:
+	// 	- add urltest for user servers
+	// 	- add urltest for all servers
+	// 	- add clash tags: auto-lantern, auto-user, auto-all
 	BaseOutbounds = []O.Outbound{
 		{
 			Type:    "direct",

@@ -16,12 +16,13 @@ import (
 
 	sbx "github.com/getlantern/sing-box-extensions"
 
+	"github.com/getlantern/radiance/app"
+
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 )
 
 const (
-	serverFileName           = "user_servers.json"
 	trustFingerprintFileName = "trusted_server_fingerprints.json"
 )
 
@@ -57,7 +58,7 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 			Endpoints: make([]option.Endpoint, 0),
 			Outbounds: make([]option.Outbound, 0),
 		},
-		serversFile:      filepath.Join(dataPath, serverFileName),
+		serversFile:      filepath.Join(dataPath, app.UserServerFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
 		logger:           logger,
 	}

@@ -45,7 +45,7 @@ func Init(dataDir, logDir, logLevel string) error {
 	}
 
 	reporting.Init(Version)
-	err := setupDirectories(dataDir, logDir)
+	err := SetupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
@@ -104,7 +104,7 @@ func initLogger(logPath, level string) error {
 	return nil
 }
 
-func setupDirectories(data, logs string) error {
+func SetupDirectories(data, logs string) error {
 	if d, ok := GetEnv[string](EnvDataPath); ok {
 		data = d
 	} else if data == "" {

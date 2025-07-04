@@ -12,6 +12,7 @@ const (
 	Platform = runtime.GOOS
 
 	// filenames
-	LogFileName    = "lantern.log"
-	ConfigFileName = "config.json"
+	LogFileName        = "lantern.log"
+	ConfigFileName     = "config.json"
+	UserServerFileName = "user_servers.json"
 )
