@@ -11,14 +11,14 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
 //replace github.com/sagernet/sing-box => ../sing-box-minimal
-replace github.com/getlantern/common => ../common
+//replace github.com/getlantern/common => ../common
 //replace github.com/getlantern/sing-box-extensions => ../sing-box-extensions
 
 require (
 	dario.cat/mergo v1.0.1
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20250507184827-3e58a77acb6b
+	github.com/getlantern/common v1.2.1-0.20250707203249-8d66f2c4eff6
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
@@ -32,6 +32,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/zeebo/assert v1.1.0
 	go.opentelemetry.io/otel/sdk v1.37.0
+	go.opentelemetry.io/otel/sdk/metric v1.37.0
 	go.uber.org/mock v0.5.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/protobuf v1.36.6
@@ -128,7 +129,6 @@ require (
 	go.etcd.io/bbolt v1.3.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.35.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.37.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
@@ -235,7 +235,7 @@ require (
 	golang.org/x/tools v0.33.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
-	google.golang.org/grpc v1.73.0 // indirect
+	google.golang.org/grpc v1.73.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
