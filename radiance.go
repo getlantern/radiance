@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -23,12 +24,11 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/metrics"
 
 	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
-
-	"github.com/getlantern/radiance/metrics"
 )
 
 const configPollInterval = 10 * time.Minute
@@ -78,7 +78,8 @@ type Options struct {
 // NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
-func NewRadiance(opts Options) (*Radiance, error) {
+func NewRadiance(opts *Options) (*Radiance, error) {
+	ctx := context.Background()
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
@@ -114,13 +115,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	)
 
 	shutdownFuncs := []func(context.Context) error{}
-	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
-	if err != nil {
-		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)
-	} else if shutdownMetrics != nil {
-		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
-		slog.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
-	}
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
@@ -137,6 +131,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		Locale:           opts.Locale,
 	}
 	confHandler := config.NewConfigHandler(cOpts)
+	startOTEL(ctx, shutdownFuncs, confHandler)
 	return &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
@@ -147,6 +142,33 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}, nil
+}
+
+func startOTEL(ctx context.Context, shutdownFuncs []func(context.Context) error, confHandler configHandler) {
+	// Initialize OpenTelemetry SDK
+	ch, err := confHandler.GetConfig()
+	if err != nil {
+		slog.Warn("Failed to get OpenTelemetry config", "error", err)
+		return
+	}
+
+	shutdown, err := metrics.SetupOTelSDK(ctx, ch.ConfigResponse.OTELEndpoint, ch.ConfigResponse.OTELHeaders, func(ctx context.Context, addr string) (net.Conn, error) {
+		// User a regular net.Dialer for now.
+		dialer := &net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+		return dialer.DialContext(ctx, "tcp", addr)
+	})
+	// If the OpenTelemetry SDK could not be initialized, log the error and return.
+	// This is not a fatal error, so we just log it and continue.
+	if err != nil {
+		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)
+		return
+	}
+	shutdownFuncs = append(shutdownFuncs, shutdown)
+	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", ch.ConfigResponse.OTELEndpoint)
+
 }
 
 // APIHandler returns the API handler for the Radiance client.

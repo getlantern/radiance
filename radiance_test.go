@@ -10,7 +10,7 @@ import (
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
 		dir := t.TempDir()
-		r, err := NewRadiance(Options{
+		r, err := NewRadiance(&Options{
 			DataDir: dir,
 			Locale:  "en-US",
 		})
@@ -67,7 +67,7 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance(Options{DataDir: t.TempDir()})
+			r, err := NewRadiance(&Options{DataDir: t.TempDir()})
 			defer r.Close()
 			require.NoError(t, err)
 			err = r.ReportIssue(tt.email, &tt.report)
