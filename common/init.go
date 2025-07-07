@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/appdir"
 
 	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
 )
@@ -62,7 +63,7 @@ func Init(dataDir, logDir, logLevel string) error {
 // The log level is determined, first by the environment variable if set and valid, then by the provided level.
 // If both are invalid and/or not set, it defaults to "info".
 func initLogger(logPath, level string) error {
-	if elevel, hasLevel := GetEnv[string](EnvLogLevel); hasLevel {
+	if elevel, hasLevel := env.Get[string](env.LogLevel); hasLevel {
 		level = elevel
 	}
 	var lvl slog.Level
@@ -105,13 +106,13 @@ func initLogger(logPath, level string) error {
 }
 
 func SetupDirectories(data, logs string) error {
-	if d, ok := GetEnv[string](EnvDataPath); ok {
+	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
 		data = appdir.General(app.Name)
 		data = maybeAddSuffix(data, "data")
 	}
-	if l, ok := GetEnv[string](EnvLogPath); ok {
+	if l, ok := env.Get[string](env.LogPath); ok {
 		logs = l
 	} else if logs == "" {
 		logs = appdir.Logs(app.Name)

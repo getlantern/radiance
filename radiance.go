@@ -22,6 +22,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/servers"
 
@@ -137,7 +138,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		ConfigRespParser: boxservice.UnmarshalConfig,
 		Locale:           opts.Locale,
 	}
-	if fetch, ok := common.GetEnv[bool](common.EnvFetchConfig); ok && !fetch {
+	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch from the API")
 	}

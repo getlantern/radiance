@@ -1,14 +1,11 @@
 package client
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -31,22 +28,7 @@ var (
 	log = slog.Default()
 )
 
-type Options struct {
-	DataDir  string
-	LogDir   string
-	PlatIfce libbox.PlatformInterface
-	// EnableSplitTunneling is the initial state of split tunneling when the service starts
-	EnableSplitTunneling bool
-}
-
 type VPNClient interface {
-	StartVPN() error
-	StopVPN() error
-	ConnectionStatus() bool
-	PauseVPN(dur time.Duration) error
-	ResumeVPN()
-	SplitTunnelHandler() *SplitTunnel
-	SelectServer(group, tag string) error
 }
 
 type vpnClient struct {
@@ -68,10 +50,6 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		return client, nil
 	}
 
-	// TODO: accept log level as an argument
-	if err := common.Init(dataDir, logDir, "debug"); err != nil {
-		return nil, fmt.Errorf("failed to initialize: %w", err)
-	}
 	log = slog.Default().With("name", "vpn-client")
 	dataDir = common.DataPath()
 
@@ -109,103 +87,6 @@ func NewVPNClient(dataDir, logDir string, platIfce libbox.PlatformInterface, ena
 		splitTunnelHandler: splitTunnel.mutableRuleSet,
 	}
 	return client, nil
-}
-
-// StartVPN Start starts the VPN client
-func (c *vpnClient) StartVPN() error {
-	if c.running.Load() {
-		return errors.New("VPN client is already running")
-	}
-
-	clientMu.Lock()
-	defer clientMu.Unlock()
-
-	log.Debug("Starting VPN client")
-	if c.boxService == nil {
-		return errors.New("box service is not initialized")
-	}
-	err := c.boxService.Start()
-	if err != nil {
-		log.Error("Failed to start boxService", "error", err)
-		return err
-	}
-
-	c.running.Store(true)
-	c.setConnectionStatus(true)
-	return nil
-}
-
-// StopVPN Stop stops the VPN client and closes the TUN device
-func (c *vpnClient) StopVPN() error {
-	if !c.running.Load() {
-		return errors.New("VPN client is not running")
-	}
-
-	clientMu.Lock()
-	defer clientMu.Unlock()
-
-	log.Debug("Stopping VPN client")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
-	var err error
-	go func() {
-		err = c.boxService.Close()
-		cancel()
-		c.running.Store(false)
-	}()
-	<-ctx.Done()
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return errors.New("box did not stop in time")
-	}
-	c.running.Store(false)
-	c.setConnectionStatus(false)
-	return err
-}
-
-// ConnectionStatus returns the connection status of the VPN client
-func (c *vpnClient) ConnectionStatus() bool {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	return c.running.Load() && c.connected
-}
-
-func (c *vpnClient) setConnectionStatus(connected bool) {
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	c.connected = connected
-}
-
-// PauseVPN Pause pauses the VPN client for the specified duration
-func (c *vpnClient) PauseVPN(dur time.Duration) error {
-	log.Info("Pausing VPN for", "duration", dur)
-	return c.boxService.Pause(dur)
-}
-
-// ResumeVPN Resume resumes the VPN client
-func (c *vpnClient) ResumeVPN() {
-	log.Info("Resuming VPN client")
-	c.boxService.Wake()
-}
-
-// ActiveServer returns the current connected server as a [boxservice.Server].
-func (c *vpnClient) ActiveServer() (*boxservice.Server, error) {
-	if !c.ConnectionStatus() {
-		return nil, fmt.Errorf("VPN is not connected")
-	}
-	activeServer, err := c.boxService.ActiveServer()
-	if err != nil {
-		return nil, fmt.Errorf("get active server: %w", err)
-	}
-	return &activeServer, nil
-}
-
-// SelectServer selects a server by its tag and group. Valid groups are [boxoptions.ServerGroupUser]
-// and [boxoptions.ServerGroupLantern]. An error is returned if a server config with the given group
-// and tag is not found.
-// SelectServer DOES NOT start the service, it only sets the server to connect to when the service
-// is started. If the service is already running and the selected server is valid, it will connect to
-// the server immediately.
-func (c *vpnClient) SelectServer(group, tag string) error {
-	return c.boxService.SelectServer(group, tag)
 }
 
 func (c *vpnClient) SplitTunnelHandler() *SplitTunnel {
