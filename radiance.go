@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -59,13 +60,14 @@ type Radiance struct {
 	issueReporter *issue.IssueReporter
 	apiHandler    *api.APIClient
 
-	//user config is the user config object that contains the device ID and other user data
+	// user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
 	locale   string
 
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
 	stopChan      chan struct{}
+	shutdownOTEL  func(context.Context) error
 }
 
 type Options struct {
@@ -116,13 +118,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	)
 
 	shutdownFuncs := []func(context.Context) error{}
-	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
-	if err != nil {
-		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)
-	} else if shutdownMetrics != nil {
-		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
-		slog.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
-	}
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
@@ -143,7 +138,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Info("Disabling config fetch from the API")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-	return &Radiance{
+
+	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
@@ -152,7 +148,66 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
-	}, nil
+	}
+	confHandler.AddConfigListener(r.otelConfigListener)
+	return r, nil
+}
+
+// otelConfigListener is a listener for OpenTelemetry configuration changes. Note this will be called both when
+// new configurations are loaded from disk as well as over the network.
+func (r *Radiance) otelConfigListener(_, newConfig *config.Config) error {
+	if newConfig == nil {
+		return fmt.Errorf("new config is nil")
+	}
+	if newConfig.ConfigResponse.OTELEndpoint == "" {
+		slog.Info("OpenTelemetry endpoint is empty, not initializing OpenTelemetry SDK")
+		return nil
+	}
+	if r.shutdownOTEL != nil {
+		slog.Info("Shutting down existing OpenTelemetry SDK")
+		if err := r.shutdownOTEL(context.Background()); err != nil {
+			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
+			return fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err)
+		}
+		r.shutdownOTEL = nil
+	}
+
+	err := r.startOTEL(context.Background(), newConfig)
+	if err != nil {
+		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
+		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
+	}
+	return nil
+}
+
+func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
+	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTELEndpoint, cfg.ConfigResponse.OTELHeaders, func(ctx context.Context, addr string) (net.Conn, error) {
+		// User a regular net.Dialer for now.
+		// TODO: Adapt kindling to return a net.Dialer that can be used with OpenTelemetry.
+		dialer := &net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+		return dialer.DialContext(ctx, "tcp", addr)
+	})
+	// If the OpenTelemetry SDK could not be initialized, log the error and return.
+	// This is not a fatal error, so we just log it and continue.
+	if err != nil {
+		return fmt.Errorf("failed to setup OpenTelemetry SDK: %w", err)
+	}
+
+	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTELEndpoint)
+	r.shutdownOTEL = shutdown
+	r.addShudownFunc(shutdown)
+	return nil
+}
+
+// addShudownFunc adds a shutdown function to the Radiance instance.
+// This function is called when the Radiance instance is closed to ensure that all resources are cleaned up properly.
+func (r *Radiance) addShudownFunc(fn func(context.Context) error) {
+	if fn != nil {
+		r.shutdownFuncs = append(r.shutdownFuncs, fn)
+	}
 }
 
 // APIHandler returns the API handler for the Radiance client.
