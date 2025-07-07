@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	sbx "github.com/getlantern/sing-box-extensions"
@@ -99,18 +100,41 @@ func (m *Manager) AddServerByConfig(cfg string) error {
 	}
 
 	m.optsMap[tag] = opts
+	if err := m.saveServers(); err != nil {
+		return fmt.Errorf("failed to save servers after adding %q: %w", tag, err)
+	}
 	return nil
 }
 
 // RemoveServer removes a server config by its tag.
 func (m *Manager) RemoveServer(tag string) error {
 	m.access.Lock()
+	opts, exists := m.optsMap[tag]
+	if !exists {
+		m.access.Unlock()
+		return nil
+	}
 	delete(m.optsMap, tag)
+	switch v := opts.(type) {
+	case option.Endpoint:
+		m.serverOpts.Endpoints = remove(m.serverOpts.Endpoints, v)
+	case option.Outbound:
+		m.serverOpts.Outbounds = remove(m.serverOpts.Outbounds, v)
+	}
 	m.access.Unlock()
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
 	}
 	return nil
+}
+
+func remove[T comparable](slice []T, item T) []T {
+	i := slices.Index(slice, item)
+	if i == -1 {
+		return slice
+	}
+	slice[i] = slice[len(slice)-1]
+	return slice[:len(slice)-1]
 }
 
 func (m *Manager) unmarshalServerOpts(cfg []byte) (string, any, error) {
