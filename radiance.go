@@ -198,13 +198,13 @@ func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
 
 	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTELEndpoint)
 	r.shutdownOTEL = shutdown
-	r.addShudownFunc(shutdown)
+	r.addShutdownFunc(shutdown)
 	return nil
 }
 
-// addShudownFunc adds a shutdown function to the Radiance instance.
+// addShutdownFunc adds a shutdown function to the Radiance instance.
 // This function is called when the Radiance instance is closed to ensure that all resources are cleaned up properly.
-func (r *Radiance) addShudownFunc(fn func(context.Context) error) {
+func (r *Radiance) addShutdownFunc(fn func(context.Context) error) {
 	if fn != nil {
 		r.shutdownFuncs = append(r.shutdownFuncs, fn)
 	}
