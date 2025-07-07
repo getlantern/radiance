@@ -34,6 +34,10 @@ import (
 var (
 	tInstance *tunnel
 	tAccess   sync.Mutex
+
+	cmdSvr     *libbox.CommandServer
+	cmdSvrOnce sync.Once
+	cmdSvrErr  error
 )
 
 type tunnel struct {
@@ -98,6 +102,61 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 		}
 	})
 	t.svrFileWatcher = svrWatcher
+	return nil
+}
+
+func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
+	tAccess.Lock()
+	defer tAccess.Unlock()
+	if tInstance != nil {
+		return errors.New("tunnel already opened")
+	}
+
+	log := slog.Default().With("component", "tunnel")
+
+	cmdSvrOnce.Do(func() {
+		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{log: log}, 64)
+		cmdSvrErr = cmdSvr.Start()
+	})
+	if cmdSvrErr != nil {
+		log.Error("failed to start command server", slog.Any("error", cmdSvrErr))
+		return fmt.Errorf("failed to start command server: %w", cmdSvrErr)
+	}
+
+	tInstance = &tunnel{
+		ctx: sbx.BoxContext(),
+		log: log,
+	}
+	if err := tInstance.init(opts, platIfce); err != nil {
+		return fmt.Errorf("initialize tunnel: %w", err)
+	}
+	return tInstance.start()
+}
+
+func (t *tunnel) start() (err error) {
+	if err = t.lbService.Start(); err != nil {
+		return fmt.Errorf("starting libbox service: %w", err)
+	}
+	// we're using the cmd server to handle libbox.Close, so we don't need to add it to closers
+	defer func() {
+		if err != nil {
+			t.lbService.Close()
+			closeTunnel()
+		}
+	}()
+	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
+	cmdSvr.SetService(t.lbService)
+
+	if err = t.optsFileWatcher.Start(); err != nil {
+		return fmt.Errorf("starting config file watcher: %w", err)
+	}
+	tInstance.closers = append(tInstance.closers, t.optsFileWatcher)
+
+	if err = t.svrFileWatcher.Start(); err != nil {
+		return fmt.Errorf("starting user server file watcher: %w", err)
+	}
+	tInstance.closers = append(tInstance.closers, t.svrFileWatcher)
+
 	return nil
 }
 
@@ -247,4 +306,15 @@ func (t *tunnel) updateServerConfigs(
 		}
 	}
 	return errors.Join(errs...)
+}
+
+type cmdSvrHandler struct {
+	libbox.CommandServerHandler
+	log *slog.Logger
+}
+
+func (c *cmdSvrHandler) PostServiceClose() {
+	if err := closeTunnel(); err != nil {
+		c.log.Error("closing tunnel", slog.Any("error", err))
+	}
 }

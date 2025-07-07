@@ -9,11 +9,9 @@ const (
 	ServerGroupLantern = "lantern"
 	ServerGroupUser    = "user"
 
-	modeAutoLantern = "auto-lantern"
-	modeAutoUser    = "auto-user"
-	modeAutoAll     = "auto-all"
-
-	modeBlock = "block"
+	autoLantern = "auto-lantern"
+	autoUser    = "auto-user"
+	autoAll     = "auto-all"
 )
 
 // serverOptions is a helper struct to iterate over the outbounds and endpoints
