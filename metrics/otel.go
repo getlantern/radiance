@@ -35,12 +35,30 @@ func SetupOTelSDK(ctx context.Context, endpoint string, headers map[string]strin
 		return shutdown, fmt.Errorf("failed to initialize gRPC connection: %w", err)
 	}
 	shutdownFuncs = append(shutdownFuncs, func(_ context.Context) error { return conn.Close() })
-	tp, err := initTracer(ctx, conn, endpoint, headers)
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			attribute.String("service.name", "radiance"),
+			attribute.String("library.language", "go"),
+			attribute.String("service.version", app.Version),
+		),
+	)
+	if err != nil {
+		return shutdown, fmt.Errorf("failed to create resource: %w", err)
+	}
+	tp, err := initTracer(ctx, res, conn, endpoint, headers)
 	if err != nil {
 		return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 	}
 	// Successfully initialized tracer
 	shutdownFuncs = append(shutdownFuncs, tp.Shutdown)
+
+	mp, err := initMeterProvider(ctx, res, conn)
+	if err != nil {
+		return shutdown, fmt.Errorf("failed to initialize meter provider: %w", err)
+	}
+	// Successfully initialized meter provider
+	shutdownFuncs = append(shutdownFuncs, mp)
 	return shutdown, nil
 
 }
@@ -59,7 +77,7 @@ func initConn(endpoint string, contextDialer func(ctx context.Context, addr stri
 }
 
 // initTracer creates and registers trace provider instance.
-func initTracer(ctx context.Context, conn *grpc.ClientConn, endpoint string, headers map[string]string) (*sdktrace.TracerProvider, error) {
+func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, endpoint string, headers map[string]string) (*sdktrace.TracerProvider, error) {
 	exp, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithGRPCConn(conn),
 		otlptracegrpc.WithEndpoint(endpoint),
@@ -68,17 +86,7 @@ func initTracer(ctx context.Context, conn *grpc.ClientConn, endpoint string, hea
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
-	res, err := resource.New(
-		context.Background(),
-		resource.WithAttributes(
-			attribute.String("service.name", "radiance"),
-			attribute.String("library.language", "go"),
-			attribute.String("service.version", app.Version),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
+
 	// Register the trace exporter with a TracerProvider, using a batch
 	// span processor to aggregate spans before export.
 	bsp := sdktrace.NewBatchSpanProcessor(exp)

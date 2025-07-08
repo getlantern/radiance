@@ -190,6 +190,10 @@ func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
 		}
 		return dialer.DialContext(ctx, "tcp", addr)
 	})
+	if shutdown != nil {
+		r.shutdownOTEL = shutdown
+		r.addShutdownFunc(shutdown)
+	}
 	// If the OpenTelemetry SDK could not be initialized, log the error and return.
 	// This is not a fatal error, so we just log it and continue.
 	if err != nil {
@@ -197,8 +201,6 @@ func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
 	}
 
 	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTELEndpoint)
-	r.shutdownOTEL = shutdown
-	r.addShutdownFunc(shutdown)
 	return nil
 }
 

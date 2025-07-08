@@ -209,13 +209,13 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 
 	if errors.Is(err, ErrNoWGKey) {
-		privateKey, err = wgtypes.GeneratePrivateKey()
-		if err != nil {
-			return fmt.Errorf("failed to generate wg keys: %w", err)
+		var keyErr error
+		if privateKey, keyErr = wgtypes.GeneratePrivateKey(); keyErr != nil {
+			return fmt.Errorf("failed to generate wg keys: %w", keyErr)
 		}
 
-		if err := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); err != nil {
-			return fmt.Errorf("writing wg key file: %w", err)
+		if writeErr := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); writeErr != nil {
+			return fmt.Errorf("writing wg key file: %w", writeErr)
 		}
 	}
 
