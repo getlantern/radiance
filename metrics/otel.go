@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 
 	"github.com/getlantern/radiance/app"
@@ -78,7 +77,6 @@ func initTracer(ctx context.Context, conn *grpc.ClientConn, endpoint string, hea
 		),
 	)
 	if err != nil {
-		log.Fatalf("Could not set resources: %v", err)
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 	// Register the trace exporter with a TracerProvider, using a batch
