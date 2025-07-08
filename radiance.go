@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -155,11 +156,16 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 // otelConfigListener is a listener for OpenTelemetry configuration changes. Note this will be called both when
 // new configurations are loaded from disk as well as over the network.
-func (r *Radiance) otelConfigListener(_, newConfig *config.Config) error {
+func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error {
 	if newConfig == nil {
 		return fmt.Errorf("new config is nil")
 	}
-	if newConfig.ConfigResponse.OTELEndpoint == "" {
+	// Check if the old OTEL configuration is the same as the new one.
+	if oldConfig != nil && reflect.DeepEqual(&oldConfig.ConfigResponse.OTEL, &newConfig.ConfigResponse.OTEL) {
+		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+		return nil
+	}
+	if newConfig.ConfigResponse.OTEL.Endpoint == "" {
 		slog.Info("OpenTelemetry endpoint is empty, not initializing OpenTelemetry SDK")
 		return nil
 	}
@@ -181,15 +187,20 @@ func (r *Radiance) otelConfigListener(_, newConfig *config.Config) error {
 }
 
 func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
-	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTELEndpoint, cfg.ConfigResponse.OTELHeaders, func(ctx context.Context, addr string) (net.Conn, error) {
-		// User a regular net.Dialer for now.
-		// TODO: Adapt kindling to return a net.Dialer that can be used with OpenTelemetry.
-		dialer := &net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}
-		return dialer.DialContext(ctx, "tcp", addr)
-	})
+	if !cfg.ConfigResponse.OTEL.Enabled || cfg.ConfigResponse.OTEL.Endpoint == "" {
+		slog.Info("OpenTelemetry configuration is disabled or empty, not initializing OpenTelemetry SDK")
+		return nil
+	}
+	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTEL.Endpoint,
+		cfg.ConfigResponse.OTEL.Headers, cfg.ConfigResponse.OTEL.SampleRate, func(ctx context.Context, addr string) (net.Conn, error) {
+			// User a regular net.Dialer for now.
+			// TODO: Adapt kindling to return a net.Dialer that can be used with OpenTelemetry.
+			dialer := &net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}
+			return dialer.DialContext(ctx, "tcp", addr)
+		})
 	if shutdown != nil {
 		r.shutdownOTEL = shutdown
 		r.addShutdownFunc(shutdown)
@@ -200,7 +211,7 @@ func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("failed to setup OpenTelemetry SDK: %w", err)
 	}
 
-	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTELEndpoint)
+	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTEL.Endpoint)
 	return nil
 }
 

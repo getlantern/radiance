@@ -20,7 +20,7 @@ import (
 
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, endpoint string, headers map[string]string, contextDialer func(ctx context.Context, addr string) (net.Conn, error)) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, endpoint string, headers map[string]string, sampleRate float64, contextDialer func(ctx context.Context, addr string) (net.Conn, error)) (func(context.Context) error, error) {
 	var shutdownFuncs []func(context.Context) error
 	var err error
 	shutdown := func(ctx context.Context) error {
@@ -46,14 +46,14 @@ func SetupOTelSDK(ctx context.Context, endpoint string, headers map[string]strin
 	if err != nil {
 		return shutdown, fmt.Errorf("failed to create resource: %w", err)
 	}
-	tp, err := initTracer(ctx, res, conn, endpoint, headers)
+	tp, err := initTracer(ctx, res, conn, endpoint, headers, sampleRate)
 	if err != nil {
 		return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 	}
 	// Successfully initialized tracer
 	shutdownFuncs = append(shutdownFuncs, tp.Shutdown)
 
-	mp, err := initMeterProvider(ctx, res, conn)
+	mp, err := initMeterProvider(ctx, res, conn, sampleRate)
 	if err != nil {
 		return shutdown, fmt.Errorf("failed to initialize meter provider: %w", err)
 	}
@@ -77,7 +77,7 @@ func initConn(endpoint string, contextDialer func(ctx context.Context, addr stri
 }
 
 // initTracer creates and registers trace provider instance.
-func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, endpoint string, headers map[string]string) (*sdktrace.TracerProvider, error) {
+func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, endpoint string, headers map[string]string, sampleRate float64) (*sdktrace.TracerProvider, error) {
 	exp, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithGRPCConn(conn),
 		otlptracegrpc.WithEndpoint(endpoint),
@@ -91,7 +91,8 @@ func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientCo
 	// span processor to aggregate spans before export.
 	bsp := sdktrace.NewBatchSpanProcessor(exp)
 	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRate))),
+		//sdktrace.WithSampler(sdktrace.AlwaysSample()),
 		sdktrace.WithResource(res),
 		sdktrace.WithSpanProcessor(bsp),
 	)
@@ -104,7 +105,7 @@ func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientCo
 }
 
 // Initializes an OTLP exporter, and configures the corresponding meter provider.
-func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn) (func(context.Context) error, error) {
+func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, sampleRate float64) (func(context.Context) error, error) {
 	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
