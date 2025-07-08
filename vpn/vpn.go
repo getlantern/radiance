@@ -6,35 +6,20 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	O "github.com/sagernet/sing-box/option"
+
+	"github.com/getlantern/radiance/common"
 )
 
 const (
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
 )
-
-var (
-	selectedServer atomic.Value
-)
-
-type Server struct {
-	Group    string
-	Tag      string
-	Type     string
-	Location string
-}
-
-func init() {
-	// set the initial selected server to ensure no other value type can be stored
-	selectedServer.Store(Server{})
-}
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [ServerGroupLantern], [ServerGroupUser], "all", or the empty string. Using "all" or
@@ -75,10 +60,7 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 	if isOpen() {
 		return selectServer(group, tag)
 	}
-	if err := connect(group, tag, platIfce); err != nil {
-		return fmt.Errorf("connect to server %s/%s: %w", group, tag, err)
-	}
-	return nil
+	return connect(group, tag, platIfce)
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
@@ -86,7 +68,7 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	if err := setSelected(group, tag); err != nil {
 		return fmt.Errorf("failed to set selected server: %w", err)
 	}
-	opts, err := buildOptions(group)
+	opts, err := buildOptions(group, common.DataPath())
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
@@ -194,6 +176,13 @@ func getSelected() (string, string, error) {
 	return group, tag, nil
 }
 
+type Server struct {
+	Group    string
+	Tag      string
+	Type     string
+	Location string
+}
+
 type Status struct {
 	TunnelOpen     bool
 	SelectedServer Server
@@ -201,11 +190,25 @@ type Status struct {
 }
 
 func GetStatus() (Status, error) {
-	// TODO: get server locations
+	// TODO:
+	// 	- get server locations
+	// 	- get selected server type
+	group, tag, err := getSelected()
+	if err != nil {
+		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
+	}
+	selected := Server{
+		Group: group,
+		Tag:   tag,
+	}
 	s := Status{
 		TunnelOpen:     isOpen(),
-		SelectedServer: selectedServer.Load().(Server),
+		SelectedServer: selected,
 	}
+	if !s.TunnelOpen {
+		return s, nil
+	}
+
 	active, err := activeServer()
 	if err != nil {
 		return s, fmt.Errorf("failed to get active server: %w", err)

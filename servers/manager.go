@@ -45,14 +45,8 @@ type Manager struct {
 	logger *slog.Logger
 }
 
-// NewManager creates a new Manager instance, loading server options from disk. If logger is nil,
-// the default logger is used. Returns an error if loading servers fails.
+// NewManager creates a new Manager instance, loading server options from disk.
 func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.Info("Initializing UserServerManager", "dataPath", dataPath)
-
 	mgr := &Manager{
 		optsMap: make(map[string]any),
 		serverOpts: ServerOptions{

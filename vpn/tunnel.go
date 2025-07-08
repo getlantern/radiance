@@ -53,6 +53,34 @@ type tunnel struct {
 	closers []io.Closer
 }
 
+func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
+	tAccess.Lock()
+	defer tAccess.Unlock()
+	if tInstance != nil {
+		return errors.New("tunnel already opened")
+	}
+
+	log := slog.Default().With("component", "tunnel")
+
+	cmdSvrOnce.Do(func() {
+		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{log: log}, 64)
+		cmdSvrErr = cmdSvr.Start()
+	})
+	if cmdSvrErr != nil {
+		log.Error("failed to start command server", slog.Any("error", cmdSvrErr))
+		return fmt.Errorf("failed to start command server: %w", cmdSvrErr)
+	}
+
+	tInstance = &tunnel{
+		ctx: sbx.BoxContext(),
+		log: log,
+	}
+	if err := tInstance.init(opts, platIfce); err != nil {
+		return fmt.Errorf("initialize tunnel: %w", err)
+	}
+	return tInstance.start()
+}
+
 func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	cfg, err := json.MarshalContext(t.ctx, opts)
 	if err != nil {
@@ -103,34 +131,6 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	})
 	t.svrFileWatcher = svrWatcher
 	return nil
-}
-
-func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
-	tAccess.Lock()
-	defer tAccess.Unlock()
-	if tInstance != nil {
-		return errors.New("tunnel already opened")
-	}
-
-	log := slog.Default().With("component", "tunnel")
-
-	cmdSvrOnce.Do(func() {
-		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{log: log}, 64)
-		cmdSvrErr = cmdSvr.Start()
-	})
-	if cmdSvrErr != nil {
-		log.Error("failed to start command server", slog.Any("error", cmdSvrErr))
-		return fmt.Errorf("failed to start command server: %w", cmdSvrErr)
-	}
-
-	tInstance = &tunnel{
-		ctx: sbx.BoxContext(),
-		log: log,
-	}
-	if err := tInstance.init(opts, platIfce); err != nil {
-		return fmt.Errorf("initialize tunnel: %w", err)
-	}
-	return tInstance.start()
 }
 
 func (t *tunnel) start() (err error) {
@@ -286,7 +286,7 @@ func (t *tunnel) updateServerConfigs(
 	}
 
 	// create a new selector with the succeeded tags
-	newSel := newSelector(group, succeededTags)
+	newSel := selectorOutbound(group, succeededTags)
 	logger := t.logFactory.NewLogger("outbound/" + group + "[" + C.TypeSelector + "]")
 	err = outboundMgr.Create(ctx, router, logger, group, C.TypeSelector, newSel.Options)
 	if err != nil {
@@ -306,6 +306,23 @@ func (t *tunnel) updateServerConfigs(
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// serverOptions is a helper struct to iterate over the outbounds and endpoints
+type serverOptions struct {
+	outbounds []O.Outbound
+	endpoints []O.Endpoint
+}
+
+func (s *serverOptions) tags() []string {
+	tags := make([]string, 0, len(s.outbounds)+len(s.endpoints))
+	for _, ob := range s.outbounds {
+		tags = append(tags, ob.Tag)
+	}
+	for _, ep := range s.endpoints {
+		tags = append(tags, ep.Tag)
+	}
+	return tags
 }
 
 type cmdSvrHandler struct {
