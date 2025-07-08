@@ -187,20 +187,15 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 }
 
 func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
-	if !cfg.ConfigResponse.OTEL.Enabled || cfg.ConfigResponse.OTEL.Endpoint == "" {
-		slog.Info("OpenTelemetry configuration is disabled or empty, not initializing OpenTelemetry SDK")
-		return nil
-	}
-	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTEL.Endpoint,
-		cfg.ConfigResponse.OTEL.Headers, cfg.ConfigResponse.OTEL.SampleRate, func(ctx context.Context, addr string) (net.Conn, error) {
-			// User a regular net.Dialer for now.
-			// TODO: Adapt kindling to return a net.Dialer that can be used with OpenTelemetry.
-			dialer := &net.Dialer{
-				Timeout:   5 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}
-			return dialer.DialContext(ctx, "tcp", addr)
-		})
+	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTEL, func(ctx context.Context, addr string) (net.Conn, error) {
+		// User a regular net.Dialer for now.
+		// TODO: Adapt kindling to return a net.Dialer that can be used with OpenTelemetry.
+		dialer := &net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+		return dialer.DialContext(ctx, "tcp", addr)
+	})
 	if shutdown != nil {
 		r.shutdownOTEL = shutdown
 		r.addShutdownFunc(shutdown)
