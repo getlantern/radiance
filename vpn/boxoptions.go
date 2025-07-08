@@ -152,7 +152,7 @@ func baseOpts() O.Options {
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
 				DefaultMode:        ServerGroupLantern,
-				ModeList:           []string{},
+				ModeList:           []string{ServerGroupLantern, ServerGroupUser, autoLantern, autoUser, autoAll},
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{
@@ -188,6 +188,13 @@ func buildOptions(mode, path string) (O.Options, error) {
 
 	// build options
 	opts := baseOpts()
+
+	// update default options and paths
+	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
+	opts.Experimental.ClashAPI.DefaultMode = mode
+	splitTunnelFilePath := filepath.Join(path, splitTunnelFile)
+	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelFilePath
+
 	mergeOuts := func(dst, src *O.Options) []string {
 		dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 		dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
@@ -207,6 +214,13 @@ func buildOptions(mode, path string) (O.Options, error) {
 	opts.Route.Rules = append(opts.Route.Rules, cOpts.Route.Rules...)
 	opts.Route.RuleSet = append(opts.Route.RuleSet, cOpts.Route.RuleSet...)
 	opts.DNS.Servers = append(opts.DNS.Servers, cOpts.DNS.Servers...)
+
+	switch plat := app.Platform; plat {
+	case "android":
+		opts.Route.OverrideAndroidVPN = true
+	case "linux":
+		opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
+	}
 
 	// merge user servers into base
 	userTags := mergeOuts(&opts, &O.Options{Outbounds: uOpts.Outbounds, Endpoints: uOpts.Endpoints})
