@@ -14,6 +14,7 @@ import (
 	O "github.com/sagernet/sing-box/option"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
 )
 
 const (
@@ -26,12 +27,12 @@ const (
 // the empty string will connect to the best available server across all groups.
 func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 	switch group {
-	case ServerGroupLantern:
-		group = autoLantern
-	case ServerGroupUser:
-		group = autoUser
+	case servers.SGLantern:
+		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
+	case servers.SGUser:
+		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
 	case "all", "":
-		group = autoAll
+		group = modeAutoAll
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
@@ -47,10 +48,10 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
-// [ServerGroupLantern] and [ServerGroupUser].
+// [servers.SGLantern] and [servers.SGUser].
 func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
 	switch group {
-	case ServerGroupLantern, ServerGroupUser:
+	case servers.SGLantern, servers.SGUser:
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
@@ -176,30 +177,24 @@ func getSelected() (string, string, error) {
 	return group, tag, nil
 }
 
-type Server struct {
-	Group    string
-	Tag      string
-	Type     string
-	Location string
-}
-
+// Status represents the current status of the tunnel, including whether it is open, the selected
+// server, and the active server. Active is only set if the tunnel is open.
 type Status struct {
-	TunnelOpen     bool
-	SelectedServer Server
-	ActiveServer   Server
+	TunnelOpen bool
+	// SelectedServer is the server that is currently selected for the tunnel.
+	SelectedServer string
+	// ActiveServer is the server that is currently active for the tunnel. This will differ from
+	// SelectedServer if using auto-select mode.
+	ActiveServer string
 }
 
 func GetStatus() (Status, error) {
-	// TODO:
-	// 	- get server locations
-	// 	- get selected server type
-	group, tag, err := getSelected()
+	group, selected, err := getSelected()
 	if err != nil {
 		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
 	}
-	selected := Server{
-		Group: group,
-		Tag:   tag,
+	if group == modeAutoAll {
+		selected = modeAutoAll
 	}
 	s := Status{
 		TunnelOpen:     isOpen(),
@@ -215,6 +210,36 @@ func GetStatus() (Status, error) {
 	}
 	s.ActiveServer = active
 	return s, nil
+}
+
+func activeServer() (string, error) {
+	if !isOpen() {
+		return "", nil
+	}
+	res, err := sendCmd(libbox.CommandClashMode)
+	if err != nil {
+		return "", fmt.Errorf("failed to get active server: %w", err)
+	}
+	outbound, err := getOutboundGroup(res.clashMode)
+	if err != nil {
+		return "", err
+	}
+	return outbound.Selected, nil
+}
+
+func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
+	res, err := sendCmd(libbox.CommandGroup)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get outbound group: %w", err)
+	}
+	groups := res.groups
+	for groups.HasNext() {
+		og := groups.Next()
+		if og.Tag == group {
+			return og, nil
+		}
+	}
+	return nil, fmt.Errorf("outbound group %s not found", group)
 }
 
 type Connection struct {
@@ -242,31 +267,6 @@ func ActiveConnections() ([]Connection, error) {
 		return -a.CreatedAt.Compare(b.CreatedAt)
 	})
 	return connections, nil
-}
-
-func activeServer() (Server, error) {
-	s := Server{}
-	if !isOpen() {
-		return s, nil
-	}
-	res, err := sendCmd(libbox.CommandClashMode)
-	if err != nil {
-		return s, fmt.Errorf("failed to get active server: %w", err)
-	}
-	outbound, err := getOutboundGroup(res.clashMode)
-	if err != nil {
-		return s, err
-	}
-	s.Group = outbound.Tag
-	s.Tag = outbound.Selected
-	for _, out := range outbound.ItemList {
-		if out.Tag == s.Tag {
-			s.Type = out.Type
-			break
-		}
-	}
-
-	return s, nil
 }
 
 func activeConnections() ([]Connection, error) {
@@ -298,37 +298,6 @@ func activeConnections() ([]Connection, error) {
 		connections = append(connections, conn)
 	}
 	return connections, nil
-}
-
-func getOutboundGroupTags(group string) ([]string, error) {
-	if group != ServerGroupLantern && group != ServerGroupUser {
-		return nil, fmt.Errorf("invalid group: %s", group)
-	}
-
-	oGroup, err := getOutboundGroup(group)
-	if err != nil {
-		return nil, err
-	}
-	tags := make([]string, 0)
-	for _, out := range oGroup.ItemList {
-		tags = append(tags, out.Tag)
-	}
-	return tags, nil
-}
-
-func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
-	res, err := sendCmd(libbox.CommandGroup)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get outbound groups: %w", err)
-	}
-	groups := res.groups
-	for groups.HasNext() {
-		og := groups.Next()
-		if og.Tag == group {
-			return og, nil
-		}
-	}
-	return nil, fmt.Errorf("outbound group %s not found", group)
 }
 
 func sendCmd(cmd int32) (*cmdClientHandler, error) {

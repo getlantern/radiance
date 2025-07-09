@@ -16,9 +16,9 @@ import (
 	sbx "github.com/getlantern/sing-box-extensions"
 	sbxlog "github.com/getlantern/sing-box-extensions/log"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/servers"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
@@ -47,9 +47,10 @@ type tunnel struct {
 	log         *slog.Logger
 	logFactory  sblog.ObservableFactory
 
-	optsFileWatcher *internal.FileWatcher
-	svrFileWatcher  *internal.FileWatcher
+	svrFileWatcher *internal.FileWatcher
+	reloadAccess   sync.Mutex
 
+	cancel  context.CancelFunc
 	closers []io.Closer
 }
 
@@ -71,12 +72,10 @@ func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
 		return fmt.Errorf("failed to start command server: %w", cmdSvrErr)
 	}
 
-	tInstance = &tunnel{
-		ctx: sbx.BoxContext(),
-		log: log,
-	}
+	tInstance = &tunnel{log: log}
+	tInstance.ctx, tInstance.cancel = context.WithCancel(sbx.BoxContext())
 	if err := tInstance.init(opts, platIfce); err != nil {
-		return fmt.Errorf("initialize tunnel: %w", err)
+		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 	return tInstance.start()
 }
@@ -94,13 +93,13 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 		WorkingPath: basePath,
 		TempPath:    filepath.Join(basePath, "temp"),
 	}
-	if app.Platform == "android" {
+	if common.Platform == "android" {
 		setupOpts.FixAndroidStack = true
 	}
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
-	t.logFactory = sbxlog.NewFactory(slog.Default().With("component", "sing-box").Handler())
+	t.logFactory = sbxlog.NewFactory(slog.Default().With("service", "sing-box").Handler())
 	service.MustRegister(t.ctx, t.logFactory)
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
 	if err != nil {
@@ -108,24 +107,14 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	}
 	t.lbService = lb
 
-	if app.Platform == "android" || app.Platform == "ios" {
+	if common.Platform == "android" || common.Platform == "ios" {
 		libbox.SetMemoryLimit(true)
 	}
 
-	// create file watchers for options and server configs
-	optsPath := filepath.Join(basePath, app.ConfigFileName)
-	optsWatcher := internal.NewFileWatcher(optsPath, func() {
-		err := t.reloadOptions(optsPath, unmarshalConfig)
-		if err != nil {
-			t.log.Error("failed to reload options", slog.Any("error", err))
-		}
-	})
-	t.optsFileWatcher = optsWatcher
-
-	svrsPath := filepath.Join(basePath, app.UserServerFileName)
+	// create file watcher for server changes
+	svrsPath := filepath.Join(basePath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
-		err := t.reloadOptions(svrsPath, unmarshal)
-		if err != nil {
+		if err := t.reloadOptions(svrsPath); err != nil {
 			t.log.Error("failed to reload user servers", slog.Any("error", err))
 		}
 	})
@@ -147,11 +136,6 @@ func (t *tunnel) start() (err error) {
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	cmdSvr.SetService(t.lbService)
 
-	if err = t.optsFileWatcher.Start(); err != nil {
-		return fmt.Errorf("starting config file watcher: %w", err)
-	}
-	tInstance.closers = append(tInstance.closers, t.optsFileWatcher)
-
 	if err = t.svrFileWatcher.Start(); err != nil {
 		return fmt.Errorf("starting user server file watcher: %w", err)
 	}
@@ -162,45 +146,23 @@ func (t *tunnel) start() (err error) {
 
 func closeTunnel() error {
 	tAccess.Lock()
-	defer tAccess.Unlock()
 	if tInstance == nil {
+		tAccess.Unlock()
 		return nil
 	}
 	var t *tunnel
+	// copying the mutex is fine here because we're not using it anymore
+	//nolint:staticcheck
 	*t, tInstance = *tInstance, nil
+	tAccess.Unlock()
+
+	t.cancel()
 
 	var errs []error
 	for _, closer := range t.closers {
 		errs = append(errs, closer.Close())
 	}
 	return errors.Join(errs...)
-}
-
-var errLibboxClosed = errors.New("libbox closed")
-
-func (t *tunnel) reloadOptions(optsPath string, unmarshaler func([]byte) (O.Options, error)) error {
-	if t == nil {
-		return nil
-	}
-
-	t.log.Debug("reloading options")
-	content, err := os.ReadFile(optsPath)
-	if os.IsNotExist(err) {
-		t.log.Debug("config file not found, skipping reload")
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read config file: %w", err)
-	}
-	opts, err := unmarshaler(content)
-	if err != nil {
-		return fmt.Errorf("unmarshal config: %w", err)
-	}
-	err = t.updateServerConfigs(t.ctx, "", opts.Outbounds, opts.Endpoints)
-	if err != nil && !errors.Is(err, errLibboxClosed) {
-		return fmt.Errorf("update server configs: %w", err)
-	}
-	return nil
 }
 
 func unmarshal(buf []byte) (O.Options, error) {
@@ -212,117 +174,179 @@ func unmarshalConfig(buf []byte) (O.Options, error) {
 	if err != nil {
 		return O.Options{}, err
 	}
-
 	return config.Options, nil
 }
 
-func (t *tunnel) updateServerConfigs(
-	ctx context.Context,
-	group string,
-	outbounds []O.Outbound,
-	endpoints []O.Endpoint,
-) (err error) {
+var errLibboxClosed = errors.New("libbox closed")
+
+func (t *tunnel) reloadOptions(optsPath string) error {
+	if t == nil {
+		return nil
+	}
+	t.reloadAccess.Lock()
+	defer t.reloadAccess.Unlock()
+
+	select {
+	case <-t.ctx.Done():
+		return nil
+	default:
+	}
+
+	t.log.Debug("reloading options")
+	content, err := os.ReadFile(optsPath)
+	if err != nil {
+		return fmt.Errorf("read config file: %w", err)
+	}
+	svrs, err := json.UnmarshalExtendedContext[servers.Servers](sbx.BoxContext(), content)
+	if err != nil {
+		return fmt.Errorf("unmarshal config: %w", err)
+	}
+	err = t.updateServers(svrs)
+	if t.ctx.Err() != nil {
+		return nil // tunnel is closing, ignore the error
+	}
+	if err != nil && !errors.Is(err, errLibboxClosed) {
+		return fmt.Errorf("update server configs: %w", err)
+	}
+	return nil
+}
+
+func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
+	ctx := t.ctx
+	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
+	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
+	getSelector := func(group string) *sbgroup.Selector {
+		out, found := outboundMgr.Outbound(group)
+		if !found {
+			// Yes, panic. And, yes, it's intentional. The group outbound should always exist if the tunnel
+			// is running, so this is a "world no longer makes sense" situation. This should be caught
+			// during testing and will not panic in release builds.
+			t.log.Log(ctx, internal.LevelPanic, "selector group missing", slog.String("group", group))
+			panic(fmt.Errorf("selector group %q missing", group))
+		}
+		return out.(*sbgroup.Selector)
+	}
 	defer func() {
 		// the managers will panic with "invalid .* index" if the libbox service is closed when
 		// calling Remove or Create. This isn't the best way to determine if the service is closed,
 		// but it's the only way to handle this without modifying sing-box.
 		if r := recover(); r != nil {
-			switch r := r.(type) {
-			case string:
-				if strings.HasPrefix(r, "invalid") && strings.HasSuffix(r, "index") {
-					err = errLibboxClosed
-				}
-			default:
-				err = fmt.Errorf("update server configs panic: %v", r)
+			if v, ok := r.(string); ok && strings.HasPrefix(v, "invalid") && strings.HasSuffix(v, "index") {
+				err = errLibboxClosed
+			} else {
+				panic(r) // re-panic if it's not the expected panic
 			}
 		}
 	}()
 
-	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
-	ob, found := outboundMgr.Outbound(group)
-	if !found {
-		t.log.Log(ctx, internal.LevelFatal, "outbound group not found", slog.String("group", group))
-		return fmt.Errorf("outbound group %q not found", group)
-	}
-	selector := ob.(*sbgroup.Selector)
-	groupTags := selector.All()
-	sopts := &serverOptions{outbounds: outbounds, endpoints: endpoints}
-	newTags := sopts.tags()
-
-	// determine which tags to need to be removed
-	tagsToRemove := make([]string, 0, len(groupTags))
-	for _, tag := range groupTags {
-		if !slices.Contains(newTags, tag) {
-			tagsToRemove = append(tagsToRemove, tag)
+	var (
+		allTags  []string
+		toRemove []string
+		creater  = &outCreater{
+			log:        t.log,
+			ctx:        ctx,
+			router:     service.FromContext[adapter.Router](ctx),
+			logFactory: t.logFactory,
+			errs:       make([]error, 0),
 		}
-	}
+	)
+	for _, group := range []string{servers.SGLantern, servers.SGUser} {
+		sopts := svrs[group]
+		newTags := sopts.AllTags()
 
-	var errs []error
-	var succeededTags []string
-	router := service.FromContext[adapter.Router](ctx)
-
-	// create/update outbounds
-	for _, opts := range sopts.outbounds {
-		t.log.Debug("creating outbound", slog.String("tag", opts.Tag), slog.String("type", opts.Type))
-		logger := t.logFactory.NewLogger("outbound/" + opts.Tag + "[" + opts.Type + "]")
-		err := outboundMgr.Create(ctx, router, logger, opts.Tag, opts.Type, opts.Options)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("create outbound %q: %w", opts.Tag, err))
-		} else {
-			succeededTags = append(succeededTags, opts.Tag)
+		// determine which tags need to be removed
+		groupTags := getSelector(group).All()
+		tagsToRemove := make([]string, 0, len(groupTags))
+		for _, tag := range groupTags {
+			if !slices.Contains(newTags, tag) {
+				tagsToRemove = append(tagsToRemove, tag)
+			}
 		}
-	}
-	// create/update endpoints
-	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
-	for _, opts := range sopts.endpoints {
-		t.log.Debug("creating endpoint", slog.String("tag", opts.Tag), slog.String("type", opts.Type))
-		logger := t.logFactory.NewLogger("endpoint/" + opts.Tag + "[" + opts.Type + "]")
-		err := endpointMgr.Create(ctx, router, logger, opts.Tag, opts.Type, opts.Options)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("create endpoint %q: %w", opts.Tag, err))
-		} else {
-			succeededTags = append(succeededTags, opts.Tag)
+		toRemove = slices.Concat(toRemove, tagsToRemove)
+
+		creater.mgr = endpointMgr
+		creater.typ = "endpoint"
+		creater.group = group
+		creater.succeededTags = make([]string, 0, len(newTags))
+		// create/update endpoints
+		for _, opts := range sopts.Endpoints {
+			creater.createNew(opts.Tag, opts.Type, opts.Options)
 		}
-	}
 
-	// create a new selector with the succeeded tags
-	newSel := selectorOutbound(group, succeededTags)
-	logger := t.logFactory.NewLogger("outbound/" + group + "[" + C.TypeSelector + "]")
-	err = outboundMgr.Create(ctx, router, logger, group, C.TypeSelector, newSel.Options)
-	if err != nil {
-		t.log.Error("failed to create selector outbound", slog.String("group", group), slog.String("type", C.TypeSelector), slog.Any("error", err))
-		errs = append(errs, fmt.Errorf("create selector outbound %q: %w", group, err))
-	}
+		// create/update outbounds
+		creater.mgr = outboundMgr
+		creater.typ = "outbound"
+		for _, opts := range sopts.Outbounds {
+			creater.createNew(opts.Tag, opts.Type, opts.Options)
+		}
+		allTags = slices.Concat(allTags, newTags)
 
-	// TODO: update urltest group outbounds
+		// create url test outbounds for group with the succeeded tags
+		autoGroup := groupAutoTag(group)
+		opts := urlTestOutbound(autoGroup, creater.succeededTags).Options
+		creater.createNew(autoGroup, C.TypeURLTest, opts)
+
+		// create a new selector with the succeeded tags
+		tags := append(creater.succeededTags, autoGroup)
+		opts = selectorOutbound(group, tags).Options
+		creater.createNew(group, C.TypeSelector, opts)
+
+	}
+	// create new auto-all outbound
+	opts := urlTestOutbound(modeAutoAll, allTags).Options
+	creater.createNew(modeAutoAll, C.TypeURLTest, opts)
 
 	// we have to remove endpoints and outbounds last, otherwise the managers will return an error
 	// because the group outbound is dependent on them.
-	for _, tag := range tagsToRemove {
+	for _, tag := range toRemove {
 		if _, exists := endpointMgr.Get(tag); exists {
 			endpointMgr.Remove(tag)
 		} else if _, exists := outboundMgr.Outbound(tag); exists {
 			outboundMgr.Remove(tag)
 		}
 	}
-	return errors.Join(errs...)
+	return errors.Join(creater.errs...)
 }
 
-// serverOptions is a helper struct to iterate over the outbounds and endpoints
-type serverOptions struct {
-	outbounds []O.Outbound
-	endpoints []O.Endpoint
+// outCreater is a one-off struct for creating outbounds or endpoints.
+type outCreater struct {
+	mgr interface {
+		Create(context.Context, adapter.Router, sblog.ContextLogger, string, string, any) error
+	}
+	typ string
+	log *slog.Logger
+
+	ctx        context.Context
+	router     adapter.Router
+	logFactory sblog.ObservableFactory
+	group      string
+
+	succeededTags []string
+	errs          []error
 }
 
-func (s *serverOptions) tags() []string {
-	tags := make([]string, 0, len(s.outbounds)+len(s.endpoints))
-	for _, ob := range s.outbounds {
-		tags = append(tags, ob.Tag)
+func (o *outCreater) createNew(tag, typ string, opts any) {
+	select {
+	case <-o.ctx.Done():
+		return
+	default:
 	}
-	for _, ep := range s.endpoints {
-		tags = append(tags, ep.Tag)
+
+	log := o.logFactory.NewLogger(o.typ + "/" + tag + "[" + typ + "]")
+	err := o.mgr.Create(o.ctx, o.router, log, tag, typ, opts)
+	if err != nil {
+		o.log.Error(
+			"failed to create "+o.typ,
+			slog.String("group", o.group), slog.String("tag", tag),
+			slog.String("type", typ), slog.Any("error", err),
+		)
+		o.errs = append(o.errs, fmt.Errorf("create %s %q: %w", o.typ, tag, err))
+	} else {
+		o.log.Debug("created "+o.typ,
+			slog.String("group", o.group), slog.String("tag", tag), slog.String("type", typ),
+		)
+		o.succeededTags = append(o.succeededTags, tag)
 	}
-	return tags
 }
 
 type cmdSvrHandler struct {

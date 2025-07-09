@@ -5,24 +5,29 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"time"
 
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
+	"github.com/sagernet/sing/common/json/badoption"
 
-	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
 )
 
 const (
-	ServerGroupLantern = "lantern"
-	ServerGroupUser    = "user"
+	modeAutoAll = "auto-all"
 
-	autoLantern = "auto-lantern"
-	autoUser    = "auto-user"
-	autoAll     = "auto-all"
+	autoLanternTag = "auto-lantern"
+	autoUserTag    = "auto-user"
+
+	urlTestInterval    = 3 * time.Minute // must be less than urlTestIdleTimeout
+	urlTestIdleTimeout = 15 * time.Minute
 )
 
+// this is the base options that is need for everything to work correctly. this should not be
+// changed unless you know what you're doing.
 func baseOpts() O.Options {
 	return O.Options{
 		Log: &O.LogOptions{
@@ -90,6 +95,11 @@ func baseOpts() O.Options {
 				Tag:     "direct",
 				Options: &O.DirectOutboundOptions{},
 			},
+			{
+				Type:    C.TypeBlock,
+				Tag:     "block",
+				Options: &O.StubOptions{},
+			},
 		},
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
@@ -132,11 +142,9 @@ func baseOpts() O.Options {
 						},
 					},
 				},
-				groupRule(autoAll),
-				groupRule(autoLantern),
-				groupRule(autoUser),
-				groupRule(ServerGroupLantern),
-				groupRule(ServerGroupUser),
+				groupRule(modeAutoAll),
+				groupRule(servers.SGLantern),
+				groupRule(servers.SGUser),
 			},
 			RuleSet: []O.RuleSet{
 				{
@@ -151,8 +159,8 @@ func baseOpts() O.Options {
 		},
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
-				DefaultMode:        ServerGroupLantern,
-				ModeList:           []string{ServerGroupLantern, ServerGroupUser, autoLantern, autoUser, autoAll},
+				DefaultMode:        servers.SGLantern,
+				ModeList:           []string{servers.SGLantern, servers.SGUser, modeAutoAll},
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{
@@ -168,24 +176,6 @@ func baseOpts() O.Options {
 // will only be added if mode is set to [autoLantern], [autoUser], or [autoAll], and only for the
 // respective group.
 func buildOptions(mode, path string) (O.Options, error) {
-	// load config options
-	confPath := filepath.Join(path, app.ConfigFileName)
-	content, err := os.ReadFile(confPath)
-	if err != nil {
-		return O.Options{}, fmt.Errorf("read config file: %w", err)
-	}
-	cOpts, err := unmarshalConfig(content)
-	if err != nil {
-		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
-	}
-
-	// load user servers
-	mgr, err := servers.NewManager(path, nil)
-	if err != nil {
-		return O.Options{}, fmt.Errorf("create server manager: %w", err)
-	}
-	uOpts := mgr.Servers()
-
 	// build options
 	opts := baseOpts()
 
@@ -195,9 +185,21 @@ func buildOptions(mode, path string) (O.Options, error) {
 	splitTunnelFilePath := filepath.Join(path, splitTunnelFile)
 	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelFilePath
 
-	mergeOuts := func(dst, src *O.Options) []string {
+	switch plat := common.Platform; plat {
+	case "android":
+		opts.Route.OverrideAndroidVPN = true
+	case "linux":
+		opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
+	}
+
+	mergeOpts := func(dst, src *O.Options) []string {
 		dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 		dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
+
+		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
+		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
+		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
+
 		var tags []string
 		for _, out := range src.Outbounds {
 			tags = append(tags, out.Tag)
@@ -208,45 +210,70 @@ func buildOptions(mode, path string) (O.Options, error) {
 		return tags
 	}
 
-	// merge config options into base
-	ltnTags := mergeOuts(&opts, &cOpts)
-	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ServerGroupLantern, ltnTags))
-	opts.Route.Rules = append(opts.Route.Rules, cOpts.Route.Rules...)
-	opts.Route.RuleSet = append(opts.Route.RuleSet, cOpts.Route.RuleSet...)
-	opts.DNS.Servers = append(opts.DNS.Servers, cOpts.DNS.Servers...)
-
-	switch plat := app.Platform; plat {
-	case "android":
-		opts.Route.OverrideAndroidVPN = true
-	case "linux":
-		opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
+	// load and merge config options into base
+	confPath := filepath.Join(path, common.ConfigFileName)
+	content, err := os.ReadFile(confPath)
+	if err != nil {
+		return O.Options{}, fmt.Errorf("read config file: %w", err)
+	}
+	cOpts, err := unmarshalConfig(content)
+	if err != nil {
+		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	// merge user servers into base
-	userTags := mergeOuts(&opts, &O.Options{Outbounds: uOpts.Outbounds, Endpoints: uOpts.Endpoints})
-	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ServerGroupUser, userTags))
+	ltnTags := mergeOpts(&opts, &cOpts)
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLanternTag, ltnTags))
+	opts.Outbounds = append(
+		opts.Outbounds,
+		selectorOutbound(servers.SGLantern, append(ltnTags, autoLanternTag)),
+	)
 
-	// if auto mode is selected, add URLTest outbounds for respective group
-	switch mode {
-	case autoAll:
-		tags := append(ltnTags, userTags...)
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAll, tags))
-	case autoLantern:
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLantern, ltnTags))
-	case autoUser:
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoUser, userTags))
+	allTags := ltnTags
+
+	// load and merge user servers into base
+	mgr, err := servers.NewManager(path, nil)
+	if err != nil {
+		return O.Options{}, fmt.Errorf("server manager: %w", err)
 	}
+	uOpts := mgr.Servers()[servers.SGUser]
+
+	userTags := mergeOpts(&opts, &O.Options{Outbounds: uOpts.Outbounds, Endpoints: uOpts.Endpoints})
+	if len(userTags) == 0 {
+		opts.Outbounds = append(opts.Outbounds, selectorOutbound(servers.SGUser, []string{"block"}))
+	} else {
+		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoUserTag, userTags))
+		opts.Outbounds = append(
+			opts.Outbounds,
+			selectorOutbound(servers.SGUser, append(userTags, autoUserTag)),
+		)
+		allTags = append(allTags, userTags...)
+	}
+
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(modeAutoAll, allTags))
 	return opts, nil
 }
 
 // helper functions
+
+func groupAutoTag(group string) string {
+	switch group {
+	case servers.SGLantern:
+		return autoLanternTag
+	case servers.SGUser:
+		return autoUserTag
+	default:
+		return modeAutoAll
+	}
+}
 
 func urlTestOutbound(group string, outbounds []string) O.Outbound {
 	return O.Outbound{
 		Type: C.TypeURLTest,
 		Tag:  group,
 		Options: &O.URLTestOutboundOptions{
-			Outbounds: outbounds,
+			Outbounds:   outbounds,
+			Interval:    badoption.Duration(urlTestInterval),
+			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
 		},
 	}
 }
@@ -256,8 +283,7 @@ func selectorOutbound(group string, outbounds []string) O.Outbound {
 		Type: C.TypeSelector,
 		Tag:  group,
 		Options: &O.SelectorOutboundOptions{
-			Outbounds:                 outbounds,
-			InterruptExistConnections: false,
+			Outbounds: outbounds,
 		},
 	}
 }

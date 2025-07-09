@@ -28,6 +28,7 @@ import (
 	exO "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
 )
 
 var (
@@ -45,16 +46,14 @@ type Config struct {
 // ListenerFunc is a function that is called when the configuration changes.
 type ListenerFunc func(oldConfig, newConfig *Config) error
 
-// Unmarshaller is a function that parses the configuration response from the server.
-type Unmarshaller func(configRaw []byte) (*C.ConfigResponse, error)
-
 type Options struct {
-	PollInterval     time.Duration
-	HTTPClient       *http.Client
-	User             common.UserInfo
-	DataDir          string
-	ConfigRespParser Unmarshaller
-	Locale           string
+	PollInterval time.Duration
+	HTTPClient   *http.Client
+	SvrManager   *servers.Manager
+	User         common.UserInfo
+	DataDir      string
+	Locale       string
+	Logger       *slog.Logger
 }
 
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
@@ -71,6 +70,9 @@ type ConfigHandler struct {
 	configListenersMu sync.RWMutex
 	configMu          sync.RWMutex
 
+	log        *slog.Logger
+	svrManager *servers.Manager
+
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath         string
 	preferredLocation atomic.Value
@@ -86,17 +88,19 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		configPath:      configPath,
 		configListeners: make([]ListenerFunc, 0),
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),
+		log:             options.Logger,
+		svrManager:      options.SvrManager,
 	}
 
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(C.ServerLocation{})
 
 	if err := os.MkdirAll(filepath.Dir(options.DataDir), 0o755); err != nil {
-		slog.Error("creating config directory", "error", err)
+		ch.log.Error("creating config directory", "error", err)
 	}
 
 	if err := ch.loadConfig(); err != nil {
-		slog.Error("failed to load config", "error", err)
+		ch.log.Error("failed to load config", "error", err)
 	}
 
 	ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale)
@@ -137,23 +141,9 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 	// fetch the config with the new preferred location on a separate goroutine
 	go func() {
 		if err := ch.fetchConfig(); err != nil {
-			slog.Error("Failed to fetch config: %v", "error", err)
+			ch.log.Error("Failed to fetch config: %v", "error", err)
 		}
 	}()
-}
-
-// ListAvailableServers returns a list of available servers from the current configuration.
-// If no configuration is available, it returns an error.
-func (ch *ConfigHandler) ListAvailableServers() ([]C.ServerLocation, error) {
-	cfgRes := ch.config.Load()
-	if cfgRes == nil {
-		return nil, fmt.Errorf("getting config: %w", ErrFetchingConfig)
-	}
-	cfg, ok := cfgRes.(*Config)
-	if !ok || cfg == nil {
-		return nil, fmt.Errorf("config is not the expected type")
-	}
-	return cfg.ConfigResponse.Servers, nil
 }
 
 // AddConfigListener adds a listener for new Configs.
@@ -164,13 +154,13 @@ func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
 	cfg, err := ch.GetConfig()
 	if err != nil {
 		// There is no config yet, so we can't notify the listener.
-		slog.Info("getting config", "error", err)
+		ch.log.Info("getting config", "error", err)
 		return
 	}
 	go func() {
 		err := listener(nil, cfg)
 		if err != nil {
-			slog.Error("Listener error", "error", err)
+			ch.log.Error("Listener error", "error", err)
 		}
 	}()
 }
@@ -182,18 +172,18 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
 		go func() {
 			err := listener(oldConfig, newConfig)
 			if err != nil {
-				slog.Error("Listener error", "error", err)
+				ch.log.Error("Listener error", "error", err)
 			}
 		}()
 	}
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
-	slog.Debug("Fetching config")
+	ch.log.Debug("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
-		slog.Info("No stored config yet -- using in-memory server location", "error", err)
+		ch.log.Info("No stored config yet -- using in-memory server location", "error", err)
 		storedLocation := ch.preferredLocation.Load()
 		if storedLocation != nil {
 			preferred = storedLocation.(C.ServerLocation)
@@ -223,7 +213,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
 	if resp == nil {
-		slog.Debug("no new config available")
+		ch.log.Debug("no new config available")
 		return nil
 	}
 
@@ -235,31 +225,53 @@ func (ch *ConfigHandler) fetchConfig() error {
 	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), resp)
 
 	if err != nil {
-		slog.Error("failed to parse config", "error", err)
+		ch.log.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	cleanTags(&(confResp.Options))
+	cleanTags(&confResp)
 
 	if err = settingWGPrivateKeyInConfig(confResp.Options.Endpoints, privateKey); err != nil {
-		slog.Error("failed to replace private key", slog.Any("error", err))
+		ch.log.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
-	ch.setConfigAndNotify(&Config{ConfigResponse: confResp})
+	if err := ch.setConfigAndNotify(&Config{ConfigResponse: confResp}); err == nil {
+		cfg := ch.config.Load().(*Config).ConfigResponse
+		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
+		for k, v := range cfg.OutboundLocations {
+			locs[k] = *v
+		}
+		opts := servers.Options{
+			Outbounds: cfg.Options.Outbounds,
+			Endpoints: cfg.Options.Endpoints,
+			Locations: locs,
+		}
+		if err := ch.svrManager.SetServers(servers.SGLantern, opts); err != nil {
+			ch.log.Error("setting servers in manager", "error", err)
+		}
+	}
 
-	slog.Debug("Config fetched")
+	ch.log.Debug("Config fetched")
 	return nil
 }
 
 // TODO: move this to lantern-cloud
-func cleanTags(opts *option.Options) {
+func cleanTags(cfg *C.ConfigResponse) {
+	opts := cfg.Options
+	locs := cfg.OutboundLocations
+	nlocs := make(map[string]*C.ServerLocation, len(locs))
 	for i := 0; i < len(opts.Outbounds); i++ {
 		tag := opts.Outbounds[i].Tag
+		loc := locs[tag]
 		opts.Outbounds[i].Tag = strings.TrimPrefix(tag, "singbox")
+		nlocs[opts.Outbounds[i].Tag] = loc
 	}
 	for i := 0; i < len(opts.Endpoints); i++ {
 		tag := opts.Endpoints[i].Tag
+		loc := locs[tag]
 		opts.Endpoints[i].Tag = strings.TrimPrefix(tag, "singbox")
+		nlocs[opts.Endpoints[i].Tag] = loc
 	}
+	cfg.OutboundLocations = nlocs
 }
 
 func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
@@ -275,18 +287,18 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 	return nil
 }
 
-func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
-	slog.Debug("Setting config")
+func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
+	ch.log.Debug("Setting config")
 	if cfg == nil {
-		slog.Debug("Config is nil, not setting")
-		return
+		ch.log.Debug("Config is nil, not setting")
+		return nil
 	}
 	oldConfig, _ := ch.GetConfig()
 	if oldConfig != nil {
 		merged, err := mergeResp(&oldConfig.ConfigResponse, &cfg.ConfigResponse)
 		if err != nil {
-			slog.Error("failed to merge config", "error", err)
-			return
+			ch.log.Error("merging config", "error", err)
+			return fmt.Errorf("merging config: %w", err)
 		}
 		cfg.ConfigResponse = *merged
 
@@ -296,13 +308,15 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 	}
 
 	ch.config.Store(cfg)
+	ch.log.Debug("Saving config", "path", ch.configPath)
 	if err := saveConfig(cfg, ch.configPath); err != nil {
-		slog.Error("saving config", "error", err)
-		return
+		ch.log.Error("saving config", "error", err)
+		return fmt.Errorf("saving config: %w", err)
 	}
-	slog.Debug("saved new config")
+	ch.log.Debug("saved new config")
 	go ch.notifyListeners(oldConfig, cfg)
-	slog.Debug("Config set")
+	ch.log.Debug("Config set")
+	return nil
 }
 
 // mergeResp merges the old and new configuration responses. The merged response is returned
@@ -310,7 +324,6 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) {
 func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
 	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
 	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride); err != nil {
-		slog.Error("merging config", "error", err)
 		return newConfig, err
 	}
 	return &oldConfigCopy, nil
@@ -319,7 +332,7 @@ func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error
 // fetchLoop fetches the configuration every pollInterval.
 func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 	if err := ch.fetchConfig(); err != nil {
-		slog.Error("Failed to fetch config. Retrying", "error", err, "interval", pollInterval)
+		ch.log.Error("Failed to fetch config. Retrying", "error", err, "interval", pollInterval)
 	}
 	for {
 		select {
@@ -327,7 +340,7 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 			return
 		case <-time.After(pollInterval):
 			if err := ch.fetchConfig(); err != nil {
-				slog.Error("Failed to fetch config in select. Retrying", "error", err, "interval", pollInterval)
+				ch.log.Error("Failed to fetch config in select. Retrying", "error", err, "interval", pollInterval)
 			}
 		}
 	}
@@ -343,9 +356,9 @@ func (ch *ConfigHandler) Stop() {
 // loadConfig loads the config file from the disk. If the config file is not found, it returns
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
-	slog.Debug("reading config file")
+	ch.log.Debug("reading config file")
 	buf, err := os.ReadFile(ch.configPath)
-	slog.Debug("config file read")
+	ch.log.Debug("config file read")
 	if os.IsNotExist(err) { // no config file
 		return nil
 	}
@@ -382,7 +395,6 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
 func saveConfig(cfg *Config, path string) error {
-	slog.Debug("Saving config", "path", path)
 	// Marshal the config to bytes and write it to the config file.
 	// If the config is nil, we don't write anything.
 	// This is important because we don't want to overwrite the config file with an empty file.
@@ -409,7 +421,7 @@ func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
 	cfg, err := ch.GetConfig()
 	if err != nil {
 		// This could happen if we haven't successfully fetched the config yet.
-		slog.Error("getting config", "error", err)
+		ch.log.Error("getting config", "error", err)
 		ch.configMu.Unlock()
 		return
 	}

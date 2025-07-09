@@ -117,11 +117,11 @@ func getServerFingerprints(host string, port int) ([]CertDetail, error) {
 	}
 }
 
-// TrustFingerprintCallback is a callback function that is called when a server's certificate
+// TrustFingerprintCB is a callback function that is called when a server's certificate
 // fingerprint is detected. It receives the server's IP address and the certificate details.
 // The responder can return a CertDetail to be used as the trusted fingerprint.
 // If the returned CertDetail is nil, the connection will be rejected.
-type TrustFingerprintCallback func(ip string, details []CertDetail) *CertDetail
+type TrustFingerprintCB func(ip string, details []CertDetail) *CertDetail
 
 func readTrustedServerFingerprints(fingerprintsJSON string) (map[string]string, error) {
 	fingerprints := map[string]string{}

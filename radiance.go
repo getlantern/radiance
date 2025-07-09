@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	C "github.com/getlantern/common"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
@@ -40,13 +39,8 @@ const configPollInterval = 10 * time.Minute
 type configHandler interface {
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
-
 	// SetPreferredServerLocation sets the preferred server location. If not set - it's auto selected by the API
 	SetPreferredServerLocation(country, city string)
-
-	// ListAvailableServers returns a list of available server locations.
-	ListAvailableServers() ([]C.ServerLocation, error)
-
 	// GetConfig returns the current configuration.
 	// It returns an error if the configuration is not yet available.
 	GetConfig() (*config.Config, error)
@@ -57,6 +51,7 @@ type Radiance struct {
 	confHandler   configHandler
 	issueReporter *issue.IssueReporter
 	apiHandler    *api.APIClient
+	srvManager    *servers.Manager
 
 	//user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
@@ -72,7 +67,6 @@ type Options struct {
 	LogDir   string
 	Locale   string
 	DeviceID string
-	// log level. This can be overridden by the RADIANCE_LOG_LEVEL env variable.
 	LogLevel string
 }
 
@@ -95,9 +89,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	var platformDeviceID string
-	if common.IsAndroid() || common.IsIOS() {
+	switch common.Platform {
+	case "ios", "android":
 		platformDeviceID = opts.DeviceID
-	} else {
+	default:
 		platformDeviceID = deviceid.Get()
 	}
 
@@ -125,16 +120,27 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), apiHandler, userInfo)
+	issueReporter, err := issue.NewIssueReporter(
+		k.NewHTTPClient(),
+		apiHandler,
+		userInfo,
+		slog.Default().With("service", "issue-reporter"),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
+	}
+	svrMgr, err := servers.NewManager(dataDir, slog.Default().With("service", "server-manager"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
 		HTTPClient:   k.NewHTTPClient(),
+		SvrManager:   svrMgr,
 		User:         userInfo,
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
+		Logger:       slog.Default().With("service", "config-handler"),
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
@@ -145,29 +151,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
+		srvManager:    svrMgr,
 		userInfo:      userInfo,
 		locale:        opts.Locale,
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}, nil
-}
-
-// APIHandler returns the API handler for the Radiance client.
-func (r *Radiance) APIHandler() *api.APIClient {
-	return r.apiHandler
-}
-
-// TODO: The server-related functionality should probably be moved to the VPNClient as well.
-// Eventually, this functionality will be moved to the API handler for better separation of concerns.
-func (r *Radiance) GetAvailableServers() ([]C.ServerLocation, error) {
-	return r.confHandler.ListAvailableServers()
-}
-
-// SetPreferredServer sets the preferred server location for the VPN connection.
-// pass empty strings to auto select the server location
-func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
-	r.confHandler.SetPreferredServerLocation(country, city)
 }
 
 func (r *Radiance) Close() {
@@ -184,15 +174,26 @@ func (r *Radiance) Close() {
 	<-r.stopChan
 }
 
+// APIHandler returns the API handler for the Radiance client.
+func (r *Radiance) APIHandler() *api.APIClient {
+	return r.apiHandler
+}
+
+// SetPreferredServer sets the preferred server location for the VPN connection.
+// pass empty strings to auto select the server location
+func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
+	r.confHandler.SetPreferredServerLocation(country, city)
+}
+
 // UserInfo returns the user info object for this client
 // This is the user config object that contains the device ID and other user data
 func (r *Radiance) UserInfo() common.UserInfo {
 	return r.userInfo
 }
 
-// NewServerManager creates a new server manager for managing user and private servers.
-func (r *Radiance) NewServerManager() (*servers.Manager, error) {
-	return servers.NewManager(common.DataPath(), slog.Default().With("service", "server-manager"))
+// ServerManager returns the server manager for the Radiance client.
+func (r *Radiance) ServerManager() *servers.Manager {
+	return r.srvManager
 }
 
 // IssueReport represents a user report of a bug or service problem. This report can be submitted
