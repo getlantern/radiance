@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common"
 )
 
 func TestPrivateServerIntegration(t *testing.T) {
@@ -26,7 +26,7 @@ func TestPrivateServerIntegration(t *testing.T) {
 			Endpoints: make([]option.Endpoint, 0),
 			Outbounds: make([]option.Outbound, 0),
 		},
-		serversFile:      filepath.Join(dataPath, app.UserServerFileName),
+		serversFile:      filepath.Join(dataPath, common.UserServerFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
 		logger:           slog.Default(),
 	}

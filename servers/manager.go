@@ -17,7 +17,7 @@ import (
 
 	sbx "github.com/getlantern/sing-box-extensions"
 
-	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -53,7 +53,7 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 			Endpoints: make([]option.Endpoint, 0),
 			Outbounds: make([]option.Outbound, 0),
 		},
-		serversFile:      filepath.Join(dataPath, app.UserServerFileName),
+		serversFile:      filepath.Join(dataPath, common.UserServerFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
 		logger:           logger,
 	}

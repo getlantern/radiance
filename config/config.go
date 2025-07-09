@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,6 @@ import (
 
 	exO "github.com/getlantern/sing-box-extensions/option"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 )
 
@@ -78,7 +78,7 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
-	configPath := filepath.Join(options.DataDir, app.ConfigFileName)
+	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ch := &ConfigHandler{
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
@@ -239,6 +239,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	cleanTags(&(confResp.Options))
 
 	if err = settingWGPrivateKeyInConfig(confResp.Options.Endpoints, privateKey); err != nil {
 		slog.Error("failed to replace private key", slog.Any("error", err))
@@ -248,6 +249,18 @@ func (ch *ConfigHandler) fetchConfig() error {
 
 	slog.Debug("Config fetched")
 	return nil
+}
+
+// TODO: move this to lantern-cloud
+func cleanTags(opts *option.Options) {
+	for i := 0; i < len(opts.Outbounds); i++ {
+		tag := opts.Outbounds[i].Tag
+		opts.Outbounds[i].Tag = strings.TrimPrefix(tag, "singbox")
+	}
+	for i := 0; i < len(opts.Endpoints); i++ {
+		tag := opts.Endpoints[i].Tag
+		opts.Endpoints[i].Tag = strings.TrimPrefix(tag, "singbox")
+	}
 }
 
 func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes.Key) error {

@@ -11,7 +11,6 @@ import (
 
 	"github.com/getlantern/timezone"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 )
 
@@ -36,16 +35,16 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Lantern/"+app.ClientVersion)
+	req.Header.Set("User-Agent", "Lantern/"+common.ClientVersion)
 	// We include a random length string here to make it harder for censors to identify lantern
 	// based on consistent packet lengths.
 	req.Header.Add(RandomNoiseHeader, randomizedString())
 
-	req.Header.Set(AppVersionHeader, app.ClientVersion)
-	req.Header.Set(VersionHeader, app.Version)
+	req.Header.Set(AppVersionHeader, common.ClientVersion)
+	req.Header.Set(VersionHeader, common.Version)
 	req.Header.Set(UserIDHeader, strconv.FormatInt(user.LegacyID(), 10))
-	req.Header.Set(PlatformHeader, app.Platform)
-	req.Header.Set(AppNameHeader, app.Name)
+	req.Header.Set(PlatformHeader, common.Platform)
+	req.Header.Set(AppNameHeader, common.Name)
 	req.Header.Set(DeviceIDHeader, user.DeviceID())
 	return req, nil
 }

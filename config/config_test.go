@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 )
 
@@ -29,7 +28,7 @@ func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
 func TestSaveConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
@@ -65,7 +64,7 @@ func TestSaveConfig(t *testing.T) {
 func TestGetConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
@@ -104,7 +103,7 @@ func TestGetConfig(t *testing.T) {
 func TestSetPreferredServerLocation(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
@@ -146,7 +145,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 func TestHandlerFetchConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Mock fetcher
 	mockFetcher := &MockFetcher{}

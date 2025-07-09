@@ -15,7 +15,6 @@ import (
 	"github.com/getlantern/osversion"
 
 	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 
@@ -105,9 +104,9 @@ func (ir *IssueReporter) Report(
 	r := &ReportIssueRequest{}
 	r.Type = ReportIssueRequest_ISSUE_TYPE(issueType)
 	r.CountryCode = country
-	r.AppVersion = app.Version
+	r.AppVersion = common.Version
 	r.SubscriptionLevel = subLevel
-	r.Platform = app.Platform
+	r.Platform = common.Platform
 	r.Description = description
 	r.UserEmail = userEmail
 	r.DeviceId = ir.userConfig.DeviceID()
@@ -132,7 +131,7 @@ func (ir *IssueReporter) Report(
 		} else {
 			log.Debug("zipping log files for issue report")
 			buf := &bytes.Buffer{}
-			// zip * under folder app.LogDir
+			// zip * under folder common.LogDir
 			if _, err := zipLogFiles(buf, logDir, size, int64(maxLogSize)); err == nil {
 				r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 					Type:    "application/zip",
