@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -18,13 +17,6 @@ import (
 	"github.com/getlantern/radiance/common"
 )
 
-// Mock implementation of ConfigParser for testing
-func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
-	var cfg C.ConfigResponse
-	err := json.Unmarshal(data, &cfg)
-	return &cfg, err
-}
-
 func TestSaveConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
@@ -32,8 +24,7 @@ func TestSaveConfig(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
+		configPath: configPath,
 	}
 
 	// Create a sample config to save
@@ -68,9 +59,8 @@ func TestGetConfig(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-		config:         atomic.Value{},
+		configPath: configPath,
+		config:     atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -107,10 +97,9 @@ func TestSetPreferredServerLocation(t *testing.T) {
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-		config:         atomic.Value{},
-		ftr:            newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		configPath: configPath,
+		config:     atomic.Value{},
+		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
 	}
 
 	ch.config.Store(&Config{
@@ -153,7 +142,6 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser and fetcher
 	ch := &ConfigHandler{
 		configPath:        configPath,
-		confRespParser:    mockConfigParser,
 		config:            atomic.Value{},
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,

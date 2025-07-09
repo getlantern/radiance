@@ -24,6 +24,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
 
+	sbx "github.com/getlantern/sing-box-extensions"
 	exO "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
@@ -68,7 +69,6 @@ type ConfigHandler struct {
 	configPath        string
 	configListeners   []ListenerFunc
 	configListenersMu sync.RWMutex
-	confRespParser    Unmarshaller
 	configMu          sync.RWMutex
 
 	// wgKeyPath is the path to the WireGuard private key file.
@@ -85,7 +85,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		closeOnce:       &sync.Once{},
 		configPath:      configPath,
 		configListeners: make([]ListenerFunc, 0),
-		confRespParser:  options.ConfigRespParser,
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),
 	}
 
@@ -233,7 +232,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	confResp, err := ch.confRespParser(resp)
+	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), resp)
 
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
@@ -245,7 +244,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to replace private key", slog.Any("error", err))
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
-	ch.setConfigAndNotify(&Config{ConfigResponse: *confResp})
+	ch.setConfigAndNotify(&Config{ConfigResponse: confResp})
 
 	slog.Debug("Config fetched")
 	return nil
@@ -371,12 +370,12 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
-	opts, err := ch.confRespParser(tmp.ConfigResponse)
+	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), tmp.ConfigResponse)
 	if err != nil {
 		return nil, err
 	}
 	return &Config{
-		ConfigResponse:    *opts,
+		ConfigResponse:    opts,
 		PreferredLocation: tmp.PreferredLocation,
 	}, nil
 }

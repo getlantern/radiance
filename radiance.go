@@ -26,7 +26,6 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/servers"
 
-	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 
@@ -131,12 +130,11 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
 	cOpts := config.Options{
-		PollInterval:     configPollInterval,
-		HTTPClient:       k.NewHTTPClient(),
-		User:             userInfo,
-		DataDir:          dataDir,
-		ConfigRespParser: boxservice.UnmarshalConfig,
-		Locale:           opts.Locale,
+		PollInterval: configPollInterval,
+		HTTPClient:   k.NewHTTPClient(),
+		User:         userInfo,
+		DataDir:      dataDir,
+		Locale:       opts.Locale,
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
