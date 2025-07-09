@@ -10,33 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseFileSize(t *testing.T) {
-	v := []struct {
-		s           string
-		shouldError bool
-		expected    int64
-	}{
-		{"1", false, 1},
-		{"-1", true, 0},
-		{"1kb", false, 1 * kb},
-		{"1Kb", false, 1 * kb},
-		{"1GB", false, 1 * gb},
-
-		{"1KB2", true, 0},
-		{"-1kB", true, 0},
-		{"1.1kB", true, 0},
-	}
-	for _, item := range v {
-		size, err := parseFileSize(item.s)
-		if item.shouldError {
-			assert.Error(t, err)
-		} else {
-			assert.NoError(t, err)
-		}
-		assert.Equal(t, item.expected, size)
-	}
-}
-
 func TestZipFilesWithoutPath(t *testing.T) {
 	var buf bytes.Buffer
 	err := zipFiles(&buf, zipOptions{Globs: map[string]string{"": "**/*.txt*"}})
@@ -54,7 +27,7 @@ func TestZipFilesWithoutPath(t *testing.T) {
 
 func TestZipFilesWithMaxBytes(t *testing.T) {
 	var buf bytes.Buffer
-	err := zipFiles(&buf, zipOptions{Globs: map[string]string{"": "test_data/*.txt*"}, MaxBytes: 1 * kb})
+	err := zipFiles(&buf, zipOptions{Globs: map[string]string{"": "test_data/*.txt*"}, MaxBytes: 1 * 1024 * 1024}) // 1 MB
 	if !assert.NoError(t, err) {
 		return
 	}

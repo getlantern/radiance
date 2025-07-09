@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"strconv"
 	"time"
 
-	"github.com/getlantern/golog"
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/osversion"
 
@@ -21,13 +21,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var (
-	log        = golog.LoggerFor("issue")
-	maxLogSize = 10247680
-)
-
 const (
 	requestURL = "https://iantem.io/api/v1/issue"
+	maxLogSize = 10247680 // 10 MB
+)
+
+var (
+	log = slog.Default()
 )
 
 type SubscriptionHandler interface {
@@ -45,18 +45,30 @@ type IssueReporter struct {
 	httpClient *http.Client
 	subHandler SubscriptionHandler
 	userConfig common.UserInfo
+	log        *slog.Logger
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(httpClient *http.Client, subHandler SubscriptionHandler, userConfig common.UserInfo) (*IssueReporter, error) {
+func NewIssueReporter(
+	httpClient *http.Client,
+	subHandler SubscriptionHandler,
+	userConfig common.UserInfo,
+	logger *slog.Logger,
+) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
 	if subHandler == nil {
 		return nil, fmt.Errorf("user is nil")
 	}
-	return &IssueReporter{httpClient: httpClient, subHandler: subHandler, userConfig: userConfig}, nil
+	log = logger
+	return &IssueReporter{
+		httpClient: httpClient,
+		subHandler: subHandler,
+		userConfig: userConfig,
+		log:        logger,
+	}, nil
 }
 
 func randStr(n int) string {
@@ -87,17 +99,17 @@ func (ir *IssueReporter) Report(
 	subLevel := "free"
 	sub, err := ir.subHandler.Subscription()
 	if err != nil {
-		log.Errorf("Error while getting user subscription info: %v", err)
+		ir.log.Error("getting user subscription info", "error", err)
 	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
-		log.Errorf("Unable to get OS version: %v", err)
+		ir.log.Error("Unable to get OS version", "error", err)
 	}
 	userLocale, err := jibber_jabber.DetectIETF()
 	if err != nil || userLocale == "C" {
-		log.Debugf("Ignoring OS locale and using default")
+		ir.log.Debug("Ignoring OS locale and using default", "default", "en-US", "error", err)
 		userLocale = "en-US"
 	}
 
@@ -125,29 +137,23 @@ func (ir *IssueReporter) Report(
 	}
 
 	// Zip logs
-	if maxLogSize > 0 {
-		if size, err := parseFileSize(strconv.Itoa(maxLogSize)); err != nil {
-			log.Error(err)
-		} else {
-			log.Debug("zipping log files for issue report")
-			buf := &bytes.Buffer{}
-			// zip * under folder common.LogDir
-			if _, err := zipLogFiles(buf, logDir, size, int64(maxLogSize)); err == nil {
-				r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
-					Type:    "application/zip",
-					Name:    "logs.zip",
-					Content: buf.Bytes(),
-				})
-			} else {
-				log.Errorf("unable to zip log files: %v", err)
-			}
-		}
+	ir.log.Debug("zipping log files for issue report")
+	buf := &bytes.Buffer{}
+	// zip * under folder common.LogDir
+	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
+		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
+			Type:    "application/zip",
+			Name:    "logs.zip",
+			Content: buf.Bytes(),
+		})
+	} else {
+		ir.log.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSize)
 	}
 
 	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
 	if err != nil {
-		log.Errorf("unable to marshal issue report: %v", err)
+		ir.log.Error("unable to marshal issue report", "error", err)
 		return err
 	}
 
@@ -159,23 +165,25 @@ func (ir *IssueReporter) Report(
 		ir.userConfig,
 	)
 	if err != nil {
-		return log.Errorf("creating request: %w", err)
+		ir.log.Error("unable to create issue report request", "error", err)
+		return err
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
-		return log.Errorf("unable to send issue report: %v", err)
+		ir.log.Error("failed to send issue report", "error", err, "requestURL", requestURL)
 	}
 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, err := httputil.DumpResponse(resp, true)
 		if err != nil {
-			log.Debugf("Unable to get failed response body for [%s]", requestURL)
+			ir.log.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
 		}
-		return log.Errorf("Bad response status: %d | response:\n%#v", resp.StatusCode, string(b))
+		ir.log.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
+		return fmt.Errorf("issue report failed with status code %d", resp.StatusCode)
 	}
 
-	log.Debugf("issue report sent: %v", resp)
+	ir.log.Debug("issue report sent")
 	return nil
 }

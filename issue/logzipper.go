@@ -56,13 +56,13 @@ func zipLogFilesFrom(w io.Writer, maxBytes int64, maxTextBytes int64, dirs map[s
 	for _, glob := range globs {
 		matched, err := filepath.Glob(glob)
 		if err != nil {
-			log.Errorf("Unable to list files at glob %v: %v", glob, err)
+			log.Error("Unable to glob log files", "glob", glob, "error", err)
 			continue
 		}
 		for _, file := range matched {
 			fi, err := os.Stat(file)
 			if err != nil {
-				log.Errorf("Unable to stat file %v: %v", file, err)
+				log.Error("Unable to stat log file", "file", file, "error", err)
 				continue
 			}
 			allFiles = append(allFiles, &fileInfo{
@@ -78,31 +78,31 @@ func zipLogFilesFrom(w io.Writer, maxBytes int64, maxTextBytes int64, dirs map[s
 		sort.Sort(allFiles)
 
 		mostRecent := allFiles[0]
-		log.Debugf("Grabbing log tail from %v", mostRecent.file)
+		log.Debug("Grabbing log tail", "file", mostRecent.file)
 
 		mostRecentFile, err := os.Open(mostRecent.file)
 		if err != nil {
-			log.Errorf("Unable to open most recent log file %v: %v", mostRecent.file, err)
+			log.Error("Unable to open most recent log file", "file", mostRecent.file, "error", err)
 			return "", nil
 		}
 		defer mostRecentFile.Close()
 
 		seekTo := mostRecent.size - maxTextBytes
 		if seekTo > 0 {
-			log.Debugf("Seeking to %d in %v", seekTo, mostRecent.file)
+			log.Debug("Seeking to tail of log file", "file", mostRecent.file, "seekTo", seekTo)
 			_, err = mostRecentFile.Seek(seekTo, io.SeekCurrent)
 			if err != nil {
-				log.Errorf("Unable to seek to tail of file %v: %v", mostRecent.file, err)
+				log.Error("Unable to seek to tail of log file", "file", mostRecent.file, "error", err)
 				return "", nil
 			}
 		}
 		tail, err := io.ReadAll(mostRecentFile)
 		if err != nil {
-			log.Errorf("Unable to read tail of file %v: %v", mostRecent.file, err)
+			log.Error("Unable to read tail of log file", "file", mostRecent.file, "error", err)
 			return "", nil
 		}
 
-		log.Debugf("Got %d bytes of log tail from %v", len(tail), mostRecent.file)
+		log.Debug("Returning log tail", "file", mostRecent.file, "tailSize", len(tail))
 		return string(tail), nil
 	}
 
