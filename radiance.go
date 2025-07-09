@@ -161,7 +161,7 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 		return fmt.Errorf("new config is nil")
 	}
 	// Check if the old OTEL configuration is the same as the new one.
-	if oldConfig != nil && reflect.DeepEqual(&oldConfig.ConfigResponse.OTEL, &newConfig.ConfigResponse.OTEL) {
+	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, newConfig.ConfigResponse.OTEL) {
 		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
 		return nil
 	}
