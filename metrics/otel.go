@@ -6,17 +6,13 @@ import (
 	"fmt"
 	"net"
 
-	//"github.com/getlantern/lantern-cloud/log"
 	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -75,23 +71,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL, contextDialer func(ctx c
 		shutdownFuncs = append(shutdownFuncs, mp)
 	}
 
-	// This is useful, for example, if an individual user requests support and would like to
-	// share their logs with the support team.
-	// It is not enabled by default, so it won't affect the performance of the application.
-	// If logsEnabled is false, we skip initializing the logger provider.
-	if cfg.LogsEnabled {
-		lp, err := newLoggerProvider(ctx, res)
-		if err != nil {
-			return shutdown, fmt.Errorf("failed to initialize logger provider: %w", err)
-		}
-		// Successfully initialized logger provider
-		shutdownFuncs = append(shutdownFuncs, lp.Shutdown)
-
-		// Register the logger provider globally
-		global.SetLoggerProvider(lp)
-	}
 	return shutdown, nil
-
 }
 
 // Initialize a gRPC connection to be used by both the tracer and meter
@@ -149,17 +129,4 @@ func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.C
 	otel.SetMeterProvider(meterProvider)
 
 	return meterProvider.Shutdown, nil
-}
-
-func newLoggerProvider(ctx context.Context, res *resource.Resource) (*log.LoggerProvider, error) {
-	exporter, err := otlploghttp.New(ctx)
-	if err != nil {
-		return nil, err
-	}
-	processor := log.NewBatchProcessor(exporter)
-	provider := log.NewLoggerProvider(
-		log.WithResource(res),
-		log.WithProcessor(processor),
-	)
-	return provider, nil
 }
