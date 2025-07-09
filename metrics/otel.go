@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/app"
@@ -23,7 +24,7 @@ import (
 // If it does not return an error, make sure to call shutdown for proper cleanup.
 func SetupOTelSDK(ctx context.Context, cfg common.OTEL, contextDialer func(ctx context.Context, addr string) (net.Conn, error)) (func(context.Context) error, error) {
 	var shutdownFuncs []func(context.Context) error
-	if !cfg.TracesEnabled && !cfg.MetricsEnabled && !cfg.LogsEnabled {
+	if !cfg.TracesEnabled && !cfg.MetricsEnabled {
 		// No need to initialize anything if all are disabled.
 		return func(_ context.Context) error { return nil }, nil
 	}
@@ -52,7 +53,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL, contextDialer func(ctx c
 		return shutdown, fmt.Errorf("failed to create resource: %w", err)
 	}
 	if cfg.TracesEnabled {
-		tp, err := initTracer(ctx, res, conn, cfg.Endpoint, cfg.Headers, cfg.SampleRate)
+		tp, err := initTracer(ctx, res, conn, cfg)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 		}
@@ -63,7 +64,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL, contextDialer func(ctx c
 	if cfg.MetricsEnabled {
 		// Initialize the meter provider with the same gRPC connection.
 		// This is useful to avoid creating multiple connections to the same endpoint.
-		mp, err := initMeterProvider(ctx, res, conn)
+		mp, err := initMeterProvider(ctx, res, conn, cfg)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize meter provider: %w", err)
 		}
@@ -88,11 +89,11 @@ func initConn(endpoint string, contextDialer func(ctx context.Context, addr stri
 }
 
 // initTracer creates and registers trace provider instance.
-func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, endpoint string, headers map[string]string, sampleRate float64) (*sdktrace.TracerProvider, error) {
+func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, cfg common.OTEL) (*sdktrace.TracerProvider, error) {
 	exp, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithGRPCConn(conn),
-		otlptracegrpc.WithEndpoint(endpoint),
-		otlptracegrpc.WithHeaders(headers),
+		otlptracegrpc.WithEndpoint(cfg.Endpoint),
+		otlptracegrpc.WithHeaders(cfg.Headers),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
@@ -102,8 +103,7 @@ func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientCo
 	// span processor to aggregate spans before export.
 	bsp := sdktrace.NewBatchSpanProcessor(exp)
 	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRate))),
-		//sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.TracesSampleRate))),
 		sdktrace.WithResource(res),
 		sdktrace.WithSpanProcessor(bsp),
 	)
@@ -116,15 +116,23 @@ func initTracer(ctx context.Context, res *resource.Resource, conn *grpc.ClientCo
 }
 
 // Initializes an OTLP exporter, and configures the corresponding meter provider.
-func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn) (func(context.Context) error, error) {
+func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn, cfg common.OTEL) (func(context.Context) error, error) {
 	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+	opts := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
+	}
+	if cfg.MetricsInterval > 0 {
+		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
+			sdkmetric.WithInterval(time.Duration(cfg.MetricsInterval)*time.Second))))
+	} else {
+		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)))
+	}
+	meterProvider := sdkmetric.NewMeterProvider(
+		opts...,
 	)
 	otel.SetMeterProvider(meterProvider)
 
