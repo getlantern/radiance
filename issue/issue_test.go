@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"context"
 	"testing"
 
 	"github.com/getlantern/fronted"
@@ -24,6 +25,7 @@ func TestSendReport(t *testing.T) {
 	reporter, err := NewIssueReporter(k.NewHTTPClient(), &mockSubscriptionHandler{}, userConfig)
 	require.NoError(t, err)
 	err = reporter.Report(
+		context.Background(),
 		t.TempDir(),
 		"radiancetest@getlantern.org",
 		int(ReportIssueRequest_NO_ACCESS),

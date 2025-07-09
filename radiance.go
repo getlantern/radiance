@@ -33,9 +33,16 @@ import (
 	"github.com/getlantern/radiance/issue"
 
 	"github.com/getlantern/radiance/metrics"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const configPollInterval = 10 * time.Minute
+
+// Initially set the tracer to noop, so that we don't have to check for nil everywhere.
+var tracer trace.Tracer = noop.Tracer{}
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 
@@ -165,6 +172,12 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
 		return nil
 	}
+	newConfig.ConfigResponse.OTEL.Endpoint = "ingest.us.signoz.cloud:443"
+	newConfig.ConfigResponse.OTEL.Headers = map[string]string{
+		"signoz-ingestion-key": "oYRsGfPwBwtIteu4vi84DzSDKnxtStlEw7Bv",
+	}
+
+	slog.Info("OpenTelemetry configuration changed", "newConfig", newConfig.ConfigResponse.OTEL)
 	if newConfig.ConfigResponse.OTEL.Endpoint == "" {
 		slog.Info("OpenTelemetry endpoint is empty, not initializing OpenTelemetry SDK")
 		return nil
@@ -183,6 +196,8 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
 		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
 	}
+	// Get a tracer for your application/package
+	tracer = otel.Tracer("radiance")
 	return nil
 }
 
@@ -291,6 +306,8 @@ var issueTypeMap = map[string]int{
 
 // ReportIssue submits an issue report to the back-end with an optional user email
 func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
+	ctx, span := tracer.Start(context.Background(), "report-issue")
+	defer span.End()
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
 	}
@@ -311,6 +328,7 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	}
 
 	return r.issueReporter.Report(
+		ctx,
 		common.LogPath(),
 		email,
 		typeInt,
@@ -375,6 +393,8 @@ type lazyDialingRoundTripper struct {
 var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
 
 func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx, span := tracer.Start(req.Context(), "lazy-dialing-roundtrip")
+	defer span.End()
 	lz.smartTransportMu.Lock()
 
 	if lz.smartTransport == nil {
@@ -390,7 +410,7 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	}
 
 	lz.smartTransportMu.Unlock()
-	return lz.smartTransport.RoundTrip(req)
+	return lz.smartTransport.RoundTrip(req.WithContext(ctx))
 }
 
 type slogWriter struct {
