@@ -40,7 +40,11 @@ func NewUserConfig(deviceID, dataDir, locale string) UserInfo {
 	path := filepath.Join(dataDir, userDataFileName)
 	data, err := load(path)
 	if err != nil {
-		slog.Info("Failed to load user data -- presumably the first run", "path", path, "error", err)
+		if os.IsNotExist(err) {
+			slog.Info("Failed to load user data -- presumably the first run", "path", path, "error", err)
+		} else {
+			slog.Warn("Failed to load user data -- potential issue", "path", path, "error", err)
+		}
 	}
 	u := &userInfo{
 		deviceID: deviceID,
