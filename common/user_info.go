@@ -40,7 +40,7 @@ func NewUserConfig(deviceID, dataDir, locale string) UserInfo {
 	path := filepath.Join(dataDir, userDataFileName)
 	data, err := load(path)
 	if err != nil {
-		slog.Warn("Failed to load user data", "path", path, "error", err)
+		slog.Info("Failed to load user data -- presumably the first run", "path", path, "error", err)
 	}
 	u := &userInfo{
 		deviceID: deviceID,
@@ -84,7 +84,7 @@ func (u *userInfo) SetData(data *protos.LoginResponse) error {
 
 // GetUserData reads user data from file
 func (u *userInfo) GetData() (*protos.LoginResponse, error) {
-	//We have already read the data from file, so we can return it directly
+	// We have already read the data from file, so we can return it directly
 	if u.data != nil {
 		return u.data, nil
 	}
