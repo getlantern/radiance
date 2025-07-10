@@ -140,7 +140,7 @@ func (s *SplitTunnel) AddItems(items Filter) error {
 // RemoveItems removes multiple items from the filter.
 func (s *SplitTunnel) RemoveItems(items Filter) error {
 	s.updateFilters(items, remove)
-	s.log.Log(context.Background(), internal.LevelTrace, "removed items form filter", "items", items.String())
+	s.log.Log(context.Background(), internal.LevelTrace, "removed items from filter", "items", items.String())
 	return s.saveToFile()
 }
 
