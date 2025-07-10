@@ -10,7 +10,11 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
+
+	LC "github.com/getlantern/common"
+	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
@@ -216,10 +220,11 @@ func buildOptions(mode, path string) (O.Options, error) {
 	if err != nil {
 		return O.Options{}, fmt.Errorf("read config file: %w", err)
 	}
-	cOpts, err := unmarshalConfig(content)
+	cfg, err := json.UnmarshalExtendedContext[LC.ConfigResponse](sbx.BoxContext(), content)
 	if err != nil {
 		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
 	}
+	cOpts := cfg.Options
 
 	ltnTags := mergeOpts(&opts, &cOpts)
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLanternTag, ltnTags))

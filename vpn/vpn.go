@@ -1,3 +1,6 @@
+// Package vpn provides high-level management of VPN tunnels, including connecting to the best
+// available server, connecting to specific servers, disconnecting, reconnecting, and querying
+// tunnel status.
 package vpn
 
 import (
@@ -118,9 +121,7 @@ func selectServer(group, tag string) error {
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
 
-	// Since we want to switch servers, we need to close any existing connections to the old server.
-	// The Selector outbound will handle closing connections automatically, but only for connections
-	// using it. If we're switching to a different group, then we have to close the connections ourselves.
+	// If switching to a different group, close previous connections.
 	res, _ := sendCmd(libbox.CommandClashMode)
 	if res.clashMode == group {
 		return nil
@@ -279,9 +280,6 @@ func activeConnections() ([]Connection, error) {
 	}
 	res.connections.FilterState(libbox.ConnectionStateActive)
 	var connections []Connection
-	// they only provide an iterator, which stores the connections as a slice internally, and Next
-	// just returns the next connection in the slice?? for real?! why tf can't they just provide a
-	// the slice.. -_-
 	iter := res.connections.Iterator()
 	for iter.HasNext() {
 		lbconn := *(iter.Next())

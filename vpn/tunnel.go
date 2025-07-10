@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	lcommon "github.com/getlantern/common"
 	sbx "github.com/getlantern/sing-box-extensions"
 	sbxlog "github.com/getlantern/sing-box-extensions/log"
 
@@ -54,6 +53,7 @@ type tunnel struct {
 	closers []io.Closer
 }
 
+// openTunnel initializes and starts the VPN tunnel with the provided options and platform interface.
 func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
 	tAccess.Lock()
 	defer tAccess.Unlock()
@@ -61,7 +61,7 @@ func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
 		return errors.New("tunnel already opened")
 	}
 
-	log := slog.Default().With("component", "tunnel")
+	log := slog.Default().With("service", "tunnel")
 
 	cmdSvrOnce.Do(func() {
 		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{log: log}, 64)
@@ -144,6 +144,7 @@ func (t *tunnel) start() (err error) {
 	return nil
 }
 
+// closeTunnel stops and cleans up the VPN tunnel instance.
 func closeTunnel() error {
 	tAccess.Lock()
 	if tInstance == nil {
@@ -163,18 +164,6 @@ func closeTunnel() error {
 		errs = append(errs, closer.Close())
 	}
 	return errors.Join(errs...)
-}
-
-func unmarshal(buf []byte) (O.Options, error) {
-	return json.UnmarshalExtendedContext[O.Options](sbx.BoxContext(), buf)
-}
-
-func unmarshalConfig(buf []byte) (O.Options, error) {
-	config, err := json.UnmarshalExtendedContext[lcommon.ConfigResponse](sbx.BoxContext(), buf)
-	if err != nil {
-		return O.Options{}, err
-	}
-	return config.Options, nil
 }
 
 var errLibboxClosed = errors.New("libbox closed")
@@ -242,7 +231,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 	var (
 		allTags  []string
 		toRemove []string
-		creater  = &outCreater{
+		creater  = &outCreator{
 			log:        t.log,
 			ctx:        ctx,
 			router:     service.FromContext[adapter.Router](ctx),
@@ -308,8 +297,8 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 	return errors.Join(creater.errs...)
 }
 
-// outCreater is a one-off struct for creating outbounds or endpoints.
-type outCreater struct {
+// outCreator is a one-off struct for creating outbounds or endpoints.
+type outCreator struct {
 	mgr interface {
 		Create(context.Context, adapter.Router, sblog.ContextLogger, string, string, any) error
 	}
@@ -325,7 +314,7 @@ type outCreater struct {
 	errs          []error
 }
 
-func (o *outCreater) createNew(tag, typ string, opts any) {
+func (o *outCreator) createNew(tag, typ string, opts any) {
 	select {
 	case <-o.ctx.Done():
 		return
