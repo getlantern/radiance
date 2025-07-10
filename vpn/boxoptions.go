@@ -236,7 +236,7 @@ func buildOptions(mode, path string) (O.Options, error) {
 	allTags := ltnTags
 
 	// load and merge user servers into base
-	mgr, err := servers.NewManager(path, nil)
+	mgr, err := servers.NewManager(path)
 	if err != nil {
 		return O.Options{}, fmt.Errorf("server manager: %w", err)
 	}

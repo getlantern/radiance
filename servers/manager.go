@@ -61,12 +61,10 @@ type Manager struct {
 
 	serversFile      string
 	fingerprintsFile string
-
-	log *slog.Logger
 }
 
 // NewManager creates a new Manager instance, loading server options from disk.
-func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
+func NewManager(dataPath string) (*Manager, error) {
 	mgr := &Manager{
 		servers: Servers{
 			SGLantern: Options{
@@ -86,7 +84,6 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 		},
 		serversFile:      filepath.Join(dataPath, common.ServersFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
-		log:              logger,
 		access:           sync.RWMutex{},
 	}
 
@@ -181,7 +178,7 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 
 	existingTags := m.merge(group, opts)
 	if len(existingTags) > 0 {
-		m.log.Warn("Some servers were not added because they already exist", "tags", existingTags)
+		slog.Warn("Some servers were not added because they already exist", "tags", existingTags)
 	}
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)

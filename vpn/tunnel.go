@@ -43,7 +43,6 @@ type tunnel struct {
 	ctx         context.Context
 	lbService   *libbox.BoxService
 	clashServer *clashapi.Server
-	log         *slog.Logger
 	logFactory  sblog.ObservableFactory
 
 	svrFileWatcher *internal.FileWatcher
@@ -61,18 +60,16 @@ func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
 		return errors.New("tunnel already opened")
 	}
 
-	log := slog.Default().With("service", "tunnel")
-
 	cmdSvrOnce.Do(func() {
-		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{log: log}, 64)
+		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
 		cmdSvrErr = cmdSvr.Start()
 	})
 	if cmdSvrErr != nil {
-		log.Error("failed to start command server", slog.Any("error", cmdSvrErr))
+		slog.Error("failed to start command server", slog.Any("error", cmdSvrErr))
 		return fmt.Errorf("failed to start command server: %w", cmdSvrErr)
 	}
 
-	tInstance = &tunnel{log: log}
+	tInstance = &tunnel{}
 	tInstance.ctx, tInstance.cancel = context.WithCancel(sbx.BoxContext())
 	if err := tInstance.init(opts, platIfce); err != nil {
 		return fmt.Errorf("initializing tunnel: %w", err)
@@ -99,7 +96,7 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
-	t.logFactory = sbxlog.NewFactory(slog.Default().With("service", "sing-box").Handler())
+	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
 	service.MustRegister(t.ctx, t.logFactory)
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
 	if err != nil {
@@ -115,7 +112,7 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	svrsPath := filepath.Join(basePath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
 		if err := t.reloadOptions(svrsPath); err != nil {
-			t.log.Error("failed to reload user servers", slog.Any("error", err))
+			slog.Error("failed to reload user servers", slog.Any("error", err))
 		}
 	})
 	t.svrFileWatcher = svrWatcher
@@ -181,7 +178,7 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	default:
 	}
 
-	t.log.Debug("reloading options")
+	slog.Debug("reloading options")
 	content, err := os.ReadFile(optsPath)
 	if err != nil {
 		return fmt.Errorf("read config file: %w", err)
@@ -210,7 +207,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			// Yes, panic. And, yes, it's intentional. The group outbound should always exist if the tunnel
 			// is running, so this is a "world no longer makes sense" situation. This should be caught
 			// during testing and will not panic in release builds.
-			t.log.Log(ctx, internal.LevelPanic, "selector group missing", slog.String("group", group))
+			slog.Log(ctx, internal.LevelPanic, "selector group missing", slog.String("group", group))
 			panic(fmt.Errorf("selector group %q missing", group))
 		}
 		return out.(*sbgroup.Selector)
@@ -232,7 +229,6 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		allTags  []string
 		toRemove []string
 		creater  = &outCreator{
-			log:        t.log,
 			ctx:        ctx,
 			router:     service.FromContext[adapter.Router](ctx),
 			logFactory: t.logFactory,
@@ -302,9 +298,7 @@ type outCreator struct {
 	mgr interface {
 		Create(context.Context, adapter.Router, sblog.ContextLogger, string, string, any) error
 	}
-	typ string
-	log *slog.Logger
-
+	typ        string
 	ctx        context.Context
 	router     adapter.Router
 	logFactory sblog.ObservableFactory
@@ -324,14 +318,14 @@ func (o *outCreator) createNew(tag, typ string, opts any) {
 	log := o.logFactory.NewLogger(o.typ + "/" + tag + "[" + typ + "]")
 	err := o.mgr.Create(o.ctx, o.router, log, tag, typ, opts)
 	if err != nil {
-		o.log.Error(
+		slog.Error(
 			"failed to create "+o.typ,
 			slog.String("group", o.group), slog.String("tag", tag),
 			slog.String("type", typ), slog.Any("error", err),
 		)
 		o.errs = append(o.errs, fmt.Errorf("create %s %q: %w", o.typ, tag, err))
 	} else {
-		o.log.Debug("created "+o.typ,
+		slog.Debug("created "+o.typ,
 			slog.String("group", o.group), slog.String("tag", tag), slog.String("type", typ),
 		)
 		o.succeededTags = append(o.succeededTags, tag)
@@ -340,11 +334,10 @@ func (o *outCreator) createNew(tag, typ string, opts any) {
 
 type cmdSvrHandler struct {
 	libbox.CommandServerHandler
-	log *slog.Logger
 }
 
 func (c *cmdSvrHandler) PostServiceClose() {
 	if err := closeTunnel(); err != nil {
-		c.log.Error("closing tunnel", slog.Any("error", err))
+		slog.Error("closing tunnel", slog.Any("error", err))
 	}
 }

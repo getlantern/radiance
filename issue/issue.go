@@ -26,10 +26,6 @@ const (
 	maxLogSize = 10 * 1024 * 1024 // 10 MB
 )
 
-var (
-	log = slog.Default()
-)
-
 type SubscriptionHandler interface {
 	Subscription() (api.Subscription, error)
 }
@@ -45,7 +41,6 @@ type IssueReporter struct {
 	httpClient *http.Client
 	subHandler SubscriptionHandler
 	userConfig common.UserInfo
-	log        *slog.Logger
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
@@ -54,7 +49,6 @@ func NewIssueReporter(
 	httpClient *http.Client,
 	subHandler SubscriptionHandler,
 	userConfig common.UserInfo,
-	logger *slog.Logger,
 ) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
@@ -66,7 +60,6 @@ func NewIssueReporter(
 		httpClient: httpClient,
 		subHandler: subHandler,
 		userConfig: userConfig,
-		log:        logger,
 	}, nil
 }
 
@@ -98,34 +91,35 @@ func (ir *IssueReporter) Report(
 	subLevel := "free"
 	sub, err := ir.subHandler.Subscription()
 	if err != nil {
-		ir.log.Error("getting user subscription info", "error", err)
+		slog.Error("getting user subscription info", "error", err)
 	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
-		ir.log.Error("Unable to get OS version", "error", err)
+		slog.Error("Unable to get OS version", "error", err)
 	}
 	userLocale, err := jibber_jabber.DetectIETF()
 	if err != nil || userLocale == "C" {
-		ir.log.Debug("Ignoring OS locale and using default", "default", "en-US", "error", err)
+		slog.Debug("Ignoring OS locale and using default", "default", "en-US", "error", err)
 		userLocale = "en-US"
 	}
 
-	r := &ReportIssueRequest{}
-	r.Type = ReportIssueRequest_ISSUE_TYPE(issueType)
-	r.CountryCode = country
-	r.AppVersion = common.Version
-	r.SubscriptionLevel = subLevel
-	r.Platform = common.Platform
-	r.Description = description
-	r.UserEmail = userEmail
-	r.DeviceId = ir.userConfig.DeviceID()
-	r.UserId = strconv.FormatInt(ir.userConfig.LegacyID(), 10)
-	r.Device = device
-	r.Model = model
-	r.OsVersion = osVersion
-	r.Language = userLocale
+	r := &ReportIssueRequest{
+		Type:              ReportIssueRequest_ISSUE_TYPE(issueType),
+		CountryCode:       country,
+		AppVersion:        common.Version,
+		SubscriptionLevel: subLevel,
+		Platform:          common.Platform,
+		Description:       description,
+		UserEmail:         userEmail,
+		DeviceId:          ir.userConfig.DeviceID(),
+		UserId:            strconv.FormatInt(ir.userConfig.LegacyID(), 10),
+		Device:            device,
+		Model:             model,
+		OsVersion:         osVersion,
+		Language:          userLocale,
+	}
 
 	for _, attachment := range attachments {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
@@ -136,7 +130,7 @@ func (ir *IssueReporter) Report(
 	}
 
 	// Zip logs
-	ir.log.Debug("zipping log files for issue report")
+	slog.Debug("zipping log files for issue report")
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
 	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
@@ -146,13 +140,13 @@ func (ir *IssueReporter) Report(
 			Content: buf.Bytes(),
 		})
 	} else {
-		ir.log.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSize)
+		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSize)
 	}
 
 	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
 	if err != nil {
-		ir.log.Error("unable to marshal issue report", "error", err)
+		slog.Error("unable to marshal issue report", "error", err)
 		return err
 	}
 
@@ -164,25 +158,25 @@ func (ir *IssueReporter) Report(
 		ir.userConfig,
 	)
 	if err != nil {
-		ir.log.Error("unable to create issue report request", "error", err)
+		slog.Error("unable to create issue report request", "error", err)
 		return err
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
-		ir.log.Error("failed to send issue report", "error", err, "requestURL", requestURL)
+		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
 	}
 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, err := httputil.DumpResponse(resp, true)
 		if err != nil {
-			ir.log.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
+			slog.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
 		}
-		ir.log.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
+		slog.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
 		return fmt.Errorf("issue report failed with status code %d", resp.StatusCode)
 	}
 
-	ir.log.Debug("issue report sent")
+	slog.Debug("issue report sent")
 	return nil
 }

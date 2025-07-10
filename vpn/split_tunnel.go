@@ -39,8 +39,6 @@ type SplitTunnel struct {
 	activeFilter *O.DefaultHeadlessRule
 	ruleFile     string
 
-	log *slog.Logger
-
 	access sync.Mutex
 }
 
@@ -51,7 +49,6 @@ func NewSplitTunnelHandler() (*SplitTunnel, error) {
 		rule:         rule,
 		ruleFile:     ruleFile,
 		activeFilter: &(rule.Rules[0].DefaultOptions),
-		log:          slog.Default().With("service", "split-tunnel"),
 	}
 	if err := s.loadRule(); err != nil {
 		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", ruleFile, err)
@@ -67,7 +64,7 @@ func (s *SplitTunnel) Enable() {
 	s.rule.Mode = C.LogicalTypeOr
 	s.access.Unlock()
 	s.saveToFile()
-	s.log.Log(context.Background(), internal.LevelTrace, "enabled split tunneling")
+	slog.Log(context.Background(), internal.LevelTrace, "enabled split tunneling")
 }
 
 func (s *SplitTunnel) Disable() {
@@ -78,7 +75,7 @@ func (s *SplitTunnel) Disable() {
 	s.rule.Mode = C.LogicalTypeAnd
 	s.access.Unlock()
 	s.saveToFile()
-	s.log.Log(context.Background(), internal.LevelTrace, "disabled split tunneling")
+	slog.Log(context.Background(), internal.LevelTrace, "disabled split tunneling")
 }
 
 func (s *SplitTunnel) IsEnabled() bool {
@@ -105,7 +102,7 @@ func (s *SplitTunnel) AddItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, merge); err != nil {
 		return err
 	}
-	s.log.Log(
+	slog.Log(
 		context.Background(), internal.LevelTrace, "added item to filter",
 		"filterType", filterType, "item", item,
 	)
@@ -120,7 +117,7 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, remove); err != nil {
 		return err
 	}
-	s.log.Log(
+	slog.Log(
 		context.Background(), internal.LevelTrace, "removed item from filter",
 		"filterType", filterType, "item", item,
 	)
@@ -133,14 +130,14 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 // AddItems adds multiple items to the filter.
 func (s *SplitTunnel) AddItems(items Filter) error {
 	s.updateFilters(items, merge)
-	s.log.Log(context.Background(), internal.LevelTrace, "added items to filter", "items", items.String())
+	slog.Log(context.Background(), internal.LevelTrace, "added items to filter", "items", items.String())
 	return s.saveToFile()
 }
 
 // RemoveItems removes multiple items from the filter.
 func (s *SplitTunnel) RemoveItems(items Filter) error {
 	s.updateFilters(items, remove)
-	s.log.Log(context.Background(), internal.LevelTrace, "removed items from filter", "items", items.String())
+	slog.Log(context.Background(), internal.LevelTrace, "removed items from filter", "items", items.String())
 	return s.saveToFile()
 }
 
@@ -279,14 +276,14 @@ func (s *SplitTunnel) loadRule() error {
 	}
 	rules := ruleSet.Options.Rules
 	if len(rules) == 0 {
-		s.log.Warn("split tunnel rule file format is invalid, using empty rule")
+		slog.Warn("split tunnel rule file format is invalid, using empty rule")
 		return nil
 	}
 
 	s.rule = rules[0].LogicalOptions
 	s.activeFilter = &(s.rule.Rules[1].DefaultOptions)
 
-	s.log.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
+	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
 		"file", s.ruleFile, "filters", s.Filters().String(), "enabled", s.IsEnabled(),
 	)
 	return nil
@@ -337,9 +334,8 @@ func initSplitTunnel() {
 			s := &SplitTunnel{
 				rule:     defaultRule(),
 				ruleFile: filepath.Join(common.DataPath(), splitTunnelTag+".json"),
-				log:      slog.Default().With("service", "split-tunnel"),
 			}
-			s.log.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
+			slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
 			s.saveToFile()
 		}
 	})

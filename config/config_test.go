@@ -16,7 +16,6 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/internal"
 )
 
 func TestSaveConfig(t *testing.T) {
@@ -97,7 +96,6 @@ func TestSetPreferredServerLocation(t *testing.T) {
 		configPath: configPath,
 		config:     atomic.Value{},
 		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
-		log:        internal.NoOpLogger(),
 	}
 
 	ch.config.Store(&Config{

@@ -17,7 +17,6 @@ func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
 	s := &SplitTunnel{
 		rule:     defaultRule(),
 		ruleFile: ruleFile,
-		log:      nil,
 	}
 	_ = s.saveToFile()
 	st, err := NewSplitTunnelHandler()

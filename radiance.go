@@ -104,7 +104,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(&slogWriter{Logger: slog.Default().With("service", "kindling")}),
+		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
@@ -120,16 +120,11 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(
-		k.NewHTTPClient(),
-		apiHandler,
-		userInfo,
-		slog.Default().With("service", "issue-reporter"),
-	)
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), apiHandler, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
-	svrMgr, err := servers.NewManager(dataDir, slog.Default().With("service", "server-manager"))
+	svrMgr, err := servers.NewManager(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
@@ -140,7 +135,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		User:         userInfo,
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
-		Logger:       slog.Default().With("service", "config-handler"),
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
@@ -233,7 +227,7 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	// get issue type as integer
 	typeInt, ok := issueTypeMap[report.Type]
 	if !ok {
-		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
+		slog.Error("Unknown issue type, setting to 'Other'", "type", report.Type)
 		typeInt = 9
 	}
 	var country string
@@ -268,7 +262,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	// Extract the domain from the URL.
 	domain := u.Host
 
-	logWriter := &slogWriter{Logger: slog.Default().With("service", "kindling", "group", "smartdialer")}
+	logWriter := &slogWriter{Logger: slog.Default()}
 
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.
@@ -288,7 +282,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	httpClient := &http.Client{
 		Transport: lz,
 	}
-	fronted.SetLogger(slog.Default().With("module", "fronted"))
+	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(
 		fronted.WithPanicListener(panicListener),
 		fronted.WithCacheFile(cacheFile),
