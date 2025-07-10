@@ -34,6 +34,7 @@ import (
 	"github.com/getlantern/radiance/metrics"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -185,6 +186,7 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 		}
 		r.shutdownOTEL = nil
 	}
+	newConfig.ConfigResponse.OTEL.TracesSampleRate = 1.0 // Always sample traces for now
 
 	err := r.startOTEL(context.Background(), newConfig)
 	if err != nil {
@@ -310,12 +312,13 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		slog.Error("Failed to get country", "error", err)
+		span.RecordError(err)
 		country = ""
 	} else {
 		country = cfg.ConfigResponse.Country
 	}
 
-	return r.issueReporter.Report(
+	err = r.issueReporter.Report(
 		ctx,
 		common.LogPath(),
 		email,
@@ -326,6 +329,13 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 		report.Model,
 		country,
 	)
+	if err != nil {
+		slog.Error("Failed to report issue", "error", err)
+		span.RecordError(err)
+		return fmt.Errorf("failed to report issue: %w", err)
+	}
+	slog.Info("Issue reported successfully")
+	return nil
 }
 
 func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, error) {
@@ -392,13 +402,20 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
+			span.RecordError(err)
 			// This typically just means we're offline
 			return nil, fmt.Errorf("could not create smart transport -- offline? %v", err)
 		}
 	}
 
 	lz.smartTransportMu.Unlock()
-	return lz.smartTransport.RoundTrip(req.WithContext(ctx))
+	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		span.RecordError(err)
+	} else {
+		span.SetAttributes(attribute.String("response.status", res.Status))
+	}
+	return res, err
 }
 
 type slogWriter struct {
