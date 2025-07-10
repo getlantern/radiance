@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -154,7 +155,8 @@ func loadCacheFile(path string) error {
 }
 
 func setSelected(group, tag string) error {
-	if err := loadCacheFile(cacheFileName); err != nil {
+	cacheFilePath := filepath.Join(common.DataPath(), cacheFileName)
+	if err := loadCacheFile(cacheFilePath); err != nil {
 		return fmt.Errorf("load cache file: %w", err)
 	}
 	if err := cacheFile.StoreMode(group); err != nil {
