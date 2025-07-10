@@ -99,7 +99,11 @@ func initTracer(res *resource.Resource, cfg common.OTEL) (func(context.Context) 
 
 // Initializes an OTLP exporter, and configures the corresponding meter provider.
 func initMeterProvider(ctx context.Context, res *resource.Resource, cfg common.OTEL) (func(context.Context) error, error) {
-	metricExporter, err := otlpmetricgrpc.New(ctx) //, otlpmetricgrpc.WithGRPCConn(conn))
+	metricExporter, err := otlpmetricgrpc.New(ctx,
+		otlpmetricgrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, "")),
+		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+		otlpmetricgrpc.WithHeaders(cfg.Headers),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
