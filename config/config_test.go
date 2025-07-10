@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
 )
 
 func TestSaveConfig(t *testing.T) {
@@ -22,13 +24,8 @@ func TestSaveConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
-	// Create a ConfigHandler with the mock parser
-	ch := &ConfigHandler{
-		configPath: configPath,
-	}
-
 	// Create a sample config to save
-	expectedConfig := &Config{
+	expectedConfig := Config{
 		ConfigResponse: C.ConfigResponse{
 			// Populate with sample data
 			Servers: []C.ServerLocation{
@@ -38,15 +35,15 @@ func TestSaveConfig(t *testing.T) {
 		},
 	}
 	// Save the config
-	err := saveConfig(expectedConfig, configPath)
+	err := saveConfig(&expectedConfig, configPath)
 	require.NoError(t, err, "Should not return an error when saving config")
 
 	// Read the file content
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err, "Should be able to read the config file")
 
-	// Parse the content using the mock parser
-	actualConfig, err := ch.unmarshalConfig(data)
+	var actualConfig Config
+	err = json.Unmarshal(data, &actualConfig)
 	require.NoError(t, err, "Should be able to parse the config file")
 
 	// Verify the content matches the expected config
@@ -100,6 +97,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 		configPath: configPath,
 		config:     atomic.Value{},
 		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		log:        internal.NoOpLogger(),
 	}
 
 	ch.config.Store(&Config{

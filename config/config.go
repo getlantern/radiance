@@ -91,6 +91,9 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		log:             options.Logger,
 		svrManager:      options.SvrManager,
 	}
+	if ch.log == nil {
+		ch.log = slog.Default()
+	}
 
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(C.ServerLocation{})
