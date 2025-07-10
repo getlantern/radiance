@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -172,10 +171,6 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
 		return nil
 	}
-	newConfig.ConfigResponse.OTEL.Endpoint = "ingest.us.signoz.cloud:443"
-	newConfig.ConfigResponse.OTEL.Headers = map[string]string{
-		"signoz-ingestion-key": "oYRsGfPwBwtIteu4vi84DzSDKnxtStlEw7Bv",
-	}
 
 	slog.Info("OpenTelemetry configuration changed", "newConfig", newConfig.ConfigResponse.OTEL)
 	if newConfig.ConfigResponse.OTEL.Endpoint == "" {
@@ -196,21 +191,14 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
 		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
 	}
+
 	// Get a tracer for your application/package
 	tracer = otel.Tracer("radiance")
 	return nil
 }
 
 func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
-	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTEL, func(ctx context.Context, addr string) (net.Conn, error) {
-		// User a regular net.Dialer for now.
-		// TODO: Adapt kindling to return a net.Dialer that can be used with OpenTelemetry.
-		dialer := &net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}
-		return dialer.DialContext(ctx, "tcp", addr)
-	})
+	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTEL)
 	if shutdown != nil {
 		r.shutdownOTEL = shutdown
 		r.addShutdownFunc(shutdown)
