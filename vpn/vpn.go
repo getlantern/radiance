@@ -1,19 +1,24 @@
+// Package vpn provides high-level management of VPN tunnels, including connecting to the best
+// available server, connecting to specific servers, disconnecting, reconnecting, and querying
+// tunnel status.
 package vpn
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	"path/filepath"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	O "github.com/sagernet/sing-box/option"
+
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
 )
 
 const (
@@ -21,71 +26,36 @@ const (
 	cacheFileName = "lantern.cache"
 )
 
-var (
-	selectedServer atomic.Value
-)
-
-type Server struct {
-	Group    string
-	Tag      string
-	Type     string
-	Location string
-}
-
-func init() {
-	// set the initial selected server to ensure no other value type can be stored
-	selectedServer.Store(Server{})
-}
-
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [ServerGroupLantern], [ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
 func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 	switch group {
-	case ServerGroupLantern:
-		group = autoLantern
-	case ServerGroupUser:
-		group = autoUser
+	case servers.SGLantern:
+		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
+	case servers.SGUser:
+		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
 	case "all", "":
-		group = autoAll
+		group = modeAutoAll
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
 	if isOpen() {
-		return autoSelect(group)
+		cc := libbox.NewStandaloneCommandClient()
+		if err := cc.SetClashMode(group); err != nil {
+			return fmt.Errorf("failed to set mode to %s: %w", group, err)
+		}
+		return nil
 	}
 
-	if err := quickConnect(group, platIfce); err != nil {
-		return fmt.Errorf("quick connect: %w", err)
-	}
-	if err := storeSelected(group, ""); err != nil {
-		slog.Error("failed to store mode in cache file", slog.Any("error", err))
-	}
-	return nil
-}
-
-func quickConnect(group string, platIfce libbox.PlatformInterface) error {
-	initSplitTunnel()
-	opts, err := buildOptions(group)
-	if err != nil {
-		return fmt.Errorf("failed to build options: %w", err)
-	}
-	if err := openTunnel(opts, platIfce); err != nil {
-		return fmt.Errorf("failed to open tunnel: %w", err)
-	}
-	selectedServer.Store(Server{
-		Group: group,
-		Tag:   "auto",
-		Type:  "auto",
-	})
-	return nil
+	return connect(group, "", platIfce)
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
-// [ServerGroupLantern] and [ServerGroupUser].
+// [servers.SGLantern] and [servers.SGUser].
 func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
 	switch group {
-	case ServerGroupLantern, ServerGroupUser:
+	case servers.SGLantern, servers.SGUser:
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
@@ -95,25 +65,22 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 	if isOpen() {
 		return selectServer(group, tag)
 	}
-	if err := connectToServer(group, tag, platIfce); err != nil {
-		return fmt.Errorf("connect to server %s/%s: %w", group, tag, err)
-	}
-	if err := storeSelected(group, tag); err != nil {
-		slog.Error("failed to store selected server in cache file", slog.Any("error", err))
-	}
-	return nil
+	return connect(group, tag, platIfce)
 }
 
-func connectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	initSplitTunnel()
-	opts, err := buildOptions(autoAll)
+	if err := setSelected(group, tag); err != nil {
+		return fmt.Errorf("failed to set selected server: %w", err)
+	}
+	opts, err := buildOptions(group, common.DataPath())
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
 	if err := openTunnel(opts, platIfce); err != nil {
 		return fmt.Errorf("failed to open tunnel: %w", err)
 	}
-	return selectServer(group, tag)
+	return nil
 }
 
 // Reconnect attempts to reconnect to the last connected server.
@@ -121,20 +88,11 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 	if isOpen() {
 		return fmt.Errorf("tunnel is already open")
 	}
-	group, _, err := loadSelected()
+	group, tag, err := getSelected()
 	if err != nil {
 		return fmt.Errorf("failed to load mode from cache file: %w", err)
 	}
-	switch group {
-	case autoLantern, autoUser, autoAll:
-		return quickConnect(group, platIfce)
-	default:
-		_, tag, err := loadSelected()
-		if err != nil {
-			return fmt.Errorf("failed to load selected server from cache file: %w", err)
-		}
-		return connectToServer(group, tag, platIfce)
-	}
+	return connect(group, tag, platIfce)
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -158,24 +116,133 @@ func Disconnect() error {
 	return nil
 }
 
+func selectServer(group, tag string) error {
+	cc := libbox.NewStandaloneCommandClient()
+	if err := cc.SelectOutbound(group, tag); err != nil {
+		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
+	}
+
+	// If switching to a different group, close previous connections.
+	res, _ := sendCmd(libbox.CommandClashMode)
+	if res.clashMode == group {
+		return nil
+	}
+	if err := cc.SetClashMode(group); err != nil {
+		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
+	}
+	if err := cc.CloseConnections(); err != nil {
+		return fmt.Errorf("failed to close previous connections: %w", err)
+	}
+	return nil
+}
+
+var (
+	cacheFile      adapter.CacheFile
+	cacheFileOnce  sync.Once
+	cacheLoadError error
+)
+
+func loadCacheFile(path string) error {
+	cacheFileOnce.Do(func() {
+		cacheFile = cachefile.New(context.Background(), O.CacheFileOptions{
+			Enabled: true,
+			Path:    path,
+			CacheID: cacheID,
+		})
+		cacheLoadError = cacheFile.Start(adapter.StartStateInitialize)
+	})
+	return cacheLoadError
+}
+
+func setSelected(group, tag string) error {
+	cacheFilePath := filepath.Join(common.DataPath(), cacheFileName)
+	if err := loadCacheFile(cacheFilePath); err != nil {
+		return fmt.Errorf("load cache file: %w", err)
+	}
+	if err := cacheFile.StoreMode(group); err != nil {
+		return fmt.Errorf("set group in cache file: %w", err)
+	}
+	if tag == "" {
+		return nil
+	}
+	if err := cacheFile.StoreSelected(group, tag); err != nil {
+		return fmt.Errorf("set selected tag in cache file: %w", err)
+	}
+	return nil
+}
+
+func getSelected() (string, string, error) {
+	if err := loadCacheFile(cacheFileName); err != nil {
+		return "", "", fmt.Errorf("load cache file: %w", err)
+	}
+	group := cacheFile.LoadMode()
+	tag := cacheFile.LoadSelected(group)
+	return group, tag, nil
+}
+
+// Status represents the current status of the tunnel, including whether it is open, the selected
+// server, and the active server. Active is only set if the tunnel is open.
 type Status struct {
-	TunnelOpen     bool
-	SelectedServer Server
-	ActiveServer   Server
+	TunnelOpen bool
+	// SelectedServer is the server that is currently selected for the tunnel.
+	SelectedServer string
+	// ActiveServer is the server that is currently active for the tunnel. This will differ from
+	// SelectedServer if using auto-select mode.
+	ActiveServer string
 }
 
 func GetStatus() (Status, error) {
-	// TODO: get server locations
+	group, selected, err := getSelected()
+	if err != nil {
+		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
+	}
+	if group == modeAutoAll {
+		selected = modeAutoAll
+	}
 	s := Status{
 		TunnelOpen:     isOpen(),
-		SelectedServer: selectedServer.Load().(Server),
+		SelectedServer: selected,
 	}
+	if !s.TunnelOpen {
+		return s, nil
+	}
+
 	active, err := activeServer()
 	if err != nil {
 		return s, fmt.Errorf("failed to get active server: %w", err)
 	}
 	s.ActiveServer = active
 	return s, nil
+}
+
+func activeServer() (string, error) {
+	if !isOpen() {
+		return "", nil
+	}
+	res, err := sendCmd(libbox.CommandClashMode)
+	if err != nil {
+		return "", fmt.Errorf("failed to get active server: %w", err)
+	}
+	outbound, err := getOutboundGroup(res.clashMode)
+	if err != nil {
+		return "", err
+	}
+	return outbound.Selected, nil
+}
+
+func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
+	res, err := sendCmd(libbox.CommandGroup)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get outbound group: %w", err)
+	}
+	groups := res.groups
+	for groups.HasNext() {
+		og := groups.Next()
+		if og.Tag == group {
+			return og, nil
+		}
+	}
+	return nil, fmt.Errorf("outbound group %s not found", group)
 }
 
 type Connection struct {
@@ -205,105 +272,6 @@ func ActiveConnections() ([]Connection, error) {
 	return connections, nil
 }
 
-var (
-	cacheFileOnce  sync.Once
-	cacheLoadError error
-
-	cacheFile adapter.CacheFile
-)
-
-func loadCacheFile(path string) error {
-	cacheFileOnce.Do(func() {
-		cacheFile = cachefile.New(context.Background(), O.CacheFileOptions{
-			Enabled: true,
-			Path:    path,
-			CacheID: cacheID,
-		})
-		cacheLoadError = cacheFile.Start(adapter.StartStateInitialize)
-	})
-	return cacheLoadError
-}
-
-func storeSelected(group, tag string) error {
-	if err := loadCacheFile(cacheFileName); err != nil {
-		return fmt.Errorf("load cache file: %w", err)
-	}
-	if err := cacheFile.StoreMode(group); err != nil {
-		return fmt.Errorf("store group in cache file: %w", err)
-	}
-	if tag == "" {
-		return nil
-	}
-	if err := cacheFile.StoreSelected(group, tag); err != nil {
-		return fmt.Errorf("store selected tag in cache file: %w", err)
-	}
-	return nil
-}
-
-func loadSelected() (string, string, error) {
-	if err := loadCacheFile(cacheFileName); err != nil {
-		return "", "", fmt.Errorf("load cache file: %w", err)
-	}
-	group := cacheFile.LoadMode()
-	tag := cacheFile.LoadSelected(group)
-	return group, tag, nil
-}
-
-func autoSelect(group string) error {
-	cc := libbox.NewStandaloneCommandClient()
-	if err := cc.SetClashMode(group); err != nil {
-		return fmt.Errorf("failed to set mode to %s: %w", group, err)
-	}
-	return nil
-}
-
-func selectServer(group, tag string) error {
-	cc := libbox.NewStandaloneCommandClient()
-	if err := cc.SelectOutbound(group, tag); err != nil {
-		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
-	}
-
-	// Since we want to switch servers, we need to close any existing connections to the old server.
-	// The Selector outbound will handle closing connections automatically, but only for connections
-	// using it. If we're switching to a different group, then we have to close the connections ourselves.
-	res, _ := sendCmd(libbox.CommandClashMode)
-	if res.clashMode == group {
-		return nil
-	}
-	if err := cc.SetClashMode(group); err != nil {
-		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
-	}
-	if err := cc.CloseConnections(); err != nil {
-		return fmt.Errorf("failed to close previous connections: %w", err)
-	}
-	return nil
-}
-
-func activeServer() (Server, error) {
-	s := Server{}
-	if !isOpen() {
-		return s, nil
-	}
-	res, err := sendCmd(libbox.CommandClashMode)
-	if err != nil {
-		return s, fmt.Errorf("failed to get active server: %w", err)
-	}
-	outbound, err := getOutboundGroup(res.clashMode)
-	if err != nil {
-		return s, err
-	}
-	s.Group = outbound.Tag
-	s.Tag = outbound.Selected
-	for _, out := range outbound.ItemList {
-		if out.Tag == s.Tag {
-			s.Type = out.Type
-			break
-		}
-	}
-
-	return s, nil
-}
-
 func activeConnections() ([]Connection, error) {
 	res, err := sendCmd(libbox.CommandConnections)
 	if err != nil {
@@ -314,9 +282,6 @@ func activeConnections() ([]Connection, error) {
 	}
 	res.connections.FilterState(libbox.ConnectionStateActive)
 	var connections []Connection
-	// they only provide an iterator, which stores the connections as a slice internally, and Next
-	// just returns the next connection in the slice?? for real?! why tf can't they just provide a
-	// the slice.. -_-
 	iter := res.connections.Iterator()
 	for iter.HasNext() {
 		lbconn := *(iter.Next())
@@ -333,37 +298,6 @@ func activeConnections() ([]Connection, error) {
 		connections = append(connections, conn)
 	}
 	return connections, nil
-}
-
-func getOutboundGroupTags(group string) ([]string, error) {
-	if group != ServerGroupLantern && group != ServerGroupUser {
-		return nil, fmt.Errorf("invalid group: %s", group)
-	}
-
-	oGroup, err := getOutboundGroup(group)
-	if err != nil {
-		return nil, err
-	}
-	tags := make([]string, 0)
-	for _, out := range oGroup.ItemList {
-		tags = append(tags, out.Tag)
-	}
-	return tags, nil
-}
-
-func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
-	res, err := sendCmd(libbox.CommandGroup)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get outbound groups: %w", err)
-	}
-	groups := res.groups
-	for groups.HasNext() {
-		og := groups.Next()
-		if og.Tag == group {
-			return og, nil
-		}
-	}
-	return nil, fmt.Errorf("outbound group %s not found", group)
 }
 
 func sendCmd(cmd int32) (*cmdClientHandler, error) {

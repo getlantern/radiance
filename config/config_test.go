@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -15,26 +14,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
 )
-
-// Mock implementation of ConfigParser for testing
-func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
-	var cfg C.ConfigResponse
-	err := json.Unmarshal(data, &cfg)
-	return &cfg, err
-}
 
 func TestSaveConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
+		configPath: configPath,
 	}
 
 	// Create a sample config to save
@@ -65,13 +55,12 @@ func TestSaveConfig(t *testing.T) {
 func TestGetConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-		config:         atomic.Value{},
+		configPath: configPath,
+		config:     atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -104,14 +93,13 @@ func TestGetConfig(t *testing.T) {
 func TestSetPreferredServerLocation(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-		config:         atomic.Value{},
-		ftr:            newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		configPath: configPath,
+		config:     atomic.Value{},
+		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
 	}
 
 	ch.config.Store(&Config{
@@ -146,7 +134,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 func TestHandlerFetchConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Mock fetcher
 	mockFetcher := &MockFetcher{}
@@ -154,7 +142,6 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser and fetcher
 	ch := &ConfigHandler{
 		configPath:        configPath,
-		confRespParser:    mockConfigParser,
 		config:            atomic.Value{},
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,

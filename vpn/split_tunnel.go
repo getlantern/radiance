@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	splitTunnelTag    = "split-tunnel"
-	splitTunnelFormat = C.RuleSetFormatSource // file will be saved as json
+	splitTunnelTag  = "split-tunnel"
+	splitTunnelFile = splitTunnelTag + ".json"
 
 	TypeDomain        = "domain"
 	TypeDomainSuffix  = "domainSuffix"
@@ -45,7 +45,7 @@ type SplitTunnel struct {
 }
 
 func NewSplitTunnelHandler() (*SplitTunnel, error) {
-	ruleFile := filepath.Join(common.DataPath(), splitTunnelTag+".json")
+	ruleFile := filepath.Join(common.DataPath(), splitTunnelFile)
 	rule := defaultRule()
 	s := &SplitTunnel{
 		rule:         rule,
@@ -140,7 +140,7 @@ func (s *SplitTunnel) AddItems(items Filter) error {
 // RemoveItems removes multiple items from the filter.
 func (s *SplitTunnel) RemoveItems(items Filter) error {
 	s.updateFilters(items, remove)
-	s.log.Log(context.Background(), internal.LevelTrace, "removed items form filter", "items", items.String())
+	s.log.Log(context.Background(), internal.LevelTrace, "removed items from filter", "items", items.String())
 	return s.saveToFile()
 }
 
@@ -332,7 +332,7 @@ var (
 // because it can't find it.
 func initSplitTunnel() {
 	initOnce.Do(func() {
-		ruleFile := filepath.Join(common.DataPath(), splitTunnelTag+".json")
+		ruleFile := filepath.Join(common.DataPath(), splitTunnelFile)
 		if _, err := os.Stat(ruleFile); errors.Is(err, fs.ErrNotExist) {
 			s := &SplitTunnel{
 				rule:     defaultRule(),

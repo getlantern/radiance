@@ -1,7 +1,6 @@
-// Package servers provides management of user server configurations, including endpoints, outbounds,
-// and trusted server fingerprints. It supports loading, and saving, as well as integration with
-// remote server managers for adding, inviting, and revoking private servers with
-// trust-on-first-use (TOFU) fingerprint verification.
+// Package servers provides management of server configurations, such as option.Endpoints and
+// option.Outbounds,and integration with remote server managers for adding, inviting, and revoking
+// private servers with trust-on-first-use (TOFU) fingerprint verification.
 package servers
 
 import (
@@ -12,55 +11,83 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	sbx "github.com/getlantern/sing-box-extensions"
 
-	"github.com/getlantern/radiance/app"
+	C "github.com/getlantern/common"
+
+	"github.com/getlantern/radiance/common"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 )
 
+type ServerGroup = string
+
 const (
+	SGLantern ServerGroup = "lantern"
+	SGUser    ServerGroup = "user"
+
 	trustFingerprintFileName = "trusted_server_fingerprints.json"
 )
 
-// ServerOptions holds the configuration for user servers, including endpoints and outbounds.
-type ServerOptions struct {
-	Endpoints []option.Endpoint `json:"endpoints,omitempty"`
-	Outbounds []option.Outbound `json:"outbounds,omitempty"`
+type Options struct {
+	Outbounds []option.Outbound           `json:"outbounds,omitempty"`
+	Endpoints []option.Endpoint           `json:"endpoints,omitempty"`
+	Locations map[string]C.ServerLocation `json:"locations,omitempty"`
 }
 
-// Manager manages user server configurations, including endpoints, outbounds, and trusted fingerprints.
+// AllTags returns a slice of all tags from both endpoints and outbounds in the Options.
+func (o Options) AllTags() []string {
+	tags := make([]string, 0, len(o.Outbounds)+len(o.Endpoints))
+	for _, ep := range o.Endpoints {
+		tags = append(tags, ep.Tag)
+	}
+	for _, out := range o.Outbounds {
+		tags = append(tags, out.Tag)
+	}
+	return tags
+}
+
+type Servers map[ServerGroup]Options
+
+// Manager manages server configurations, including endpoints and outbounds.
 type Manager struct {
-	access     sync.RWMutex
-	optsMap    map[string]any // Map of server tags to their options (Endpoint or Outbound).
-	serverOpts ServerOptions
+	access   sync.RWMutex
+	servers  Servers
+	optsMaps map[ServerGroup]map[string]any // map of tag to option for quick access
 
 	serversFile      string
 	fingerprintsFile string
 
-	logger *slog.Logger
+	log *slog.Logger
 }
 
-// NewManager creates a new Manager instance, loading server options from disk. If logger is nil,
-// the default logger is used. Returns an error if loading servers fails.
+// NewManager creates a new Manager instance, loading server options from disk.
 func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.Info("Initializing UserServerManager", "dataPath", dataPath)
-
 	mgr := &Manager{
-		optsMap: make(map[string]any),
-		serverOpts: ServerOptions{
-			Endpoints: make([]option.Endpoint, 0),
-			Outbounds: make([]option.Outbound, 0),
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+			SGUser: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
 		},
-		serversFile:      filepath.Join(dataPath, app.UserServerFileName),
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: make(map[string]any),
+			SGUser:    make(map[string]any),
+		},
+		serversFile:      filepath.Join(dataPath, common.ServersFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
-		logger:           logger,
+		log:              logger,
+		access:           sync.RWMutex{},
 	}
 
 	if err := mgr.loadServers(); err != nil {
@@ -70,71 +97,174 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 	return mgr, nil
 }
 
-// Servers returns the current [ServerOptions] managed by the Manager.
-func (m *Manager) Servers() ServerOptions {
-	return m.serverOpts
+// Servers returns the current server configurations for both groups ([SGLantern] and [SGUser]).
+func (m *Manager) Servers() Servers {
+	return m.servers
 }
 
-// GetServerByTag retrieves a server option by its tag. Returns the option and a boolean indicating
-// if it was found.
-func (m *Manager) GetServerByTag(tag string) (any, bool) {
+type Server struct {
+	Group    ServerGroup
+	Tag      string
+	Type     string
+	Options  any // will be either [option.Endpoint] or [option.Outbound]
+	Location C.ServerLocation
+}
+
+// GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
+// the server was found.
+func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()
-	opts, ok := m.optsMap[tag]
-	return opts, ok
+
+	group := SGLantern
+	opts, ok := m.optsMaps[SGLantern][tag]
+	if !ok {
+		if opts, ok = m.optsMaps[SGUser][tag]; !ok {
+			return Server{}, false
+		}
+		group = SGUser
+	}
+	s := Server{
+		Group:    group,
+		Tag:      tag,
+		Options:  opts,
+		Location: m.servers[SGLantern].Locations[tag],
+	}
+	switch v := opts.(type) {
+	case option.Endpoint:
+		s.Type = v.Type
+	case option.Outbound:
+		s.Type = v.Type
+	}
+	return s, true
 }
 
-// AddServerByConfig adds a server configuration from a JSON string. Returns an error if the config
-// is invalid or the tag already exists.
-func (m *Manager) AddServerByConfig(cfg string) error {
-	// validate config
-	tag, opts, err := m.unmarshalServerOpts([]byte(cfg))
-	if err != nil {
-		return fmt.Errorf("config must be a valid option.Endpoint or option.Outbound: %w", err)
-	}
-	m.access.Lock()
-	defer m.access.Unlock()
-	if _, exists := m.optsMap[tag]; exists {
-		return fmt.Errorf("server with tag %q already exists", tag)
+// SetServers sets the server options for a specific group.
+// Important: this will overwrite any existing servers for that group. To add new servers without
+// overwriting existing ones, use [AddServers] instead.
+func (m *Manager) SetServers(group ServerGroup, options Options) error {
+	switch group {
+	case SGLantern, SGUser:
+	default:
+		return fmt.Errorf("invalid server group: %s", group)
 	}
 
-	m.optsMap[tag] = opts
+	m.access.Lock()
+	defer m.access.Unlock()
+
+	m.servers[group] = options
+	opts := make(map[string]any)
+	for _, ep := range options.Endpoints {
+		opts[ep.Tag] = ep
+	}
+	for _, out := range options.Outbounds {
+		opts[out.Tag] = out
+	}
+	m.optsMaps[group] = opts
+	if err := m.saveServers(); err != nil {
+		return fmt.Errorf("failed to save servers: %w", err)
+	}
 	return nil
+}
+
+// AddServers adds new servers to the specified group. If a server with the same tag already exists,
+// it will be skipped.
+func (m *Manager) AddServers(group ServerGroup, opts Options) error {
+	switch group {
+	case SGLantern, SGUser:
+	default:
+		return fmt.Errorf("invalid server group: %s", group)
+	}
+
+	m.access.Lock()
+	defer m.access.Unlock()
+
+	existingTags := m.merge(group, opts)
+	if len(existingTags) > 0 {
+		m.log.Warn("Some servers were not added because they already exist", "tags", existingTags)
+	}
+	if err := m.saveServers(); err != nil {
+		return fmt.Errorf("failed to save servers: %w", err)
+	}
+	if len(existingTags) > 0 {
+		return fmt.Errorf("some servers were not added because they already exist: %v", existingTags)
+	}
+	return nil
+}
+
+// merge adds new endpoints and outbounds to the specified group, skipping any that already exist.
+// It returns the tags that were skipped.
+func (m *Manager) merge(group ServerGroup, options Options) []string {
+	if len(options.Endpoints) == 0 && len(options.Outbounds) == 0 {
+		return nil
+	}
+	var existingTags []string
+	opts := m.optsMaps[group]
+	servers := m.servers[group]
+	for _, ep := range options.Endpoints {
+		if _, exists := opts[ep.Tag]; exists {
+			existingTags = append(existingTags, ep.Tag)
+			continue
+		}
+		opts[ep.Tag] = ep
+		servers.Endpoints = append(servers.Endpoints, ep)
+		servers.Locations[ep.Tag] = options.Locations[ep.Tag]
+	}
+	for _, out := range options.Outbounds {
+		if _, exists := opts[out.Tag]; exists {
+			existingTags = append(existingTags, out.Tag)
+			continue
+		}
+		opts[out.Tag] = out
+		servers.Outbounds = append(servers.Outbounds, out)
+		servers.Locations[out.Tag] = options.Locations[out.Tag]
+	}
+	m.servers[group] = servers
+	return existingTags
 }
 
 // RemoveServer removes a server config by its tag.
 func (m *Manager) RemoveServer(tag string) error {
 	m.access.Lock()
-	delete(m.optsMap, tag)
-	m.access.Unlock()
+	defer m.access.Unlock()
+
+	// check which group the server belongs to so we can get the correct optsMaps and servers
+	opts := m.optsMaps[SGLantern]
+	servers := m.servers[SGLantern]
+	if _, exists := opts[tag]; !exists {
+		opts = m.optsMaps[SGUser]
+		servers = m.servers[SGUser]
+		if _, exists := opts[tag]; !exists {
+			return fmt.Errorf("server with tag %q not found", tag)
+		}
+	}
+	// remove the server from the optsMaps and servers
+	switch v := opts[tag].(type) {
+	case option.Endpoint:
+		servers.Endpoints = remove(servers.Endpoints, v)
+	case option.Outbound:
+		servers.Outbounds = remove(servers.Outbounds, v)
+	}
+	delete(opts, tag)
+	delete(servers.Locations, tag)
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
 	}
 	return nil
 }
 
-func (m *Manager) unmarshalServerOpts(cfg []byte) (string, any, error) {
-	ctx := sbx.BoxContext()
-
-	// first try to unmarshal the config as an Endpoint
-	ep, err := json.UnmarshalExtendedContext[option.Endpoint](ctx, cfg)
-	if err == nil { // config is a valid Endpoint
-		return ep.Tag, ep, nil
+func remove[T comparable](slice []T, item T) []T {
+	i := slices.Index(slice, item)
+	if i == -1 {
+		return slice
 	}
-	// try to unmarshal it as an Outbound
-	out, err := json.UnmarshalExtendedContext[option.Outbound](ctx, cfg)
-	if err == nil { // config is a valid Outbound
-		return out.Tag, out, nil
-	}
-	// if we reach here, the config is neither a valid an Endpoint nor an Outbound
-	return "", nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	slice[i] = slice[len(slice)-1]
+	return slice[:len(slice)-1]
 }
 
 func (m *Manager) saveServers() error {
 	ctx := sbx.BoxContext()
-	m.access.Lock()
-	buf, err := json.MarshalContext(ctx, m.serverOpts)
-	m.access.Unlock()
+	buf, err := json.MarshalContext(ctx, m.servers)
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
@@ -149,54 +279,13 @@ func (m *Manager) loadServers() error {
 	if err != nil {
 		return fmt.Errorf("read server file %q: %w", m.serversFile, err)
 	}
-	opts, err := json.UnmarshalExtendedContext[ServerOptions](sbx.BoxContext(), buf)
+	servers, err := json.UnmarshalExtendedContext[Servers](sbx.BoxContext(), buf)
 	if err != nil {
 		return fmt.Errorf("unmarshal server options: %w", err)
 	}
-	_ = m.merge(opts) // merge the loaded options into the manager
+	m.SetServers(SGLantern, servers[SGLantern])
+	m.SetServers(SGUser, servers[SGUser])
 	return nil
-}
-
-func (m *Manager) addServers(opts ServerOptions) error {
-	existingTags := m.merge(opts)
-	if len(existingTags) > 0 {
-		slog.Warn("Some servers were not added because they already exist", "tags", existingTags)
-	}
-	if err := m.saveServers(); err != nil {
-		return fmt.Errorf("failed to save servers: %w", err)
-	}
-	if len(existingTags) > 0 {
-		return fmt.Errorf("some servers were not added because they already exist: %v", existingTags)
-	}
-	return nil
-}
-
-// merge adds new endpoints and outbounds to the manager. If an endpoint or outbound with the same
-// tag already exists, it will not be added again. merge returns the tags that were not added.
-func (m *Manager) merge(opts ServerOptions) []string {
-	if len(opts.Endpoints) == 0 && len(opts.Outbounds) == 0 {
-		return nil
-	}
-	m.access.Lock()
-	defer m.access.Unlock()
-	var existingTags []string
-	for _, ep := range opts.Endpoints {
-		if _, exists := m.optsMap[ep.Tag]; !exists {
-			m.optsMap[ep.Tag] = ep
-			m.serverOpts.Endpoints = append(m.serverOpts.Endpoints, ep)
-		} else {
-			existingTags = append(existingTags, ep.Tag)
-		}
-	}
-	for _, out := range opts.Outbounds {
-		if _, exists := m.optsMap[out.Tag]; !exists {
-			m.optsMap[out.Tag] = out
-			m.serverOpts.Outbounds = append(m.serverOpts.Outbounds, out)
-		} else {
-			existingTags = append(existingTags, out.Tag)
-		}
-	}
-	return existingTags
 }
 
 // Lantern Server Manager Integration
@@ -204,12 +293,12 @@ func (m *Manager) merge(opts ServerOptions) []string {
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
 // Requires a trust fingerprint callback for certificate verification. If one isn't provided, it will
 // prompt the user to trust the fingerprint.
-func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, trustFingerprintCallback TrustFingerprintCallback) error {
-	if trustFingerprintCallback == nil {
-		return fmt.Errorf("trustFingerprintCallback is required")
+func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, trustFingerprintCB TrustFingerprintCB) error {
+	if trustFingerprintCB == nil {
+		return fmt.Errorf("trustFingerprintCB is required")
 	}
 
-	client, err := m.getClientForTrustedFingerprint(ip, port, trustFingerprintCallback)
+	client, err := m.getClientForTrustedFingerprint(ip, port, trustFingerprintCB)
 	if err != nil {
 		return err
 	}
@@ -228,7 +317,7 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 	defer resp.Body.Close()
 
 	ctx := sbx.BoxContext()
-	servers, err := json.UnmarshalExtendedContext[ServerOptions](ctx, body)
+	servers, err := json.UnmarshalExtendedContext[Options](ctx, body)
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
@@ -238,7 +327,7 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 
 	// TODO: update when we support endpoints
 	servers.Outbounds[0].Tag = tag // use the provided tag
-	return m.addServers(servers)
+	return m.AddServers(SGUser, servers)
 }
 
 // InviteToPrivateServer invites another user to the server manager instance and returns a connection
@@ -291,7 +380,7 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 	return nil
 }
 
-func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFingerprintCallback TrustFingerprintCallback) (*http.Client, error) {
+func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFingerprintCallback TrustFingerprintCB) (*http.Client, error) {
 	// get server fingerprints via TLS
 	details, err := getServerFingerprints(ip, port)
 	if err != nil {

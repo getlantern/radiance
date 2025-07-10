@@ -18,7 +18,6 @@ import (
 
 	"github.com/getlantern/sing-box-extensions/protocol"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 )
@@ -56,8 +55,8 @@ func newFetcher(client *http.Client, user common.UserInfo, locale string) Fetche
 func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
-		OS:             app.Platform,
-		AppName:        app.Name,
+		OS:             common.Platform,
+		AppName:        common.Name,
 		DeviceID:       f.user.DeviceID(),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,

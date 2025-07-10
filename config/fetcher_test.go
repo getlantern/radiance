@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	C "github.com/getlantern/common"
-	"github.com/getlantern/radiance/app"
-	"github.com/getlantern/radiance/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	"github.com/getlantern/radiance/common"
 )
 
 type mockRoundTripper struct {
@@ -121,8 +121,8 @@ func TestFetchConfig(t *testing.T) {
 				err = json.Unmarshal(body, &confReq)
 				require.NoError(t, err)
 
-				assert.Equal(t, app.Platform, confReq.OS)
-				assert.Equal(t, app.Name, confReq.AppName)
+				assert.Equal(t, common.Platform, confReq.OS)
+				assert.Equal(t, common.Name, confReq.AppName)
 				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
 				assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
 				if tt.preferredServerLoc != nil {

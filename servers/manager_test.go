@@ -11,24 +11,37 @@ import (
 	"strings"
 	"testing"
 
+	C "github.com/getlantern/common"
+
 	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common"
 )
 
 func TestPrivateServerIntegration(t *testing.T) {
 	dataPath := t.TempDir()
 	manager := &Manager{
-		optsMap: make(map[string]any),
-		serverOpts: ServerOptions{
-			Endpoints: make([]option.Endpoint, 0),
-			Outbounds: make([]option.Outbound, 0),
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+			SGUser: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
 		},
-		serversFile:      filepath.Join(dataPath, app.UserServerFileName),
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: make(map[string]any),
+			SGUser:    make(map[string]any),
+		},
+		serversFile:      filepath.Join(dataPath, common.ServersFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
-		logger:           slog.Default(),
+		log:              slog.Default(),
 	}
 
 	srv := newLanternServerManagerMock()
@@ -41,7 +54,7 @@ func TestPrivateServerIntegration(t *testing.T) {
 	}
 	t.Run("convert a token into a custom server", func(t *testing.T) {
 		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", trustingCallback))
-		require.Contains(t, manager.optsMap, "s1", "server should be added to the manager")
+		require.Contains(t, manager.optsMaps[SGUser], "s1", "server should be added to the manager")
 	})
 
 	t.Run("invite a user", func(t *testing.T) {
@@ -50,14 +63,14 @@ func TestPrivateServerIntegration(t *testing.T) {
 		assert.NotEmpty(t, inviteToken)
 
 		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, trustingCallback))
-		require.Contains(t, manager.optsMap, "s2", "server should be added for the invited user")
+		require.Contains(t, manager.optsMaps[SGUser], "s2", "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
-			delete(manager.optsMap, "s1")
+			delete(manager.optsMaps[SGUser], "s1")
 			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
 			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, trustingCallback))
-			assert.NotContains(t, manager.optsMap, "s1", "server should not be added after revoking invite")
+			assert.NotContains(t, manager.optsMaps[SGUser], "s1", "server should not be added after revoking invite")
 		})
 	})
 

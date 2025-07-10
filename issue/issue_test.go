@@ -2,6 +2,7 @@ package issue
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/getlantern/fronted"
@@ -22,7 +23,7 @@ func TestSendReport(t *testing.T) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 	userConfig := common.NewUserConfig("radiance-test", "", "")
-	reporter, err := NewIssueReporter(k.NewHTTPClient(), &mockSubscriptionHandler{}, userConfig)
+	reporter, err := NewIssueReporter(k.NewHTTPClient(), &mockSubscriptionHandler{}, userConfig, slog.Default())
 	require.NoError(t, err)
 	err = reporter.Report(
 		context.Background(),
