@@ -23,7 +23,7 @@ import (
 
 const (
 	requestURL = "https://iantem.io/api/v1/issue"
-	maxLogSize = 10247680 // 10 MB
+	maxLogSize = 10 * 1024 * 1024 // 10 MB
 )
 
 var (

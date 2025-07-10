@@ -27,7 +27,12 @@ func TestZipFilesWithoutPath(t *testing.T) {
 
 func TestZipFilesWithMaxBytes(t *testing.T) {
 	var buf bytes.Buffer
-	err := zipFiles(&buf, zipOptions{Globs: map[string]string{"": "test_data/*.txt*"}, MaxBytes: 1 * 1024 * 1024}) // 1 MB
+	err := zipFiles(&buf,
+		zipOptions{
+			Globs:    map[string]string{"": "test_data/*.txt*"},
+			MaxBytes: 1024, // 1KB
+		},
+	)
 	if !assert.NoError(t, err) {
 		return
 	}
