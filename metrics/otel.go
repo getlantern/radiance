@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"time"
 
@@ -50,7 +49,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) e
 	}
 
 	if cfg.TracesEnabled {
-		shutdownFunc, err := initTracer(res, cfg)
+		shutdownFunc, err := initTracer(ctx, res, cfg)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 		}
@@ -73,9 +72,9 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) e
 	return shutdown, nil
 }
 
-func initTracer(res *resource.Resource, cfg common.OTEL) (func(context.Context) error, error) {
+func initTracer(ctx context.Context, res *resource.Resource, cfg common.OTEL) (func(context.Context) error, error) {
 	exporter, err := otlptrace.New(
-		context.Background(),
+		ctx,
 		otlptracegrpc.NewClient(
 			otlptracegrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, "")),
 			otlptracegrpc.WithEndpoint(cfg.Endpoint),
@@ -83,18 +82,24 @@ func initTracer(res *resource.Resource, cfg common.OTEL) (func(context.Context) 
 		),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create exporter: %v", err)
 		return nil, fmt.Errorf("failed to create exporter: %w", err)
 	}
-
-	otel.SetTracerProvider(
-		sdktrace.NewTracerProvider(
-			sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.TracesSampleRate))),
-			sdktrace.WithBatcher(exporter),
-			sdktrace.WithResource(res),
-		),
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.TracesSampleRate))),
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
 	)
-	return exporter.Shutdown, nil
+
+	otel.SetTracerProvider(tracerProvider)
+	return func(ctx context.Context) error {
+		if err := tracerProvider.Shutdown(ctx); err != nil {
+			return fmt.Errorf("failed to shutdown tracer provider: %w", err)
+		}
+		if err := exporter.Shutdown(ctx); err != nil {
+			return fmt.Errorf("failed to shutdown exporter: %w", err)
+		}
+		return nil
+	}, nil
 }
 
 // Initializes an OTLP exporter, and configures the corresponding meter provider.
