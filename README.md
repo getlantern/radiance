@@ -27,13 +27,12 @@ The following variables are available:
 ## Packages
 
 Use `common.Init` to setup directories and configure loggers. 
-> [!note] This isn't necessary if `NewRadiance` was called as it will call `Init` for you.
+> [!note]
+> This isn't necessary if `NewRadiance` was called as it will call `Init` for you.
 
 ### `vpn`
 
 The `vpn` package provides high-level functions for controlling the VPN tunnel. 
-
-**Usage:**
 
 To connect to the best available server, you can use the `QuickConnect` function. This function takes a server group (`servers.SGLantern`, `servers.SGUser`, or `"all"`) and a `PlatformInterface` as input. For example:
 
@@ -65,10 +64,10 @@ This package also includes split tunneling capabilities, allowing you to include
 
 The `servers` package is responsible for managing all VPN server configurations, separating them into two groups: `lantern` (official Lantern servers) and `user` (user-provided servers).
 
-**Usage:**
+The `Manager` allows you to `AddServers` and `RemoveServer` configurations. You can retrieve the config for a specific server with `GetServerByTag` or use `Servers` to retrieve all configs.
 
-While you can get a new `Manager` instance with `NewManager`, it is recommended to use `Radiance.ServerManager`. This will return the shared manager instance. `NewManager` can be useful for retrieving server information if you don't have access to the shared instance, but the new instance should not be kept as it won't stay in sync. 
-`Manager` allows you to `AddServers` and `RemoveServer` server configurations. You can also retrieve a server's config with `GetServerByTag` or use `Servers` to retrieve all configs.
+> [!caution]
+> While you can get a new `Manager` instance with `NewManager`, it is recommended to use `Radiance.ServerManager`. This will return the shared manager instance. `NewManager` can be useful for retrieving server information if you don't have access to the shared instance, but the new instance should not be kept as it won't stay in sync and adding server configs to it will overwrite existing configs if both manager instances are pointed to the same server file.
 
 A key feature of this package is the ability to add private servers from a server manager via an access token using `AddPrivateServer`. This process uses Trust-on-first-use (TOFU) to securely add the server. Once a private server is added, you can use the manager to invite other users to it with `InviteToPrivateServer` and revoke access with `RevokePrivateServerInvite`.
 
