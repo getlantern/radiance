@@ -62,7 +62,6 @@ func NewIssueReporter(
 	if subHandler == nil {
 		return nil, fmt.Errorf("user is nil")
 	}
-	log = logger
 	return &IssueReporter{
 		httpClient: httpClient,
 		subHandler: subHandler,
