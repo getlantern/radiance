@@ -199,7 +199,7 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 }
 
 func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
-	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse.OTEL)
+	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse)
 	if shutdown != nil {
 		r.shutdownOTEL = shutdown
 		r.addShutdownFunc(shutdown)

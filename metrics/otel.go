@@ -17,12 +17,13 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"google.golang.org/grpc/credentials"
 )
 
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.Context) error, error) {
 	var shutdownFuncs []func(context.Context) error
 	if !cfg.TracesEnabled && !cfg.MetricsEnabled {
 		// No need to initialize anything if all are disabled.
@@ -39,9 +40,11 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) e
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			attribute.String("service.name", "radiance"),
+			semconv.ServiceName("radiance"),
+			semconv.ServiceVersion(rcommon.Version),
 			attribute.String("library.language", "go"),
-			attribute.String("service.version", rcommon.Version),
+			attribute.String("platform", rcommon.Platform),
+			attribute.Bool("pro", cfg.UserInfo.Pro),
 		),
 	)
 	if err != nil {
@@ -49,7 +52,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) e
 	}
 
 	if cfg.TracesEnabled {
-		shutdownFunc, err := initTracer(ctx, res, cfg)
+		shutdownFunc, err := initTracer(ctx, res, cfg.OTEL)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 		}
@@ -61,7 +64,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) e
 	if cfg.MetricsEnabled {
 		// Initialize the meter provider with the same gRPC connection.
 		// This is useful to avoid creating multiple connections to the same endpoint.
-		mp, err := initMeterProvider(ctx, res, cfg)
+		mp, err := initMeterProvider(ctx, res, cfg.OTEL)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize meter provider: %w", err)
 		}
