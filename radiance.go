@@ -331,6 +331,27 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	return nil
 }
 
+// Features returns the features available in the current configuration, returned from the server in the
+// config response.
+func (r *Radiance) Features() map[string]bool {
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		slog.Error("Failed to get config for features", "error", err)
+		return map[string]bool{}
+	}
+	if cfg == nil {
+		slog.Info("No config available for features, returning empty map")
+		return map[string]bool{}
+	}
+	slog.Debug("Returning features from config", "features", cfg.ConfigResponse.Features)
+	// Return the features from the config
+	if cfg.ConfigResponse.Features == nil {
+		slog.Info("No features available in config, returning empty map")
+		return map[string]bool{}
+	}
+	return cfg.ConfigResponse.Features
+}
+
 func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, error) {
 	// Parse the domain from the URL.
 	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"

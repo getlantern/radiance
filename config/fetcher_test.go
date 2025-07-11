@@ -121,7 +121,7 @@ func TestFetchConfig(t *testing.T) {
 				err = json.Unmarshal(body, &confReq)
 				require.NoError(t, err)
 
-				assert.Equal(t, common.Platform, confReq.OS)
+				assert.Equal(t, common.Platform, confReq.Platform)
 				assert.Equal(t, common.Name, confReq.AppName)
 				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
 				assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
