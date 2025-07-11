@@ -64,6 +64,10 @@ func Init(dataDir, logDir, logLevel string) error {
 // The log level is determined, first by the environment variable if set and valid, then by the provided level.
 // If both are invalid and/or not set, it defaults to "info".
 func initLogger(logPath, level string) error {
+	if testing.Testing() {
+		return nil // Skip logger initialization in tests
+	}
+
 	if elevel, hasLevel := env.Get[string](env.LogLevel); hasLevel {
 		level = elevel
 	}
