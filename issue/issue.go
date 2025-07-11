@@ -74,6 +74,7 @@ func randStr(n int) string {
 
 // Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
 func (ir *IssueReporter) Report(
+	ctx context.Context,
 	logDir, userEmail string,
 	issueType int,
 	description string,
@@ -151,7 +152,7 @@ func (ir *IssueReporter) Report(
 	}
 
 	req, err := backend.NewIssueRequest(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		requestURL,
 		bytes.NewReader(out),
