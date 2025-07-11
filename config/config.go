@@ -238,6 +238,10 @@ func (ch *ConfigHandler) fetchConfig() error {
 		cfg := ch.config.Load().(*Config).ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
 		for k, v := range cfg.OutboundLocations {
+			if v == nil {
+				slog.Warn("Server location is nil, skipping", "tag", k)
+				continue
+			}
 			locs[k] = *v
 		}
 		opts := servers.Options{
