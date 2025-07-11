@@ -15,6 +15,8 @@ const (
 	LevelError = slog.LevelError
 	LevelFatal = slog.LevelError + 4
 	LevelPanic = slog.LevelError + 8
+
+	Disable = slog.LevelInfo + 1000 // A level that disables logging, used for testing or no-op logger.
 )
 
 // ParseLogLevel parses a string representation of a log level and returns the corresponding slog.Level.
@@ -35,6 +37,8 @@ func ParseLogLevel(level string) (slog.Level, error) {
 		return LevelFatal, nil
 	case "panic":
 		return LevelPanic, nil
+	case "disable", "none", "off":
+		return Disable, nil
 	default:
 		return LevelInfo, fmt.Errorf("unknown log level: %s", level)
 	}
@@ -63,6 +67,6 @@ func FormatLogLevel(level slog.Level) string {
 func NoOpLogger() *slog.Logger {
 	// Create a no-op logger that does nothing.
 	return slog.New(slog.NewTextHandler(nil, &slog.HandlerOptions{
-		Level: LevelInfo + 1000, // Set to a level that does not log anything.
+		Level: Disable,
 	}))
 }
