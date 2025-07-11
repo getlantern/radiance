@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -50,6 +51,11 @@ func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.
 	if err != nil {
 		return shutdown, fmt.Errorf("failed to create resource: %w", err)
 	}
+
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	if cfg.TracesEnabled {
 		shutdownFunc, err := initTracer(ctx, res, cfg.OTEL)
