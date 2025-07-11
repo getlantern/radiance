@@ -25,11 +25,16 @@ import (
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
 func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.Context) error, error) {
-	var shutdownFuncs []func(context.Context) error
-	if !cfg.TracesEnabled && !cfg.MetricsEnabled {
+	//if tracesEnabled, ok := myMap[common.TRACES]; ok && val {
+	val, ok := cfg.Features[common.TRACES]
+	tracesEnabled := ok && val
+	val, ok = cfg.Features[common.METRICS]
+	metricsEnabled := ok && val
+	if !tracesEnabled && !metricsEnabled {
 		// No need to initialize anything if all are disabled.
 		return func(_ context.Context) error { return nil }, nil
 	}
+	var shutdownFuncs []func(context.Context) error
 	var err error
 	shutdown := func(ctx context.Context) error {
 		for _, fn := range shutdownFuncs {
@@ -57,7 +62,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.
 		propagation.Baggage{},
 	))
 
-	if cfg.TracesEnabled {
+	if tracesEnabled {
 		shutdownFunc, err := initTracer(ctx, res, cfg.OTEL)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
@@ -67,7 +72,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.
 		slog.Info("OpenTelemetry tracer initialized")
 	}
 
-	if cfg.MetricsEnabled {
+	if metricsEnabled {
 		// Initialize the meter provider with the same gRPC connection.
 		// This is useful to avoid creating multiple connections to the same endpoint.
 		mp, err := initMeterProvider(ctx, res, cfg.OTEL)

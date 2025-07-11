@@ -19,7 +19,7 @@ require (
 	dario.cat/mergo v1.0.1
 	github.com/1Password/srp v0.2.0
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20250711174422-6ff1db726cb2
+	github.com/getlantern/common v1.2.1-0.20250711182004-51a659011c7a
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
