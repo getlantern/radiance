@@ -55,7 +55,7 @@ func newFetcher(client *http.Client, user common.UserInfo, locale string) Fetche
 func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
-		OS:             common.Platform,
+		Platform:       common.Platform,
 		AppName:        common.Name,
 		DeviceID:       f.user.DeviceID(),
 		WGPublicKey:    wgPublicKey,
