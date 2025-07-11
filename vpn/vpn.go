@@ -172,7 +172,8 @@ func setSelected(group, tag string) error {
 }
 
 func getSelected() (string, string, error) {
-	if err := loadCacheFile(cacheFileName); err != nil {
+	cacheFilePath := filepath.Join(common.DataPath(), cacheFileName)
+	if err := loadCacheFile(cacheFilePath); err != nil {
 		return "", "", fmt.Errorf("load cache file: %w", err)
 	}
 	group := cacheFile.LoadMode()
