@@ -43,17 +43,21 @@ type SplitTunnel struct {
 }
 
 func NewSplitTunnelHandler() (*SplitTunnel, error) {
-	ruleFile := filepath.Join(common.DataPath(), splitTunnelFile)
+	s := newSplitTunnel(common.DataPath())
+	if err := s.loadRule(); err != nil {
+		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", s.ruleFile, err)
+	}
+	return s, nil
+}
+
+func newSplitTunnel(path string) *SplitTunnel {
+	ruleFile := filepath.Join(path, splitTunnelFile)
 	rule := defaultRule()
-	s := &SplitTunnel{
+	return &SplitTunnel{
 		rule:         rule,
 		ruleFile:     ruleFile,
 		activeFilter: &(rule.Rules[0].DefaultOptions),
 	}
-	if err := s.loadRule(); err != nil {
-		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", ruleFile, err)
-	}
-	return s, nil
 }
 
 func (s *SplitTunnel) Enable() {

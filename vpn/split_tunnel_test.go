@@ -1,27 +1,17 @@
 package vpn
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/getlantern/radiance/common"
 )
 
 func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
 	tmp := t.TempDir()
-	common.SetupDirectories(tmp, tmp)
-	ruleFile := filepath.Join(common.DataPath(), splitTunnelTag+".json")
-	s := &SplitTunnel{
-		rule:     defaultRule(),
-		ruleFile: ruleFile,
-	}
+	s := newSplitTunnel(tmp)
 	_ = s.saveToFile()
-	st, err := NewSplitTunnelHandler()
-	require.NoError(t, err)
-	return st
+	return s
 }
 
 func TestEnableDisableIsEnabled(t *testing.T) {

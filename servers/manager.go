@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 
 	sbx "github.com/getlantern/sing-box-extensions"
@@ -300,7 +303,15 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 		return err
 	}
 
-	resp, err := client.Get(fmt.Sprintf("https://%s:%d/api/v1/connect-config?token=%s", ip, port, accessToken))
+	u := &url.URL{
+		Scheme: "https",
+		Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
+		Path:   "/api/v1/connect-config",
+	}
+	q := u.Query()
+	q.Set("token", accessToken)
+	u.RawQuery = q.Encode()
+	resp, err := client.Get(u.String())
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}

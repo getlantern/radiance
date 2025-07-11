@@ -49,7 +49,7 @@ func Init(dataDir, logDir, logLevel string) error {
 	}
 
 	reporting.Init(Version)
-	err := SetupDirectories(dataDir, logDir)
+	err := setupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
@@ -141,7 +141,10 @@ func initLogger(logPath, level string) error {
 	return nil
 }
 
-func SetupDirectories(data, logs string) error {
+// setupDirectories creates the data and logs directories, and needed subdirectories if they do
+// not exist. If data or logs are the empty string, it will use the user's config directory retrieved
+// from the OS.
+func setupDirectories(data, logs string) error {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
