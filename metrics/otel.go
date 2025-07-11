@@ -25,7 +25,9 @@ import (
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
 func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.Context) error, error) {
-	//if tracesEnabled, ok := myMap[common.TRACES]; ok && val {
+	if cfg.Features == nil {
+		cfg.Features = make(map[string]bool)
+	}
 	val, ok := cfg.Features[common.TRACES]
 	tracesEnabled := ok && val
 	val, ok = cfg.Features[common.METRICS]
