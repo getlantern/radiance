@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	"github.com/getlantern/appdir"
 
@@ -172,4 +173,12 @@ func DataPath() string {
 
 func LogPath() string {
 	return logPath.Load().(string)
+}
+
+func init() {
+	if testing.Testing() {
+		// If running tests, we don't want to initialize the logger
+		// as it will clutter the test output.
+		slog.SetDefault(internal.NoOpLogger())
+	}
 }

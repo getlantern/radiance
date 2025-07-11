@@ -43,13 +43,17 @@ type Config struct {
 	PreferredLocation C.ServerLocation
 }
 
+type ServerManager interface {
+	SetServers(serverGroup string, opts servers.Options) error
+}
+
 // ListenerFunc is a function that is called when the configuration changes.
 type ListenerFunc func(oldConfig, newConfig *Config) error
 
 type Options struct {
 	PollInterval time.Duration
 	HTTPClient   *http.Client
-	SvrManager   *servers.Manager
+	SvrManager   ServerManager
 	User         common.UserInfo
 	DataDir      string
 	Locale       string
@@ -69,7 +73,7 @@ type ConfigHandler struct {
 	configListenersMu sync.RWMutex
 	configMu          sync.RWMutex
 
-	svrManager *servers.Manager
+	svrManager ServerManager
 
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath         string

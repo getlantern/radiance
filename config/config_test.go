@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
 )
 
 func TestSaveConfig(t *testing.T) {
@@ -142,6 +143,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,
 		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
+		svrManager:        &mockSrvManager{},
 	}
 
 	// Test case: No server location set
@@ -518,6 +520,10 @@ func TestMergeResp(t *testing.T) {
 		assert.Equal(t, mergedConfig, want)
 	})
 }
+
+type mockSrvManager struct{}
+
+func (m *mockSrvManager) SetServers(_ string, _ servers.Options) error { return nil }
 
 // MockFetcher is a mock implementation of the fetcher used for testing
 type MockFetcher struct {

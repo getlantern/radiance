@@ -4,11 +4,18 @@ import (
 	"archive/zip"
 	"bytes"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/getlantern/radiance/internal"
 )
+
+func init() {
+	slog.SetDefault(internal.NoOpLogger())
+}
 
 func TestZipFilesWithoutPath(t *testing.T) {
 	var buf bytes.Buffer
