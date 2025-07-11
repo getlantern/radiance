@@ -2,7 +2,6 @@ package issue
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 
 	"github.com/getlantern/fronted"

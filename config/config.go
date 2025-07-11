@@ -179,7 +179,7 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
-	slog.Debug("Fetching config")
+	slog.Info("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
@@ -213,7 +213,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
 	if resp == nil {
-		slog.Debug("no new config available")
+		slog.Info("no new config available")
 		return nil
 	}
 
@@ -250,7 +250,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		}
 	}
 
-	slog.Debug("Config fetched")
+	slog.Info("Config fetched")
 	return nil
 }
 
@@ -288,9 +288,9 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 }
 
 func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
-	slog.Debug("Setting config")
+	slog.Info("Setting config")
 	if cfg == nil {
-		slog.Debug("Config is nil, not setting")
+		slog.Warn("Config is nil, not setting")
 		return nil
 	}
 	oldConfig, _ := ch.GetConfig()
@@ -313,9 +313,9 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 		slog.Error("saving config", "error", err)
 		return fmt.Errorf("saving config: %w", err)
 	}
-	slog.Debug("saved new config")
+	slog.Info("saved new config")
 	go ch.notifyListeners(oldConfig, cfg)
-	slog.Debug("Config set")
+	slog.Info("Config set")
 	return nil
 }
 
