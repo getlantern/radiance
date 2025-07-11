@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/getlantern/common"
-	"github.com/getlantern/radiance/app"
+	rcommon "github.com/getlantern/radiance/common"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -41,7 +41,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.OTEL) (func(context.Context) e
 		resource.WithAttributes(
 			attribute.String("service.name", "radiance"),
 			attribute.String("library.language", "go"),
-			attribute.String("service.version", app.Version),
+			attribute.String("service.version", rcommon.Version),
 		),
 	)
 	if err != nil {
