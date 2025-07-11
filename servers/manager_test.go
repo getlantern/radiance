@@ -2,7 +2,6 @@ package servers
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,7 +40,6 @@ func TestPrivateServerIntegration(t *testing.T) {
 		},
 		serversFile:      filepath.Join(dataPath, common.ServersFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
-		log:              slog.Default(),
 	}
 
 	srv := newLanternServerManagerMock()

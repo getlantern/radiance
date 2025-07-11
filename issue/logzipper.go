@@ -4,6 +4,7 @@ package issue
 
 import (
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,13 +57,13 @@ func zipLogFilesFrom(w io.Writer, maxBytes int64, maxTextBytes int64, dirs map[s
 	for _, glob := range globs {
 		matched, err := filepath.Glob(glob)
 		if err != nil {
-			log.Error("Unable to glob log files", "glob", glob, "error", err)
+			slog.Error("Unable to glob log files", "glob", glob, "error", err)
 			continue
 		}
 		for _, file := range matched {
 			fi, err := os.Stat(file)
 			if err != nil {
-				log.Error("Unable to stat log file", "file", file, "error", err)
+				slog.Error("Unable to stat log file", "file", file, "error", err)
 				continue
 			}
 			allFiles = append(allFiles, &fileInfo{
@@ -78,31 +79,31 @@ func zipLogFilesFrom(w io.Writer, maxBytes int64, maxTextBytes int64, dirs map[s
 		sort.Sort(allFiles)
 
 		mostRecent := allFiles[0]
-		log.Debug("Grabbing log tail", "file", mostRecent.file)
+		slog.Debug("Grabbing log tail", "file", mostRecent.file)
 
 		mostRecentFile, err := os.Open(mostRecent.file)
 		if err != nil {
-			log.Error("Unable to open most recent log file", "file", mostRecent.file, "error", err)
+			slog.Error("Unable to open most recent log file", "file", mostRecent.file, "error", err)
 			return "", nil
 		}
 		defer mostRecentFile.Close()
 
 		seekTo := mostRecent.size - maxTextBytes
 		if seekTo > 0 {
-			log.Debug("Seeking to tail of log file", "file", mostRecent.file, "seekTo", seekTo)
+			slog.Debug("Seeking to tail of log file", "file", mostRecent.file, "seekTo", seekTo)
 			_, err = mostRecentFile.Seek(seekTo, io.SeekCurrent)
 			if err != nil {
-				log.Error("Unable to seek to tail of log file", "file", mostRecent.file, "error", err)
+				slog.Error("Unable to seek to tail of log file", "file", mostRecent.file, "error", err)
 				return "", nil
 			}
 		}
 		tail, err := io.ReadAll(mostRecentFile)
 		if err != nil {
-			log.Error("Unable to read tail of log file", "file", mostRecent.file, "error", err)
+			slog.Error("Unable to read tail of log file", "file", mostRecent.file, "error", err)
 			return "", nil
 		}
 
-		log.Debug("Returning log tail", "file", mostRecent.file, "tailSize", len(tail))
+		slog.Debug("Returning log tail", "file", mostRecent.file, "tailSize", len(tail))
 		return string(tail), nil
 	}
 

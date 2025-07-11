@@ -1,11 +1,18 @@
 package radiance
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/internal"
 )
+
+func init() {
+	slog.SetDefault(internal.NoOpLogger())
+}
 
 func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {

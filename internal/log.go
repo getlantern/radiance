@@ -58,3 +58,11 @@ func FormatLogLevel(level slog.Level) string {
 		return "PANIC"
 	}
 }
+
+// NoOpLogger returns a no-op logger that does not log anything.
+func NoOpLogger() *slog.Logger {
+	// Create a no-op logger that does nothing.
+	return slog.New(slog.NewTextHandler(nil, &slog.HandlerOptions{
+		Level: LevelInfo + 1000, // Set to a level that does not log anything.
+	}))
+}

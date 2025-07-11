@@ -61,12 +61,10 @@ type Manager struct {
 
 	serversFile      string
 	fingerprintsFile string
-
-	log *slog.Logger
 }
 
 // NewManager creates a new Manager instance, loading server options from disk.
-func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
+func NewManager(dataPath string) (*Manager, error) {
 	mgr := &Manager{
 		servers: Servers{
 			SGLantern: Options{
@@ -86,7 +84,6 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 		},
 		serversFile:      filepath.Join(dataPath, common.ServersFileName),
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
-		log:              logger,
 		access:           sync.RWMutex{},
 	}
 
@@ -128,7 +125,7 @@ func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 		Group:    group,
 		Tag:      tag,
 		Options:  opts,
-		Location: m.servers[SGLantern].Locations[tag],
+		Location: m.servers[group].Locations[tag],
 	}
 	switch v := opts.(type) {
 	case option.Endpoint:
@@ -181,7 +178,7 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 
 	existingTags := m.merge(group, opts)
 	if len(existingTags) > 0 {
-		m.log.Warn("Some servers were not added because they already exist", "tags", existingTags)
+		slog.Warn("Some servers were not added because they already exist", "tags", existingTags)
 	}
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
@@ -229,24 +226,24 @@ func (m *Manager) RemoveServer(tag string) error {
 	defer m.access.Unlock()
 
 	// check which group the server belongs to so we can get the correct optsMaps and servers
-	opts := m.optsMaps[SGLantern]
-	servers := m.servers[SGLantern]
-	if _, exists := opts[tag]; !exists {
-		opts = m.optsMaps[SGUser]
-		servers = m.servers[SGUser]
-		if _, exists := opts[tag]; !exists {
+	group := SGLantern
+	if _, exists := m.optsMaps[group][tag]; !exists {
+		group = SGUser
+		if _, exists := m.optsMaps[group][tag]; !exists {
 			return fmt.Errorf("server with tag %q not found", tag)
 		}
 	}
 	// remove the server from the optsMaps and servers
-	switch v := opts[tag].(type) {
+	servers := m.servers[group]
+	switch v := m.optsMaps[group][tag].(type) {
 	case option.Endpoint:
 		servers.Endpoints = remove(servers.Endpoints, v)
 	case option.Outbound:
 		servers.Outbounds = remove(servers.Outbounds, v)
 	}
-	delete(opts, tag)
+	delete(m.optsMaps[group], tag)
 	delete(servers.Locations, tag)
+	m.servers[group] = servers
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
 	}

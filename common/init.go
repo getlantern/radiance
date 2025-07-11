@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	"github.com/getlantern/appdir"
 
@@ -62,6 +64,10 @@ func Init(dataDir, logDir, logLevel string) error {
 // The log level is determined, first by the environment variable if set and valid, then by the provided level.
 // If both are invalid and/or not set, it defaults to "info".
 func initLogger(logPath, level string) error {
+	if testing.Testing() {
+		return nil // Skip logger initialization in tests
+	}
+
 	if elevel, hasLevel := env.Get[string](env.LogLevel); hasLevel {
 		level = elevel
 	}
@@ -81,7 +87,6 @@ func initLogger(logPath, level string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
-	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logWriter := io.MultiWriter(os.Stdout, f)
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
@@ -89,8 +94,39 @@ func initLogger(logPath, level string) error {
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {
 			case slog.SourceKey:
-				source := a.Value.Any().(*slog.Source)
-				source.File = filepath.Base(source.File) // Shorten the file path to just the file name
+				source, ok := a.Value.Any().(*slog.Source)
+				if !ok {
+					return a
+				}
+				// remove github.com/<username> to get pkg name
+				var service, fn string
+				fields := strings.SplitN(source.Function, "/", 4)
+				switch len(fields) {
+				case 0, 1, 2:
+					file := filepath.Base(source.File)
+					a.Value = slog.StringValue(fmt.Sprintf("%s:%d", file, source.Line))
+					return a
+				case 3:
+					pf := strings.SplitN(fields[2], ".", 2)
+					service, fn = pf[0], pf[1]
+				default:
+					service = fields[2]
+					fn = strings.SplitN(fields[3], ".", 2)[1]
+				}
+
+				_, file, fnd := strings.Cut(source.File, service+"/")
+				if !fnd {
+					file = filepath.Base(source.File)
+				}
+				src := slog.GroupValue(
+					slog.String("func", fn),
+					slog.String("file", fmt.Sprintf("%s:%d", file, source.Line)),
+				)
+				a.Value = slog.GroupValue(
+					slog.String("service", service),
+					slog.Any("source", src),
+				)
+				a.Key = ""
 			case slog.LevelKey:
 				// format the log level to account for the custom levels defined in internal/util.go, i.e. trace
 				// otherwise, slog will print as "DEBUG-4" (trace) or similar
@@ -141,4 +177,12 @@ func DataPath() string {
 
 func LogPath() string {
 	return logPath.Load().(string)
+}
+
+func init() {
+	if testing.Testing() {
+		// If running tests, we don't want to initialize the logger
+		// as it will clutter the test output.
+		slog.SetDefault(internal.NoOpLogger())
+	}
 }
