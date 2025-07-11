@@ -1,3 +1,4 @@
+// Package env is responsible for loading radiance configuration based on a order of precedence (environment variables > configurations set at .env file).
 package env
 
 import (
