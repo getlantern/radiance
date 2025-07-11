@@ -24,22 +24,19 @@ func TestSendReport(t *testing.T) {
 	userConfig := common.NewUserConfig("radiance-test", "", "")
 	reporter, err := NewIssueReporter(k.NewHTTPClient(), &mockSubscriptionHandler{}, userConfig)
 	require.NoError(t, err)
-	err = reporter.Report(
-		context.Background(),
-		t.TempDir(),
-		"radiancetest@getlantern.org",
-		int(ReportIssueRequest_NO_ACCESS),
-		"Description placeholder-test only",
-		[]*Attachment{
+	report := IssueReport{
+		Type:        "Cannot access blocked sites",
+		Description: "Description placeholder-test only",
+		Attachments: []*Attachment{
 			{
 				Name: "Hello.txt",
 				Data: []byte("Hello World"),
 			},
 		},
-		"Samsung Galaxy S10",
-		"SM-G973F",
-		"US",
-	)
+		Device: "Samsung Galaxy S10",
+		Model:  "SM-G973F",
+	}
+	err = reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
 	require.NoError(t, err)
 }
 

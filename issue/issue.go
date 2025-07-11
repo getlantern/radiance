@@ -30,12 +30,6 @@ type SubscriptionHandler interface {
 	Subscription() (api.Subscription, error)
 }
 
-// Attachment is a file attachment
-type Attachment struct {
-	Name string
-	Data []byte
-}
-
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
 	httpClient *http.Client
@@ -72,17 +66,41 @@ func randStr(n int) string {
 	return hexStr
 }
 
+// Attachment is a file attachment
+type Attachment struct {
+	Name string
+	Data []byte
+}
+
+type IssueReport struct {
+	// Type is one of the predefined issue type strings
+	Type string
+	// Issue description
+	Description string
+	// Attachment is a list of issue attachments
+	Attachments []*Attachment
+
+	// device common name
+	Device string
+	// device alphanumeric name
+	Model string
+}
+
+// issue text to type mapping
+var issueTypeMap = map[string]int{
+	"Cannot complete purchase":    0,
+	"Cannot sign in":              1,
+	"Spinner loads endlessly":     2,
+	"Cannot access blocked sites": 3,
+	"Slow":                        4,
+	"Cannot link device":          5,
+	"Application crashes":         6,
+	"Other":                       9,
+	"Update fails":                10,
+}
+
 // Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
-func (ir *IssueReporter) Report(
-	ctx context.Context,
-	logDir, userEmail string,
-	issueType int,
-	description string,
-	attachments []*Attachment,
-	device string,
-	model string,
-	country string,
-) error {
+func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEmail, country string) error {
 	// set a random email if it's empty
 	if userEmail == "" {
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
@@ -106,23 +124,30 @@ func (ir *IssueReporter) Report(
 		userLocale = "en-US"
 	}
 
+	// get issue type as integer
+	iType, ok := issueTypeMap[report.Type]
+	if !ok {
+		slog.Error("Unknown issue type, setting to 'Other'", "type", report.Type)
+		iType = 9
+	}
+
 	r := &ReportIssueRequest{
-		Type:              ReportIssueRequest_ISSUE_TYPE(issueType),
+		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
 		CountryCode:       country,
 		AppVersion:        common.Version,
 		SubscriptionLevel: subLevel,
 		Platform:          common.Platform,
-		Description:       description,
+		Description:       report.Description,
 		UserEmail:         userEmail,
 		DeviceId:          ir.userConfig.DeviceID(),
 		UserId:            strconv.FormatInt(ir.userConfig.LegacyID(), 10),
-		Device:            device,
-		Model:             model,
+		Device:            report.Device,
+		Model:             report.Model,
 		OsVersion:         osVersion,
 		Language:          userLocale,
 	}
 
-	for _, attachment := range attachments {
+	for _, attachment := range report.Attachments {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
 			Name:    attachment.Name,
@@ -134,6 +159,7 @@ func (ir *IssueReporter) Report(
 	slog.Debug("zipping log files for issue report")
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
+	logDir := common.LogPath()
 	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",

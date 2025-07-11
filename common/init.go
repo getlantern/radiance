@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"testing"
 
 	"github.com/getlantern/appdir"
 
@@ -35,6 +34,9 @@ func init() {
 	dataPath.Store("")
 	logPath.Store("")
 
+	if v, _ := env.Get[bool](env.Testing); v {
+		slog.SetLogLoggerLevel(internal.Disable)
+	}
 }
 
 // Init initializes the common components of the application. This includes setting up the directories
@@ -64,10 +66,6 @@ func Init(dataDir, logDir, logLevel string) error {
 // The log level is determined, first by the environment variable if set and valid, then by the provided level.
 // If both are invalid and/or not set, it defaults to "info".
 func initLogger(logPath, level string) error {
-	if testing.Testing() {
-		return nil // Skip logger initialization in tests
-	}
-
 	if elevel, hasLevel := env.Get[string](env.LogLevel); hasLevel {
 		level = elevel
 	}
@@ -80,6 +78,9 @@ func initLogger(logPath, level string) error {
 		} else {
 			slog.SetLogLoggerLevel(lvl)
 		}
+	}
+	if lvl == internal.Disable {
+		return nil
 	}
 
 	// If the log file does not exist, create it.
@@ -177,12 +178,4 @@ func DataPath() string {
 
 func LogPath() string {
 	return logPath.Load().(string)
-}
-
-func init() {
-	if testing.Testing() {
-		// If running tests, we don't want to initialize the logger
-		// as it will clutter the test output.
-		slog.SetDefault(internal.NoOpLogger())
-	}
 }

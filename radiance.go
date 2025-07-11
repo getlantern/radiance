@@ -55,10 +55,14 @@ type configHandler interface {
 	GetConfig() (*config.Config, error)
 }
 
+type issueReporter interface {
+	Report(ctx context.Context, report issue.IssueReport, userEmail, country string) error
+}
+
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
 	confHandler   configHandler
-	issueReporter *issue.IssueReporter
+	issueReporter issueReporter
 	apiHandler    *api.APIClient
 	srvManager    *servers.Manager
 
@@ -258,47 +262,14 @@ func (r *Radiance) ServerManager() *servers.Manager {
 	return r.srvManager
 }
 
-// IssueReport represents a user report of a bug or service problem. This report can be submitted
-// via [Radiance.ReportIssue].
-type IssueReport struct {
-	// Type is one of the predefined issue type strings
-	Type string
-	// Issue description
-	Description string
-	// Attachment is a list of issue attachments
-	Attachment []*issue.Attachment
-
-	// device common name
-	Device string
-	// device alphanumeric name
-	Model string
-}
-
-// issue text to type mapping
-var issueTypeMap = map[string]int{
-	"Cannot complete purchase":    0,
-	"Cannot sign in":              1,
-	"Spinner loads endlessly":     2,
-	"Cannot access blocked sites": 3,
-	"Slow":                        4,
-	"Cannot link device":          5,
-	"Application crashes":         6,
-	"Other":                       9,
-	"Update fails":                10,
-}
+type IssueReport = issue.IssueReport
 
 // ReportIssue submits an issue report to the back-end with an optional user email
-func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
+func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	ctx, span := tracer.Start(context.Background(), "report-issue")
 	defer span.End()
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
-	}
-	// get issue type as integer
-	typeInt, ok := issueTypeMap[report.Type]
-	if !ok {
-		slog.Error("Unknown issue type, setting to 'Other'", "type", report.Type)
-		typeInt = 9
 	}
 	var country string
 	// get country from the config returned by the backend
@@ -306,22 +277,11 @@ func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
 	if err != nil {
 		slog.Error("Failed to get country", "error", err)
 		span.RecordError(err)
-		country = ""
 	} else {
 		country = cfg.ConfigResponse.Country
 	}
 
-	err = r.issueReporter.Report(
-		ctx,
-		common.LogPath(),
-		email,
-		typeInt,
-		report.Description,
-		report.Attachment,
-		report.Device,
-		report.Model,
-		country,
-	)
+	err = r.issueReporter.Report(ctx, report, email, country)
 	if err != nil {
 		slog.Error("Failed to report issue", "error", err)
 		span.RecordError(err)

@@ -1,4 +1,5 @@
-// Package env is responsible for loading radiance configuration based on a order of precedence (environment variables > configurations set at .env file).
+// Package env is responsible for loading radiance configuration based on a order of precedence
+// (environment variables > configurations set at .env file).
 package env
 
 import (
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"testing"
 )
 
 type Key = string
@@ -17,6 +19,8 @@ const (
 	LogPath      Key = "RADIANCE_LOG_PATH"
 	DataPath     Key = "RADIANCE_DATA_PATH"
 	DisableFetch Key = "RADIANCE_DISABLE_FETCH_CONFIG"
+
+	Testing = "RADIANCE_TESTING"
 )
 
 var (
@@ -49,6 +53,10 @@ func init() {
 		if value, exists := os.LookupEnv(key); exists {
 			parseAndSet(key, value)
 		}
+	}
+	if testing.Testing() {
+		envVars[Testing] = true
+		envVars[LogLevel] = "DISABLE"
 	}
 }
 
