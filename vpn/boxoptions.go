@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	C "github.com/sagernet/sing-box/constant"
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	modeAutoAll = "auto-all"
+	autoAllTag = "auto-all"
 
 	autoLanternTag = "auto-lantern"
 	autoUserTag    = "auto-user"
@@ -146,7 +147,7 @@ func baseOpts() O.Options {
 						},
 					},
 				},
-				groupRule(modeAutoAll),
+				groupRule(autoAllTag),
 				groupRule(servers.SGLantern),
 				groupRule(servers.SGUser),
 			},
@@ -164,7 +165,7 @@ func baseOpts() O.Options {
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
 				DefaultMode:        servers.SGLantern,
-				ModeList:           []string{servers.SGLantern, servers.SGUser, modeAutoAll},
+				ModeList:           []string{servers.SGLantern, servers.SGUser, autoAllTag},
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{
@@ -230,10 +231,8 @@ func buildOptions(mode, path string) (O.Options, error) {
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLanternTag, ltnTags))
 	opts.Outbounds = append(
 		opts.Outbounds,
-		selectorOutbound(servers.SGLantern, append(ltnTags, autoLanternTag)),
+		selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, ltnTags...)),
 	)
-
-	allTags := ltnTags
 
 	// load and merge user servers into base
 	mgr, err := servers.NewManager(path)
@@ -249,12 +248,11 @@ func buildOptions(mode, path string) (O.Options, error) {
 		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoUserTag, userTags))
 		opts.Outbounds = append(
 			opts.Outbounds,
-			selectorOutbound(servers.SGUser, append(userTags, autoUserTag)),
+			selectorOutbound(servers.SGUser, append([]string{autoUserTag}, userTags...)),
 		)
-		allTags = append(allTags, userTags...)
 	}
-
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(modeAutoAll, allTags))
+	allTags := slices.Concat(ltnTags, userTags)
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, allTags))
 	return opts, nil
 }
 
@@ -267,14 +265,14 @@ func groupAutoTag(group string) string {
 	case servers.SGUser:
 		return autoUserTag
 	default:
-		return modeAutoAll
+		return autoAllTag
 	}
 }
 
-func urlTestOutbound(group string, outbounds []string) O.Outbound {
+func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
 		Type: C.TypeURLTest,
-		Tag:  group,
+		Tag:  tag,
 		Options: &O.URLTestOutboundOptions{
 			Outbounds:   outbounds,
 			Interval:    badoption.Duration(urlTestInterval),

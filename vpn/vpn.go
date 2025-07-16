@@ -9,13 +9,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	O "github.com/sagernet/sing-box/option"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
@@ -36,7 +35,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 	case servers.SGUser:
 		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
 	case "all", "":
-		group = modeAutoAll
+		group = autoAllTag
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
@@ -70,14 +69,11 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	initSplitTunnel()
-	if err := setSelected(group, tag); err != nil {
-		return fmt.Errorf("failed to set selected server: %w", err)
-	}
 	opts, err := buildOptions(group, common.DataPath())
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
-	if err := openTunnel(opts, platIfce); err != nil {
+	if err := establishConnection(group, tag, opts, platIfce); err != nil {
 		return fmt.Errorf("failed to open tunnel: %w", err)
 	}
 	return nil
@@ -88,23 +84,17 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 	if isOpen() {
 		return fmt.Errorf("tunnel is already open")
 	}
-	group, tag, err := getSelected()
-	if err != nil {
-		return fmt.Errorf("failed to load mode from cache file: %w", err)
-	}
-	return connect(group, tag, platIfce)
+	return connect("", "", platIfce)
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
 // Note, this does not check if the tunnel can connect to a server.
 func isOpen() bool {
-	res, _ := sendCmd(libbox.CommandClashMode)
-	select {
-	case <-res.connected:
-		return true
-	default:
+	err := libbox.NewStandaloneCommandClient().SetGroupExpand("default", false)
+	if err != nil && strings.Contains(err.Error(), "dial unix") {
 		return false
 	}
+	return true
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -122,7 +112,6 @@ func selectServer(group, tag string) error {
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
 
-	// If switching to a different group, close previous connections.
 	res, _ := sendCmd(libbox.CommandClashMode)
 	if res.clashMode == group {
 		return nil
@@ -130,54 +119,45 @@ func selectServer(group, tag string) error {
 	if err := cc.SetClashMode(group); err != nil {
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
+	// If switching to a different group, close previous connections.
 	if err := cc.CloseConnections(); err != nil {
 		return fmt.Errorf("failed to close previous connections: %w", err)
 	}
 	return nil
 }
 
-var (
-	cacheFile      adapter.CacheFile
-	cacheFileOnce  sync.Once
-	cacheLoadError error
-)
-
-func loadCacheFile(path string) error {
-	cacheFileOnce.Do(func() {
-		cacheFile = cachefile.New(context.Background(), O.CacheFileOptions{
-			Enabled: true,
-			Path:    path,
-			CacheID: cacheID,
-		})
-		cacheLoadError = cacheFile.Start(adapter.StartStateInitialize)
-	})
-	return cacheLoadError
-}
-
-func setSelected(group, tag string) error {
-	cacheFilePath := filepath.Join(common.DataPath(), cacheFileName)
-	if err := loadCacheFile(cacheFilePath); err != nil {
-		return fmt.Errorf("load cache file: %w", err)
+func selectedServer() (string, string, error) {
+	if isOpen() {
+		res, err := sendCmd(libbox.CommandClashMode)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get selected server: %w", err)
+		}
+		group := res.clashMode
+		if group == autoAllTag {
+			return "all", "auto", nil
+		}
+		outbound, err := getOutboundGroup(group)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get selected server: %w", err)
+		}
+		if outbound.Selectable {
+			return group, outbound.Selected, nil
+		}
+		return group, "auto", nil
 	}
-	if err := cacheFile.StoreMode(group); err != nil {
-		return fmt.Errorf("set group in cache file: %w", err)
-	}
-	if tag == "" {
-		return nil
-	}
-	if err := cacheFile.StoreSelected(group, tag); err != nil {
-		return fmt.Errorf("set selected tag in cache file: %w", err)
-	}
-	return nil
-}
-
-func getSelected() (string, string, error) {
-	cacheFilePath := filepath.Join(common.DataPath(), cacheFileName)
-	if err := loadCacheFile(cacheFilePath); err != nil {
-		return "", "", fmt.Errorf("load cache file: %w", err)
+	opts := baseOpts().Experimental.CacheFile
+	opts.Path = filepath.Join(common.DataPath(), cacheFileName)
+	cacheFile := cachefile.New(context.Background(), *opts)
+	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
+		return "", "", fmt.Errorf("failed to start cache file: %w", err)
 	}
 	group := cacheFile.LoadMode()
 	tag := cacheFile.LoadSelected(group)
+	// we need to ensure the cache file is closed after use or sing-box will error on start.
+	cacheFile.Close()
+	if group == autoAllTag {
+		return "all", "auto", nil
+	}
 	return group, tag, nil
 }
 
@@ -193,12 +173,12 @@ type Status struct {
 }
 
 func GetStatus() (Status, error) {
-	group, selected, err := getSelected()
+	group, selected, err := selectedServer()
 	if err != nil {
 		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
 	}
-	if group == modeAutoAll {
-		selected = modeAutoAll
+	if group == autoAllTag {
+		selected = autoAllTag
 	}
 	s := Status{
 		TunnelOpen:     isOpen(),

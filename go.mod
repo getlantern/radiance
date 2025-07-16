@@ -4,13 +4,14 @@ go 1.24
 
 toolchain go1.24.1
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.12-0.20250616155750-74188abad925
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a
 
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
-//replace github.com/sagernet/sing-box => ../sing-box-minimal
+// replace github.com/sagernet/sing-box => ../sing-box-minimal
+
 //replace github.com/getlantern/common => ../common
 
 //replace github.com/getlantern/sing-box-extensions => ../sing-box-extensions
@@ -207,7 +208,7 @@ require (
 	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
 	github.com/sagernet/sing-shadowsocks2 v0.2.1 // indirect
 	github.com/sagernet/sing-shadowtls v0.2.0 // indirect
-	github.com/sagernet/sing-tun v0.6.5 // indirect
+	github.com/sagernet/sing-tun v0.6.8 // indirect
 	github.com/sagernet/sing-vmess v0.2.3 // indirect
 	github.com/sagernet/smux v1.5.34-mod.2 // indirect
 	github.com/sagernet/utls v1.6.7 // indirect

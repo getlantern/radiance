@@ -143,7 +143,7 @@ func initLogger(logPath, level string) error {
 
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do
 // not exist. If data or logs are the empty string, it will use the user's config directory retrieved
-// from the OS.
+// from the OS. The resulting paths are stored in [dataPath] and [logPath] respectively.
 func setupDirectories(data, logs string) error {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d

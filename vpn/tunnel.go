@@ -21,6 +21,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -42,6 +43,7 @@ var (
 type tunnel struct {
 	ctx         context.Context
 	lbService   *libbox.BoxService
+	cacheFile   adapter.CacheFile
 	clashServer *clashapi.Server
 	logFactory  sblog.ObservableFactory
 
@@ -52,21 +54,17 @@ type tunnel struct {
 	closers []io.Closer
 }
 
-// openTunnel initializes and starts the VPN tunnel with the provided options and platform interface.
-func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
+// establishConnection initializes and starts the VPN tunnel with the provided options and platform interface.
+func establishConnection(group, tag string, opts O.Options, platIfce libbox.PlatformInterface) error {
 	tAccess.Lock()
 	defer tAccess.Unlock()
 	if tInstance != nil {
 		return errors.New("tunnel already opened")
 	}
 
-	cmdSvrOnce.Do(func() {
-		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
-		cmdSvrErr = cmdSvr.Start()
-	})
-	if cmdSvrErr != nil {
-		slog.Error("failed to start command server", slog.Any("error", cmdSvrErr))
-		return fmt.Errorf("failed to start command server: %w", cmdSvrErr)
+	if err := startCmdServer(); err != nil {
+		slog.Error("failed to start command server", slog.Any("error", err))
+		return fmt.Errorf("failed to start command server: %w", err)
 	}
 
 	tInstance = &tunnel{}
@@ -74,7 +72,18 @@ func openTunnel(opts O.Options, platIfce libbox.PlatformInterface) error {
 	if err := tInstance.init(opts, platIfce); err != nil {
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
-	return tInstance.start()
+
+	// we need to set the selected server before starting libbox
+	cacheFile := tInstance.cacheFile
+	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
+		return fmt.Errorf("start cache file: %w", err)
+	}
+	tInstance.closers = append(tInstance.closers, cacheFile)
+
+	if group == "" { // group is empty, connect to last selected server
+		return tInstance.connect()
+	}
+	return tInstance.connectTo(group, tag)
 }
 
 func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
@@ -98,14 +107,26 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	}
 	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
 	service.MustRegister(t.ctx, t.logFactory)
+
+	// create the cache file service
+	if opts.Experimental.CacheFile == nil {
+		return fmt.Errorf("cache file options are required")
+	}
+	cacheFile := cachefile.New(t.ctx, *opts.Experimental.CacheFile)
+	service.MustRegister[adapter.CacheFile](t.ctx, cacheFile)
+	t.cacheFile = cacheFile
+
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
 	t.lbService = lb
 
-	if common.Platform == "android" || common.Platform == "ios" {
+	// set memory limit for Android and iOS
+	switch common.Platform {
+	case "android", "ios":
 		libbox.SetMemoryLimit(true)
+	default:
 	}
 
 	// create file watcher for server changes
@@ -119,8 +140,9 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	return nil
 }
 
-func (t *tunnel) start() (err error) {
+func (t *tunnel) connect() (err error) {
 	if err = t.lbService.Start(); err != nil {
+		t.cacheFile.Close()
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
 	// we're using the cmd server to handle libbox.Close, so we don't need to add it to closers
@@ -130,6 +152,7 @@ func (t *tunnel) start() (err error) {
 			closeTunnel()
 		}
 	}()
+	tInstance.closers = append(tInstance.closers, t.cacheFile)
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	cmdSvr.SetService(t.lbService)
 
@@ -139,6 +162,33 @@ func (t *tunnel) start() (err error) {
 	tInstance.closers = append(tInstance.closers, t.svrFileWatcher)
 
 	return nil
+}
+
+func (t *tunnel) connectTo(group, tag string) (err error) {
+	err = t.cacheFile.StoreMode(group)
+	if err == nil {
+		err = t.cacheFile.StoreSelected(group, tag)
+	}
+	if err != nil {
+		t.cacheFile.Close()
+		return fmt.Errorf("set selected server %s.%s: %w", group, tag, err)
+	}
+	return t.connect()
+}
+
+func startCmdServer() error {
+	cmdSvrOnce.Do(func() {
+		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
+		cmdSvrErr = cmdSvr.Start()
+	})
+	return cmdSvrErr
+}
+
+func closeCmdServer() error {
+	if err := cmdSvr.Close(); err != nil {
+		return fmt.Errorf("closing command server: %w", err)
+	}
+	return os.Remove(filepath.Join(common.DataPath(), "command.sock"))
 }
 
 // closeTunnel stops and cleans up the VPN tunnel instance.
@@ -278,8 +328,8 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 
 	}
 	// create new auto-all outbound
-	opts := urlTestOutbound(modeAutoAll, allTags).Options
-	creater.createNew(modeAutoAll, C.TypeURLTest, opts)
+	opts := urlTestOutbound(autoAllTag, allTags).Options
+	creater.createNew(autoAllTag, C.TypeURLTest, opts)
 
 	// we have to remove endpoints and outbounds last, otherwise the managers will return an error
 	// because the group outbound is dependent on them.
