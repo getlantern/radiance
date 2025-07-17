@@ -51,13 +51,17 @@ func NewSplitTunnelHandler() (*SplitTunnel, error) {
 }
 
 func newSplitTunnel(path string) *SplitTunnel {
-	ruleFile := filepath.Join(path, splitTunnelFile)
 	rule := defaultRule()
-	return &SplitTunnel{
+	s := &SplitTunnel{
 		rule:         rule,
-		ruleFile:     ruleFile,
+		ruleFile:     filepath.Join(path, splitTunnelFile),
 		activeFilter: &(rule.Rules[0].DefaultOptions),
 	}
+	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
+		slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
+		s.saveToFile()
+	}
+	return s
 }
 
 func (s *SplitTunnel) Enable() {
@@ -323,24 +327,4 @@ func defaultRule() O.LogicalHeadlessRule {
 			},
 		},
 	}
-}
-
-var (
-	initOnce sync.Once
-)
-
-// initSplitTunnel ensures that the split tunnel rule file exists to prevent sing-box from erroring
-// because it can't find it.
-func initSplitTunnel() {
-	initOnce.Do(func() {
-		ruleFile := filepath.Join(common.DataPath(), splitTunnelFile)
-		if _, err := os.Stat(ruleFile); errors.Is(err, fs.ErrNotExist) {
-			s := &SplitTunnel{
-				rule:     defaultRule(),
-				ruleFile: filepath.Join(common.DataPath(), splitTunnelTag+".json"),
-			}
-			slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
-			s.saveToFile()
-		}
-	})
 }

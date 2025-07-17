@@ -63,8 +63,10 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
-	initSplitTunnel()
-	opts, err := buildOptions(group, common.DataPath())
+	path := common.DataPath()
+	_ = newSplitTunnel(path) // ensure split tunnel rule file exists to prevent sing-box from complaining
+
+	opts, err := buildOptions(group, path)
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
