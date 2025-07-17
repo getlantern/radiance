@@ -20,11 +20,6 @@ import (
 	"github.com/getlantern/radiance/servers"
 )
 
-const (
-	cacheID       = "lantern"
-	cacheFileName = "lantern.cache"
-)
-
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [ServerGroupLantern], [ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
@@ -283,7 +278,7 @@ func activeConnections() ([]Connection, error) {
 
 func sendCmd(cmd int32) (*cmdClientHandler, error) {
 	handler := newCmdClientHandler()
-	opts := libbox.CommandClientOptions{Command: cmd}
+	opts := libbox.CommandClientOptions{Command: cmd, StatusInterval: int64(time.Second)}
 	cc := libbox.NewCommandClient(handler, &opts)
 	if err := cc.Connect(); err != nil {
 		return nil, fmt.Errorf("failed to connect to command client: %w", err)

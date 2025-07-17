@@ -29,6 +29,9 @@ const (
 
 	urlTestInterval    = 3 * time.Minute // must be less than urlTestIdleTimeout
 	urlTestIdleTimeout = 15 * time.Minute
+
+	cacheID       = "lantern"
+	cacheFileName = "lantern.cache"
 )
 
 // this is the base options that is need for everything to work correctly. this should not be

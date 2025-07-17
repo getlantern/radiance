@@ -5,11 +5,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common"
 )
 
 func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
-	tmp := t.TempDir()
-	s := newSplitTunnel(tmp)
+	common.SetPathsForTesting(t)
+	s := newSplitTunnel(common.DataPath())
 	_ = s.saveToFile()
 	return s
 }
