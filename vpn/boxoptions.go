@@ -1,7 +1,9 @@
 package vpn
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -221,21 +223,24 @@ func buildOptions(mode, path string) (O.Options, error) {
 	// load and merge config options into base
 	confPath := filepath.Join(path, common.ConfigFileName)
 	content, err := os.ReadFile(confPath)
-	if err != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return O.Options{}, fmt.Errorf("read config file: %w", err)
 	}
-	cfg, err := json.UnmarshalExtendedContext[LC.ConfigResponse](sbx.BoxContext(), content)
-	if err != nil {
-		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
-	}
-	cOpts := cfg.Options
+	var ltnTags []string
+	if len(content) > 0 {
+		cfg, err := json.UnmarshalExtendedContext[LC.ConfigResponse](sbx.BoxContext(), content)
+		if err != nil {
+			return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
+		}
+		cOpts := cfg.Options
 
-	ltnTags := mergeOpts(&opts, &cOpts)
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLanternTag, ltnTags))
-	opts.Outbounds = append(
-		opts.Outbounds,
-		selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, ltnTags...)),
-	)
+		ltnTags = mergeOpts(&opts, &cOpts)
+		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLanternTag, ltnTags))
+		opts.Outbounds = append(
+			opts.Outbounds,
+			selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, ltnTags...)),
+		)
+	}
 
 	// load and merge user servers into base
 	mgr, err := servers.NewManager(path)
