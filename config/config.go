@@ -63,10 +63,11 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config    atomic.Value
-	ftr       Fetcher
-	stopC     chan struct{}
-	closeOnce *sync.Once
+	config        atomic.Value
+	ftr           Fetcher
+	stopC         chan struct{}
+	closeOnce     *sync.Once
+	fetchDisabled bool
 
 	configPath        string
 	configListeners   []ListenerFunc
@@ -87,6 +88,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		config:          atomic.Value{},
 		stopC:           make(chan struct{}),
 		closeOnce:       &sync.Once{},
+		fetchDisabled:   options.PollInterval <= 0,
 		configPath:      configPath,
 		configListeners: make([]ListenerFunc, 0),
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),
@@ -103,8 +105,8 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		slog.Error("failed to load config", "error", err)
 	}
 
-	ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale)
-	if options.PollInterval > 0 {
+	if !ch.fetchDisabled {
+		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale)
 		go ch.fetchLoop(options.PollInterval)
 	}
 	return ch
@@ -179,6 +181,9 @@ func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
+	if ch.fetchDisabled {
+		return fmt.Errorf("fetching config is disabled")
+	}
 	slog.Info("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
