@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 )
@@ -15,6 +16,8 @@ const (
 	LevelError = slog.LevelError
 	LevelFatal = slog.LevelError + 4
 	LevelPanic = slog.LevelError + 8
+
+	Disable = slog.LevelInfo + 1000 // A level that disables logging, used for testing or no-op logger.
 )
 
 // ParseLogLevel parses a string representation of a log level and returns the corresponding slog.Level.
@@ -35,6 +38,8 @@ func ParseLogLevel(level string) (slog.Level, error) {
 		return LevelFatal, nil
 	case "panic":
 		return LevelPanic, nil
+	case "disable", "none", "off":
+		return Disable, nil
 	default:
 		return LevelInfo, fmt.Errorf("unknown log level: %s", level)
 	}
@@ -54,7 +59,17 @@ func FormatLogLevel(level slog.Level) string {
 		return "ERROR"
 	case level < LevelPanic:
 		return "FATAL"
-	default:
+	case level < Disable:
 		return "PANIC"
+	default:
+		return "DISABLE"
 	}
+}
+
+// NoOpLogger returns a no-op logger that does not log anything.
+func NoOpLogger() *slog.Logger {
+	// Create a no-op logger that does nothing.
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
+		Level: Disable,
+	}))
 }
