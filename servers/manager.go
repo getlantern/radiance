@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -143,6 +144,16 @@ func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 // Important: this will overwrite any existing servers for that group. To add new servers without
 // overwriting existing ones, use [AddServers] instead.
 func (m *Manager) SetServers(group ServerGroup, options Options) error {
+	if err := m.setServers(group, options); err != nil {
+		return fmt.Errorf("set servers: %w", err)
+	}
+	if err := m.saveServers(); err != nil {
+		return fmt.Errorf("failed to save servers: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) setServers(group ServerGroup, options Options) error {
 	switch group {
 	case SGLantern, SGUser:
 	default:
@@ -152,18 +163,24 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	m.access.Lock()
 	defer m.access.Unlock()
 
-	m.servers[group] = options
-	opts := make(map[string]any)
+	opts := Options{
+		Outbounds: append([]option.Outbound{}, options.Outbounds...),
+		Endpoints: append([]option.Endpoint{}, options.Endpoints...),
+		Locations: make(map[string]C.ServerLocation, len(options.Locations)),
+	}
+	if len(options.Locations) > 0 {
+		maps.Copy(opts.Locations, options.Locations)
+	}
+
+	m.servers[group] = opts
+	oMap := make(map[string]any, len(options.Endpoints)+len(options.Outbounds))
 	for _, ep := range options.Endpoints {
-		opts[ep.Tag] = ep
+		oMap[ep.Tag] = ep
 	}
 	for _, out := range options.Outbounds {
-		opts[out.Tag] = out
+		oMap[out.Tag] = out
 	}
-	m.optsMaps[group] = opts
-	if err := m.saveServers(); err != nil {
-		return fmt.Errorf("failed to save servers: %w", err)
-	}
+	m.optsMaps[group] = oMap
 	return nil
 }
 
@@ -283,8 +300,8 @@ func (m *Manager) loadServers() error {
 	if err != nil {
 		return fmt.Errorf("unmarshal server options: %w", err)
 	}
-	m.SetServers(SGLantern, servers[SGLantern])
-	m.SetServers(SGUser, servers[SGUser])
+	m.setServers(SGLantern, servers[SGLantern])
+	m.setServers(SGUser, servers[SGUser])
 	return nil
 }
 
