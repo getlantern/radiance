@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 )
@@ -58,15 +59,17 @@ func FormatLogLevel(level slog.Level) string {
 		return "ERROR"
 	case level < LevelPanic:
 		return "FATAL"
-	default:
+	case level < Disable:
 		return "PANIC"
+	default:
+		return "DISABLE"
 	}
 }
 
 // NoOpLogger returns a no-op logger that does not log anything.
 func NoOpLogger() *slog.Logger {
 	// Create a no-op logger that does nothing.
-	return slog.New(slog.NewTextHandler(nil, &slog.HandlerOptions{
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
 		Level: Disable,
 	}))
 }
