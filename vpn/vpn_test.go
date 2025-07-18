@@ -159,8 +159,8 @@ func setupVpnTest(t *testing.T) context.Context {
 	return ctx
 }
 
-func testBoxOptions(path string) (*O.Options, string, error) {
-	content, err := os.ReadFile("test_boxopts.json")
+func testBoxOptions(tmpPath string) (*O.Options, string, error) {
+	content, err := os.ReadFile("testdata/boxopts.json")
 	if err != nil {
 		return nil, "", err
 	}
@@ -168,7 +168,7 @@ func testBoxOptions(path string) (*O.Options, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
+	opts.Experimental.CacheFile.Path = filepath.Join(tmpPath, cacheFileName)
 	opts.Experimental.CacheFile.CacheID = cacheID
 	buf, _ := json.Marshal(opts)
 	return &opts, string(buf), nil
