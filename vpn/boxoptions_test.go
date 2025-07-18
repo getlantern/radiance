@@ -1,0 +1,124 @@
+package vpn
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	LC "github.com/getlantern/common"
+
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
+)
+
+func TestBuildOptions(t *testing.T) {
+	httpTags, httpOutbounds := getTestOutbounds(t, constant.TypeHTTP)
+	socksTags, socksOutbounds := getTestOutbounds(t, constant.TypeSOCKS)
+	cfg := LC.ConfigResponse{
+		Options: option.Options{
+			Outbounds: httpOutbounds,
+		},
+	}
+	svrs := servers.Servers{
+		servers.SGUser: servers.Options{
+			Outbounds: socksOutbounds,
+		},
+	}
+	httpAllOutbounds := append(
+		httpOutbounds,
+		urlTestOutbound(autoLanternTag, httpTags),
+		selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, httpTags...)),
+	)
+	socksAllOutbounds := append(
+		socksOutbounds,
+		urlTestOutbound(autoUserTag, socksTags),
+		selectorOutbound(servers.SGUser, append([]string{autoUserTag}, socksTags...)),
+	)
+
+	tests := []struct {
+		name    string
+		hasCfg  bool
+		hasSvrs bool
+		want    []option.Outbound
+		assert  func(*testing.T, []option.Outbound)
+	}{
+		{
+			name:   "config without user servers",
+			hasCfg: true,
+			want: append(
+				httpAllOutbounds,
+				selectorOutbound(servers.SGUser, []string{"block"}),
+				urlTestOutbound(autoAllTag, httpTags),
+			),
+		},
+		{
+			name:    "user servers without config",
+			hasSvrs: true,
+			want: append(
+				socksAllOutbounds,
+				selectorOutbound(servers.SGLantern, []string{"block"}),
+				urlTestOutbound(autoAllTag, socksTags),
+			),
+		},
+		{
+			name:    "config and user servers",
+			hasCfg:  true,
+			hasSvrs: true,
+			want: append(
+				append(httpAllOutbounds, socksAllOutbounds...),
+				urlTestOutbound(autoAllTag, append(httpTags, socksTags...)),
+			),
+		},
+		{
+			name: "neither config nor user servers",
+			want: []option.Outbound{
+				selectorOutbound(servers.SGLantern, []string{"block"}),
+				selectorOutbound(servers.SGUser, []string{"block"}),
+				urlTestOutbound(autoAllTag, []string{"block"}),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := t.TempDir()
+			if tt.hasCfg {
+				testOptsToFile(t, cfg, filepath.Join(path, common.ConfigFileName))
+			}
+			if tt.hasSvrs {
+				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
+			}
+			opts, err := buildOptions(autoAllTag, path)
+			require.NoError(t, err)
+
+			gotOutbounds := opts.Outbounds
+			assert.Subset(t, gotOutbounds, tt.want, "options should contain expected outbounds")
+		})
+	}
+}
+
+func testOptsToFile[T any](t *testing.T, opts T, path string) {
+	buf, err := json.Marshal(opts)
+	require.NoError(t, err, "marshal options")
+	require.NoError(t, os.WriteFile(path, buf, 0600), "write options to file")
+}
+
+func getTestOutbounds(t *testing.T, outType string) ([]string, []option.Outbound) {
+	bOpts, _, err := testBoxOptions("testdata/boxops.json")
+	require.NoError(t, err, "get test box options")
+	var outbounds []option.Outbound
+	var tags []string
+	for _, o := range bOpts.Outbounds {
+		if o.Type == outType {
+			outbounds = append(outbounds, o)
+			tags = append(tags, o.Tag)
+		}
+	}
+	require.NotEmptyf(t, outbounds, "no %s outbounds found", outType)
+	return tags, outbounds
+}

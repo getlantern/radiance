@@ -185,13 +185,13 @@ func baseOpts() O.Options {
 // buildOptions builds the box options using the config options and user servers. URLTest outbounds
 // will only be added if mode is set to [autoLantern], [autoUser], or [autoAll], and only for the
 // respective group.
-func buildOptions(mode, path string) (O.Options, error) {
+func buildOptions(group, path string) (O.Options, error) {
 	// build options
 	opts := baseOpts()
 
 	// update default options and paths
 	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
-	opts.Experimental.ClashAPI.DefaultMode = mode
+	opts.Experimental.ClashAPI.DefaultMode = group
 	splitTunnelFilePath := filepath.Join(path, splitTunnelFile)
 	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelFilePath
 
@@ -200,24 +200,6 @@ func buildOptions(mode, path string) (O.Options, error) {
 		opts.Route.OverrideAndroidVPN = true
 	case "linux":
 		opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
-	}
-
-	mergeOpts := func(dst, src *O.Options) []string {
-		dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
-		dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
-
-		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
-		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
-		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
-
-		var tags []string
-		for _, out := range src.Outbounds {
-			tags = append(tags, out.Tag)
-		}
-		for _, ep := range src.Endpoints {
-			tags = append(tags, ep.Tag)
-		}
-		return tags
 	}
 
 	// load and merge config options into base
@@ -240,6 +222,8 @@ func buildOptions(mode, path string) (O.Options, error) {
 			opts.Outbounds,
 			selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, ltnTags...)),
 		)
+	} else {
+		opts.Outbounds = append(opts.Outbounds, selectorOutbound(servers.SGLantern, []string{"block"}))
 	}
 
 	// load and merge user servers into base
@@ -250,21 +234,47 @@ func buildOptions(mode, path string) (O.Options, error) {
 	uOpts := mgr.Servers()[servers.SGUser]
 
 	userTags := mergeOpts(&opts, &O.Options{Outbounds: uOpts.Outbounds, Endpoints: uOpts.Endpoints})
-	if len(userTags) == 0 {
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(servers.SGUser, []string{"block"}))
-	} else {
+	if len(userTags) > 0 {
 		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoUserTag, userTags))
 		opts.Outbounds = append(
 			opts.Outbounds,
 			selectorOutbound(servers.SGUser, append([]string{autoUserTag}, userTags...)),
 		)
+	} else {
+		opts.Outbounds = append(opts.Outbounds, selectorOutbound(servers.SGUser, []string{"block"}))
 	}
+
 	allTags := slices.Concat(ltnTags, userTags)
+	if len(allTags) == 0 {
+		allTags = []string{"block"}
+	}
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, allTags))
 	return opts, nil
 }
 
 // helper functions
+
+func mergeOpts(dst, src *O.Options) []string {
+	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
+	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
+
+	if src.Route != nil {
+		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
+		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
+	}
+	if src.DNS != nil {
+		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
+	}
+
+	var tags []string
+	for _, out := range src.Outbounds {
+		tags = append(tags, out.Tag)
+	}
+	for _, ep := range src.Endpoints {
+		tags = append(tags, ep.Tag)
+	}
+	return tags
+}
 
 func groupAutoTag(group string) string {
 	switch group {
