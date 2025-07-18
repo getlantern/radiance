@@ -6,23 +6,39 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
+
+	"github.com/getlantern/appdir"
 
 	"github.com/getlantern/radiance/app"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
 )
 
 const (
-	// envLogLevel is the environment variable that can be used to override the log level.
-	envLogLevel     = "RADIANCE_LOG_LEVEL"
 	defaultLogLevel = "info"
 )
 
 var (
 	initMutex   sync.Mutex
 	initialized bool
+
+	dataPath atomic.Value
+	logPath  atomic.Value
 )
+
+func init() {
+	// ensure dataPath and logPath are of type string
+	dataPath.Store("")
+	logPath.Store("")
+
+	if v, _ := env.Get[bool](env.Testing); v {
+		slog.SetLogLoggerLevel(internal.Disable)
+	}
+}
 
 // Init initializes the common components of the application. This includes setting up the directories
 // for data and logs, initializing the logger, and setting up reporting.
@@ -34,7 +50,7 @@ func Init(dataDir, logDir, logLevel string) error {
 	}
 
 	reporting.Init(Version)
-	dataDir, logDir, err := SetupDirectories(dataDir, logDir)
+	err := setupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
@@ -51,30 +67,28 @@ func Init(dataDir, logDir, logLevel string) error {
 // The log level is determined, first by the environment variable if set and valid, then by the provided level.
 // If both are invalid and/or not set, it defaults to "info".
 func initLogger(logPath, level string) error {
+	if elevel, hasLevel := env.Get[string](env.LogLevel); hasLevel {
+		level = elevel
+	}
 	var lvl slog.Level
-	var err error
-	envLevelValue := os.Getenv(envLogLevel)
-	logLevelSet := false
-	if envLevelValue != "" {
-		if lvl, err = internal.ParseLogLevel(envLevelValue); err != nil {
-			slog.Warn("Failed to parse "+envLogLevel, "error", err)
+	if level != "" {
+		var err error
+		lvl, err = internal.ParseLogLevel(level)
+		if err != nil {
+			slog.Warn("Failed to parse log level", "error", err)
 		} else {
-			logLevelSet = true
+			slog.SetLogLoggerLevel(lvl)
 		}
 	}
-	if !logLevelSet && level != "" {
-		if lvl, err = internal.ParseLogLevel(level); err != nil {
-			slog.Warn("Failed to parse given log level", "error", err)
-		}
+	if lvl == internal.Disable {
+		return nil
 	}
-	slog.SetLogLoggerLevel(lvl)
 
 	// If the log file does not exist, create it.
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
-	// defer f.Close() - file should be closed externally when logger is no longer needed
 	logWriter := io.MultiWriter(os.Stdout, f)
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
@@ -82,8 +96,39 @@ func initLogger(logPath, level string) error {
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {
 			case slog.SourceKey:
-				source := a.Value.Any().(*slog.Source)
-				source.File = filepath.Base(source.File) // Shorten the file path to just the file name
+				source, ok := a.Value.Any().(*slog.Source)
+				if !ok {
+					return a
+				}
+				// remove github.com/<username> to get pkg name
+				var service, fn string
+				fields := strings.SplitN(source.Function, "/", 4)
+				switch len(fields) {
+				case 0, 1, 2:
+					file := filepath.Base(source.File)
+					a.Value = slog.StringValue(fmt.Sprintf("%s:%d", file, source.Line))
+					return a
+				case 3:
+					pf := strings.SplitN(fields[2], ".", 2)
+					service, fn = pf[0], pf[1]
+				default:
+					service = fields[2]
+					fn = strings.SplitN(fields[3], ".", 2)[1]
+				}
+
+				_, file, fnd := strings.Cut(source.File, service+"/")
+				if !fnd {
+					file = filepath.Base(source.File)
+				}
+				src := slog.GroupValue(
+					slog.String("func", fn),
+					slog.String("file", fmt.Sprintf("%s:%d", file, source.Line)),
+				)
+				a.Value = slog.GroupValue(
+					slog.String("service", service),
+					slog.Any("source", src),
+				)
+				a.Key = ""
 			case slog.LevelKey:
 				// format the log level to account for the custom levels defined in internal/util.go, i.e. trace
 				// otherwise, slog will print as "DEBUG-4" (trace) or similar
@@ -95,4 +140,46 @@ func initLogger(logPath, level string) error {
 	}))
 	slog.SetDefault(logger)
 	return nil
+}
+
+// setupDirectories creates the data and logs directories, and needed subdirectories if they do
+// not exist. If data or logs are the empty string, it will use the user's config directory retrieved
+// from the OS. The resulting paths are stored in [dataPath] and [logPath] respectively.
+func setupDirectories(data, logs string) error {
+	if d, ok := env.Get[string](env.DataPath); ok {
+		data = d
+	} else if data == "" {
+		data = appdir.General(app.Name)
+		data = maybeAddSuffix(data, "data")
+	}
+	if l, ok := env.Get[string](env.LogPath); ok {
+		logs = l
+	} else if logs == "" {
+		logs = appdir.Logs(app.Name)
+		logs = maybeAddSuffix(logs, "logs")
+	}
+	for _, path := range []string{data, logs} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", path, err)
+		}
+	}
+
+	dataPath.Store(data)
+	logPath.Store(logs)
+	return nil
+}
+
+func maybeAddSuffix(path, suffix string) string {
+	if filepath.Base(path) != suffix {
+		path = filepath.Join(path, suffix)
+	}
+	return path
+}
+
+func DataPath() string {
+	return dataPath.Load().(string)
+}
+
+func LogPath() string {
+	return logPath.Load().(string)
 }
