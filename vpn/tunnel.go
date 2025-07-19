@@ -55,21 +55,16 @@ type tunnel struct {
 }
 
 // establishConnection initializes and starts the VPN tunnel with the provided options and platform interface.
-func establishConnection(group, tag string, opts O.Options, platIfce libbox.PlatformInterface) error {
+func establishConnection(group, tag string, opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
 	tAccess.Lock()
 	defer tAccess.Unlock()
 	if tInstance != nil {
 		return errors.New("tunnel already opened")
 	}
 
-	if err := startCmdServer(); err != nil {
-		slog.Error("failed to start command server", slog.Any("error", err))
-		return fmt.Errorf("failed to start command server: %w", err)
-	}
-
 	tInstance = &tunnel{}
 	tInstance.ctx, tInstance.cancel = context.WithCancel(sbx.BoxContext())
-	if err := tInstance.init(opts, platIfce); err != nil {
+	if err := tInstance.init(opts, dataPath, platIfce); err != nil {
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
@@ -86,18 +81,17 @@ func establishConnection(group, tag string, opts O.Options, platIfce libbox.Plat
 	return tInstance.connectTo(group, tag)
 }
 
-func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
+func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
 	cfg, err := json.MarshalContext(t.ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to marshal options: %w", err)
 	}
 
 	// setup libbox service
-	basePath := common.DataPath()
 	setupOpts := &libbox.SetupOptions{
-		BasePath:    basePath,
-		WorkingPath: basePath,
-		TempPath:    filepath.Join(basePath, "temp"),
+		BasePath:    dataPath,
+		WorkingPath: dataPath,
+		TempPath:    filepath.Join(dataPath, "temp"),
 	}
 	if common.Platform == "android" {
 		setupOpts.FixAndroidStack = true
@@ -105,6 +99,12 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
+
+	if err := startCmdServer(); err != nil {
+		slog.Error("failed to start command server", slog.Any("error", err))
+		return fmt.Errorf("failed to start command server: %w", err)
+	}
+
 	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
 	service.MustRegister(t.ctx, t.logFactory)
 
@@ -112,6 +112,7 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	if opts.Experimental.CacheFile == nil {
 		return fmt.Errorf("cache file options are required")
 	}
+
 	cacheFile := cachefile.New(t.ctx, *opts.Experimental.CacheFile)
 	service.MustRegister[adapter.CacheFile](t.ctx, cacheFile)
 	t.cacheFile = cacheFile
@@ -130,7 +131,7 @@ func (t *tunnel) init(opts O.Options, platIfce libbox.PlatformInterface) error {
 	}
 
 	// create file watcher for server changes
-	svrsPath := filepath.Join(basePath, common.ServersFileName)
+	svrsPath := filepath.Join(dataPath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
 		if err := t.reloadOptions(svrsPath); err != nil {
 			slog.Error("failed to reload user servers", slog.Any("error", err))
@@ -152,6 +153,7 @@ func (t *tunnel) connect() (err error) {
 			closeTunnel()
 		}
 	}()
+
 	tInstance.closers = append(tInstance.closers, t.cacheFile)
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	cmdSvr.SetService(t.lbService)

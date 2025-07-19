@@ -70,7 +70,7 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
-	if err := establishConnection(group, tag, opts, platIfce); err != nil {
+	if err := establishConnection(group, tag, opts, path, platIfce); err != nil {
 		return fmt.Errorf("failed to open tunnel: %w", err)
 	}
 	return nil
