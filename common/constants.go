@@ -1,4 +1,4 @@
-package app
+package common
 
 import "runtime"
 
@@ -12,6 +12,7 @@ const (
 	Platform = runtime.GOOS
 
 	// filenames
-	LogFileName    = "lantern.log"
-	ConfigFileName = "config.json"
+	LogFileName     = "lantern.log"
+	ConfigFileName  = "config.json"
+	ServersFileName = "servers.json"
 )

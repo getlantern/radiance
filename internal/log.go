@@ -59,10 +59,8 @@ func FormatLogLevel(level slog.Level) string {
 		return "ERROR"
 	case level < LevelPanic:
 		return "FATAL"
-	case level < Disable:
-		return "PANIC"
 	default:
-		return "DISABLE"
+		return "PANIC"
 	}
 }
 
