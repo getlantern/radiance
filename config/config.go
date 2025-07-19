@@ -184,7 +184,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	if ch.fetchDisabled {
 		return fmt.Errorf("fetching config is disabled")
 	}
-	slog.Info("Fetching config")
+	slog.Debug("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
