@@ -62,11 +62,15 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		return errors.New("tunnel already opened")
 	}
 
+	slog.Debug("Establishing VPN tunnel", "group", group, "tag", tag)
+
 	tInstance = &tunnel{}
 	tInstance.ctx, tInstance.cancel = context.WithCancel(sbx.BoxContext())
 	if err := tInstance.init(opts, dataPath, platIfce); err != nil {
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
+
+	slog.Log(nil, internal.LevelTrace, "starting cachefile")
 
 	// we need to set the selected server before starting libbox
 	cacheFile := tInstance.cacheFile
@@ -82,6 +86,8 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 }
 
 func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
+	slog.Log(nil, internal.LevelTrace, "initializing tunnel")
+
 	cfg, err := json.MarshalContext(t.ctx, opts)
 	if err != nil {
 		return fmt.Errorf("failed to marshal options: %w", err)
@@ -96,6 +102,8 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	if common.Platform == "android" {
 		setupOpts.FixAndroidStack = true
 	}
+	slog.Log(nil, internal.LevelTrace, "setting up libbox", slog.Any("setupOptions", setupOpts))
+
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
@@ -112,11 +120,11 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	if opts.Experimental.CacheFile == nil {
 		return fmt.Errorf("cache file options are required")
 	}
-
 	cacheFile := cachefile.New(t.ctx, *opts.Experimental.CacheFile)
 	service.MustRegister[adapter.CacheFile](t.ctx, cacheFile)
 	t.cacheFile = cacheFile
 
+	slog.Log(nil, internal.LevelTrace, "creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
@@ -142,6 +150,8 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 }
 
 func (t *tunnel) connect() (err error) {
+	slog.Log(nil, internal.LevelTrace, "starting libbox service")
+
 	if err = t.lbService.Start(); err != nil {
 		t.cacheFile.Close()
 		return fmt.Errorf("starting libbox service: %w", err)
@@ -153,6 +163,7 @@ func (t *tunnel) connect() (err error) {
 			closeTunnel()
 		}
 	}()
+	slog.Log(nil, internal.LevelTrace, "libbox service started")
 
 	tInstance.closers = append(tInstance.closers, t.cacheFile)
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
@@ -167,6 +178,7 @@ func (t *tunnel) connect() (err error) {
 }
 
 func (t *tunnel) connectTo(group, tag string) (err error) {
+	slog.Log(nil, internal.LevelTrace, "connecting to server", "group", group, "tag", tag)
 	err = t.cacheFile.StoreMode(group)
 	if err == nil {
 		err = t.cacheFile.StoreSelected(group, tag)
@@ -180,6 +192,7 @@ func (t *tunnel) connectTo(group, tag string) (err error) {
 
 func startCmdServer() error {
 	cmdSvrOnce.Do(func() {
+		slog.Log(nil, internal.LevelTrace, "starting command server")
 		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
 		cmdSvrErr = cmdSvr.Start()
 	})
@@ -200,13 +213,17 @@ func closeTunnel() error {
 		tAccess.Unlock()
 		return nil
 	}
-	var t *tunnel
 	// copying the mutex is fine here because we're not using it anymore
 	//nolint:staticcheck
-	*t, tInstance = *tInstance, nil
+	t := *tInstance
+	tInstance = nil
+	cmdSvr.SetService(nil)
 	tAccess.Unlock()
 
 	t.cancel()
+
+	// close it just in case
+	t.lbService.Close()
 
 	var errs []error
 	for _, closer := range t.closers {

@@ -2,8 +2,6 @@ package vpn
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	sbx "github.com/getlantern/sing-box-extensions"
@@ -14,9 +12,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
-	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,19 +153,4 @@ func setupVpnTest(t *testing.T) context.Context {
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))
 
 	return ctx
-}
-
-func testBoxOptions(tmpPath string) (*O.Options, string, error) {
-	content, err := os.ReadFile("testdata/boxopts.json")
-	if err != nil {
-		return nil, "", err
-	}
-	opts, err := json.UnmarshalExtendedContext[O.Options](sbx.BoxContext(), content)
-	if err != nil {
-		return nil, "", err
-	}
-	opts.Experimental.CacheFile.Path = filepath.Join(tmpPath, cacheFileName)
-	opts.Experimental.CacheFile.CacheID = cacheID
-	buf, _ := json.Marshal(opts)
-	return &opts, string(buf), nil
 }

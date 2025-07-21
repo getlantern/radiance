@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -88,10 +89,16 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 // Note, this does not check if the tunnel can connect to a server.
 func isOpen() bool {
 	err := libbox.NewStandaloneCommandClient().SetGroupExpand("default", false)
-	if err != nil && strings.Contains(err.Error(), "dial unix") {
+	if err == nil {
+		return true
+	}
+	estr := err.Error()
+	if strings.Contains(estr, "database not open") {
+		slog.Warn("libbox initialized but not started")
 		return false
 	}
-	return true
+	return !strings.Contains(estr, "dial unix") &&
+		!strings.Contains(estr, "service not ready")
 }
 
 // Disconnect closes the tunnel and all active connections.

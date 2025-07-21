@@ -15,6 +15,10 @@
 			"tag": "direct"
 		},
 		{
+			"type": "block",
+			"tag": "block"
+		},
+		{
 			"type": "http",
 			"tag": "http1-out",
 			"server": "127.0.0.1",
@@ -76,31 +80,37 @@
 	"route": {
 		"rules": [
 			{
-				"action": "route",
-				"outbound": "direct",
-				"clash_mode": "direct"
+				"rule_set": "split-tunnel",
+				"outbound": "direct"
 			},
 			{
-				"action": "route",
-				"outbound": "http-selector",
-				"clash_mode": "http"
+				"clash_mode": "direct",
+				"outbound": "direct"
 			},
 			{
-				"action": "route",
-				"outbound": "socks-selector",
-				"clash_mode": "socks"
+				"clash_mode": "http",
+				"outbound": "http-selector"
+			},
+			{
+				"clash_mode": "socks",
+				"outbound": "socks-selector"
+			}
+		],
+		"rule_set": [
+			{
+				"type": "local",
+				"tag": "split-tunnel",
+				"path": "split-tunnel.json"
 			}
 		]
 	},
 	"experimental": {
 		"cache_file": {
 			"enabled": true,
-			"path": "",
 			"cache_id": "test_cache"
 		},
 		"clash_api": {
-			"default_mode": "Rule",
-			"external_controller": ""
+			"default_mode": "Rule"
 		}
 	}
 }

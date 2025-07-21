@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	LC "github.com/getlantern/common"
+	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
@@ -121,4 +122,21 @@ func getTestOutbounds(t *testing.T, outType string) ([]string, []option.Outbound
 	}
 	require.NotEmptyf(t, outbounds, "no %s outbounds found", outType)
 	return tags, outbounds
+}
+
+func testBoxOptions(tmpPath string) (*option.Options, string, error) {
+	content, err := os.ReadFile("testdata/boxopts.json")
+	if err != nil {
+		return nil, "", err
+	}
+	opts, err := json.UnmarshalExtendedContext[option.Options](sbx.BoxContext(), content)
+	if err != nil {
+		return nil, "", err
+	}
+
+	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmpPath, splitTunnelFile)
+	opts.Experimental.CacheFile.Path = filepath.Join(tmpPath, cacheFileName)
+	opts.Experimental.CacheFile.CacheID = cacheID
+	buf, _ := json.Marshal(opts)
+	return &opts, string(buf), nil
 }
