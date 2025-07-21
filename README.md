@@ -13,7 +13,4 @@ Interoperability is at the core of Lantern and Radiance. Lantern is designed to 
 
 ## Run
 
-```
-go run cmd/main.go 
-```
-Sudo/Admin privileges are required to run.
+Radiance is used by the lantern client at getlantern/lantern-outline. See build instructions there.
