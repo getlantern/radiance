@@ -55,7 +55,7 @@ func newSplitTunnel(path string) *SplitTunnel {
 	s := &SplitTunnel{
 		rule:         rule,
 		ruleFile:     filepath.Join(path, splitTunnelFile),
-		activeFilter: &(rule.Rules[0].DefaultOptions),
+		activeFilter: &(rule.Rules[1].DefaultOptions),
 	}
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
 		slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
@@ -254,13 +254,17 @@ func remove(s []string, items []string) []string {
 }
 
 func (s *SplitTunnel) saveToFile() error {
+	rule := s.rule
+	if isEmptyRule(rule.Rules[1].DefaultOptions) {
+		rule.Rules = rule.Rules[:1] // remove the default rule if it's empty
+	}
 	rs := O.PlainRuleSetCompat{
 		Version: 3,
 		Options: O.PlainRuleSet{
 			Rules: []O.HeadlessRule{
 				{
 					Type:           "logical",
-					LogicalOptions: s.rule,
+					LogicalOptions: rule,
 				},
 			},
 		},
@@ -270,6 +274,12 @@ func (s *SplitTunnel) saveToFile() error {
 		return err
 	}
 	return os.WriteFile(s.ruleFile, buf, 0644)
+}
+
+func isEmptyRule(rule O.DefaultHeadlessRule) bool {
+	return len(rule.Domain) == 0 && len(rule.DomainSuffix) == 0 &&
+		len(rule.DomainKeyword) == 0 && len(rule.DomainRegex) == 0 &&
+		len(rule.ProcessName) == 0 && len(rule.PackageName) == 0
 }
 
 func (s *SplitTunnel) loadRule() error {
@@ -289,6 +299,12 @@ func (s *SplitTunnel) loadRule() error {
 	}
 
 	s.rule = rules[0].LogicalOptions
+	if len(s.rule.Rules) == 1 {
+		s.rule.Rules = append(s.rule.Rules, O.HeadlessRule{
+			Type:           C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{},
+		})
+	}
 	s.activeFilter = &(s.rule.Rules[1].DefaultOptions)
 
 	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
