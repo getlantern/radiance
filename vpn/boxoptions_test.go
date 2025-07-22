@@ -134,7 +134,6 @@ func testBoxOptions(tmpPath string) (*option.Options, string, error) {
 		return nil, "", err
 	}
 
-	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmpPath, splitTunnelFile)
 	opts.Experimental.CacheFile.Path = filepath.Join(tmpPath, cacheFileName)
 	opts.Experimental.CacheFile.CacheID = cacheID
 	buf, _ := json.Marshal(opts)

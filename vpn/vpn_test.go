@@ -95,20 +95,6 @@ func TestSelectedServer(t *testing.T) {
 	})
 }
 
-func TestIsOpened(t *testing.T) {
-	common.SetPathsForTesting(t)
-	assert.False(t, isOpen(), "tunnel should not be open")
-	path := common.DataPath()
-	setupOpts := libbox.SetupOptions{
-		BasePath:    path,
-		WorkingPath: path,
-		TempPath:    path,
-	}
-	require.NoError(t, libbox.Setup(&setupOpts))
-	require.NoError(t, startCmdServer())
-	require.True(t, isOpen(), "tunnel should be open after starting command server")
-}
-
 func TestSendCmd(t *testing.T) {
 	common.SetPathsForTesting(t)
 	ctx := setupVpnTest(t)

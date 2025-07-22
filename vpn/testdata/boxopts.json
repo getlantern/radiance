@@ -80,10 +80,6 @@
 	"route": {
 		"rules": [
 			{
-				"rule_set": "split-tunnel",
-				"outbound": "direct"
-			},
-			{
 				"clash_mode": "direct",
 				"outbound": "direct"
 			},
@@ -94,13 +90,6 @@
 			{
 				"clash_mode": "socks",
 				"outbound": "socks-selector"
-			}
-		],
-		"rule_set": [
-			{
-				"type": "local",
-				"tag": "split-tunnel",
-				"path": "split-tunnel.json"
 			}
 		]
 	},
