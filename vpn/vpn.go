@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	"github.com/getlantern/radiance"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
 )
@@ -24,12 +26,20 @@ import (
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [ServerGroupLantern], [ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
-func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
+func QuickConnect(group string, platIfce libbox.PlatformInterface, options radiance.Options) error {
+	// Since this will start as new process we need to ask for path and logger.
+	// This is to ensure that the options are correctly set for the new process.
+	err := common.Init(options.DataDir, options.LogDir, options.LogLevel)
+	if err != nil {
+		// Better to return the error
+		// if this not working tunnel will not work.
+		return fmt.Errorf("failed to initialize common: %w", err)
+	}
 	switch group {
 	case servers.SGLantern:
-		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
+		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce, options)
 	case servers.SGUser:
-		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
+		return ConnectToServer(servers.SGUser, autoUserTag, platIfce, options)
 	case "all", "":
 		group = autoAllTag
 	default:
@@ -48,7 +58,15 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
-func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface, options radiance.Options) error {
+	// Since this will start as new process we need to ask for path and logger.
+	// This is to ensure that the options are correctly set for the new process.
+	err := common.Init(options.DataDir, options.LogDir, options.LogLevel)
+	if err != nil {
+		// Better to return the error
+		// if this not working tunnel will not work.
+		return fmt.Errorf("failed to initialize common: %w", err)
+	}
 	switch group {
 	case servers.SGLantern, servers.SGUser:
 	default:
@@ -66,6 +84,8 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	path := common.DataPath()
 	_ = newSplitTunnel(path) // ensure split tunnel rule file exists to prevent sing-box from complaining
+
+	log.Printf("Path: %s", path)
 
 	opts, err := buildOptions(group, path)
 	if err != nil {
