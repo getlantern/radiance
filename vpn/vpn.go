@@ -24,12 +24,12 @@ import (
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [ServerGroupLantern], [ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
-func QuickConnect(group string, platIfce libbox.PlatformInterface, dataDir, logDir, logLevel string) error {
+func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 	switch group {
 	case servers.SGLantern:
-		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce, dataDir, logDir, logLevel)
+		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
 	case servers.SGUser:
-		return ConnectToServer(servers.SGUser, autoUserTag, platIfce, dataDir, logDir, logLevel)
+		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
 	case "all", "":
 		group = autoAllTag
 	default:
@@ -42,15 +42,12 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface, dataDir, logD
 		}
 		return nil
 	}
-	if err := initializeCommonForApplePlatforms(dataDir, logDir, logLevel); err != nil {
-		return err
-	}
 	return connect(group, "", platIfce)
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
-func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface, dataDir, logDir, logLevel string) error {
+func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
 	switch group {
 	case servers.SGLantern, servers.SGUser:
 	default:
@@ -61,9 +58,6 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface, dataD
 	}
 	if isOpen() {
 		return selectServer(group, tag)
-	}
-	if err := initializeCommonForApplePlatforms(dataDir, logDir, logLevel); err != nil {
-		return err
 	}
 	return connect(group, tag, platIfce)
 }
@@ -352,14 +346,3 @@ func (c *cmdClientHandler) WriteGroups(message libbox.OutboundGroupIterator) {
 // Not Implemented
 func (c *cmdClientHandler) ClearLogs()                                  { c.done <- struct{}{} }
 func (c *cmdClientHandler) WriteLogs(messageList libbox.StringIterator) { c.done <- struct{}{} }
-
-func initializeCommonForApplePlatforms(dataDir, logDir, logLevel string) error {
-	if common.IsIOS() || common.IsMacOS() {
-		// Since this will start as a new process, we need to ask for path and logger.
-		// This ensures options are correctly set for the new process.
-		if err := common.Init(dataDir, logDir, logLevel); err != nil {
-			return fmt.Errorf("failed to initialize common: %w", err)
-		}
-	}
-	return nil
-}
