@@ -145,10 +145,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
-		slog.Info("Disabling config fetch from the API")
-	}
-	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
-		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)

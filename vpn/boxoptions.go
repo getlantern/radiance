@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 )
 
@@ -187,68 +189,95 @@ func baseOpts() O.Options {
 // respective group.
 func buildOptions(group, path string) (O.Options, error) {
 	// build options
+	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
 	opts := baseOpts()
+	slog.Debug("Base options initialized")
 
 	// update default options and paths
 	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
 	opts.Experimental.ClashAPI.DefaultMode = group
 	splitTunnelFilePath := filepath.Join(path, splitTunnelFile)
 	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelFilePath
+	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
+		"cacheFilePath", opts.Experimental.CacheFile.Path,
+		"splitTunnelFilePath", splitTunnelFilePath,
+	)
 
 	switch plat := common.Platform; plat {
 	case "android":
 		opts.Route.OverrideAndroidVPN = true
+		slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
 	case "linux":
 		opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
+		slog.Debug("Linux platform detected, AutoRedirect set to true")
 	}
 
 	// load and merge config options into base
 	confPath := filepath.Join(path, common.ConfigFileName)
+	slog.Debug("Loading config file", "confPath", confPath)
 	content, err := os.ReadFile(confPath)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Error("Failed to read config file", "error", err)
 		return O.Options{}, fmt.Errorf("read config file: %w", err)
 	}
 	var ltnTags []string
 	if len(content) > 0 {
+		slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling")
 		cfg, err := json.UnmarshalExtendedContext[LC.ConfigResponse](sbx.BoxContext(), content)
 		if err != nil {
+			slog.Error("Failed to unmarshal config", "error", err)
 			return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
 		}
 		cOpts := cfg.Options
 
 		ltnTags = mergeOpts(&opts, &cOpts)
+		slog.Debug("Merged lantern config options", "tags", ltnTags)
 		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoLanternTag, ltnTags))
 		opts.Outbounds = append(
 			opts.Outbounds,
 			selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, ltnTags...)),
 		)
+		slog.Log(nil, internal.LevelTrace, "Added lantern outbounds", "outbounds", opts.Outbounds)
 	} else {
+		slog.Info("No config file found")
+		slog.Debug("Using placeholder outbound")
 		opts.Outbounds = append(opts.Outbounds, selectorOutbound(servers.SGLantern, []string{"block"}))
 	}
 
 	// load and merge user servers into base
+	slog.Debug("Loading user servers")
 	mgr, err := servers.NewManager(path)
 	if err != nil {
+		slog.Error("Failed to create server manager", "error", err)
 		return O.Options{}, fmt.Errorf("server manager: %w", err)
 	}
 	uOpts := mgr.Servers()[servers.SGUser]
 
-	userTags := mergeOpts(&opts, &O.Options{Outbounds: uOpts.Outbounds, Endpoints: uOpts.Endpoints})
-	if len(userTags) > 0 {
+	var userTags []string
+	if len(uOpts.Outbounds)+len(uOpts.Endpoints) > 0 {
+		userTags = mergeOpts(&opts, &O.Options{Outbounds: uOpts.Outbounds, Endpoints: uOpts.Endpoints})
+		slog.Debug("Merged user server options", "userTags", userTags)
 		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoUserTag, userTags))
 		opts.Outbounds = append(
 			opts.Outbounds,
 			selectorOutbound(servers.SGUser, append([]string{autoUserTag}, userTags...)),
 		)
+		slog.Log(nil, internal.LevelTrace, "Added user outbounds", "outbounds", opts.Outbounds)
 	} else {
+		slog.Info("No user servers found")
+		slog.Debug("Using placeholder outbound")
 		opts.Outbounds = append(opts.Outbounds, selectorOutbound(servers.SGUser, []string{"block"}))
 	}
 
 	allTags := slices.Concat(ltnTags, userTags)
 	if len(allTags) == 0 {
+		slog.Warn("No tags found")
+		slog.Debug("Using placeholder outbound")
 		allTags = []string{"block"}
 	}
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, allTags))
+	slog.Debug("Final outbounds set", "outbounds", opts.Outbounds)
+	slog.Log(nil, internal.LevelTrace, "buildOptions completed successfully")
 	return opts, nil
 }
 
