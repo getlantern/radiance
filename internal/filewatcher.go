@@ -16,7 +16,6 @@ import (
 type FileWatcher struct {
 	watcher  *fsnotify.Watcher
 	path     string
-	filename string
 	callback func()
 	closeC   chan struct{}
 	started  atomic.Bool
@@ -24,9 +23,9 @@ type FileWatcher struct {
 
 // NewFileWatcher creates a new file watcher for the given path and callback function.
 func NewFileWatcher(path string, callback func()) *FileWatcher {
+	path, _ = filepath.Abs(path)
 	return &FileWatcher{
-		path:     filepath.Dir(path),
-		filename: filepath.Base(path),
+		path:     path,
 		callback: callback,
 	}
 }
@@ -43,13 +42,14 @@ func (fw *FileWatcher) Start() error {
 		return fmt.Errorf("start watcher: %w", err)
 	}
 	fw.watcher = watcher
-	err = watcher.Add(fw.path)
+	go fw.watchLoop()
+
+	err = watcher.Add(filepath.Dir(fw.path))
 	if err != nil {
 		fw.started.Store(false)
 		return fmt.Errorf("failed to add watcher: %w", err)
 	}
 	fw.closeC = make(chan struct{})
-	go fw.watchLoop()
 	return nil
 }
 
@@ -75,10 +75,9 @@ func (fw *FileWatcher) watchLoop() {
 			if !ok {
 				return
 			}
-			if event.Name != fw.path && !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) {
+			if event.Name != fw.path && (!event.Has(fsnotify.Create) || !event.Has(fsnotify.Write)) {
 				continue
 			}
-			slog.Debug("File modified: " + event.Name)
 
 			// since files can be written in chunks, we need to wait until the whole file is written.
 			// we create a timer that will call the callback after not receiving any more events for
