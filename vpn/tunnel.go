@@ -59,34 +59,37 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	tAccess.Lock()
 	defer tAccess.Unlock()
 	if tInstance != nil {
+		slog.Warn("Tunnel already opened", "group", group, "tag", tag)
 		return errors.New("tunnel already opened")
 	}
 
-	slog.Debug("Establishing VPN tunnel", "group", group, "tag", tag)
+	slog.Info("Establishing VPN tunnel", "group", group, "tag", tag)
 
 	tInstance = &tunnel{}
 	tInstance.ctx, tInstance.cancel = context.WithCancel(sbx.BoxContext())
 	if err := tInstance.init(opts, dataPath, platIfce); err != nil {
+		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	slog.Log(nil, internal.LevelTrace, "starting cachefile")
-
 	// we need to set the selected server before starting libbox
+	slog.Log(nil, internal.LevelTrace, "Starting cachefile")
 	cacheFile := tInstance.cacheFile
 	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
+		slog.Error("Failed to start cache file", "error", err)
 		return fmt.Errorf("start cache file: %w", err)
 	}
 	tInstance.closers = append(tInstance.closers, cacheFile)
 
 	if group == "" { // group is empty, connect to last selected server
+		slog.Debug("Connecting to last selected server")
 		return tInstance.connect()
 	}
 	return tInstance.connectTo(group, tag)
 }
 
 func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
-	slog.Log(nil, internal.LevelTrace, "initializing tunnel")
+	slog.Log(nil, internal.LevelTrace, "Initializing tunnel")
 
 	cfg, err := json.MarshalContext(t.ctx, opts)
 	if err != nil {
@@ -102,14 +105,13 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	if common.Platform == "android" {
 		setupOpts.FixAndroidStack = true
 	}
-	slog.Log(nil, internal.LevelTrace, "setting up libbox", slog.Any("setupOptions", setupOpts))
+	slog.Log(nil, internal.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
 
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
 	if err := startCmdServer(); err != nil {
-		slog.Error("failed to start command server", slog.Any("error", err))
 		return fmt.Errorf("failed to start command server: %w", err)
 	}
 
@@ -124,7 +126,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	service.MustRegister[adapter.CacheFile](t.ctx, cacheFile)
 	t.cacheFile = cacheFile
 
-	slog.Log(nil, internal.LevelTrace, "creating libbox service")
+	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
@@ -134,6 +136,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	// set memory limit for Android and iOS
 	switch common.Platform {
 	case "android", "ios":
+		slog.Debug("Setting memory limit for mobile platform", "platform", common.Platform)
 		libbox.SetMemoryLimit(true)
 	default:
 	}
@@ -142,57 +145,65 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	svrsPath := filepath.Join(dataPath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
 		if err := t.reloadOptions(svrsPath); err != nil {
-			slog.Error("failed to reload user servers", slog.Any("error", err))
+			slog.Error("Failed to reload servers", "error", err)
+		} else {
+			slog.Debug("Servers reloaded successfully")
 		}
 	})
 	t.svrFileWatcher = svrWatcher
+	slog.Info("Tunnel initializated")
 	return nil
 }
 
 func (t *tunnel) connect() (err error) {
-	slog.Log(nil, internal.LevelTrace, "starting libbox service")
+	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
 
 	if err = t.lbService.Start(); err != nil {
 		t.cacheFile.Close()
+		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
 	// we're using the cmd server to handle libbox.Close, so we don't need to add it to closers
 	defer func() {
 		if err != nil {
+			slog.Warn("Error occurred during connection, closing tunnel", "error", err)
 			t.lbService.Close()
 			closeTunnel()
 		}
 	}()
-	slog.Log(nil, internal.LevelTrace, "libbox service started")
+	slog.Debug("Libbox service started")
 
-	tInstance.closers = append(tInstance.closers, t.cacheFile)
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	cmdSvr.SetService(t.lbService)
 
 	if err = t.svrFileWatcher.Start(); err != nil {
+		slog.Error("Failed to start user server file watcher", "error", err)
 		return fmt.Errorf("starting user server file watcher: %w", err)
 	}
 	tInstance.closers = append(tInstance.closers, t.svrFileWatcher)
 
+	slog.Info("Tunnel connection established")
 	return nil
 }
 
 func (t *tunnel) connectTo(group, tag string) (err error) {
-	slog.Log(nil, internal.LevelTrace, "connecting to server", "group", group, "tag", tag)
+	slog.Log(nil, internal.LevelTrace, "Connecting to server", "group", group, "tag", tag)
 	err = t.cacheFile.StoreMode(group)
 	if err == nil {
 		err = t.cacheFile.StoreSelected(group, tag)
 	}
 	if err != nil {
 		t.cacheFile.Close()
+		slog.Error("failed to set selected server", "group", group, "tag", tag, "error", err)
 		return fmt.Errorf("set selected server %s.%s: %w", group, tag, err)
 	}
+	slog.Debug("set selected server", "group", group, "tag", tag)
 	return t.connect()
 }
 
 func startCmdServer() error {
 	cmdSvrOnce.Do(func() {
-		slog.Log(nil, internal.LevelTrace, "starting command server")
+		slog.Debug("Starting command server")
 		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
 		cmdSvrErr = cmdSvr.Start()
 	})
@@ -213,22 +224,23 @@ func closeTunnel() error {
 		tAccess.Unlock()
 		return nil
 	}
+	slog.Info("Closing tunnel")
 	// copying the mutex is fine here because we're not using it anymore
 	//nolint:staticcheck
 	t := *tInstance
 	tInstance = nil
+	slog.Log(nil, internal.LevelTrace, "Clearing cmd server tunnel reference")
 	cmdSvr.SetService(nil)
 	tAccess.Unlock()
 
 	t.cancel()
 
-	// close it just in case
-	t.lbService.Close()
-
 	var errs []error
 	for _, closer := range t.closers {
+		slog.Log(nil, internal.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
 		errs = append(errs, closer.Close())
 	}
+	slog.Debug("Tunnel closed")
 	return errors.Join(errs...)
 }
 
@@ -247,10 +259,9 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	default:
 	}
 
-	slog.Debug("reloading options")
 	content, err := os.ReadFile(optsPath)
 	if err != nil {
-		return fmt.Errorf("read config file: %w", err)
+		return fmt.Errorf("read file: %w", err)
 	}
 	svrs, err := json.UnmarshalExtendedContext[servers.Servers](sbx.BoxContext(), content)
 	if err != nil {
@@ -406,6 +417,7 @@ type cmdSvrHandler struct {
 }
 
 func (c *cmdSvrHandler) PostServiceClose() {
+	slog.Log(nil, internal.LevelTrace, "Command server received service close request")
 	if err := closeTunnel(); err != nil {
 		slog.Error("closing tunnel", slog.Any("error", err))
 	}

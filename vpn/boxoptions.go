@@ -232,6 +232,11 @@ func buildOptions(group, path string) (O.Options, error) {
 		slog.Warn("Config loaded but no outbounds or endpoints found")
 		fallthrough // Proceed to merge with base options
 	default:
+		{ // TODO: remove after lantern-cloud is updated to not include it
+			opts.Outbounds = slices.DeleteFunc(configOpts.Outbounds, func(out O.Outbound) bool {
+				return out.Type != "urltest"
+			})
+		}
 		lanternTags = mergeAndCollectTags(&opts, &configOpts)
 		slog.Debug("Merged config options", "tags", lanternTags)
 	}
@@ -260,8 +265,8 @@ func buildOptions(group, path string) (O.Options, error) {
 		allTags = []string{"block"}
 	}
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, allTags))
-	slog.Debug("Final outbounds set", "outbounds", opts.Outbounds)
-	slog.Log(nil, internal.LevelTrace, "buildOptions completed successfully")
+	slog.Debug("Finished building options")
+	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
 	return opts, nil
 }
 
@@ -340,8 +345,10 @@ func groupAutoTag(group string) string {
 		return autoLanternTag
 	case servers.SGUser:
 		return autoUserTag
-	default:
+	case "all", "":
 		return autoAllTag
+	default:
+		return ""
 	}
 }
 

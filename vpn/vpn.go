@@ -18,11 +18,12 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 )
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
-// groups are [ServerGroupLantern], [ServerGroupUser], "all", or the empty string. Using "all" or
+// groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
 func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 	switch group {
@@ -31,18 +32,17 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 	case servers.SGUser:
 		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
 	case "all", "":
-		group = autoAllTag
+		if isOpen() {
+			cc := libbox.NewStandaloneCommandClient()
+			if err := cc.SetClashMode(autoAllTag); err != nil {
+				return fmt.Errorf("failed to set auto mode: %w", err)
+			}
+			return nil
+		}
+		return connect(group, "", platIfce)
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
-	if isOpen() {
-		cc := libbox.NewStandaloneCommandClient()
-		if err := cc.SetClashMode(group); err != nil {
-			return fmt.Errorf("failed to set mode to %s: %w", group, err)
-		}
-		return nil
-	}
-	return connect(group, "", platIfce)
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
@@ -129,24 +129,30 @@ func selectServer(group, tag string) error {
 }
 
 func selectedServer() (string, string, error) {
+	slog.Log(nil, internal.LevelTrace, "Retrieving selected server")
 	if isOpen() {
+		slog.Log(nil, internal.LevelTrace, "Using command client")
 		res, err := sendCmd(libbox.CommandClashMode)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to get selected server: %w", err)
+			slog.Error("Failed to retrieve clash mode", "error", err)
+			return "", "", fmt.Errorf("retrieving clashMode: %w", err)
 		}
 		group := res.clashMode
 		if group == autoAllTag {
 			return "all", "auto", nil
 		}
+		slog.Log(nil, internal.LevelTrace, "Retrieving outbound group for", "group", group)
 		outbound, err := getOutboundGroup(group)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to get selected server: %w", err)
+			slog.Error("Failed to retrieve outbound group", "group", group, "error", err)
+			return "", "", fmt.Errorf("retrieving outbound group %v: %w", group, err)
 		}
 		if outbound.Selectable {
 			return group, outbound.Selected, nil
 		}
 		return group, "auto", nil
 	}
+	slog.Log(nil, internal.LevelTrace, "Reading from cache file")
 	opts := baseOpts().Experimental.CacheFile
 	opts.Path = filepath.Join(common.DataPath(), cacheFileName)
 	cacheFile := cachefile.New(context.Background(), *opts)
@@ -216,7 +222,7 @@ func activeServer() (string, error) {
 func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
 	res, err := sendCmd(libbox.CommandGroup)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get outbound group: %w", err)
+		return nil, fmt.Errorf("sending groups cmd: %w", err)
 	}
 	groups := res.groups
 	for groups.HasNext() {
@@ -225,7 +231,7 @@ func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
 			return og, nil
 		}
 	}
-	return nil, fmt.Errorf("outbound group %s not found", group)
+	return nil, fmt.Errorf("not found")
 }
 
 type Connection struct {
@@ -288,7 +294,7 @@ func sendCmd(cmd int32) (*cmdClientHandler, error) {
 	opts := libbox.CommandClientOptions{Command: cmd, StatusInterval: int64(time.Second)}
 	cc := libbox.NewCommandClient(handler, &opts)
 	if err := cc.Connect(); err != nil {
-		return nil, fmt.Errorf("failed to connect to command client: %w", err)
+		return nil, fmt.Errorf("connecting to command client: %w", err)
 	}
 	defer cc.Disconnect()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
