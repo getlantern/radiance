@@ -41,30 +41,39 @@ func TestBuildOptions(t *testing.T) {
 		urlTestOutbound(autoUserTag, socksTags),
 		selectorOutbound(servers.SGUser, append([]string{autoUserTag}, socksTags...)),
 	)
+	collectTags := func(outbounds []option.Outbound) []string {
+		tags := make([]string, 0, len(outbounds))
+		for _, o := range outbounds {
+			tags = append(tags, o.Tag)
+		}
+		return tags
+	}
+	httpTags = collectTags(httpAllOutbounds)
+	socksTags = collectTags(socksAllOutbounds)
 
 	tests := []struct {
 		name    string
 		hasCfg  bool
 		hasSvrs bool
-		want    []option.Outbound
+		want    []string
 		assert  func(*testing.T, []option.Outbound)
 	}{
 		{
 			name:   "config without user servers",
 			hasCfg: true,
 			want: append(
-				httpAllOutbounds,
-				selectorOutbound(servers.SGUser, []string{"block"}),
-				urlTestOutbound(autoAllTag, httpTags),
+				httpTags,
+				selectorOutbound(servers.SGUser, []string{"block"}).Tag,
+				urlTestOutbound(autoAllTag, httpTags).Tag,
 			),
 		},
 		{
 			name:    "user servers without config",
 			hasSvrs: true,
 			want: append(
-				socksAllOutbounds,
-				selectorOutbound(servers.SGLantern, []string{"block"}),
-				urlTestOutbound(autoAllTag, socksTags),
+				socksTags,
+				selectorOutbound(servers.SGLantern, []string{"block"}).Tag,
+				urlTestOutbound(autoAllTag, socksTags).Tag,
 			),
 		},
 		{
@@ -72,16 +81,16 @@ func TestBuildOptions(t *testing.T) {
 			hasCfg:  true,
 			hasSvrs: true,
 			want: append(
-				append(httpAllOutbounds, socksAllOutbounds...),
-				urlTestOutbound(autoAllTag, append(httpTags, socksTags...)),
+				append(httpTags, socksTags...),
+				urlTestOutbound(autoAllTag, append(httpTags, socksTags...)).Tag,
 			),
 		},
 		{
 			name: "neither config nor user servers",
-			want: []option.Outbound{
-				selectorOutbound(servers.SGLantern, []string{"block"}),
-				selectorOutbound(servers.SGUser, []string{"block"}),
-				urlTestOutbound(autoAllTag, []string{"block"}),
+			want: []string{
+				selectorOutbound(servers.SGLantern, []string{"block"}).Tag,
+				selectorOutbound(servers.SGUser, []string{"block"}).Tag,
+				urlTestOutbound(autoAllTag, []string{"block"}).Tag,
 			},
 		},
 	}
@@ -98,7 +107,8 @@ func TestBuildOptions(t *testing.T) {
 			require.NoError(t, err)
 
 			gotOutbounds := opts.Outbounds
-			assert.Subset(t, gotOutbounds, tt.want, "options should contain expected outbounds")
+			gotTags := collectTags(gotOutbounds)
+			assert.Subset(t, gotTags, tt.want, "options should contain expected outbounds")
 		})
 	}
 }

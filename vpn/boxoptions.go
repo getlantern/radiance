@@ -234,7 +234,7 @@ func buildOptions(group, path string) (O.Options, error) {
 	default:
 		{ // TODO: remove after lantern-cloud is updated to not include it
 			opts.Outbounds = slices.DeleteFunc(configOpts.Outbounds, func(out O.Outbound) bool {
-				return out.Type != "urltest"
+				return out.Type == "urltest"
 			})
 		}
 		lanternTags = mergeAndCollectTags(&opts, &configOpts)
