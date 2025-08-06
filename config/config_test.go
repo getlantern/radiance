@@ -15,30 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
 )
-
-// Mock implementation of ConfigParser for testing
-func mockConfigParser(data []byte) (*C.ConfigResponse, error) {
-	var cfg C.ConfigResponse
-	err := json.Unmarshal(data, &cfg)
-	return &cfg, err
-}
 
 func TestSaveConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
-
-	// Create a ConfigHandler with the mock parser
-	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-	}
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a sample config to save
-	expectedConfig := &Config{
+	expectedConfig := Config{
 		ConfigResponse: C.ConfigResponse{
 			// Populate with sample data
 			Servers: []C.ServerLocation{
@@ -48,15 +35,15 @@ func TestSaveConfig(t *testing.T) {
 		},
 	}
 	// Save the config
-	err := saveConfig(expectedConfig, configPath)
+	err := saveConfig(&expectedConfig, configPath)
 	require.NoError(t, err, "Should not return an error when saving config")
 
 	// Read the file content
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err, "Should be able to read the config file")
 
-	// Parse the content using the mock parser
-	actualConfig, err := ch.unmarshalConfig(data)
+	var actualConfig Config
+	err = json.Unmarshal(data, &actualConfig)
 	require.NoError(t, err, "Should be able to parse the config file")
 
 	// Verify the content matches the expected config
@@ -65,13 +52,12 @@ func TestSaveConfig(t *testing.T) {
 func TestGetConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-		config:         atomic.Value{},
+		configPath: configPath,
+		config:     atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -104,14 +90,13 @@ func TestGetConfig(t *testing.T) {
 func TestSetPreferredServerLocation(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
-		configPath:     configPath,
-		confRespParser: mockConfigParser,
-		config:         atomic.Value{},
-		ftr:            newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		configPath: configPath,
+		config:     atomic.Value{},
+		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
 	}
 
 	ch.config.Store(&Config{
@@ -146,7 +131,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 func TestHandlerFetchConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, app.ConfigFileName)
+	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Mock fetcher
 	mockFetcher := &MockFetcher{}
@@ -154,11 +139,11 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser and fetcher
 	ch := &ConfigHandler{
 		configPath:        configPath,
-		confRespParser:    mockConfigParser,
 		config:            atomic.Value{},
 		preferredLocation: atomic.Value{},
 		ftr:               mockFetcher,
 		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
+		svrManager:        &mockSrvManager{},
 	}
 
 	// Test case: No server location set
@@ -535,6 +520,10 @@ func TestMergeResp(t *testing.T) {
 		assert.Equal(t, mergedConfig, want)
 	})
 }
+
+type mockSrvManager struct{}
+
+func (m *mockSrvManager) SetServers(_ string, _ servers.Options) error { return nil }
 
 // MockFetcher is a mock implementation of the fetcher used for testing
 type MockFetcher struct {

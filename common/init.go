@@ -12,7 +12,6 @@ import (
 
 	"github.com/getlantern/appdir"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
@@ -55,7 +54,7 @@ func Init(dataDir, logDir, logLevel string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	err = initLogger(filepath.Join(logDir, app.LogFileName), logLevel)
+	err = initLogger(filepath.Join(logPath.Load().(string), LogFileName), logLevel)
 	if err != nil {
 		return fmt.Errorf("initialize log: %w", err)
 	}
@@ -149,15 +148,17 @@ func setupDirectories(data, logs string) error {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
-		data = appdir.General(app.Name)
+		data = appdir.General(Name)
 		data = maybeAddSuffix(data, "data")
 	}
 	if l, ok := env.Get[string](env.LogPath); ok {
 		logs = l
 	} else if logs == "" {
-		logs = appdir.Logs(app.Name)
+		logs = appdir.Logs(Name)
 		logs = maybeAddSuffix(logs, "logs")
 	}
+	data, _ = filepath.Abs(data)
+	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", path, err)

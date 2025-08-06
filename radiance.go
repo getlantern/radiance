@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	C "github.com/getlantern/common"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 
@@ -24,15 +24,23 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/servers"
 
-	boxservice "github.com/getlantern/radiance/client/service"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
 
 	"github.com/getlantern/radiance/metrics"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const configPollInterval = 10 * time.Minute
+
+// Initially set the tracer to noop, so that we don't have to check for nil everywhere.
+var tracer trace.Tracer = noop.Tracer{}
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 
@@ -40,31 +48,32 @@ const configPollInterval = 10 * time.Minute
 type configHandler interface {
 	// Stop stops the config handler from fetching new configurations.
 	Stop()
-
 	// SetPreferredServerLocation sets the preferred server location. If not set - it's auto selected by the API
 	SetPreferredServerLocation(country, city string)
-
-	// ListAvailableServers returns a list of available server locations.
-	ListAvailableServers() ([]C.ServerLocation, error)
-
 	// GetConfig returns the current configuration.
 	// It returns an error if the configuration is not yet available.
 	GetConfig() (*config.Config, error)
 }
 
+type issueReporter interface {
+	Report(ctx context.Context, report issue.IssueReport, userEmail, country string) error
+}
+
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
 	confHandler   configHandler
-	issueReporter *issue.IssueReporter
+	issueReporter issueReporter
 	apiHandler    *api.APIClient
+	srvManager    *servers.Manager
 
-	//user config is the user config object that contains the device ID and other user data
+	// user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
 	locale   string
 
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
 	stopChan      chan struct{}
+	shutdownOTEL  func(context.Context) error
 }
 
 type Options struct {
@@ -72,7 +81,6 @@ type Options struct {
 	LogDir   string
 	Locale   string
 	DeviceID string
-	// log level. This can be overridden by the RADIANCE_LOG_LEVEL env variable.
 	LogLevel string
 }
 
@@ -95,9 +103,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	var platformDeviceID string
-	if common.IsAndroid() || common.IsIOS() {
+	switch common.Platform {
+	case "ios", "android":
 		platformDeviceID = opts.DeviceID
-	} else {
+	default:
 		platformDeviceID = deviceid.Get()
 	}
 
@@ -109,19 +118,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	k := kindling.NewKindling(
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(&slogWriter{Logger: slog.Default().With("service", "kindling")}),
+		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
 
 	shutdownFuncs := []func(context.Context) error{}
-	shutdownMetrics, err := metrics.SetupOTelSDK(context.Background())
-	if err != nil {
-		slog.Error("Failed to setup OpenTelemetry SDK", "error", err)
-	} else if shutdownMetrics != nil {
-		shutdownFuncs = append(shutdownFuncs, shutdownMetrics)
-		slog.Debug("Setup OpenTelemetry SDK", "shutdown", shutdownMetrics)
-	}
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
@@ -129,46 +131,99 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
+	svrMgr, err := servers.NewManager(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create server manager: %w", err)
+	}
 	cOpts := config.Options{
-		PollInterval:     configPollInterval,
-		HTTPClient:       k.NewHTTPClient(),
-		User:             userInfo,
-		DataDir:          dataDir,
-		ConfigRespParser: boxservice.UnmarshalConfig,
-		Locale:           opts.Locale,
+		PollInterval: configPollInterval,
+		HTTPClient:   k.NewHTTPClient(),
+		SvrManager:   svrMgr,
+		User:         userInfo,
+		DataDir:      dataDir,
+		Locale:       opts.Locale,
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-	return &Radiance{
+
+	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
+		srvManager:    svrMgr,
 		userInfo:      userInfo,
 		locale:        opts.Locale,
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
-	}, nil
+	}
+	confHandler.AddConfigListener(r.otelConfigListener)
+	return r, nil
 }
 
-// APIHandler returns the API handler for the Radiance client.
-func (r *Radiance) APIHandler() *api.APIClient {
-	return r.apiHandler
+// otelConfigListener is a listener for OpenTelemetry configuration changes. Note this will be called both when
+// new configurations are loaded from disk as well as over the network.
+func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error {
+	if newConfig == nil {
+		return fmt.Errorf("new config is nil")
+	}
+	// Check if the old OTEL configuration is the same as the new one.
+	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, newConfig.ConfigResponse.OTEL) {
+		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+		return nil
+	}
+
+	slog.Info("OpenTelemetry configuration changed", "newConfig", newConfig.ConfigResponse.OTEL)
+	if newConfig.ConfigResponse.OTEL.Endpoint == "" {
+		slog.Info("OpenTelemetry endpoint is empty, not initializing OpenTelemetry SDK")
+		return nil
+	}
+	if r.shutdownOTEL != nil {
+		slog.Info("Shutting down existing OpenTelemetry SDK")
+		if err := r.shutdownOTEL(context.Background()); err != nil {
+			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
+			return fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err)
+		}
+		r.shutdownOTEL = nil
+	}
+	newConfig.ConfigResponse.OTEL.TracesSampleRate = 1.0 // Always sample traces for now
+
+	err := r.startOTEL(context.Background(), newConfig)
+	if err != nil {
+		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
+		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
+	}
+
+	// Get a tracer for your application/package
+	tracer = otel.Tracer("radiance")
+	return nil
 }
 
-// TODO: The server-related functionality should probably be moved to the VPNClient as well.
-// Eventually, this functionality will be moved to the API handler for better separation of concerns.
-func (r *Radiance) GetAvailableServers() ([]C.ServerLocation, error) {
-	return r.confHandler.ListAvailableServers()
+func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
+	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse)
+	if shutdown != nil {
+		r.shutdownOTEL = shutdown
+		r.addShutdownFunc(shutdown)
+	}
+	// If the OpenTelemetry SDK could not be initialized, log the error and return.
+	// This is not a fatal error, so we just log it and continue.
+	if err != nil {
+		return fmt.Errorf("failed to setup OpenTelemetry SDK: %w", err)
+	}
+
+	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTEL.Endpoint)
+	return nil
 }
 
-// SetPreferredServer sets the preferred server location for the VPN connection.
-// pass empty strings to auto select the server location
-func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
-	r.confHandler.SetPreferredServerLocation(country, city)
+// addShutdownFunc adds a shutdown function to the Radiance instance.
+// This function is called when the Radiance instance is closed to ensure that all resources are cleaned up properly.
+func (r *Radiance) addShutdownFunc(fn func(context.Context) error) {
+	if fn != nil {
+		r.shutdownFuncs = append(r.shutdownFuncs, fn)
+	}
 }
 
 func (r *Radiance) Close() {
@@ -185,72 +240,76 @@ func (r *Radiance) Close() {
 	<-r.stopChan
 }
 
+// APIHandler returns the API handler for the Radiance client.
+func (r *Radiance) APIHandler() *api.APIClient {
+	return r.apiHandler
+}
+
+// SetPreferredServer sets the preferred server location for the VPN connection.
+// pass empty strings to auto select the server location
+func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
+	r.confHandler.SetPreferredServerLocation(country, city)
+}
+
 // UserInfo returns the user info object for this client
 // This is the user config object that contains the device ID and other user data
 func (r *Radiance) UserInfo() common.UserInfo {
 	return r.userInfo
 }
 
-// IssueReport represents a user report of a bug or service problem. This report can be submitted
-// via [Radiance.ReportIssue].
-type IssueReport struct {
-	// Type is one of the predefined issue type strings
-	Type string
-	// Issue description
-	Description string
-	// Attachment is a list of issue attachments
-	Attachment []*issue.Attachment
-
-	// device common name
-	Device string
-	// device alphanumeric name
-	Model string
+// ServerManager returns the server manager for the Radiance client.
+func (r *Radiance) ServerManager() *servers.Manager {
+	return r.srvManager
 }
 
-// issue text to type mapping
-var issueTypeMap = map[string]int{
-	"Cannot complete purchase":    0,
-	"Cannot sign in":              1,
-	"Spinner loads endlessly":     2,
-	"Cannot access blocked sites": 3,
-	"Slow":                        4,
-	"Cannot link device":          5,
-	"Application crashes":         6,
-	"Other":                       9,
-	"Update fails":                10,
-}
+type IssueReport = issue.IssueReport
 
 // ReportIssue submits an issue report to the back-end with an optional user email
-func (r *Radiance) ReportIssue(email string, report *IssueReport) error {
+func (r *Radiance) ReportIssue(email string, report IssueReport) error {
+	ctx, span := tracer.Start(context.Background(), "report-issue")
+	defer span.End()
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
-	}
-	// get issue type as integer
-	typeInt, ok := issueTypeMap[report.Type]
-	if !ok {
-		slog.Error("Unknown issue type: %s, set to Other", "type", report.Type)
-		typeInt = 9
 	}
 	var country string
 	// get country from the config returned by the backend
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		slog.Error("Failed to get country", "error", err)
-		country = ""
+		span.RecordError(err)
 	} else {
 		country = cfg.ConfigResponse.Country
 	}
 
-	return r.issueReporter.Report(
-		common.LogPath(),
-		email,
-		typeInt,
-		report.Description,
-		report.Attachment,
-		report.Device,
-		report.Model,
-		country,
-	)
+	err = r.issueReporter.Report(ctx, report, email, country)
+	if err != nil {
+		slog.Error("Failed to report issue", "error", err)
+		span.RecordError(err)
+		return fmt.Errorf("failed to report issue: %w", err)
+	}
+	slog.Info("Issue reported successfully")
+	return nil
+}
+
+// Features returns the features available in the current configuration, returned from the server in the
+// config response.
+func (r *Radiance) Features() map[string]bool {
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		slog.Error("Failed to get config for features", "error", err)
+		return map[string]bool{}
+	}
+	if cfg == nil {
+		slog.Info("No config available for features, returning empty map")
+		return map[string]bool{}
+	}
+	slog.Debug("Returning features from config", "features", cfg.ConfigResponse.Features)
+	// Return the features from the config
+	if cfg.ConfigResponse.Features == nil {
+		slog.Info("No features available in config, returning empty map")
+		return map[string]bool{}
+	}
+	return cfg.ConfigResponse.Features
 }
 
 func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, error) {
@@ -263,7 +322,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	// Extract the domain from the URL.
 	domain := u.Host
 
-	logWriter := &slogWriter{Logger: slog.Default().With("service", "kindling", "group", "smartdialer")}
+	logWriter := &slogWriter{Logger: slog.Default()}
 
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.
@@ -283,7 +342,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	httpClient := &http.Client{
 		Transport: lz,
 	}
-	fronted.SetLogger(slog.Default().With("module", "fronted"))
+	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(
 		fronted.WithPanicListener(panicListener),
 		fronted.WithCacheFile(cacheFile),
@@ -306,6 +365,8 @@ type lazyDialingRoundTripper struct {
 var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
 
 func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx, span := tracer.Start(req.Context(), "lazy-dialing-roundtrip")
+	defer span.End()
 	lz.smartTransportMu.Lock()
 
 	if lz.smartTransport == nil {
@@ -315,13 +376,20 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
+			span.RecordError(err)
 			// This typically just means we're offline
 			return nil, fmt.Errorf("could not create smart transport -- offline? %v", err)
 		}
 	}
 
 	lz.smartTransportMu.Unlock()
-	return lz.smartTransport.RoundTrip(req)
+	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		span.RecordError(err)
+	} else {
+		span.SetAttributes(attribute.String("response.status", res.Status))
+	}
+	return res, err
 }
 
 type slogWriter struct {

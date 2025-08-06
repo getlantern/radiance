@@ -12,8 +12,8 @@ import (
 	"github.com/go-resty/resty/v2"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common"
 )
 
 type webClient struct {
@@ -30,9 +30,9 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 	}
 
 	client.SetHeaders(map[string]string{
-		backend.AppNameHeader:  app.Name,
-		backend.VersionHeader:  app.Version,
-		backend.PlatformHeader: app.Platform,
+		backend.AppNameHeader:  common.Name,
+		backend.VersionHeader:  common.Version,
+		backend.PlatformHeader: common.Platform,
 	})
 
 	// Add a request middleware to marshal the request body to protobuf or JSON

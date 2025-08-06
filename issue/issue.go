@@ -4,41 +4,30 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"strconv"
 	"time"
 
-	"github.com/getlantern/golog"
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/osversion"
 
 	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/app"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 
 	"google.golang.org/protobuf/proto"
 )
 
-var (
-	log        = golog.LoggerFor("issue")
-	maxLogSize = 10247680
-)
-
 const (
 	requestURL = "https://iantem.io/api/v1/issue"
+	maxLogSize = 10 * 1024 * 1024 // 10 MB
 )
 
 type SubscriptionHandler interface {
 	Subscription() (api.Subscription, error)
-}
-
-// Attachment is a file attachment
-type Attachment struct {
-	Name string
-	Data []byte
 }
 
 // IssueReporter is used to send issue reports to backend
@@ -50,14 +39,22 @@ type IssueReporter struct {
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(httpClient *http.Client, subHandler SubscriptionHandler, userConfig common.UserInfo) (*IssueReporter, error) {
+func NewIssueReporter(
+	httpClient *http.Client,
+	subHandler SubscriptionHandler,
+	userConfig common.UserInfo,
+) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
 	if subHandler == nil {
 		return nil, fmt.Errorf("user is nil")
 	}
-	return &IssueReporter{httpClient: httpClient, subHandler: subHandler, userConfig: userConfig}, nil
+	return &IssueReporter{
+		httpClient: httpClient,
+		subHandler: subHandler,
+		userConfig: userConfig,
+	}, nil
 }
 
 func randStr(n int) string {
@@ -69,16 +66,41 @@ func randStr(n int) string {
 	return hexStr
 }
 
+// Attachment is a file attachment
+type Attachment struct {
+	Name string
+	Data []byte
+}
+
+type IssueReport struct {
+	// Type is one of the predefined issue type strings
+	Type string
+	// Issue description
+	Description string
+	// Attachment is a list of issue attachments
+	Attachments []*Attachment
+
+	// device common name
+	Device string
+	// device alphanumeric name
+	Model string
+}
+
+// issue text to type mapping
+var issueTypeMap = map[string]int{
+	"Cannot complete purchase":    0,
+	"Cannot sign in":              1,
+	"Spinner loads endlessly":     2,
+	"Cannot access blocked sites": 3,
+	"Slow":                        4,
+	"Cannot link device":          5,
+	"Application crashes":         6,
+	"Other":                       9,
+	"Update fails":                10,
+}
+
 // Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
-func (ir *IssueReporter) Report(
-	logDir, userEmail string,
-	issueType int,
-	description string,
-	attachments []*Attachment,
-	device string,
-	model string,
-	country string,
-) error {
+func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEmail, country string) error {
 	// set a random email if it's empty
 	if userEmail == "" {
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
@@ -88,36 +110,44 @@ func (ir *IssueReporter) Report(
 	subLevel := "free"
 	sub, err := ir.subHandler.Subscription()
 	if err != nil {
-		log.Errorf("Error while getting user subscription info: %v", err)
+		slog.Error("getting user subscription info", "error", err)
 	} else if sub.Tier == api.TierPro {
 		subLevel = "pro"
 	}
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
-		log.Errorf("Unable to get OS version: %v", err)
+		slog.Error("Unable to get OS version", "error", err)
 	}
 	userLocale, err := jibber_jabber.DetectIETF()
 	if err != nil || userLocale == "C" {
-		log.Debugf("Ignoring OS locale and using default")
+		slog.Debug("Ignoring OS locale and using default", "default", "en-US", "error", err)
 		userLocale = "en-US"
 	}
 
-	r := &ReportIssueRequest{}
-	r.Type = ReportIssueRequest_ISSUE_TYPE(issueType)
-	r.CountryCode = country
-	r.AppVersion = app.Version
-	r.SubscriptionLevel = subLevel
-	r.Platform = app.Platform
-	r.Description = description
-	r.UserEmail = userEmail
-	r.DeviceId = ir.userConfig.DeviceID()
-	r.UserId = strconv.FormatInt(ir.userConfig.LegacyID(), 10)
-	r.Device = device
-	r.Model = model
-	r.OsVersion = osVersion
-	r.Language = userLocale
+	// get issue type as integer
+	iType, ok := issueTypeMap[report.Type]
+	if !ok {
+		slog.Error("Unknown issue type, setting to 'Other'", "type", report.Type)
+		iType = 9
+	}
 
-	for _, attachment := range attachments {
+	r := &ReportIssueRequest{
+		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
+		CountryCode:       country,
+		AppVersion:        common.Version,
+		SubscriptionLevel: subLevel,
+		Platform:          common.Platform,
+		Description:       report.Description,
+		UserEmail:         userEmail,
+		DeviceId:          ir.userConfig.DeviceID(),
+		UserId:            strconv.FormatInt(ir.userConfig.LegacyID(), 10),
+		Device:            report.Device,
+		Model:             report.Model,
+		OsVersion:         osVersion,
+		Language:          userLocale,
+	}
+
+	for _, attachment := range report.Attachments {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
 			Name:    attachment.Name,
@@ -126,57 +156,54 @@ func (ir *IssueReporter) Report(
 	}
 
 	// Zip logs
-	if maxLogSize > 0 {
-		if size, err := parseFileSize(strconv.Itoa(maxLogSize)); err != nil {
-			log.Error(err)
-		} else {
-			log.Debug("zipping log files for issue report")
-			buf := &bytes.Buffer{}
-			// zip * under folder app.LogDir
-			if _, err := zipLogFiles(buf, logDir, size, int64(maxLogSize)); err == nil {
-				r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
-					Type:    "application/zip",
-					Name:    "logs.zip",
-					Content: buf.Bytes(),
-				})
-			} else {
-				log.Errorf("unable to zip log files: %v", err)
-			}
-		}
+	slog.Debug("zipping log files for issue report")
+	buf := &bytes.Buffer{}
+	// zip * under folder common.LogDir
+	logDir := common.LogPath()
+	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
+		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
+			Type:    "application/zip",
+			Name:    "logs.zip",
+			Content: buf.Bytes(),
+		})
+	} else {
+		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSize)
 	}
 
 	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
 	if err != nil {
-		log.Errorf("unable to marshal issue report: %v", err)
+		slog.Error("unable to marshal issue report", "error", err)
 		return err
 	}
 
 	req, err := backend.NewIssueRequest(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		requestURL,
 		bytes.NewReader(out),
 		ir.userConfig,
 	)
 	if err != nil {
-		return log.Errorf("creating request: %w", err)
+		slog.Error("unable to create issue report request", "error", err)
+		return err
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
-		return log.Errorf("unable to send issue report: %v", err)
+		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
 	}
 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, err := httputil.DumpResponse(resp, true)
 		if err != nil {
-			log.Debugf("Unable to get failed response body for [%s]", requestURL)
+			slog.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
 		}
-		return log.Errorf("Bad response status: %d | response:\n%#v", resp.StatusCode, string(b))
+		slog.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
+		return fmt.Errorf("issue report failed with status code %d", resp.StatusCode)
 	}
 
-	log.Debugf("issue report sent: %v", resp)
+	slog.Debug("issue report sent")
 	return nil
 }

@@ -1,10 +1,12 @@
 package radiance
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/config"
 )
 
 func TestNewRadiance(t *testing.T) {
@@ -31,7 +33,7 @@ func TestReportIssue(t *testing.T) {
 		assert func(*testing.T, error)
 	}{
 		{
-			name:   "it should return error when issue report is missing both type and description",
+			name:   "return error when missing type and description",
 			email:  "",
 			report: IssueReport{},
 			assert: func(t *testing.T, err error) {
@@ -39,7 +41,7 @@ func TestReportIssue(t *testing.T) {
 			},
 		},
 		{
-			name:  "it should return nil when issue report is valid",
+			name:  "return nil when issue report is valid",
 			email: "radiancetest@getlantern.org",
 			report: IssueReport{
 				Type:        "Application crashes",
@@ -52,7 +54,7 @@ func TestReportIssue(t *testing.T) {
 			},
 		},
 		{
-			name:  "it should return nil when issue report is valid with empty email",
+			name:  "return nil when issue report is valid with empty email",
 			email: "",
 			report: IssueReport{
 				Type:        "Cannot sign in",
@@ -67,11 +69,26 @@ func TestReportIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := NewRadiance(Options{DataDir: t.TempDir()})
-			defer r.Close()
-			require.NoError(t, err)
-			err = r.ReportIssue(tt.email, &tt.report)
+			r := &Radiance{
+				issueReporter: &mockIssueReporter{},
+				confHandler:   &mockConfigHandler{},
+			}
+			err := r.ReportIssue(tt.email, tt.report)
 			tt.assert(t, err)
 		})
 	}
+}
+
+type mockIssueReporter struct{}
+
+func (m *mockIssueReporter) Report(_ context.Context, _ IssueReport, _, _ string) error { return nil }
+
+type mockConfigHandler struct{}
+
+func (m *mockConfigHandler) Stop() {}
+
+func (m *mockConfigHandler) SetPreferredServerLocation(country string, city string) {}
+
+func (m *mockConfigHandler) GetConfig() (*config.Config, error) {
+	return &config.Config{}, nil
 }
