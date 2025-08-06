@@ -54,7 +54,7 @@ func Init(dataDir, logDir, logLevel string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	err = initLogger(filepath.Join(logDir, LogFileName), logLevel)
+	err = initLogger(filepath.Join(logPath.Load().(string), LogFileName), logLevel)
 	if err != nil {
 		return fmt.Errorf("initialize log: %w", err)
 	}
@@ -157,6 +157,8 @@ func setupDirectories(data, logs string) error {
 		logs = appdir.Logs(Name)
 		logs = maybeAddSuffix(logs, "logs")
 	}
+	data, _ = filepath.Abs(data)
+	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", path, err)
