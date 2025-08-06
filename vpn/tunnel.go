@@ -24,6 +24,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/log"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
 	sbgroup "github.com/sagernet/sing-box/protocol/group"
@@ -116,7 +117,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	}
 
 	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
-	service.MustRegister(t.ctx, t.logFactory)
+	service.MustRegister[log.Factory](t.ctx, t.logFactory)
 
 	// create the cache file service
 	if opts.Experimental.CacheFile == nil {

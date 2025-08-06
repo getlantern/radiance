@@ -17,10 +17,10 @@ import (
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 
-	LC "github.com/getlantern/common"
 	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 )
@@ -233,9 +233,12 @@ func buildOptions(group, path string) (O.Options, error) {
 		fallthrough // Proceed to merge with base options
 	default:
 		{ // TODO: remove after lantern-cloud is updated to not include it
-			opts.Outbounds = slices.DeleteFunc(configOpts.Outbounds, func(out O.Outbound) bool {
+			idx := slices.IndexFunc(configOpts.Outbounds, func(out O.Outbound) bool {
 				return out.Type == "urltest"
 			})
+			if idx >= 0 {
+				configOpts.Outbounds = append(configOpts.Outbounds[:idx], configOpts.Outbounds[idx+1:]...)
+			}
 		}
 		lanternTags = mergeAndCollectTags(&opts, &configOpts)
 		slog.Debug("Merged config options", "tags", lanternTags)
@@ -282,13 +285,18 @@ func loadConfigOptions(confPath string) (O.Options, error) {
 	if len(content) == 0 {
 		return O.Options{}, nil
 	}
-	slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling")
-	cfg, err := json.UnmarshalExtendedContext[LC.ConfigResponse](sbx.BoxContext(), content)
+	slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling", "config", content)
+	cfg, err := json.UnmarshalExtendedContext[config.Config](sbx.BoxContext(), content)
 	if err != nil {
 		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
 	}
-	slog.Log(nil, internal.LevelTrace, "Loaded config", "config", cfg)
-	return cfg.Options, nil
+	conf := cfg.ConfigResponse
+
+	c := conf
+	c.Options.RawMessage = nil
+	slog.Log(nil, internal.LevelTrace, "Loaded config", "config", c)
+
+	return conf.Options, nil
 }
 
 func loadUserOptions(path string) (O.Options, error) {
@@ -358,6 +366,7 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 		Tag:  tag,
 		Options: &O.URLTestOutboundOptions{
 			Outbounds:   outbounds,
+			URL:         "http://connectivitycheck.gstatic.com/generate_204",
 			Interval:    badoption.Duration(urlTestInterval),
 			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
 		},

@@ -15,15 +15,18 @@ import (
 	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/servers"
 )
 
 func TestBuildOptions(t *testing.T) {
 	httpTags, httpOutbounds := getTestOutbounds(t, constant.TypeHTTP)
 	socksTags, socksOutbounds := getTestOutbounds(t, constant.TypeSOCKS)
-	cfg := LC.ConfigResponse{
-		Options: option.Options{
-			Outbounds: httpOutbounds,
+	cfg := config.Config{
+		ConfigResponse: LC.ConfigResponse{
+			Options: option.Options{
+				Outbounds: httpOutbounds,
+			},
 		},
 	}
 	svrs := servers.Servers{
@@ -116,7 +119,7 @@ func TestBuildOptions(t *testing.T) {
 func testOptsToFile[T any](t *testing.T, opts T, path string) {
 	buf, err := json.Marshal(opts)
 	require.NoError(t, err, "marshal options")
-	require.NoError(t, os.WriteFile(path, buf, 0600), "write options to file")
+	require.NoError(t, os.WriteFile(path, buf, 0644), "write options to file")
 }
 
 func getTestOutbounds(t *testing.T, outType string) ([]string, []option.Outbound) {
