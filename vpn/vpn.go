@@ -183,7 +183,7 @@ func selectedServer() (string, string, error) {
 			return autoAllTag, autoAllTag, nil
 		}
 		slog.Log(nil, internal.LevelTrace, "Retrieving outbound group", "group", group)
-		outbound, err := getOutboundGroup(group, false)
+		outbound, err := getOutboundGroup(group)
 		if err != nil {
 			slog.Error("Failed to retrieve outbound group", "group", group, "error", err)
 			return "", "", fmt.Errorf("retrieving outbound group %v: %w", group, err)
@@ -263,24 +263,17 @@ func resolveActive(groupMap map[string]*libbox.OutboundGroup, group string) (str
 	return "", errors.New("selected item not found: " + selected)
 }
 
-func getOutboundGroup(group string, deep bool) (*libbox.OutboundGroup, error) {
+func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
 	res, err := sendCmd(libbox.CommandGroup)
 	if err != nil {
 		return nil, fmt.Errorf("sending groups cmd: %w", err)
 	}
-	idx := slices.IndexFunc(res.groups, func(g *libbox.OutboundGroup) bool { return g.Tag == group })
-	if idx < 0 {
-		return nil, fmt.Errorf("outbound group not found")
-	}
-	for {
-		outbound := res.groups[idx]
-		idx = slices.IndexFunc(res.groups, func(g *libbox.OutboundGroup) bool {
-			return g.Tag == outbound.Selected
-		})
-		if idx < 0 {
-			return outbound, nil
+	for _, g := range res.groups {
+		if g.Tag == group {
+			return g, nil
 		}
 	}
+	return nil, fmt.Errorf("group not found: %s", group)
 }
 
 type Connection struct {
