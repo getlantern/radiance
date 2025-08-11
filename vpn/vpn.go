@@ -220,15 +220,18 @@ func activeServer(group string) (string, error) {
 		groupMap[g.Tag] = g
 	}
 	if group == autoAllTag {
-		g, ok := groupMap[group]
-		if !ok {
-			return "", errors.New("group not found: " + group)
-		}
-		switch g.Selected {
-		case autoLanternTag:
-			group = servers.SGLantern
-		case autoUserTag:
-			group = servers.SGUser
+		if g, ok := groupMap[group]; ok {
+			if g.Selected == autoLanternTag {
+				group = servers.SGLantern
+			} else {
+				group = servers.SGUser
+			}
+		} else {
+			if _, ok = groupMap[autoLanternTag]; ok {
+				group = servers.SGLantern
+			} else {
+				group = servers.SGUser
+			}
 		}
 	}
 	return resolveActive(groupMap, group)
