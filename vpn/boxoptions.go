@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	C "github.com/sagernet/sing-box/constant"
@@ -26,7 +25,7 @@ import (
 )
 
 const (
-	autoAllTag = "auto-all"
+	autoAllTag = "auto"
 
 	autoLanternTag = "auto-lantern"
 	autoUserTag    = "auto-user"
@@ -232,14 +231,6 @@ func buildOptions(group, path string) (O.Options, error) {
 		slog.Warn("Config loaded but no outbounds or endpoints found")
 		fallthrough // Proceed to merge with base options
 	default:
-		{ // TODO: remove after lantern-cloud is updated to not include it
-			idx := slices.IndexFunc(configOpts.Outbounds, func(out O.Outbound) bool {
-				return out.Type == "urltest"
-			})
-			if idx >= 0 {
-				configOpts.Outbounds = append(configOpts.Outbounds[:idx], configOpts.Outbounds[idx+1:]...)
-			}
-		}
 		lanternTags = mergeAndCollectTags(&opts, &configOpts)
 		slog.Debug("Merged config options", "tags", lanternTags)
 	}
@@ -261,13 +252,20 @@ func buildOptions(group, path string) (O.Options, error) {
 	}
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
 
-	// Final outbound for all tags
-	allTags := slices.Concat(lanternTags, userTags)
-	if len(allTags) == 0 {
-		slog.Warn("No tags found, using placeholder")
-		allTags = []string{"block"}
+	// Add auto all outbound if applicable
+	tags := []string{}
+	if len(lanternTags) > 0 {
+		tags = append(tags, autoLanternTag)
 	}
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, allTags))
+	if len(userTags) > 0 {
+		tags = append(tags, autoUserTag)
+	}
+	if len(tags) > 0 {
+		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, tags))
+	} else {
+		slog.Warn("No lantern or user tags found, using placeholder outbound for auto-all")
+		opts.Outbounds = append(opts.Outbounds, selectorOutbound(autoAllTag, []string{"block"}))
+	}
 	slog.Debug("Finished building options")
 	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
 	return opts, nil

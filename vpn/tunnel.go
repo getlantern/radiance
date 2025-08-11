@@ -26,6 +26,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/log"
 	sblog "github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
 	sbgroup "github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
@@ -288,7 +289,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			// Yes, panic. And, yes, it's intentional. The group outbound should always exist if the tunnel
 			// is running, so this is a "world no longer makes sense" situation. This should be caught
 			// during testing and will not panic in release builds.
-			slog.Log(ctx, internal.LevelPanic, "selector group missing", slog.String("group", group))
+			slog.Log(ctx, internal.LevelPanic, "selector group missing", "group", group)
 			panic(fmt.Errorf("selector group %q missing", group))
 		}
 		return out.(*sbgroup.Selector)
@@ -307,9 +308,10 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 	}()
 
 	var (
-		allTags  []string
-		toRemove []string
-		creater  = &outCreator{
+		toRemove   []string
+		hasLantern bool
+		hasUser    bool
+		creator    = &outCreator{
 			ctx:        ctx,
 			router:     service.FromContext[adapter.Router](ctx),
 			logFactory: t.logFactory,
@@ -319,6 +321,13 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 	for _, group := range []string{servers.SGLantern, servers.SGUser} {
 		sopts := svrs[group]
 		newTags := sopts.AllTags()
+
+		switch group {
+		case servers.SGLantern:
+			hasLantern = len(newTags) > 0
+		case servers.SGUser:
+			hasUser = len(newTags) > 0
+		}
 
 		// determine which tags need to be removed
 		groupTags := getSelector(group).All()
@@ -330,37 +339,23 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		}
 		toRemove = slices.Concat(toRemove, tagsToRemove)
 
-		creater.mgr = endpointMgr
-		creater.typ = "endpoint"
-		creater.group = group
-		creater.succeededTags = make([]string, 0, len(newTags))
-		// create/update endpoints
-		for _, opts := range sopts.Endpoints {
-			creater.createNew(opts.Tag, opts.Type, opts.Options)
-		}
+		creator.group = group
+		creator.succeededTags = make([]string, 0, len(newTags)+1)
 
-		// create/update outbounds
-		creater.mgr = outboundMgr
-		creater.typ = "outbound"
-		for _, opts := range sopts.Outbounds {
-			creater.createNew(opts.Tag, opts.Type, opts.Options)
-		}
-		allTags = slices.Concat(allTags, newTags)
+		// create/update endpoints and outbounds
+		creator.createEndpoints(endpointMgr, sopts.Endpoints)
+		creator.createOutbounds(outboundMgr, sopts.Outbounds)
 
-		// create url test outbounds for group with the succeeded tags
+		// create/update urltest and selector for group with the succeeded tags
 		autoGroup := groupAutoTag(group)
-		opts := urlTestOutbound(autoGroup, creater.succeededTags).Options
-		creater.createNew(autoGroup, C.TypeURLTest, opts)
+		opts := urlTestOutbound(autoGroup, creator.succeededTags).Options
+		creator.createNew(autoGroup, C.TypeURLTest, opts)
 
-		// create a new selector with the succeeded tags
-		tags := append(creater.succeededTags, autoGroup)
+		tags := append(creator.succeededTags, autoGroup)
 		opts = selectorOutbound(group, tags).Options
-		creater.createNew(group, C.TypeSelector, opts)
+		creator.createNew(group, C.TypeSelector, opts)
 
 	}
-	// create new auto-all outbound
-	opts := urlTestOutbound(autoAllTag, allTags).Options
-	creater.createNew(autoAllTag, C.TypeURLTest, opts)
 
 	// we have to remove endpoints and outbounds last, otherwise the managers will return an error
 	// because the group outbound is dependent on them.
@@ -371,7 +366,41 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			outboundMgr.Remove(tag)
 		}
 	}
-	return errors.Join(creater.errs...)
+
+	out, found := outboundMgr.Outbound(autoAllTag)
+	if !found {
+		// see above comment about panic
+		slog.Log(nil, internal.LevelPanic, "auto outbound missing", "group", autoAllTag)
+		panic(fmt.Errorf("auto outbound %q missing", autoAllTag))
+	}
+	creator.mgr = outboundMgr
+	creator.typ = "outbound"
+	updateAuto(creator, out.(adapter.OutboundGroup), hasLantern, hasUser)
+	return errors.Join(creator.errs...)
+}
+
+func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, hasUser bool) {
+	slog.Log(nil, internal.LevelTrace, "Updating auto all", "has_lantern", hasLantern, "has_user", hasUser)
+	_, isPlaceholder := auto.(*sbgroup.Selector)
+	shouldBePlaceholder := !(hasLantern && hasUser)
+	if (isPlaceholder && shouldBePlaceholder) || (len(auto.All()) == 2 && !shouldBePlaceholder) {
+		return // nothing to do
+	}
+	if !isPlaceholder && shouldBePlaceholder {
+		// create a placeholder
+		creator.createNew(autoAllTag, C.TypeSelector, selectorOutbound(autoAllTag, []string{"block"}).Options)
+		return
+	}
+
+	// otherwise, we need to update the auto outbound with the appropriate tags
+	var tags []string
+	if hasLantern {
+		tags = append(tags, autoLanternTag)
+	}
+	if hasUser {
+		tags = append(tags, autoUserTag)
+	}
+	creator.createNew(autoAllTag, C.TypeURLTest, urlTestOutbound(autoAllTag, tags).Options)
 }
 
 // outCreator is a one-off struct for creating outbounds or endpoints.
@@ -387,6 +416,22 @@ type outCreator struct {
 
 	succeededTags []string
 	errs          []error
+}
+
+func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []option.Endpoint) {
+	o.mgr = mgr
+	o.typ = "endpoint"
+	for _, opts := range endpoints {
+		o.createNew(opts.Tag, opts.Type, opts.Options)
+	}
+}
+
+func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []option.Outbound) {
+	o.mgr = mgr
+	o.typ = "outbound"
+	for _, opts := range outbounds {
+		o.createNew(opts.Tag, opts.Type, opts.Options)
+	}
 }
 
 func (o *outCreator) createNew(tag, typ string, opts any) {

@@ -213,6 +213,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		}
 	}
 
+	slog.Info("Fetching config")
 	resp, err := ch.ftr.fetchConfig(preferred, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
@@ -221,6 +222,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Info("no new config available")
 		return nil
 	}
+	slog.Info("Config fetched from server")
 
 	// Otherwise, we keep the previous config and store any error that might have occurred.
 	// We still want to keep the previous config if there was an error. This is important

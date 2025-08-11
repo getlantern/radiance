@@ -20,6 +20,7 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
 )
 
 const configURL = "https://api.iantem.io/v1/config-new"
@@ -71,7 +72,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
-	slog.Info("fetching config", "request", string(buf))
+	slog.Debug("sending config request", "request", string(buf))
 	buf, err = f.send(bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -80,7 +81,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 	if buf == nil { // no new config available
 		return nil, nil
 	}
-	slog.Info("fetched config", "config", string(buf))
+	slog.Log(nil, internal.LevelTrace, "received config", "config", string(buf))
 
 	f.lastModified = time.Now()
 	return buf, nil
