@@ -395,17 +395,6 @@ func (c *cmdClientHandler) WriteGroups(message libbox.OutboundGroupIterator) {
 	for groups.HasNext() {
 		c.groups = append(c.groups, groups.Next())
 	}
-
-	type item struct {
-		tag string
-		typ string
-	}
-	for _, g := range c.groups {
-		items := []item{}
-		for _, i := range g.ItemList {
-			items = append(items, item{i.Tag, i.Type})
-		}
-	}
 	c.done <- struct{}{}
 }
 
