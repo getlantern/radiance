@@ -128,6 +128,49 @@ func selectServer(group, tag string) error {
 	return nil
 }
 
+// Status represents the current status of the tunnel, including whether it is open, the selected
+// server, and the active server. Active is only set if the tunnel is open.
+type Status struct {
+	TunnelOpen bool
+	// SelectedServer is the server that is currently selected for the tunnel.
+	SelectedServer string
+	// ActiveServer is the server that is currently active for the tunnel. This will differ from
+	// SelectedServer if using auto-select mode.
+	ActiveServer string
+}
+
+func GetStatus() (Status, error) {
+	slog.Debug("Retrieving tunnel status")
+	group, selected, err := selectedServer()
+	if err != nil {
+		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
+	}
+	if group == autoAllTag {
+		selected = autoAllTag
+	}
+	s := Status{
+		TunnelOpen:     isOpen(),
+		SelectedServer: selected,
+	}
+	if !s.TunnelOpen {
+		return s, nil
+	}
+
+	if s.TunnelOpen {
+		switch selected {
+		case autoAllTag, autoLanternTag, autoUserTag:
+			s.ActiveServer, err = activeServer(group)
+			if err != nil {
+				return s, fmt.Errorf("failed to get active server: %w", err)
+			}
+		default:
+			s.ActiveServer = selected
+		}
+	}
+	slog.Debug("Tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
+	return s, nil
+}
+
 func selectedServer() (string, string, error) {
 	slog.Log(nil, internal.LevelTrace, "Retrieving selected server")
 	if isOpen() {
@@ -139,10 +182,10 @@ func selectedServer() (string, string, error) {
 		}
 		group := res.clashMode
 		if group == autoAllTag {
-			return "all", "auto", nil
+			return autoAllTag, autoAllTag, nil
 		}
-		slog.Log(nil, internal.LevelTrace, "Retrieving outbound group for", "group", group)
-		outbound, err := getOutboundGroup(group)
+		slog.Log(nil, internal.LevelTrace, "Retrieving outbound group", "group", group)
+		outbound, err := getOutboundGroup(group, false)
 		if err != nil {
 			slog.Error("Failed to retrieve outbound group", "group", group, "error", err)
 			return "", "", fmt.Errorf("retrieving outbound group %v: %w", group, err)
@@ -150,7 +193,7 @@ func selectedServer() (string, string, error) {
 		if outbound.Selectable {
 			return group, outbound.Selected, nil
 		}
-		return group, "auto", nil
+		return group, outbound.Tag, nil
 	}
 	slog.Log(nil, internal.LevelTrace, "Reading from cache file")
 	opts := baseOpts().Experimental.CacheFile
@@ -169,69 +212,74 @@ func selectedServer() (string, string, error) {
 	return group, tag, nil
 }
 
-// Status represents the current status of the tunnel, including whether it is open, the selected
-// server, and the active server. Active is only set if the tunnel is open.
-type Status struct {
-	TunnelOpen bool
-	// SelectedServer is the server that is currently selected for the tunnel.
-	SelectedServer string
-	// ActiveServer is the server that is currently active for the tunnel. This will differ from
-	// SelectedServer if using auto-select mode.
-	ActiveServer string
-}
-
-func GetStatus() (Status, error) {
-	group, selected, err := selectedServer()
+func activeServer(group string) (string, error) {
+	res, err := sendCmd(libbox.CommandGroup)
 	if err != nil {
-		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
+		return "", fmt.Errorf("sending groups cmd: %w", err)
+	}
+	groupMap := make(map[string]*libbox.OutboundGroup)
+	for _, g := range res.groups {
+		groupMap[g.Tag] = g
 	}
 	if group == autoAllTag {
-		selected = autoAllTag
+		g, ok := groupMap[group]
+		if !ok {
+			return "", errors.New("group not found: " + group)
+		}
+		switch g.Selected {
+		case autoLanternTag:
+			group = servers.SGLantern
+		case autoUserTag:
+			group = servers.SGUser
+		}
 	}
-	s := Status{
-		TunnelOpen:     isOpen(),
-		SelectedServer: selected,
-	}
-	if !s.TunnelOpen {
-		return s, nil
-	}
-
-	active, err := activeServer()
-	if err != nil {
-		return s, fmt.Errorf("failed to get active server: %w", err)
-	}
-	s.ActiveServer = active
-	return s, nil
+	return resolveActive(groupMap, group)
 }
 
-func activeServer() (string, error) {
-	if !isOpen() {
-		return "", nil
+func resolveActive(groupMap map[string]*libbox.OutboundGroup, group string) (string, error) {
+	g, ok := groupMap[group]
+	if !ok {
+		return "", errors.New("group not found: " + group)
 	}
-	res, err := sendCmd(libbox.CommandClashMode)
-	if err != nil {
-		return "", fmt.Errorf("failed to get active server: %w", err)
+	selected := g.Selected
+	for _, item := range g.ItemList {
+		if item.Tag == selected {
+			if item.Type != "urltest" {
+				return item.Tag, nil
+			}
+			if _, ok := groupMap[item.Tag]; ok {
+				return resolveActive(groupMap, item.Tag)
+			}
+			// urltest group missing: return first non-urltest item
+			for _, i := range g.ItemList {
+				if i.Type != "urltest" {
+					return i.Tag, nil
+				}
+			}
+			return "", errors.New("no non-urltest item found in group: " + group)
+		}
 	}
-	outbound, err := getOutboundGroup(res.clashMode)
-	if err != nil {
-		return "", err
-	}
-	return outbound.Selected, nil
+	return "", errors.New("selected item not found: " + selected)
 }
 
-func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
+func getOutboundGroup(group string, deep bool) (*libbox.OutboundGroup, error) {
 	res, err := sendCmd(libbox.CommandGroup)
 	if err != nil {
 		return nil, fmt.Errorf("sending groups cmd: %w", err)
 	}
-	groups := res.groups
-	for groups.HasNext() {
-		og := groups.Next()
-		if og.Tag == group {
-			return og, nil
+	idx := slices.IndexFunc(res.groups, func(g *libbox.OutboundGroup) bool { return g.Tag == group })
+	if idx < 0 {
+		return nil, fmt.Errorf("outbound group not found")
+	}
+	for {
+		outbound := res.groups[idx]
+		idx = slices.IndexFunc(res.groups, func(g *libbox.OutboundGroup) bool {
+			return g.Tag == outbound.Selected
+		})
+		if idx < 0 {
+			return outbound, nil
 		}
 	}
-	return nil, fmt.Errorf("not found")
 }
 
 type Connection struct {
@@ -311,7 +359,7 @@ type cmdClientHandler struct {
 	status      *libbox.StatusMessage
 	connections *libbox.Connections
 	clashMode   string
-	groups      libbox.OutboundGroupIterator
+	groups      []*libbox.OutboundGroup
 	connected   chan struct{}
 	done        chan struct{}
 }
@@ -345,7 +393,21 @@ func (c *cmdClientHandler) WriteConnections(message *libbox.Connections) {
 }
 
 func (c *cmdClientHandler) WriteGroups(message libbox.OutboundGroupIterator) {
-	c.groups = message
+	groups := message
+	for groups.HasNext() {
+		c.groups = append(c.groups, groups.Next())
+	}
+
+	type item struct {
+		tag string
+		typ string
+	}
+	for _, g := range c.groups {
+		items := []item{}
+		for _, i := range g.ItemList {
+			items = append(items, item{i.Tag, i.Type})
+		}
+	}
 	c.done <- struct{}{}
 }
 
