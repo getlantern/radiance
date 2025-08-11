@@ -156,16 +156,14 @@ func GetStatus() (Status, error) {
 		return s, nil
 	}
 
-	if s.TunnelOpen {
-		switch selected {
-		case autoAllTag, autoLanternTag, autoUserTag:
-			s.ActiveServer, err = activeServer(group)
-			if err != nil {
-				return s, fmt.Errorf("failed to get active server: %w", err)
-			}
-		default:
-			s.ActiveServer = selected
+	switch selected {
+	case autoAllTag, autoLanternTag, autoUserTag:
+		s.ActiveServer, err = activeServer(group)
+		if err != nil {
+			return s, fmt.Errorf("failed to get active server: %w", err)
 		}
+	default:
+		s.ActiveServer = selected
 	}
 	slog.Debug("Tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
 	return s, nil
