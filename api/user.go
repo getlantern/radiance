@@ -499,3 +499,22 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
 }
+
+type LinkResponse struct {
+	*protos.BaseResponse `json:",inline"`
+	UserID               int    `json:"userID"`
+	ProToken             string `json:"token"`
+}
+
+// DeviceRemove removes a device from the user's account.
+func (a *APIClient) DeviceRemove(ctx context.Context, deviceID string) (LinkResponse, error) {
+	query := map[string]string{
+		"deviceId": deviceID,
+	}
+	req := a.authWc.NewRequest(query, nil, nil)
+	var resp LinkResponse
+	if err := a.proWC.Post(ctx, "/user-link-remove", req, &resp); err != nil {
+		return LinkResponse{}, err
+	}
+	return resp, nil
+}
