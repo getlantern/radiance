@@ -49,8 +49,8 @@ type tunnel struct {
 	clashServer *clashapi.Server
 	logFactory  sblog.ObservableFactory
 
-	svrFileWatcher *internal.FileWatcher
-	reloadAccess   sync.Mutex
+	// svrFileWatcher *internal.FileWatcher
+	reloadAccess sync.Mutex
 
 	cancel  context.CancelFunc
 	closers []io.Closer
@@ -144,15 +144,15 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	}
 
 	// create file watcher for server changes
-	svrsPath := filepath.Join(dataPath, common.ServersFileName)
-	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
-		if err := t.reloadOptions(svrsPath); err != nil {
-			slog.Error("Failed to reload servers", "error", err)
-		} else {
-			slog.Debug("Servers reloaded successfully")
-		}
-	})
-	t.svrFileWatcher = svrWatcher
+	// svrsPath := filepath.Join(dataPath, common.ServersFileName)
+	// svrWatcher := internal.NewFileWatcher(svrsPath, func() {
+	// 	if err := t.reloadOptions(svrsPath); err != nil {
+	// 		slog.Error("Failed to reload servers", "error", err)
+	// 	} else {
+	// 		slog.Debug("Servers reloaded successfully")
+	// 	}
+	// })
+	// t.svrFileWatcher = svrWatcher
 	slog.Info("Tunnel initializated")
 	return nil
 }
@@ -178,11 +178,11 @@ func (t *tunnel) connect() (err error) {
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	cmdSvr.SetService(t.lbService)
 
-	if err = t.svrFileWatcher.Start(); err != nil {
-		slog.Error("Failed to start user server file watcher", "error", err)
-		return fmt.Errorf("starting user server file watcher: %w", err)
-	}
-	tInstance.closers = append(tInstance.closers, t.svrFileWatcher)
+	// if err = t.svrFileWatcher.Start(); err != nil {
+	// 	slog.Error("Failed to start user server file watcher", "error", err)
+	// 	return fmt.Errorf("starting user server file watcher: %w", err)
+	// }
+	// tInstance.closers = append(tInstance.closers, t.svrFileWatcher)
 
 	slog.Info("Tunnel connection established")
 	return nil
@@ -192,7 +192,11 @@ func (t *tunnel) connectTo(group, tag string) (err error) {
 	slog.Log(nil, internal.LevelTrace, "Connecting to server", "group", group, "tag", tag)
 	err = t.cacheFile.StoreMode(group)
 	if err == nil {
-		err = t.cacheFile.StoreSelected(group, tag)
+		real := tag
+		if isFake(group, tag) {
+			real = "wireguard"
+		}
+		err = t.cacheFile.StoreSelected(group, real)
 	}
 	if err != nil {
 		t.cacheFile.Close()

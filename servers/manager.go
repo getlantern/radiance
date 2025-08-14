@@ -155,7 +155,56 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 
 func (m *Manager) setServers(group ServerGroup, options Options) error {
 	switch group {
-	case SGLantern, SGUser:
+	case SGLantern:
+		ep := options.Endpoints[0]
+		if ep.Tag != "wireguard" {
+			break
+		}
+		loc := options.Locations[ep.Tag]
+		loc.CountryCode = "SG"
+
+		options.Endpoints = []option.Endpoint{ep,
+			{
+				Tag:     "tls",
+				Type:    "wireguard",
+				Options: ep.Options,
+			},
+			{
+				Tag:     "vmess",
+				Type:    "wireguard",
+				Options: ep.Options,
+			},
+			{
+				Tag:     "algeneva",
+				Type:    "wireguard",
+				Options: ep.Options,
+			},
+		}
+		options.Locations = map[string]C.ServerLocation{
+			"wireguard": loc,
+			"tls": C.ServerLocation{
+				Country:     "Germany",
+				City:        "Frankfurt",
+				Latitude:    50.110924,
+				Longitude:   8.682127,
+				CountryCode: "DE",
+			},
+			"vmess": C.ServerLocation{
+				Country:     "United States",
+				City:        "Ashburn",
+				Latitude:    39.030,
+				Longitude:   77.490,
+				CountryCode: "US",
+			},
+			"algeneva": C.ServerLocation{
+				Country:     "United States",
+				City:        "Los Angeles",
+				Latitude:    33.4484,
+				Longitude:   118.2437,
+				CountryCode: "US",
+			},
+		}
+	case SGUser:
 	default:
 		return fmt.Errorf("invalid server group: %s", group)
 	}

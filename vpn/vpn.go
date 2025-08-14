@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -72,6 +74,8 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	if err := establishConnection(group, tag, opts, path, platIfce); err != nil {
 		return fmt.Errorf("failed to open tunnel: %w", err)
 	}
+
+	setFakeServer(group, tag)
 	return nil
 }
 
@@ -108,11 +112,30 @@ func Disconnect() error {
 	return nil
 }
 
+var fakeSelected string
+
+func isFake(group, tag string) bool {
+	return group == servers.SGLantern && tag != autoLanternTag
+}
+
+func setFakeServer(group, tag string) {
+	if isFake(group, tag) {
+		fakeSelected = tag
+	} else {
+		fakeSelected = ""
+	}
+}
+
 func selectServer(group, tag string) error {
 	cc := libbox.NewStandaloneCommandClient()
-	if err := cc.SelectOutbound(group, tag); err != nil {
+	real := tag
+	if isFake(group, tag) {
+		real = "wireguard"
+	}
+	if err := cc.SelectOutbound(group, real); err != nil {
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
+	setFakeServer(group, tag)
 
 	res, _ := sendCmd(libbox.CommandClashMode)
 	if res.clashMode == group {
@@ -147,6 +170,8 @@ func GetStatus() (Status, error) {
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
+	} else if isFake(group, selected) {
+		selected = fakeSelected
 	}
 	s := Status{
 		TunnelOpen:     isOpen(),
@@ -156,15 +181,17 @@ func GetStatus() (Status, error) {
 		return s, nil
 	}
 
+	var active string
 	switch selected {
 	case autoAllTag, autoLanternTag, autoUserTag:
-		s.ActiveServer, err = activeServer(group)
+		active, err = activeServer(group)
 		if err != nil {
 			return s, fmt.Errorf("failed to get active server: %w", err)
 		}
 	default:
-		s.ActiveServer = selected
+		active = selected
 	}
+	s.ActiveServer = active
 	slog.Debug("Tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
 	return s, nil
 }
@@ -210,6 +237,17 @@ func selectedServer() (string, string, error) {
 	return group, tag, nil
 }
 
+var (
+	fakeActive  = randTag()
+	activeTimer *time.Timer
+	timerAccess sync.Mutex
+)
+
+func randTag() string {
+	n := rand.Intn(4)
+	return []string{"wireguard", "tls", "vmess", "algeneva"}[n]
+}
+
 func activeServer(group string) (string, error) {
 	res, err := sendCmd(libbox.CommandGroup)
 	if err != nil {
@@ -234,6 +272,23 @@ func activeServer(group string) (string, error) {
 			}
 		}
 	}
+	if group == servers.SGLantern {
+		timerAccess.Lock()
+		defer timerAccess.Unlock()
+		if activeTimer == nil {
+			// get random int between 2 and 10
+			n := rand.Intn(9) + 2
+			wait := time.Duration(n) * time.Second
+			activeTimer = time.AfterFunc(wait, func() {
+				fakeActive = randTag()
+				timerAccess.Lock()
+				activeTimer = nil
+				timerAccess.Unlock()
+			})
+		}
+		return fakeActive, nil
+	}
+
 	return resolveActive(groupMap, group)
 }
 

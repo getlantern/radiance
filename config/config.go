@@ -270,17 +270,27 @@ func cleanTags(cfg *C.ConfigResponse) {
 	opts := cfg.Options
 	locs := cfg.OutboundLocations
 	nlocs := make(map[string]*C.ServerLocation, len(locs))
+	clean := func(tag string) string {
+		tag = strings.TrimPrefix(tag, "singbox")
+		parts := strings.SplitN(tag, "-", 4)
+		return parts[0] + "-" + parts[1] + "-" + parts[2]
+	}
 	for i := 0; i < len(opts.Outbounds); i++ {
 		tag := opts.Outbounds[i].Tag
 		loc := locs[tag]
-		opts.Outbounds[i].Tag = strings.TrimPrefix(tag, "singbox")
+		opts.Outbounds[i].Tag = clean(tag)
 		nlocs[opts.Outbounds[i].Tag] = loc
 	}
 	for i := 0; i < len(opts.Endpoints); i++ {
 		tag := opts.Endpoints[i].Tag
 		loc := locs[tag]
-		opts.Endpoints[i].Tag = strings.TrimPrefix(tag, "singbox")
+		opts.Endpoints[i].Tag = clean(tag)
 		nlocs[opts.Endpoints[i].Tag] = loc
+
+		if opts.Endpoints[i].Type == "wireguard" {
+			opts.Endpoints[i].Tag = "wireguard"
+			nlocs["wireguard"] = loc
+		}
 	}
 	cfg.OutboundLocations = nlocs
 }
@@ -413,7 +423,7 @@ func saveConfig(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-	return os.WriteFile(path, buf, 0o600)
+	return os.WriteFile(path, buf, 0o644)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.
