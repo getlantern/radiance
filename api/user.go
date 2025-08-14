@@ -223,12 +223,10 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	if err != nil {
 		return nil, err
 	}
-	// If login was successful, update the user info and cache the user data.
+	// regardless of state we need to save login information
 	// We have device flow limit on login
-	if resp.Success {
-		a.userInfo.SetData(resp)
-		a.userData = resp
-	}
+	a.userInfo.SetData(resp)
+	a.userData = resp
 	a.salt = salt
 	if err := writeSalt(salt, a.saltPath); err != nil {
 		return nil, err
@@ -507,14 +505,17 @@ type LinkResponse struct {
 }
 
 // DeviceRemove removes a device from the user's account.
-func (a *APIClient) DeviceRemove(ctx context.Context, deviceID string) (LinkResponse, error) {
+func (a *APIClient) DeviceRemove(ctx context.Context, deviceID string) (*LinkResponse, error) {
 	query := map[string]string{
 		"deviceId": deviceID,
 	}
-	req := a.authWc.NewRequest(query, nil, nil)
-	var resp LinkResponse
+	req := a.proWC.NewRequest(nil, nil, query)
+	var resp *LinkResponse
 	if err := a.proWC.Post(ctx, "/user-link-remove", req, &resp); err != nil {
-		return LinkResponse{}, err
+		return nil, err
+	}
+	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
+		return nil, fmt.Errorf("failed to remove device: %s", resp.BaseResponse.Error)
 	}
 	return resp, nil
 }

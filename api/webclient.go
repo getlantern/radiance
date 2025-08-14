@@ -83,7 +83,7 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
-	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
+	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
 }
 
 func (wc *webClient) Get(ctx context.Context, path string, req *resty.Request, res any) error {
@@ -108,8 +108,8 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 		return fmt.Errorf("error sending request: %w", err)
 	}
 
-	// print cutl command for debugging
-	fmt.Println(req.GenerateCurlCommand())
+	// print curl command for debugging
+	fmt.Printf("curl %s\n", req.GenerateCurlCommand())
 
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(resp.Body()))
