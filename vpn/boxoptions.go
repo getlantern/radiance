@@ -146,7 +146,7 @@ func baseOpts() O.Options {
 							RuleSet: []string{splitTunnelTag},
 						},
 						RuleAction: O.RuleAction{
-							Action: C.RuleActionRejectMethodDefault,
+							Action: C.RuleActionTypeReject,
 						},
 					},
 				},
