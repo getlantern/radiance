@@ -146,6 +146,17 @@ func baseOpts() O.Options {
 							RuleSet: []string{splitTunnelTag},
 						},
 						RuleAction: O.RuleAction{
+							Action: C.RuleActionRejectMethodDefault,
+						},
+					},
+				},
+				{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: O.DefaultRule{
+						RawDefaultRule: O.RawDefaultRule{
+							IPIsPrivate: true,
+						},
+						RuleAction: O.RuleAction{
 							Action: C.RuleActionTypeRoute,
 							RouteOptions: O.RouteActionOptions{
 								Outbound: "direct",
@@ -156,6 +167,15 @@ func baseOpts() O.Options {
 				groupRule(autoAllTag),
 				groupRule(servers.SGLantern),
 				groupRule(servers.SGUser),
+				{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: O.DefaultRule{
+						RawDefaultRule: O.RawDefaultRule{},
+						RuleAction: O.RuleAction{
+							Action: C.RuleActionRejectMethodDefault,
+						},
+					},
+				},
 			},
 			RuleSet: []O.RuleSet{
 				{
@@ -311,13 +331,13 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
 
-	if src.Route != nil {
-		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
-		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
-	}
-	if src.DNS != nil {
-		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
-	}
+	// if src.Route != nil {
+	// 	dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
+	// 	dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
+	// }
+	// if src.DNS != nil {
+	// 	dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
+	// }
 
 	var tags []string
 	for _, out := range src.Outbounds {
@@ -386,7 +406,6 @@ func groupRule(group string) O.Rule {
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
 			RawDefaultRule: O.RawDefaultRule{
-				Inbound:   []string{"tun-in"},
 				ClashMode: group,
 			},
 			RuleAction: O.RuleAction{
