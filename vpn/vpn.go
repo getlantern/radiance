@@ -31,7 +31,10 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
 	case servers.SGUser:
 		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
-	case "all", "":
+	case "":
+		group = autoAllTag
+		fallthrough // fall through to handle empty group as "all"
+	case "all":
 		if isOpen() {
 			cc := libbox.NewStandaloneCommandClient()
 			if err := cc.SetClashMode(autoAllTag); err != nil {
