@@ -172,7 +172,7 @@ func baseOpts() O.Options {
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{},
 						RuleAction: O.RuleAction{
-							Action: C.RuleActionRejectMethodDefault,
+							Action: C.RuleActionTypeReject,
 						},
 					},
 				},
