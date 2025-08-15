@@ -139,14 +139,17 @@ func baseOpts() O.Options {
 						},
 					},
 				},
-				{
+				{ // split tunnel rule
 					Type: C.RuleTypeDefault,
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{
 							RuleSet: []string{splitTunnelTag},
 						},
 						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeReject,
+							Action: C.RuleActionTypeRoute,
+							RouteOptions: O.RouteActionOptions{
+								Outbound: "direct",
+							},
 						},
 					},
 				},
@@ -167,7 +170,7 @@ func baseOpts() O.Options {
 				groupRule(autoAllTag),
 				groupRule(servers.SGLantern),
 				groupRule(servers.SGUser),
-				{
+				{ // catch-all rule to ensure no fallthrough
 					Type: C.RuleTypeDefault,
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{},

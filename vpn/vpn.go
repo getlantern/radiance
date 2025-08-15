@@ -31,10 +31,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
 	case servers.SGUser:
 		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
-	case "":
-		group = autoAllTag
-		fallthrough // fall through to handle empty group as "all"
-	case "all":
+	case autoAllTag, "all", "":
 		if isOpen() {
 			cc := libbox.NewStandaloneCommandClient()
 			if err := cc.SetClashMode(autoAllTag); err != nil {
@@ -42,7 +39,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
 			}
 			return nil
 		}
-		return connect(group, "", platIfce)
+		return connect(autoAllTag, "", platIfce)
 	default:
 		return fmt.Errorf("invalid group: %s", group)
 	}
