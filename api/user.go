@@ -225,6 +225,7 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	}
 	// regardless of state we need to save login information
 	// We have device flow limit on login
+
 	a.userInfo.SetData(resp)
 	a.userData = resp
 	a.salt = salt
@@ -314,13 +315,12 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 	if a.userData == nil {
 		return ErrNotLoggedIn
 	}
-	lowerCaseEmail := strings.ToLower(a.userData.Id)
+	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return err
 	}
-
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
@@ -393,7 +393,7 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    a.userData.Id,
+		OldEmail:    a.userData.LegacyUserData.Email,
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -408,9 +408,8 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err := a.userInfo.SetData(a.userData); err != nil {
 		return err
 	}
-
 	a.salt = newSalt
-	a.userData.Id = newEmail
+	a.userData.LegacyUserData.Email = newEmail
 	return nil
 }
 
