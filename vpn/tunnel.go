@@ -24,9 +24,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing-box/log"
 	sblog "github.com/sagernet/sing-box/log"
-	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
 	sbgroup "github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
@@ -118,7 +116,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	}
 
 	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
-	service.MustRegister[log.Factory](t.ctx, t.logFactory)
+	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
 	// create the cache file service
 	if opts.Experimental.CacheFile == nil {
@@ -230,6 +228,7 @@ func closeTunnel() error {
 	// copying the mutex is fine here because we're not using it anymore
 	//nolint:staticcheck
 	t := *tInstance
+	t.lbService.Close()
 	tInstance = nil
 	slog.Log(nil, internal.LevelTrace, "Clearing cmd server tunnel reference")
 	cmdSvr.SetService(nil)
@@ -418,7 +417,7 @@ type outCreator struct {
 	errs          []error
 }
 
-func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []option.Endpoint) {
+func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []O.Endpoint) {
 	o.mgr = mgr
 	o.typ = "endpoint"
 	for _, opts := range endpoints {
@@ -426,7 +425,7 @@ func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []op
 	}
 }
 
-func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []option.Outbound) {
+func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []O.Outbound) {
 	o.mgr = mgr
 	o.typ = "outbound"
 	for _, opts := range outbounds {
