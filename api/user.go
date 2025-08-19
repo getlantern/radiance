@@ -505,10 +505,10 @@ type LinkResponse struct {
 
 // DeviceRemove removes a device from the user's account.
 func (a *APIClient) DeviceRemove(ctx context.Context, deviceID string) (*LinkResponse, error) {
-	query := map[string]string{
+	data := map[string]string{
 		"deviceId": deviceID,
 	}
-	req := a.proWC.NewRequest(nil, nil, query)
+	req := a.proWC.NewRequest(nil, nil, data)
 	var resp *LinkResponse
 	if err := a.proWC.Post(ctx, "/user-link-remove", req, &resp); err != nil {
 		return nil, err

@@ -14,6 +14,7 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 )
 
 type webClient struct {
@@ -83,7 +84,10 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
-	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
+	if curl, _ := env.Get[bool](env.PrintCurl); curl {
+		return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
+	}
+	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
 }
 
 func (wc *webClient) Get(ctx context.Context, path string, req *resty.Request, res any) error {
