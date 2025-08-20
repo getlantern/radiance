@@ -503,14 +503,14 @@ type LinkResponse struct {
 	ProToken             string `json:"token"`
 }
 
-// DeviceRemove removes a device from the user's account.
-func (a *APIClient) DeviceRemove(ctx context.Context, deviceID string) (*LinkResponse, error) {
+// RemoveDevice removes a device from the user's account.
+func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkResponse, error) {
 	data := map[string]string{
 		"deviceId": deviceID,
 	}
 	req := a.proWC.NewRequest(nil, nil, data)
-	var resp *LinkResponse
-	if err := a.proWC.Post(ctx, "/user-link-remove", req, &resp); err != nil {
+	resp := &LinkResponse{}
+	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
 		return nil, err
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {

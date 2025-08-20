@@ -84,10 +84,11 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
+	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
 	if curl, _ := env.Get[bool](env.PrintCurl); curl {
-		return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
+		req = req.SetDebug(true).EnableGenerateCurlOnDebug()
 	}
-	return wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
+	return req
 }
 
 func (wc *webClient) Get(ctx context.Context, path string, req *resty.Request, res any) error {
