@@ -218,7 +218,8 @@ func buildOptions(group, path string) (O.Options, error) {
 	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
 	opts.Experimental.ClashAPI.DefaultMode = group
 
-	splitTunnelPath := filepath.Join(path, splitTunnelFile)
+	splitTunnelPath := splitTunnelFile
+	//splitTunnelPath := filepath.Join(path, splitTunnelFile)
 	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelPath
 
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
