@@ -25,6 +25,7 @@ import (
 	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 
 	sbx "github.com/getlantern/sing-box-extensions"
 	exO "github.com/getlantern/sing-box-extensions/option"
@@ -295,8 +296,9 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 			opts.PrivateKey = privateKey.String()
 			if runtime.GOOS == "windows" {
 				if opts.Inet6BindAddress != nil {
-					addr, _ := netip.ParseAddr("[::0]")
-					opts.Inet6BindAddress.Build(addr)
+					addr, _ := netip.ParseAddr("::")
+					bAddr := badoption.Addr(addr)
+					opts.Inet6BindAddress = &bAddr
 				}
 			}
 
