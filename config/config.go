@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -293,7 +294,10 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 			if runtime.GOOS == "windows" {
-				opts.Inet6BindAddress = nil
+				if opts.Inet6BindAddress != nil {
+					addr, _ := netip.ParseAddr("[::0]")
+					opts.Inet6BindAddress.Build(addr)
+				}
 			}
 
 		case *exO.AmneziaEndpointOptions:
