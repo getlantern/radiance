@@ -297,7 +297,7 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 			if runtime.GOOS == "windows" {
 				if opts.Inet4BindAddress == nil {
 					var addr badoption.Addr
-					nAddr, _ := netip.ParseAddr(fmt.Sprintf("0.0.0.0:%d", opts.ListenPort))
+					nAddr, _ := netip.ParseAddr("0.0.0.0")
 					addr.Build(nAddr)
 					opts.Inet4BindAddress = &addr
 				}
