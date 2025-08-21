@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,7 @@ import (
 	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 
 	sbx "github.com/getlantern/sing-box-extensions"
 	exO "github.com/getlantern/sing-box-extensions/option"
@@ -241,6 +244,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
+
 	if err := ch.setConfigAndNotify(&Config{ConfigResponse: confResp}); err == nil {
 		cfg := ch.config.Load().(*Config).ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
@@ -290,6 +294,16 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 		switch opts := endpoint.Options.(type) {
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
+			if runtime.GOOS == "windows" {
+				if opts.Inet4BindAddress == nil {
+					var addr badoption.Addr
+					nAddr, _ := netip.ParseAddr(fmt.Sprintf(":%d", opts.ListenPort))
+					addr.Build(nAddr)
+					opts.Inet4BindAddress = &addr
+				}
+				opts.Inet6BindAddress = nil
+			}
+
 		case *exO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 		default:
