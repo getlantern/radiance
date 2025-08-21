@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -176,7 +177,9 @@ func (t *tunnel) connect() (err error) {
 	slog.Debug("Libbox service started")
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
-	cmdSvr.SetService(t.lbService)
+	if cmdSvr != nil {
+		cmdSvr.SetService(t.lbService)
+	}
 
 	if err = t.svrFileWatcher.Start(); err != nil {
 		slog.Error("Failed to start user server file watcher", "error", err)
@@ -204,6 +207,9 @@ func (t *tunnel) connectTo(group, tag string) (err error) {
 }
 
 func startCmdServer() error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	cmdSvrOnce.Do(func() {
 		slog.Debug("Starting command server")
 		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
@@ -213,6 +219,9 @@ func startCmdServer() error {
 }
 
 func closeCmdServer() error {
+	if cmdSvr == nil {
+		return nil
+	}
 	if err := cmdSvr.Close(); err != nil {
 		return fmt.Errorf("closing command server: %w", err)
 	}
