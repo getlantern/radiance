@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,7 +24,6 @@ import (
 	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/common/json/badoption"
 
 	sbx "github.com/getlantern/sing-box-extensions"
 	exO "github.com/getlantern/sing-box-extensions/option"
@@ -295,12 +293,6 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 			if runtime.GOOS == "windows" {
-				if opts.Inet4BindAddress == nil {
-					var addr badoption.Addr
-					nAddr, _ := netip.ParseAddr("0.0.0.0")
-					addr.Build(nAddr)
-					opts.Inet4BindAddress = &addr
-				}
 				opts.Inet6BindAddress = nil
 			}
 
