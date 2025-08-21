@@ -295,12 +295,10 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 			if runtime.GOOS == "windows" {
-				if opts.Inet4BindAddress == nil {
-					var addr badoption.Addr
-					nAddr, _ := netip.ParseAddr("0.0.0.0")
-					addr.Build(nAddr)
-					opts.Inet4BindAddress = &addr
-				}
+				var addr badoption.Addr
+				nAddr, _ := netip.ParseAddr("0.0.0.0")
+				addr = badoption.Addr(nAddr)
+				opts.Inet4BindAddress = &addr
 				opts.Inet6BindAddress = nil
 			}
 
