@@ -223,12 +223,11 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	if err != nil {
 		return nil, err
 	}
-	// If login was successful, update the user info and cache the user data.
+	// regardless of state we need to save login information
 	// We have device flow limit on login
-	if resp.Success {
-		a.userInfo.SetData(resp)
-		a.userData = resp
-	}
+
+	a.userInfo.SetData(resp)
+	a.userData = resp
 	a.salt = salt
 	if err := writeSalt(salt, a.saltPath); err != nil {
 		return nil, err
@@ -316,13 +315,12 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 	if a.userData == nil {
 		return ErrNotLoggedIn
 	}
-	lowerCaseEmail := strings.ToLower(a.userData.Id)
+	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return err
 	}
-
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
@@ -395,7 +393,7 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    a.userData.Id,
+		OldEmail:    a.userData.LegacyUserData.Email,
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -410,9 +408,8 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err := a.userInfo.SetData(a.userData); err != nil {
 		return err
 	}
-
 	a.salt = newSalt
-	a.userData.Id = newEmail
+	a.userData.LegacyUserData.Email = newEmail
 	return nil
 }
 
@@ -498,4 +495,26 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 	query.Set("proToken", a.userInfo.LegacyToken())
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
+}
+
+type LinkResponse struct {
+	*protos.BaseResponse `json:",inline"`
+	UserID               int    `json:"userID"`
+	ProToken             string `json:"token"`
+}
+
+// RemoveDevice removes a device from the user's account.
+func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkResponse, error) {
+	data := map[string]string{
+		"deviceId": deviceID,
+	}
+	req := a.proWC.NewRequest(nil, nil, data)
+	resp := &LinkResponse{}
+	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
+		return nil, err
+	}
+	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
+		return nil, fmt.Errorf("failed to remove device: %s", resp.BaseResponse.Error)
+	}
+	return resp, nil
 }

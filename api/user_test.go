@@ -101,8 +101,10 @@ func TestStartChangeEmail(t *testing.T) {
 	email := "test@example.com"
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
-		saltPath:   filepath.Join(t.TempDir(), saltFileName),
-		userData:   &protos.LoginResponse{Id: email},
+		saltPath: filepath.Join(t.TempDir(), saltFileName),
+		userData: &protos.LoginResponse{LegacyUserData: &protos.LoginResponse_UserData{
+			Email: email,
+		}},
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
@@ -112,8 +114,10 @@ func TestStartChangeEmail(t *testing.T) {
 
 func TestCompleteChangeEmail(t *testing.T) {
 	ac := &APIClient{
-		saltPath:   filepath.Join(t.TempDir(), saltFileName),
-		userData:   &protos.LoginResponse{Id: "test@example.com"},
+		saltPath: filepath.Join(t.TempDir(), saltFileName),
+		userData: &protos.LoginResponse{Id: "test@example.com", LegacyUserData: &protos.LoginResponse_UserData{
+			Email: "test@example.com",
+		}},
 		authClient: &mockAuthClient{},
 		userInfo:   &mockUserInfo{},
 	}
@@ -131,7 +135,7 @@ func TestDeleteAccount(t *testing.T) {
 		salt:       authClient.salt[email],
 		userInfo:   &mockUserInfo{},
 	}
-	err := ac.DeleteAccount(context.Background(), "test@example.com","password")
+	err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
