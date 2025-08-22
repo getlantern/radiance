@@ -292,7 +292,7 @@ func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes
 			opts.PrivateKey = privateKey.String()
 			// Requires privilege and cannot conflict with exists system interfaces
 			// System try to use system env for mobile we need to tun device
-			opts.System = (common.IsAndroid() || common.IsIOS())
+			opts.System = !(common.IsAndroid() || common.IsIOS())
 		case *exO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 		default:
