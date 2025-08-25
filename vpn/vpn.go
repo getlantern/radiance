@@ -276,56 +276,38 @@ func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
 	return nil, fmt.Errorf("group not found: %s", group)
 }
 
-type Connection struct {
-	CreatedAt    time.Time
-	Destination  string
-	Domain       string
-	Upload       int64
-	Download     int64
-	Outbound     string
-	OutboundType string
-	ChainList    []string
-}
+type Connection = libbox.Connection
 
 // ActiveConnections returns a list of currently active connections, ordered from newest to oldest.
 // A non-nil error is only returned if there was an error retrieving the connections, or if the
 // tunnel is closed. If there are no active connections and the tunnel is open, an empty slice is
 // returned without an error.
 func ActiveConnections() ([]Connection, error) {
-	connections, err := activeConnections()
+	connections, err := Connections()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active connections: %w", err)
 	}
 
-	slices.SortStableFunc(connections, func(a, b Connection) int {
-		return -a.CreatedAt.Compare(b.CreatedAt)
+	slices.DeleteFunc(connections, func(c Connection) bool {
+		return c.ClosedAt != 0
 	})
 	return connections, nil
 }
 
-func activeConnections() ([]Connection, error) {
+func Connections() ([]Connection, error) {
 	res, err := sendCmd(libbox.CommandConnections)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get active connections: %w", err)
+		return nil, fmt.Errorf("failed to get connections: %w", err)
 	}
 	if res.connections == nil {
-		return nil, errors.New("no active connections found")
+		return nil, errors.New("no connections found")
 	}
-	res.connections.FilterState(libbox.ConnectionStateActive)
+	res.connections.FilterState(libbox.ConnectionStateAll)
+	res.connections.SortByDate()
 	var connections []Connection
 	iter := res.connections.Iterator()
 	for iter.HasNext() {
-		lbconn := *(iter.Next())
-		conn := Connection{
-			CreatedAt:    time.UnixMilli(lbconn.CreatedAt),
-			Destination:  lbconn.Destination,
-			Domain:       lbconn.Domain,
-			Upload:       lbconn.Uplink,
-			Download:     lbconn.Downlink,
-			Outbound:     lbconn.Outbound,
-			OutboundType: lbconn.OutboundType,
-			ChainList:    append([]string{}, lbconn.ChainList...),
-		}
+		conn := *(iter.Next())
 		connections = append(connections, conn)
 	}
 	return connections, nil
