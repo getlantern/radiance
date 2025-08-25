@@ -24,6 +24,7 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/internal/ops"
 	"github.com/getlantern/radiance/servers"
 
 	"github.com/getlantern/radiance/config"
@@ -199,6 +200,7 @@ func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error
 
 	// Get a tracer for your application/package
 	tracer = otel.Tracer("radiance")
+	ops.InitGlobalContext("radiance", common.ClientVersion, "", r.userInfo.DeviceID(), func() bool { return false }, func() string { return "" })
 	return nil
 }
 
