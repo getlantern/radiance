@@ -292,12 +292,12 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 			opts.PrivateKey = privateKey.String()
 			// Requires privilege and cannot conflict with existing system interfaces
 			// System tries to use system env; for mobile we need to tun device
-			opts.System = !(common.IsAndroid() || common.IsIOS())
+			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
 		case *exO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 			// Requires privilege and cannot conflict with existing system interfaces
 			// System tries to use system env; for mobile we need to tun device
-			opts.System = !(common.IsAndroid() || common.IsIOS())
+			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
 		default:
 		}
 	}
