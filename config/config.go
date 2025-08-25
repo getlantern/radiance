@@ -237,7 +237,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	cleanTags(&confResp)
 
-	if err = settingWGPrivateKeyInConfig(confResp.Options.Endpoints, privateKey); err != nil {
+	if err = setWireGuardKeyInOptions(confResp.Options.Endpoints, privateKey); err != nil {
 		slog.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
@@ -285,13 +285,19 @@ func cleanTags(cfg *C.ConfigResponse) {
 	cfg.OutboundLocations = nlocs
 }
 
-func settingWGPrivateKeyInConfig(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
+func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
 	for _, endpoint := range endpoints {
 		switch opts := endpoint.Options.(type) {
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
+			// Requires privilege and cannot conflict with existing system interfaces
+			// System tries to use system env; for mobile we need to tun device
+			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
 		case *exO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
+			// Requires privilege and cannot conflict with existing system interfaces
+			// System tries to use system env; for mobile we need to tun device
+			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
 		default:
 		}
 	}
