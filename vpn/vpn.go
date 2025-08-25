@@ -19,29 +19,34 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/internal/ops"
 	"github.com/getlantern/radiance/servers"
 )
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
-func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
+func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
+	op := ops.Begin("quick_connect")
+	op.Set("group", group)
+	defer op.End()
+
 	switch group {
 	case servers.SGLantern:
-		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
+		return op.FailIf(ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
 	case servers.SGUser:
-		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
+		return op.FailIf(ConnectToServer(servers.SGUser, autoUserTag, platIfce))
 	case autoAllTag, "all", "":
 		if isOpen() {
 			cc := libbox.NewStandaloneCommandClient()
 			if err := cc.SetClashMode(autoAllTag); err != nil {
-				return fmt.Errorf("failed to set auto mode: %w", err)
+				return op.FailIf(fmt.Errorf("failed to set auto mode: %w", err))
 			}
 			return nil
 		}
-		return connect(autoAllTag, "", platIfce)
+		return op.FailIf(connect(autoAllTag, "", platIfce))
 	default:
-		return fmt.Errorf("invalid group: %s", group)
+		return op.FailIf(fmt.Errorf("invalid group: %s", group))
 	}
 }
 
@@ -77,10 +82,13 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 
 // Reconnect attempts to reconnect to the last connected server.
 func Reconnect(platIfce libbox.PlatformInterface) error {
+	op := ops.Begin("reconnect")
+	defer op.End()
+
 	if isOpen() {
 		return fmt.Errorf("tunnel is already open")
 	}
-	return connect("", "", platIfce)
+	return op.FailIf(connect("", "", platIfce))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -101,9 +109,11 @@ func isOpen() bool {
 
 // Disconnect closes the tunnel and all active connections.
 func Disconnect() error {
+	op := ops.Begin("disconnect")
+	defer op.End()
 	err := libbox.NewStandaloneCommandClient().ServiceClose()
 	if err != nil {
-		return fmt.Errorf("failed to disconnect: %w", err)
+		return op.FailIf(fmt.Errorf("failed to disconnect: %w", err))
 	}
 	return nil
 }
@@ -140,10 +150,12 @@ type Status struct {
 }
 
 func GetStatus() (Status, error) {
+	op := ops.Begin("get_status")
+	defer op.End()
 	slog.Debug("Retrieving tunnel status")
 	group, selected, err := selectedServer()
 	if err != nil {
-		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
+		return Status{}, op.FailIf(fmt.Errorf("failed to get selected server: %w", err))
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
@@ -160,7 +172,7 @@ func GetStatus() (Status, error) {
 	case autoAllTag, autoLanternTag, autoUserTag:
 		s.ActiveServer, err = activeServer(group)
 		if err != nil {
-			return s, fmt.Errorf("failed to get active server: %w", err)
+			return s, op.FailIf(fmt.Errorf("failed to get active server: %w", err))
 		}
 	default:
 		s.ActiveServer = selected
