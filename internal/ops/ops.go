@@ -14,7 +14,7 @@ import (
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/ops"
 	"github.com/getlantern/osversion"
-	"github.com/getlantern/radiance/common"
+	"github.com/sagernet/sing-box/experimental/libbox"
 )
 
 type contextKey string
@@ -140,22 +140,21 @@ func (op *Op) HTTPStatusCode(code int) *Op {
 	return op
 }
 
-// ChainedProxy attaches chained proxy information to the Context
-func (op *Op) ChainedProxy(name string, addr string, protocol string, network string, multiplexed bool) *Op {
-	return op.ProxyName(name).
-		ProxyAddr(addr).
-		ProxyProtocol(protocol).
-		ProxyNetwork(network).
-		ProxyMultiplexed(multiplexed)
-}
-
-func (op *Op) Outbound(name string, tag string, protocol string, addr string, network string) *Op {
-	op.Set("outbound_name", name)
-	op.Set("outbound_tag", tag)
-	op.Set("outbound_protocol", protocol)
-	op.Set("outbound_addr", addr)
-	op.Set("outbound_network", network)
-	return op
+func (op *Op) Connection(conn libbox.Connection) {
+	op.Set("inbound", conn.Inbound)
+	op.Set("inbound_type", conn.InboundType)
+	op.Set("outbound", conn.Outbound)
+	op.Set("outbound_type", conn.OutboundType)
+	op.Set("network", conn.Network)
+	op.Set("protocol", conn.Protocol)
+	op.Set("ip_version", conn.IPVersion)
+	op.Set("created_at", conn.CreatedAt)
+	op.Set("closed_at", conn.ClosedAt)
+	op.Set("rule", conn.Rule)
+	op.SetMetricSum("uplink", float64(conn.Uplink))
+	op.SetMetricSum("downlink", float64(conn.Uplink))
+	op.SetMetricMax("uplink_total", float64(conn.UplinkTotal))
+	op.SetMetricMax("downlink_total", float64(conn.DownlinkTotal))
 }
 
 // ProxyName attaches the name of the proxy and the inferred datacenter to the
