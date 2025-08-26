@@ -16,6 +16,9 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
@@ -295,18 +298,15 @@ type Connection = libbox.Connection
 // tunnel is closed. If there are no active connections and the tunnel is open, an empty slice is
 // returned without an error.
 func ActiveConnections() ([]Connection, error) {
-	connections, err := Connections()
+	connections, err := Connections(libbox.ConnectionStateActive)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active connections: %w", err)
 	}
 
-	slices.DeleteFunc(connections, func(c Connection) bool {
-		return c.ClosedAt != 0
-	})
 	return connections, nil
 }
 
-func Connections() ([]Connection, error) {
+func Connections(filter int32) ([]Connection, error) {
 	res, err := sendCmd(libbox.CommandConnections)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connections: %w", err)
@@ -314,7 +314,7 @@ func Connections() ([]Connection, error) {
 	if res.connections == nil {
 		return nil, errors.New("no connections found")
 	}
-	res.connections.FilterState(libbox.ConnectionStateAll)
+	res.connections.FilterState(filter)
 	res.connections.SortByDate()
 	var connections []Connection
 	iter := res.connections.Iterator()
@@ -323,6 +323,68 @@ func Connections() ([]Connection, error) {
 		connections = append(connections, conn)
 	}
 	return connections, nil
+}
+
+// HarvestConnectionMetrics periodically polls the number of active connections and their total
+// upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
+// that can be called to stop the polling.
+func HarvestConnectionMetrics(pollInterval time.Duration) func() {
+	ticker := time.NewTicker(pollInterval)
+	meter := otel.GetMeterProvider().Meter("radiance")
+	currentActiveConnections, _ := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
+	connectionDuration, _ := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
+	downlinkBytes, _ := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
+	uplinkBytes, _ := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
+	go func() {
+		// these lists stores connection IDs of connections we've already recorded metrics
+		alreadySeenActiveConnections := make([]string, 0)
+		alreadyRegistered := make([]string, 0)
+		for range ticker.C {
+			conns, err := Connections(libbox.ConnectionStateAll)
+			if err != nil {
+				slog.Warn("Failed to harvest connection metrics", "error", err)
+				continue
+			}
+
+			for _, c := range conns {
+				attributes := attribute.NewSet(
+					attribute.String("from_outbound", c.FromOutbound),
+					attribute.String("outbound_name", c.Outbound),
+					attribute.String("outbound_type", c.OutboundType),
+					attribute.String("inbound", c.Inbound),
+					attribute.String("inbound_type", c.InboundType),
+					attribute.String("network", c.Network),
+					attribute.String("protocol", c.Protocol),
+					attribute.Int("ip_version", int(c.IPVersion)),
+					attribute.String("rule", c.Rule),
+					attribute.StringSlice("chain_list", c.ChainList),
+				)
+
+				// not collecting duration of active connections
+				if c.ClosedAt == 0 && !slices.Contains(alreadySeenActiveConnections, c.ID) {
+					currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
+					alreadySeenActiveConnections = append(alreadySeenActiveConnections, c.ID)
+					continue
+				}
+
+				// already registered this closed connection
+				if slices.Contains(alreadyRegistered, c.ID) {
+					continue
+				}
+
+				duration := float64(c.ClosedAt - c.CreatedAt)
+				if duration > 0 {
+					connectionDuration.Record(context.Background(), duration/1000, metric.WithAttributeSet(attributes))
+				}
+
+				downlinkBytes.Add(context.Background(), int64(c.Downlink), metric.WithAttributeSet(attributes))
+				uplinkBytes.Add(context.Background(), int64(c.Uplink), metric.WithAttributeSet(attributes))
+
+				alreadyRegistered = append(alreadyRegistered, c.ID)
+			}
+		}
+	}()
+	return ticker.Stop
 }
 
 func sendCmd(cmd int32) (*cmdClientHandler, error) {
