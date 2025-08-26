@@ -103,6 +103,8 @@ var issueTypeMap = map[string]int{
 
 // Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
 func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEmail, country string) error {
+	ctx, op := ops.BeginCtx(ctx, "issue_reporter")
+	defer op.End()
 	// set a random email if it's empty
 	if userEmail == "" {
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
@@ -188,12 +190,13 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)
-		return err
+		return op.FailIf(err)
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
+		return op.FailIf(err)
 	}
 
 	defer resp.Body.Close()
@@ -203,7 +206,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 			slog.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
 		}
 		slog.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
-		return fmt.Errorf("issue report failed with status code %d", resp.StatusCode)
+		return op.FailIf(fmt.Errorf("issue report failed with status code %d", resp.StatusCode))
 	}
 
 	slog.Debug("issue report sent")
