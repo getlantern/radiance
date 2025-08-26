@@ -23,20 +23,14 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/internal/ops"
 	"github.com/getlantern/radiance/servers"
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const configPollInterval = 10 * time.Minute
-
-// Initially set the tracer to noop, so that we don't have to check for nil everywhere.
-var tracer trace.Tracer = noop.Tracer{}
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 
@@ -208,8 +202,9 @@ type IssueReport = issue.IssueReport
 
 // ReportIssue submits an issue report to the back-end with an optional user email
 func (r *Radiance) ReportIssue(email string, report IssueReport) error {
-	ctx, span := tracer.Start(context.Background(), "report-issue")
-	defer span.End()
+	op := ops.Begin("report-issue")
+	defer op.End()
+	ctx := ops.WithOp(context.Background(), op)
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
 	}
@@ -217,8 +212,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	// get country from the config returned by the backend
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		slog.Error("Failed to get country", "error", err)
-		span.RecordError(err)
+		slog.Warn("Failed to get config", "error", err)
 	} else {
 		country = cfg.ConfigResponse.Country
 	}
@@ -226,7 +220,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	err = r.issueReporter.Report(ctx, report, email, country)
 	if err != nil {
 		slog.Error("Failed to report issue", "error", err)
-		span.RecordError(err)
+		op.FailIf(err)
 		return fmt.Errorf("failed to report issue: %w", err)
 	}
 	slog.Info("Issue reported successfully")
@@ -307,8 +301,10 @@ type lazyDialingRoundTripper struct {
 var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
 
 func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := tracer.Start(req.Context(), "lazy-dialing-roundtrip")
-	defer span.End()
+	op := ops.Begin("lazy-dialing-roundtrip")
+	defer op.End()
+	ctx := ops.WithOp(req.Context(), op)
+
 	lz.smartTransportMu.Lock()
 
 	if lz.smartTransport == nil {
@@ -318,18 +314,17 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
-			span.RecordError(err)
 			// This typically just means we're offline
-			return nil, fmt.Errorf("could not create smart transport -- offline? %v", err)
+			return nil, op.FailIf(fmt.Errorf("could not create smart transport -- offline? %v", err))
 		}
 	}
 
 	lz.smartTransportMu.Unlock()
 	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
 	if err != nil {
-		span.RecordError(err)
+		op.FailIf(err)
 	} else {
-		span.SetAttributes(attribute.String("response.status", res.Status))
+		op.Set("response_status", res.Status)
 	}
 	return res, err
 }
