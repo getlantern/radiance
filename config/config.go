@@ -28,6 +28,7 @@ import (
 	exO "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal/ops"
 	"github.com/getlantern/radiance/servers"
 )
 
@@ -83,6 +84,7 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
+	options.HTTPClient.Transport = ops.NewRoundTripper(options.HTTPClient.Transport)
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ch := &ConfigHandler{
 		config:          atomic.Value{},

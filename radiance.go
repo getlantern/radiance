@@ -276,7 +276,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	}
 
 	httpClient := &http.Client{
-		Transport: lz,
+		Transport: ops.NewRoundTripper(lz),
 	}
 	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(

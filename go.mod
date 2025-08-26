@@ -74,6 +74,7 @@ require (
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
+	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
 	github.com/getlantern/errors v1.0.4 // indirect
@@ -130,6 +131,7 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/text v0.26.0 // indirect

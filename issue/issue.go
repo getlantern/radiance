@@ -17,6 +17,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal/ops"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -47,6 +48,7 @@ func NewIssueReporter(
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
+	httpClient.Transport = ops.NewRoundTripper(httpClient.Transport)
 	if subHandler == nil {
 		return nil, fmt.Errorf("user is nil")
 	}
