@@ -1,3 +1,4 @@
+// Package metrics provides OpenTelemetry setup for radiance
 package metrics
 
 import (
@@ -8,7 +9,7 @@ import (
 	"time"
 
 	"github.com/getlantern/common"
-	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/ops"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -24,7 +25,7 @@ import (
 
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, version, platform string, cfg common.ConfigResponse) (func(context.Context) error, error) {
 	if cfg.Features == nil {
 		cfg.Features = make(map[string]bool)
 	}
@@ -45,13 +46,13 @@ func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.
 		shutdownFuncs = nil
 		return err
 	}
-
+	serviceName := "radiance"
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			semconv.ServiceName("radiance"),
-			semconv.ServiceVersion(rcommon.Version),
+			semconv.ServiceName(serviceName),
+			semconv.ServiceVersion(version),
 			attribute.String("library.language", "go"),
-			attribute.String("platform", rcommon.Platform),
+			attribute.String("platform", platform),
 			attribute.Bool("pro", cfg.UserInfo.Pro),
 		),
 	)
@@ -69,6 +70,7 @@ func SetupOTelSDK(ctx context.Context, cfg common.ConfigResponse) (func(context.
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 		}
+		ops.EnableOpenTelemetry(serviceName)
 		// Successfully initialized tracer
 		shutdownFuncs = append(shutdownFuncs, shutdownFunc)
 		slog.Info("OpenTelemetry tracer initialized")
