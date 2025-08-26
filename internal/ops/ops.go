@@ -5,8 +5,6 @@ package ops
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/http"
 	"runtime"
 	"strings"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/ops"
 	"github.com/getlantern/osversion"
-	"github.com/sagernet/sing-box/experimental/libbox"
 )
 
 type contextKey string
@@ -92,17 +89,6 @@ func (op *Op) Set(key string, value any) *Op {
 	return op
 }
 
-// SetGlobal mimics the similar method from ops
-func SetGlobal(key string, value any) {
-	ops.SetGlobal(key, value)
-}
-
-// SetDynamic mimics the similar method from ops.Op
-func (op *Op) SetDynamic(key string, valueFN func() any) *Op {
-	op.wrapped.SetDynamic(key, valueFN)
-	return op
-}
-
 // SetGlobalDynamic mimics the similar method from ops
 func SetGlobalDynamic(key string, valueFN func() any) {
 	ops.SetGlobalDynamic(key, valueFN)
@@ -111,189 +97,6 @@ func SetGlobalDynamic(key string, valueFN func() any) {
 // FailIf mimics the similar method from ops.op
 func (op *Op) FailIf(err error) error {
 	return op.wrapped.FailIf(err)
-}
-
-// UserAgent attaches a user agent to the Context.
-func (op *Op) UserAgent(v string) *Op {
-	op.Set("user_agent", v)
-	return op
-}
-
-// Request attaches key information of an `http.Request` to the Context.
-func (op *Op) Request(req *http.Request) *Op {
-	if req == nil {
-		return op
-	}
-	op.Set("http_method", req.Method).
-		Set("http_proto", req.Proto)
-	op.OriginFromRequest(req)
-	return op
-}
-
-// Response attaches key information of an `http.Response` to the Context. If
-// the response has corresponding Request it will call Request internally.
-func (op *Op) Response(r *http.Response) *Op {
-	if r == nil {
-		return op
-	}
-	op.HTTPStatusCode(r.StatusCode)
-	op.Request(r.Request)
-	return op
-}
-
-func (op *Op) HTTPStatusCode(code int) *Op {
-	op.Set("http_status_code", code)
-	return op
-}
-
-func (op *Op) Connection(conn libbox.Connection) {
-	op.Set("inbound", conn.Inbound)
-	op.Set("inbound_type", conn.InboundType)
-	op.Set("outbound", conn.Outbound)
-	op.Set("outbound_type", conn.OutboundType)
-	op.Set("network", conn.Network)
-	op.Set("protocol", conn.Protocol)
-	op.Set("ip_version", conn.IPVersion)
-	op.Set("created_at", conn.CreatedAt)
-	op.Set("closed_at", conn.ClosedAt)
-	op.Set("rule", conn.Rule)
-	op.SetMetricSum("uplink", float64(conn.Uplink))
-	op.SetMetricSum("downlink", float64(conn.Uplink))
-	op.SetMetricMax("uplink_total", float64(conn.UplinkTotal))
-	op.SetMetricMax("downlink_total", float64(conn.DownlinkTotal))
-}
-
-// ProxyName attaches the name of the proxy and the inferred datacenter to the
-// Context
-func (op *Op) ProxyName(name string) *Op {
-	proxyName, dc := ProxyNameAndDC(name)
-	if proxyName != "" {
-		op.Set("proxy_name", proxyName)
-	}
-	if dc != "" {
-		op.Set("dc", dc)
-	}
-	return op
-}
-
-// ProxyNameAndDC extracts the canonical proxy name and datacenter from a given
-// full proxy name.
-func ProxyNameAndDC(name string) (proxyName string, dc string) {
-	hyphenIndexes := make([]int, 0, 5)
-	for i, r := range name {
-		if r == '-' {
-			hyphenIndexes = append(hyphenIndexes, i)
-		}
-	}
-
-	if len(hyphenIndexes) < 2 {
-		return
-	}
-
-	dc = name[hyphenIndexes[0]+1 : hyphenIndexes[1]]
-	if len(hyphenIndexes) > 3 {
-		proxyName = name[:hyphenIndexes[3]]
-	} else {
-		proxyName = name
-	}
-
-	return
-}
-
-// ProxyAddr attaches proxy server address to the Context
-func (op *Op) ProxyAddr(v string) *Op {
-	host, port, err := net.SplitHostPort(v)
-	if err == nil {
-		op.Set("proxy_host", host).Set("proxy_port", port)
-	}
-	return op
-}
-
-// ProxyProtocol attaches proxy server's protocol (http, https or obfs4) to the Context
-func (op *Op) ProxyProtocol(v string) *Op {
-	return op.Set("proxy_protocol", v)
-}
-
-// ProxyNetwork attaches proxy server's network (tcp or kcp) to the Context
-func (op *Op) ProxyNetwork(v string) *Op {
-	return op.Set("proxy_network", v)
-}
-
-func (op *Op) ProxyMultiplexed(v bool) *Op {
-	return op.Set("proxy_multiplexed", v)
-}
-
-// OriginFromRequest attaches the origin to the Context based on the request's
-// Host property.
-func (op *Op) OriginFromRequest(req *http.Request) *Op {
-	defaultPort := ""
-	if req.Method != http.MethodConnect {
-		defaultPort = "80"
-	}
-	return op.OriginPort(req.Host, defaultPort)
-}
-
-// OriginPort attaches the origin to the Context
-func (op *Op) OriginPort(origin string, defaultPort string) *Op {
-	_, port, _ := net.SplitHostPort(origin)
-	if port == "0" || port == "" {
-		port = defaultPort
-	}
-	op.Set("origin_port", port)
-	return op
-}
-
-// DialTime records a dial time relative to a given start time (in milliseconds)
-// if and only if there is no error.
-func (op *Op) DialTime(elapsed time.Duration, err error) *Op {
-	if err != nil {
-		return op
-	}
-	return op.SetMetricPercentile("dial_time", float64(elapsed.Nanoseconds())/1000000)
-}
-
-// BalancerDialTime records a balancer dial time relative to a given start time (in
-// milliseconds) if and only if there is no error.
-func (op *Op) BalancerDialTime(elapsed time.Duration, err error) *Op {
-	if err != nil {
-		return op
-	}
-	return op.SetMetricPercentile("balancer_dial_time", float64(elapsed.Nanoseconds())/1000000)
-}
-
-// CoreDialTime records a core dial time relative to a given start time (in
-// milliseconds) if and only if there is no error.
-func (op *Op) CoreDialTime(elapsed time.Duration, err error) *Op {
-	if err != nil {
-		return op
-	}
-	return op.SetMetricPercentile("core_dial_time", float64(elapsed.Nanoseconds())/1000000)
-}
-
-// SetMetric sets a named metric. Metrics will be reported as borda values
-// rather than dimensions.
-func (op *Op) SetMetric(name string, value Val) *Op {
-	return op.Set(name, value)
-}
-
-func (op *Op) SetMetricSum(name string, value float64) *Op {
-	return op.Set(name, Sum(value))
-}
-
-func (op *Op) SetMetricMin(name string, value float64) *Op {
-	return op.Set(name, Min(value))
-}
-
-func (op *Op) SetMetricMax(name string, value float64) *Op {
-	return op.Set(name, Max(value))
-}
-
-func (op *Op) SetMetricAvg(name string, value float64) *Op {
-	return op.Set(name, Avg(value))
-}
-
-func (op *Op) SetMetricPercentile(name string, value float64) *Op {
-	return op.Set(name, Percentile(value))
 }
 
 // InitGlobalContext configures global context info
