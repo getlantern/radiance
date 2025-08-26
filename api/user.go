@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal/ops"
 )
 
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
@@ -58,17 +59,19 @@ type UserDataResponse struct {
 	*protos.LoginResponse_UserData `json:",inline"`
 }
 
-// Create a new user account
+// NewUser creates a new user account
 func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
+	ctx, op := ops.BeginCtx(ctx, "new_user")
+	defer op.End()
 	var resp UserDataResponse
 	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	if resp.LoginResponse_UserData == nil {
 		slog.Error("creating new user", "error", "no user data in response")
-		return nil, fmt.Errorf("no user data in response")
+		return nil, op.FailIf(fmt.Errorf("no user data in response"))
 	}
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
@@ -78,7 +81,7 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	err = ac.userInfo.SetData(login)
 	if err != nil {
 		slog.Error("setting user data", "error", err)
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	// update the user data
 	ac.userData = login
@@ -87,20 +90,22 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 
 // UserData returns the user data
 func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
+	ctx, op := ops.BeginCtx(ctx, "user_data")
+	defer op.End()
 	var resp UserDataResponse
 	err := ac.proWC.Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
 		slog.Error("user data", "error", err)
-		return nil, fmt.Errorf("getting user data: %w", err)
+		return nil, op.FailIf(fmt.Errorf("getting user data: %w", err))
 	}
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err = fmt.Errorf("recevied bad response: %s", resp.Error)
 		slog.Error("user data", "error", err)
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	if resp.LoginResponse_UserData == nil {
 		slog.Error("user data", "error", "no user data in response")
-		return nil, fmt.Errorf("no user data in response")
+		return nil, op.FailIf(fmt.Errorf("no user data in response"))
 	}
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
@@ -110,7 +115,7 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 	err = ac.userInfo.SetData(login)
 	if err != nil {
 		slog.Error("setting user data", "error", err)
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	// update the user data
 	ac.userData = login
@@ -152,12 +157,14 @@ func (a *APIClient) DataCapInfo() (*DataCapInfo, error) {
 
 // SignUp signs the user up for an account.
 func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
+	ctx, op := ops.BeginCtx(ctx, "sign_up")
+	defer op.End()
 	salt, err := a.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		a.salt = salt
-		return writeSalt(salt, a.saltPath)
+		return op.FailIf(writeSalt(salt, a.saltPath))
 	}
-	return err
+	return op.FailIf(err)
 }
 
 var ErrNoSalt = errors.New("not salt available, call GetSalt/Signup first")
@@ -166,21 +173,25 @@ var ErrInvalidCode = errors.New("invalid code")
 
 // SignUpEmailResendCode requests that the sign-up code be resent via email.
 func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) error {
+	ctx, op := ops.BeginCtx(ctx, "sign_up_email_resend_code")
+	defer op.End()
 	if a.salt == nil {
-		return ErrNoSalt
+		return op.FailIf(ErrNoSalt)
 	}
-	return a.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
+	return op.FailIf(a.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
 		Email: email,
 		Salt:  a.salt,
-	})
+	}))
 }
 
 // SignupEmailConfirmation confirms the new account using the sign-up code received via email.
 func (a *APIClient) SignupEmailConfirmation(ctx context.Context, email, code string) error {
-	return a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
+	ctx, op := ops.BeginCtx(ctx, "sign_up_email_confirmation")
+	defer op.End()
+	return op.FailIf(a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
-	})
+	}))
 }
 
 func writeSalt(salt []byte, path string) error {
@@ -203,25 +214,29 @@ func readSalt(path string) ([]byte, error) {
 
 // getSalt retrieves the salt for the given email address or it's cached value.
 func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
+	ctx, op := ops.BeginCtx(ctx, "get_salt")
+	defer op.End()
 	if a.salt != nil {
 		return a.salt, nil // use cached value
 	}
 	resp, err := a.authClient.GetSalt(ctx, email)
 	if err != nil {
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	return resp.Salt, nil
 }
 
 // Login logs the user in.
 func (a *APIClient) Login(ctx context.Context, email string, password string, deviceId string) (*protos.LoginResponse, error) {
+	ctx, op := ops.BeginCtx(ctx, "login")
+	defer op.End()
 	salt, err := a.getSalt(ctx, email)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
 	if err != nil {
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	// regardless of state we need to save login information
 	// We have device flow limit on login
@@ -230,13 +245,15 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	a.userData = resp
 	a.salt = salt
 	if err := writeSalt(salt, a.saltPath); err != nil {
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	return resp, nil
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (a *APIClient) Logout(ctx context.Context, email string) error {
+	ctx, op := ops.BeginCtx(ctx, "logout")
+	defer op.End()
 	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     a.userInfo.DeviceID(),
@@ -244,38 +261,42 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 		LegacyToken:  a.userInfo.LegacyToken(),
 	})
 	if err != nil {
-		return fmt.Errorf("logging out: %w", err)
+		return op.FailIf(fmt.Errorf("logging out: %w", err))
 	}
 	// clean up local data
 	a.userData = nil
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
-		return fmt.Errorf("writing salt after logout: %w", err)
+		return op.FailIf(fmt.Errorf("writing salt after logout: %w", err))
 	}
 	return nil
 }
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
 func (a *APIClient) StartRecoveryByEmail(ctx context.Context, email string) error {
-	return a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
+	ctx, op := ops.BeginCtx(ctx, "start_recovery_by_email")
+	defer op.End()
+	return op.FailIf(a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
-	})
+	}))
 }
 
 // CompleteRecoveryByEmail completes account recovery using the code received via email.
 func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassword, code string) error {
+	ctx, op := ops.BeginCtx(ctx, "complete_recovery_by_email")
+	defer op.End()
 	lowerCaseEmail := strings.ToLower(email)
 	newSalt, err := generateSalt()
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	srpClient, err := newSRPClient(lowerCaseEmail, newPassword, newSalt)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	err = a.authClient.CompleteRecoveryByEmail(ctx, &protos.CompleteRecoveryByEmailRequest{
@@ -285,25 +306,27 @@ func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassw
 		NewVerifier: verifierKey.Bytes(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to complete recovery by email: %w", err)
+		return op.FailIf(fmt.Errorf("failed to complete recovery by email: %w", err))
 	}
 	if err = writeSalt(newSalt, a.saltPath); err != nil {
-		return fmt.Errorf("failed to write new salt: %w", err)
+		return op.FailIf(fmt.Errorf("failed to write new salt: %w", err))
 	}
 	return nil
 }
 
 // ValidateEmailRecoveryCode validates the recovery code received via email.
 func (a *APIClient) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
+	ctx, op := ops.BeginCtx(ctx, "validate_email_recovery_code")
+	defer op.End()
 	resp, err := a.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
 	})
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	if !resp.Valid {
-		return ErrInvalidCode
+		return op.FailIf(ErrInvalidCode)
 	}
 	return nil
 }
@@ -312,19 +335,21 @@ const group = srp.RFC5054Group3072
 
 // StartChangeEmail initializes a change of the email address associated with this user account.
 func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
+	ctx, op := ops.BeginCtx(ctx, "start_change_email")
+	defer op.End()
 	if a.userData == nil {
-		return ErrNotLoggedIn
+		return op.FailIf(ErrNotLoggedIn)
 	}
 	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
@@ -338,30 +363,30 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 	}
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	// Once the client receives B from the server Client should check error status here as defense against
 	// a malicious B sent from server
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	// client can now make the session key
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return fmt.Errorf("user_not_found error while generating Client key %w", err)
+		return op.FailIf(fmt.Errorf("user_not_found error while generating Client key %w", err))
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return fmt.Errorf("user_not_found error while checking server proof %w", err)
+		return op.FailIf(fmt.Errorf("user_not_found error while checking server proof %w", err))
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return fmt.Errorf("user_not_found error while generating client proof %w", err)
+		return op.FailIf(fmt.Errorf("user_not_found error while generating client proof %w", err))
 	}
 
 	changeEmailRequestBody := &protos.ChangeEmailRequest{
@@ -370,26 +395,28 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 		Proof:    clientProof,
 	}
 
-	return a.authClient.ChangeEmail(ctx, changeEmailRequestBody)
+	return op.FailIf(a.authClient.ChangeEmail(ctx, changeEmailRequestBody))
 }
 
 // CompleteChangeEmail completes a change of the email address associated with this user account,
 // using the code recieved via email.
 func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
+	ctx, op := ops.BeginCtx(ctx, "complete_change_email")
+	defer op.End()
 	newSalt, err := generateSalt()
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	encKey, err := generateEncryptedKey(password, newEmail, newSalt)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	srpClient := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
@@ -399,14 +426,14 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 		NewSalt:     newSalt,
 		NewVerifier: verifierKey.Bytes(),
 	}); err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	if err := writeSalt(newSalt, a.saltPath); err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	if err := a.userInfo.SetData(a.userData); err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	a.salt = newSalt
 	a.userData.LegacyUserData.Email = newEmail
@@ -415,16 +442,18 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 
 // DeleteAccount deletes this user account.
 func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) error {
+	ctx, op := ops.BeginCtx(ctx, "delete_account")
+	defer op.End()
 	lowerCaseEmail := strings.ToLower(email)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
@@ -439,29 +468,28 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
-		return err
+		return op.FailIf(err)
 	}
 
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-
-		return err
+		return op.FailIf(err)
 	}
 
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return fmt.Errorf("user_not_found error while generating Client key %w", err)
+		return op.FailIf(fmt.Errorf("user_not_found error while generating Client key %w", err))
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return fmt.Errorf("user_not_found error while checking server proof %w", err)
+		return op.FailIf(fmt.Errorf("user_not_found error while checking server proof %w", err))
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return fmt.Errorf("user_not_found error while generating client proof %w", err)
+		return op.FailIf(fmt.Errorf("user_not_found error while generating client proof %w", err))
 	}
 
 	changeEmailRequestBody := &protos.DeleteUserRequest{
@@ -472,15 +500,15 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 	}
 
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
-		return err
+		return op.FailIf(err)
 	}
 	// clean up local data
 	a.userData = nil
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
-		return fmt.Errorf("failed to write salt during account deletion cleanup: %w", err)
+		return op.FailIf(fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
-	return a.userInfo.SetData(nil)
+	return op.FailIf(a.userInfo.SetData(nil))
 }
 
 // OAuthLogin initiates the OAuth login process for the specified provider.
@@ -505,16 +533,18 @@ type LinkResponse struct {
 
 // RemoveDevice removes a device from the user's account.
 func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkResponse, error) {
+	ctx, op := ops.BeginCtx(ctx, "remove_device")
+	defer op.End()
 	data := map[string]string{
 		"deviceId": deviceID,
 	}
 	req := a.proWC.NewRequest(nil, nil, data)
 	resp := &LinkResponse{}
 	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
-		return nil, err
+		return nil, op.FailIf(err)
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
-		return nil, fmt.Errorf("failed to remove device: %s", resp.BaseResponse.Error)
+		return nil, op.FailIf(fmt.Errorf("failed to remove device: %s", resp.BaseResponse.Error))
 	}
 	return resp, nil
 }

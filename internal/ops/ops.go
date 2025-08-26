@@ -42,6 +42,12 @@ func Begin(name string) *Op {
 	return &Op{ops.Begin(name)}
 }
 
+// BeginCtx mimics the similar method from ops and add to the context
+func BeginCtx(ctx context.Context, name string) (context.Context, *Op) {
+	op := &Op{ops.Begin(name)}
+	return WithOp(ctx, op), op
+}
+
 // WithOp adds an Op to the context to be retrieved later via FromContext
 func WithOp(ctx context.Context, op *Op) context.Context {
 	return context.WithValue(ctx, ctxKeyOp, op)
