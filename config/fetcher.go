@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/internal/ops"
 )
 
 const configURL = "https://api.iantem.io/v1/config-new"
@@ -89,7 +90,10 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	req, err := backend.NewRequestWithHeaders(context.Background(), http.MethodPost, configURL, body, f.user)
+	op := ops.Begin("config_fetcher.send")
+	defer op.End()
+	ctx := ops.WithOp(context.Background(), op)
+	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body, f.user)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
