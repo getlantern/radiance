@@ -35,12 +35,13 @@ var (
 	initMutex   sync.Mutex
 	initialized bool
 
-	dataPath           atomic.Value
-	logPath            atomic.Value
-	oldConfig          *config
-	configFileWatcher  *internal.FileWatcher
-	shutdownOTEL       func(context.Context) error
-	harvestConnections sync.Once
+	dataPath                    atomic.Value
+	logPath                     atomic.Value
+	oldConfig                   *config
+	configFileWatcher           *internal.FileWatcher
+	shutdownOTEL                func(context.Context) error
+	harvestConnections          sync.Once
+	harvestConnectionTickerStop func()
 )
 
 func init() {
@@ -102,7 +103,7 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 		}
 
 		harvestConnections.Do(func() {
-			metrics.HarvestConnectionMetrics(1 * time.Minute)
+			harvestConnectionTickerStop = metrics.HarvestConnectionMetrics(1 * time.Minute)
 		})
 	})
 	configFileWatcher.Start()
@@ -120,6 +121,11 @@ func Close(ctx context.Context) error {
 	var errs error
 	if configFileWatcher != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to close config file watcher: %w", configFileWatcher.Close()))
+	}
+
+	// stop collecting connection metrics
+	if harvestConnectionTickerStop != nil {
+		harvestConnectionTickerStop()
 	}
 
 	if shutdownOTEL != nil {
