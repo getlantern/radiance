@@ -15,16 +15,17 @@ import (
 	"slices"
 
 	C "github.com/getlantern/common"
+	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/sing-box-extensions/protocol"
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/internal/ops"
 )
 
 const configURL = "https://api.iantem.io/v1/config-new"
+const tracerName = "github.com/getlantern/radiance/config"
 
 type Fetcher interface {
 	// fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
@@ -90,9 +91,8 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 
 // send sends a request to the server with the given body and returns the response.
 func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	op := ops.Begin("config_fetcher.send")
-	defer op.End()
-	ctx := ops.WithOp(context.Background(), op)
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "config_fetcher.send")
+	defer span.End()
 	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body, f.user)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)

@@ -18,55 +18,69 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/internal/ops"
+	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/servers"
 )
+
+const tracerName = "github.com/getlantern/radiance/vpn"
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
 func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
-	op := ops.Begin("quick_connect")
-	op.Set("group", group)
-	defer op.End()
+	_, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"quick_connect",
+		trace.WithAttributes(attribute.String("group", group)))
+	defer span.End()
 
 	switch group {
 	case servers.SGLantern:
-		return op.FailIf(ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
+		return metrics.RecordError(span, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
 	case servers.SGUser:
-		return op.FailIf(ConnectToServer(servers.SGUser, autoUserTag, platIfce))
+		return metrics.RecordError(span, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
 	case autoAllTag, "all", "":
 		if isOpen() {
 			cc := libbox.NewStandaloneCommandClient()
 			if err := cc.SetClashMode(autoAllTag); err != nil {
-				return op.FailIf(fmt.Errorf("failed to set auto mode: %w", err))
+				return metrics.RecordError(span, fmt.Errorf("failed to set auto mode: %w", err))
 			}
 			return nil
 		}
-		return op.FailIf(connect(autoAllTag, "", platIfce))
+
+		return metrics.RecordError(span, connect(autoAllTag, "", platIfce))
 	default:
-		return op.FailIf(fmt.Errorf("invalid group: %s", group))
+		return metrics.RecordError(span, fmt.Errorf("invalid group: %s", group))
 	}
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
 func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+	_, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"connect_to_server",
+		trace.WithAttributes(
+			attribute.String("group", group),
+			attribute.String("tag", tag)))
+	defer span.End()
+
 	switch group {
 	case servers.SGLantern, servers.SGUser:
 	default:
-		return fmt.Errorf("invalid group: %s", group)
+		return metrics.RecordError(span, fmt.Errorf("invalid group: %s", group))
 	}
 	if tag == "" {
-		return errors.New("tag must be specified")
+		return metrics.RecordError(span, errors.New("tag must be specified"))
 	}
 	if isOpen() {
-		return selectServer(group, tag)
+		return metrics.RecordError(span, selectServer(group, tag))
 	}
-	return connect(group, tag, platIfce)
+	return metrics.RecordError(span, connect(group, tag, platIfce))
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
@@ -84,13 +98,13 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 
 // Reconnect attempts to reconnect to the last connected server.
 func Reconnect(platIfce libbox.PlatformInterface) error {
-	op := ops.Begin("reconnect")
-	defer op.End()
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
+	defer span.End()
 
 	if isOpen() {
-		return fmt.Errorf("tunnel is already open")
+		return metrics.RecordError(span, fmt.Errorf("tunnel is already open"))
 	}
-	return op.FailIf(connect("", "", platIfce))
+	return metrics.RecordError(span, connect("", "", platIfce))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -111,11 +125,11 @@ func isOpen() bool {
 
 // Disconnect closes the tunnel and all active connections.
 func Disconnect() error {
-	op := ops.Begin("disconnect")
-	defer op.End()
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
+	defer span.End()
 	err := libbox.NewStandaloneCommandClient().ServiceClose()
 	if err != nil {
-		return op.FailIf(fmt.Errorf("failed to disconnect: %w", err))
+		return metrics.RecordError(span, fmt.Errorf("failed to disconnect: %w", err))
 	}
 	return nil
 }
@@ -152,12 +166,12 @@ type Status struct {
 }
 
 func GetStatus() (Status, error) {
-	op := ops.Begin("get_status")
-	defer op.End()
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
+	defer span.End()
 	slog.Debug("Retrieving tunnel status")
 	group, selected, err := selectedServer()
 	if err != nil {
-		return Status{}, op.FailIf(fmt.Errorf("failed to get selected server: %w", err))
+		return Status{}, metrics.RecordError(span, fmt.Errorf("failed to get selected server: %w", err))
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
@@ -174,7 +188,7 @@ func GetStatus() (Status, error) {
 	case autoAllTag, autoLanternTag, autoUserTag:
 		s.ActiveServer, err = activeServer(group)
 		if err != nil {
-			return s, op.FailIf(fmt.Errorf("failed to get active server: %w", err))
+			return s, metrics.RecordError(span, fmt.Errorf("failed to get active server: %w", err))
 		}
 	default:
 		s.ActiveServer = selected

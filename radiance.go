@@ -17,13 +17,15 @@ import (
 	"github.com/Xuanwo/go-locale"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/internal/ops"
+	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/servers"
 
 	"github.com/getlantern/radiance/config"
@@ -31,6 +33,7 @@ import (
 )
 
 const configPollInterval = 10 * time.Minute
+const tracerName = "github.com/getlantern/radiance"
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 
@@ -202,9 +205,8 @@ type IssueReport = issue.IssueReport
 
 // ReportIssue submits an issue report to the back-end with an optional user email
 func (r *Radiance) ReportIssue(email string, report IssueReport) error {
-	op := ops.Begin("report-issue")
-	defer op.End()
-	ctx := ops.WithOp(context.Background(), op)
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
+	defer span.End()
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
 	}
@@ -220,8 +222,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	err = r.issueReporter.Report(ctx, report, email, country)
 	if err != nil {
 		slog.Error("Failed to report issue", "error", err)
-		op.FailIf(err)
-		return fmt.Errorf("failed to report issue: %w", err)
+		return metrics.RecordError(span, fmt.Errorf("failed to report issue: %w", err))
 	}
 	slog.Info("Issue reported successfully")
 	return nil
@@ -230,9 +231,12 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
 func (r *Radiance) Features() map[string]bool {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "features")
+	defer span.End()
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		slog.Error("Failed to get config for features", "error", err)
+		metrics.RecordError(span, err, trace.WithStackTrace(true))
 		return map[string]bool{}
 	}
 	if cfg == nil {
@@ -276,7 +280,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	}
 
 	httpClient := &http.Client{
-		Transport: ops.NewRoundTripper(lz),
+		Transport: metrics.NewRoundTripper(lz),
 	}
 	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(
@@ -301,9 +305,8 @@ type lazyDialingRoundTripper struct {
 var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
 
 func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	op := ops.Begin("lazy-dialing-roundtrip")
-	defer op.End()
-	ctx := ops.WithOp(req.Context(), op)
+	ctx, span := otel.Tracer(tracerName).Start(req.Context(), "lazy_dialing_round_trip")
+	defer span.End()
 
 	lz.smartTransportMu.Lock()
 
@@ -315,16 +318,14 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
 			// This typically just means we're offline
-			return nil, op.FailIf(fmt.Errorf("could not create smart transport -- offline? %v", err))
+			return nil, metrics.RecordError(span, fmt.Errorf("could not create smart transport -- offline? %v", err))
 		}
 	}
 
 	lz.smartTransportMu.Unlock()
 	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
 	if err != nil {
-		op.FailIf(err)
-	} else {
-		op.Set("response_status", res.Status)
+		metrics.RecordError(span, err, trace.WithStackTrace(true))
 	}
 	return res, err
 }
