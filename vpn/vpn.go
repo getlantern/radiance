@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -336,9 +335,7 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 	downlinkBytes, _ := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
 	uplinkBytes, _ := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
 	go func() {
-		// these lists stores connection IDs of connections we've already recorded metrics
-		alreadyRegisteredActiveConnections := make([]string, 0)
-		alreadyRegisteredClosedConnections := make([]string, 0)
+		seenConnections := make(map[string]bool)
 		for range ticker.C {
 			conns, err := Connections(libbox.ConnectionStateAll)
 			if err != nil {
@@ -360,15 +357,17 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 					attribute.StringSlice("chain_list", c.ChainList),
 				)
 
+				active, seen := seenConnections[c.ID]
+				seenConnections[c.ID] = c.ClosedAt == 0
+
 				// not collecting duration of active connections
-				if c.ClosedAt == 0 && !slices.Contains(alreadyRegisteredActiveConnections, c.ID) {
+				if c.ClosedAt == 0 && !seen {
 					currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
-					alreadyRegisteredActiveConnections = append(alreadyRegisteredActiveConnections, c.ID)
 					continue
 				}
 
 				// already registered this closed connection
-				if slices.Contains(alreadyRegisteredClosedConnections, c.ID) {
+				if seen && !active {
 					continue
 				}
 
@@ -379,7 +378,6 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 
 				downlinkBytes.Add(context.Background(), int64(c.Downlink), metric.WithAttributeSet(attributes))
 				uplinkBytes.Add(context.Background(), int64(c.Uplink), metric.WithAttributeSet(attributes))
-				alreadyRegisteredClosedConnections = append(alreadyRegisteredClosedConnections, c.ID)
 			}
 		}
 	}()
