@@ -18,7 +18,6 @@ import (
 
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/osversion"
-	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common/env"
@@ -253,7 +252,6 @@ func initOTEL(deviceID string, configResponse C.ConfigResponse) error {
 	}
 
 	shutdownOTEL = shutdown
-	otel.GetTracerProvider().Tracer("")
 	return nil
 }
 
