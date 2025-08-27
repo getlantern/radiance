@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,7 +27,10 @@ import (
 	"github.com/getlantern/radiance/traces"
 )
 
-const tracerName = "github.com/getlantern/radiance/vpn"
+const (
+	tracerName = "github.com/getlantern/radiance/vpn"
+	meterName  = "github.com/getlantern/radiance/vpn"
+)
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
@@ -311,15 +315,19 @@ type Connection = libbox.Connection
 // tunnel is closed. If there are no active connections and the tunnel is open, an empty slice is
 // returned without an error.
 func ActiveConnections() ([]Connection, error) {
-	connections, err := Connections(libbox.ConnectionStateActive)
+	connections, err := Connections()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active connections: %w", err)
 	}
 
+	slices.DeleteFunc(connections, func(c Connection) bool {
+		return c.ClosedAt != 0
+	})
+
 	return connections, nil
 }
 
-func Connections(filter int32) ([]Connection, error) {
+func Connections() ([]Connection, error) {
 	res, err := sendCmd(libbox.CommandConnections)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connections: %w", err)
@@ -327,7 +335,7 @@ func Connections(filter int32) ([]Connection, error) {
 	if res.connections == nil {
 		return nil, errors.New("no connections found")
 	}
-	res.connections.FilterState(filter)
+	res.connections.FilterState(libbox.ConnectionStateAll)
 	res.connections.SortByDate()
 	var connections []Connection
 	iter := res.connections.Iterator()
@@ -343,7 +351,7 @@ func Connections(filter int32) ([]Connection, error) {
 // that can be called to stop the polling.
 func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 	ticker := time.NewTicker(pollInterval)
-	meter := otel.GetMeterProvider().Meter("radiance")
+	meter := otel.Meter(meterName)
 	currentActiveConnections, _ := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
 	connectionDuration, _ := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
 	downlinkBytes, _ := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
@@ -351,9 +359,9 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 	go func() {
 		seenConnections := make(map[string]bool)
 		for range ticker.C {
-			conns, err := Connections(libbox.ConnectionStateAll)
+			conns, err := Connections()
 			if err != nil {
-				slog.Warn("Failed to harvest connection metrics", "error", err)
+				slog.Warn("failed to retrieve connections", "error", err)
 				continue
 			}
 
