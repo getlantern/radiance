@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/getlantern/common"
-	"github.com/getlantern/ops"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -23,9 +22,44 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+type Attributes struct {
+	App            string
+	AppVersion     string
+	DeviceID       string
+	GeoCountry     string
+	GoVersion      string
+	LocaleLanguage string
+	LocaleCountry  string
+	Platform       string
+	OSName         string
+	OSArch         string
+	OSVersion      string
+	Timezone       string
+	Pro            bool
+}
+
+func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		semconv.ServiceNameKey.String(serviceName),
+		semconv.ServiceVersionKey.String(a.AppVersion),
+		attribute.String("device.id", a.DeviceID),
+		attribute.String("geo.country", a.GeoCountry),
+		attribute.String("library.language", "go"),
+		attribute.String("library.language.version", a.GoVersion),
+		attribute.String("locale.language", a.LocaleLanguage),
+		attribute.String("locale.country", a.LocaleCountry),
+		attribute.String("platform", a.Platform),
+		attribute.String("os.name", a.OSName),
+		attribute.String("os.arch", a.OSArch),
+		attribute.String("os.version", a.OSVersion),
+		attribute.String("timezone", a.Timezone),
+		attribute.Bool("is_pro", a.Pro),
+	}
+}
+
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, version, platform string, cfg common.ConfigResponse) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, attributes Attributes, cfg common.ConfigResponse) (func(context.Context) error, error) {
 	if cfg.Features == nil {
 		cfg.Features = make(map[string]bool)
 	}
@@ -49,11 +83,7 @@ func SetupOTelSDK(ctx context.Context, version, platform string, cfg common.Conf
 	serviceName := "radiance"
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			semconv.ServiceName(serviceName),
-			semconv.ServiceVersion(version),
-			attribute.String("library.language", "go"),
-			attribute.String("platform", platform),
-			attribute.Bool("pro", cfg.UserInfo.Pro),
+			buildResources(serviceName, attributes)...,
 		),
 	)
 	if err != nil {
@@ -70,7 +100,6 @@ func SetupOTelSDK(ctx context.Context, version, platform string, cfg common.Conf
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 		}
-		ops.EnableOpenTelemetry(serviceName)
 		// Successfully initialized tracer
 		shutdownFuncs = append(shutdownFuncs, shutdownFunc)
 		slog.Info("OpenTelemetry tracer initialized")

@@ -11,17 +11,19 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/getlantern/appdir"
+	"github.com/getlantern/osversion"
+	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/internal/ops"
 	"github.com/getlantern/radiance/metrics"
 )
 
@@ -229,14 +231,29 @@ func initOTEL(deviceID string, configResponse C.ConfigResponse) error {
 	}
 	configResponse.OTEL.TracesSampleRate = 1.0 // Always sample traces for now
 
-	shutdown, err := metrics.SetupOTelSDK(context.Background(), ClientVersion, Platform, configResponse)
+	attrs := metrics.Attributes{
+		App:        "radiance",
+		DeviceID:   deviceID,
+		AppVersion: ClientVersion,
+		Platform:   Platform,
+		GoVersion:  runtime.Version(),
+		OSName:     runtime.GOOS,
+		OSArch:     runtime.GOARCH,
+		GeoCountry: configResponse.Country,
+		Pro:        configResponse.Pro,
+	}
+	if osStr, err := osversion.GetHumanReadable(); err == nil {
+		attrs.OSVersion = osStr
+	}
+
+	shutdown, err := metrics.SetupOTelSDK(context.Background(), attrs, configResponse)
 	if err != nil {
 		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
 		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
 	}
 
 	shutdownOTEL = shutdown
-	ops.InitGlobalContext("radiance", ClientVersion, Platform, "revisiondate", "deviceID", func() bool { return false }, func() string { return "" })
+	otel.GetTracerProvider().Tracer("")
 	return nil
 }
 
