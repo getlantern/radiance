@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/getlantern/appdir"
 	"github.com/getlantern/osversion"
@@ -34,11 +35,12 @@ var (
 	initMutex   sync.Mutex
 	initialized bool
 
-	dataPath          atomic.Value
-	logPath           atomic.Value
-	oldConfig         *config
-	configFileWatcher *internal.FileWatcher
-	shutdownOTEL      func(context.Context) error
+	dataPath           atomic.Value
+	logPath            atomic.Value
+	oldConfig          *config
+	configFileWatcher  *internal.FileWatcher
+	shutdownOTEL       func(context.Context) error
+	harvestConnections sync.Once
 )
 
 func init() {
@@ -98,6 +100,10 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 				return
 			}
 		}
+
+		harvestConnections.Do(func() {
+			metrics.HarvestConnectionMetrics(1 * time.Minute)
+		})
 	})
 	configFileWatcher.Start()
 	initialized = true
