@@ -22,8 +22,8 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/traces"
 )
 
 const tracerName = "github.com/getlantern/radiance/vpn"
@@ -40,21 +40,21 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 
 	switch group {
 	case servers.SGLantern:
-		return metrics.RecordError(span, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
+		return traces.RecordError(span, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
 	case servers.SGUser:
-		return metrics.RecordError(span, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
+		return traces.RecordError(span, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
 	case autoAllTag, "all", "":
 		if isOpen() {
 			cc := libbox.NewStandaloneCommandClient()
 			if err := cc.SetClashMode(autoAllTag); err != nil {
-				return metrics.RecordError(span, fmt.Errorf("failed to set auto mode: %w", err))
+				return traces.RecordError(span, fmt.Errorf("failed to set auto mode: %w", err))
 			}
 			return nil
 		}
 
-		return metrics.RecordError(span, connect(autoAllTag, "", platIfce))
+		return traces.RecordError(span, connect(autoAllTag, "", platIfce))
 	default:
-		return metrics.RecordError(span, fmt.Errorf("invalid group: %s", group))
+		return traces.RecordError(span, fmt.Errorf("invalid group: %s", group))
 	}
 }
 
@@ -72,15 +72,15 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 	switch group {
 	case servers.SGLantern, servers.SGUser:
 	default:
-		return metrics.RecordError(span, fmt.Errorf("invalid group: %s", group))
+		return traces.RecordError(span, fmt.Errorf("invalid group: %s", group))
 	}
 	if tag == "" {
-		return metrics.RecordError(span, errors.New("tag must be specified"))
+		return traces.RecordError(span, errors.New("tag must be specified"))
 	}
 	if isOpen() {
-		return metrics.RecordError(span, selectServer(group, tag))
+		return traces.RecordError(span, selectServer(group, tag))
 	}
-	return metrics.RecordError(span, connect(group, tag, platIfce))
+	return traces.RecordError(span, connect(group, tag, platIfce))
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
@@ -102,9 +102,9 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 	defer span.End()
 
 	if isOpen() {
-		return metrics.RecordError(span, fmt.Errorf("tunnel is already open"))
+		return traces.RecordError(span, fmt.Errorf("tunnel is already open"))
 	}
-	return metrics.RecordError(span, connect("", "", platIfce))
+	return traces.RecordError(span, connect("", "", platIfce))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -129,7 +129,7 @@ func Disconnect() error {
 	defer span.End()
 	err := libbox.NewStandaloneCommandClient().ServiceClose()
 	if err != nil {
-		return metrics.RecordError(span, fmt.Errorf("failed to disconnect: %w", err))
+		return traces.RecordError(span, fmt.Errorf("failed to disconnect: %w", err))
 	}
 	return nil
 }
@@ -171,7 +171,7 @@ func GetStatus() (Status, error) {
 	slog.Debug("Retrieving tunnel status")
 	group, selected, err := selectedServer()
 	if err != nil {
-		return Status{}, metrics.RecordError(span, fmt.Errorf("failed to get selected server: %w", err))
+		return Status{}, traces.RecordError(span, fmt.Errorf("failed to get selected server: %w", err))
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
@@ -188,7 +188,7 @@ func GetStatus() (Status, error) {
 	case autoAllTag, autoLanternTag, autoUserTag:
 		s.ActiveServer, err = activeServer(group)
 		if err != nil {
-			return s, metrics.RecordError(span, fmt.Errorf("failed to get active server: %w", err))
+			return s, traces.RecordError(span, fmt.Errorf("failed to get active server: %w", err))
 		}
 	default:
 		s.ActiveServer = selected

@@ -1,4 +1,5 @@
-package metrics
+// Package traces provides utilities for working with OpenTelemetry traces.
+package traces
 
 import "go.opentelemetry.io/otel/trace"
 

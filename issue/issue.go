@@ -19,6 +19,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/metrics"
+	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -192,13 +193,13 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)
-		return metrics.RecordError(span, err)
+		return traces.RecordError(span, err)
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
-		return metrics.RecordError(span, err)
+		return traces.RecordError(span, err)
 	}
 
 	defer resp.Body.Close()
@@ -208,7 +209,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 			slog.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
 		}
 		slog.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
-		return metrics.RecordError(span, fmt.Errorf("issue report failed with status code %d", resp.StatusCode))
+		return traces.RecordError(span, fmt.Errorf("issue report failed with status code %d", resp.StatusCode))
 	}
 
 	slog.Debug("issue report sent")
