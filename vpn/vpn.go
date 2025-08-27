@@ -320,7 +320,7 @@ func ActiveConnections() ([]Connection, error) {
 		return nil, fmt.Errorf("failed to get active connections: %w", err)
 	}
 
-	slices.DeleteFunc(connections, func(c Connection) bool {
+	connections = slices.DeleteFunc(connections, func(c Connection) bool {
 		return c.ClosedAt != 0
 	})
 
