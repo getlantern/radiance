@@ -25,7 +25,6 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
 
@@ -281,7 +280,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	}
 
 	httpClient := &http.Client{
-		Transport: metrics.NewRoundTripper(lz),
+		Transport: traces.NewRoundTripper(lz),
 	}
 	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(
