@@ -7,6 +7,7 @@ import (
 	sbx "github.com/getlantern/sing-box-extensions"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/vpn/client"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
@@ -102,9 +103,9 @@ func TestSendCmd(t *testing.T) {
 	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
 	want := clashServer.Mode()
 
-	res, err := sendCmd(libbox.CommandClashMode)
+	res, err := client.SendCmd(libbox.CommandClashMode)
 	require.NoError(t, err)
-	require.Equal(t, want, res.clashMode)
+	require.Equal(t, want, res.ClashMode)
 }
 
 func setupVpnTest(t *testing.T) context.Context {

@@ -11,20 +11,19 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/vpn/client"
 )
 
 const (
@@ -144,8 +143,8 @@ func selectServer(group, tag string) error {
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
 
-	res, _ := sendCmd(libbox.CommandClashMode)
-	if res.clashMode == group {
+	res, _ := client.SendCmd(libbox.CommandClashMode)
+	if res.ClashMode == group {
 		return nil
 	}
 	if err := cc.SetClashMode(group); err != nil {
@@ -205,12 +204,12 @@ func selectedServer() (string, string, error) {
 	slog.Log(nil, internal.LevelTrace, "Retrieving selected server")
 	if isOpen() {
 		slog.Log(nil, internal.LevelTrace, "Using command client")
-		res, err := sendCmd(libbox.CommandClashMode)
+		res, err := client.SendCmd(libbox.CommandClashMode)
 		if err != nil {
 			slog.Error("Failed to retrieve clash mode", "error", err)
 			return "", "", fmt.Errorf("retrieving clashMode: %w", err)
 		}
-		group := res.clashMode
+		group := res.ClashMode
 		if group == autoAllTag {
 			return autoAllTag, autoAllTag, nil
 		}
@@ -243,12 +242,12 @@ func selectedServer() (string, string, error) {
 }
 
 func activeServer(group string) (string, error) {
-	res, err := sendCmd(libbox.CommandGroup)
+	res, err := client.SendCmd(libbox.CommandGroup)
 	if err != nil {
 		return "", fmt.Errorf("sending groups cmd: %w", err)
 	}
 	groupMap := make(map[string]*libbox.OutboundGroup)
-	for _, g := range res.groups {
+	for _, g := range res.Groups {
 		groupMap[g.Tag] = g
 	}
 	if group == autoAllTag {
@@ -296,11 +295,11 @@ func resolveActive(groupMap map[string]*libbox.OutboundGroup, group string) (str
 }
 
 func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
-	res, err := sendCmd(libbox.CommandGroup)
+	res, err := client.SendCmd(libbox.CommandGroup)
 	if err != nil {
 		return nil, fmt.Errorf("sending groups cmd: %w", err)
 	}
-	for _, g := range res.groups {
+	for _, g := range res.Groups {
 		if g.Tag == group {
 			return g, nil
 		}
@@ -328,147 +327,20 @@ func ActiveConnections() ([]Connection, error) {
 }
 
 func Connections() ([]Connection, error) {
-	res, err := sendCmd(libbox.CommandConnections)
+	res, err := client.SendCmd(libbox.CommandConnections)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connections: %w", err)
 	}
-	if res.connections == nil {
+	if res.Connections == nil {
 		return nil, errors.New("no connections found")
 	}
-	res.connections.FilterState(libbox.ConnectionStateAll)
-	res.connections.SortByDate()
+	res.Connections.FilterState(libbox.ConnectionStateAll)
+	res.Connections.SortByDate()
 	var connections []Connection
-	iter := res.connections.Iterator()
+	iter := res.Connections.Iterator()
 	for iter.HasNext() {
 		conn := *(iter.Next())
 		connections = append(connections, conn)
 	}
 	return connections, nil
 }
-
-// HarvestConnectionMetrics periodically polls the number of active connections and their total
-// upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
-// that can be called to stop the polling.
-func HarvestConnectionMetrics(pollInterval time.Duration) func() {
-	ticker := time.NewTicker(pollInterval)
-	meter := otel.Meter(meterName)
-	currentActiveConnections, _ := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
-	connectionDuration, _ := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
-	downlinkBytes, _ := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
-	uplinkBytes, _ := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
-	go func() {
-		seenConnections := make(map[string]bool)
-		for range ticker.C {
-			conns, err := Connections()
-			if err != nil {
-				slog.Warn("failed to retrieve connections", "error", err)
-				continue
-			}
-
-			for _, c := range conns {
-				attributes := attribute.NewSet(
-					attribute.String("from_outbound", c.FromOutbound),
-					attribute.String("outbound_name", c.Outbound),
-					attribute.String("outbound_type", c.OutboundType),
-					attribute.String("inbound", c.Inbound),
-					attribute.String("inbound_type", c.InboundType),
-					attribute.String("network", c.Network),
-					attribute.String("protocol", c.Protocol),
-					attribute.Int("ip_version", int(c.IPVersion)),
-					attribute.String("rule", c.Rule),
-					attribute.StringSlice("chain_list", c.ChainList),
-				)
-
-				active, seen := seenConnections[c.ID]
-				seenConnections[c.ID] = c.ClosedAt == 0
-
-				// not collecting duration of active connections
-				if c.ClosedAt == 0 && !seen {
-					currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
-					continue
-				}
-
-				// already registered this closed connection
-				if seen && !active {
-					continue
-				}
-
-				duration := float64(c.ClosedAt - c.CreatedAt)
-				if duration > 0 {
-					connectionDuration.Record(context.Background(), duration/1000, metric.WithAttributeSet(attributes))
-				}
-
-				downlinkBytes.Add(context.Background(), int64(c.Downlink), metric.WithAttributeSet(attributes))
-				uplinkBytes.Add(context.Background(), int64(c.Uplink), metric.WithAttributeSet(attributes))
-			}
-		}
-	}()
-	return ticker.Stop
-}
-
-func sendCmd(cmd int32) (*cmdClientHandler, error) {
-	handler := newCmdClientHandler()
-	opts := libbox.CommandClientOptions{Command: cmd, StatusInterval: int64(time.Second)}
-	cc := libbox.NewCommandClient(handler, &opts)
-	if err := cc.Connect(); err != nil {
-		return nil, fmt.Errorf("connecting to command client: %w", err)
-	}
-	defer cc.Disconnect()
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	select {
-	case <-handler.done:
-		return handler, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-type cmdClientHandler struct {
-	status      *libbox.StatusMessage
-	connections *libbox.Connections
-	clashMode   string
-	groups      []*libbox.OutboundGroup
-	connected   chan struct{}
-	done        chan struct{}
-}
-
-func newCmdClientHandler() *cmdClientHandler {
-	return &cmdClientHandler{
-		connected: make(chan struct{}, 1),
-		done:      make(chan struct{}, 1),
-	}
-}
-
-func (c *cmdClientHandler) Connected() {
-	c.connected <- struct{}{}
-}
-func (c *cmdClientHandler) Disconnected(message string) {}
-func (c *cmdClientHandler) WriteStatus(message *libbox.StatusMessage) {
-	c.status = message
-	c.done <- struct{}{}
-}
-func (c *cmdClientHandler) InitializeClashMode(modeList libbox.StringIterator, currentMode string) {
-	c.clashMode = currentMode
-	c.done <- struct{}{}
-}
-func (c *cmdClientHandler) UpdateClashMode(newMode string) {
-	c.clashMode = newMode
-	c.done <- struct{}{}
-}
-func (c *cmdClientHandler) WriteConnections(message *libbox.Connections) {
-	c.connections = message
-	c.done <- struct{}{}
-}
-
-func (c *cmdClientHandler) WriteGroups(message libbox.OutboundGroupIterator) {
-	groups := message
-	for groups.HasNext() {
-		c.groups = append(c.groups, groups.Next())
-	}
-	c.done <- struct{}{}
-}
-
-// Not Implemented
-func (c *cmdClientHandler) ClearLogs()                                  { c.done <- struct{}{} }
-func (c *cmdClientHandler) WriteLogs(messageList libbox.StringIterator) { c.done <- struct{}{} }
