@@ -76,7 +76,14 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 
 	// creating file watcher to monitor changes to config file and initialize whatever depends on it
 	configPath := filepath.Join(dataDir, ConfigFileName)
+	slog.Debug("created config file watcher for opentelemetry")
 	configFileWatcher = internal.NewFileWatcher(configPath, func() {
+		// adding recovery to avoid crashing the app if something goes wrong in the callback
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("Recovered from panic in config file watcher callback", slog.Any("error", r))
+			}
+		}()
 		f, err := os.Open(configPath)
 		if err != nil {
 			slog.Error("Failed to open config file", "error", err)
@@ -84,22 +91,21 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 		}
 		defer f.Close()
 		// unmarshaling with json is fine here since we only care about OTEL section of the config
-		var cfg config
-		if err := json.NewDecoder(f).Decode(&cfg); err != nil {
+		cfg := new(config)
+		if err := json.NewDecoder(f).Decode(cfg); err != nil {
 			slog.Error("Failed to decode config file", "error", err)
 			return
 		}
 
-		if oldConfig == nil {
-			oldConfig = &cfg
+		// Check if the old OTEL configuration is the same as the new one.
+		if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, cfg.ConfigResponse.OTEL) {
+			slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+			return
 		}
 
-		// Check if the old OTEL configuration is the same as the new one.
-		if !reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, cfg.ConfigResponse.OTEL) {
-			if err := initOTEL(deviceID, cfg.ConfigResponse); err != nil {
-				slog.Error("Failed to initialize OpenTelemetry", "error", err)
-				return
-			}
+		if err := initOTEL(deviceID, cfg.ConfigResponse); err != nil {
+			slog.Error("Failed to initialize OpenTelemetry", "error", err)
+			return
 		}
 
 		harvestConnections.Do(func() {
