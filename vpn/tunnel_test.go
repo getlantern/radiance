@@ -8,11 +8,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func TestEstablishConnection(t *testing.T) {
-	tmp := t.TempDir()
+	common.SetPathsForTesting(t)
+	tmp := common.DataPath()
 	tOpts, _, err := testBoxOptions(tmp)
 	require.NoError(t, err, "failed to get test box options")
 

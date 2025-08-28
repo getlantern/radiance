@@ -68,7 +68,10 @@ func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
 	for _, connection := range closedConns {
 		connections = append(connections, newConnection(connection))
 	}
-	json.NewEncoder(w).Encode(connections)
+	if err := json.NewEncoder(w).Encode(connections); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 // Connection represents a network connection with relevant metadata.
