@@ -33,21 +33,40 @@ func connections() (*libbox.Connections, error) {
 func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 	ticker := time.NewTicker(pollInterval)
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
-	currentActiveConnections, _ := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
-	connectionDuration, _ := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
-	downlinkBytes, _ := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
-	uplinkBytes, _ := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
+	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
+	if err != nil {
+		slog.Warn("failed to create current_active_connections metric", slog.Any("error", err))
+	}
+	connectionDuration, err := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
+	if err != nil {
+		slog.Warn("failed to create connection_duration_seconds metric", slog.Any("error", err))
+	}
+	downlinkBytes, err := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
+	if err != nil {
+		slog.Warn("failed to create downlink_bytes metric", slog.Any("error", err))
+	}
+	uplinkBytes, err := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
+	if err != nil {
+		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
+	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("recovered from panic in HarvestConnectionMetrics", slog.Any("error", r))
+			}
+		}()
 		seenConnections := make(map[string]bool)
 		for range ticker.C {
+			slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
 			conns, err := connections()
 			if err != nil {
-				slog.Warn("failed to retrieve connections", "error", err)
+				slog.Warn("failed to retrieve connections", slog.Any("error", err))
 				continue
 			}
 
-			for conns.Iterator().HasNext() {
-				c := conns.Iterator().Next()
+			iterator := conns.Iterator()
+			for iterator.HasNext() {
+				c := iterator.Next()
 
 				attributes := attribute.NewSet(
 					attribute.String("from_outbound", c.FromOutbound),
@@ -63,10 +82,10 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 				)
 
 				active, seen := seenConnections[c.ID]
-				seenConnections[c.ID] = c.ClosedAt == 0
 
 				// not collecting duration of active connections
 				if c.ClosedAt == 0 && !seen {
+					seenConnections[c.ID] = true
 					currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
 					continue
 				}
@@ -76,6 +95,7 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 					continue
 				}
 
+				seenConnections[c.ID] = false
 				duration := float64(c.ClosedAt - c.CreatedAt)
 				if duration > 0 {
 					connectionDuration.Record(context.Background(), duration/1000, metric.WithAttributeSet(attributes))
