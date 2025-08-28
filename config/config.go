@@ -208,7 +208,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 			return fmt.Errorf("failed to generate wg keys: %w", keyErr)
 		}
 
-		if writeErr := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); writeErr != nil {
+		if writeErr := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0644); writeErr != nil {
 			return fmt.Errorf("writing wg key file: %w", writeErr)
 		}
 	}
@@ -419,7 +419,7 @@ func saveConfig(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-	return os.WriteFile(path, buf, 0o600)
+	return os.WriteFile(path, buf, 0644)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.

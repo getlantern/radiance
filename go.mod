@@ -19,6 +19,7 @@ replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero
 require (
 	dario.cat/mergo v1.0.1
 	github.com/1Password/srp v0.2.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20250711182004-51a659011c7a
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
@@ -172,7 +173,7 @@ require (
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gofrs/uuid/v5 v5.3.2 // indirect
+	github.com/gofrs/uuid/v5 v5.3.2
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
