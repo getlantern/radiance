@@ -285,7 +285,7 @@ func (m *Manager) saveServers() error {
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
-	return os.WriteFile(m.serversFile, buf, 0600)
+	return os.WriteFile(m.serversFile, buf, 0644)
 }
 
 func (m *Manager) loadServers() error {

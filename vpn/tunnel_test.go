@@ -3,16 +3,18 @@ package vpn
 import (
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func TestEstablishConnection(t *testing.T) {
-	tmp := t.TempDir()
+	common.SetPathsForTesting(t)
+	tmp := common.DataPath()
 	tOpts, _, err := testBoxOptions(tmp)
 	require.NoError(t, err, "failed to get test box options")
 
@@ -23,14 +25,16 @@ func TestEstablishConnection(t *testing.T) {
 
 	err = establishConnection("", "", *tOpts, tmp, nil)
 	require.NoError(t, err, "failed to establish connection")
-	defer closeTunnel()
+	t.Cleanup(func() {
+		if tInstance != nil {
+			tInstance.close()
+		}
+	})
 
-	assert.True(t, isOpen(), "connection should be open")
-	assert.NotNil(t, tInstance, "tInstance should not be nil")
+	tun := tInstance
+	assert.NotNil(t, tun, "tInstance should not be nil")
+	assert.Equal(t, ipc.StatusRunning, tun.Status(), "tunnel should be running")
 
-	time.Sleep(100 * time.Millisecond) // give it a sec to start
-
-	err = libbox.NewStandaloneCommandClient().ServiceClose()
-	assert.NoError(t, err, "failed to close service")
-	assert.False(t, isOpen(), "connection should be closed after closing lbService")
+	assert.NoError(t, tun.close(), "failed to close lbService")
+	assert.Equal(t, ipc.StatusClosed, tun.Status(), "tun should be closed")
 }
