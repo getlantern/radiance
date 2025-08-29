@@ -11,7 +11,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
-	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/service"
 )
 
@@ -42,7 +41,7 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	selector, isSelector := outbound.(*group.Selector)
+	selector, isSelector := outbound.(_selector)
 	if !isSelector {
 		http.Error(w, "outbound is not a selector: "+p.GroupTag, http.StatusBadRequest)
 		return
@@ -61,6 +60,12 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// _selector is helper interface to check if an outbound is a selector or wrapper of selector.
+type _selector interface {
+	adapter.OutboundGroup
+	SelectOutbound(tag string) bool
 }
 
 // GetSelected retrieves the currently selected outbound and its group.
