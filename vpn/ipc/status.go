@@ -73,21 +73,3 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
-
-// func (s *Server) eventStreamHandler(w http.ResponseWriter, r *http.Request) {
-// 	flusher, ok := w.(http.Flusher)
-// 	if !ok {
-// 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-// 		return
-// 	}
-// 	eventCh := make(chan string, 10)
-// 	for {
-// 		select {
-// 		case event := <-eventCh:
-// 			_, _ = w.Write([]byte("data: " + event + "\n\n"))
-// 			flusher.Flush()
-// 		case <-r.Context().Done():
-// 			return
-// 		}
-// 	}
-// }

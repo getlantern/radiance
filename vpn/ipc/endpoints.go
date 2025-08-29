@@ -1,7 +1,6 @@
 package ipc
 
 const (
-	eventStream              = "/stream"
 	statusEndpoint           = "/status"
 	metricsEndpoint          = "/metrics"
 	closeServiceEndpoint     = "/service/close"
