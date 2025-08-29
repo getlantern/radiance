@@ -208,7 +208,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 			return fmt.Errorf("failed to generate wg keys: %w", keyErr)
 		}
 
-		if writeErr := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0600); writeErr != nil {
+		if writeErr := os.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); writeErr != nil {
 			return fmt.Errorf("writing wg key file: %w", writeErr)
 		}
 	}
