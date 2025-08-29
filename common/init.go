@@ -126,7 +126,9 @@ func Close(ctx context.Context) error {
 
 	var errs error
 	if configFileWatcher != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to close config file watcher: %w", configFileWatcher.Close()))
+		if err := configFileWatcher.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to close config file watcher: %w", err))
+		}
 	}
 
 	// stop collecting connection metrics
