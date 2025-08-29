@@ -11,55 +11,79 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/vpn/client"
+)
+
+const (
+	tracerName = "github.com/getlantern/radiance/vpn"
+	meterName  = "github.com/getlantern/radiance/vpn"
 )
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
-func QuickConnect(group string, platIfce libbox.PlatformInterface) error {
+func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
+	_, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"quick_connect",
+		trace.WithAttributes(attribute.String("group", group)))
+	defer span.End()
+
 	switch group {
 	case servers.SGLantern:
-		return ConnectToServer(servers.SGLantern, autoLanternTag, platIfce)
+		return traces.RecordError(span, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
 	case servers.SGUser:
-		return ConnectToServer(servers.SGUser, autoUserTag, platIfce)
+		return traces.RecordError(span, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
 	case autoAllTag, "all", "":
 		if isOpen() {
 			cc := libbox.NewStandaloneCommandClient()
 			if err := cc.SetClashMode(autoAllTag); err != nil {
-				return fmt.Errorf("failed to set auto mode: %w", err)
+				return traces.RecordError(span, fmt.Errorf("failed to set auto mode: %w", err))
 			}
 			return nil
 		}
-		return connect(autoAllTag, "", platIfce)
+
+		return traces.RecordError(span, connect(autoAllTag, "", platIfce))
 	default:
-		return fmt.Errorf("invalid group: %s", group)
+		return traces.RecordError(span, fmt.Errorf("invalid group: %s", group))
 	}
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
 func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+	_, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"connect_to_server",
+		trace.WithAttributes(
+			attribute.String("group", group),
+			attribute.String("tag", tag)))
+	defer span.End()
+
 	switch group {
 	case servers.SGLantern, servers.SGUser:
 	default:
-		return fmt.Errorf("invalid group: %s", group)
+		return traces.RecordError(span, fmt.Errorf("invalid group: %s", group))
 	}
 	if tag == "" {
-		return errors.New("tag must be specified")
+		return traces.RecordError(span, errors.New("tag must be specified"))
 	}
 	if isOpen() {
-		return selectServer(group, tag)
+		return traces.RecordError(span, selectServer(group, tag))
 	}
-	return connect(group, tag, platIfce)
+	return traces.RecordError(span, connect(group, tag, platIfce))
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
@@ -77,10 +101,13 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 
 // Reconnect attempts to reconnect to the last connected server.
 func Reconnect(platIfce libbox.PlatformInterface) error {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
+	defer span.End()
+
 	if isOpen() {
-		return fmt.Errorf("tunnel is already open")
+		return traces.RecordError(span, fmt.Errorf("tunnel is already open"))
 	}
-	return connect("", "", platIfce)
+	return traces.RecordError(span, connect("", "", platIfce))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -101,9 +128,11 @@ func isOpen() bool {
 
 // Disconnect closes the tunnel and all active connections.
 func Disconnect() error {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
+	defer span.End()
 	err := libbox.NewStandaloneCommandClient().ServiceClose()
 	if err != nil {
-		return fmt.Errorf("failed to disconnect: %w", err)
+		return traces.RecordError(span, fmt.Errorf("failed to disconnect: %w", err))
 	}
 	return nil
 }
@@ -114,8 +143,8 @@ func selectServer(group, tag string) error {
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
 
-	res, _ := sendCmd(libbox.CommandClashMode)
-	if res.clashMode == group {
+	res, _ := client.SendCmd(libbox.CommandClashMode)
+	if res.ClashMode == group {
 		return nil
 	}
 	if err := cc.SetClashMode(group); err != nil {
@@ -140,10 +169,12 @@ type Status struct {
 }
 
 func GetStatus() (Status, error) {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
+	defer span.End()
 	slog.Debug("Retrieving tunnel status")
 	group, selected, err := selectedServer()
 	if err != nil {
-		return Status{}, fmt.Errorf("failed to get selected server: %w", err)
+		return Status{}, traces.RecordError(span, fmt.Errorf("failed to get selected server: %w", err))
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
@@ -160,7 +191,7 @@ func GetStatus() (Status, error) {
 	case autoAllTag, autoLanternTag, autoUserTag:
 		s.ActiveServer, err = activeServer(group)
 		if err != nil {
-			return s, fmt.Errorf("failed to get active server: %w", err)
+			return s, traces.RecordError(span, fmt.Errorf("failed to get active server: %w", err))
 		}
 	default:
 		s.ActiveServer = selected
@@ -173,12 +204,12 @@ func selectedServer() (string, string, error) {
 	slog.Log(nil, internal.LevelTrace, "Retrieving selected server")
 	if isOpen() {
 		slog.Log(nil, internal.LevelTrace, "Using command client")
-		res, err := sendCmd(libbox.CommandClashMode)
+		res, err := client.SendCmd(libbox.CommandClashMode)
 		if err != nil {
 			slog.Error("Failed to retrieve clash mode", "error", err)
 			return "", "", fmt.Errorf("retrieving clashMode: %w", err)
 		}
-		group := res.clashMode
+		group := res.ClashMode
 		if group == autoAllTag {
 			return autoAllTag, autoAllTag, nil
 		}
@@ -211,12 +242,12 @@ func selectedServer() (string, string, error) {
 }
 
 func activeServer(group string) (string, error) {
-	res, err := sendCmd(libbox.CommandGroup)
+	res, err := client.SendCmd(libbox.CommandGroup)
 	if err != nil {
 		return "", fmt.Errorf("sending groups cmd: %w", err)
 	}
 	groupMap := make(map[string]*libbox.OutboundGroup)
-	for _, g := range res.groups {
+	for _, g := range res.Groups {
 		groupMap[g.Tag] = g
 	}
 	if group == autoAllTag {
@@ -264,11 +295,11 @@ func resolveActive(groupMap map[string]*libbox.OutboundGroup, group string) (str
 }
 
 func getOutboundGroup(group string) (*libbox.OutboundGroup, error) {
-	res, err := sendCmd(libbox.CommandGroup)
+	res, err := client.SendCmd(libbox.CommandGroup)
 	if err != nil {
 		return nil, fmt.Errorf("sending groups cmd: %w", err)
 	}
-	for _, g := range res.groups {
+	for _, g := range res.Groups {
 		if g.Tag == group {
 			return g, nil
 		}
@@ -288,94 +319,28 @@ func ActiveConnections() ([]Connection, error) {
 		return nil, fmt.Errorf("failed to get active connections: %w", err)
 	}
 
-	slices.DeleteFunc(connections, func(c Connection) bool {
+	connections = slices.DeleteFunc(connections, func(c Connection) bool {
 		return c.ClosedAt != 0
 	})
+
 	return connections, nil
 }
 
 func Connections() ([]Connection, error) {
-	res, err := sendCmd(libbox.CommandConnections)
+	res, err := client.SendCmd(libbox.CommandConnections)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connections: %w", err)
 	}
-	if res.connections == nil {
+	if res.Connections == nil {
 		return nil, errors.New("no connections found")
 	}
-	res.connections.FilterState(libbox.ConnectionStateAll)
-	res.connections.SortByDate()
+	res.Connections.FilterState(libbox.ConnectionStateAll)
+	res.Connections.SortByDate()
 	var connections []Connection
-	iter := res.connections.Iterator()
+	iter := res.Connections.Iterator()
 	for iter.HasNext() {
 		conn := *(iter.Next())
 		connections = append(connections, conn)
 	}
 	return connections, nil
 }
-
-func sendCmd(cmd int32) (*cmdClientHandler, error) {
-	handler := newCmdClientHandler()
-	opts := libbox.CommandClientOptions{Command: cmd, StatusInterval: int64(time.Second)}
-	cc := libbox.NewCommandClient(handler, &opts)
-	if err := cc.Connect(); err != nil {
-		return nil, fmt.Errorf("connecting to command client: %w", err)
-	}
-	defer cc.Disconnect()
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	select {
-	case <-handler.done:
-		return handler, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-type cmdClientHandler struct {
-	status      *libbox.StatusMessage
-	connections *libbox.Connections
-	clashMode   string
-	groups      []*libbox.OutboundGroup
-	connected   chan struct{}
-	done        chan struct{}
-}
-
-func newCmdClientHandler() *cmdClientHandler {
-	return &cmdClientHandler{
-		connected: make(chan struct{}, 1),
-		done:      make(chan struct{}, 1),
-	}
-}
-
-func (c *cmdClientHandler) Connected() {
-	c.connected <- struct{}{}
-}
-func (c *cmdClientHandler) Disconnected(message string) {}
-func (c *cmdClientHandler) WriteStatus(message *libbox.StatusMessage) {
-	c.status = message
-	c.done <- struct{}{}
-}
-func (c *cmdClientHandler) InitializeClashMode(modeList libbox.StringIterator, currentMode string) {
-	c.clashMode = currentMode
-	c.done <- struct{}{}
-}
-func (c *cmdClientHandler) UpdateClashMode(newMode string) {
-	c.clashMode = newMode
-	c.done <- struct{}{}
-}
-func (c *cmdClientHandler) WriteConnections(message *libbox.Connections) {
-	c.connections = message
-	c.done <- struct{}{}
-}
-
-func (c *cmdClientHandler) WriteGroups(message libbox.OutboundGroupIterator) {
-	groups := message
-	for groups.HasNext() {
-		c.groups = append(c.groups, groups.Next())
-	}
-	c.done <- struct{}{}
-}
-
-// Not Implemented
-func (c *cmdClientHandler) ClearLogs()                                  { c.done <- struct{}{} }
-func (c *cmdClientHandler) WriteLogs(messageList libbox.StringIterator) { c.done <- struct{}{} }
