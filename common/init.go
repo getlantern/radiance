@@ -248,7 +248,6 @@ func initOTEL(deviceID string, configResponse C.ConfigResponse) error {
 		}
 		shutdownOTEL = nil
 	}
-	configResponse.OTEL.TracesSampleRate = 1.0 // Always sample traces for now
 
 	attrs := metrics.Attributes{
 		App:        "radiance",
