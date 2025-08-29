@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	sbx "github.com/getlantern/sing-box-extensions"
+	"github.com/getlantern/sing-box-extensions/protocol/group"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn/client"
@@ -13,7 +14,6 @@ import (
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
