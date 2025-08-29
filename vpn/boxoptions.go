@@ -94,9 +94,11 @@ func baseOpts() O.Options {
 					InterfaceName: "utun225",
 					Address: []netip.Prefix{
 						netip.MustParsePrefix("10.10.1.1/30"),
+						netip.MustParsePrefix("fdf0:f3e1:0fdd::1/126"),
 					},
 					AutoRoute:   true,
 					StrictRoute: true,
+					MTU:         1500,
 				},
 			},
 		},
