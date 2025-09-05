@@ -139,7 +139,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 	ch := &ConfigHandler{
 		configPath:        configPath,
 		config:            atomic.Value{},
-		preferredLocation: atomic.Value{},
+		preferredLocation: atomic.Pointer[C.ServerLocation]{},
 		ftr:               mockFetcher,
 		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
 		svrManager:        &mockSrvManager{},
@@ -172,7 +172,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 		}`)
 		mockFetcher.err = nil
 
-		ch.preferredLocation.Store(C.ServerLocation{Country: "US", City: "New York"})
+		ch.preferredLocation.Store(&C.ServerLocation{Country: "US", City: "New York"})
 
 		err := ch.fetchConfig()
 		require.NoError(t, err, "Should not return an error when fetch succeeds")

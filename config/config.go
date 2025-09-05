@@ -76,7 +76,7 @@ type ConfigHandler struct {
 
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath         string
-	preferredLocation atomic.Value
+	preferredLocation atomic.Pointer[C.ServerLocation]
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
@@ -93,7 +93,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		svrManager:      options.SvrManager,
 	}
 	// Set the preferred location to an empty struct to define the underlying type.
-	ch.preferredLocation.Store(C.ServerLocation{})
+	ch.preferredLocation.Store(&C.ServerLocation{})
 
 	if err := os.MkdirAll(filepath.Dir(options.DataDir), 0o755); err != nil {
 		slog.Error("creating config directory", "error", err)
@@ -129,14 +129,14 @@ func (ch *ConfigHandler) loadWGKey() (wgtypes.Key, error) {
 
 // SetPreferredServerLocation sets the preferred server location to connect to
 func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
-	preferred := C.ServerLocation{
+	preferred := &C.ServerLocation{
 		Country: country,
 		City:    city,
 	}
 	// We store the preferred location in memory in case we haven't fetched a config yet.
 	ch.preferredLocation.Store(preferred)
 	ch.modifyConfig(func(cfg *Config) {
-		cfg.PreferredLocation = preferred
+		cfg.PreferredLocation = *preferred
 	})
 	// fetch the config with the new preferred location on a separate goroutine
 	go func() {
@@ -189,7 +189,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Info("No stored config yet -- using in-memory server location", "error", err)
 		storedLocation := ch.preferredLocation.Load()
 		if storedLocation != nil {
-			preferred = storedLocation.(C.ServerLocation)
+			preferred = *storedLocation
 		}
 	} else {
 		preferred = oldConfig.PreferredLocation
@@ -314,7 +314,10 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 	}
 	oldConfig, _ := ch.GetConfig()
 	if cfg.PreferredLocation == (C.ServerLocation{}) {
-		cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			cfg.PreferredLocation = *storedLocation
+		}
 	}
 
 	ch.config.Store(cfg)
