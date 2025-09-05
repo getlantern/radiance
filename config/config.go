@@ -345,7 +345,6 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
 	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
 	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride, mergo.WithOverwriteWithEmptyValue); err != nil {
-		slog.Error("merging config", "error", err)
 		return newConfig, err
 	}
 	return &oldConfigCopy, nil
