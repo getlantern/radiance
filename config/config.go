@@ -16,11 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dario.cat/mergo"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
-	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
 
@@ -329,16 +327,6 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Info("Config set")
 	return nil
-}
-
-// mergeResp merges the old and new configuration responses. The merged response is returned
-// along with any error that occurred during the merge.
-func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
-	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
-	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride, mergo.WithOverwriteWithEmptyValue); err != nil {
-		return newConfig, err
-	}
-	return &oldConfigCopy, nil
 }
 
 // fetchLoop fetches the configuration every pollInterval.
