@@ -15,11 +15,12 @@ import (
 type Key = string
 
 const (
-	LogLevel     Key = "RADIANCE_LOG_LEVEL"
-	LogPath      Key = "RADIANCE_LOG_PATH"
-	DataPath     Key = "RADIANCE_DATA_PATH"
-	DisableFetch Key = "RADIANCE_DISABLE_FETCH_CONFIG"
-	PrintCurl    Key = "RADIANCE_PRINT_CURL"
+	LogLevel      Key = "RADIANCE_LOG_LEVEL"
+	LogPath       Key = "RADIANCE_LOG_PATH"
+	DataPath      Key = "RADIANCE_DATA_PATH"
+	DisableFetch  Key = "RADIANCE_DISABLE_FETCH_CONFIG"
+	PrintCurl     Key = "RADIANCE_PRINT_CURL"
+	DisableStdout Key = "RADIANCE_DISABLE_STDOUT_LOG"
 
 	Testing = "RADIANCE_TESTING"
 )

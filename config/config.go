@@ -419,7 +419,7 @@ func saveConfig(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-	return os.WriteFile(path, buf, 0o600)
+	return os.WriteFile(path, buf, 0644)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.

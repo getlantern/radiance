@@ -88,7 +88,12 @@ func initLogger(logPath, level string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
-	logWriter := io.MultiWriter(os.Stdout, f)
+	var logWriter io.Writer
+	if noStdout, _ := env.Get[bool](env.DisableStdout); noStdout {
+		logWriter = f
+	} else {
+		logWriter = io.MultiWriter(os.Stdout, f)
+	}
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     lvl,
