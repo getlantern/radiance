@@ -224,13 +224,17 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	slog.Info("Config fetched from server")
 
+	// Save the raw config for debugging
+	if writeErr := os.WriteFile(strings.Replace(ch.configPath, ".json", "_raw.json", 1), resp, 0o600); writeErr != nil {
+		slog.Error("writing raw config file", "error", writeErr)
+	}
+
 	// Otherwise, we keep the previous config and store any error that might have occurred.
 	// We still want to keep the previous config if there was an error. This is important
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
 	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), resp)
-
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
@@ -340,7 +344,8 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 // along with any error that occurred during the merge.
 func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
 	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
-	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride); err != nil {
+	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride, mergo.WithOverwriteWithEmptyValue); err != nil {
+		slog.Error("merging config", "error", err)
 		return newConfig, err
 	}
 	return &oldConfigCopy, nil

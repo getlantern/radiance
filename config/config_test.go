@@ -244,13 +244,28 @@ func TestMergeResp(t *testing.T) {
 				},
 			},
 		}
+		want := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{
+				{Country: "UK", City: "London"},
+			},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
 
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		assert.Equal(t, newConfig.Servers, mergedConfig.Servers, "Merged servers should match newConfig servers")
-		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
-		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
-		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+		assert.Equal(t, want, mergedConfig)
 	})
 
 	t.Run("NoNewServerLocations", func(t *testing.T) {
@@ -280,13 +295,26 @@ func TestMergeResp(t *testing.T) {
 				},
 			},
 		}
+		want := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
 
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
-		assert.Equal(t, newConfig.Options, mergedConfig.Options, "Merged options should match newConfig options")
-		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
-		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+		assert.Equal(t, want, mergedConfig)
 	})
 	t.Run("OverwriteOutbounds", func(t *testing.T) {
 		oldConfig := &C.ConfigResponse{
@@ -324,15 +352,28 @@ func TestMergeResp(t *testing.T) {
 				},
 			},
 		}
+		want := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
 
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
-		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged options should match newConfig options")
-		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
-		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
+		assert.Equal(t, want, mergedConfig)
 	})
-	t.Run("KeepDNSOptions", func(t *testing.T) {
+	t.Run("RemoveDNSOptions", func(t *testing.T) {
 		oldConfig := &C.ConfigResponse{
 			UserInfo: C.UserInfo{
 				IP:       "1.1.1.1",
@@ -370,13 +411,27 @@ func TestMergeResp(t *testing.T) {
 			},
 		}
 
+		want := &C.ConfigResponse{
+			UserInfo: C.UserInfo{
+				IP: "2.2.2.2",
+			},
+			Servers: []C.ServerLocation{},
+			Options: O.Options{
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		assert.Equal(t, oldConfig.Servers, mergedConfig.Servers, "Merged servers should match oldConfig servers")
-		assert.Equal(t, newConfig.Options.Outbounds, mergedConfig.Options.Outbounds, "Merged Outbounds should match newConfig Outbounds")
-		assert.Equal(t, newConfig.UserInfo.IP, mergedConfig.UserInfo.IP, "Merged IP should match newConfig IP")
-		assert.Equal(t, oldConfig.UserInfo.ProToken, mergedConfig.UserInfo.ProToken, "Merged ProToken should match oldConfig ProToken")
-		assert.Equal(t, oldConfig.Options.DNS, mergedConfig.Options.DNS, "Merged DNS options should match oldConfig DNS options")
+
+		assert.Equal(t, want, mergedConfig)
 	})
 	t.Run("SuccessfulRemovedUnassignedOutbounds", func(t *testing.T) {
 		oldConfig := &C.ConfigResponse{
@@ -424,8 +479,7 @@ func TestMergeResp(t *testing.T) {
 		}
 		want := &C.ConfigResponse{
 			UserInfo: C.UserInfo{
-				IP:       "2.2.2.2",
-				ProToken: "test-pro-token",
+				IP: "2.2.2.2",
 			},
 			Servers: []C.ServerLocation{
 				{Country: "UK", City: "London"},
@@ -443,10 +497,10 @@ func TestMergeResp(t *testing.T) {
 		}
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		assert.Equal(t, mergedConfig, want)
+		assert.Equal(t, want, mergedConfig)
 	})
 
-	t.Run("DoNotOverwriteAllOptions", func(t *testing.T) {
+	t.Run("OverwriteAllOptions", func(t *testing.T) {
 		oldConfig := &C.ConfigResponse{
 			Options: O.Options{
 				DNS: &O.DNSOptions{
@@ -497,7 +551,7 @@ func TestMergeResp(t *testing.T) {
 		want := &C.ConfigResponse{
 			Options: O.Options{
 				DNS: &O.DNSOptions{
-					ReverseMapping: true,
+					ReverseMapping: false,
 					Servers: []O.DNSServerOptions{
 						{
 							Tag:     "dns1",
@@ -517,7 +571,96 @@ func TestMergeResp(t *testing.T) {
 		}
 		mergedConfig, err := mergeResp(oldConfig, newConfig)
 		require.NoError(t, err, "Should not return an error when merging configs")
-		assert.Equal(t, mergedConfig, want)
+		assert.Equal(t, want, mergedConfig)
+	})
+	t.Run("OverwriteEndpoints", func(t *testing.T) {
+		oldConfig := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: true,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "8.8.8.8",
+						},
+					},
+				},
+				Endpoints: []O.Endpoint{
+					{
+						Tag: "endpoint1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+					{
+						Tag: "endpoint4",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound1",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+					{
+						Tag: "outbound4",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		newConfig := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "1.1.1.1",
+						},
+					},
+				},
+				Endpoints: []O.Endpoint{},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		want := &C.ConfigResponse{
+			Options: O.Options{
+				DNS: &O.DNSOptions{
+					ReverseMapping: false,
+					Servers: []O.DNSServerOptions{
+						{
+							Tag:     "dns1",
+							Address: "1.1.1.1",
+						},
+					},
+				},
+				Endpoints: []O.Endpoint{},
+				Outbounds: []O.Outbound{
+					{
+						Tag: "outbound2",
+						Options: map[string]interface{}{
+							"key": "value",
+						},
+					},
+				},
+			},
+		}
+		mergedConfig, err := mergeResp(oldConfig, newConfig)
+		require.NoError(t, err, "Should not return an error when merging configs")
+		assert.Equal(t, want, mergedConfig)
 	})
 }
 
