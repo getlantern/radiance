@@ -228,7 +228,6 @@ func closeTunnel() error {
 	// copying the mutex is fine here because we're not using it anymore
 	//nolint:staticcheck
 	t := *tInstance
-	t.lbService.Close()
 	tInstance = nil
 	slog.Log(nil, internal.LevelTrace, "Clearing cmd server tunnel reference")
 	cmdSvr.SetService(nil)
