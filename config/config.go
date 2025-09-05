@@ -16,11 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dario.cat/mergo"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	C "github.com/getlantern/common"
-	"github.com/qdm12/reprint"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
 
@@ -78,7 +76,7 @@ type ConfigHandler struct {
 
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath         string
-	preferredLocation atomic.Value
+	preferredLocation atomic.Pointer[C.ServerLocation]
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
@@ -95,7 +93,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		svrManager:      options.SvrManager,
 	}
 	// Set the preferred location to an empty struct to define the underlying type.
-	ch.preferredLocation.Store(C.ServerLocation{})
+	ch.preferredLocation.Store(&C.ServerLocation{})
 
 	if err := os.MkdirAll(filepath.Dir(options.DataDir), 0o755); err != nil {
 		slog.Error("creating config directory", "error", err)
@@ -131,14 +129,14 @@ func (ch *ConfigHandler) loadWGKey() (wgtypes.Key, error) {
 
 // SetPreferredServerLocation sets the preferred server location to connect to
 func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
-	preferred := C.ServerLocation{
+	preferred := &C.ServerLocation{
 		Country: country,
 		City:    city,
 	}
 	// We store the preferred location in memory in case we haven't fetched a config yet.
 	ch.preferredLocation.Store(preferred)
 	ch.modifyConfig(func(cfg *Config) {
-		cfg.PreferredLocation = preferred
+		cfg.PreferredLocation = *preferred
 	})
 	// fetch the config with the new preferred location on a separate goroutine
 	go func() {
@@ -191,7 +189,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Info("No stored config yet -- using in-memory server location", "error", err)
 		storedLocation := ch.preferredLocation.Load()
 		if storedLocation != nil {
-			preferred = storedLocation.(C.ServerLocation)
+			preferred = *storedLocation
 		}
 	} else {
 		preferred = oldConfig.PreferredLocation
@@ -224,13 +222,17 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	slog.Info("Config fetched from server")
 
+	// Save the raw config for debugging
+	if writeErr := os.WriteFile(strings.TrimSuffix(ch.configPath, ".json")+"_raw.json", resp, 0o600); writeErr != nil {
+		slog.Error("writing raw config file", "error", writeErr)
+	}
+
 	// Otherwise, we keep the previous config and store any error that might have occurred.
 	// We still want to keep the previous config if there was an error. This is important
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
 	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), resp)
-
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
@@ -311,16 +313,10 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 		return nil
 	}
 	oldConfig, _ := ch.GetConfig()
-	if oldConfig != nil {
-		merged, err := mergeResp(&oldConfig.ConfigResponse, &cfg.ConfigResponse)
-		if err != nil {
-			slog.Error("merging config", "error", err)
-			return fmt.Errorf("merging config: %w", err)
-		}
-		cfg.ConfigResponse = *merged
-
-		if cfg.PreferredLocation == (C.ServerLocation{}) {
-			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
+	if cfg.PreferredLocation == (C.ServerLocation{}) {
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			cfg.PreferredLocation = *storedLocation
 		}
 	}
 
@@ -334,16 +330,6 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Info("Config set")
 	return nil
-}
-
-// mergeResp merges the old and new configuration responses. The merged response is returned
-// along with any error that occurred during the merge.
-func mergeResp(oldConfig, newConfig *C.ConfigResponse) (*C.ConfigResponse, error) {
-	oldConfigCopy := reprint.This(*oldConfig).(C.ConfigResponse)
-	if err := mergo.Merge(&oldConfigCopy, newConfig, mergo.WithOverride); err != nil {
-		return newConfig, err
-	}
-	return &oldConfigCopy, nil
 }
 
 // fetchLoop fetches the configuration every pollInterval.
