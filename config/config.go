@@ -225,7 +225,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	slog.Info("Config fetched from server")
 
 	// Save the raw config for debugging
-	if writeErr := os.WriteFile(strings.Replace(ch.configPath, ".json", "_raw.json", 1), resp, 0o600); writeErr != nil {
+	if writeErr := os.WriteFile(strings.TrimSuffix(ch.configPath, ".json")+"_raw.json", resp, 0o600); writeErr != nil {
 		slog.Error("writing raw config file", "error", writeErr)
 	}
 
