@@ -315,17 +315,8 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 		return nil
 	}
 	oldConfig, _ := ch.GetConfig()
-	if oldConfig != nil {
-		merged, err := mergeResp(&oldConfig.ConfigResponse, &cfg.ConfigResponse)
-		if err != nil {
-			slog.Error("merging config", "error", err)
-			return fmt.Errorf("merging config: %w", err)
-		}
-		cfg.ConfigResponse = *merged
-
-		if cfg.PreferredLocation == (C.ServerLocation{}) {
-			cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
-		}
+	if cfg.PreferredLocation == (C.ServerLocation{}) {
+		cfg.PreferredLocation = ch.preferredLocation.Load().(C.ServerLocation)
 	}
 
 	ch.config.Store(cfg)
