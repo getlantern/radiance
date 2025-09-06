@@ -110,10 +110,7 @@ func (s *SplitTunnel) AddItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, merge); err != nil {
 		return err
 	}
-	slog.Log(
-		context.Background(), internal.LevelTrace, "added item to filter",
-		"filterType", filterType, "item", item,
-	)
+	slog.Debug("added item to filter", "filterType", filterType, "item", item)
 	if err := s.saveToFile(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -125,10 +122,7 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, remove); err != nil {
 		return err
 	}
-	slog.Log(
-		context.Background(), internal.LevelTrace, "removed item from filter",
-		"filterType", filterType, "item", item,
-	)
+	slog.Debug("removed item from filter", "filterType", filterType, "item", item)
 	if err := s.saveToFile(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -138,14 +132,14 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 // AddItems adds multiple items to the filter.
 func (s *SplitTunnel) AddItems(items Filter) error {
 	s.updateFilters(items, merge)
-	slog.Log(context.Background(), internal.LevelTrace, "added items to filter", "items", items.String())
+	slog.Debug("added items to filter", "items", items.String())
 	return s.saveToFile()
 }
 
 // RemoveItems removes multiple items from the filter.
 func (s *SplitTunnel) RemoveItems(items Filter) error {
 	s.updateFilters(items, remove)
-	slog.Log(context.Background(), internal.LevelTrace, "removed items from filter", "items", items.String())
+	slog.Debug("removed items from filter", "items", items.String())
 	return s.saveToFile()
 }
 
