@@ -13,7 +13,6 @@ import (
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +46,10 @@ func TestSelectServer(t *testing.T) {
 	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 
+	type gSelector interface {
+		adapter.OutboundGroup
+		Start() error
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// set initial group
@@ -55,7 +58,7 @@ func TestSelectServer(t *testing.T) {
 			// start the selector
 			outbound, ok := outboundMgr.Outbound(tt.wantGroup)
 			require.True(t, ok, tt.wantGroup+" selector should exist")
-			selector := outbound.(*group.Selector)
+			selector := outbound.(gSelector)
 			require.NoError(t, selector.Start(), "failed to start selector")
 
 			mservice.status = ipc.StatusRunning
