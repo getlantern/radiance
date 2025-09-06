@@ -23,6 +23,7 @@ import (
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -91,10 +92,12 @@ func NewManager(dataPath string) (*Manager, error) {
 		access:           sync.RWMutex{},
 	}
 
+	slog.Debug("Loading servers", "file", mgr.serversFile)
 	if err := mgr.loadServers(); err != nil {
+		slog.Error("Failed to load servers", "file", mgr.serversFile, "error", err)
 		return nil, fmt.Errorf("failed to load servers from file: %w", err)
 	}
-
+	slog.Log(nil, internal.LevelTrace, "Loaded servers", "servers", mgr.servers)
 	return mgr, nil
 }
 
@@ -163,6 +166,7 @@ func (m *Manager) setServers(group ServerGroup, options Options) error {
 	m.access.Lock()
 	defer m.access.Unlock()
 
+	slog.Log(nil, internal.LevelTrace, "Setting servers", "group", group, "options", options)
 	opts := Options{
 		Outbounds: append([]option.Outbound{}, options.Outbounds...),
 		Endpoints: append([]option.Endpoint{}, options.Endpoints...),
@@ -196,6 +200,7 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 	m.access.Lock()
 	defer m.access.Unlock()
 
+	slog.Log(nil, internal.LevelTrace, "Adding servers", "group", group, "options", opts)
 	existingTags := m.merge(group, opts)
 	if len(existingTags) > 0 {
 		slog.Warn("Some servers were not added because they already exist", "tags", existingTags)
@@ -204,8 +209,10 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
 	if len(existingTags) > 0 {
+		slog.Warn("Tried to add some servers that already exist", "tags", existingTags)
 		return fmt.Errorf("some servers were not added because they already exist: %v", existingTags)
 	}
+	slog.Debug("Server configs added", "group", group, "newCount", len(opts.AllTags()))
 	return nil
 }
 
@@ -245,11 +252,13 @@ func (m *Manager) RemoveServer(tag string) error {
 	m.access.Lock()
 	defer m.access.Unlock()
 
+	slog.Log(nil, internal.LevelTrace, "Removing server", "tag", tag)
 	// check which group the server belongs to so we can get the correct optsMaps and servers
 	group := SGLantern
 	if _, exists := m.optsMaps[group][tag]; !exists {
 		group = SGUser
 		if _, exists := m.optsMaps[group][tag]; !exists {
+			slog.Warn("Tried to remove non-existent server", "tag", tag)
 			return fmt.Errorf("server with tag %q not found", tag)
 		}
 	}
@@ -267,6 +276,7 @@ func (m *Manager) RemoveServer(tag string) error {
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
 	}
+	slog.Debug("Server config removed", "group", group, "tag", tag)
 	return nil
 }
 
@@ -280,6 +290,7 @@ func remove[T comparable](slice []T, item T) []T {
 }
 
 func (m *Manager) saveServers() error {
+	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
 	ctx := sbx.BoxContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
 	if err != nil {

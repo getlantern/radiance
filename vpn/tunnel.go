@@ -164,9 +164,14 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	// create file watcher for server changes
 	svrsPath := filepath.Join(dataPath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
-		if err := t.reloadOptions(svrsPath); err != nil {
+		slog.Debug("Server file change detected", "path", svrsPath)
+		err := t.reloadOptions(svrsPath)
+		switch {
+		case errors.Is(err, context.Canceled):
+			slog.Debug("Tunnel is closing, ignoring server reload")
+		case err != nil:
 			slog.Error("Failed to reload servers", "error", err)
-		} else {
+		default:
 			slog.Debug("Servers reloaded successfully")
 		}
 	})
@@ -269,12 +274,11 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	t.reloadAccess.Lock()
 	defer t.reloadAccess.Unlock()
 
-	select {
-	case <-t.ctx.Done():
-		return nil
-	default:
+	if contextDone(t.ctx) {
+		return t.ctx.Err() // tunnel is closing, ignore the reload
 	}
 
+	slog.Debug("Reloading server options", "path", optsPath)
 	content, err := os.ReadFile(optsPath)
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
@@ -283,8 +287,9 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
+	slog.Log(nil, internal.LevelTrace, "Parsed server options", "options", svrs)
 	err = t.updateServers(svrs)
-	if t.ctx.Err() != nil {
+	if errors.Is(err, context.Canceled) {
 		return nil // tunnel is closing, ignore the error
 	}
 	if err != nil && !errors.Is(err, errLibboxClosed) {
@@ -294,6 +299,7 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 }
 
 func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
+	slog.Log(nil, internal.LevelTrace, "Updating servers")
 	ctx := t.ctx
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
@@ -336,6 +342,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		sopts := svrs[group]
 		newTags := sopts.AllTags()
 
+		slog.Log(nil, internal.LevelTrace, "Processing group", "group", group, "new_tags", newTags)
 		switch group {
 		case servers.SGLantern:
 			hasLantern = len(newTags) > 0
@@ -352,6 +359,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			}
 		}
 		toRemove = slices.Concat(toRemove, tagsToRemove)
+		slog.Log(nil, internal.LevelTrace, "Tags to remove", "group", group, "tags", tagsToRemove)
 
 		creator.group = group
 		creator.succeededTags = make([]string, 0, len(newTags)+1)
@@ -360,7 +368,14 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		creator.createEndpoints(endpointMgr, sopts.Endpoints)
 		creator.createOutbounds(outboundMgr, sopts.Outbounds)
 
+		if contextDone(ctx) {
+			return ctx.Err() // tunnel is closing, stop processing
+		}
+
 		// create/update urltest and selector for group with the succeeded tags
+		slog.Log(nil, internal.LevelTrace, "Creating group outbounds", "group", group,
+			"tags", creator.succeededTags,
+		)
 		autoGroup := groupAutoTag(group)
 		opts := urlTestOutbound(autoGroup, creator.succeededTags).Options
 		creator.createNew(autoGroup, C.TypeURLTest, opts)
@@ -369,15 +384,25 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		opts = selectorOutbound(group, tags).Options
 		creator.createNew(group, C.TypeSelector, opts)
 
+		if contextDone(ctx) {
+			return ctx.Err() // tunnel is closing, stop processing
+		}
 	}
 
 	// we have to remove endpoints and outbounds last, otherwise the managers will return an error
 	// because the group outbound is dependent on them.
 	for _, tag := range toRemove {
+		if contextDone(ctx) {
+			return ctx.Err() // tunnel is closing, stop processing
+		}
 		if _, exists := endpointMgr.Get(tag); exists {
-			endpointMgr.Remove(tag)
+			if err := endpointMgr.Remove(tag); err != nil {
+				slog.Error("Failed to remove endpoint", "tag", tag, "error", err)
+			}
 		} else if _, exists := outboundMgr.Outbound(tag); exists {
-			outboundMgr.Remove(tag)
+			if err := outboundMgr.Remove(tag); err != nil {
+				slog.Error("Failed to remove outbound", "tag", tag, "error", err)
+			}
 		}
 	}
 
@@ -386,6 +411,9 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		// see above comment about panic
 		slog.Log(nil, internal.LevelPanic, "auto outbound missing", "group", autoAllTag)
 		panic(fmt.Errorf("auto outbound %q missing", autoAllTag))
+	}
+	if contextDone(ctx) {
+		return ctx.Err() // tunnel is closing, stop processing
 	}
 	creator.mgr = outboundMgr
 	creator.typ = "outbound"
@@ -398,10 +426,12 @@ func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, has
 	_, isPlaceholder := auto.(*sbgroup.Selector)
 	shouldBePlaceholder := !(hasLantern && hasUser)
 	if (isPlaceholder && shouldBePlaceholder) || (len(auto.All()) == 2 && !shouldBePlaceholder) {
+		slog.Log(nil, internal.LevelTrace, "No update needed for auto all")
 		return // nothing to do
 	}
 	if !isPlaceholder && shouldBePlaceholder {
 		// create a placeholder
+		slog.Log(nil, internal.LevelTrace, "Creating placeholder for auto all")
 		creator.createNew(autoAllTag, C.TypeSelector, selectorOutbound(autoAllTag, []string{"block"}).Options)
 		return
 	}
@@ -414,7 +444,9 @@ func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, has
 	if hasUser {
 		tags = append(tags, autoUserTag)
 	}
-	creator.createNew(autoAllTag, C.TypeURLTest, urlTestOutbound(autoAllTag, tags).Options)
+	if creator.createNew(autoAllTag, C.TypeURLTest, urlTestOutbound(autoAllTag, tags).Options) {
+		slog.Log(nil, internal.LevelTrace, "Updated auto all", "tags", tags)
+	}
 }
 
 // outCreator is a one-off struct for creating outbounds or endpoints.
@@ -436,7 +468,9 @@ func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []O.
 	o.mgr = mgr
 	o.typ = "endpoint"
 	for _, opts := range endpoints {
-		o.createNew(opts.Tag, opts.Type, opts.Options)
+		if !o.createNew(opts.Tag, opts.Type, opts.Options) && errors.Is(o.ctx.Err(), context.Canceled) {
+			return // context is done, stop processing
+		}
 	}
 }
 
@@ -444,15 +478,16 @@ func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []O.
 	o.mgr = mgr
 	o.typ = "outbound"
 	for _, opts := range outbounds {
-		o.createNew(opts.Tag, opts.Type, opts.Options)
+		if !o.createNew(opts.Tag, opts.Type, opts.Options) && errors.Is(o.ctx.Err(), context.Canceled) {
+			return // context is done, stop processing
+		}
 	}
 }
 
-func (o *outCreator) createNew(tag, typ string, opts any) {
-	select {
-	case <-o.ctx.Done():
-		return
-	default:
+func (o *outCreator) createNew(tag, typ string, opts any) bool {
+	if contextDone(o.ctx) {
+		slog.Log(nil, internal.LevelTrace, "Context done, aborting create", "type", o.typ, "group", o.group, "tag", tag, "outbound_type", typ)
+		return false
 	}
 
 	log := o.logFactory.NewLogger(o.typ + "/" + tag + "[" + typ + "]")
@@ -460,14 +495,22 @@ func (o *outCreator) createNew(tag, typ string, opts any) {
 	if err != nil {
 		slog.Error(
 			"failed to create "+o.typ,
-			slog.String("group", o.group), slog.String("tag", tag),
-			slog.String("type", typ), slog.Any("error", err),
+			"group", o.group, "tag", tag,
+			"type", typ, "error", err,
 		)
 		o.errs = append(o.errs, fmt.Errorf("create %s %q: %w", o.typ, tag, err))
-	} else {
-		slog.Debug("created "+o.typ,
-			slog.String("group", o.group), slog.String("tag", tag), slog.String("type", typ),
-		)
-		o.succeededTags = append(o.succeededTags, tag)
+		return false
+	}
+	slog.Debug("created "+o.typ, "group", o.group, "tag", tag, "type", typ)
+	o.succeededTags = append(o.succeededTags, tag)
+	return true
+}
+
+func contextDone(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
