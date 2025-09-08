@@ -212,9 +212,11 @@ func ActiveServer() (group, tag string, err error) {
 // tunnel is closed. If there are no active connections and the tunnel is open, an empty slice is
 // returned without an error.
 func ActiveConnections() ([]ipc.Connection, error) {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "active_connections")
+	defer span.End()
 	connections, err := Connections()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get active connections: %w", err)
+		return nil, traces.RecordError(span, fmt.Errorf("failed to get active connections: %w", err))
 	}
 
 	connections = slices.DeleteFunc(connections, func(c ipc.Connection) bool {
