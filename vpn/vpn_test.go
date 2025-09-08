@@ -5,10 +5,9 @@ import (
 	"testing"
 
 	sbx "github.com/getlantern/sing-box-extensions"
-	"github.com/getlantern/sing-box-extensions/protocol/group"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/vpn/client"
+	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
@@ -41,11 +40,16 @@ func TestSelectServer(t *testing.T) {
 	}
 
 	common.SetPathsForTesting(t)
-	ctx := setupVpnTest(t)
+	mservice := setupVpnTest(t)
 
+	ctx := mservice.Ctx()
 	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 
+	type gSelector interface {
+		adapter.OutboundGroup
+		Start() error
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// set initial group
@@ -54,9 +58,10 @@ func TestSelectServer(t *testing.T) {
 			// start the selector
 			outbound, ok := outboundMgr.Outbound(tt.wantGroup)
 			require.True(t, ok, tt.wantGroup+" selector should exist")
-			selector := outbound.(*group.Selector)
+			selector := outbound.(gSelector)
 			require.NoError(t, selector.Start(), "failed to start selector")
 
+			mservice.status = ipc.StatusRunning
 			require.NoError(t, selectServer(tt.wantGroup, tt.wantTag))
 			assert.Equal(t, tt.wantTag, selector.Now(), tt.wantTag+" should be selected")
 			assert.Equal(t, tt.wantGroup, clashServer.Mode(), "clash mode should be "+tt.wantGroup)
@@ -76,7 +81,7 @@ func TestSelectedServer(t *testing.T) {
 
 	require.NoError(t, cacheFile.StoreMode(wantGroup))
 	require.NoError(t, cacheFile.StoreSelected(wantGroup, wantTag))
-	err = cacheFile.Close()
+	_ = cacheFile.Close()
 
 	t.Run("with tunnel closed", func(t *testing.T) {
 		group, tag, err := selectedServer()
@@ -85,8 +90,8 @@ func TestSelectedServer(t *testing.T) {
 		assert.Equal(t, wantTag, tag, "tag should match")
 	})
 	t.Run("with tunnel open", func(t *testing.T) {
-		ctx := setupVpnTest(t)
-		outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
+		mservice := setupVpnTest(t)
+		outboundMgr := service.FromContext[adapter.OutboundManager](mservice.Ctx())
 		require.NoError(t, outboundMgr.Start(adapter.StartStateStart), "failed to start outbound manager")
 
 		group, tag, err := selectedServer()
@@ -96,19 +101,18 @@ func TestSelectedServer(t *testing.T) {
 	})
 }
 
-func TestSendCmd(t *testing.T) {
-	common.SetPathsForTesting(t)
-	ctx := setupVpnTest(t)
-
-	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
-	want := clashServer.Mode()
-
-	res, err := client.SendCmd(libbox.CommandClashMode)
-	require.NoError(t, err)
-	require.Equal(t, want, res.ClashMode)
+type mockService struct {
+	ctx    context.Context
+	status string
+	clash  *clashapi.Server
 }
 
-func setupVpnTest(t *testing.T) context.Context {
+func (m *mockService) Ctx() context.Context          { return m.ctx }
+func (m *mockService) Status() string                { return m.status }
+func (m *mockService) ClashServer() *clashapi.Server { return m.clash }
+func (m *mockService) Close() error                  { return nil }
+
+func setupVpnTest(t *testing.T) *mockService {
 	path := common.DataPath()
 	setupOpts := libbox.SetupOptions{
 		BasePath:    path,
@@ -127,17 +131,21 @@ func setupVpnTest(t *testing.T) context.Context {
 	clashServer := service.FromContext[adapter.ClashServer](ctx)
 	cacheFile := service.FromContext[adapter.CacheFile](ctx)
 
-	cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
+	m := &mockService{
+		ctx:    ctx,
+		status: ipc.StatusInitializing,
+		clash:  clashServer.(*clashapi.Server),
+	}
+	ipcServer = ipc.NewServer(m)
 	t.Cleanup(func() {
 		lb.Close()
-		cmdSvr.Close()
+		ipcServer.Close()
+		cacheFile.Close()
+		clashServer.Close()
 	})
-
-	require.NoError(t, cmdSvr.Start())
-	cmdSvr.SetService(lb)
+	require.NoError(t, ipcServer.Start(path))
 
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))
-
-	return ctx
+	return m
 }

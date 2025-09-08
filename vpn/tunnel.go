@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	sbx "github.com/getlantern/sing-box-extensions"
 	sbxlog "github.com/getlantern/sing-box-extensions/log"
@@ -19,15 +21,14 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing-box/log"
 	sblog "github.com/sagernet/sing-box/log"
-	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
@@ -37,9 +38,7 @@ var (
 	tInstance *tunnel
 	tAccess   sync.Mutex
 
-	cmdSvr     *libbox.CommandServer
-	cmdSvrOnce sync.Once
-	cmdSvrErr  error
+	ipcServer *ipc.Server
 )
 
 type tunnel struct {
@@ -52,12 +51,13 @@ type tunnel struct {
 	svrFileWatcher *internal.FileWatcher
 	reloadAccess   sync.Mutex
 
+	status  atomic.Value
 	cancel  context.CancelFunc
 	closers []io.Closer
 }
 
 // establishConnection initializes and starts the VPN tunnel with the provided options and platform interface.
-func establishConnection(group, tag string, opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
+func establishConnection(group, tag string, opts O.Options, dataPath string, platIfce libbox.PlatformInterface) (err error) {
 	tAccess.Lock()
 	defer tAccess.Unlock()
 	if tInstance != nil {
@@ -67,27 +67,49 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 
 	slog.Info("Establishing VPN tunnel", "group", group, "tag", tag)
 
-	tInstance = &tunnel{}
-	tInstance.ctx, tInstance.cancel = context.WithCancel(sbx.BoxContext())
-	if err := tInstance.init(opts, dataPath, platIfce); err != nil {
+	t := &tunnel{}
+	t.status.Store(ipc.StatusInitializing)
+
+	ipcServer = ipc.NewServer(t)
+	if err := ipcServer.Start(common.DataPath()); err != nil {
+		slog.Error("Failed to start IPC server", "error", err)
+		return fmt.Errorf("starting IPC server: %w", err)
+	}
+	slog.Debug("IPC server started")
+	defer func() {
+		if err != nil {
+			t.status.Store(ipc.StatusClosed)
+			ipcServer.Close()
+		}
+	}()
+
+	t.ctx, t.cancel = context.WithCancel(sbx.BoxContext())
+	if err := t.init(opts, dataPath, platIfce); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
 	// we need to set the selected server before starting libbox
 	slog.Log(nil, internal.LevelTrace, "Starting cachefile")
-	cacheFile := tInstance.cacheFile
-	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
+	if err := t.cacheFile.Start(adapter.StartStateInitialize); err != nil {
 		slog.Error("Failed to start cache file", "error", err)
 		return fmt.Errorf("start cache file: %w", err)
 	}
-	tInstance.closers = append(tInstance.closers, cacheFile)
+	t.closers = append(t.closers, t.cacheFile)
 
 	if group == "" { // group is empty, connect to last selected server
 		slog.Debug("Connecting to last selected server")
-		return tInstance.connect()
+		err = t.connect()
+	} else {
+		err = t.connectTo(group, tag)
 	}
-	return tInstance.connectTo(group, tag)
+	if err != nil {
+		t.Close()
+		return err
+	}
+	tInstance = t
+	t.status.Store(ipc.StatusRunning)
+	return nil
 }
 
 func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
@@ -113,12 +135,8 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
-	if err := startCmdServer(); err != nil {
-		return fmt.Errorf("failed to start command server: %w", err)
-	}
-
 	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
-	service.MustRegister[log.Factory](t.ctx, t.logFactory)
+	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
 	// create the cache file service
 	if opts.Experimental.CacheFile == nil {
@@ -146,9 +164,14 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	// create file watcher for server changes
 	svrsPath := filepath.Join(dataPath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
-		if err := t.reloadOptions(svrsPath); err != nil {
+		slog.Debug("Server file change detected", "path", svrsPath)
+		err := t.reloadOptions(svrsPath)
+		switch {
+		case errors.Is(err, context.Canceled):
+			slog.Debug("Tunnel is closing, ignoring server reload")
+		case err != nil:
 			slog.Error("Failed to reload servers", "error", err)
-		} else {
+		default:
 			slog.Debug("Servers reloaded successfully")
 		}
 	})
@@ -157,45 +180,35 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	return nil
 }
 
-func (t *tunnel) connect() (err error) {
+func (t *tunnel) connect() error {
 	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
 
-	if err = t.lbService.Start(); err != nil {
-		t.cacheFile.Close()
+	if err := t.lbService.Start(); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
-	// we're using the cmd server to handle libbox.Close, so we don't need to add it to closers
-	defer func() {
-		if err != nil {
-			slog.Warn("Error occurred during connection, closing tunnel", "error", err)
-			t.lbService.Close()
-			closeTunnel()
-		}
-	}()
 	slog.Debug("Libbox service started")
+	t.closers = append(t.closers, t.lbService)
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
-	cmdSvr.SetService(t.lbService)
 
-	if err = t.svrFileWatcher.Start(); err != nil {
+	if err := t.svrFileWatcher.Start(); err != nil {
 		slog.Error("Failed to start user server file watcher", "error", err)
 		return fmt.Errorf("starting user server file watcher: %w", err)
 	}
-	tInstance.closers = append(tInstance.closers, t.svrFileWatcher)
+	t.closers = append(t.closers, t.svrFileWatcher)
 
 	slog.Info("Tunnel connection established")
 	return nil
 }
 
-func (t *tunnel) connectTo(group, tag string) (err error) {
+func (t *tunnel) connectTo(group, tag string) error {
 	slog.Log(nil, internal.LevelTrace, "Connecting to server", "group", group, "tag", tag)
-	err = t.cacheFile.StoreMode(group)
+	err := t.cacheFile.StoreMode(group)
 	if err == nil {
 		err = t.cacheFile.StoreSelected(group, tag)
 	}
 	if err != nil {
-		t.cacheFile.Close()
 		slog.Error("failed to set selected server", "group", group, "tag", tag, "error", err)
 		return fmt.Errorf("set selected server %s.%s: %w", group, tag, err)
 	}
@@ -203,47 +216,53 @@ func (t *tunnel) connectTo(group, tag string) (err error) {
 	return t.connect()
 }
 
-func startCmdServer() error {
-	cmdSvrOnce.Do(func() {
-		slog.Debug("Starting command server")
-		cmdSvr = libbox.NewCommandServer(&cmdSvrHandler{}, 64)
-		cmdSvrErr = cmdSvr.Start()
-	})
-	return cmdSvrErr
-}
-
-func closeCmdServer() error {
-	if err := cmdSvr.Close(); err != nil {
-		return fmt.Errorf("closing command server: %w", err)
-	}
-	return os.Remove(filepath.Join(common.DataPath(), "command.sock"))
-}
-
-// closeTunnel stops and cleans up the VPN tunnel instance.
-func closeTunnel() error {
+func (t *tunnel) Close() error {
+	t.status.Store(ipc.StatusClosing)
 	tAccess.Lock()
-	if tInstance == nil {
-		tAccess.Unlock()
-		return nil
-	}
+	defer tAccess.Unlock()
+
 	slog.Info("Closing tunnel")
-	// copying the mutex is fine here because we're not using it anymore
-	//nolint:staticcheck
-	t := *tInstance
-	tInstance = nil
-	slog.Log(nil, internal.LevelTrace, "Clearing cmd server tunnel reference")
-	cmdSvr.SetService(nil)
-	tAccess.Unlock()
+	slog.Log(nil, internal.LevelTrace, "Clearing ipc server tunnel reference")
 
 	t.cancel()
 
-	var errs []error
-	for _, closer := range t.closers {
-		slog.Log(nil, internal.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
-		errs = append(errs, closer.Close())
+	done := make(chan error)
+	go func() {
+		var errs []error
+		for _, closer := range t.closers {
+			slog.Log(nil, internal.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
+			errs = append(errs, closer.Close())
+		}
+		done <- errors.Join(errs...)
+	}()
+	var err error
+	select {
+	case <-time.After(10 * time.Second):
+		err = errors.New("timeout waiting for tunnel to close")
+	case err = <-done:
 	}
 	slog.Debug("Tunnel closed")
-	return errors.Join(errs...)
+	t.status.Store(ipc.StatusClosed)
+	tInstance = nil
+	return err
+}
+
+func (t *tunnel) close() error {
+	return errors.Join(t.Close(), ipcServer.Close())
+}
+
+func (t *tunnel) Ctx() context.Context {
+	return t.ctx
+}
+
+func (t *tunnel) Status() string {
+	if t == nil {
+		return ipc.StatusClosed
+	}
+	return t.status.Load().(string)
+}
+func (t *tunnel) ClashServer() *clashapi.Server {
+	return t.clashServer
 }
 
 var errLibboxClosed = errors.New("libbox closed")
@@ -255,12 +274,11 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	t.reloadAccess.Lock()
 	defer t.reloadAccess.Unlock()
 
-	select {
-	case <-t.ctx.Done():
-		return nil
-	default:
+	if contextDone(t.ctx) {
+		return t.ctx.Err() // tunnel is closing, ignore the reload
 	}
 
+	slog.Debug("Reloading server options", "path", optsPath)
 	content, err := os.ReadFile(optsPath)
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
@@ -269,8 +287,9 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
+	slog.Log(nil, internal.LevelTrace, "Parsed server options", "options", svrs)
 	err = t.updateServers(svrs)
-	if t.ctx.Err() != nil {
+	if errors.Is(err, context.Canceled) {
 		return nil // tunnel is closing, ignore the error
 	}
 	if err != nil && !errors.Is(err, errLibboxClosed) {
@@ -280,6 +299,7 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 }
 
 func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
+	slog.Log(nil, internal.LevelTrace, "Updating servers")
 	ctx := t.ctx
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
@@ -322,6 +342,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		sopts := svrs[group]
 		newTags := sopts.AllTags()
 
+		slog.Log(nil, internal.LevelTrace, "Processing group", "group", group, "new_tags", newTags)
 		switch group {
 		case servers.SGLantern:
 			hasLantern = len(newTags) > 0
@@ -338,6 +359,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			}
 		}
 		toRemove = slices.Concat(toRemove, tagsToRemove)
+		slog.Log(nil, internal.LevelTrace, "Tags to remove", "group", group, "tags", tagsToRemove)
 
 		creator.group = group
 		creator.succeededTags = make([]string, 0, len(newTags)+1)
@@ -346,7 +368,14 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		creator.createEndpoints(endpointMgr, sopts.Endpoints)
 		creator.createOutbounds(outboundMgr, sopts.Outbounds)
 
+		if contextDone(ctx) {
+			return ctx.Err() // tunnel is closing, stop processing
+		}
+
 		// create/update urltest and selector for group with the succeeded tags
+		slog.Log(nil, internal.LevelTrace, "Creating group outbounds", "group", group,
+			"tags", creator.succeededTags,
+		)
 		autoGroup := groupAutoTag(group)
 		opts := urlTestOutbound(autoGroup, creator.succeededTags).Options
 		creator.createNew(autoGroup, C.TypeURLTest, opts)
@@ -355,15 +384,25 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		opts = selectorOutbound(group, tags).Options
 		creator.createNew(group, C.TypeSelector, opts)
 
+		if contextDone(ctx) {
+			return ctx.Err() // tunnel is closing, stop processing
+		}
 	}
 
 	// we have to remove endpoints and outbounds last, otherwise the managers will return an error
 	// because the group outbound is dependent on them.
 	for _, tag := range toRemove {
+		if contextDone(ctx) {
+			return ctx.Err() // tunnel is closing, stop processing
+		}
 		if _, exists := endpointMgr.Get(tag); exists {
-			endpointMgr.Remove(tag)
+			if err := endpointMgr.Remove(tag); err != nil {
+				slog.Error("Failed to remove endpoint", "tag", tag, "error", err)
+			}
 		} else if _, exists := outboundMgr.Outbound(tag); exists {
-			outboundMgr.Remove(tag)
+			if err := outboundMgr.Remove(tag); err != nil {
+				slog.Error("Failed to remove outbound", "tag", tag, "error", err)
+			}
 		}
 	}
 
@@ -372,6 +411,9 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 		// see above comment about panic
 		slog.Log(nil, internal.LevelPanic, "auto outbound missing", "group", autoAllTag)
 		panic(fmt.Errorf("auto outbound %q missing", autoAllTag))
+	}
+	if contextDone(ctx) {
+		return ctx.Err() // tunnel is closing, stop processing
 	}
 	creator.mgr = outboundMgr
 	creator.typ = "outbound"
@@ -384,10 +426,12 @@ func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, has
 	_, isPlaceholder := auto.(*sbxgroup.Selector)
 	shouldBePlaceholder := !(hasLantern && hasUser)
 	if (isPlaceholder && shouldBePlaceholder) || (len(auto.All()) == 2 && !shouldBePlaceholder) {
+		slog.Log(nil, internal.LevelTrace, "No update needed for auto all")
 		return // nothing to do
 	}
 	if !isPlaceholder && shouldBePlaceholder {
 		// create a placeholder
+		slog.Log(nil, internal.LevelTrace, "Creating placeholder for auto all")
 		creator.createNew(autoAllTag, C.TypeSelector, selectorOutbound(autoAllTag, []string{"block"}).Options)
 		return
 	}
@@ -400,7 +444,9 @@ func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, has
 	if hasUser {
 		tags = append(tags, autoUserTag)
 	}
-	creator.createNew(autoAllTag, C.TypeURLTest, urlTestOutbound(autoAllTag, tags).Options)
+	if creator.createNew(autoAllTag, C.TypeURLTest, urlTestOutbound(autoAllTag, tags).Options) {
+		slog.Log(nil, internal.LevelTrace, "Updated auto all", "tags", tags)
+	}
 }
 
 // outCreator is a one-off struct for creating outbounds or endpoints.
@@ -418,27 +464,30 @@ type outCreator struct {
 	errs          []error
 }
 
-func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []option.Endpoint) {
+func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []O.Endpoint) {
 	o.mgr = mgr
 	o.typ = "endpoint"
 	for _, opts := range endpoints {
-		o.createNew(opts.Tag, opts.Type, opts.Options)
+		if !o.createNew(opts.Tag, opts.Type, opts.Options) && errors.Is(o.ctx.Err(), context.Canceled) {
+			return // context is done, stop processing
+		}
 	}
 }
 
-func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []option.Outbound) {
+func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []O.Outbound) {
 	o.mgr = mgr
 	o.typ = "outbound"
 	for _, opts := range outbounds {
-		o.createNew(opts.Tag, opts.Type, opts.Options)
+		if !o.createNew(opts.Tag, opts.Type, opts.Options) && errors.Is(o.ctx.Err(), context.Canceled) {
+			return // context is done, stop processing
+		}
 	}
 }
 
-func (o *outCreator) createNew(tag, typ string, opts any) {
-	select {
-	case <-o.ctx.Done():
-		return
-	default:
+func (o *outCreator) createNew(tag, typ string, opts any) bool {
+	if contextDone(o.ctx) {
+		slog.Log(nil, internal.LevelTrace, "Context done, aborting create", "type", o.typ, "group", o.group, "tag", tag, "outbound_type", typ)
+		return false
 	}
 
 	log := o.logFactory.NewLogger(o.typ + "/" + tag + "[" + typ + "]")
@@ -446,25 +495,22 @@ func (o *outCreator) createNew(tag, typ string, opts any) {
 	if err != nil {
 		slog.Error(
 			"failed to create "+o.typ,
-			slog.String("group", o.group), slog.String("tag", tag),
-			slog.String("type", typ), slog.Any("error", err),
+			"group", o.group, "tag", tag,
+			"type", typ, "error", err,
 		)
 		o.errs = append(o.errs, fmt.Errorf("create %s %q: %w", o.typ, tag, err))
-	} else {
-		slog.Debug("created "+o.typ,
-			slog.String("group", o.group), slog.String("tag", tag), slog.String("type", typ),
-		)
-		o.succeededTags = append(o.succeededTags, tag)
+		return false
 	}
+	slog.Debug("created "+o.typ, "group", o.group, "tag", tag, "type", typ)
+	o.succeededTags = append(o.succeededTags, tag)
+	return true
 }
 
-type cmdSvrHandler struct {
-	libbox.CommandServerHandler
-}
-
-func (c *cmdSvrHandler) PostServiceClose() {
-	slog.Log(nil, internal.LevelTrace, "Command server received service close request")
-	if err := closeTunnel(); err != nil {
-		slog.Error("closing tunnel", slog.Any("error", err))
+func contextDone(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
