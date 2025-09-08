@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"runtime"
 
+	"github.com/getlantern/radiance/traces"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/common/memory"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -37,6 +39,8 @@ func GetMetrics() (Metrics, error) {
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.metricsHandler")
+	defer span.End()
 	stats := Metrics{
 		Memory:      memory.Inuse(),
 		Goroutines:  runtime.NumGoroutine(),
@@ -47,10 +51,12 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		stats.UplinkTotal, stats.DownlinkTotal = up, down
 	}
 	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(stats)
-	if err != nil {
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 type state struct {
@@ -67,9 +73,13 @@ func GetStatus() (string, error) {
 }
 
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.statusHandler")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(state{s.service.Status()})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := json.NewEncoder(w).Encode(state{s.service.Status()}); err != nil {
+		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
+		return
 	}
+	w.WriteHeader(http.StatusOK)
 }

@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
+	"github.com/getlantern/radiance/traces"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing/service"
+	"go.opentelemetry.io/otel"
 )
 
 // GetGroups retrieves the list of group outbounds.
@@ -16,21 +19,27 @@ func GetGroups() ([]OutboundGroup, error) {
 	return sendRequest[[]OutboundGroup]("GET", groupsEndpoint, nil)
 }
 
+var errServiceIsNotReady = fmt.Errorf("service is not ready")
+
 func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.groupHandler")
+	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	groups, err := getGroups(s.service.Ctx())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(groups); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
 		return
 	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // OutboundGroup represents a group of outbounds.
