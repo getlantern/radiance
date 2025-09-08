@@ -37,7 +37,7 @@ type Server struct {
 func NewServer(service Service) *Server {
 	s := &Server{service: service, router: chi.NewMux()}
 	s.router.Use(log)
-	s.router.Get("", func(w http.ResponseWriter, r *http.Request) {
+	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	s.router.NotFound(func(w http.ResponseWriter, r *http.Request) {
