@@ -34,55 +34,62 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 	if err != nil {
 		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		seenConnections := make(map[string]bool)
-		for range ticker.C {
-			slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
-			conns, err := ipc.GetConnections()
-			if err != nil {
-				if errors.Is(err, ipc.ErrServiceIsNotReady) {
-					continue
-				}
-				slog.Warn("failed to retrieve connections", slog.Any("error", err))
-				continue
-			}
-
-			for _, c := range conns {
-				attributes := attribute.NewSet(
-					attribute.String("from_outbound", c.FromOutbound),
-					attribute.String("outbound_name", c.Outbound),
-					attribute.String("inbound", c.Inbound),
-					attribute.String("network", c.Network),
-					attribute.String("protocol", c.Protocol),
-					attribute.Int("ip_version", int(c.IPVersion)),
-					attribute.String("rule", c.Rule),
-					attribute.StringSlice("chain_list", c.ChainList),
-				)
-
-				active, seen := seenConnections[c.ID]
-
-				// not collecting duration of active connections
-				if c.ClosedAt == 0 && !seen {
-					seenConnections[c.ID] = true
-					currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
+				conns, err := ipc.GetConnections()
+				if err != nil {
+					if errors.Is(err, ipc.ErrServiceIsNotReady) {
+						continue
+					}
+					slog.Warn("failed to retrieve connections", slog.Any("error", err))
 					continue
 				}
 
-				// already registered this closed connection
-				if seen && !active {
-					continue
-				}
+				for _, c := range conns {
+					attributes := attribute.NewSet(
+						attribute.String("from_outbound", c.FromOutbound),
+						attribute.String("outbound_name", c.Outbound),
+						attribute.String("inbound", c.Inbound),
+						attribute.String("network", c.Network),
+						attribute.String("protocol", c.Protocol),
+						attribute.Int("ip_version", int(c.IPVersion)),
+						attribute.String("rule", c.Rule),
+						attribute.StringSlice("chain_list", c.ChainList),
+					)
 
-				seenConnections[c.ID] = false
-				duration := float64(c.ClosedAt - c.CreatedAt)
-				if duration > 0 {
-					connectionDuration.Record(context.Background(), duration/1000, metric.WithAttributeSet(attributes))
-				}
+					active, seen := seenConnections[c.ID]
 
-				downlinkBytes.Add(context.Background(), int64(c.Downlink), metric.WithAttributeSet(attributes))
-				uplinkBytes.Add(context.Background(), int64(c.Uplink), metric.WithAttributeSet(attributes))
+					// not collecting duration of active connections
+					if c.ClosedAt == 0 && !seen {
+						seenConnections[c.ID] = true
+						currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
+						continue
+					}
+
+					// already registered this closed connection
+					if seen && !active {
+						continue
+					}
+
+					seenConnections[c.ID] = false
+					duration := float64(c.ClosedAt - c.CreatedAt)
+					if duration > 0 {
+						connectionDuration.Record(context.Background(), duration/1000, metric.WithAttributeSet(attributes))
+					}
+
+					downlinkBytes.Add(context.Background(), int64(c.Downlink), metric.WithAttributeSet(attributes))
+					uplinkBytes.Add(context.Background(), int64(c.Uplink), metric.WithAttributeSet(attributes))
+				}
 			}
 		}
 	}()
-	return ticker.Stop
+	return cancel
 }
