@@ -23,7 +23,7 @@ func (s *Server) closeConnectionHandler(w http.ResponseWriter, r *http.Request) 
 	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.closeConnectionHandler")
 	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	var cids []string
@@ -61,7 +61,7 @@ func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
 	defer span.End()
 
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -33,7 +33,7 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 	_, span := otel.Tracer(tracerName).Start(req.Context(), "server.clashModeHandler")
 	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()

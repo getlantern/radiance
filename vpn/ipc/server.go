@@ -114,4 +114,4 @@ type closedService struct {
 func (s *closedService) Status() string { return StatusClosed }
 func (s *closedService) Close() error   { return nil }
 
-var errServiceIsNotReady = fmt.Errorf("service is not ready")
+var ErrServiceIsNotReady = fmt.Errorf("service is not ready")

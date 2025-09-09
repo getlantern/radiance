@@ -22,7 +22,7 @@ func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.groupHandler")
 	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	groups, err := getGroups(s.service.Ctx())

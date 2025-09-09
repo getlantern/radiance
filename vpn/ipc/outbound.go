@@ -31,7 +31,7 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.selectHandler")
 	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	var p selection
@@ -121,7 +121,7 @@ func (s *Server) activeOutboundHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.activeOutboundHandler")
 	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, errServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()
