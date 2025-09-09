@@ -28,7 +28,6 @@ import (
 
 const (
 	tracerName = "github.com/getlantern/radiance/vpn"
-	meterName  = "github.com/getlantern/radiance/vpn"
 )
 
 // QuickConnect automatically connects to the best available server in the specified group. Valid
