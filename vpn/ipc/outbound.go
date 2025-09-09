@@ -45,7 +45,7 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
 		return
 	}
-	selector, isSelector := outbound.(_selector)
+	selector, isSelector := outbound.(Selector)
 	if !isSelector {
 		http.Error(w, traces.RecordError(span, fmt.Errorf("outbound %q is not a selector", p.GroupTag)).Error(), http.StatusBadRequest)
 		return
@@ -66,8 +66,8 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// _selector is helper interface to check if an outbound is a selector or wrapper of selector.
-type _selector interface {
+// Selector is helper interface to check if an outbound is a selector or wrapper of selector.
+type Selector interface {
 	adapter.OutboundGroup
 	SelectOutbound(tag string) bool
 }
