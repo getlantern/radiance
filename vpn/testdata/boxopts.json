@@ -75,6 +75,14 @@
 				"socks1-out",
 				"socks2-out"
 			]
+		},
+		{
+			"type": "urltest",
+			"tag": "auto-all",
+			"outbounds": [
+				"auto-http",
+				"auto-socks"
+			]
 		}
 	],
 	"route": {

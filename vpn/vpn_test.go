@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	sbx "github.com/getlantern/sing-box-extensions"
@@ -46,7 +47,7 @@ func TestSelectServer(t *testing.T) {
 	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 
-	type gSelector interface {
+	type _selector interface {
 		adapter.OutboundGroup
 		Start() error
 	}
@@ -58,7 +59,7 @@ func TestSelectServer(t *testing.T) {
 			// start the selector
 			outbound, ok := outboundMgr.Outbound(tt.wantGroup)
 			require.True(t, ok, tt.wantGroup+" selector should exist")
-			selector := outbound.(gSelector)
+			selector := outbound.(_selector)
 			require.NoError(t, selector.Start(), "failed to start selector")
 
 			mservice.status = ipc.StatusRunning
@@ -100,6 +101,87 @@ func TestSelectedServer(t *testing.T) {
 		assert.Equal(t, wantTag, tag, "tag should match")
 	})
 }
+
+func TestAutoServerSelections(t *testing.T) {
+	common.SetPathsForTesting(t)
+	mgr := &mockOutMgr{
+		outbounds: []adapter.Outbound{
+			&mockOutbound{tag: "socks1-out"},
+			&mockOutbound{tag: "socks2-out"},
+			&mockOutbound{tag: "http1-out"},
+			&mockOutbound{tag: "http2-out"},
+			&mockOutboundGroup{
+				mockOutbound: mockOutbound{tag: autoLanternTag},
+				now:          "socks1-out",
+				all:          []string{"socks1-out", "socks2-out"},
+			},
+			&mockOutboundGroup{
+				mockOutbound: mockOutbound{tag: autoUserTag},
+				now:          "http2-out",
+				all:          []string{"http1-out", "http2-out"},
+			},
+			&mockOutboundGroup{
+				mockOutbound: mockOutbound{tag: autoAllTag},
+				now:          autoLanternTag,
+				all:          []string{autoLanternTag, autoUserTag},
+			},
+		},
+	}
+	want := AutoSelections{
+		Lantern: "socks1-out",
+		User:    "http2-out",
+		AutoAll: "socks1-out",
+	}
+	ctx := sbx.BoxContext()
+	service.MustRegister[adapter.OutboundManager](ctx, mgr)
+	m := &mockService{
+		ctx:    ctx,
+		status: ipc.StatusRunning,
+	}
+	ipcServer = ipc.NewServer(m)
+	require.NoError(t, ipcServer.Start(common.DataPath()))
+
+	got, err := AutoServerSelections()
+	require.NoError(t, err, "should not error when getting auto server selections")
+	require.Equal(t, want, got, "selections should match")
+	t.Logf("got auto selections: %+v", got)
+}
+
+type mockOutMgr struct {
+	adapter.OutboundManager
+	outbounds []adapter.Outbound
+}
+
+func (o *mockOutMgr) Outbounds() []adapter.Outbound {
+	return o.outbounds
+}
+
+func (o *mockOutMgr) Outbound(tag string) (adapter.Outbound, bool) {
+	idx := slices.IndexFunc(o.outbounds, func(ob adapter.Outbound) bool {
+		return ob.Tag() == tag
+	})
+	if idx == -1 {
+		return nil, false
+	}
+	return o.outbounds[idx], true
+}
+
+type mockOutbound struct {
+	adapter.Outbound
+	tag string
+}
+
+func (o *mockOutbound) Tag() string  { return o.tag }
+func (o *mockOutbound) Type() string { return "mock" }
+
+type mockOutboundGroup struct {
+	mockOutbound
+	now string
+	all []string
+}
+
+func (o *mockOutboundGroup) Now() string   { return o.now }
+func (o *mockOutboundGroup) All() []string { return o.all }
 
 type mockService struct {
 	ctx    context.Context
