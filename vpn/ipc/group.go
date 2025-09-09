@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/getlantern/radiance/traces"
@@ -18,8 +17,6 @@ import (
 func GetGroups() ([]OutboundGroup, error) {
 	return sendRequest[[]OutboundGroup]("GET", groupsEndpoint, nil)
 }
-
-var errServiceIsNotReady = fmt.Errorf("service is not ready")
 
 func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
 	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.groupHandler")
