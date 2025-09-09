@@ -3,29 +3,14 @@ package metrics
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/getlantern/radiance/vpn/client"
-	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/getlantern/radiance/vpn/ipc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
-
-func connections() (*libbox.Connections, error) {
-	res, err := client.SendCmd(libbox.CommandConnections)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get connections: %w", err)
-	}
-	if res.Connections == nil {
-		return nil, errors.New("no connections found")
-	}
-	res.Connections.FilterState(libbox.ConnectionStateAll)
-	res.Connections.SortByDate()
-	return res.Connections, nil
-}
 
 // HarvestConnectionMetrics periodically polls the number of active connections and their total
 // upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
@@ -58,22 +43,20 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 		seenConnections := make(map[string]bool)
 		for range ticker.C {
 			slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
-			conns, err := connections()
+			conns, err := ipc.GetConnections()
 			if err != nil {
+				if errors.Is(err, ipc.ErrServiceIsNotReady) {
+					continue
+				}
 				slog.Warn("failed to retrieve connections", slog.Any("error", err))
 				continue
 			}
 
-			iterator := conns.Iterator()
-			for iterator.HasNext() {
-				c := iterator.Next()
-
+			for _, c := range conns {
 				attributes := attribute.NewSet(
 					attribute.String("from_outbound", c.FromOutbound),
 					attribute.String("outbound_name", c.Outbound),
-					attribute.String("outbound_type", c.OutboundType),
 					attribute.String("inbound", c.Inbound),
-					attribute.String("inbound_type", c.InboundType),
 					attribute.String("network", c.Network),
 					attribute.String("protocol", c.Protocol),
 					attribute.Int("ip_version", int(c.IPVersion)),
