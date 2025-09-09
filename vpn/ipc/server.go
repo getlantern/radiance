@@ -40,9 +40,6 @@ func NewServer(service Service) *Server {
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	s.router.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
 	s.router.Get(statusEndpoint, s.statusHandler)
 	s.router.Get(metricsEndpoint, s.metricsHandler)
 	s.router.Get(groupsEndpoint, s.groupHandler)
