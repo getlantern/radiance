@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing/service"
 )
 
@@ -35,24 +34,19 @@ func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
 
 // OutboundGroup represents a group of outbounds.
 type OutboundGroup struct {
-	Tag      string
-	Type     string
-	Selected string
-	ItemList []OutboundGroupItem
+	Tag       string
+	Type      string
+	Selected  string
+	Outbounds []Outbounds
 }
 
-// OutboundGroupItem represents outbounds within a group.
-type OutboundGroupItem struct {
+// Outbounds represents outbounds within a group.
+type Outbounds struct {
 	Tag  string
 	Type string
-
-	// URLTestTime and URLTestDelay are only available for URLTest outbounds.
-	URLTestTime  int64
-	URLTestDelay int32
 }
 
 func getGroups(ctx context.Context) ([]OutboundGroup, error) {
-	historyStorage := service.PtrFromContext[urltest.HistoryStorage](ctx)
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 	if outboundMgr == nil {
 		return nil, errors.New("outbound manager not found")
@@ -77,15 +71,11 @@ func getGroups(ctx context.Context) ([]OutboundGroup, error) {
 				continue
 			}
 
-			item := OutboundGroupItem{
+			item := Outbounds{
 				Tag:  itemTag,
 				Type: itemOutbound.Type(),
 			}
-			if history := historyStorage.LoadURLTestHistory(adapter.OutboundTag(itemOutbound)); history != nil {
-				item.URLTestTime = history.Time.Unix()
-				item.URLTestDelay = int32(history.Delay)
-			}
-			group.ItemList = append(group.ItemList, item)
+			group.Outbounds = append(group.Outbounds, item)
 		}
 		groups = append(groups, group)
 	}
