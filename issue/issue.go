@@ -26,7 +26,7 @@ import (
 const (
 	requestURL = "https://iantem.io/api/v1/issue"
 	maxLogSize = 10 * 1024 * 1024 // 10 MB
-	tracerName = "issue_reporter"
+	tracerName = "github.com/getlantern/radiance/issue"
 )
 
 type SubscriptionHandler interface {
