@@ -35,11 +35,6 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
 	}
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("recovered from panic in HarvestConnectionMetrics", slog.Any("error", r))
-			}
-		}()
 		seenConnections := make(map[string]bool)
 		for range ticker.C {
 			slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
