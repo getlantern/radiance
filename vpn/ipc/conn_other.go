@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	sockPath string
+	sockPath = "radiance.sock" // default to current directory
 
 	uid = os.Getuid()
 	gid = os.Getgid()
