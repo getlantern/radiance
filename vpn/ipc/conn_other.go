@@ -8,8 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-
-	"github.com/getlantern/radiance/common"
 )
 
 const (
@@ -17,24 +15,29 @@ const (
 )
 
 var (
-	sockFile = "radiance.sock"
-	uid      = os.Getuid()
-	gid      = os.Getgid()
+	// might need a locker
+	socksPath = ""
+	sockFile  = "radiance.sock"
+	uid       = os.Getuid()
+	gid       = os.Getgid()
 )
 
 func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
+	if socksPath == "" {
+		return nil, fmt.Errorf("socks path not defined")
+	}
 	return net.DialUnix("unix", nil, &net.UnixAddr{
-		Name: filepath.Join(common.DataPath(), sockFile),
+		Name: socksPath,
 		Net:  "unix",
 	})
 }
 
 // listen creates a Unix domain socket listener in the specified directory.
 func listen(path string) (net.Listener, error) {
-	path = filepath.Join(path, sockFile)
-	os.Remove(path)
+	socksPath = filepath.Join(path, sockFile)
+	os.Remove(socksPath)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{
-		Name: path,
+		Name: socksPath,
 		Net:  "unix",
 	})
 	if err != nil {
