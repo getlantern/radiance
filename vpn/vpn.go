@@ -247,7 +247,7 @@ func AutoServerSelections() (AutoSelections, error) {
 }
 
 // AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
-// selectionion changes until the context is cancelled.
+// selection changes until the context is cancelled.
 func AutoSelectionsChangeListener(ctx context.Context, pollInterval time.Duration) <-chan AutoSelections {
 	ch := make(chan AutoSelections, 1)
 	go func() {
