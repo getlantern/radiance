@@ -25,6 +25,11 @@ const (
 	// sddl = `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;BU)`
 )
 
+// SetSocketPath not supported on Windows.
+func SetSocketPath(path string) {
+	panic("SetSocketPath is not supported on Windows")
+}
+
 func dialContext(ctx context.Context, _, _ string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()

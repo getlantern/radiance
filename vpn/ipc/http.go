@@ -7,16 +7,17 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/getlantern/radiance/traces"
 )
+
+const tracerName = "github.com/getlantern/radiance/vpn/ipc"
 
 // empty is a placeholder type for requests that do not expect a response body.
 type empty struct{}
-
-const tracerName = "github.com/getlantern/radiance/vpn/ipc"
 
 // sendRequest sends an HTTP request to the specified endpoint with the given method and data.
 func sendRequest[T any](method, endpoint string, data any) (T, error) {
