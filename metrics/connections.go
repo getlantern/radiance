@@ -70,7 +70,7 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 					// not collecting duration of active connections
 					if c.ClosedAt == 0 && !seen {
 						seenConnections[c.ID] = true
-						currentActiveConnections.Add(context.Background(), 1, metric.WithAttributeSet(attributes))
+						currentActiveConnections.Add(ctx, 1, metric.WithAttributeSet(attributes))
 						continue
 					}
 
@@ -82,11 +82,11 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 					seenConnections[c.ID] = false
 					duration := float64(c.ClosedAt - c.CreatedAt)
 					if duration > 0 {
-						connectionDuration.Record(context.Background(), duration/1000, metric.WithAttributeSet(attributes))
+						connectionDuration.Record(ctx, duration/1000, metric.WithAttributeSet(attributes))
 					}
 
-					downlinkBytes.Add(context.Background(), int64(c.Downlink), metric.WithAttributeSet(attributes))
-					uplinkBytes.Add(context.Background(), int64(c.Uplink), metric.WithAttributeSet(attributes))
+					downlinkBytes.Add(ctx, int64(c.Downlink), metric.WithAttributeSet(attributes))
+					uplinkBytes.Add(ctx, int64(c.Uplink), metric.WithAttributeSet(attributes))
 				}
 			}
 		}
