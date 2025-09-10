@@ -8,23 +8,28 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-
-	"github.com/getlantern/radiance/common"
 )
 
 const (
-	apiURL = "http://unix"
+	apiURL   = "http://unix"
+	sockFile = "radiance.sock"
 )
 
 var (
-	sockFile = "radiance.sock"
-	uid      = os.Getuid()
-	gid      = os.Getgid()
+	sockPath = "radiance.sock" // default to current directory
+
+	uid = os.Getuid()
+	gid = os.Getgid()
 )
+
+// SetSocketPath sets the path for the Unix domain socket file for client connections.
+func SetSocketPath(path string) {
+	sockPath = filepath.Join(path, sockFile)
+}
 
 func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
 	return net.DialUnix("unix", nil, &net.UnixAddr{
-		Name: filepath.Join(common.DataPath(), sockFile),
+		Name: sockPath,
 		Net:  "unix",
 	})
 }

@@ -1,8 +1,12 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type m struct {
@@ -10,8 +14,8 @@ type m struct {
 }
 
 // GetClashMode retrieves the current mode from the Clash server.
-func GetClashMode() (string, error) {
-	res, err := sendRequest[m]("GET", clashModeEndpoint, nil)
+func GetClashMode(ctx context.Context) (string, error) {
+	res, err := sendRequest[m](ctx, "GET", clashModeEndpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -19,30 +23,35 @@ func GetClashMode() (string, error) {
 }
 
 // SetClashMode sets the mode of the Clash server.
-func SetClashMode(mode string) error {
-	_, err := sendRequest[empty]("POST", clashModeEndpoint, m{Mode: mode})
+func SetClashMode(ctx context.Context, mode string) error {
+	_, err := sendRequest[empty](ctx, "POST", clashModeEndpoint, m{Mode: mode})
 	return err
 }
 
 // clashModeHandler handles HTTP requests for getting or setting the Clash server mode.
 func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
+	span := trace.SpanFromContext(req.Context())
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()
 	switch req.Method {
 	case "GET":
 		mode := cs.Mode()
+		span.SetAttributes(attribute.String("mode", mode))
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(m{Mode: mode})
+		if err := json.NewEncoder(w).Encode(m{Mode: mode}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	case "POST":
 		var mode m
-		err := json.NewDecoder(req.Body).Decode(&mode)
-		if err != nil {
+		if err := json.NewDecoder(req.Body).Decode(&mode); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		span.SetAttributes(attribute.String("mode", mode.Mode))
 		cs.SetMode(mode.Mode)
 		w.WriteHeader(http.StatusOK)
 	default:

@@ -11,13 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
 	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
@@ -25,22 +26,14 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/traces"
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
-
-	"github.com/getlantern/radiance/metrics"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const configPollInterval = 10 * time.Minute
-
-// Initially set the tracer to noop, so that we don't have to check for nil everywhere.
-var tracer trace.Tracer = noop.Tracer{}
+const tracerName = "github.com/getlantern/radiance"
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
 
@@ -88,9 +81,6 @@ type Options struct {
 // interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
 // can be nil.
 func NewRadiance(opts Options) (*Radiance, error) {
-	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
-		return nil, fmt.Errorf("failed to initialize: %w", err)
-	}
 	if opts.Locale == "" {
 		// It is preferable to use the locale from the frontend, as locale is a requirement for lots
 		// of frontend code and therefore is more reliably supported there.
@@ -110,6 +100,11 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		platformDeviceID = deviceid.Get()
 	}
 
+	shutdownFuncs := []func(context.Context) error{}
+	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel, platformDeviceID); err != nil {
+		return nil, fmt.Errorf("failed to initialize: %w", err)
+	}
+
 	dataDir := common.DataPath()
 	f, err := newFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"))
 	if err != nil {
@@ -122,8 +117,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
-
-	shutdownFuncs := []func(context.Context) error{}
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
@@ -160,62 +153,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
-	confHandler.AddConfigListener(r.otelConfigListener)
+	r.addShutdownFunc(common.Close)
 	return r, nil
-}
-
-// otelConfigListener is a listener for OpenTelemetry configuration changes. Note this will be called both when
-// new configurations are loaded from disk as well as over the network.
-func (r *Radiance) otelConfigListener(oldConfig, newConfig *config.Config) error {
-	if newConfig == nil {
-		return fmt.Errorf("new config is nil")
-	}
-	// Check if the old OTEL configuration is the same as the new one.
-	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, newConfig.ConfigResponse.OTEL) {
-		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
-		return nil
-	}
-
-	slog.Info("OpenTelemetry configuration changed", "newConfig", newConfig.ConfigResponse.OTEL)
-	if newConfig.ConfigResponse.OTEL.Endpoint == "" {
-		slog.Info("OpenTelemetry endpoint is empty, not initializing OpenTelemetry SDK")
-		return nil
-	}
-	if r.shutdownOTEL != nil {
-		slog.Info("Shutting down existing OpenTelemetry SDK")
-		if err := r.shutdownOTEL(context.Background()); err != nil {
-			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
-			return fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err)
-		}
-		r.shutdownOTEL = nil
-	}
-	newConfig.ConfigResponse.OTEL.TracesSampleRate = 1.0 // Always sample traces for now
-
-	err := r.startOTEL(context.Background(), newConfig)
-	if err != nil {
-		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
-		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
-	}
-
-	// Get a tracer for your application/package
-	tracer = otel.Tracer("radiance")
-	return nil
-}
-
-func (r *Radiance) startOTEL(ctx context.Context, cfg *config.Config) error {
-	shutdown, err := metrics.SetupOTelSDK(ctx, cfg.ConfigResponse)
-	if shutdown != nil {
-		r.shutdownOTEL = shutdown
-		r.addShutdownFunc(shutdown)
-	}
-	// If the OpenTelemetry SDK could not be initialized, log the error and return.
-	// This is not a fatal error, so we just log it and continue.
-	if err != nil {
-		return fmt.Errorf("failed to setup OpenTelemetry SDK: %w", err)
-	}
-
-	slog.Info("OpenTelemetry SDK initialized successfully", "endpoint", cfg.ConfigResponse.OTEL.Endpoint)
-	return nil
 }
 
 // addShutdownFunc adds a shutdown function to the Radiance instance.
@@ -266,7 +205,7 @@ type IssueReport = issue.IssueReport
 
 // ReportIssue submits an issue report to the back-end with an optional user email
 func (r *Radiance) ReportIssue(email string, report IssueReport) error {
-	ctx, span := tracer.Start(context.Background(), "report-issue")
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
 	defer span.End()
 	if report.Type == "" && report.Description == "" {
 		return fmt.Errorf("issue report should contain at least type or description")
@@ -275,8 +214,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	// get country from the config returned by the backend
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		slog.Error("Failed to get country", "error", err)
-		span.RecordError(err)
+		slog.Warn("Failed to get config", "error", err)
 	} else {
 		country = cfg.ConfigResponse.Country
 	}
@@ -284,8 +222,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	err = r.issueReporter.Report(ctx, report, email, country)
 	if err != nil {
 		slog.Error("Failed to report issue", "error", err)
-		span.RecordError(err)
-		return fmt.Errorf("failed to report issue: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to report issue: %w", err))
 	}
 	slog.Info("Issue reported successfully")
 	return nil
@@ -294,9 +231,12 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
 func (r *Radiance) Features() map[string]bool {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "features")
+	defer span.End()
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		slog.Error("Failed to get config for features", "error", err)
+		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 		return map[string]bool{}
 	}
 	if cfg == nil {
@@ -340,7 +280,7 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	}
 
 	httpClient := &http.Client{
-		Transport: lz,
+		Transport: traces.NewRoundTripper(lz),
 	}
 	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(
@@ -365,8 +305,9 @@ type lazyDialingRoundTripper struct {
 var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
 
 func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := tracer.Start(req.Context(), "lazy-dialing-roundtrip")
+	ctx, span := otel.Tracer(tracerName).Start(req.Context(), "lazy_dialing_round_trip")
 	defer span.End()
+
 	lz.smartTransportMu.Lock()
 
 	if lz.smartTransport == nil {
@@ -376,18 +317,15 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
-			span.RecordError(err)
 			// This typically just means we're offline
-			return nil, fmt.Errorf("could not create smart transport -- offline? %v", err)
+			return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport -- offline? %v", err))
 		}
 	}
 
 	lz.smartTransportMu.Unlock()
 	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
 	if err != nil {
-		span.RecordError(err)
-	} else {
-		span.SetAttributes(attribute.String("response.status", res.Status))
+		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 	}
 	return res, err
 }

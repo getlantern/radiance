@@ -29,7 +29,6 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
-	sbgroup "github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 )
@@ -303,7 +302,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 	ctx := t.ctx
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
-	getSelector := func(group string) *sbgroup.Selector {
+	getSelector := func(group string) ipc.Selector {
 		out, found := outboundMgr.Outbound(group)
 		if !found {
 			// Yes, panic. And, yes, it's intentional. The group outbound should always exist if the tunnel
@@ -312,7 +311,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			slog.Log(ctx, internal.LevelPanic, "selector group missing", "group", group)
 			panic(fmt.Errorf("selector group %q missing", group))
 		}
-		return out.(*sbgroup.Selector)
+		return out.(ipc.Selector)
 	}
 	defer func() {
 		// the managers will panic with "invalid .* index" if the libbox service is closed when
@@ -423,7 +422,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 
 func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, hasUser bool) {
 	slog.Log(nil, internal.LevelTrace, "Updating auto all", "has_lantern", hasLantern, "has_user", hasUser)
-	_, isPlaceholder := auto.(*sbgroup.Selector)
+	_, isPlaceholder := auto.(ipc.Selector)
 	shouldBePlaceholder := !(hasLantern && hasUser)
 	if (isPlaceholder && shouldBePlaceholder) || (len(auto.All()) == 2 && !shouldBePlaceholder) {
 		slog.Log(nil, internal.LevelTrace, "No update needed for auto all")

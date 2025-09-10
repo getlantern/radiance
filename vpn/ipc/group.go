@@ -12,13 +12,13 @@ import (
 )
 
 // GetGroups retrieves the list of group outbounds.
-func GetGroups() ([]OutboundGroup, error) {
-	return sendRequest[[]OutboundGroup]("GET", groupsEndpoint, nil)
+func GetGroups(ctx context.Context) ([]OutboundGroup, error) {
+	return sendRequest[[]OutboundGroup](ctx, "GET", groupsEndpoint, nil)
 }
 
 func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	groups, err := getGroups(s.service.Ctx())
