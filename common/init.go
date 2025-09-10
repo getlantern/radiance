@@ -21,10 +21,12 @@ import (
 	"github.com/getlantern/osversion"
 
 	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/metrics"
+	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 const (
@@ -69,9 +71,16 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	err = initLogger(filepath.Join(logPath.Load().(string), LogFileName), logLevel)
+	dataDir = dataPath.Load().(string)
+	logDir = logPath.Load().(string)
+
+	err = initLogger(filepath.Join(logDir, LogFileName), logLevel)
 	if err != nil {
 		return fmt.Errorf("initialize log: %w", err)
+	}
+
+	if runtime.GOOS != "windows" {
+		ipc.SetSocketPath(dataDir)
 	}
 
 	// creating file watcher to monitor changes to config file and initialize whatever depends on it

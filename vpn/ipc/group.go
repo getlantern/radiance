@@ -6,10 +6,11 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/getlantern/radiance/traces"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing/service"
+
+	"github.com/getlantern/radiance/traces"
 )
 
 // GetGroups retrieves the list of group outbounds.
@@ -32,8 +33,6 @@ func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
 // OutboundGroup represents a group of outbounds.

@@ -46,7 +46,6 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, traces.RecordError(req.Context(), err).Error(), http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 	case "POST":
 		var mode m
 		if err := json.NewDecoder(req.Body).Decode(&mode); err != nil {

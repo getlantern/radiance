@@ -9,10 +9,11 @@ import (
 	runtimeDebug "runtime/debug"
 	"time"
 
-	"github.com/getlantern/radiance/traces"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/service"
+
+	"github.com/getlantern/radiance/traces"
 )
 
 type selection struct {
@@ -99,7 +100,6 @@ func (s *Server) selectedHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 // GetActiveOutbound retrieves the outbound that is actively being used, resolving nested groups
@@ -146,8 +146,6 @@ func (s *Server) activeOutboundHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
 func getGroupOutbound(ctx context.Context, tag string) (adapter.OutboundGroup, error) {

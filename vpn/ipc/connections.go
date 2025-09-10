@@ -7,10 +7,11 @@ import (
 	runtimeDebug "runtime/debug"
 	"time"
 
-	"github.com/getlantern/radiance/traces"
 	"github.com/gofrs/uuid/v5"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
+
+	"github.com/getlantern/radiance/traces"
 )
 
 // CloseConnections closes connections by their IDs. If connIDs is empty, all connections will be closed.
@@ -74,7 +75,6 @@ func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 // Connection represents a network connection with relevant metadata.

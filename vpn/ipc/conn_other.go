@@ -11,33 +11,35 @@ import (
 )
 
 const (
-	apiURL = "http://unix"
+	apiURL   = "http://unix"
+	sockFile = "radiance.sock"
 )
 
 var (
-	// might need a locker
-	socksPath = ""
-	sockFile  = "radiance.sock"
-	uid       = os.Getuid()
-	gid       = os.Getgid()
+	sockPath = "radiance.sock" // default to current directory
+
+	uid = os.Getuid()
+	gid = os.Getgid()
 )
 
+// SetSocketPath sets the path for the Unix domain socket file for client connections.
+func SetSocketPath(path string) {
+	sockPath = filepath.Join(path, sockFile)
+}
+
 func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
-	if socksPath == "" {
-		return nil, fmt.Errorf("socks path not defined")
-	}
 	return net.DialUnix("unix", nil, &net.UnixAddr{
-		Name: socksPath,
+		Name: sockPath,
 		Net:  "unix",
 	})
 }
 
 // listen creates a Unix domain socket listener in the specified directory.
 func listen(path string) (net.Listener, error) {
-	socksPath = filepath.Join(path, sockFile)
-	os.Remove(socksPath)
+	path = filepath.Join(path, sockFile)
+	os.Remove(path)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{
-		Name: socksPath,
+		Name: path,
 		Net:  "unix",
 	})
 	if err != nil {

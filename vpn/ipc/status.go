@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/getlantern/radiance/traces"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/common/memory"
 	"go.opentelemetry.io/otel"
+
+	"github.com/getlantern/radiance/traces"
 )
 
 const (
@@ -56,8 +57,6 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
 type state struct {
@@ -79,5 +78,4 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
