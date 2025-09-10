@@ -43,11 +43,11 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	selector, isSelector := outbound.(Selector)
 	if !isSelector {
-		http.Error(w, fmt.Errorf("outbound %q is not a selector", p.GroupTag).Error(), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("outbound %q is not a selector", p.GroupTag), http.StatusBadRequest)
 		return
 	}
 	if !selector.SelectOutbound(p.OutboundTag) {
-		http.Error(w, fmt.Errorf("outbound %q not found in group", p.OutboundTag).Error(), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("outbound %q not found in group", p.OutboundTag), http.StatusBadRequest)
 		return
 	}
 	cs := s.service.ClashServer()
@@ -79,7 +79,7 @@ func GetSelected(ctx context.Context) (group, tag string, err error) {
 
 func (s *Server) selectedHandler(w http.ResponseWriter, r *http.Request) {
 	if s.service.Status() == StatusClosed || s.service.Status() == StatusClosing {
-		http.Error(w, fmt.Errorf("service closed").Error(), http.StatusServiceUnavailable)
+		http.Error(w, "service closed", http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()
