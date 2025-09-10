@@ -35,7 +35,7 @@ type Server struct {
 // NewServer creates a new Server instance with the provided Service.
 func NewServer(service Service) *Server {
 	s := &Server{service: service, router: chi.NewMux()}
-	s.router.Use(log)
+	s.router.Use(log, tracer)
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

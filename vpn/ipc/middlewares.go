@@ -1,10 +1,14 @@
 package ipc
 
 import (
+	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/traces"
+	"github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
@@ -21,5 +25,21 @@ func log(h http.Handler) http.Handler {
 
 		slog.Log(r.Context(), internal.LevelTrace, "IPC request", "method", r.Method, "path", r.URL.Path)
 		h.ServeHTTP(w, r)
+	})
+}
+
+func tracer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, span := otel.Tracer(tracerName).Start(r.Context(), r.URL.Path)
+		defer span.End()
+
+		r = r.WithContext(ctx)
+		var buf bytes.Buffer
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		ww.Tee(&buf)
+		next.ServeHTTP(ww, r)
+		if ww.Status() >= 400 {
+			traces.RecordError(ctx, fmt.Errorf("status %d: %s", ww.Status(), buf.String()))
+		}
 	})
 }
