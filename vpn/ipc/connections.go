@@ -10,7 +10,6 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
-	"go.opentelemetry.io/otel"
 )
 
 // CloseConnections closes connections by their IDs. If connIDs is empty, all connections will be closed.
@@ -20,16 +19,14 @@ func CloseConnections(connIDs []string) error {
 }
 
 func (s *Server) closeConnectionHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.closeConnectionHandler")
-	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(r.Context(), ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	var cids []string
 	err := json.NewDecoder(r.Body).Decode(&cids)
 	if err != nil {
-		http.Error(w, traces.RecordError(span, err).Error(), http.StatusBadRequest)
+		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusBadRequest)
 		return
 	}
 	if len(cids) > 0 {
@@ -57,11 +54,8 @@ func GetConnections() ([]Connection, error) {
 }
 
 func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.connectionsHandler")
-	defer span.End()
-
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(r.Context(), ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -76,7 +70,7 @@ func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
 		connections = append(connections, newConnection(connection))
 	}
 	if err := json.NewEncoder(w).Encode(connections); err != nil {
-		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

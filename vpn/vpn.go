@@ -34,7 +34,7 @@ const (
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
 func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
-	_, span := otel.Tracer(tracerName).Start(
+	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"quick_connect",
 		trace.WithAttributes(attribute.String("group", group)))
@@ -42,9 +42,9 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 
 	switch group {
 	case servers.SGLantern:
-		return traces.RecordError(span, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
+		return traces.RecordError(ctx, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
 	case servers.SGUser:
-		return traces.RecordError(span, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
+		return traces.RecordError(ctx, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
 	case autoAllTag, "all", "":
 		if isOpen() {
 			if err := ipc.SetClashMode(autoAllTag); err != nil {
@@ -53,16 +53,16 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 			return nil
 		}
 
-		return traces.RecordError(span, connect(autoAllTag, "", platIfce))
+		return traces.RecordError(ctx, connect(autoAllTag, "", platIfce))
 	default:
-		return traces.RecordError(span, fmt.Errorf("invalid group: %s", group))
+		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
 	}
 }
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
 func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
-	_, span := otel.Tracer(tracerName).Start(
+	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"connect_to_server",
 		trace.WithAttributes(
@@ -73,15 +73,15 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 	switch group {
 	case servers.SGLantern, servers.SGUser:
 	default:
-		return traces.RecordError(span, fmt.Errorf("invalid group: %s", group))
+		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
 	}
 	if tag == "" {
-		return traces.RecordError(span, errors.New("tag must be specified"))
+		return traces.RecordError(ctx, errors.New("tag must be specified"))
 	}
 	if isOpen() {
-		return traces.RecordError(span, selectServer(group, tag))
+		return traces.RecordError(ctx, selectServer(group, tag))
 	}
-	return traces.RecordError(span, connect(group, tag, platIfce))
+	return traces.RecordError(ctx, connect(group, tag, platIfce))
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
@@ -99,13 +99,13 @@ func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 
 // Reconnect attempts to reconnect to the last connected server.
 func Reconnect(platIfce libbox.PlatformInterface) error {
-	_, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
 	defer span.End()
 
 	if isOpen() {
-		return traces.RecordError(span, fmt.Errorf("tunnel is already open"))
+		return traces.RecordError(ctx, fmt.Errorf("tunnel is already open"))
 	}
-	return traces.RecordError(span, connect("", "", platIfce))
+	return traces.RecordError(ctx, connect("", "", platIfce))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -120,9 +120,9 @@ func isOpen() bool {
 
 // Disconnect closes the tunnel and all active connections.
 func Disconnect() error {
-	_, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
 	defer span.End()
-	return ipc.CloseService()
+	return traces.RecordError(ctx, ipc.CloseService())
 }
 
 // selectServer selects the specified server for the tunnel. The tunnel must already be open.
@@ -145,12 +145,12 @@ type Status struct {
 }
 
 func GetStatus() (Status, error) {
-	_, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
 	defer span.End()
 	slog.Debug("Retrieving tunnel status")
 	group, selected, err := selectedServer()
 	if err != nil {
-		return Status{}, traces.RecordError(span, fmt.Errorf("failed to get selected server: %w", err))
+		return Status{}, traces.RecordError(ctx, fmt.Errorf("failed to get selected server: %w", err))
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
@@ -211,11 +211,11 @@ func ActiveServer() (group, tag string, err error) {
 // tunnel is closed. If there are no active connections and the tunnel is open, an empty slice is
 // returned without an error.
 func ActiveConnections() ([]ipc.Connection, error) {
-	_, span := otel.Tracer(tracerName).Start(context.Background(), "active_connections")
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "active_connections")
 	defer span.End()
 	connections, err := Connections()
 	if err != nil {
-		return nil, traces.RecordError(span, fmt.Errorf("failed to get active connections: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to get active connections: %w", err))
 	}
 
 	connections = slices.DeleteFunc(connections, func(c ipc.Connection) bool {

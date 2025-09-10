@@ -68,11 +68,11 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.LoginResponse_UserData == nil {
 		slog.Error("creating new user", "error", "no user data in response")
-		return nil, traces.RecordError(span, fmt.Errorf("no user data in response"))
+		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
@@ -82,7 +82,7 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	err = ac.userInfo.SetData(login)
 	if err != nil {
 		slog.Error("setting user data", "error", err)
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	// update the user data
 	ac.userData = login
@@ -97,16 +97,16 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 	err := ac.proWC.Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
 		slog.Error("user data", "error", err)
-		return nil, traces.RecordError(span, fmt.Errorf("getting user data: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
 	}
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err = fmt.Errorf("recevied bad response: %s", resp.Error)
 		slog.Error("user data", "error", err)
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.LoginResponse_UserData == nil {
 		slog.Error("user data", "error", "no user data in response")
-		return nil, traces.RecordError(span, fmt.Errorf("no user data in response"))
+		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
@@ -116,7 +116,7 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 	err = ac.userInfo.SetData(login)
 	if err != nil {
 		slog.Error("setting user data", "error", err)
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	// update the user data
 	ac.userData = login
@@ -163,9 +163,9 @@ func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
 	salt, err := a.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		a.salt = salt
-		return traces.RecordError(span, writeSalt(salt, a.saltPath))
+		return traces.RecordError(ctx, writeSalt(salt, a.saltPath))
 	}
-	return traces.RecordError(span, err)
+	return traces.RecordError(ctx, err)
 }
 
 var ErrNoSalt = errors.New("not salt available, call GetSalt/Signup first")
@@ -177,9 +177,9 @@ func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) err
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_resend_code")
 	defer span.End()
 	if a.salt == nil {
-		return traces.RecordError(span, ErrNoSalt)
+		return traces.RecordError(ctx, ErrNoSalt)
 	}
-	return traces.RecordError(span, a.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
+	return traces.RecordError(ctx, a.authClient.SignupEmailResendCode(ctx, &protos.SignupEmailResendRequest{
 		Email: email,
 		Salt:  a.salt,
 	}))
@@ -189,7 +189,7 @@ func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) err
 func (a *APIClient) SignupEmailConfirmation(ctx context.Context, email, code string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_confirmation")
 	defer span.End()
-	return traces.RecordError(span, a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
+	return traces.RecordError(ctx, a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
 	}))
@@ -222,7 +222,7 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	}
 	resp, err := a.authClient.GetSalt(ctx, email)
 	if err != nil {
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	return resp.Salt, nil
 }
@@ -237,7 +237,7 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	}
 	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
 	if err != nil {
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	// regardless of state we need to save login information
 	// We have device flow limit on login
@@ -246,7 +246,7 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	a.userData = resp
 	a.salt = salt
 	if err := writeSalt(salt, a.saltPath); err != nil {
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	return resp, nil
 }
@@ -262,13 +262,13 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 		LegacyToken:  a.userInfo.LegacyToken(),
 	})
 	if err != nil {
-		return traces.RecordError(span, fmt.Errorf("logging out: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
 	// clean up local data
 	a.userData = nil
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
-		return traces.RecordError(span, fmt.Errorf("writing salt after logout: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
 	}
 	return nil
 }
@@ -277,7 +277,7 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 func (a *APIClient) StartRecoveryByEmail(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_recovery_by_email")
 	defer span.End()
-	return traces.RecordError(span, a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
+	return traces.RecordError(ctx, a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
 	}))
 }
@@ -289,15 +289,15 @@ func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassw
 	lowerCaseEmail := strings.ToLower(email)
 	newSalt, err := generateSalt()
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	srpClient, err := newSRPClient(lowerCaseEmail, newPassword, newSalt)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	err = a.authClient.CompleteRecoveryByEmail(ctx, &protos.CompleteRecoveryByEmailRequest{
@@ -307,10 +307,10 @@ func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassw
 		NewVerifier: verifierKey.Bytes(),
 	})
 	if err != nil {
-		return traces.RecordError(span, fmt.Errorf("failed to complete recovery by email: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("failed to complete recovery by email: %w", err))
 	}
 	if err = writeSalt(newSalt, a.saltPath); err != nil {
-		return traces.RecordError(span, fmt.Errorf("failed to write new salt: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("failed to write new salt: %w", err))
 	}
 	return nil
 }
@@ -324,10 +324,10 @@ func (a *APIClient) ValidateEmailRecoveryCode(ctx context.Context, email, code s
 		Code:  code,
 	})
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	if !resp.Valid {
-		return traces.RecordError(span, ErrInvalidCode)
+		return traces.RecordError(ctx, ErrInvalidCode)
 	}
 	return nil
 }
@@ -339,18 +339,18 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_change_email")
 	defer span.End()
 	if a.userData == nil {
-		return traces.RecordError(span, ErrNotLoggedIn)
+		return traces.RecordError(ctx, ErrNotLoggedIn)
 	}
 	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
@@ -364,30 +364,30 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 	}
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	// Once the client receives B from the server Client should check error status here as defense against
 	// a malicious B sent from server
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	// client can now make the session key
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return traces.RecordError(span, fmt.Errorf("user_not_found error while generating Client key %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return traces.RecordError(span, fmt.Errorf("user_not_found error while checking server proof %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while checking server proof %w", err))
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return traces.RecordError(span, fmt.Errorf("user_not_found error while generating client proof %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
 	}
 
 	changeEmailRequestBody := &protos.ChangeEmailRequest{
@@ -396,7 +396,7 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 		Proof:    clientProof,
 	}
 
-	return traces.RecordError(span, a.authClient.ChangeEmail(ctx, changeEmailRequestBody))
+	return traces.RecordError(ctx, a.authClient.ChangeEmail(ctx, changeEmailRequestBody))
 }
 
 // CompleteChangeEmail completes a change of the email address associated with this user account,
@@ -406,18 +406,18 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	defer span.End()
 	newSalt, err := generateSalt()
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	encKey, err := generateEncryptedKey(password, newEmail, newSalt)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	srpClient := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
@@ -427,14 +427,14 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 		NewSalt:     newSalt,
 		NewVerifier: verifierKey.Bytes(),
 	}); err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	if err := writeSalt(newSalt, a.saltPath); err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	if err := a.userInfo.SetData(a.userData); err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	a.salt = newSalt
 	a.userData.LegacyUserData.Email = newEmail
@@ -448,13 +448,13 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 	lowerCaseEmail := strings.ToLower(email)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
@@ -469,28 +469,28 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return traces.RecordError(span, fmt.Errorf("user_not_found error while generating Client key %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return traces.RecordError(span, fmt.Errorf("user_not_found error while checking server proof %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while checking server proof %w", err))
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return traces.RecordError(span, fmt.Errorf("user_not_found error while generating client proof %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
 	}
 
 	changeEmailRequestBody := &protos.DeleteUserRequest{
@@ -501,15 +501,15 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 	}
 
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 	// clean up local data
 	a.userData = nil
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
-		return traces.RecordError(span, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
-	return traces.RecordError(span, a.userInfo.SetData(nil))
+	return traces.RecordError(ctx, a.userInfo.SetData(nil))
 }
 
 // OAuthLogin initiates the OAuth login process for the specified provider.
@@ -542,10 +542,10 @@ func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkRes
 	req := a.proWC.NewRequest(nil, nil, data)
 	resp := &LinkResponse{}
 	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
-		return nil, traces.RecordError(span, fmt.Errorf("failed to remove device: %s", resp.BaseResponse.Error))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to remove device: %s", resp.BaseResponse.Error))
 	}
 	return resp, nil
 }

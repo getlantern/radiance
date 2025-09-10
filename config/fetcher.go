@@ -107,14 +107,14 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		return nil, traces.RecordError(span, fmt.Errorf("could not send request: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("could not send request: %w", err))
 	}
 
 	// Note that Go's HTTP library should automatically have decompressed the response here.
 	buf, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return nil, traces.RecordError(span, fmt.Errorf("could not read response body: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("could not read response body: %w", err))
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:

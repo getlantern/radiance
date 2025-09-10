@@ -1,12 +1,17 @@
 // Package traces provides utilities for working with OpenTelemetry traces.
 package traces
 
-import "go.opentelemetry.io/otel/trace"
+import (
+	"context"
 
-func RecordError(span trace.Span, err error, options ...trace.EventOption) error {
+	"go.opentelemetry.io/otel/trace"
+)
+
+func RecordError(ctx context.Context, err error, options ...trace.EventOption) error {
 	if err == nil {
 		return nil
 	}
+	span := trace.SpanFromContext(ctx)
 	span.RecordError(err, options...)
 	return err
 }

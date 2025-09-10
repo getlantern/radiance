@@ -30,7 +30,7 @@ func httpTrace(ctx context.Context) *httptrace.ClientTrace {
 		},
 		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
 			if err != nil {
-				RecordError(span, err)
+				RecordError(ctx, err)
 				return
 			}
 			span.SetAttributes(attribute.Bool("handshake_complete", cs.HandshakeComplete))
@@ -39,13 +39,13 @@ func httpTrace(ctx context.Context) *httptrace.ClientTrace {
 			span.SetAttributes(attribute.String("dns_host", di.Host))
 		},
 		DNSDone: func(di httptrace.DNSDoneInfo) {
-			RecordError(span, di.Err)
+			RecordError(ctx, di.Err)
 		},
 		ConnectStart: func(network, addr string) {
 			span.SetAttributes(attribute.String("network", network))
 		},
 		ConnectDone: func(network, addr string, err error) {
-			RecordError(span, err)
+			RecordError(ctx, err)
 		},
 	}
 }

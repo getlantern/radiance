@@ -10,7 +10,6 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing/service"
-	"go.opentelemetry.io/otel"
 )
 
 // GetGroups retrieves the list of group outbounds.
@@ -19,20 +18,18 @@ func GetGroups() ([]OutboundGroup, error) {
 }
 
 func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.groupHandler")
-	defer span.End()
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(span, ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, traces.RecordError(r.Context(), ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
 		return
 	}
 	groups, err := getGroups(s.service.Ctx())
 	if err != nil {
-		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(groups); err != nil {
-		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
 

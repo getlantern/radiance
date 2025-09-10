@@ -13,7 +13,6 @@ import (
 	"github.com/getlantern/radiance/traces"
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-	"go.opentelemetry.io/otel"
 )
 
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
@@ -90,15 +89,13 @@ func CloseService() error {
 }
 
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.closeServiceHandler")
-	defer span.End()
 	service := s.service
 	s.service = &closedService{}
 	defer func() {
-		go traces.RecordError(span, s.Close())
+		go traces.RecordError(r.Context(), s.Close())
 	}()
 	if err := service.Close(); err != nil {
-		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

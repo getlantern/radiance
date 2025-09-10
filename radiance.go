@@ -222,7 +222,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 	err = r.issueReporter.Report(ctx, report, email, country)
 	if err != nil {
 		slog.Error("Failed to report issue", "error", err)
-		return traces.RecordError(span, fmt.Errorf("failed to report issue: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("failed to report issue: %w", err))
 	}
 	slog.Info("Issue reported successfully")
 	return nil
@@ -236,7 +236,7 @@ func (r *Radiance) Features() map[string]bool {
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		slog.Error("Failed to get config for features", "error", err)
-		traces.RecordError(span, err, trace.WithStackTrace(true))
+		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 		return map[string]bool{}
 	}
 	if cfg == nil {
@@ -318,14 +318,14 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
 			// This typically just means we're offline
-			return nil, traces.RecordError(span, fmt.Errorf("could not create smart transport -- offline? %v", err))
+			return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport -- offline? %v", err))
 		}
 	}
 
 	lz.smartTransportMu.Unlock()
 	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
 	if err != nil {
-		traces.RecordError(span, err, trace.WithStackTrace(true))
+		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 	}
 	return res, err
 }

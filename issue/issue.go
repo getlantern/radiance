@@ -192,13 +192,13 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
-		return traces.RecordError(span, err)
+		return traces.RecordError(ctx, err)
 	}
 
 	defer resp.Body.Close()
@@ -208,7 +208,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 			slog.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
 		}
 		slog.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
-		return traces.RecordError(span, fmt.Errorf("issue report failed with status code %d", resp.StatusCode))
+		return traces.RecordError(ctx, fmt.Errorf("issue report failed with status code %d", resp.StatusCode))
 	}
 
 	slog.Debug("issue report sent")

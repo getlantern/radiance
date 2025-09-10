@@ -73,12 +73,9 @@ func GetStatus() (string, error) {
 }
 
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.statusHandler")
-	defer span.End()
-
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(state{s.service.Status()}); err != nil {
-		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
+		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

@@ -66,12 +66,12 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*Su
 	err := ac.proWC.Get(ctx, "/plans-v5", req, &resp)
 	if err != nil {
 		slog.Error("retrieving plans", "error", err)
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err = fmt.Errorf("received bad response: %s", resp.Error)
 		slog.Error("retrieving plans", "error", err)
-		return nil, traces.RecordError(span, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	return &resp, nil
 }
@@ -89,7 +89,7 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 	err := ac.proWC.Post(ctx, "/stripe-subscription", req, &resp)
 	if err != nil {
 		slog.Error("creating new subscription", "error", err)
-		return nil, traces.RecordError(span, fmt.Errorf("creating new subscription: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("creating new subscription: %w", err))
 	}
 	return &resp, nil
 }
@@ -109,7 +109,7 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 	case AppleService:
 		path = "/purchase-apple-subscription"
 	default:
-		return "", "", traces.RecordError(span, fmt.Errorf("unsupported service: %s", service))
+		return "", "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}
 
 	req := ac.proWC.NewRequest(nil, nil, data)
@@ -121,7 +121,7 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 	err = ac.proWC.Post(ctx, path, req, &resp)
 	if err != nil {
 		slog.Error("verifying subscription", "error", err)
-		return "", "", traces.RecordError(span, fmt.Errorf("verifying subscription: %w", err))
+		return "", "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
 	}
 	return resp.Status, resp.SubscriptionId, nil
 }
@@ -162,9 +162,9 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 	err := ac.proWC.Get(ctx, "/subscription-payment-redirect", req, &resp)
 	if err != nil {
 		slog.Error("subscription payment redirect", "error", err)
-		return "", traces.RecordError(span, fmt.Errorf("subscription payment redirect: %w", err))
+		return "", traces.RecordError(ctx, fmt.Errorf("subscription payment redirect: %w", err))
 	}
-	return resp.Redirect, traces.RecordError(span, err)
+	return resp.Redirect, traces.RecordError(ctx, err)
 }
 
 // PaymentRedirect is used to get the payment redirect URL with PaymentRedirectData
@@ -189,9 +189,9 @@ func (ac *APIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectDa
 	err := ac.proWC.Get(ctx, "/payment-redirect", req, &resp)
 	if err != nil {
 		slog.Error("subscription payment redirect", "error", err)
-		return "", traces.RecordError(span, fmt.Errorf("subscription payment redirect: %w", err))
+		return "", traces.RecordError(ctx, fmt.Errorf("subscription payment redirect: %w", err))
 	}
-	return resp.Redirect, traces.RecordError(span, err)
+	return resp.Redirect, traces.RecordError(ctx, err)
 }
 
 type PurchaseResponse struct {
@@ -217,11 +217,11 @@ func (ac *APIClient) ActivationCode(ctx context.Context, email, resellerCode str
 	err := ac.proWC.Post(ctx, "/purchase", req, &resp)
 	if err != nil {
 		slog.Error("retrieving subscription status", "error", err)
-		return nil, traces.RecordError(span, fmt.Errorf("retrieving subscription status: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("retrieving subscription status: %w", err))
 	}
 	if resp.BaseResponse != nil && resp.Error != "" {
 		slog.Error("retrieving subscription status", "error", err)
-		return nil, traces.RecordError(span, fmt.Errorf("received bad response: %s", resp.Error))
+		return nil, traces.RecordError(ctx, fmt.Errorf("received bad response: %s", resp.Error))
 	}
 	return &resp, nil
 }

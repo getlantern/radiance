@@ -26,7 +26,7 @@ func sendRequest[T any](method, endpoint string, data any) (T, error) {
 	buf, err := json.Marshal(data)
 	var res T
 	if err != nil {
-		return res, traces.RecordError(span, fmt.Errorf("failed to marshal payload: %w", err))
+		return res, traces.RecordError(ctx, fmt.Errorf("failed to marshal payload: %w", err))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, apiURL+endpoint, bytes.NewReader(buf))
 	if err != nil {
@@ -39,7 +39,7 @@ func sendRequest[T any](method, endpoint string, data any) (T, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return res, traces.RecordError(span, fmt.Errorf("request failed: %w", err))
+		return res, traces.RecordError(ctx, fmt.Errorf("request failed: %w", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -51,7 +51,7 @@ func sendRequest[T any](method, endpoint string, data any) (T, error) {
 
 	err = json.NewDecoder(resp.Body).Decode(&res)
 	if err != nil {
-		return res, traces.RecordError(span, fmt.Errorf("failed to decode response: %w", err))
+		return res, traces.RecordError(ctx, fmt.Errorf("failed to decode response: %w", err))
 	}
 	return res, nil
 }
