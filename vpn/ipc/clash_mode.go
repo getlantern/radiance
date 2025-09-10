@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/getlantern/radiance/traces"
 )
 
 type m struct {
@@ -46,7 +47,6 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 	case "POST":
 		var mode m
 		if err := json.NewDecoder(req.Body).Decode(&mode); err != nil {
