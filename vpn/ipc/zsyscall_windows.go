@@ -44,7 +44,7 @@ var (
 )
 
 func impersonateNamedPipeClient(h windows.Handle) (err error) {
-	r1, _, e1 := syscall.SyscallN(procImpersonateNamedPipeClient.Addr(), 1, uintptr(h), 0, 0)
+	r1, _, e1 := syscall.Syscall(procImpersonateNamedPipeClient.Addr(), 1, uintptr(h), 0, 0)
 	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
