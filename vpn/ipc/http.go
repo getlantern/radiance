@@ -44,7 +44,7 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return res, fmt.Errorf("received error response: %s", resp.Status)
+		return res, traces.RecordError(ctx, fmt.Errorf("received error response: %s", resp.Status))
 	}
 	if _, ok := any(&res).(*empty); ok {
 		return res, nil
