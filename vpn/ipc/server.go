@@ -95,7 +95,7 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 		go traces.RecordError(r.Context(), s.Close())
 	}()
 	if err := service.Close(); err != nil {
-		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

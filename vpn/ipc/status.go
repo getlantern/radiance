@@ -9,8 +9,6 @@ import (
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/common/memory"
 	"go.opentelemetry.io/otel"
-
-	"github.com/getlantern/radiance/traces"
 )
 
 const (
@@ -75,7 +73,7 @@ func GetStatus(ctx context.Context) (string, error) {
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(state{s.service.Status()}); err != nil {
-		http.Error(w, traces.RecordError(r.Context(), err).Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 }

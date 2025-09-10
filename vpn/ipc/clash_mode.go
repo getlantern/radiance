@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -33,7 +32,7 @@ func SetClashMode(ctx context.Context, mode string) error {
 func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 	span := trace.SpanFromContext(req.Context())
 	if s.service.Status() != StatusRunning {
-		http.Error(w, traces.RecordError(req.Context(), ErrServiceIsNotReady).Error(), http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()
@@ -43,13 +42,13 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 		span.SetAttributes(attribute.String("mode", mode))
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(m{Mode: mode}); err != nil {
-			http.Error(w, traces.RecordError(req.Context(), err).Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	case "POST":
 		var mode m
 		if err := json.NewDecoder(req.Body).Decode(&mode); err != nil {
-			http.Error(w, traces.RecordError(req.Context(), err).Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		span.SetAttributes(attribute.String("mode", mode.Mode))
