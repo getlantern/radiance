@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -14,8 +15,8 @@ type m struct {
 }
 
 // GetClashMode retrieves the current mode from the Clash server.
-func GetClashMode() (string, error) {
-	res, err := sendRequest[m]("GET", clashModeEndpoint, nil)
+func GetClashMode(ctx context.Context) (string, error) {
+	res, err := sendRequest[m](ctx, "GET", clashModeEndpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -23,8 +24,8 @@ func GetClashMode() (string, error) {
 }
 
 // SetClashMode sets the mode of the Clash server.
-func SetClashMode(mode string) error {
-	_, err := sendRequest[empty]("POST", clashModeEndpoint, m{Mode: mode})
+func SetClashMode(ctx context.Context, mode string) error {
+	_, err := sendRequest[empty](ctx, "POST", clashModeEndpoint, m{Mode: mode})
 	return err
 }
 

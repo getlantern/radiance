@@ -44,7 +44,7 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 				return
 			case <-ticker.C:
 				slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
-				conns, err := ipc.GetConnections()
+				conns, err := ipc.GetConnections(ctx)
 				if err != nil {
 					if errors.Is(err, ipc.ErrServiceIsNotReady) {
 						continue

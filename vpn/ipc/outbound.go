@@ -21,8 +21,8 @@ type selection struct {
 }
 
 // SelectOutbound selects an outbound within a group.
-func SelectOutbound(groupTag, outboundTag string) error {
-	_, err := sendRequest[empty]("POST", selectEndpoint, selection{groupTag, outboundTag})
+func SelectOutbound(ctx context.Context, groupTag, outboundTag string) error {
+	_, err := sendRequest[empty](ctx, "POST", selectEndpoint, selection{groupTag, outboundTag})
 	return err
 }
 
@@ -70,8 +70,8 @@ type Selector interface {
 }
 
 // GetSelected retrieves the currently selected outbound and its group.
-func GetSelected() (group, tag string, err error) {
-	res, err := sendRequest[selection]("GET", selectEndpoint, nil)
+func GetSelected(ctx context.Context) (group, tag string, err error) {
+	res, err := sendRequest[selection](ctx, "GET", selectEndpoint, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -104,8 +104,8 @@ func (s *Server) selectedHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetActiveOutbound retrieves the outbound that is actively being used, resolving nested groups
 // if necessary.
-func GetActiveOutbound() (group, tag string, err error) {
-	res, err := sendRequest[selection]("GET", activeEndpoint, nil)
+func GetActiveOutbound(ctx context.Context) (group, tag string, err error) {
+	res, err := sendRequest[selection](ctx, "GET", activeEndpoint, nil)
 	if err != nil {
 		return "", "", err
 	}

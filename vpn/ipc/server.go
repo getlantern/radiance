@@ -83,8 +83,8 @@ func (s *Server) Close() error {
 }
 
 // CloseService sends a request to shutdown the service. This will also close the IPC server.
-func CloseService() error {
-	_, err := sendRequest[empty]("POST", closeServiceEndpoint, nil)
+func CloseService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", closeServiceEndpoint, nil)
 	return err
 }
 

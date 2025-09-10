@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"runtime"
@@ -34,8 +35,8 @@ type Metrics struct {
 }
 
 // GetMetrics retrieves the current runtime metrics of the service.
-func GetMetrics() (Metrics, error) {
-	return sendRequest[Metrics]("GET", metricsEndpoint, nil)
+func GetMetrics(ctx context.Context) (Metrics, error) {
+	return sendRequest[Metrics](ctx, "GET", metricsEndpoint, nil)
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +65,8 @@ type state struct {
 }
 
 // GetStatus retrieves the current status of the service.
-func GetStatus() (string, error) {
-	res, err := sendRequest[state]("GET", statusEndpoint, nil)
+func GetStatus(ctx context.Context) (string, error) {
+	res, err := sendRequest[state](ctx, "GET", statusEndpoint, nil)
 	if err != nil {
 		return "", err
 	}

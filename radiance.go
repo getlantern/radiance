@@ -231,7 +231,7 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
 func (r *Radiance) Features() map[string]bool {
-	_, span := otel.Tracer(tracerName).Start(context.Background(), "features")
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "features")
 	defer span.End()
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {

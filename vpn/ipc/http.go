@@ -19,8 +19,8 @@ type empty struct{}
 const tracerName = "github.com/getlantern/radiance/vpn/ipc"
 
 // sendRequest sends an HTTP request to the specified endpoint with the given method and data.
-func sendRequest[T any](method, endpoint string, data any) (T, error) {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "sendRequest", trace.WithAttributes(attribute.String("endpoint", endpoint)))
+func sendRequest[T any](ctx context.Context, method, endpoint string, data any) (T, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "sendRequest", trace.WithAttributes(attribute.String("endpoint", endpoint)))
 	defer span.End()
 
 	buf, err := json.Marshal(data)

@@ -13,8 +13,8 @@ import (
 )
 
 // GetGroups retrieves the list of group outbounds.
-func GetGroups() ([]OutboundGroup, error) {
-	return sendRequest[[]OutboundGroup]("GET", groupsEndpoint, nil)
+func GetGroups(ctx context.Context) ([]OutboundGroup, error) {
+	return sendRequest[[]OutboundGroup](ctx, "GET", groupsEndpoint, nil)
 }
 
 func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
