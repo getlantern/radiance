@@ -153,8 +153,6 @@ func (s *Server) activeOutboundHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, traces.RecordError(span, err).Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
 func getGroupOutbound(ctx context.Context, tag string) (adapter.OutboundGroup, error) {
