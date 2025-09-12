@@ -1,0 +1,48 @@
+{
+	"lantern": {
+		"outbounds": [
+			{
+				"type": "hysteria2",
+				"tag": "golduck",
+				"server": "138.2.5.44",
+				"server_port": 10002,
+				"password": "password",
+				"tls": {
+					"enabled": true,
+					"insecure": true
+				}
+			},
+			{
+				"type": "http",
+				"tag": "goldeen",
+				"server": "129.159.114.120",
+				"server_port": 10010
+			},
+			{
+				"type": "http",
+				"tag": "moltres",
+				"server": "213.35.105.30",
+				"server_port": 8080
+			}
+		],
+		"locations": {
+			"goldeen": {
+				"country": "United States of America",
+				"city": "Ashburn",
+				"latitude": 39.03,
+				"longitude": 77.47
+			},
+			"moltres": {
+				"country": "Singapore",
+				"city": "Singapore",
+				"latitude": 1.28,
+				"longitude": 103.83
+			},
+			"golduck": {
+				"country": "Japan",
+				"city": "Tokyo"
+			}
+		}
+	},
+	"user": {}
+}

@@ -1,0 +1,158 @@
+{
+	"ConfigResponse": {
+		"date": "2025-09-12T17:31:09Z",
+		"user_info": {
+			"pro_token": "2WHGwuZo-DyvflmFQdbq0rI9HFOttKtJCTxxWLlzU3i82BpM9TshcQ",
+			"country": "US",
+			"ip": "47.36.184.108",
+			"id": "3350739"
+		},
+		"outbound_locations": {
+			"goldeen": {
+				"country": "United States of America",
+				"city": "Ashburn",
+				"latitude": 39.03,
+				"longitude": 77.47
+			},
+			"moltres": {
+				"country": "Singapore",
+				"city": "Singapore",
+				"latitude": 1.28,
+				"longitude": 103.83
+			},
+			"golduck": {
+				"country": "Japan",
+				"city": "Tokyo"
+			}
+		},
+		"otel": {
+			"endpoint": "ingest.us.signoz.cloud:443",
+			"headers": {
+				"signoz-ingestion-key": "g-UfBSY-lgzTRVsqmrLzFZKBKO9vhwLZbQn5"
+			},
+			"sample_rate": 1,
+			"metrics_interval": 60
+		},
+		"features": {
+			"otel.metrics": false,
+			"otel.traces": true,
+			"private.gcp": true
+		},
+		"options": {
+			"outbounds": [
+				{
+					"type": "hysteria2",
+					"tag": "golduck",
+					"server": "138.2.5.44",
+					"server_port": 10002,
+					"password": "password",
+					"tls": {
+						"enabled": true,
+						"insecure": true
+					}
+				},
+				{
+					"type": "http",
+					"tag": "goldeen",
+					"server": "129.159.114.120",
+					"server_port": 10010
+				},
+				{
+					"type": "http",
+					"tag": "moltres",
+					"server": "213.35.105.30",
+					"server_port": 8080
+				}
+			],
+			"route": {
+				"rules": [
+					{
+						"rule_set": [
+							"acl-ban-ad",
+							"acl-ban-program-ad",
+							"acl-ban-company-ad",
+							"geosite-category-ads",
+							"geosite-malware",
+							"geosite-phishing",
+							"geoip-malware",
+							"geoip-phishing",
+							"geosite-cryptominers"
+						],
+						"outbound": "block"
+					}
+				],
+				"rule_set": [
+					{
+						"type": "remote",
+						"tag": "acl-ban-ad",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/ACL4SSR/BanAD.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "acl-ban-program-ad",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/ACL4SSR/BanProgramAD.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "acl-ban-company-ad",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/ACL4SSR/BanADCompany.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "geosite-category-ads",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/geo/geosite/category-ads.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "geosite-malware",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/geo/geosite/malware.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "geosite-phishing",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/geo/geosite/phishing.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "geoip-malware",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/geo/geoip/malware.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "geoip-phishing",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/geo/geoip/phishing.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					},
+					{
+						"type": "remote",
+						"tag": "geosite-cryptominers",
+						"url": "https://raw.githubusercontent.com/KaringX/karing-ruleset/sing/geo/geosite/cryptominers.srs",
+						"download_detour": "direct",
+						"update_interval": "24h0m0s"
+					}
+				]
+			},
+			"experimental": {
+				"cache_file": {
+					"enabled": true
+				}
+			}
+		}
+	},
+	"PreferredLocation": {}
+}
