@@ -180,9 +180,15 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	return nil
 }
 
-func (t *tunnel) connect() error {
+func (t *tunnel) connect() (err error) {
 	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
 
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Panic starting libbox service", "panic", r)
+			err = fmt.Errorf("panic starting libbox service: %v", r)
+		}
+	}()
 	if err := t.lbService.Start(); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
@@ -322,6 +328,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			if v, ok := r.(string); ok && strings.HasPrefix(v, "invalid") && strings.HasSuffix(v, "index") {
 				err = errLibboxClosed
 			} else {
+				t.Close()
 				panic(r) // re-panic if it's not the expected panic
 			}
 		}
