@@ -24,7 +24,7 @@ require (
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/jibber_jabber v0.0.0-20210901195950-68955124cc42
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
-	github.com/getlantern/sing-box-extensions v0.0.6-0.20250903223913-8a773ac96b4d
+	github.com/getlantern/sing-box-extensions v0.0.6-0.20250912211228-f05099d8db0a
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
