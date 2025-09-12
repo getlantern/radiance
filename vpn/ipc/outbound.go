@@ -38,7 +38,7 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			http.Error(w, fmt.Sprint(r), http.StatusBadRequest)
+			http.Error(w, fmt.Sprint(r), http.StatusInternalServerError)
 		}
 	}()
 	outbound, err := getGroupOutbound(s.service.Ctx(), p.GroupTag)
