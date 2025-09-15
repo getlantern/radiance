@@ -221,6 +221,15 @@ func buildOptions(group, path string) (O.Options, error) {
 	splitTunnelPath := filepath.Join(path, splitTunnelFile)
 	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelPath
 
+	p := opts.Route.RuleSet[0].LocalOptions.Path
+	if filepath.IsAbs(p) {
+		if rel, err := filepath.Rel(path, p); err == nil {
+			opts.Route.RuleSet[0].LocalOptions.Path = rel
+		} else {
+			opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelFile
+		}
+	}
+
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
 		"cacheFilePath", opts.Experimental.CacheFile.Path,
 		"clashAPIDefaultMode", opts.Experimental.ClashAPI.DefaultMode,
