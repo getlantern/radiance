@@ -59,7 +59,7 @@ func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 
 // SetupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, attributes Attributes, cfg common.ConfigResponse) (func(context.Context) error, error) {
+func SetupOTelSDK(ctx context.Context, attributes Attributes, cfg *common.ConfigResponse) (func(context.Context) error, error) {
 	if cfg.Features == nil {
 		cfg.Features = make(map[string]bool)
 	}
