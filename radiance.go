@@ -260,7 +260,7 @@ func (r *Radiance) ServerLocations() ([]lcommon.ServerLocation, error) {
 		return nil, fmt.Errorf("failed to get config: %w", err)
 	}
 	if cfg == nil {
-		slog.Info("No config available for server locations, returning empty list")
+		slog.Info("No config available for server locations, returning error")
 		return nil, fmt.Errorf("no config available")
 	}
 	slog.Debug("Returning server locations from config", "locations", cfg.ConfigResponse.Servers)
