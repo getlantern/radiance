@@ -187,7 +187,6 @@ func initLogger(logPath, level string) error {
 	} else {
 		logWriter = io.MultiWriter(os.Stdout, f)
 	}
-	now := time.Now()
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     lvl,
@@ -195,8 +194,7 @@ func initLogger(logPath, level string) error {
 			switch a.Key {
 			case slog.TimeKey:
 				if t, ok := a.Value.Any().(time.Time); ok {
-					ts := fmt.Sprintf("%s [%v]", t.UTC().Format("2006-01-02 15:04:05.000"), time.Since(now).Truncate(time.Millisecond))
-					a.Value = slog.StringValue(ts)
+					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000"))
 				}
 				return a
 			case slog.SourceKey:
