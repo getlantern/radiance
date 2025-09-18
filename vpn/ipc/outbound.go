@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	runtimeDebug "runtime/debug"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/service"
+
+	"github.com/getlantern/radiance/internal"
 )
 
 type selection struct {
@@ -41,6 +44,7 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprint(r), http.StatusInternalServerError)
 		}
 	}()
+	slog.Log(nil, internal.LevelTrace, "selecting outbound", "group", p.GroupTag, "outbound", p.OutboundTag)
 	outbound, err := getGroupOutbound(s.service.Ctx(), p.GroupTag)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -51,12 +55,14 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("outbound %q is not a selector", p.GroupTag), http.StatusBadRequest)
 		return
 	}
+	slog.Log(nil, internal.LevelTrace, "setting outbound", "outbound", p.OutboundTag)
 	if !selector.SelectOutbound(p.OutboundTag) {
 		http.Error(w, fmt.Sprintf("outbound %q not found in group", p.OutboundTag), http.StatusBadRequest)
 		return
 	}
 	cs := s.service.ClashServer()
-	if cs.Mode() != p.GroupTag {
+	if mode := cs.Mode(); mode != p.GroupTag {
+		slog.Log(nil, internal.LevelDebug, "changing clash mode", "new", p.GroupTag, "old", mode)
 		s.service.ClashServer().SetMode(p.GroupTag)
 		conntrack.Close()
 		go func() {

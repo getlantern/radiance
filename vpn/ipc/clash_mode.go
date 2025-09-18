@@ -3,10 +3,13 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/getlantern/radiance/internal"
 )
 
 type m struct {
@@ -52,6 +55,7 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		span.SetAttributes(attribute.String("mode", mode.Mode))
+		slog.Log(nil, internal.LevelTrace, "Setting clash mode", "mode", mode.Mode)
 		cs.SetMode(mode.Mode)
 		w.WriteHeader(http.StatusOK)
 	default:
