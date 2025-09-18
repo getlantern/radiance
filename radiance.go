@@ -6,20 +6,17 @@ package radiance
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	"github.com/getlantern/fronted"
 	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	lcommon "github.com/getlantern/common"
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
@@ -252,90 +249,20 @@ func (r *Radiance) Features() map[string]bool {
 	return cfg.ConfigResponse.Features
 }
 
-func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, error) {
-	// Parse the domain from the URL.
-	configURL := "https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"
-	u, err := url.Parse(configURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
-	}
-	// Extract the domain from the URL.
-	domain := u.Host
-
-	logWriter := &slogWriter{Logger: slog.Default()}
-
-	// First, download the file from the specified URL using the smart dialer.
-	// Then, create a new fronted instance with the downloaded file.
-	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
-	}
-	lz := &lazyDialingRoundTripper{
-		smartTransportMu: sync.Mutex{},
-		logWriter:        logWriter,
-		domain:           domain,
-	}
-	if trans != nil {
-		lz.smartTransport = trans
-	}
-
-	httpClient := &http.Client{
-		Transport: traces.NewRoundTripper(lz),
-	}
-	fronted.SetLogger(slog.Default())
-	return fronted.NewFronted(
-		fronted.WithPanicListener(panicListener),
-		fronted.WithCacheFile(cacheFile),
-		fronted.WithHTTPClient(httpClient),
-		fronted.WithConfigURL(configURL),
-	), nil
-}
-
-// This is a lazy RoundTripper that allows radiance to start without an error
-// when it's offline.
-type lazyDialingRoundTripper struct {
-	smartTransport   http.RoundTripper
-	smartTransportMu sync.Mutex
-
-	logWriter io.Writer
-	domain    string
-}
-
-// Make sure lazyDialingRoundTripper implements http.RoundTripper
-var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
-
-func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := otel.Tracer(tracerName).Start(req.Context(), "lazy_dialing_round_trip")
+// ServerLocations returns the list of server locations where the user can connect to proxies.
+func (r *Radiance) ServerLocations() ([]lcommon.ServerLocation, error) {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "server_locations")
 	defer span.End()
-
-	lz.smartTransportMu.Lock()
-
-	if lz.smartTransport == nil {
-		slog.Info("Smart transport is nil")
-		var err error
-		lz.smartTransport, err = kindling.NewSmartHTTPTransport(lz.logWriter, lz.domain)
-		if err != nil {
-			slog.Info("Error creating smart transport", "error", err)
-			lz.smartTransportMu.Unlock()
-			// This typically just means we're offline
-			return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport -- offline? %v", err))
-		}
-	}
-
-	lz.smartTransportMu.Unlock()
-	res, err := lz.smartTransport.RoundTrip(req.WithContext(ctx))
+	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
+		slog.Error("Failed to get config for server locations", "error", err)
 		traces.RecordError(ctx, err, trace.WithStackTrace(true))
+		return nil, fmt.Errorf("failed to get config: %w", err)
 	}
-	return res, err
-}
-
-type slogWriter struct {
-	*slog.Logger
-}
-
-func (w *slogWriter) Write(p []byte) (n int, err error) {
-	// Convert the byte slice to a string and log it
-	w.Info(string(p))
-	return len(p), nil
+	if cfg == nil {
+		slog.Info("No config available for server locations, returning empty list")
+		return nil, fmt.Errorf("no config available")
+	}
+	slog.Debug("Returning server locations from config", "locations", cfg.ConfigResponse.Servers)
+	return cfg.ConfigResponse.Servers, nil
 }
