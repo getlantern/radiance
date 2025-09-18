@@ -192,6 +192,11 @@ func initLogger(logPath, level string) error {
 		Level:     lvl,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {
+			case slog.TimeKey:
+				if t, ok := a.Value.Any().(time.Time); ok {
+					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000"))
+				}
+				return a
 			case slog.SourceKey:
 				source, ok := a.Value.Any().(*slog.Source)
 				if !ok {
