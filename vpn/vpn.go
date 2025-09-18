@@ -122,12 +122,15 @@ func isOpen(ctx context.Context) bool {
 func Disconnect() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
 	defer span.End()
+	slog.Info("Disconnecting VPN")
 	return traces.RecordError(ctx, ipc.CloseService(ctx))
 }
 
 // selectServer selects the specified server for the tunnel. The tunnel must already be open.
 func selectServer(ctx context.Context, group, tag string) error {
+	slog.Info("Selecting server", "group", group, "tag", tag)
 	if err := ipc.SelectOutbound(ctx, group, tag); err != nil {
+		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
 	return nil
@@ -163,13 +166,13 @@ func GetStatus() (Status, error) {
 		return s, nil
 	}
 
-	slog.Debug("Tunnel is open, retrieving active server")
+	slog.Log(nil, internal.LevelTrace, "Tunnel is open, retrieving active server")
 	_, active, err := ipc.GetActiveOutbound(ctx)
 	if err != nil {
 		return s, fmt.Errorf("failed to get active server: %w", err)
 	}
 	s.ActiveServer = active
-	slog.Debug("Tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
+	slog.Log(nil, internal.LevelTrace, "retrieved tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
 	return s, nil
 }
 
@@ -201,6 +204,7 @@ func selectedServer(ctx context.Context) (string, string, error) {
 func ActiveServer(ctx context.Context) (group, tag string, err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "active_server")
 	defer span.End()
+	slog.Log(nil, internal.LevelTrace, "Retrieving active server")
 	group, tag, err = ipc.GetActiveOutbound(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get active server: %w", err)
