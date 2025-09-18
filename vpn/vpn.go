@@ -145,23 +145,27 @@ type Status struct {
 	// ActiveServer is the server that is currently active for the tunnel. This will differ from
 	// SelectedServer if using auto-select mode.
 	ActiveServer string
+	// IP is the current public IP address
+	IP string
 }
 
 func GetStatus() (Status, error) {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
 	defer span.End()
 	slog.Debug("Retrieving tunnel status")
+	ip, _ := getPublicIP()
+	s := Status{
+		TunnelOpen: isOpen(ctx),
+		IP:         ip,
+	}
 	group, selected, err := selectedServer(ctx)
 	if err != nil {
-		return Status{}, traces.RecordError(ctx, fmt.Errorf("failed to get selected server: %w", err))
+		return s, traces.RecordError(ctx, fmt.Errorf("failed to get selected server: %w", err))
 	}
 	if group == autoAllTag {
 		selected = autoAllTag
 	}
-	s := Status{
-		TunnelOpen:     isOpen(ctx),
-		SelectedServer: selected,
-	}
+	s.SelectedServer = selected
 	if !s.TunnelOpen {
 		return s, nil
 	}
