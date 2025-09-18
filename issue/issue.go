@@ -25,7 +25,7 @@ import (
 
 const (
 	requestURL = "https://iantem.io/api/v1/issue"
-	maxLogSize = 10 * 1024 * 1024 // 10 MB
+	maxLogSize = 20 * 1024 * 1024 // 20 MB
 	tracerName = "github.com/getlantern/radiance/issue"
 )
 
@@ -166,6 +166,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
 	logDir := common.LogPath()
+	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxLogSize)
 	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
