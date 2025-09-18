@@ -22,6 +22,7 @@ import (
 
 	C "github.com/getlantern/common"
 
+	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
@@ -63,6 +64,10 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 	defer initMutex.Unlock()
 	if initialized {
 		return nil
+	}
+
+	if deviceID == "" {
+		deviceID = deviceid.Get()
 	}
 
 	reporting.Init(Version)
@@ -114,7 +119,7 @@ func afterConfigIsAvailableCallback(configPath, deviceID string) {
 		return
 	}
 
-	if err := initOTEL(deviceID, cfg.ConfigResponse); err != nil {
+	if err := initOTEL(deviceID, &cfg.ConfigResponse); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
 		return
 	}
@@ -190,7 +195,7 @@ func initLogger(logPath, level string) error {
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     lvl,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 			switch a.Key {
 			case slog.SourceKey:
 				source, ok := a.Value.Any().(*slog.Source)
@@ -243,7 +248,7 @@ type config struct {
 	ConfigResponse C.ConfigResponse
 }
 
-func initOTEL(deviceID string, configResponse C.ConfigResponse) error {
+func initOTEL(deviceID string, configResponse *C.ConfigResponse) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 
