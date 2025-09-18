@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"time"
 )
 
 // list of URLs to fetch the public IP address, just in case one is down or blocked
@@ -20,21 +21,27 @@ var ipURLs = []string{
 	"https://api.ipify.org",
 }
 
-// getPublicIP fetches the public IP address by querying multiple external services concurrently.
-// It returns the first successful response or an error if all requests fail.
-func getPublicIP() (string, error) {
+// GetPublicIP fetches the public IP address
+func GetPublicIP() (string, error) {
+	return getPublicIP(context.Background(), ipURLs)
+}
+
+func getPublicIP(ctx context.Context, urls []string) (string, error) {
+	if len(urls) == 0 {
+		urls = ipURLs
+	}
 	type result struct {
 		ip  string
 		err error
 	}
-	results := make(chan result, len(ipURLs))
-	sem := make(chan struct{}, 4)
+	results := make(chan result, len(urls))
+	sem := make(chan struct{}, 3)
 
 	client := &http.Client{}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	for _, url := range ipURLs {
+	for _, url := range urls {
 		go func() {
 			// limit number of concurrent requests
 			sem <- struct{}{}
@@ -62,6 +69,8 @@ func fetchIP(ctx context.Context, client *http.Client, url string) (string, erro
 		return "", err
 	}
 	req.Header.Set("User-Agent", "curl/8.14.1") // some services return the entire HTML page for non-curl user agents
+	req.Header.Set("Connection", "close")
+	req.Close = true
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -79,4 +88,23 @@ func fetchIP(ctx context.Context, client *http.Client, url string) (string, erro
 		return "", fmt.Errorf("response is not a valid IP: %s -> %s...", url, ip[:7])
 	}
 	return ip, nil
+}
+
+// WaitForIPChange polls the public IP address every interval until it changes from the current value.
+func WaitForIPChange(ctx context.Context, current string, interval time.Duration) (string, error) {
+	urls := ipURLs
+	for {
+		select {
+		case <-ctx.Done():
+			return "", nil
+		case <-time.After(interval):
+			ip, err := getPublicIP(ctx, urls)
+			if err != nil {
+				return "", nil
+			} else if ip != current {
+				return ip, nil
+			}
+			urls = append(urls[3:], urls[:3]...) // rotate URLs to avoid hitting the same ones repeatedly
+		}
+	}
 }
