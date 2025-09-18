@@ -112,12 +112,12 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 	if err != nil {
 		return fmt.Errorf("error sending request: %w", err)
 	}
-
 	// print curl command for debugging
 	fmt.Printf("curl %s\n", req.GenerateCurlCommand())
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
-		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(sanitizeResponseBody(resp.Body())))
-		return fmt.Errorf("unexpected status %v body %s ", resp.StatusCode(), string(sanitizeResponseBody(resp.Body())))
+		sanitizedBody := sanitizeResponseBody(resp.Body())
+		slog.Debug("error sending request", "status", resp.StatusCode(), "body", string(sanitizedBody))
+		return fmt.Errorf("unexpected status %v body %s ", resp.StatusCode(), string(sanitizedBody))
 	}
 	return nil
 }
