@@ -97,7 +97,9 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 
 	go func() {
 		if err := s.Close(); err != nil {
