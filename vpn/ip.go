@@ -85,7 +85,7 @@ func fetchIP(ctx context.Context, client *http.Client, url string) (string, erro
 		return "", fmt.Errorf("empty response from %s", url)
 	}
 	if _, err := netip.ParseAddr(ip); err != nil {
-		return "", fmt.Errorf("response is not a valid IP: %s -> %s...", url, ip[:7])
+		return "", fmt.Errorf("response is not a valid IP: %s -> %s...", url, ip[:min(len(ip), 7)])
 	}
 	return ip, nil
 }
