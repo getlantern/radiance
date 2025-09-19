@@ -52,7 +52,7 @@ func getPublicIP(ctx context.Context, urls []string) (string, error) {
 	}
 
 	var lastErr error
-	for i := 0; i < len(ipURLs); i++ {
+	for i := 0; i < len(urls); i++ {
 		res := <-results
 		if res.err == nil {
 			return res.ip, nil
