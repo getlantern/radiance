@@ -153,7 +153,11 @@ func GetStatus() (Status, error) {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
 	defer span.End()
 	slog.Debug("Retrieving tunnel status")
-	ip, _ := GetPublicIP()
+	ip, err := GetPublicIP()
+	if err != nil {
+		slog.Warn("Failed to get public IP", "error", err)
+		ip = "unknown"
+	}
 	s := Status{
 		TunnelOpen: isOpen(ctx),
 		IP:         ip,
