@@ -59,7 +59,7 @@ func getPublicIP(ctx context.Context, urls []string) (string, error) {
 		}
 		lastErr = res.err
 	}
-	return "", lastErr
+	return "", fmt.Errorf("failed to get public IP, error: %w", lastErr)
 }
 
 // fetchIP performs an HTTP GET request to the given URL and returns the trimmed response body as the IP.
