@@ -76,8 +76,6 @@ type IssueReport struct {
 	Device string
 	// device alphanumeric name
 	Model string
-	// subscription level
-	UserStatus string
 }
 
 // issue text to type mapping
@@ -102,6 +100,16 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
 	}
 
+	userStatus := "free"
+	userData, err := ir.userConfig.GetData()
+	if err != nil {
+		slog.Error("Unable to get user data", "error", err)
+	} else {
+		if userData != nil && userData.LegacyUserData.UserLevel == "pro" {
+			userStatus = "pro"
+		}
+	}
+
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)
@@ -117,7 +125,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
 		CountryCode:       country,
 		AppVersion:        common.Version,
-		SubscriptionLevel: report.UserStatus,
+		SubscriptionLevel: userStatus,
 		Platform:          common.Platform,
 		Description:       report.Description,
 		UserEmail:         userEmail,
