@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 	"unicode"
 
 	"fmt"
@@ -25,6 +26,8 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
+	//Default timeout of 60 seconds
+	httpClient.Timeout = (60 * time.Second)
 	client := resty.NewWithClient(httpClient)
 	if baseURL != "" {
 		client.SetBaseURL(baseURL)
