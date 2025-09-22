@@ -257,7 +257,7 @@ type AutoSelections struct {
 // AutoServerSelections returns the currently active server for each auto server group. If the group
 // is not found or has no active server, "N/A" is returned for that group.
 func AutoServerSelections() (AutoSelections, error) {
-	groups, err := ipc.GetGroups()
+	groups, err := ipc.GetGroups(context.Background())
 	if err != nil {
 		return AutoSelections{}, fmt.Errorf("failed to get groups: %w", err)
 	}
