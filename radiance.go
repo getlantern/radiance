@@ -117,7 +117,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), apiHandler, userInfo)
+	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}

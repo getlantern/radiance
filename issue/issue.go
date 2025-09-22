@@ -11,11 +11,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/getlantern/jibber_jabber"
 	"github.com/getlantern/osversion"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
@@ -29,14 +27,10 @@ const (
 	tracerName = "github.com/getlantern/radiance/issue"
 )
 
-type SubscriptionHandler interface {
-	Subscription() (api.Subscription, error)
-}
-
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
 	httpClient *http.Client
-	subHandler SubscriptionHandler
+
 	userConfig common.UserInfo
 }
 
@@ -44,19 +38,14 @@ type IssueReporter struct {
 // to the backend.
 func NewIssueReporter(
 	httpClient *http.Client,
-	subHandler SubscriptionHandler,
 	userConfig common.UserInfo,
 ) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
 	httpClient.Transport = traces.NewRoundTripper(httpClient.Transport)
-	if subHandler == nil {
-		return nil, fmt.Errorf("user is nil")
-	}
 	return &IssueReporter{
 		httpClient: httpClient,
-		subHandler: subHandler,
 		userConfig: userConfig,
 	}, nil
 }
@@ -83,11 +72,12 @@ type IssueReport struct {
 	Description string
 	// Attachment is a list of issue attachments
 	Attachments []*Attachment
-
 	// device common name
 	Device string
 	// device alphanumeric name
 	Model string
+	// subscription level
+	UserStatus string
 }
 
 // issue text to type mapping
@@ -112,24 +102,10 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
 	}
 
-	// get subscription level as string
-	subLevel := "free"
-	sub, err := ir.subHandler.Subscription()
-	if err != nil {
-		slog.Error("getting user subscription info", "error", err)
-	} else if sub.Tier == api.TierPro {
-		subLevel = "pro"
-	}
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)
 	}
-	userLocale, err := jibber_jabber.DetectIETF()
-	if err != nil || userLocale == "C" {
-		slog.Debug("Ignoring OS locale and using default", "default", "en-US", "error", err)
-		userLocale = "en-US"
-	}
-
 	// get issue type as integer
 	iType, ok := issueTypeMap[report.Type]
 	if !ok {
@@ -141,7 +117,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
 		CountryCode:       country,
 		AppVersion:        common.Version,
-		SubscriptionLevel: subLevel,
+		SubscriptionLevel: report.UserStatus,
 		Platform:          common.Platform,
 		Description:       report.Description,
 		UserEmail:         userEmail,
@@ -150,7 +126,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		Device:            report.Device,
 		Model:             report.Model,
 		OsVersion:         osVersion,
-		Language:          userLocale,
+		Language:          ir.userConfig.Locale(),
 	}
 
 	for _, attachment := range report.Attachments {
