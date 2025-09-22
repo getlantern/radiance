@@ -29,7 +29,6 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
-	sbgroup "github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 )
@@ -180,9 +179,15 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	return nil
 }
 
-func (t *tunnel) connect() error {
+func (t *tunnel) connect() (err error) {
 	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
 
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Panic starting libbox service", "panic", r)
+			err = fmt.Errorf("panic starting libbox service: %v", r)
+		}
+	}()
 	if err := t.lbService.Start(); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
@@ -303,7 +308,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 	ctx := t.ctx
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
-	getSelector := func(group string) *sbgroup.Selector {
+	getSelector := func(group string) ipc.Selector {
 		out, found := outboundMgr.Outbound(group)
 		if !found {
 			// Yes, panic. And, yes, it's intentional. The group outbound should always exist if the tunnel
@@ -312,7 +317,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			slog.Log(ctx, internal.LevelPanic, "selector group missing", "group", group)
 			panic(fmt.Errorf("selector group %q missing", group))
 		}
-		return out.(*sbgroup.Selector)
+		return out.(ipc.Selector)
 	}
 	defer func() {
 		// the managers will panic with "invalid .* index" if the libbox service is closed when
@@ -322,6 +327,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 			if v, ok := r.(string); ok && strings.HasPrefix(v, "invalid") && strings.HasSuffix(v, "index") {
 				err = errLibboxClosed
 			} else {
+				t.Close()
 				panic(r) // re-panic if it's not the expected panic
 			}
 		}
@@ -423,7 +429,7 @@ func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
 
 func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, hasUser bool) {
 	slog.Log(nil, internal.LevelTrace, "Updating auto all", "has_lantern", hasLantern, "has_user", hasUser)
-	_, isPlaceholder := auto.(*sbgroup.Selector)
+	_, isPlaceholder := auto.(ipc.Selector)
 	shouldBePlaceholder := !(hasLantern && hasUser)
 	if (isPlaceholder && shouldBePlaceholder) || (len(auto.All()) == 2 && !shouldBePlaceholder) {
 		slog.Log(nil, internal.LevelTrace, "No update needed for auto all")

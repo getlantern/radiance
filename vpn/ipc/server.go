@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/getlantern/radiance/traces"
+	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-
-	"github.com/getlantern/radiance/internal"
 )
 
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
@@ -29,30 +29,27 @@ type Server struct {
 	svr     *http.Server
 	service Service
 
-	GET  map[string]http.HandlerFunc
-	POST map[string]http.HandlerFunc
+	router chi.Router
 }
 
 // NewServer creates a new Server instance with the provided Service.
 func NewServer(service Service) *Server {
-	s := &Server{service: service}
-	s.GET = map[string]http.HandlerFunc{
-		"": func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		},
-		statusEndpoint:      s.statusHandler,
-		metricsEndpoint:     s.metricsHandler,
-		groupsEndpoint:      s.groupHandler,
-		connectionsEndpoint: s.connectionsHandler,
-		selectEndpoint:      s.selectedHandler,
-		activeEndpoint:      s.activeOutboundHandler,
-	}
-	s.POST = map[string]http.HandlerFunc{
-		selectEndpoint:           s.selectHandler,
-		clashModeEndpoint:        s.clashModeHandler,
-		closeServiceEndpoint:     s.closeServiceHandler,
-		closeConnectionsEndpoint: s.closeConnectionHandler,
-	}
+	s := &Server{service: service, router: chi.NewMux()}
+	s.router.Use(log, tracer)
+	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	s.router.Get(statusEndpoint, s.statusHandler)
+	s.router.Get(metricsEndpoint, s.metricsHandler)
+	s.router.Get(groupsEndpoint, s.groupHandler)
+	s.router.Get(connectionsEndpoint, s.connectionsHandler)
+	s.router.Get(selectEndpoint, s.selectedHandler)
+	s.router.Get(activeEndpoint, s.activeOutboundHandler)
+	s.router.Post(selectEndpoint, s.selectHandler)
+	s.router.Get(clashModeEndpoint, s.clashModeHandler)
+	s.router.Post(clashModeEndpoint, s.clashModeHandler)
+	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
+	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
 }
 
@@ -64,7 +61,7 @@ func (s *Server) Start(basePath string) error {
 		return fmt.Errorf("IPC server: listen: %w", err)
 	}
 	svr := &http.Server{
-		Handler:      http.HandlerFunc(s.serveHTTP),
+		Handler:      s.router,
 		ReadTimeout:  time.Second * 5,
 		WriteTimeout: time.Second * 5,
 	}
@@ -85,26 +82,9 @@ func (s *Server) Close() error {
 	return s.svr.Close()
 }
 
-func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	slog.Log(nil, internal.LevelTrace, "IPC request", "method", r.Method, "path", r.URL.Path)
-	switch r.Method {
-	case "GET":
-		if h, ok := s.GET[r.URL.Path]; ok {
-			h(w, r)
-			return
-		}
-	case "POST":
-		if h, ok := s.POST[r.URL.Path]; ok {
-			h(w, r)
-			return
-		}
-	}
-	http.NotFound(w, r)
-}
-
 // CloseService sends a request to shutdown the service. This will also close the IPC server.
-func CloseService() error {
-	_, err := sendRequest[empty]("POST", closeServiceEndpoint, nil)
+func CloseService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", closeServiceEndpoint, nil)
 	return err
 }
 
@@ -112,7 +92,7 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	service := s.service
 	s.service = &closedService{}
 	defer func() {
-		go s.Close()
+		go traces.RecordError(r.Context(), s.Close())
 	}()
 	if err := service.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -130,3 +110,5 @@ type closedService struct {
 
 func (s *closedService) Status() string { return StatusClosed }
 func (s *closedService) Close() error   { return nil }
+
+var ErrServiceIsNotReady = fmt.Errorf("service is not ready")

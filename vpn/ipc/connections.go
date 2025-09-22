@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	runtimeDebug "runtime/debug"
@@ -12,14 +13,14 @@ import (
 )
 
 // CloseConnections closes connections by their IDs. If connIDs is empty, all connections will be closed.
-func CloseConnections(connIDs []string) error {
-	_, err := sendRequest[empty]("POST", closeConnectionsEndpoint, connIDs)
+func CloseConnections(ctx context.Context, connIDs []string) error {
+	_, err := sendRequest[empty](ctx, "POST", closeConnectionsEndpoint, connIDs)
 	return err
 }
 
 func (s *Server) closeConnectionHandler(w http.ResponseWriter, r *http.Request) {
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	var cids []string
@@ -48,13 +49,13 @@ func (s *Server) closeConnectionHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 // GetConnections retrieves the list of current and recently closed connections.
-func GetConnections() ([]Connection, error) {
-	return sendRequest[[]Connection]("GET", connectionsEndpoint, nil)
+func GetConnections(ctx context.Context) ([]Connection, error) {
+	return sendRequest[[]Connection](ctx, "GET", connectionsEndpoint, nil)
 }
 
 func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

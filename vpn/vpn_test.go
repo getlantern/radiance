@@ -63,7 +63,7 @@ func TestSelectServer(t *testing.T) {
 			require.NoError(t, selector.Start(), "failed to start selector")
 
 			mservice.status = ipc.StatusRunning
-			require.NoError(t, selectServer(tt.wantGroup, tt.wantTag))
+			require.NoError(t, selectServer(context.Background(), tt.wantGroup, tt.wantTag))
 			assert.Equal(t, tt.wantTag, selector.Now(), tt.wantTag+" should be selected")
 			assert.Equal(t, tt.wantGroup, clashServer.Mode(), "clash mode should be "+tt.wantGroup)
 		})
@@ -85,7 +85,7 @@ func TestSelectedServer(t *testing.T) {
 	_ = cacheFile.Close()
 
 	t.Run("with tunnel closed", func(t *testing.T) {
-		group, tag, err := selectedServer()
+		group, tag, err := selectedServer(context.Background())
 		require.NoError(t, err, "should not error when getting selected server")
 		assert.Equal(t, wantGroup, group, "group should match")
 		assert.Equal(t, wantTag, tag, "tag should match")
@@ -95,7 +95,7 @@ func TestSelectedServer(t *testing.T) {
 		outboundMgr := service.FromContext[adapter.OutboundManager](mservice.Ctx())
 		require.NoError(t, outboundMgr.Start(adapter.StartStateStart), "failed to start outbound manager")
 
-		group, tag, err := selectedServer()
+		group, tag, err := selectedServer(context.Background())
 		require.NoError(t, err, "should not error when getting selected server")
 		assert.Equal(t, wantGroup, group, "group should match")
 		assert.Equal(t, wantTag, tag, "tag should match")

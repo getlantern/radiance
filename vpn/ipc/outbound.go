@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	runtimeDebug "runtime/debug"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/service"
+
+	"github.com/getlantern/radiance/internal"
 )
 
 type selection struct {
@@ -20,14 +23,14 @@ type selection struct {
 }
 
 // SelectOutbound selects an outbound within a group.
-func SelectOutbound(groupTag, outboundTag string) error {
-	_, err := sendRequest[empty]("POST", selectEndpoint, selection{groupTag, outboundTag})
+func SelectOutbound(ctx context.Context, groupTag, outboundTag string) error {
+	_, err := sendRequest[empty](ctx, "POST", selectEndpoint, selection{groupTag, outboundTag})
 	return err
 }
 
 func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	var p selection
@@ -36,22 +39,30 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			http.Error(w, fmt.Sprint(r), http.StatusInternalServerError)
+		}
+	}()
+	slog.Log(nil, internal.LevelTrace, "selecting outbound", "group", p.GroupTag, "outbound", p.OutboundTag)
 	outbound, err := getGroupOutbound(s.service.Ctx(), p.GroupTag)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	selector, isSelector := outbound.(_selector)
+	selector, isSelector := outbound.(Selector)
 	if !isSelector {
-		http.Error(w, "outbound is not a selector: "+p.GroupTag, http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("outbound %q is not a selector", p.GroupTag), http.StatusBadRequest)
 		return
 	}
+	slog.Log(nil, internal.LevelTrace, "setting outbound", "outbound", p.OutboundTag)
 	if !selector.SelectOutbound(p.OutboundTag) {
-		http.Error(w, "outbound not found in group: "+p.OutboundTag, http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("outbound %q not found in group", p.OutboundTag), http.StatusBadRequest)
 		return
 	}
 	cs := s.service.ClashServer()
-	if cs.Mode() != p.GroupTag {
+	if mode := cs.Mode(); mode != p.GroupTag {
+		slog.Log(nil, internal.LevelDebug, "changing clash mode", "new", p.GroupTag, "old", mode)
 		s.service.ClashServer().SetMode(p.GroupTag)
 		conntrack.Close()
 		go func() {
@@ -62,15 +73,15 @@ func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// _selector is helper interface to check if an outbound is a selector or wrapper of selector.
-type _selector interface {
+// Selector is helper interface to check if an outbound is a selector or wrapper of selector.
+type Selector interface {
 	adapter.OutboundGroup
 	SelectOutbound(tag string) bool
 }
 
 // GetSelected retrieves the currently selected outbound and its group.
-func GetSelected() (group, tag string, err error) {
-	res, err := sendRequest[selection]("GET", selectEndpoint, nil)
+func GetSelected(ctx context.Context) (group, tag string, err error) {
+	res, err := sendRequest[selection](ctx, "GET", selectEndpoint, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -102,8 +113,8 @@ func (s *Server) selectedHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetActiveOutbound retrieves the outbound that is actively being used, resolving nested groups
 // if necessary.
-func GetActiveOutbound() (group, tag string, err error) {
-	res, err := sendRequest[selection]("GET", activeEndpoint, nil)
+func GetActiveOutbound(ctx context.Context) (group, tag string, err error) {
+	res, err := sendRequest[selection](ctx, "GET", activeEndpoint, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -112,7 +123,7 @@ func GetActiveOutbound() (group, tag string, err error) {
 
 func (s *Server) activeOutboundHandler(w http.ResponseWriter, r *http.Request) {
 	if s.service.Status() != StatusRunning {
-		http.Error(w, "service not ready", http.StatusServiceUnavailable)
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()

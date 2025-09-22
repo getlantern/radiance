@@ -1,12 +1,14 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"runtime"
 
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/common/memory"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -32,11 +34,13 @@ type Metrics struct {
 }
 
 // GetMetrics retrieves the current runtime metrics of the service.
-func GetMetrics() (Metrics, error) {
-	return sendRequest[Metrics]("GET", metricsEndpoint, nil)
+func GetMetrics(ctx context.Context) (Metrics, error) {
+	return sendRequest[Metrics](ctx, "GET", metricsEndpoint, nil)
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer(tracerName).Start(r.Context(), "server.metricsHandler")
+	defer span.End()
 	stats := Metrics{
 		Memory:      memory.Inuse(),
 		Goroutines:  runtime.NumGoroutine(),
@@ -47,9 +51,9 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		stats.UplinkTotal, stats.DownlinkTotal = up, down
 	}
 	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(stats)
-	if err != nil {
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
 
@@ -58,8 +62,8 @@ type state struct {
 }
 
 // GetStatus retrieves the current status of the service.
-func GetStatus() (string, error) {
-	res, err := sendRequest[state]("GET", statusEndpoint, nil)
+func GetStatus(ctx context.Context) (string, error) {
+	res, err := sendRequest[state](ctx, "GET", statusEndpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -68,8 +72,8 @@ func GetStatus() (string, error) {
 
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(state{s.service.Status()})
-	if err != nil {
+	if err := json.NewEncoder(w).Encode(state{s.service.Status()}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
