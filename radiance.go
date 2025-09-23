@@ -114,8 +114,9 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)
+
 	httpClientWithTimeout := k.NewHTTPClient()
-	httpClientWithTimeout.Timeout = (60 * time.Second)
+	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
