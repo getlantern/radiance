@@ -168,14 +168,6 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	default:
 	}
 
-	mutGrpMgr, err := newMutableGroupManager(
-		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
-	)
-	if err != nil {
-		return fmt.Errorf("creating mutable group manager: %w", err)
-	}
-	t.mutGrpMgr = mutGrpMgr
-
 	// create file watcher for server changes
 	svrsPath := filepath.Join(dataPath, common.ServersFileName)
 	svrWatcher := internal.NewFileWatcher(svrsPath, func() {
@@ -232,6 +224,14 @@ func (t *tunnel) connect() (err error) {
 	t.closers = append(t.closers, t.lbService)
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
+
+	mutGrpMgr, err := newMutableGroupManager(
+		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
+	)
+	if err != nil {
+		return fmt.Errorf("creating mutable group manager: %w", err)
+	}
+	t.mutGrpMgr = mutGrpMgr
 
 	if err := t.svrFileWatcher.Start(); err != nil {
 		slog.Error("Failed to start user server file watcher", "error", err)
