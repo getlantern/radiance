@@ -115,9 +115,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		kindling.WithProxyless("api.iantem.io"),
 	)
 
+	httpClientWithTimeout := k.NewHTTPClient()
+	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
+
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(k.NewHTTPClient(), userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(k.NewHTTPClient(), apiHandler, userInfo)
+	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
+	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, apiHandler, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
@@ -127,7 +130,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
-		HTTPClient:   k.NewHTTPClient(),
+		HTTPClient:   httpClientWithTimeout,
 		SvrManager:   svrMgr,
 		User:         userInfo,
 		DataDir:      dataDir,
