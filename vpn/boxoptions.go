@@ -279,20 +279,9 @@ func buildOptions(group, path string) (O.Options, error) {
 	}
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
 
-	// Add auto all outbound if applicable
-	tags := []string{}
-	if len(lanternTags) > 0 {
-		tags = append(tags, autoLanternTag)
-	}
-	if len(userTags) > 0 {
-		tags = append(tags, autoUserTag)
-	}
-	if len(tags) > 0 {
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, tags))
-	} else {
-		slog.Warn("No lantern or user tags found, using placeholder outbound for auto-all")
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(autoAllTag, []string{"block"}))
-	}
+	// Add auto all outbound
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
+
 	slog.Debug("Finished building options")
 	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
 	return opts, nil
@@ -357,19 +346,14 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string) {
-	if len(tags) > 0 {
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags))
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
-		slog.Log(
-			nil, internal.LevelTrace, "Added group outbounds",
-			"serverGroup", serverGroup,
-			"tags", tags,
-			"outbounds", opts.Outbounds[len(opts.Outbounds)-2:],
-		)
-	} else {
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, []string{"block"}))
-		slog.Debug("Using placeholder outbound", "serverGroup", serverGroup)
-	}
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags))
+	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
+	slog.Log(
+		nil, internal.LevelTrace, "Added group outbounds",
+		"serverGroup", serverGroup,
+		"tags", tags,
+		"outbounds", opts.Outbounds[len(opts.Outbounds)-2:],
+	)
 }
 
 func groupAutoTag(group string) string {
