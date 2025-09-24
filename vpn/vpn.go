@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
@@ -233,6 +234,9 @@ func ActiveConnections(ctx context.Context) ([]ipc.Connection, error) {
 	return connections, nil
 }
 
+// Connections returns a list of all connections, both active and recently closed. A non-nil error
+// is only returned if there was an error retrieving the connections, or if the tunnel is closed.
+// If there are no connections and the tunnel is open, an empty slice is returned without an error.
 func Connections(ctx context.Context) ([]ipc.Connection, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "connections")
 	defer span.End()
@@ -241,4 +245,69 @@ func Connections(ctx context.Context) ([]ipc.Connection, error) {
 		return nil, fmt.Errorf("failed to get connections: %w", err)
 	}
 	return connections, nil
+}
+
+// AutoSelections represents the currently active servers for each auto server group.
+type AutoSelections struct {
+	Lantern string
+	User    string
+	AutoAll string
+}
+
+// AutoServerSelections returns the currently active server for each auto server group. If the group
+// is not found or has no active server, "N/A" is returned for that group.
+func AutoServerSelections() (AutoSelections, error) {
+	groups, err := ipc.GetGroups(context.Background())
+	if err != nil {
+		return AutoSelections{}, fmt.Errorf("failed to get groups: %w", err)
+	}
+	selected := func(tag string) string {
+		idx := slices.IndexFunc(groups, func(g ipc.OutboundGroup) bool {
+			return g.Tag == tag
+		})
+		if idx < 0 || groups[idx].Selected == "" {
+			return "N/A"
+		}
+		return groups[idx].Selected
+	}
+	auto := AutoSelections{
+		Lantern: selected(autoLanternTag),
+		User:    selected(autoUserTag),
+	}
+
+	switch all := selected(autoAllTag); all {
+	case autoLanternTag:
+		auto.AutoAll = auto.Lantern
+	case autoUserTag:
+		auto.AutoAll = auto.User
+	default:
+		auto.AutoAll = all
+	}
+	return auto, nil
+}
+
+// AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
+// selection changes until the context is cancelled.
+func AutoSelectionsChangeListener(ctx context.Context, pollInterval time.Duration) <-chan AutoSelections {
+	ch := make(chan AutoSelections, 1)
+	go func() {
+		defer close(ch)
+		var prev AutoSelections
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+				curr, err := AutoServerSelections()
+				if err != nil {
+					continue
+				}
+				if curr != prev {
+					ch <- curr
+					prev = curr
+				}
+			}
+		}
+	}()
+	return ch
 }
