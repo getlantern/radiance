@@ -17,6 +17,8 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	sbx "github.com/getlantern/sing-box-extensions"
+	sbxconstant "github.com/getlantern/sing-box-extensions/constant"
+	sbxoption "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/config"
@@ -385,9 +387,9 @@ func groupAutoTag(group string) string {
 
 func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: C.TypeURLTest,
+		Type: sbxconstant.TypeMutableURLTest,
 		Tag:  tag,
-		Options: &O.URLTestOutboundOptions{
+		Options: &sbxoption.MutableURLTestOutboundOptions{
 			Outbounds:   outbounds,
 			URL:         "http://connectivitycheck.gstatic.com/generate_204",
 			Interval:    badoption.Duration(urlTestInterval),
@@ -398,9 +400,9 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 
 func selectorOutbound(group string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: C.TypeSelector,
+		Type: sbxconstant.TypeMutableSelector,
 		Tag:  group,
-		Options: &O.SelectorOutboundOptions{
+		Options: &sbxoption.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
 		},
 	}

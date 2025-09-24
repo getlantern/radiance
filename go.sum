@@ -219,10 +219,10 @@ github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNi
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534/go.mod h1:ZsLfOY6gKQOTyEcPYNA9ws5/XHZQFroxqCOhHjGcs9Y=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175 h1:JWH5BB2o0eAeGs0tZnFPpQGx+nMIo/WmxKnj2hnGjgE=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175/go.mod h1:h3S9LBmmzN/xM+lwYZHE4abzTtCTtidKtG+nxZcCZX0=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250903223913-8a773ac96b4d h1:i7vlBFlvw8T64oISHyiu0tSvRC+42zpcBsgLaeQMCdg=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250903223913-8a773ac96b4d/go.mod h1:wcEF5dUGe/B1DxGOlGHwvdyjsn2BMaNdFtMjX7Vq9L4=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250912211228-f05099d8db0a h1:mObxMGwTfXl6CYmIiq+XTm2yKvO+0zy5Khn0XQeT8Kw=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250912211228-f05099d8db0a/go.mod h1:wcEF5dUGe/B1DxGOlGHwvdyjsn2BMaNdFtMjX7Vq9L4=
+github.com/getlantern/sing-box-extensions v0.0.6-0.20250923223733-8f19ba53814a h1:08bIHYiBBeVs+iRQ4C366Wi9W+z9DBBf1bQY42Q5iAE=
+github.com/getlantern/sing-box-extensions v0.0.6-0.20250923223733-8f19ba53814a/go.mod h1:wcEF5dUGe/B1DxGOlGHwvdyjsn2BMaNdFtMjX7Vq9L4=
+github.com/getlantern/sing-box-extensions v0.0.6-0.20250924005126-1a029f0332ea h1:bLv/V7RJmuvKwEis+LxU+SjYGUmX786t0P8GG1+rdd4=
+github.com/getlantern/sing-box-extensions v0.0.6-0.20250924005126-1a029f0332ea/go.mod h1:wcEF5dUGe/B1DxGOlGHwvdyjsn2BMaNdFtMjX7Vq9L4=
 github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a h1:aiM0ypjXIjdSiLevb14hNnVmWA9eXRDqpzdHhbxkzzY=
 github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a/go.mod h1:UMwVTK6uaUZ9WV+TM2fGuLpeQphysQ5dwK2r/Wp4xBE=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
