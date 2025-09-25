@@ -44,7 +44,7 @@
 		},
 		{
 			"type": "mutableurltest",
-			"tag": "auto-lantern",
+			"tag": "auto-http",
 			"outbounds": [
 				"http1-out",
 				"http2-out"
@@ -52,7 +52,7 @@
 		},
 		{
 			"type": "mutableurltest",
-			"tag": "auto-user",
+			"tag": "auto-socks",
 			"outbounds": [
 				"socks1-out",
 				"socks2-out"
@@ -60,18 +60,18 @@
 		},
 		{
 			"type": "mutableselector",
-			"tag": "lantern",
+			"tag": "http",
 			"outbounds": [
-				"auto-lantern",
+				"auto-http",
 				"http1-out",
 				"http2-out"
 			]
 		},
 		{
 			"type": "mutableselector",
-			"tag": "user",
+			"tag": "socks",
 			"outbounds": [
-				"auto-user",
+				"auto-socks",
 				"socks1-out",
 				"socks2-out"
 			]
@@ -80,8 +80,8 @@
 			"type": "mutableurltest",
 			"tag": "auto-all",
 			"outbounds": [
-				"auto-lantern",
-				"auto-user"
+				"auto-http",
+				"auto-socks"
 			]
 		}
 	],
@@ -92,12 +92,12 @@
 				"outbound": "direct"
 			},
 			{
-				"clash_mode": "lantern",
-				"outbound": "lantern"
+				"clash_mode": "http",
+				"outbound": "http"
 			},
 			{
-				"clash_mode": "user",
-				"outbound": "user"
+				"clash_mode": "socks",
+				"outbound": "socks"
 			}
 		]
 	},
