@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"runtime"
 
@@ -64,6 +65,9 @@ type state struct {
 // GetStatus retrieves the current status of the service.
 func GetStatus(ctx context.Context) (string, error) {
 	res, err := sendRequest[state](ctx, "GET", statusEndpoint, nil)
+	if errors.Is(err, ErrServiceIsNotRunning) || errors.Is(err, ErrServiceIsNotReady) {
+		return StatusClosed, nil
+	}
 	if err != nil {
 		return "", err
 	}

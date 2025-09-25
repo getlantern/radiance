@@ -1,6 +1,9 @@
 package common
 
-import "runtime"
+import (
+	"runtime"
+	"time"
+)
 
 const (
 	Name = "lantern"
@@ -12,7 +15,8 @@ const (
 	Platform = runtime.GOOS
 
 	// filenames
-	LogFileName     = "lantern.log"
-	ConfigFileName  = "config.json"
-	ServersFileName = "servers.json"
+	LogFileName        = "lantern.log"
+	ConfigFileName     = "config.json"
+	ServersFileName    = "servers.json"
+	DefaultHTTPTimeout = (60 * time.Second)
 )

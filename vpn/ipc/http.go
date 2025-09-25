@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -40,6 +43,10 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if strings.Contains(err.Error(), "no such file or directory") &&
+			!slog.Default().Enabled(context.Background(), internal.LevelTrace) {
+			err = ErrServiceIsNotRunning
+		}
 		return res, traces.RecordError(ctx, fmt.Errorf("request failed: %w", err))
 	}
 	defer resp.Body.Close()
