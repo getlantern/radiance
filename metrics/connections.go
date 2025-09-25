@@ -2,14 +2,14 @@ package metrics
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 
-	"github.com/getlantern/radiance/vpn/ipc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 // HarvestConnectionMetrics periodically polls the number of active connections and their total
@@ -44,11 +44,15 @@ func HarvestConnectionMetrics(pollInterval time.Duration) func() {
 				return
 			case <-ticker.C:
 				slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
+				vpnStatus, err := ipc.GetStatus(ctx)
+				if err != nil {
+					slog.Warn("failed to get service status", "error", err)
+				}
+				if vpnStatus != ipc.StatusRunning {
+					continue
+				}
 				conns, err := ipc.GetConnections(ctx)
 				if err != nil {
-					if errors.Is(err, ipc.ErrServiceIsNotReady) {
-						continue
-					}
 					slog.Warn("failed to retrieve connections", slog.Any("error", err))
 					continue
 				}

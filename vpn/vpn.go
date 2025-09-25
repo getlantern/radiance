@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -113,7 +112,7 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 // Note, this does not check if the tunnel can connect to a server.
 func isOpen(ctx context.Context) bool {
 	state, err := ipc.GetStatus(ctx)
-	if err != nil && !strings.Contains(err.Error(), "no such file") {
+	if err != nil {
 		slog.Warn("Failed to get tunnel state", "error", err)
 	}
 	return state == ipc.StatusRunning

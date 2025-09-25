@@ -5,6 +5,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 	"github.com/sagernet/sing-box/experimental/clashapi"
 
 	"github.com/getlantern/radiance/traces"
+)
+
+var (
+	ErrServiceIsNotReady   = errors.New("service is not ready")
+	ErrServiceIsNotRunning = errors.New("service is not running")
 )
 
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
@@ -117,5 +123,3 @@ type closedService struct {
 
 func (s *closedService) Status() string { return StatusClosed }
 func (s *closedService) Close() error   { return nil }
-
-var ErrServiceIsNotReady = fmt.Errorf("service is not ready")
