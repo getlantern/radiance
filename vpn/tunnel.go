@@ -340,9 +340,6 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 }
 
 func (t *tunnel) updateServers(new servers.Servers) (err error) {
-	new = removeDuplicates(t.optsMap, new)
-	slog.Log(nil, internal.LevelTrace, "Deduplicated server options", "options", new)
-
 	var errs []error
 	for _, group := range []string{servers.SGLantern, servers.SGUser} {
 		err := t.updateGroup(group, new[group])
@@ -356,6 +353,10 @@ func (t *tunnel) updateServers(new servers.Servers) (err error) {
 }
 
 func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
+	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
+		slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
+		return nil
+	}
 	slog.Log(nil, internal.LevelTrace, "Updating servers", "group", group)
 
 	mutGrpMgr := t.mutGrpMgr
@@ -393,6 +394,11 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 
 	// for each outbound/endpoint in current not in new, remove from group
 	for _, tag := range selector.All() {
+		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
+			if _, isMutGroup := out.(sbxadapter.MutableOutboundGroup); isMutGroup {
+				continue // skip nested urltests
+			}
+		}
 		if !slices.Contains(newTags, tag) {
 			// remove from selector
 			err := mutGrpMgr.RemoveFromGroup(group, tag)
@@ -411,6 +417,9 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 			}
 		}
 	}
+
+	// remove duplicates from newOpts before adding to avoid unnecessary reloads
+	newOpts = removeDuplicates(t.optsMap, newOpts, group)
 
 	// for each outbound/endpoint in new add to group
 	for _, outbound := range newOpts.Outbounds {
@@ -461,34 +470,37 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 	return errors.Join(errs...)
 }
 
-func removeDuplicates(curr map[string][]byte, new servers.Servers) servers.Servers {
-	deduped := servers.Servers{}
+func removeDuplicates(curr map[string][]byte, new servers.Options, group string) servers.Options {
+	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
 	ctx := sbx.BoxContext()
-	for group, opts := range new {
-		diffOpts := servers.Options{
-			Outbounds: []O.Outbound{},
-			Endpoints: []O.Endpoint{},
-			Locations: map[string]lcommon.ServerLocation{},
-		}
-		for _, out := range opts.Outbounds {
-			if currOpts, exists := curr[out.Tag]; exists {
-				if outBytes, _ := json.MarshalContext(ctx, out); bytes.Equal(currOpts, outBytes) {
-					continue
-				}
+	deduped := servers.Options{
+		Outbounds: []O.Outbound{},
+		Endpoints: []O.Endpoint{},
+		Locations: map[string]lcommon.ServerLocation{},
+	}
+	var dropped []string
+	for _, out := range new.Outbounds {
+		if currOpts, exists := curr[out.Tag]; exists {
+			if outBytes, _ := json.MarshalContext(ctx, out); bytes.Equal(currOpts, outBytes) {
+				dropped = append(dropped, out.Tag)
+				continue
 			}
-			diffOpts.Outbounds = append(diffOpts.Outbounds, out)
-			diffOpts.Locations[out.Tag] = opts.Locations[out.Tag]
 		}
-		for _, ep := range opts.Endpoints {
-			if currOpts, exists := curr[ep.Tag]; exists {
-				if epBytes, _ := json.MarshalContext(ctx, ep); bytes.Equal(currOpts, epBytes) {
-					continue
-				}
+		deduped.Outbounds = append(deduped.Outbounds, out)
+		deduped.Locations[out.Tag] = new.Locations[out.Tag]
+	}
+	for _, ep := range new.Endpoints {
+		if currOpts, exists := curr[ep.Tag]; exists {
+			if epBytes, _ := json.MarshalContext(ctx, ep); bytes.Equal(currOpts, epBytes) {
+				dropped = append(dropped, ep.Tag)
+				continue
 			}
-			diffOpts.Endpoints = append(diffOpts.Endpoints, ep)
-			diffOpts.Locations[ep.Tag] = opts.Locations[ep.Tag]
 		}
-		deduped[group] = diffOpts
+		deduped.Endpoints = append(deduped.Endpoints, ep)
+		deduped.Locations[ep.Tag] = new.Locations[ep.Tag]
+	}
+	if len(dropped) > 0 {
+		slog.Log(nil, internal.LevelDebug, "Dropped duplicate outbounds/endpoints", "group", group, "tags", dropped)
 	}
 	return deduped
 }
