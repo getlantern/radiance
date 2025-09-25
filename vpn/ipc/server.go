@@ -10,9 +10,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/getlantern/radiance/traces"
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
+
+	"github.com/getlantern/radiance/traces"
 )
 
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
@@ -91,14 +92,20 @@ func CloseService(ctx context.Context) error {
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	service := s.service
 	s.service = &closedService{}
-	defer func() {
-		go traces.RecordError(r.Context(), s.Close())
-	}()
 	if err := service.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	go func() {
+		if err := s.Close(); err != nil {
+			traces.RecordError(context.Background(), err)
+		}
+	}()
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the
