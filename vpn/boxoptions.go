@@ -210,9 +210,7 @@ func baseOpts() O.Options {
 	}
 }
 
-// buildOptions builds the box options using the config options and user servers. URLTest outbounds
-// will only be added if mode is set to [autoLantern], [autoUser], or [autoAll], and only for the
-// respective group.
+// buildOptions builds the box options using the config options and user servers.
 func buildOptions(group, path string) (O.Options, error) {
 	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
 	opts := baseOpts()
