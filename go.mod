@@ -14,7 +14,7 @@ replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero
 
 //replace github.com/getlantern/common => ../common
 
-//replace github.com/getlantern/sing-box-extensions => ../sing-box-extensions
+// replace github.com/getlantern/sing-box-extensions => ../sing-box-extensions
 
 require (
 	github.com/1Password/srp v0.2.0
@@ -23,7 +23,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20250711182004-51a659011c7a
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
-	github.com/getlantern/sing-box-extensions v0.0.6-0.20250924180544-b7ae5952ed67
+	github.com/getlantern/sing-box-extensions v0.0.6-0.20250925221018-0ad75329374b
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0

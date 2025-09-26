@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,12 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	lcommon "github.com/getlantern/common"
+
 	sbx "github.com/getlantern/sing-box-extensions"
+	sbxadapter "github.com/getlantern/sing-box-extensions/adapter"
+	"github.com/getlantern/sing-box-extensions/adapter/groups"
 	sbxlog "github.com/getlantern/sing-box-extensions/log"
 
 	"github.com/getlantern/radiance/common"
@@ -23,7 +27,6 @@ import (
 	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
-	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -49,6 +52,9 @@ type tunnel struct {
 
 	svrFileWatcher *internal.FileWatcher
 	reloadAccess   sync.Mutex
+	// optsMap is a map of current outbound/endpoint options JSON, used to deduplicate on reload
+	optsMap   map[string][]byte
+	mutGrpMgr *groups.MutableGroupManager
 
 	status  atomic.Value
 	cancel  context.CancelFunc
@@ -106,6 +112,8 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		t.Close()
 		return err
 	}
+	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
+
 	tInstance = t
 	t.status.Store(ipc.StatusRunning)
 	return nil
@@ -179,6 +187,26 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	return nil
 }
 
+func newMutableGroupManager(
+	ctx context.Context,
+	logger sblog.ContextLogger,
+	connMgr groups.ConnectionManager,
+) (*groups.MutableGroupManager, error) {
+	oMgr := service.FromContext[adapter.OutboundManager](ctx)
+	epMgr := service.FromContext[adapter.EndpointManager](ctx)
+	if oMgr == nil || epMgr == nil {
+		return nil, fmt.Errorf("outbound or endpoint manager not found in context")
+	}
+
+	var mutGroups []sbxadapter.MutableOutboundGroup
+	for _, out := range oMgr.Outbounds() {
+		if g, isMutGroup := out.(sbxadapter.MutableOutboundGroup); isMutGroup {
+			mutGroups = append(mutGroups, g)
+		}
+	}
+	return groups.NewMutableGroupManager(logger, oMgr, epMgr, connMgr, mutGroups), nil
+}
+
 func (t *tunnel) connect() (err error) {
 	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
 
@@ -196,6 +224,14 @@ func (t *tunnel) connect() (err error) {
 	t.closers = append(t.closers, t.lbService)
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
+
+	mutGrpMgr, err := newMutableGroupManager(
+		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
+	)
+	if err != nil {
+		return fmt.Errorf("creating mutable group manager: %w", err)
+	}
+	t.mutGrpMgr = mutGrpMgr
 
 	if err := t.svrFileWatcher.Start(); err != nil {
 		slog.Error("Failed to start user server file watcher", "error", err)
@@ -303,213 +339,181 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	return nil
 }
 
-func (t *tunnel) updateServers(svrs servers.Servers) (err error) {
-	slog.Log(nil, internal.LevelTrace, "Updating servers")
-	ctx := t.ctx
-	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
-	endpointMgr := service.FromContext[adapter.EndpointManager](ctx)
-	getSelector := func(group string) ipc.Selector {
-		out, found := outboundMgr.Outbound(group)
-		if !found {
-			// Yes, panic. And, yes, it's intentional. The group outbound should always exist if the tunnel
-			// is running, so this is a "world no longer makes sense" situation. This should be caught
-			// during testing and will not panic in release builds.
-			slog.Log(ctx, internal.LevelPanic, "selector group missing", "group", group)
-			panic(fmt.Errorf("selector group %q missing", group))
+func (t *tunnel) updateServers(new servers.Servers) (err error) {
+	var errs []error
+	for _, group := range []string{servers.SGLantern, servers.SGUser} {
+		err := t.updateGroup(group, new[group])
+		if errors.Is(err, errLibboxClosed) {
+			return err
 		}
-		return out.(ipc.Selector)
+		errs = append(errs, err)
 	}
-	defer func() {
-		// the managers will panic with "invalid .* index" if the libbox service is closed when
-		// calling Remove or Create. This isn't the best way to determine if the service is closed,
-		// but it's the only way to handle this without modifying sing-box.
-		if r := recover(); r != nil {
-			if v, ok := r.(string); ok && strings.HasPrefix(v, "invalid") && strings.HasSuffix(v, "index") {
-				err = errLibboxClosed
-			} else {
-				t.Close()
-				panic(r) // re-panic if it's not the expected panic
-			}
-		}
-	}()
+
+	return errors.Join(errs...)
+}
+
+func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
+	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
+		slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
+		return nil
+	}
+	slog.Log(nil, internal.LevelTrace, "Updating servers", "group", group)
+
+	mutGrpMgr := t.mutGrpMgr
+	ctx := t.ctx
+	router := service.FromContext[adapter.Router](ctx)
+
+	autoTag := groupAutoTag(group)
+	selector, selectorExists := mutGrpMgr.OutboundGroup(group)
+	_, urltestExists := mutGrpMgr.OutboundGroup(autoTag)
+	if !selectorExists || !urltestExists {
+		// Yes, panic. And, yes, it's intentional. Both selector and URLtest should always exist
+		// if the tunnel is running, so this is a "world no longer makes sense" situation. This
+		// should be caught during testing and will not panic in release builds.
+		slog.Log(
+			nil, internal.LevelPanic, "selector or urltest group missing", "group", group,
+			"selector_exists", selectorExists, "urltest_exists", urltestExists,
+		)
+		panic(fmt.Errorf(
+			"selector or urltest group missing for %q. selector_exists=%v, urltest_exists=%v",
+			group, selectorExists, urltestExists,
+		))
+	}
 
 	var (
-		toRemove   []string
-		hasLantern bool
-		hasUser    bool
-		creator    = &outCreator{
-			ctx:        ctx,
-			router:     service.FromContext[adapter.Router](ctx),
-			logFactory: t.logFactory,
-			errs:       make([]error, 0),
-		}
+		removed = 0
+		added   = 0
+		errs    []error
+
+		newTags = newOpts.AllTags()
 	)
-	for _, group := range []string{servers.SGLantern, servers.SGUser} {
-		sopts := svrs[group]
-		newTags := sopts.AllTags()
 
-		slog.Log(nil, internal.LevelTrace, "Processing group", "group", group, "new_tags", newTags)
-		switch group {
-		case servers.SGLantern:
-			hasLantern = len(newTags) > 0
-		case servers.SGUser:
-			hasUser = len(newTags) > 0
-		}
-
-		// determine which tags need to be removed
-		groupTags := getSelector(group).All()
-		tagsToRemove := make([]string, 0, len(groupTags))
-		for _, tag := range groupTags {
-			if !slices.Contains(newTags, tag) {
-				tagsToRemove = append(tagsToRemove, tag)
-			}
-		}
-		toRemove = slices.Concat(toRemove, tagsToRemove)
-		slog.Log(nil, internal.LevelTrace, "Tags to remove", "group", group, "tags", tagsToRemove)
-
-		creator.group = group
-		creator.succeededTags = make([]string, 0, len(newTags)+1)
-
-		// create/update endpoints and outbounds
-		creator.createEndpoints(endpointMgr, sopts.Endpoints)
-		creator.createOutbounds(outboundMgr, sopts.Outbounds)
-
-		if contextDone(ctx) {
-			return ctx.Err() // tunnel is closing, stop processing
-		}
-
-		// create/update urltest and selector for group with the succeeded tags
-		slog.Log(nil, internal.LevelTrace, "Creating group outbounds", "group", group,
-			"tags", creator.succeededTags,
-		)
-		autoGroup := groupAutoTag(group)
-		opts := urlTestOutbound(autoGroup, creator.succeededTags).Options
-		creator.createNew(autoGroup, C.TypeURLTest, opts)
-
-		tags := append(creator.succeededTags, autoGroup)
-		opts = selectorOutbound(group, tags).Options
-		creator.createNew(group, C.TypeSelector, opts)
-
-		if contextDone(ctx) {
-			return ctx.Err() // tunnel is closing, stop processing
-		}
-	}
-
-	// we have to remove endpoints and outbounds last, otherwise the managers will return an error
-	// because the group outbound is dependent on them.
-	for _, tag := range toRemove {
-		if contextDone(ctx) {
-			return ctx.Err() // tunnel is closing, stop processing
-		}
-		if _, exists := endpointMgr.Get(tag); exists {
-			if err := endpointMgr.Remove(tag); err != nil {
-				slog.Error("Failed to remove endpoint", "tag", tag, "error", err)
-			}
-		} else if _, exists := outboundMgr.Outbound(tag); exists {
-			if err := outboundMgr.Remove(tag); err != nil {
-				slog.Error("Failed to remove outbound", "tag", tag, "error", err)
-			}
-		}
-	}
-
-	out, found := outboundMgr.Outbound(autoAllTag)
-	if !found {
-		// see above comment about panic
-		slog.Log(nil, internal.LevelPanic, "auto outbound missing", "group", autoAllTag)
-		panic(fmt.Errorf("auto outbound %q missing", autoAllTag))
-	}
 	if contextDone(ctx) {
-		return ctx.Err() // tunnel is closing, stop processing
-	}
-	creator.mgr = outboundMgr
-	creator.typ = "outbound"
-	updateAuto(creator, out.(adapter.OutboundGroup), hasLantern, hasUser)
-	return errors.Join(creator.errs...)
-}
-
-func updateAuto(creator *outCreator, auto adapter.OutboundGroup, hasLantern, hasUser bool) {
-	slog.Log(nil, internal.LevelTrace, "Updating auto all", "has_lantern", hasLantern, "has_user", hasUser)
-	_, isPlaceholder := auto.(ipc.Selector)
-	shouldBePlaceholder := !(hasLantern && hasUser)
-	if (isPlaceholder && shouldBePlaceholder) || (len(auto.All()) == 2 && !shouldBePlaceholder) {
-		slog.Log(nil, internal.LevelTrace, "No update needed for auto all")
-		return // nothing to do
-	}
-	if !isPlaceholder && shouldBePlaceholder {
-		// create a placeholder
-		slog.Log(nil, internal.LevelTrace, "Creating placeholder for auto all")
-		creator.createNew(autoAllTag, C.TypeSelector, selectorOutbound(autoAllTag, []string{"block"}).Options)
-		return
+		return ctx.Err()
 	}
 
-	// otherwise, we need to update the auto outbound with the appropriate tags
-	var tags []string
-	if hasLantern {
-		tags = append(tags, autoLanternTag)
-	}
-	if hasUser {
-		tags = append(tags, autoUserTag)
-	}
-	if creator.createNew(autoAllTag, C.TypeURLTest, urlTestOutbound(autoAllTag, tags).Options) {
-		slog.Log(nil, internal.LevelTrace, "Updated auto all", "tags", tags)
-	}
-}
-
-// outCreator is a one-off struct for creating outbounds or endpoints.
-type outCreator struct {
-	mgr interface {
-		Create(context.Context, adapter.Router, sblog.ContextLogger, string, string, any) error
-	}
-	typ        string
-	ctx        context.Context
-	router     adapter.Router
-	logFactory sblog.ObservableFactory
-	group      string
-
-	succeededTags []string
-	errs          []error
-}
-
-func (o *outCreator) createEndpoints(mgr adapter.EndpointManager, endpoints []O.Endpoint) {
-	o.mgr = mgr
-	o.typ = "endpoint"
-	for _, opts := range endpoints {
-		if !o.createNew(opts.Tag, opts.Type, opts.Options) && errors.Is(o.ctx.Err(), context.Canceled) {
-			return // context is done, stop processing
+	// for each outbound/endpoint in current not in new, remove from group
+	for _, tag := range selector.All() {
+		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
+			if _, isMutGroup := out.(sbxadapter.MutableOutboundGroup); isMutGroup {
+				continue // skip nested urltests
+			}
+		}
+		if !slices.Contains(newTags, tag) {
+			// remove from selector
+			err := mutGrpMgr.RemoveFromGroup(group, tag)
+			if err == nil {
+				// remove from urltest
+				err = mutGrpMgr.RemoveFromGroup(autoTag, tag)
+			}
+			if errors.Is(err, groups.ErrIsClosed) {
+				return errLibboxClosed
+			}
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				delete(t.optsMap, tag)
+				removed++
+			}
 		}
 	}
-}
 
-func (o *outCreator) createOutbounds(mgr adapter.OutboundManager, outbounds []O.Outbound) {
-	o.mgr = mgr
-	o.typ = "outbound"
-	for _, opts := range outbounds {
-		if !o.createNew(opts.Tag, opts.Type, opts.Options) && errors.Is(o.ctx.Err(), context.Canceled) {
-			return // context is done, stop processing
-		}
-	}
-}
+	// remove duplicates from newOpts before adding to avoid unnecessary reloads
+	newOpts = removeDuplicates(t.optsMap, newOpts, group)
 
-func (o *outCreator) createNew(tag, typ string, opts any) bool {
-	if contextDone(o.ctx) {
-		slog.Log(nil, internal.LevelTrace, "Context done, aborting create", "type", o.typ, "group", o.group, "tag", tag, "outbound_type", typ)
-		return false
-	}
-
-	log := o.logFactory.NewLogger(o.typ + "/" + tag + "[" + typ + "]")
-	err := o.mgr.Create(o.ctx, o.router, log, tag, typ, opts)
-	if err != nil {
-		slog.Error(
-			"failed to create "+o.typ,
-			"group", o.group, "tag", tag,
-			"type", typ, "error", err,
+	// for each outbound/endpoint in new add to group
+	for _, outbound := range newOpts.Outbounds {
+		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
+		err := mutGrpMgr.CreateOutboundForGroup(
+			ctx, router, logger, group, outbound.Tag, outbound.Type, outbound.Options,
 		)
-		o.errs = append(o.errs, fmt.Errorf("create %s %q: %w", o.typ, tag, err))
-		return false
+		if err == nil {
+			// add to urltest
+			err = mutGrpMgr.AddToGroup(autoTag, outbound.Tag)
+		}
+		if errors.Is(err, groups.ErrIsClosed) {
+			return errLibboxClosed
+		}
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			t.optsMap[outbound.Tag], _ = json.MarshalContext(ctx, outbound)
+			added++
+		}
 	}
-	slog.Debug("created "+o.typ, "group", o.group, "tag", tag, "type", typ)
-	o.succeededTags = append(o.succeededTags, tag)
-	return true
+
+	if contextDone(ctx) {
+		return ctx.Err()
+	}
+
+	for _, endpoint := range newOpts.Endpoints {
+		logger := t.logFactory.NewLogger("endpoint/" + endpoint.Tag + "[" + endpoint.Type + "]")
+		err := mutGrpMgr.CreateEndpointForGroup(
+			ctx, router, logger, group, endpoint.Tag, endpoint.Type, endpoint.Options,
+		)
+		if err == nil {
+			// add to urltest
+			err = mutGrpMgr.AddToGroup(autoTag, endpoint.Tag)
+		}
+		if errors.Is(err, groups.ErrIsClosed) {
+			return errLibboxClosed
+		}
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			t.optsMap[endpoint.Tag], _ = json.MarshalContext(ctx, endpoint)
+			added++
+		}
+	}
+
+	slog.Debug("Updated servers in group", "group", group, "added", added, "removed", removed)
+	return errors.Join(errs...)
+}
+
+func removeDuplicates(curr map[string][]byte, new servers.Options, group string) servers.Options {
+	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
+	ctx := sbx.BoxContext()
+	deduped := servers.Options{
+		Outbounds: []O.Outbound{},
+		Endpoints: []O.Endpoint{},
+		Locations: map[string]lcommon.ServerLocation{},
+	}
+	var dropped []string
+	for _, out := range new.Outbounds {
+		if currOpts, exists := curr[out.Tag]; exists {
+			if outBytes, _ := json.MarshalContext(ctx, out); bytes.Equal(currOpts, outBytes) {
+				dropped = append(dropped, out.Tag)
+				continue
+			}
+		}
+		deduped.Outbounds = append(deduped.Outbounds, out)
+		deduped.Locations[out.Tag] = new.Locations[out.Tag]
+	}
+	for _, ep := range new.Endpoints {
+		if currOpts, exists := curr[ep.Tag]; exists {
+			if epBytes, _ := json.MarshalContext(ctx, ep); bytes.Equal(currOpts, epBytes) {
+				dropped = append(dropped, ep.Tag)
+				continue
+			}
+		}
+		deduped.Endpoints = append(deduped.Endpoints, ep)
+		deduped.Locations[ep.Tag] = new.Locations[ep.Tag]
+	}
+	if len(dropped) > 0 {
+		slog.Log(nil, internal.LevelDebug, "Dropped duplicate outbounds/endpoints", "group", group, "tags", dropped)
+	}
+	return deduped
+}
+
+func makeOutboundOptsMap(ctx context.Context, outbounds []O.Outbound, endpoints []O.Endpoint) map[string][]byte {
+	optsMap := make(map[string][]byte)
+	for _, out := range outbounds {
+		optsMap[out.Tag], _ = json.MarshalContext(ctx, out)
+	}
+	for _, ep := range endpoints {
+		optsMap[ep.Tag], _ = json.MarshalContext(ctx, ep)
+	}
+	return optsMap
 }
 
 func contextDone(ctx context.Context) bool {

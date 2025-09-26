@@ -17,6 +17,8 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	sbx "github.com/getlantern/sing-box-extensions"
+	sbxconstant "github.com/getlantern/sing-box-extensions/constant"
+	sbxoption "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/config"
@@ -208,9 +210,7 @@ func baseOpts() O.Options {
 	}
 }
 
-// buildOptions builds the box options using the config options and user servers. URLTest outbounds
-// will only be added if mode is set to [autoLantern], [autoUser], or [autoAll], and only for the
-// respective group.
+// buildOptions builds the box options using the config options and user servers.
 func buildOptions(group, path string) (O.Options, error) {
 	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
 	opts := baseOpts()
@@ -277,20 +277,9 @@ func buildOptions(group, path string) (O.Options, error) {
 	}
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
 
-	// Add auto all outbound if applicable
-	tags := []string{}
-	if len(lanternTags) > 0 {
-		tags = append(tags, autoLanternTag)
-	}
-	if len(userTags) > 0 {
-		tags = append(tags, autoUserTag)
-	}
-	if len(tags) > 0 {
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, tags))
-	} else {
-		slog.Warn("No lantern or user tags found, using placeholder outbound for auto-all")
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(autoAllTag, []string{"block"}))
-	}
+	// Add auto all outbound
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
+
 	slog.Debug("Finished building options")
 	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
 	return opts, nil
@@ -355,19 +344,14 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string) {
-	if len(tags) > 0 {
-		opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags))
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
-		slog.Log(
-			nil, internal.LevelTrace, "Added group outbounds",
-			"serverGroup", serverGroup,
-			"tags", tags,
-			"outbounds", opts.Outbounds[len(opts.Outbounds)-2:],
-		)
-	} else {
-		opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, []string{"block"}))
-		slog.Debug("Using placeholder outbound", "serverGroup", serverGroup)
-	}
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags))
+	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
+	slog.Log(
+		nil, internal.LevelTrace, "Added group outbounds",
+		"serverGroup", serverGroup,
+		"tags", tags,
+		"outbounds", opts.Outbounds[len(opts.Outbounds)-2:],
+	)
 }
 
 func groupAutoTag(group string) string {
@@ -385,9 +369,9 @@ func groupAutoTag(group string) string {
 
 func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: C.TypeURLTest,
+		Type: sbxconstant.TypeMutableURLTest,
 		Tag:  tag,
-		Options: &O.URLTestOutboundOptions{
+		Options: &sbxoption.MutableURLTestOutboundOptions{
 			Outbounds:   outbounds,
 			URL:         "http://connectivitycheck.gstatic.com/generate_204",
 			Interval:    badoption.Duration(urlTestInterval),
@@ -398,9 +382,9 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 
 func selectorOutbound(group string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: C.TypeSelector,
+		Type: sbxconstant.TypeMutableSelector,
 		Tag:  group,
-		Options: &O.SelectorOutboundOptions{
+		Options: &sbxoption.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
 		},
 	}

@@ -1,18 +1,22 @@
 package vpn
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
+	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	LC "github.com/getlantern/common"
 	sbx "github.com/getlantern/sing-box-extensions"
+	sbxO "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/config"
@@ -20,121 +24,116 @@ import (
 )
 
 func TestBuildOptions(t *testing.T) {
-	httpTags, httpOutbounds := getTestOutbounds(t, constant.TypeHTTP)
-	socksTags, socksOutbounds := getTestOutbounds(t, constant.TypeSOCKS)
+	testOpts, _, err := testBoxOptions("")
+	require.NoError(t, err, "get test box options")
+	lanternTags, lanternOuts := filterOutbounds(*testOpts, constant.TypeHTTP)
+	userTags, userOuts := filterOutbounds(*testOpts, constant.TypeSOCKS)
 	cfg := config.Config{
 		ConfigResponse: LC.ConfigResponse{
-			Options: option.Options{
-				Outbounds: httpOutbounds,
+			Options: O.Options{
+				Outbounds: lanternOuts,
 			},
 		},
 	}
 	svrs := servers.Servers{
 		servers.SGUser: servers.Options{
-			Outbounds: socksOutbounds,
+			Outbounds: userOuts,
 		},
 	}
-	httpAllOutbounds := append(
-		httpOutbounds,
-		urlTestOutbound(autoLanternTag, httpTags),
-		selectorOutbound(servers.SGLantern, append([]string{autoLanternTag}, httpTags...)),
-	)
-	socksAllOutbounds := append(
-		socksOutbounds,
-		urlTestOutbound(autoUserTag, socksTags),
-		selectorOutbound(servers.SGUser, append([]string{autoUserTag}, socksTags...)),
-	)
-	collectTags := func(outbounds []option.Outbound) []string {
-		tags := make([]string, 0, len(outbounds))
-		for _, o := range outbounds {
-			tags = append(tags, o.Tag)
-		}
-		return tags
-	}
-	httpTags = collectTags(httpAllOutbounds)
-	socksTags = collectTags(socksAllOutbounds)
-
 	tests := []struct {
-		name    string
-		hasCfg  bool
-		hasSvrs bool
-		want    []string
-		assert  func(*testing.T, []option.Outbound)
+		name        string
+		lanternTags []string
+		userTags    []string
 	}{
 		{
-			name:   "config without user servers",
-			hasCfg: true,
-			want: append(
-				httpTags,
-				selectorOutbound(servers.SGUser, []string{"block"}).Tag,
-				urlTestOutbound(autoAllTag, httpTags).Tag,
-			),
+			name:        "config without user servers",
+			lanternTags: lanternTags,
 		},
 		{
-			name:    "user servers without config",
-			hasSvrs: true,
-			want: append(
-				socksTags,
-				selectorOutbound(servers.SGLantern, []string{"block"}).Tag,
-				urlTestOutbound(autoAllTag, socksTags).Tag,
-			),
+			name:     "user servers without config",
+			userTags: userTags,
 		},
 		{
-			name:    "config and user servers",
-			hasCfg:  true,
-			hasSvrs: true,
-			want: append(
-				append(httpTags, socksTags...),
-				urlTestOutbound(autoAllTag, append(httpTags, socksTags...)).Tag,
-			),
+			name:        "config and user servers",
+			lanternTags: lanternTags,
+			userTags:    userTags,
 		},
 		{
 			name: "neither config nor user servers",
-			want: []string{
-				selectorOutbound(servers.SGLantern, []string{"block"}).Tag,
-				selectorOutbound(servers.SGUser, []string{"block"}).Tag,
-				urlTestOutbound(autoAllTag, []string{"block"}).Tag,
-			},
 		},
+	}
+	hasGroupWithTags := func(t *testing.T, outs []O.Outbound, group string, tags []string) {
+		out := findOutbound(outs, group)
+		if !assert.NotNilf(t, out, "group %s not found", group) {
+			return
+		}
+		switch opts := out.Options.(type) {
+		case *sbxO.MutableSelectorOutboundOptions:
+			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
+		case *O.SelectorOutboundOptions:
+			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
+		case *sbxO.MutableURLTestOutboundOptions:
+			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
+		case *O.URLTestOutboundOptions:
+			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
+		default:
+			assert.Failf(t, fmt.Sprintf("%s[%T] is not a group outbound", group, opts), "")
+		}
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := t.TempDir()
-			if tt.hasCfg {
+			if len(tt.lanternTags) > 0 {
 				testOptsToFile(t, cfg, filepath.Join(path, common.ConfigFileName))
 			}
-			if tt.hasSvrs {
+			if len(tt.userTags) > 0 {
 				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
 			}
 			opts, err := buildOptions(autoAllTag, path)
 			require.NoError(t, err)
 
 			gotOutbounds := opts.Outbounds
-			gotTags := collectTags(gotOutbounds)
-			assert.Subset(t, gotTags, tt.want, "options should contain expected outbounds")
+			require.NotEmpty(t, gotOutbounds, "no outbounds in built options")
+
+			assert.NotNil(t, findOutbound(gotOutbounds, constant.TypeDirect), "direct outbound not found")
+			assert.NotNil(t, findOutbound(gotOutbounds, constant.TypeBlock), "block outbound not found")
+
+			hasGroupWithTags(t, gotOutbounds, servers.SGLantern, append(tt.lanternTags, autoLanternTag))
+			hasGroupWithTags(t, gotOutbounds, servers.SGUser, append(tt.userTags, autoUserTag))
+
+			hasGroupWithTags(t, gotOutbounds, autoLanternTag, tt.lanternTags)
+			hasGroupWithTags(t, gotOutbounds, autoUserTag, tt.userTags)
+			hasGroupWithTags(t, gotOutbounds, autoAllTag, []string{autoLanternTag, autoUserTag})
 		})
 	}
+}
+
+func filterOutbounds(opts O.Options, typ string) ([]string, []O.Outbound) {
+	var outbounds []O.Outbound
+	var tags []string
+	for _, o := range opts.Outbounds {
+		if o.Type == typ {
+			outbounds = append(outbounds, o)
+			tags = append(tags, o.Tag)
+		}
+	}
+	return tags, outbounds
+}
+
+func findOutbound(outs []O.Outbound, tag string) *O.Outbound {
+	idx := slices.IndexFunc(outs, func(o O.Outbound) bool {
+		return o.Tag == tag
+	})
+	if idx == -1 {
+		return nil
+	}
+	return &outs[idx]
 }
 
 func testOptsToFile[T any](t *testing.T, opts T, path string) {
 	buf, err := json.Marshal(opts)
 	require.NoError(t, err, "marshal options")
 	require.NoError(t, os.WriteFile(path, buf, 0644), "write options to file")
-}
-
-func getTestOutbounds(t *testing.T, outType string) ([]string, []option.Outbound) {
-	bOpts, _, err := testBoxOptions("testdata/boxops.json")
-	require.NoError(t, err, "get test box options")
-	var outbounds []option.Outbound
-	var tags []string
-	for _, o := range bOpts.Outbounds {
-		if o.Type == outType {
-			outbounds = append(outbounds, o)
-			tags = append(tags, o.Tag)
-		}
-	}
-	require.NotEmptyf(t, outbounds, "no %s outbounds found", outType)
-	return tags, outbounds
 }
 
 func testBoxOptions(tmpPath string) (*option.Options, string, error) {

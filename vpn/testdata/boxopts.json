@@ -43,7 +43,7 @@
 			"server_port": 5443
 		},
 		{
-			"type": "urltest",
+			"type": "mutableurltest",
 			"tag": "auto-http",
 			"outbounds": [
 				"http1-out",
@@ -51,7 +51,7 @@
 			]
 		},
 		{
-			"type": "urltest",
+			"type": "mutableurltest",
 			"tag": "auto-socks",
 			"outbounds": [
 				"socks1-out",
@@ -59,7 +59,7 @@
 			]
 		},
 		{
-			"type": "selector",
+			"type": "mutableselector",
 			"tag": "http",
 			"outbounds": [
 				"auto-http",
@@ -68,7 +68,7 @@
 			]
 		},
 		{
-			"type": "selector",
+			"type": "mutableselector",
 			"tag": "socks",
 			"outbounds": [
 				"auto-socks",
@@ -77,7 +77,7 @@
 			]
 		},
 		{
-			"type": "urltest",
+			"type": "mutableurltest",
 			"tag": "auto-all",
 			"outbounds": [
 				"auto-http",
@@ -93,11 +93,11 @@
 			},
 			{
 				"clash_mode": "http",
-				"outbound": "http-selector"
+				"outbound": "http"
 			},
 			{
 				"clash_mode": "socks",
-				"outbound": "socks-selector"
+				"outbound": "socks"
 			}
 		]
 	},
