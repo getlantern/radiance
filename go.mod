@@ -23,7 +23,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20250711182004-51a659011c7a
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
-	github.com/getlantern/sing-box-extensions v0.0.6-0.20250927021148-a36a79cd9a68
+	github.com/getlantern/sing-box-extensions v0.0.6-0.20250927022149-37f8a374c805
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
