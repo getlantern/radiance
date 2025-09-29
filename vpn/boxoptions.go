@@ -118,86 +118,7 @@ func baseOpts() O.Options {
 		},
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
-			// routing rules are evaluated in the order they are defined and the first matching rule
-			// is applied. So order is important here.
-			// DO NOT change the order of the first three rules or things will break. They MUST always
-			// be the first three rules.
-			Rules: []O.Rule{
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeSniff,
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							Protocol: []string{"dns"},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeHijackDNS,
-						},
-					},
-				},
-				{ // split tunnel rule
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							RuleSet: []string{splitTunnelTag},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
-							},
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							ProcessName: []string{"lantern", "lantern.exe", "Lantern", "Lantern.exe"},
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
-							},
-						},
-					},
-				},
-				{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{
-							IPIsPrivate: true,
-						},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeRoute,
-							RouteOptions: O.RouteActionOptions{
-								Outbound: "direct",
-							},
-						},
-					},
-				},
-				groupRule(autoAllTag),
-				groupRule(servers.SGLantern),
-				groupRule(servers.SGUser),
-				{ // catch-all rule to ensure no fallthrough
-					Type: C.RuleTypeDefault,
-					DefaultOptions: O.DefaultRule{
-						RawDefaultRule: O.RawDefaultRule{},
-						RuleAction: O.RuleAction{
-							Action: C.RuleActionTypeReject,
-						},
-					},
-				},
-			},
+			Rules:               baseRoutingRules(),
 			RuleSet: []O.RuleSet{
 				{
 					Type: C.RuleSetTypeLocal,
@@ -222,6 +143,95 @@ func baseOpts() O.Options {
 			},
 		},
 	}
+}
+
+func baseRoutingRules() []O.Rule {
+	// routing rules are evaluated in the order they are defined and the first matching rule
+	// is applied. So order is important here.
+	// DO NOT change the order of the first three rules or things will break. They MUST always
+	// be the first three rules.
+	rules := []O.Rule{
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeSniff,
+				},
+			},
+		},
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					Protocol: []string{"dns"},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeHijackDNS,
+				},
+			},
+		},
+		{ // split tunnel rule
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					RuleSet: []string{splitTunnelTag},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "direct",
+					},
+				},
+			},
+		},
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					IPIsPrivate: true,
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "direct",
+					},
+				},
+			},
+		},
+	}
+	if common.Platform != "android" {
+		rules = append(rules, O.Rule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					ProcessName: []string{"lantern", "lantern.exe", "Lantern", "Lantern.exe"},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "direct",
+					},
+				},
+			},
+		})
+	}
+	rules = append(rules, groupRule(autoAllTag))
+	rules = append(rules, groupRule(servers.SGLantern))
+	rules = append(rules, groupRule(servers.SGUser))
+
+	// catch-all rule to ensure no fallthrough
+	rules = append(rules, O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
+			},
+		},
+	})
+
+	return rules
 }
 
 // buildOptions builds the box options using the config options and user servers.
