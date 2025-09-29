@@ -161,6 +161,20 @@ func baseOpts() O.Options {
 					Type: C.RuleTypeDefault,
 					DefaultOptions: O.DefaultRule{
 						RawDefaultRule: O.RawDefaultRule{
+							ProcessName: []string{"lantern", "lantern.exe", "Lantern", "Lantern.exe"},
+						},
+						RuleAction: O.RuleAction{
+							Action: C.RuleActionTypeRoute,
+							RouteOptions: O.RouteActionOptions{
+								Outbound: "direct",
+							},
+						},
+					},
+				},
+				{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: O.DefaultRule{
+						RawDefaultRule: O.RawDefaultRule{
 							IPIsPrivate: true,
 						},
 						RuleAction: O.RuleAction{
