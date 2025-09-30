@@ -26,7 +26,7 @@ func TestEstablishConnection(t *testing.T) {
 
 	testEstablishConnection(t, *tOpts)
 	tun := tInstance
-	assert.NoError(t, tun.close(), "failed to close lbService")
+	assert.NoError(t, tun.Close(), "failed to close lbService")
 	assert.Equal(t, ipc.StatusClosed, tun.Status(), "tun should be closed")
 }
 
@@ -63,7 +63,7 @@ func TestUpdateServers(t *testing.T) {
 	testEstablishConnection(t, *testOpts)
 	tun := tInstance
 	defer func() {
-		tun.close()
+		tun.Close()
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -130,7 +130,7 @@ func testEstablishConnection(t *testing.T, opts sbO.Options) {
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
 		if tInstance != nil {
-			tInstance.close()
+			tInstance.Close()
 		}
 	})
 

@@ -115,6 +115,9 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if s.startFn == nil {
 		http.Error(w, "start not supported", http.StatusNotImplemented)
 		return
+	} else if s.service == nil {
+		http.Error(w, "service not attached", http.StatusInternalServerError)
+		return
 	}
 	// check if service is already running
 	if s.service.Status() == StatusRunning {

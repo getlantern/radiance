@@ -103,6 +103,10 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 
 	tInstance = t
 	t.status.Store(ipc.StatusRunning)
+	// If the IPC server is already running, make sure it points to the live tunnel
+	if ipcServer != nil {
+		ipcServer.SetService(t)
+	}
 	return nil
 }
 
@@ -273,10 +277,6 @@ func (t *tunnel) Close() error {
 	t.status.Store(ipc.StatusClosed)
 	tInstance = nil
 	return err
-}
-
-func (t *tunnel) close() error {
-	return t.Close()
 }
 
 func (t *tunnel) Ctx() context.Context {
