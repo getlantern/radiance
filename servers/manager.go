@@ -4,6 +4,7 @@
 package servers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -19,11 +20,15 @@ import (
 	"sync"
 
 	sbx "github.com/getlantern/sing-box-extensions"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/traces"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -36,6 +41,8 @@ const (
 	SGUser    ServerGroup = "user"
 
 	trustFingerprintFileName = "trusted_server_fingerprints.json"
+
+	tracerName = "github.com/getlantern/radiance/servers"
 )
 
 type Options struct {
@@ -446,4 +453,44 @@ func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFinge
 		return nil, fmt.Errorf("failed to get tofu client: %w", err)
 	}
 	return client, nil
+}
+
+// AddServerByURL parse a value that can be a JSON sing-box config or a base64
+// encoded config from another provider. It parses the config into a sing-box config
+// and add it to the user managed group
+func (m *Manager) AddServerByURL(ctx context.Context, tag string, value []byte) error {
+	ctx, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"Manager.AddServerByURL",
+		trace.WithAttributes(attribute.String("tag", tag)))
+	defer span.End()
+
+	var option Options
+	if err := json.UnmarshalContext(ctx, value, &option); err != nil {
+		var syntaxErr json.SyntaxError
+		if !errors.Is(err, &syntaxErr) {
+			return traces.RecordError(ctx, fmt.Errorf("failed to unmarshal json: %w", err))
+		}
+
+		// config is not in json format, so try to parse as URL
+		providedURL, err := validURL(value)
+		if err != nil {
+			return err
+		}
+
+		option, err = parseURL(providedURL)
+		if err != nil {
+			return traces.RecordError(
+				ctx,
+				fmt.Errorf("received configuration couldn't be parsed: %w", err),
+				trace.WithAttributes(
+					attribute.String("provided_value", string(value)),
+				),
+			)
+		}
+	}
+	if err := m.AddServers(SGUser, option); err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
+	}
+	return nil
 }
