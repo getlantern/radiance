@@ -104,7 +104,11 @@ func StartService(ctx context.Context, group, tag string) error {
 	return err
 }
 
-func (s *Server) SetStartFn(fn StartFn)  { s.startFn = fn }
+// SetStartFn registers a function that will be called when the start endpoint is hit
+func (s *Server) SetStartFn(fn StartFn) { s.startFn = fn }
+
+// SetService updates the service attached to the server.
+// Typically called when starting or replacing the VPN tunnel
 func (s *Server) SetService(svc Service) { s.service = svc }
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {

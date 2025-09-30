@@ -3,6 +3,7 @@ package vpn
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -27,6 +28,10 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
 		return nil
 	}
 	platIfceProvider = provider
+	if runtime.GOOS != "windows" && basePath != "" {
+		ipc.SetSocketPath(basePath)
+	}
+
 	ipcServer = ipc.NewServer(closedSvc{})
 	// start tunnel via IPC. How /service/start brings the tunnel up
 	ipcServer.SetStartFn(func(ctx context.Context, group, tag string) (ipc.Service, error) {
