@@ -192,7 +192,11 @@ func (m *mockAuthClient) GetSalt(ctx context.Context, email string) (*protos.Get
 }
 
 func (m *mockAuthClient) Login(ctx context.Context, email, password, deviceId string, salt []byte) (*protos.LoginResponse, error) {
-	return &protos.LoginResponse{}, nil
+	return &protos.LoginResponse{
+		LegacyUserData: &protos.LoginResponse_UserData{
+			DeviceID: "deviceId",
+		},
+	}, nil
 }
 
 func (m *mockAuthClient) SignOut(ctx context.Context, req *protos.LogoutRequest) error {

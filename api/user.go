@@ -68,7 +68,7 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("creating new user", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
-	//Append device ID to user data
+	// Append device ID to user data
 	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
@@ -104,7 +104,7 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("user data", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
-	//Append device ID to user data
+	// Append device ID to user data
 	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
@@ -228,8 +228,8 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
-	//Append device ID to user data
-	resp.LegacyUserData.DeviceID = a.userInfo.DeviceID()
+	// Append device ID to user data
+	resp.LegacyUserData.DeviceID = deviceId
 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
