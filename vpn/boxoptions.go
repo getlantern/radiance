@@ -436,7 +436,11 @@ func groupRule(group string) O.Rule {
 func lanternRegexForPlatform() []string {
 	switch common.Platform {
 	case "windows":
-		return []string{`(?i)^.*\\lantern.exe$`}
+		return []string{
+			`(?i)^C:\\Program Files( \(x86\))?\\Lantern\\lantern\.exe$`,
+			`(?i)^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\Lantern\\lantern\.exe$`,
+			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
+		}
 	case "darwin":
 		return []string{`(?i)^/Lantern.app/Contents/MacOS/lantern$`}
 	case "linux":
