@@ -30,7 +30,10 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
 	ipcServer = ipc.NewServer(closedSvc{})
 	// start tunnel via IPC. How /service/start brings the tunnel up
 	ipcServer.SetStartFn(func(ctx context.Context, group, tag string) (ipc.Service, error) {
-		path := common.DataPath()
+		path := basePath
+		if path == "" {
+			path = common.DataPath()
+		}
 
 		_ = newSplitTunnel(path)
 
