@@ -205,7 +205,7 @@ func baseRoutingRules() []O.Rule {
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					ProcessName: []string{"lantern", "lantern.exe", "Lantern", "Lantern.exe"},
+					ProcessPathRegex: lanternRegexForPlatform(),
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -428,5 +428,29 @@ func groupRule(group string) O.Rule {
 				},
 			},
 		},
+	}
+}
+
+// lanternRegexForPlatform returns the regex patterns to match Lantern process path for the current platform. We want this
+// to be as limited as possible to avoid cases where other applications can bypass the VPN.
+func lanternRegexForPlatform() []string {
+	switch common.Platform {
+	case "windows":
+		return []string{
+			`(?i)^C:\\Program Files( \(x86\))?\\Lantern\\lantern\.exe$`,
+			`(?i)^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\Lantern\\lantern\.exe$`,
+			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
+		}
+	case "darwin":
+		return []string{`(?i)^/Lantern.app/Contents/MacOS/lantern$`}
+	case "linux":
+		return []string{
+			`(?i)^/opt/lantern/lantern$`,
+			`(?i)^/usr/bin/lantern$`,
+			`(?i)^/usr/local/bin/lantern$`,
+			`(?i)^/home/.+/(lantern/(bin/)?)?lantern$`,
+		}
+	default:
+		return []string{}
 	}
 }
