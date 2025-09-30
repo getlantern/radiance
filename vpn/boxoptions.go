@@ -444,7 +444,12 @@ func lanternRegexForPlatform() []string {
 	case "darwin":
 		return []string{`(?i)^/Lantern.app/Contents/MacOS/lantern$`}
 	case "linux":
-		return []string{`(?i)^/opt/lantern/lantern$`, `(?i)^/usr/bin/lantern$`, `(?i)^/usr/local/bin/lantern$`}
+		return []string{
+			`(?i)^/opt/lantern/lantern$`,
+			`(?i)^/usr/bin/lantern$`,
+			`(?i)^/usr/local/bin/lantern$`,
+			`(?i)^/home/.+/(lantern/(bin/)?)?lantern$`,
+		}
 	default:
 		return []string{}
 	}
