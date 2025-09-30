@@ -29,6 +29,8 @@ type Service interface {
 	Close() error
 }
 
+type StartFn func(ctx context.Context, group, tag string) (Service, error)
+
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
@@ -36,7 +38,7 @@ type Server struct {
 	service Service
 
 	router  chi.Router
-	startFn func(context.Context, string, string) error
+	startFn StartFn
 }
 
 // NewServer creates a new Server instance with the provided Service.
@@ -90,20 +92,29 @@ func (s *Server) Close() error {
 	return s.svr.Close()
 }
 
-// CloseService sends a request to shutdown the service. This will also close the IPC server.
+// CloseService sends a request to shutdown the service
 func CloseService(ctx context.Context) error {
 	_, err := sendRequest[empty](ctx, "POST", closeServiceEndpoint, nil)
 	return err
 }
 
+// StartService sends a request to start the service
 func StartService(ctx context.Context, group, tag string) error {
 	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, selection{GroupTag: group, OutboundTag: tag})
 	return err
 }
 
+func (s *Server) SetStartFn(fn StartFn)  { s.startFn = fn }
+func (s *Server) SetService(svc Service) { s.service = svc }
+
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if s.startFn == nil {
 		http.Error(w, "start not supported", http.StatusNotImplemented)
+		return
+	}
+	// check if service is already running
+	if s.service.Status() == StatusRunning {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	var p selection
@@ -111,10 +122,12 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.startFn(r.Context(), p.GroupTag, p.OutboundTag); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := s.startFn(r.Context(), p.GroupTag, p.OutboundTag)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	s.SetService(svc)
 	w.WriteHeader(http.StatusOK)
 }
 
