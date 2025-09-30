@@ -5,6 +5,7 @@ package ipc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,8 +14,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-
-	"github.com/getlantern/radiance/traces"
 )
 
 var (
@@ -36,7 +35,8 @@ type Server struct {
 	svr     *http.Server
 	service Service
 
-	router chi.Router
+	router  chi.Router
+	startFn func(context.Context, string, string) error
 }
 
 // NewServer creates a new Server instance with the provided Service.
@@ -55,6 +55,7 @@ func NewServer(service Service) *Server {
 	s.router.Post(selectEndpoint, s.selectHandler)
 	s.router.Get(clashModeEndpoint, s.clashModeHandler)
 	s.router.Post(clashModeEndpoint, s.clashModeHandler)
+	s.router.Post(startServiceEndpoint, s.startServiceHandler)
 	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
@@ -95,6 +96,28 @@ func CloseService(ctx context.Context) error {
 	return err
 }
 
+func StartService(ctx context.Context, group, tag string) error {
+	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, selection{GroupTag: group, OutboundTag: tag})
+	return err
+}
+
+func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if s.startFn == nil {
+		http.Error(w, "start not supported", http.StatusNotImplemented)
+		return
+	}
+	var p selection
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.startFn(r.Context(), p.GroupTag, p.OutboundTag); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	service := s.service
 	s.service = &closedService{}
@@ -106,12 +129,6 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-
-	go func() {
-		if err := s.Close(); err != nil {
-			traces.RecordError(context.Background(), err)
-		}
-	}()
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the
