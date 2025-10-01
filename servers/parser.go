@@ -130,6 +130,15 @@ func parseURL(providedURL *url.URL) (Options, error) {
 				ServerPort: vmessConfig.Port,
 			},
 		}
+		if vmessConfig.TLS == "tls" {
+			vmessOptions.OutboundTLSOptionsContainer = option.OutboundTLSOptionsContainer{
+				TLS: &option.OutboundTLSOptions{
+					Enabled:    true,
+					ServerName: vmessConfig.Sni,
+					ALPN:       badoption.Listable[string]{vmessConfig.ALPN},
+				},
+			}
+		}
 		o.Outbounds = append(o.Outbounds, option.Outbound{
 			Type:    constant.TypeVMess,
 			Tag:     providedURL.Fragment,
@@ -160,8 +169,6 @@ type vmess struct {
 
 func parseV2RayTransportOptionsFromQuery(queryParams url.Values) *option.V2RayTransportOptions {
 	switch queryParams.Get("type") {
-	case "tcp":
-		return nil
 	case "http":
 		return &option.V2RayTransportOptions{
 			Type: constant.V2RayTransportTypeHTTP,
@@ -198,14 +205,52 @@ func parseV2RayTransportOptionsFromQuery(queryParams url.Values) *option.V2RayTr
 			Type:        constant.V2RayTransportTypeQUIC,
 			QUICOptions: option.V2RayQUICOptions{},
 		}
+	case "tcp":
+		return nil
 	default:
 		return nil
 	}
 }
 
 func parseV2RayTransportOptionsFromVmessConfig(config vmess) *option.V2RayTransportOptions {
-	switch config.Type {
-
+	switch config.Net {
+	case "http":
+		return &option.V2RayTransportOptions{
+			Type: constant.V2RayTransportTypeHTTP,
+			HTTPOptions: option.V2RayHTTPOptions{
+				Host: badoption.Listable[string]{config.Host},
+				Path: config.Path,
+			},
+		}
+	case "httpupgrade", "xhttp":
+		return &option.V2RayTransportOptions{
+			Type: constant.V2RayTransportTypeHTTPUpgrade,
+			HTTPUpgradeOptions: option.V2RayHTTPUpgradeOptions{
+				Host: config.Host,
+				Path: config.Path,
+			},
+		}
+	case "ws", "wss":
+		return &option.V2RayTransportOptions{
+			Type: constant.V2RayTransportTypeWebsocket,
+			WebsocketOptions: option.V2RayWebsocketOptions{
+				Path: config.Path,
+			},
+		}
+	case "grpc":
+		return &option.V2RayTransportOptions{
+			Type: constant.V2RayTransportTypeGRPC,
+			GRPCOptions: option.V2RayGRPCOptions{
+				ServiceName: config.Host,
+			},
+		}
+	case "quic":
+		return &option.V2RayTransportOptions{
+			Type:        constant.V2RayTransportTypeQUIC,
+			QUICOptions: option.V2RayQUICOptions{},
+		}
+	case "tcp":
+		return nil
 	default:
 		return nil
 	}
