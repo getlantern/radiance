@@ -92,6 +92,7 @@ message LoginResponse {
     }
 
   SubscriptionData subscriptionData = 20; 
+  string deviceID = 21;
 }
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login
