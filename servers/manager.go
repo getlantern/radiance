@@ -459,9 +459,7 @@ func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFinge
 // encoded config from another provider. It parses the config into a sing-box config
 // and add it to the user managed group
 func (m *Manager) AddServerByURL(ctx context.Context, value []byte) error {
-	ctx, span := otel.Tracer(tracerName).Start(
-		context.Background(),
-		"Manager.AddServerByURL")
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURL")
 	defer span.End()
 	var option Options
 	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
