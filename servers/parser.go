@@ -57,6 +57,9 @@ func parseURL(providedURL *url.URL) (Options, error) {
 			ssOptions.Password = providedURL.User.Username()
 		} else {
 			splitUsername := strings.Split(string(decodedUsername), ":")
+			if len(splitUsername) != 2 {
+				return o, fmt.Errorf("couldn't parse shadowsocks method and password from username")
+			}
 			ssOptions.Method = splitUsername[0]
 			ssOptions.Password = splitUsername[1]
 		}
