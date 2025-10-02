@@ -132,6 +132,7 @@ func parseURL(providedURL *url.URL) (Options, error) {
 				Server:     vmessConfig.Addr,
 				ServerPort: vmessConfig.Port,
 			},
+			Transport: parseV2RayTransportOptionsFromVmessConfig(vmessConfig),
 		}
 		if vmessConfig.TLS == "tls" {
 			vmessOptions.OutboundTLSOptionsContainer = option.OutboundTLSOptionsContainer{
