@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -138,4 +140,73 @@ func (s *lanternServerManagerMock) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusNotFound)
+}
+
+func TestAddServerByURL(t *testing.T) {
+	dataPath := t.TempDir()
+	manager := &Manager{
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+			SGUser: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+		},
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: make(map[string]any),
+			SGUser:    make(map[string]any),
+		},
+		serversFile:      filepath.Join(dataPath, common.ServersFileName),
+		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+	}
+
+	ctx := context.Background()
+	jsonConfig := `
+	{
+		"outbounds": [
+			{
+               "type": "shadowsocks",
+               "tag": "ss-out",
+               "server": "127.0.0.1",
+               "server_port": 8388,
+               "method": "chacha20-ietf-poly1305",
+               "password": "randompasswordwith24char",
+               "network": "tcp"
+            }
+		]
+	}`
+
+	t.Run("adding server with a sing-box json config should work", func(t *testing.T) {
+		require.NoError(t, manager.AddServerByURL(ctx, []byte(jsonConfig)))
+	})
+
+	t.Run("adding server with invalid json config should fail", func(t *testing.T) {
+		require.Error(t, manager.AddServerByURL(ctx, []byte(`{"incompatible_json": ""}`)))
+	})
+
+	t.Run("adding a shadowsocks server by URL should work", func(t *testing.T) {
+		method := "chacha20-ietf-poly1305"
+		key := "randompasswordwith24char"
+		host := "127.0.0.1"
+		port := 8388
+		tagName := "ss url test"
+		encodedKey := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", method, key)))
+		ssURL := fmt.Sprintf("ss://%s@%s:%d#%s", encodedKey, host, port, url.QueryEscape(tagName))
+		require.NoError(t, manager.AddServerByURL(ctx, []byte(ssURL)))
+	})
+
+	t.Run("adding a invalid URL should return an error", func(t *testing.T) {
+		invalidURL := "this is not a valid url"
+		require.Error(t, manager.AddServerByURL(ctx, []byte(invalidURL)))
+	})
+
+	t.Run("adding a URL with unsupported protocol should return an error", func(t *testing.T) {
+		invalidURL := "http://example.com"
+		require.Error(t, manager.AddServerByURL(ctx, []byte(invalidURL)))
+	})
 }

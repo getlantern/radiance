@@ -473,11 +473,10 @@ func (m *Manager) AddServerByURL(ctx context.Context, value []byte) error {
 		// config is not in json format, so try to parse as URL
 		providedURL, err := validURL(value)
 		if err != nil {
-			return err
+			return traces.RecordError(ctx, err)
 		}
 
-		option, err = parseURL(providedURL)
-		if err != nil {
+		if option, err = parseURL(providedURL); err != nil {
 			return traces.RecordError(
 				ctx,
 				fmt.Errorf("received configuration couldn't be parsed: %w", err),
@@ -486,6 +485,9 @@ func (m *Manager) AddServerByURL(ctx context.Context, value []byte) error {
 				),
 			)
 		}
+	}
+	if len(option.Endpoints) == 0 && len(option.Outbounds) == 0 {
+		return traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
 	if err := m.AddServers(SGUser, option); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))

@@ -27,7 +27,7 @@ func validURL(value []byte) (*url.URL, error) {
 	}
 
 	if isSupported := slices.Contains(protocol.SupportedProtocols(), proto); !isSupported {
-		return nil, fmt.Errorf("protocol not supported")
+		return nil, fmt.Errorf("protocol not supported: %s", providedURL.Scheme)
 	}
 	return providedURL, nil
 }
