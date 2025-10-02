@@ -464,9 +464,9 @@ func (m *Manager) AddServerByURL(ctx context.Context, value []byte) error {
 		"Manager.AddServerByURL")
 	defer span.End()
 	var option Options
-	if err := json.UnmarshalContext(ctx, value, &option); err != nil {
-		var syntaxErr json.SyntaxError
-		if !errors.Is(err, &syntaxErr) {
+	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
+		var syntaxErr *json.SyntaxError
+		if !errors.As(err, &syntaxErr) {
 			return traces.RecordError(ctx, fmt.Errorf("failed to unmarshal json: %w", err))
 		}
 
