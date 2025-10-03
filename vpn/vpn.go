@@ -112,7 +112,7 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 // Note, this does not check if the tunnel can connect to a server.
 func isOpen(ctx context.Context) bool {
 	state, err := ipc.GetStatus(ctx)
-	if err != nil {
+	if !errors.Is(err, ipc.ErrServiceIsNotRunning) {
 		slog.Warn("Failed to get tunnel state", "error", err)
 	}
 	return state == ipc.StatusRunning
@@ -254,18 +254,28 @@ type AutoSelections struct {
 }
 
 // AutoServerSelections returns the currently active server for each auto server group. If the group
-// is not found or has no active server, "N/A" is returned for that group.
+// is not found or has no active server, "Unavailable" is returned for that group.
 func AutoServerSelections() (AutoSelections, error) {
-	groups, err := ipc.GetGroups(context.Background())
+	as := AutoSelections{
+		Lantern: "Unavailable",
+		User:    "Unavailable",
+		AutoAll: "Unavailable",
+	}
+	ctx := context.Background()
+	if !isOpen(ctx) {
+		slog.Log(ctx, internal.LevelTrace, "Tunnel not running, cannot get auto selections")
+		return as, nil
+	}
+	groups, err := ipc.GetGroups(ctx)
 	if err != nil {
-		return AutoSelections{}, fmt.Errorf("failed to get groups: %w", err)
+		return as, fmt.Errorf("failed to get groups: %w", err)
 	}
 	selected := func(tag string) string {
 		idx := slices.IndexFunc(groups, func(g ipc.OutboundGroup) bool {
 			return g.Tag == tag
 		})
 		if idx < 0 || groups[idx].Selected == "" {
-			return "N/A"
+			return "Unavailable"
 		}
 		return groups[idx].Selected
 	}
