@@ -14,17 +14,18 @@ What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 Interoperability is at the core of Lantern and Radiance. Lantern is designed to interoperate with everything from Outline servers to sing-box servers to servers running Lantern's own sing-box extensions. You can similarly run Lantern servers to interoperate with any of those clients. The addition of WATER means that Lantern can deliver new protocols written in any WASM-compatible language at runtime without client-side updates.
 
 ## Environment Variables
-Configuration can be controlled via a `.env` file in the root of the project directory or by setting environment variables. The order of precedence for setting these is as follows:
+Configuration can be controlled by setting environment variables or creating a `.env` file in the same directory as the compiled executable or project root directory if running the souce directly. The order of precedence for setting these is as follows:
 
 1.  Environment variables (highest precedence)
 2.  `.env` file (lowest precedence)
 
-The following variables are available:
+Available variables:
 
 *   `RADIANCE_LOG_LEVEL`: Sets the log level (e.g., `trace`, `debug`, `info`, `warn`, `error`, `fatal`).
 *   `RADIANCE_LOG_PATH`: Sets the absolute path to the log file.
 *   `RADIANCE_DATA_PATH`: Sets the absolute path to the data directory.
 *   `RADIANCE_DISABLE_FETCH_CONFIG`: If set to `true`, disables fetching the remote config.
+*   `RADIANCE_DISABLE_STDOUT_LOG`: Disable printing `radiance` logs to STDOUT. Logs will still be written to the log file.
 
 ## Packages
 
