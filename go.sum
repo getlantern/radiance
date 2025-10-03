@@ -217,14 +217,8 @@ github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNi
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534/go.mod h1:ZsLfOY6gKQOTyEcPYNA9ws5/XHZQFroxqCOhHjGcs9Y=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175 h1:JWH5BB2o0eAeGs0tZnFPpQGx+nMIo/WmxKnj2hnGjgE=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175/go.mod h1:h3S9LBmmzN/xM+lwYZHE4abzTtCTtidKtG+nxZcCZX0=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250925220431-89fd03b4180d h1:PwUDbJzHahiXUKa017JCyi5B0WCdnQEXe6K7BZL+V4M=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250925220431-89fd03b4180d/go.mod h1:wcEF5dUGe/B1DxGOlGHwvdyjsn2BMaNdFtMjX7Vq9L4=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250925221018-0ad75329374b h1:gsLk2XjLMdMqB8eLffkKG4b4+04FqTL5wKnD5rqRmGM=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250925221018-0ad75329374b/go.mod h1:j0FToxEE8WJ9nPCOsYKbyJCoZcTUMPvGbAdU9wf4vFs=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250927021148-a36a79cd9a68 h1:K6O2VpK9IWW4x7a65Bnn8fUldPoHcSenho//GrZRq2Q=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250927021148-a36a79cd9a68/go.mod h1:j0FToxEE8WJ9nPCOsYKbyJCoZcTUMPvGbAdU9wf4vFs=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250927022149-37f8a374c805 h1:93jvG9jlZuF+SVSKWkZvVEf1wHLUzagPR9ltFBhsD1A=
-github.com/getlantern/sing-box-extensions v0.0.6-0.20250927022149-37f8a374c805/go.mod h1:j0FToxEE8WJ9nPCOsYKbyJCoZcTUMPvGbAdU9wf4vFs=
+github.com/getlantern/sing-box-extensions v0.0.6-0.20251003000811-d446ace2b4f6 h1:gu+jNCQH+9/UrMrE82NF7GPDn9N2OsQ5Kdh78uh5ucw=
+github.com/getlantern/sing-box-extensions v0.0.6-0.20251003000811-d446ace2b4f6/go.mod h1:j0FToxEE8WJ9nPCOsYKbyJCoZcTUMPvGbAdU9wf4vFs=
 github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a h1:aiM0ypjXIjdSiLevb14hNnVmWA9eXRDqpzdHhbxkzzY=
 github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a/go.mod h1:UMwVTK6uaUZ9WV+TM2fGuLpeQphysQ5dwK2r/Wp4xBE=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
