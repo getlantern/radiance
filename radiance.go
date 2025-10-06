@@ -181,10 +181,10 @@ func (r *Radiance) Close() {
 	<-r.stopChan
 }
 
-func (r *Radiance) AddConfigListener(fetched func()) {
+func (r *Radiance) AddConfigListener(onChange func()) {
 	r.confHandler.AddConfigListener(func(oldCfg, newCfg *config.Config) error {
 		slog.Debug("Config Listener called")
-		fetched()
+		onChange()
 		return nil
 	})
 }
