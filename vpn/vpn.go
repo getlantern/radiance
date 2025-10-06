@@ -270,11 +270,13 @@ func AutoServerSelections() (AutoSelections, error) {
 	if err != nil {
 		return as, fmt.Errorf("failed to get groups: %w", err)
 	}
+	slog.Log(ctx, internal.LevelTrace, "Retrieved groups", "groups", groups)
 	selected := func(tag string) string {
 		idx := slices.IndexFunc(groups, func(g ipc.OutboundGroup) bool {
 			return g.Tag == tag
 		})
 		if idx < 0 || groups[idx].Selected == "" {
+			slog.Log(ctx, internal.LevelTrace, "Group not found or has no selection", "tag", tag)
 			return "Unavailable"
 		}
 		return groups[idx].Selected
