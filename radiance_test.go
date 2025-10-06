@@ -92,3 +92,7 @@ func (m *mockConfigHandler) SetPreferredServerLocation(country string, city stri
 func (m *mockConfigHandler) GetConfig() (*config.Config, error) {
 	return &config.Config{}, nil
 }
+
+func (m *mockConfigHandler) AddConfigListener(listener config.ListenerFunc) {
+	listener(&config.Config{}, &config.Config{})
+}

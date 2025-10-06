@@ -43,6 +43,9 @@ type configHandler interface {
 	// GetConfig returns the current configuration.
 	// It returns an error if the configuration is not yet available.
 	GetConfig() (*config.Config, error)
+
+	// AddConfigListener adds a listener that is called whenever the configuration changes.
+	AddConfigListener(listener config.ListenerFunc)
 }
 
 type issueReporter interface {
@@ -141,7 +144,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-
 	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
@@ -177,6 +179,14 @@ func (r *Radiance) Close() {
 		}
 	})
 	<-r.stopChan
+}
+
+func (r *Radiance) AddConfigListener(onChange func()) {
+	r.confHandler.AddConfigListener(func(oldCfg, newCfg *config.Config) error {
+		slog.Debug("Config Listener called")
+		onChange()
+		return nil
+	})
 }
 
 // APIHandler returns the API handler for the Radiance client.
