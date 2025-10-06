@@ -197,7 +197,6 @@ func baseRoutingRules() []O.Rule {
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
 					RuleSet: []string{splitTunnelTag, directTag},
-					//RuleSet: []string{splitTunnelTag},
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
