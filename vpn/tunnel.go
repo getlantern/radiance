@@ -111,7 +111,7 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	// fallback: start IPC server here for platforms that don't call InitIPC yet
 	ipcServer = ipc.NewServer(t)
 	if err := ipcServer.Start(dataPath); err != nil {
-		slog.Error("Failed to start IPC server: %w", err)
+		slog.Error("Failed to start IPC server", "error", err)
 		t.status.Store(ipc.StatusClosed)
 		return fmt.Errorf("starting IPC server: %w", err)
 	}
