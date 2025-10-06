@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	C "github.com/sagernet/sing-box/constant"
@@ -37,11 +38,24 @@ const (
 
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
+
+	directTag  = "direct-domains"
+	directFile = directTag + ".json"
 )
 
 // this is the base options that is need for everything to work correctly. this should not be
 // changed unless you know what you're doing.
-func baseOpts() O.Options {
+func baseOpts(basePath string) O.Options {
+	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
+	directPath := filepath.Join(basePath, directFile)
+
+	// Write the domains to access directly to a file to disk.
+	if err := os.WriteFile(directPath, []byte(directDomains()), 0644); err != nil {
+		slog.Warn("Failed to write inline direct rule set to file", "path", directPath, "error", err)
+	} else {
+		slog.Info("Wrote inline direct rule set to file", "path", directPath)
+	}
+
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -124,7 +138,15 @@ func baseOpts() O.Options {
 					Type: C.RuleSetTypeLocal,
 					Tag:  splitTunnelTag,
 					LocalOptions: O.LocalRuleSet{
-						Path: splitTunnelFile,
+						Path: splitTunnelPath,
+					},
+					Format: C.RuleSetFormatSource,
+				},
+				{
+					Type: C.RuleSetTypeLocal,
+					Tag:  directTag,
+					LocalOptions: O.LocalRuleSet{
+						Path: directPath,
 					},
 					Format: C.RuleSetFormatSource,
 				},
@@ -175,7 +197,7 @@ func baseRoutingRules() []O.Rule {
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					RuleSet: []string{splitTunnelTag},
+					RuleSet: []string{splitTunnelTag, directTag},
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -237,20 +259,17 @@ func baseRoutingRules() []O.Rule {
 // buildOptions builds the box options using the config options and user servers.
 func buildOptions(group, path string) (O.Options, error) {
 	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
-	opts := baseOpts()
+
+	opts := baseOpts(path)
 	slog.Debug("Base options initialized")
 
 	// update default options and paths
 	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
 	opts.Experimental.ClashAPI.DefaultMode = group
 
-	splitTunnelPath := filepath.Join(path, splitTunnelFile)
-	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelPath
-
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
 		"cacheFilePath", opts.Experimental.CacheFile.Path,
 		"clashAPIDefaultMode", opts.Experimental.ClashAPI.DefaultMode,
-		"splitTunnelFilePath", splitTunnelPath,
 	)
 
 	// platform-specific overrides
@@ -454,3 +473,28 @@ func lanternRegexForPlatform() []string {
 		return []string{}
 	}
 }
+
+// These are embedded domains that should always bypass the VPN.
+func directDomains() string {
+	domains := []string{
+		"iantem.io",                 // Used for API access to fetch configs, for example.
+		"a248.e.akamai.net",         // Used in domain fronting
+		"cloudfront.net",            // Used in domain fronting.
+		"raw.githubusercontent.com", // Used to fetch domain fronting configurations, for example.
+	}
+	prettyDomains := strings.Join(domains, ",\n        ")
+	return strings.Replace(inlineDirectRuleSet, "domains", prettyDomains, 1)
+}
+
+var inlineDirectRuleSet string = `
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        domains
+      ]
+    }
+  ]
+}
+`
