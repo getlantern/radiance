@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	C "github.com/sagernet/sing-box/constant"
@@ -50,7 +49,7 @@ func baseOpts(basePath string) O.Options {
 	directPath := filepath.Join(basePath, directFile)
 
 	// Write the domains to access directly to a file to disk.
-	if err := os.WriteFile(directPath, []byte(directDomains()), 0644); err != nil {
+	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
 		slog.Warn("Failed to write inline direct rule set to file", "path", directPath, "error", err)
 	} else {
 		slog.Info("Wrote inline direct rule set to file", "path", directPath)
@@ -198,6 +197,7 @@ func baseRoutingRules() []O.Rule {
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
 					RuleSet: []string{splitTunnelTag, directTag},
+					//RuleSet: []string{splitTunnelTag},
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -475,24 +475,16 @@ func lanternRegexForPlatform() []string {
 }
 
 // These are embedded domains that should always bypass the VPN.
-func directDomains() string {
-	domains := []string{
-		"iantem.io",                 // Used for API access to fetch configs, for example.
-		"a248.e.akamai.net",         // Used in domain fronting
-		"cloudfront.net",            // Used in domain fronting.
-		"raw.githubusercontent.com", // Used to fetch domain fronting configurations, for example.
-	}
-	prettyDomains := strings.Join(domains, ",\n        ")
-	return strings.Replace(inlineDirectRuleSet, "domains", prettyDomains, 1)
-}
-
 var inlineDirectRuleSet string = `
 {
   "version": 3,
   "rules": [
     {
       "domain_suffix": [
-        domains
+        "iantem.io",
+		"a248.e.akamai.net",
+		"cloudfront.net",
+		"raw.githubusercontent.com"
       ]
     }
   ]
