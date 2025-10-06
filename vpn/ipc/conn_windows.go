@@ -58,7 +58,7 @@ type winioConn interface {
 	SyscallConn() (syscall.RawConn, error)
 }
 
-// withConnHandle runs the function with the connection’s HANDLE pinned by the runtime
+// withConnHandle runs the function with the connection’s handle pinned by the runtime
 func withConnHandle(c winioConn, fn func(h windows.Handle) error) error {
 	rc, err := c.SyscallConn()
 	if err != nil {
