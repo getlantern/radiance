@@ -51,13 +51,14 @@ func listen(_ string) (net.Listener, error) {
 	return &winioListener{ln}, nil
 }
 
-// winioConn is an helper interface to access the underlying file descriptor of a winio.Conn. This
-// is needed to call Windows API functions that require a handle.
+// winioConn is an helper interface that exposes the standard syscall.Conn so we can
+// access the underlying handle via RawConn.Control
 type winioConn interface {
 	net.Conn
 	SyscallConn() (syscall.RawConn, error)
 }
 
+// withConnHandle runs the function with the connection’s HANDLE pinned by the runtime
 func withConnHandle(c winioConn, fn func(h windows.Handle) error) error {
 	rc, err := c.SyscallConn()
 	if err != nil {
@@ -159,14 +160,4 @@ func getServerProcessToken() (windows.Token, error) {
 		return 0, fmt.Errorf("failed to open service process token: %w", err)
 	}
 	return token, nil
-}
-
-func getPipeClientPID(pc winioConn) (uint32, error) {
-	var pid uint32
-	if err := withConnHandle(pc, func(h windows.Handle) error {
-		return windows.GetNamedPipeClientProcessId(h, &pid)
-	}); err != nil {
-		return 0, fmt.Errorf("failed to get client process id: %w", err)
-	}
-	return pid, nil
 }
