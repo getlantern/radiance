@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/getlantern/radiance/traces"
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 )
@@ -58,6 +59,7 @@ func NewServer(service Service) *Server {
 	s.router.Get(clashModeEndpoint, s.clashModeHandler)
 	s.router.Post(clashModeEndpoint, s.clashModeHandler)
 	s.router.Post(startServiceEndpoint, s.startServiceHandler)
+	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
@@ -104,6 +106,12 @@ func StartService(ctx context.Context, group, tag string) error {
 	return err
 }
 
+// StopService sends a request to stop the service (IPC server stays up)
+func StopService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", stopServiceEndpoint, nil)
+	return err
+}
+
 // SetStartFn registers a function that will be called when the start endpoint is hit
 func (s *Server) SetStartFn(fn StartFn) { s.startFn = fn }
 
@@ -135,6 +143,22 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
+	svc := s.service
+	s.service = &closedService{}
+
+	if svc != nil {
+		if err := svc.Close(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	service := s.service
 	s.service = &closedService{}
@@ -146,6 +170,14 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.svr.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			traces.RecordError(context.Background(), err)
+		}
+	}()
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the

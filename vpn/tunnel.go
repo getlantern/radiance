@@ -106,7 +106,16 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	// If the IPC server is already running, make sure it points to the live tunnel
 	if ipcServer != nil {
 		ipcServer.SetService(t)
+		return nil
 	}
+	// fallback: start IPC server here for platforms that don't call InitIPC yet
+	ipcServer = ipc.NewServer(t)
+	if err := ipcServer.Start(dataPath); err != nil {
+		slog.Error("Failed to start IPC server: %w", err)
+		t.status.Store(ipc.StatusClosed)
+		return fmt.Errorf("starting IPC server: %w", err)
+	}
+	slog.Debug("IPC server started")
 	return nil
 }
 
