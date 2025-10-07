@@ -41,12 +41,6 @@ const (
 	baseURL = "https://iantem.io/api/v1"
 )
 
-// Subscription holds information about a user's paid subscription.
-type Subscription struct {
-	Tier    Tier
-	Expires time.Time
-}
-
 // Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
 type Device struct {
 	ID   string
@@ -74,6 +68,8 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("creating new user", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
+	// Append device ID to user data
+	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
 		LegacyToken:    resp.Token,
@@ -108,6 +104,8 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("user data", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
+	// Append device ID to user data
+	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
 		LegacyToken:    resp.Token,
@@ -141,16 +139,7 @@ func (a *APIClient) Devices() ([]Device, error) {
 	return ret, nil
 }
 
-// TODO: do we want to store the subscription status in the user config?
-//			or should we just always request it from the server when needed?
-
-// Subscription returns the subscription status of this user account.
-func (a *APIClient) Subscription() (Subscription, error) {
-	// TODO: implement me!
-	return Subscription{}, common.ErrNotImplemented
-}
-
-// DataCapInfo returns information about this user's data cap. Only valid for free accounts.
+// DataCapInfo returns information about this user's data cap
 func (a *APIClient) DataCapInfo() (*DataCapInfo, error) {
 	// TODO: implement me!
 	return nil, common.ErrNotImplemented
@@ -239,9 +228,11 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
+	// Append device ID to user data
+	resp.LegacyUserData.DeviceID = deviceId
+
 	// regardless of state we need to save login information
 	// We have device flow limit on login
-
 	a.userInfo.SetData(resp)
 	a.userData = resp
 	a.salt = salt

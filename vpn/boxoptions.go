@@ -37,11 +37,24 @@ const (
 
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
+
+	directTag  = "direct-domains"
+	directFile = directTag + ".json"
 )
 
 // this is the base options that is need for everything to work correctly. this should not be
 // changed unless you know what you're doing.
-func baseOpts() O.Options {
+func baseOpts(basePath string) O.Options {
+	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
+	directPath := filepath.Join(basePath, directFile)
+
+	// Write the domains to access directly to a file to disk.
+	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
+		slog.Warn("Failed to write inline direct rule set to file", "path", directPath, "error", err)
+	} else {
+		slog.Info("Wrote inline direct rule set to file", "path", directPath)
+	}
+
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -124,7 +137,15 @@ func baseOpts() O.Options {
 					Type: C.RuleSetTypeLocal,
 					Tag:  splitTunnelTag,
 					LocalOptions: O.LocalRuleSet{
-						Path: splitTunnelFile,
+						Path: splitTunnelPath,
+					},
+					Format: C.RuleSetFormatSource,
+				},
+				{
+					Type: C.RuleSetTypeLocal,
+					Tag:  directTag,
+					LocalOptions: O.LocalRuleSet{
+						Path: directPath,
 					},
 					Format: C.RuleSetFormatSource,
 				},
@@ -175,7 +196,7 @@ func baseRoutingRules() []O.Rule {
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					RuleSet: []string{splitTunnelTag},
+					RuleSet: []string{splitTunnelTag, directTag},
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -205,7 +226,7 @@ func baseRoutingRules() []O.Rule {
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					ProcessName: []string{"lantern", "lantern.exe", "Lantern", "Lantern.exe"},
+					ProcessPathRegex: lanternRegexForPlatform(),
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -237,20 +258,17 @@ func baseRoutingRules() []O.Rule {
 // buildOptions builds the box options using the config options and user servers.
 func buildOptions(group, path string) (O.Options, error) {
 	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
-	opts := baseOpts()
+
+	opts := baseOpts(path)
 	slog.Debug("Base options initialized")
 
 	// update default options and paths
 	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
 	opts.Experimental.ClashAPI.DefaultMode = group
 
-	splitTunnelPath := filepath.Join(path, splitTunnelFile)
-	opts.Route.RuleSet[0].LocalOptions.Path = splitTunnelPath
-
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
 		"cacheFilePath", opts.Experimental.CacheFile.Path,
 		"clashAPIDefaultMode", opts.Experimental.ClashAPI.DefaultMode,
-		"splitTunnelFilePath", splitTunnelPath,
 	)
 
 	// platform-specific overrides
@@ -430,3 +448,44 @@ func groupRule(group string) O.Rule {
 		},
 	}
 }
+
+// lanternRegexForPlatform returns the regex patterns to match Lantern process path for the current platform. We want this
+// to be as limited as possible to avoid cases where other applications can bypass the VPN.
+func lanternRegexForPlatform() []string {
+	switch common.Platform {
+	case "windows":
+		return []string{
+			`(?i)^C:\\Program Files( \(x86\))?\\Lantern\\lantern\.exe$`,
+			`(?i)^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\Lantern\\lantern\.exe$`,
+			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
+		}
+	case "darwin":
+		return []string{`(?i)^/Lantern.app/Contents/MacOS/lantern$`}
+	case "linux":
+		return []string{
+			`(?i)^/opt/lantern/lantern$`,
+			`(?i)^/usr/bin/lantern$`,
+			`(?i)^/usr/local/bin/lantern$`,
+			`(?i)^/home/.+/(lantern/(bin/)?)?lantern$`,
+		}
+	default:
+		return []string{}
+	}
+}
+
+// These are embedded domains that should always bypass the VPN.
+var inlineDirectRuleSet string = `
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        "iantem.io",
+		"a248.e.akamai.net",
+		"cloudfront.net",
+		"raw.githubusercontent.com"
+      ]
+    }
+  ]
+}
+`

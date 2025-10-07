@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
+	"os"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -42,11 +43,11 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 		}),
 	}
 	resp, err := client.Do(req)
+	if isSocketError(err) &&
+		!slog.Default().Enabled(context.Background(), internal.LevelTrace) {
+		err = ErrServiceIsNotRunning
+	}
 	if err != nil {
-		if strings.Contains(err.Error(), "no such file or directory") &&
-			!slog.Default().Enabled(context.Background(), internal.LevelTrace) {
-			err = ErrServiceIsNotRunning
-		}
 		return res, traces.RecordError(ctx, fmt.Errorf("request failed: %w", err))
 	}
 	defer resp.Body.Close()
@@ -62,4 +63,8 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 		return res, traces.RecordError(ctx, fmt.Errorf("failed to decode response: %w", err))
 	}
 	return res, nil
+}
+
+func isSocketError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission)
 }

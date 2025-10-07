@@ -35,7 +35,7 @@ func TestUpdateServers(t *testing.T) {
 	testOpts, _, err := testBoxOptions(common.DataPath())
 	require.NoError(t, err, "failed to get test box options")
 
-	baseOuts := baseOpts().Outbounds
+	baseOuts := baseOpts(common.DataPath()).Outbounds
 	allOutbounds := map[string]sbO.Outbound{
 		"direct": baseOuts[0],
 		"block":  baseOuts[1],
@@ -121,9 +121,9 @@ func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
 func testEstablishConnection(t *testing.T, opts sbO.Options) {
 	tmp := common.DataPath()
 
-	opts.Route.RuleSet = baseOpts().Route.RuleSet
+	opts.Route.RuleSet = baseOpts(common.DataPath()).Route.RuleSet
 	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts().Route.Rules[2]}, opts.Route.Rules...)
+	opts.Route.Rules = append([]sbO.Rule{baseOpts(common.DataPath()).Route.Rules[2]}, opts.Route.Rules...)
 	newSplitTunnel(tmp)
 
 	err := establishConnection("", "", opts, tmp, nil)
