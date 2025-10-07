@@ -185,7 +185,7 @@ func selectedServer(ctx context.Context) (string, string, error) {
 		return group, tag, nil
 	}
 	slog.Log(nil, internal.LevelTrace, "Tunnel not running, reading from cache file")
-	opts := baseOpts().Experimental.CacheFile
+	opts := baseOpts(common.DataPath()).Experimental.CacheFile
 	opts.Path = filepath.Join(common.DataPath(), cacheFileName)
 	cacheFile := cachefile.New(context.Background(), *opts)
 	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
