@@ -77,9 +77,9 @@ type Options struct {
 	LogLevel string
 }
 
-// NewRadiance creates a new Radiance VPN client. platIfce is the platform interface used to
-// interact with the underlying platform on iOS and Android. On other platforms, it is ignored and
-// can be nil.
+// NewRadiance creates a new Radiance VPN client. opts includes the platform interface used to
+// interact with the underlying platform on iOS, Android, and MacOS. On other platforms, it is
+// ignored and can be nil.
 func NewRadiance(opts Options) (*Radiance, error) {
 	if opts.Locale == "" {
 		// It is preferable to use the locale from the frontend, as locale is a requirement for lots
@@ -274,6 +274,7 @@ func (r *Radiance) ServerLocations() ([]lcommon.ServerLocation, error) {
 	}
 	if cfg == nil {
 		slog.Info("No config available for server locations, returning error")
+		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 		return nil, fmt.Errorf("no config available")
 	}
 	slog.Debug("Returning server locations from config", "locations", cfg.ConfigResponse.Servers)
