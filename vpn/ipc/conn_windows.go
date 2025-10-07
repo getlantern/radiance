@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -20,9 +21,7 @@ const (
 	apiURL         = "http://pipe"
 	connectTimeout = 10 * time.Second
 
-	// TODO: I don't know which one should be used
-	sddl = `O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)`
-	// sddl = `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;BU)`
+	sddl = `D:P(A;;GA;;;SY)(A;;GRGW;;;IU)(A;;GRGW;;;BA)`
 )
 
 // SetSocketPath not supported on Windows.
@@ -52,11 +51,24 @@ func listen(_ string) (net.Listener, error) {
 	return &winioListener{ln}, nil
 }
 
-// winioConn is an helper interface to access the underlying file descriptor of a winio.Conn. This
-// is needed to call Windows API functions that require a handle.
+// winioConn is an helper interface that exposes the standard syscall.Conn so we can
+// access the underlying handle via RawConn.Control
 type winioConn interface {
 	net.Conn
-	FD() uintptr
+	SyscallConn() (syscall.RawConn, error)
+}
+
+// withConnHandle runs the function with the connection’s handle pinned by the runtime
+func withConnHandle(c winioConn, fn func(h windows.Handle) error) error {
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var callErr error
+	if err := rc.Control(func(fd uintptr) { callErr = fn(windows.Handle(fd)) }); err != nil {
+		return err
+	}
+	return callErr
 }
 
 type winioListener struct {
@@ -86,7 +98,7 @@ func (l *winioListener) Accept() (conn net.Conn, err error) {
 	}
 	defer pipeToken.Close()
 
-	procToken, err := getProcessToken(wc)
+	procToken, err := getServerProcessToken()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get process token: %w", err)
 	}
@@ -103,68 +115,49 @@ func (l *winioListener) Accept() (conn net.Conn, err error) {
 	return wc, nil
 }
 
+func tokenUserSID(t windows.Token) (*windows.SID, error) {
+	u, err := t.GetTokenUser()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token user: %w", err)
+	}
+	return u.User.Sid, nil
+}
+
 // verifySameUser checks if two tokens belong to the same user.
 func verifySameUser(t1, t2 windows.Token) (bool, error) {
-	u1, err := t1.GetTokenUser()
+	s1, err := tokenUserSID(t1)
 	if err != nil {
 		return false, fmt.Errorf("failed to get token user: %w", err)
 	}
-	u2, err := t2.GetTokenUser()
+	s2, err := tokenUserSID(t2)
 	if err != nil {
 		return false, fmt.Errorf("failed to get token user: %w", err)
 	}
-	return u1.User.Sid.Equals(u2.User.Sid), nil
+	return s1.Equals(s2), nil
 }
 
 // getPipeClientToken retrieves the impersonation token for the pipe client.
 func getPipeClientToken(conn winioConn) (windows.Token, error) {
-	ph := windows.Handle(conn.FD())
-	if ph == 0 {
-		return 0, fmt.Errorf("invalid pipe handle")
-	}
-
-	err := impersonateNamedPipeClient(ph)
-	if err != nil {
-		return 0, fmt.Errorf("failed to impersonate client: %w", err)
-	}
-	defer windows.RevertToSelf()
-
 	var token windows.Token
-	err = windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY, true, &token)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open thread token: %w", err)
+	if err := withConnHandle(conn, func(h windows.Handle) error {
+		err := impersonateNamedPipeClient(h)
+		if err != nil {
+			return fmt.Errorf("failed to impersonate client: %w", err)
+		}
+		defer windows.RevertToSelf()
+
+		return windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY, true, &token)
+	}); err != nil {
+		return 0, err
 	}
 	return token, nil
 }
 
-// getProcessToken retrieves the process token for the pipe client.
-func getProcessToken(pc winioConn) (windows.Token, error) {
-	pid, err := getPipeClientPID(pc)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get client process id: %w", err)
-	}
-	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION, false, pid)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open process token: %w", err)
-	}
-	defer windows.CloseHandle(h)
-
+// getServerProcessToken retrieves the process token for the pipe client.
+func getServerProcessToken() (windows.Token, error) {
 	var token windows.Token
-	if err := windows.OpenProcessToken(h, windows.TOKEN_QUERY, &token); err != nil {
-		return 0, fmt.Errorf("failed to open process token: %w", err)
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
+		return 0, fmt.Errorf("failed to open service process token: %w", err)
 	}
 	return token, nil
-}
-
-func getPipeClientPID(pc winioConn) (uint32, error) {
-	ph := windows.Handle(pc.FD())
-	if ph == 0 {
-		return 0, fmt.Errorf("invalid pipe handle")
-	}
-	var pid uint32
-	err := windows.GetNamedPipeClientProcessId(ph, &pid)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get client process id: %w", err)
-	}
-	return pid, nil
 }

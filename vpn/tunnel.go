@@ -75,19 +75,6 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	t := &tunnel{}
 	t.status.Store(ipc.StatusInitializing)
 
-	ipcServer = ipc.NewServer(t)
-	if err := ipcServer.Start(common.DataPath()); err != nil {
-		slog.Error("Failed to start IPC server", "error", err)
-		return fmt.Errorf("starting IPC server: %w", err)
-	}
-	slog.Debug("IPC server started")
-	defer func() {
-		if err != nil {
-			t.status.Store(ipc.StatusClosed)
-			ipcServer.Close()
-		}
-	}()
-
 	t.ctx, t.cancel = context.WithCancel(sbx.BoxContext())
 	if err := t.init(opts, dataPath, platIfce); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
@@ -116,6 +103,19 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 
 	tInstance = t
 	t.status.Store(ipc.StatusRunning)
+	// If the IPC server is already running, make sure it points to the live tunnel
+	if ipcServer != nil {
+		ipcServer.SetService(t)
+		return nil
+	}
+	// fallback: start IPC server here for platforms that don't call InitIPC yet
+	ipcServer = ipc.NewServer(t)
+	if err := ipcServer.Start(dataPath); err != nil {
+		slog.Error("Failed to start IPC server", "error", err)
+		t.status.Store(ipc.StatusClosed)
+		return fmt.Errorf("starting IPC server: %w", err)
+	}
+	slog.Debug("IPC server started")
 	return nil
 }
 
@@ -286,10 +286,6 @@ func (t *tunnel) Close() error {
 	t.status.Store(ipc.StatusClosed)
 	tInstance = nil
 	return err
-}
-
-func (t *tunnel) close() error {
-	return errors.Join(t.Close(), ipcServer.Close())
 }
 
 func (t *tunnel) Ctx() context.Context {

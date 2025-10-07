@@ -5,16 +5,16 @@ package ipc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/getlantern/radiance/traces"
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-
-	"github.com/getlantern/radiance/traces"
 )
 
 var (
@@ -30,13 +30,16 @@ type Service interface {
 	Close() error
 }
 
+type StartFn func(ctx context.Context, group, tag string) (Service, error)
+
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
 	svr     *http.Server
 	service Service
 
-	router chi.Router
+	router  chi.Router
+	startFn StartFn
 }
 
 // NewServer creates a new Server instance with the provided Service.
@@ -55,6 +58,8 @@ func NewServer(service Service) *Server {
 	s.router.Post(selectEndpoint, s.selectHandler)
 	s.router.Get(clashModeEndpoint, s.clashModeHandler)
 	s.router.Post(clashModeEndpoint, s.clashModeHandler)
+	s.router.Post(startServiceEndpoint, s.startServiceHandler)
+	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
@@ -89,10 +94,69 @@ func (s *Server) Close() error {
 	return s.svr.Close()
 }
 
-// CloseService sends a request to shutdown the service. This will also close the IPC server.
+// CloseService sends a request to shutdown the service
 func CloseService(ctx context.Context) error {
 	_, err := sendRequest[empty](ctx, "POST", closeServiceEndpoint, nil)
 	return err
+}
+
+// StartService sends a request to start the service
+func StartService(ctx context.Context, group, tag string) error {
+	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, selection{GroupTag: group, OutboundTag: tag})
+	return err
+}
+
+// StopService sends a request to stop the service (IPC server stays up)
+func StopService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", stopServiceEndpoint, nil)
+	return err
+}
+
+// SetStartFn registers a function that will be called when the start endpoint is hit
+func (s *Server) SetStartFn(fn StartFn) { s.startFn = fn }
+
+// SetService updates the service attached to the server.
+// Typically called when starting or replacing the VPN tunnel
+func (s *Server) SetService(svc Service) { s.service = svc }
+
+func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if s.startFn == nil {
+		http.Error(w, "start not supported", http.StatusNotImplemented)
+		return
+	}
+	// check if service is already running
+	if s.service != nil && s.service.Status() == StatusRunning {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	var p selection
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	svc, err := s.startFn(r.Context(), p.GroupTag, p.OutboundTag)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	s.SetService(svc)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
+	svc := s.service
+	s.service = &closedService{}
+
+	if svc != nil {
+		if err := svc.Close(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +172,9 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		if err := s.Close(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.svr.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			traces.RecordError(context.Background(), err)
 		}
 	}()
