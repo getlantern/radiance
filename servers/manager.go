@@ -21,8 +21,6 @@ import (
 
 	sbx "github.com/getlantern/sing-box-extensions"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	C "github.com/getlantern/common"
 
@@ -455,34 +453,14 @@ func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFinge
 	return client, nil
 }
 
-// AddServerByURL parse a value that can be a JSON sing-box config or a base64
-// encoded config from another provider. It parses the config into a sing-box config
-// and add it to the user managed group
-func (m *Manager) AddServerByURL(ctx context.Context, value []byte) error {
+// AddServerWithSingboxJSON parse a value that can be a JSON sing-box config.
+// It parses the config into a sing-box config and add it to the user managed group.
+func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURL")
 	defer span.End()
 	var option Options
 	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
-		var syntaxErr *json.SyntaxError
-		if !errors.As(err, &syntaxErr) {
-			return traces.RecordError(ctx, fmt.Errorf("failed to unmarshal json: %w", err))
-		}
-
-		// config is not in json format, so try to parse as URL
-		providedURL, err := validURL(value)
-		if err != nil {
-			return traces.RecordError(ctx, err)
-		}
-
-		if option, err = parseURL(providedURL); err != nil {
-			return traces.RecordError(
-				ctx,
-				fmt.Errorf("received configuration couldn't be parsed: %w", err),
-				trace.WithAttributes(
-					attribute.String("provided_value", string(value)),
-				),
-			)
-		}
+		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
 	if len(option.Endpoints) == 0 && len(option.Outbounds) == 0 {
 		return traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))

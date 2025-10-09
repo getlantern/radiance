@@ -2,7 +2,7 @@ package servers
 
 import (
 	"context"
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -142,7 +142,7 @@ func (s *lanternServerManagerMock) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNotFound)
 }
 
-func TestAddServerByURL(t *testing.T) {
+func TestAddServerWithSingBoxJSON(t *testing.T) {
 	dataPath := t.TempDir()
 	manager := &Manager{
 		servers: Servers{
@@ -182,31 +182,12 @@ func TestAddServerByURL(t *testing.T) {
 	}`
 
 	t.Run("adding server with a sing-box json config should work", func(t *testing.T) {
-		require.NoError(t, manager.AddServerByURL(ctx, []byte(jsonConfig)))
+		require.NoError(t, manager.AddServerWithSingboxJSON(ctx, []byte(jsonConfig)))
 	})
-
-	t.Run("adding server with invalid json config should fail", func(t *testing.T) {
-		require.Error(t, manager.AddServerByURL(ctx, []byte(`{"incompatible_json": ""}`)))
+	t.Run("using a empty config should return an error", func(t *testing.T) {
+		require.Error(t, manager.AddServerWithSingboxJSON(ctx, []byte{}))
 	})
-
-	t.Run("adding a shadowsocks server by URL should work", func(t *testing.T) {
-		method := "chacha20-ietf-poly1305"
-		key := "randompasswordwith24char"
-		host := "127.0.0.1"
-		port := 8388
-		tagName := "ss url test"
-		encodedKey := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", method, key)))
-		ssURL := fmt.Sprintf("ss://%s@%s:%d#%s", encodedKey, host, port, url.QueryEscape(tagName))
-		require.NoError(t, manager.AddServerByURL(ctx, []byte(ssURL)))
-	})
-
-	t.Run("adding a invalid URL should return an error", func(t *testing.T) {
-		invalidURL := "this is not a valid url"
-		require.Error(t, manager.AddServerByURL(ctx, []byte(invalidURL)))
-	})
-
-	t.Run("adding a URL with unsupported protocol should return an error", func(t *testing.T) {
-		invalidURL := "http://example.com"
-		require.Error(t, manager.AddServerByURL(ctx, []byte(invalidURL)))
+	t.Run("providing a json that doesn't have any endpoints or outbounds should return a error", func(t *testing.T) {
+		require.Error(t, manager.AddServerWithSingboxJSON(ctx, json.RawMessage("{}")))
 	})
 }
