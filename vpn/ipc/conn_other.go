@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 const (
@@ -15,12 +16,7 @@ const (
 	sockFile = "radiance.sock"
 )
 
-var (
-	sockPath = "radiance.sock" // default to current directory
-
-	uid = os.Getuid()
-	gid = os.Getgid()
-)
+var sockPath = "radiance.sock" // default to current directory
 
 // SetSocketPath sets the path for the Unix domain socket file for client connections.
 func SetSocketPath(path string) {
@@ -45,9 +41,21 @@ func listen(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", path, err)
 	}
+	uid, gid := getUidGid(path)
 	if err := os.Chown(path, uid, gid); err != nil {
 		listener.Close()
 		return nil, fmt.Errorf("chmod %s: %w", path, err)
 	}
 	return listener, nil
+}
+
+func getUidGid(sockPath string) (int, int) {
+	parentDir := filepath.Dir(sockPath)
+	fInfo, err := os.Stat(parentDir)
+	if err == nil {
+		if stat, ok := fInfo.Sys().(*syscall.Stat_t); ok {
+			return int(stat.Uid), int(stat.Gid)
+		}
+	}
+	return os.Getuid(), os.Getgid()
 }
