@@ -5,10 +5,13 @@ package ipc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/getlantern/radiance/internal"
 )
 
 const (
@@ -70,6 +73,7 @@ func getNonRootOwner(path string) (uid, gid int) {
 		return uid, gid
 	}
 
+	slog.Log(context.Background(), internal.LevelTrace, "searching for non-root owner of", "path", path)
 	for {
 		parentDir := filepath.Dir(path)
 		if parentDir == path || parentDir == "/" {
@@ -79,6 +83,7 @@ func getNonRootOwner(path string) (uid, gid int) {
 
 		fInfo, err := os.Stat(path)
 		if err != nil {
+			slog.Log(context.Background(), internal.LevelTrace, "stat error", "path", path, "error", err)
 			continue
 		}
 		stat, ok := fInfo.Sys().(*syscall.Stat_t)
@@ -86,8 +91,12 @@ func getNonRootOwner(path string) (uid, gid int) {
 			continue
 		}
 		if int(stat.Uid) != 0 {
+			slog.Log(context.Background(), internal.LevelTrace, "found non-root owner", "path", path, "uid", stat.Uid, "gid", stat.Gid)
 			return int(stat.Uid), int(stat.Gid)
 		}
+	}
+	if slog.Default().Enabled(context.Background(), internal.LevelTrace) {
+		slog.Warn("falling back to root owner for", "path", path)
 	}
 	return uid, gid
 }
