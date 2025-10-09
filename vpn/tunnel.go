@@ -96,7 +96,8 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		err = t.connectTo(group, tag)
 	}
 	if err != nil {
-		t.Close()
+		slog.Error("Failed to connect tunnel", "error", err)
+		t.close()
 		return err
 	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
@@ -109,12 +110,13 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		return nil
 	}
 	// fallback: start IPC server here for platforms that don't call InitIPC yet
-	ipcServer = ipc.NewServer(t)
-	if err := ipcServer.Start(dataPath); err != nil {
+	isvr := ipc.NewServer(t)
+	if err := isvr.Start(dataPath); err != nil {
 		slog.Error("Failed to start IPC server", "error", err)
-		t.status.Store(ipc.StatusClosed)
+		t.close()
 		return fmt.Errorf("starting IPC server: %w", err)
 	}
+	ipcServer = isvr
 	slog.Debug("IPC server started")
 	return nil
 }
@@ -244,7 +246,6 @@ func (t *tunnel) connect() (err error) {
 }
 
 func (t *tunnel) connectTo(group, tag string) error {
-	slog.Log(nil, internal.LevelTrace, "Connecting to server", "group", group, "tag", tag)
 	err := t.cacheFile.StoreMode(group)
 	if err == nil {
 		err = t.cacheFile.StoreSelected(group, tag)
@@ -258,13 +259,17 @@ func (t *tunnel) connectTo(group, tag string) error {
 }
 
 func (t *tunnel) Close() error {
-	t.status.Store(ipc.StatusClosing)
+	if t.status.Swap(ipc.StatusClosed) == ipc.StatusClosed {
+		return nil
+	}
 	tAccess.Lock()
 	defer tAccess.Unlock()
+	tInstance = nil
+	return t.close()
+}
 
+func (t *tunnel) close() error {
 	slog.Info("Closing tunnel")
-	slog.Log(nil, internal.LevelTrace, "Clearing ipc server tunnel reference")
-
 	t.cancel()
 
 	done := make(chan error)
@@ -283,8 +288,6 @@ func (t *tunnel) Close() error {
 	case err = <-done:
 	}
 	slog.Debug("Tunnel closed")
-	t.status.Store(ipc.StatusClosed)
-	tInstance = nil
 	return err
 }
 

@@ -89,8 +89,8 @@ func GetSelected(ctx context.Context) (group, tag string, err error) {
 }
 
 func (s *Server) selectedHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() == StatusClosed || s.service.Status() == StatusClosing {
-		http.Error(w, "service closed", http.StatusServiceUnavailable)
+	if s.service.Status() != StatusRunning {
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	cs := s.service.ClashServer()

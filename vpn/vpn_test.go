@@ -215,7 +215,7 @@ func setupVpnTest(t *testing.T) *mockService {
 
 	m := &mockService{
 		ctx:    ctx,
-		status: ipc.StatusInitializing,
+		status: ipc.StatusRunning,
 		clash:  clashServer.(*clashapi.Server),
 	}
 	ipcServer = ipc.NewServer(m)
