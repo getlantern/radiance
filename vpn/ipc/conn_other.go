@@ -30,32 +30,60 @@ func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
 	})
 }
 
+type sockListener struct {
+	net.Listener
+}
+
 // listen creates a Unix domain socket listener in the specified directory.
 func listen(path string) (net.Listener, error) {
-	path = filepath.Join(path, sockFile)
-	os.Remove(path)
+	sockPath = filepath.Join(path, sockFile)
+	os.Remove(sockPath)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{
-		Name: path,
+		Name: sockPath,
 		Net:  "unix",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("listen %s: %w", path, err)
+		return nil, fmt.Errorf("listen %s: %w", sockPath, err)
 	}
-	uid, gid := getUidGid(path)
-	if err := os.Chown(path, uid, gid); err != nil {
+	uid, gid := getNonRootOwner(sockPath)
+	if err := os.Chown(sockPath, uid, gid); err != nil {
 		listener.Close()
-		return nil, fmt.Errorf("chmod %s: %w", path, err)
+		return nil, fmt.Errorf("chmod %s: %w", sockPath, err)
 	}
-	return listener, nil
+	return &sockListener{Listener: listener}, nil
 }
 
-func getUidGid(sockPath string) (int, int) {
-	parentDir := filepath.Dir(sockPath)
-	fInfo, err := os.Stat(parentDir)
-	if err == nil {
-		if stat, ok := fInfo.Sys().(*syscall.Stat_t); ok {
+func (l *sockListener) Close() error {
+	err := l.Listener.Close()
+	os.Remove(sockPath)
+	return err
+}
+
+func getNonRootOwner(path string) (uid, gid int) {
+	uid = os.Getuid()
+	gid = os.Getgid()
+	if uid != 0 {
+		return uid, gid
+	}
+
+	for {
+		parentDir := filepath.Dir(path)
+		if parentDir == path || parentDir == "/" {
+			break
+		}
+		path = parentDir
+
+		fInfo, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		stat, ok := fInfo.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
+		if int(stat.Uid) != 0 {
 			return int(stat.Uid), int(stat.Gid)
 		}
 	}
-	return os.Getuid(), os.Getgid()
+	return uid, gid
 }
