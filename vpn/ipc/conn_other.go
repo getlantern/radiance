@@ -32,30 +32,34 @@ func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
 
 type sockListener struct {
 	net.Listener
+	path string
 }
 
 // listen creates a Unix domain socket listener in the specified directory.
 func listen(path string) (net.Listener, error) {
-	sockPath = filepath.Join(path, sockFile)
-	os.Remove(sockPath)
+	path = filepath.Join(path, sockFile)
+	os.Remove(path)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{
-		Name: sockPath,
+		Name: path,
 		Net:  "unix",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("listen %s: %w", sockPath, err)
+		return nil, fmt.Errorf("listen %s: %w", path, err)
 	}
-	uid, gid := getNonRootOwner(sockPath)
-	if err := os.Chown(sockPath, uid, gid); err != nil {
+	uid, gid := getNonRootOwner(path)
+	if err := os.Chown(path, uid, gid); err != nil {
 		listener.Close()
-		return nil, fmt.Errorf("chmod %s: %w", sockPath, err)
+		return nil, fmt.Errorf("chown %s: %w", path, err)
 	}
-	return &sockListener{Listener: listener}, nil
+	return &sockListener{
+		Listener: listener,
+		path:     path,
+	}, nil
 }
 
 func (l *sockListener) Close() error {
 	err := l.Listener.Close()
-	os.Remove(sockPath)
+	os.Remove(l.path)
 	return err
 }
 
