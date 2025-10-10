@@ -123,7 +123,7 @@ func Disconnect() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
 	defer span.End()
 	slog.Info("Disconnecting VPN")
-	return traces.RecordError(ctx, ipc.CloseService(ctx))
+	return traces.RecordError(ctx, ipc.StopService(ctx))
 }
 
 // selectServer selects the specified server for the tunnel. The tunnel must already be open.
