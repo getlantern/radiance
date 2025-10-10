@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -138,4 +140,54 @@ func (s *lanternServerManagerMock) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusNotFound)
+}
+
+func TestAddServerWithSingBoxJSON(t *testing.T) {
+	dataPath := t.TempDir()
+	manager := &Manager{
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+			SGUser: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+		},
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: make(map[string]any),
+			SGUser:    make(map[string]any),
+		},
+		serversFile:      filepath.Join(dataPath, common.ServersFileName),
+		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+	}
+
+	ctx := context.Background()
+	jsonConfig := `
+	{
+		"outbounds": [
+			{
+               "type": "shadowsocks",
+               "tag": "ss-out",
+               "server": "127.0.0.1",
+               "server_port": 8388,
+               "method": "chacha20-ietf-poly1305",
+               "password": "randompasswordwith24char",
+               "network": "tcp"
+            }
+		]
+	}`
+
+	t.Run("adding server with a sing-box json config should work", func(t *testing.T) {
+		require.NoError(t, manager.AddServerWithSingboxJSON(ctx, []byte(jsonConfig)))
+	})
+	t.Run("using a empty config should return an error", func(t *testing.T) {
+		require.Error(t, manager.AddServerWithSingboxJSON(ctx, []byte{}))
+	})
+	t.Run("providing a json that doesn't have any endpoints or outbounds should return a error", func(t *testing.T) {
+		require.Error(t, manager.AddServerWithSingboxJSON(ctx, json.RawMessage("{}")))
+	})
 }
