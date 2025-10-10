@@ -43,6 +43,7 @@ type fetcher struct {
 	user         common.UserInfo
 	lastModified time.Time
 	locale       string
+	etag         string
 }
 
 // newFetcher creates a new fetcher with the given http client.
@@ -104,15 +105,23 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	// Add If-Modified-Since header to the request
 	// Note that on the first run, lastModified is zero, so the server will return the latest config.
 	req.Header.Set("If-Modified-Since", f.lastModified.Format(http.TimeFormat))
+	if f.etag != "" {
+		req.Header.Set("If-None-Match", f.etag)
+	}
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not send request: %w", err))
 	}
+	defer resp.Body.Close()
+
+	// Update the etag from the response
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		f.etag = etag
+	}
 
 	// Note that Go's HTTP library should automatically have decompressed the response here.
 	buf, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not read response body: %w", err))
 	}
