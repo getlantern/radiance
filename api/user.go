@@ -140,7 +140,8 @@ func (a *APIClient) Devices() ([]Device, error) {
 
 // DataCapInfo returns information about this user's data cap
 func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
-	otel.Tracer(tracerName).Start(ctx, "data_cap_info")
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
+	defer span.End()
 	datacap := &DataCapInfo{}
 	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", a.userInfo.LegacyID(), a.userInfo.DeviceID())
 	newReq := a.authWc.NewRequest(nil, nil, nil)
