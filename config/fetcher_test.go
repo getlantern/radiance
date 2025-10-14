@@ -40,6 +40,9 @@ func (m *mockUser) LegacyID() int64 {
 func (m *mockUser) AuthToken() string {
 	return "mock-auth-token"
 }
+func (m *mockUser) LegacyToken() string {
+	return "mock-legacy-token"
+}
 
 func TestFetchConfig(t *testing.T) {
 	mockUser := &mockUser{}
