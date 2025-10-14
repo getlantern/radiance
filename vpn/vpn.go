@@ -34,6 +34,7 @@ const (
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
 func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
+	slog.Debug("QuickConnect called", "group", group)
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"quick_connect",
@@ -62,6 +63,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
 func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+	slog.Debug("ConnectToServer called", "group", group, "tag", tag)
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"connect_to_server",
@@ -122,7 +124,7 @@ func isOpen(ctx context.Context) bool {
 func Disconnect() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
 	defer span.End()
-	slog.Info("Disconnecting VPN")
+	slog.Info("Disconnecting VPN..")
 	return traces.RecordError(ctx, ipc.StopService(ctx))
 }
 

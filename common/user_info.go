@@ -3,14 +3,13 @@ package common
 // this file contains the user info interface and the methods to read and write user data
 // use this acrosss the app to read and write user data in sync
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 
-	"google.golang.org/protobuf/proto"
-
-	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/common"
 )
 
 const userDataFileName = ".userData"
@@ -20,8 +19,8 @@ type UserInfo interface {
 	DeviceID() string
 	LegacyID() int64
 	LegacyToken() string
-	SetData(*protos.LoginResponse) error
-	GetData() (*protos.LoginResponse, error)
+	SetData(*common.UserData) error
+	GetData() (*common.UserData, error)
 	Locale() string
 	SetLocale(string)
 }
@@ -30,7 +29,7 @@ type UserInfo interface {
 // it contains the device ID, user data, data directory, and locale
 type userInfo struct {
 	deviceID string
-	data     *protos.LoginResponse
+	data     *common.UserData
 	dataPath string
 	locale   string
 }
@@ -61,14 +60,14 @@ func (u *userInfo) DeviceID() string {
 
 func (u *userInfo) LegacyID() int64 {
 	if u.data != nil {
-		return u.data.LegacyID
+		return u.data.UserId
 	}
 	return 0
 }
 
 func (u *userInfo) LegacyToken() string {
 	if u.data != nil {
-		return u.data.LegacyToken
+		return u.data.Token
 	}
 	return ""
 }
@@ -81,13 +80,13 @@ func (u *userInfo) SetLocale(locale string) {
 	u.locale = locale
 }
 
-func (u *userInfo) SetData(data *protos.LoginResponse) error {
+func (u *userInfo) SetData(data *common.UserData) error {
 	u.data = data
 	return save(data, u.dataPath)
 }
 
 // GetUserData reads user data from file
-func (u *userInfo) GetData() (*protos.LoginResponse, error) {
+func (u *userInfo) GetData() (*common.UserData, error) {
 	// We have already read the data from file, so we can return it directly
 	if u.data != nil {
 		return u.data, nil
@@ -96,17 +95,17 @@ func (u *userInfo) GetData() (*protos.LoginResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	var resp protos.LoginResponse
-	if err := proto.Unmarshal(data, &resp); err != nil {
+	var resp common.UserData
+	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
 // Save user data to file
-func save(data *protos.LoginResponse, path string) error {
+func save(data *common.UserData, path string) error {
 	slog.Debug("Saving user data", "path", path)
-	bytes, err := proto.Marshal(data)
+	bytes, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal user data: %w", err)
 	}
@@ -116,7 +115,7 @@ func save(data *protos.LoginResponse, path string) error {
 	return nil
 }
 
-func load(path string) (*protos.LoginResponse, error) {
+func load(path string) (*common.UserData, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil // File does not exist. could be first run
@@ -124,8 +123,8 @@ func load(path string) (*protos.LoginResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	var resp protos.LoginResponse
-	if err := proto.Unmarshal(data, &resp); err != nil {
+	var resp common.UserData
+	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal user data: %w", err)
 	}
 	return &resp, nil

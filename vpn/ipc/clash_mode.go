@@ -18,7 +18,7 @@ type m struct {
 
 // GetClashMode retrieves the current mode from the Clash server.
 func GetClashMode(ctx context.Context) (string, error) {
-	res, err := sendRequest[m](ctx, "GET", clashModeEndpoint, nil)
+	res, err := sendRequest[m](ctx, http.MethodGet, clashModeEndpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -27,7 +27,7 @@ func GetClashMode(ctx context.Context) (string, error) {
 
 // SetClashMode sets the mode of the Clash server.
 func SetClashMode(ctx context.Context, mode string) error {
-	_, err := sendRequest[empty](ctx, "POST", clashModeEndpoint, m{Mode: mode})
+	_, err := sendRequest[empty](ctx, http.MethodPost, clashModeEndpoint, m{Mode: mode})
 	return err
 }
 
@@ -40,7 +40,7 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	cs := s.service.ClashServer()
 	switch req.Method {
-	case "GET":
+	case http.MethodGet:
 		mode := cs.Mode()
 		span.SetAttributes(attribute.String("mode", mode))
 		w.Header().Set("Content-Type", "application/json")
@@ -48,7 +48,7 @@ func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	case "POST":
+	case http.MethodPost:
 		var mode m
 		if err := json.NewDecoder(req.Body).Decode(&mode); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

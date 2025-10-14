@@ -63,6 +63,7 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 		Platform:       common.Platform,
 		AppName:        common.Name,
 		DeviceID:       f.user.DeviceID(),
+		UserID:         fmt.Sprintf("%d", f.user.LegacyID()),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
@@ -106,6 +107,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	// Note that on the first run, lastModified is zero, so the server will return the latest config.
 	req.Header.Set("If-Modified-Since", f.lastModified.Format(http.TimeFormat))
 	if f.etag != "" {
+		slog.Debug("Sending If-None-Match header", "etag", f.etag)
 		req.Header.Set("If-None-Match", f.etag)
 	}
 
@@ -115,8 +117,12 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
+	// Log the response headers at debug level
+	slog.Debug("Response headers", "headers", resp.Header)
+
 	// Update the etag from the response
 	if etag := resp.Header.Get("ETag"); etag != "" {
+		slog.Debug("Received new ETag", "etag", etag)
 		f.etag = etag
 	}
 
@@ -134,6 +140,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 		return buf, nil
 	case http.StatusNotModified:
 		// 304 Not Modified
+		slog.Debug("Config is not modified")
 		return nil, nil
 	case http.StatusNoContent:
 		// 204 No Content

@@ -14,8 +14,9 @@ import (
 	"github.com/getlantern/osversion"
 	"go.opentelemetry.io/otel"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
+	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
@@ -31,14 +32,14 @@ const (
 type IssueReporter struct {
 	httpClient *http.Client
 
-	userConfig common.UserInfo
+	userConfig rcommon.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
 func NewIssueReporter(
 	httpClient *http.Client,
-	userConfig common.UserInfo,
+	userConfig rcommon.UserInfo,
 ) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
@@ -105,7 +106,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	if err != nil {
 		slog.Error("Unable to get user data", "error", err)
 	} else {
-		if userData != nil && userData.LegacyUserData.UserLevel == "pro" {
+		if userData != nil && userData.Level == common.UserLevelPro {
 			userStatus = "pro"
 		}
 	}
@@ -124,9 +125,9 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	r := &ReportIssueRequest{
 		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
 		CountryCode:       country,
-		AppVersion:        common.Version,
+		AppVersion:        rcommon.Version,
 		SubscriptionLevel: userStatus,
-		Platform:          common.Platform,
+		Platform:          rcommon.Platform,
 		Description:       report.Description,
 		UserEmail:         userEmail,
 		DeviceId:          ir.userConfig.DeviceID(),
@@ -149,7 +150,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	slog.Debug("zipping log files for issue report")
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
-	logDir := common.LogPath()
+	logDir := rcommon.LogPath()
 	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxLogSize)
 	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{

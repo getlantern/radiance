@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/big"
 	"net/url"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/1Password/srp"
 	"go.opentelemetry.io/otel"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/traces"
 )
@@ -40,6 +40,7 @@ const (
 	baseURL = "https://iantem.io/api/v1"
 )
 
+/*
 // Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
 type Device struct {
 	ID   string
@@ -137,6 +138,7 @@ func (a *APIClient) Devices() ([]Device, error) {
 
 	return ret, nil
 }
+*/
 
 // DataCapInfo returns information about this user's data cap
 func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
@@ -244,13 +246,41 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
-	a.userInfo.SetData(resp)
-	a.userData = resp
+	jsonData := protoToJson(resp)
+	a.userInfo.SetData(jsonData)
+	//a.userData = jsonData
 	a.salt = salt
 	if err := writeSalt(salt, a.saltPath); err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
 	return resp, nil
+}
+
+func protoToJson(resp *protos.LoginResponse) *common.UserData {
+	if resp == nil {
+		return nil
+	}
+	return &common.UserData{
+		UserId:  resp.LegacyID,
+		Token:   resp.LegacyToken,
+		Email:   resp.LegacyUserData.Email,
+		Devices: toCommonDevices(resp.LegacyUserData.Devices),
+		Code:    resp.LegacyUserData.Code,
+	}
+}
+
+func toCommonDevices(devices []*protos.LoginResponse_Device) []common.Device {
+	if devices == nil {
+		return nil
+	}
+	ret := make([]common.Device, len(devices))
+	for i, d := range devices {
+		ret[i] = common.Device{
+			Id:   d.Id,
+			Name: d.Name,
+		}
+	}
+	return ret
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
@@ -266,8 +296,6 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
-	// clean up local data
-	a.userData = nil
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
@@ -340,10 +368,14 @@ const group = srp.RFC5054Group3072
 func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_change_email")
 	defer span.End()
-	if a.userData == nil {
+	userData, err := a.userInfo.GetData()
+	if err != nil {
+		return traces.RecordError(ctx, err)
+	}
+	if userData == nil {
 		return traces.RecordError(ctx, ErrNotLoggedIn)
 	}
-	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
+	lowerCaseEmail := strings.ToLower(userData.Email)
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
@@ -421,9 +453,16 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err != nil {
 		return traces.RecordError(ctx, err)
 	}
+	userData, err := a.userInfo.GetData()
+	if err != nil {
+		return traces.RecordError(ctx, err)
+	}
+	if userData == nil {
+		return traces.RecordError(ctx, ErrNotLoggedIn)
+	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    a.userData.LegacyUserData.Email,
+		OldEmail:    userData.Email,
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -434,12 +473,12 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err := writeSalt(newSalt, a.saltPath); err != nil {
 		return traces.RecordError(ctx, err)
 	}
+	userData.Email = newEmail
 
-	if err := a.userInfo.SetData(a.userData); err != nil {
+	if err := a.userInfo.SetData(userData); err != nil {
 		return traces.RecordError(ctx, err)
 	}
 	a.salt = newSalt
-	a.userData.LegacyUserData.Email = newEmail
 	return nil
 }
 
@@ -506,7 +545,6 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 		return traces.RecordError(ctx, err)
 	}
 	// clean up local data
-	a.userData = nil
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))

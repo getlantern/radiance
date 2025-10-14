@@ -27,10 +27,16 @@ func SetSocketPath(path string) {
 }
 
 func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
-	return net.DialUnix("unix", nil, &net.UnixAddr{
+	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{
 		Name: sockPath,
 		Net:  "unix",
 	})
+	if err != nil {
+		slog.Log(context.Background(), internal.LevelTrace, "dial error", "error", err)
+		return nil, fmt.Errorf("dial %s: %w", sockPath, err)
+	}
+	slog.Log(context.Background(), internal.LevelTrace, "connected to socket", "path", sockPath, "local", conn.LocalAddr(), "remote", conn.RemoteAddr())
+	return conn, nil
 }
 
 type sockListener struct {

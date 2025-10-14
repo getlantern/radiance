@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
@@ -21,7 +20,6 @@ type APIClient struct {
 
 	salt       []byte
 	saltPath   string
-	userData   *protos.LoginResponse
 	deviceID   string
 	authClient AuthClient
 	userInfo   common.UserInfo
@@ -30,10 +28,6 @@ type APIClient struct {
 func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
 	httpClient.Transport = traces.NewRoundTripper(httpClient.Transport)
 
-	userData, err := userInfo.GetData()
-	if err != nil {
-		slog.Warn("failed to get user data", "error", err)
-	}
 	path := filepath.Join(dataDir, saltFileName)
 	salt, err := readSalt(path)
 	if err != nil {
@@ -43,12 +37,8 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	proWC := newWebClient(httpClient, proServerURL)
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
 		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
-		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
-		}
+		req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
+		req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
 		return nil
 	})
 	wc := newWebClient(httpClient, baseURL)
@@ -57,7 +47,6 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		proWC:      proWC,
 		salt:       salt,
 		saltPath:   path,
-		userData:   userData,
 		deviceID:   userInfo.DeviceID(),
 		authClient: &authClient{wc, userInfo},
 		userInfo:   userInfo,

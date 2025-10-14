@@ -29,7 +29,7 @@ import (
 	"github.com/getlantern/radiance/issue"
 )
 
-const configPollInterval = 10 * time.Minute
+const configPollInterval = 35 * time.Second
 const tracerName = "github.com/getlantern/radiance"
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
