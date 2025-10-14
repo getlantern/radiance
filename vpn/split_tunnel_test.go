@@ -151,22 +151,6 @@ func TestMatch(t *testing.T) {
 
 	router.ruleSet = ruleSet
 
-	rsStr := ruleSet.String()
-	waitForReload := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(50 * time.Millisecond):
-				if ruleSet.String() != rsStr {
-					return nil
-				}
-			}
-		}
-	}
-
 	rule, err := R.NewRule(ctx, logger, ruleOpts, false)
 	require.NoError(t, err)
 	require.NoError(t, rule.Start())
@@ -174,15 +158,19 @@ func TestMatch(t *testing.T) {
 
 	metadata := &adapter.InboundContext{Domain: "example.com"}
 
-	rsStr = ruleSet.String()
+	rsStr := ruleSet.String()
 	require.NoError(t, st.Enable())
-	require.NoError(t, waitForReload(), "timed out waiting for rule reload")
+	require.Eventually(t, func() bool {
+		return ruleSet.String() != rsStr
+	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
 
 	assert.True(t, rule.Match(metadata), "rule should match when split tunnel is enabled")
 
 	rsStr = ruleSet.String()
 	require.NoError(t, st.Disable())
-	require.NoError(t, waitForReload(), "timed out waiting for rule reload")
+	require.Eventually(t, func() bool {
+		return ruleSet.String() != rsStr
+	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
 
 	assert.False(t, rule.Match(metadata), "rule should not match when split tunnel is not enabled")
 }
