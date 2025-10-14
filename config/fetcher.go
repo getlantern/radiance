@@ -63,6 +63,8 @@ func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([
 		Platform:       common.Platform,
 		AppName:        common.Name,
 		DeviceID:       f.user.DeviceID(),
+		UserID:         fmt.Sprintf("%d", f.user.LegacyID()),
+		ProToken:       f.user.LegacyToken(),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
@@ -134,6 +136,7 @@ func (f *fetcher) send(body io.Reader) ([]byte, error) {
 		return buf, nil
 	case http.StatusNotModified:
 		// 304 Not Modified
+		slog.Debug("Config is not modified")
 		return nil, nil
 	case http.StatusNoContent:
 		// 204 No Content
