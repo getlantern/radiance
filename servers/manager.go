@@ -4,6 +4,7 @@
 package servers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -19,11 +20,13 @@ import (
 	"sync"
 
 	sbx "github.com/getlantern/sing-box-extensions"
+	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/traces"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -36,6 +39,8 @@ const (
 	SGUser    ServerGroup = "user"
 
 	trustFingerprintFileName = "trusted_server_fingerprints.json"
+
+	tracerName = "github.com/getlantern/radiance/servers"
 )
 
 type Options struct {
@@ -446,4 +451,22 @@ func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFinge
 		return nil, fmt.Errorf("failed to get tofu client: %w", err)
 	}
 	return client, nil
+}
+
+// AddServerWithSingboxJSON parse a value that can be a JSON sing-box config.
+// It parses the config into a sing-box config and add it to the user managed group.
+func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerWithSingboxJSON")
+	defer span.End()
+	var option Options
+	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
+	}
+	if len(option.Endpoints) == 0 && len(option.Outbounds) == 0 {
+		return traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
+	}
+	if err := m.AddServers(SGUser, option); err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
+	}
+	return nil
 }
