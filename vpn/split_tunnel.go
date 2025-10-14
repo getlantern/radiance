@@ -64,26 +64,32 @@ func newSplitTunnel(path string) *SplitTunnel {
 	return s
 }
 
-func (s *SplitTunnel) Enable() {
+func (s *SplitTunnel) Enable() error {
 	if s.IsEnabled() {
-		return
+		return nil
 	}
 	s.access.Lock()
 	s.rule.Mode = C.LogicalTypeOr
 	s.access.Unlock()
-	s.saveToFile()
+	if err := s.saveToFile(); err != nil {
+		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
+	}
 	slog.Log(context.Background(), internal.LevelTrace, "enabled split tunneling")
+	return nil
 }
 
-func (s *SplitTunnel) Disable() {
+func (s *SplitTunnel) Disable() error {
 	if !s.IsEnabled() {
-		return
+		return nil
 	}
 	s.access.Lock()
 	s.rule.Mode = C.LogicalTypeAnd
 	s.access.Unlock()
-	s.saveToFile()
+	if err := s.saveToFile(); err != nil {
+		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
+	}
 	slog.Log(context.Background(), internal.LevelTrace, "disabled split tunneling")
+	return nil
 }
 
 func (s *SplitTunnel) IsEnabled() bool {
