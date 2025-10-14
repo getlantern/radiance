@@ -456,7 +456,7 @@ func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFinge
 // AddServerWithSingboxJSON parse a value that can be a JSON sing-box config.
 // It parses the config into a sing-box config and add it to the user managed group.
 func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) error {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURL")
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerWithSingboxJSON")
 	defer span.End()
 	var option Options
 	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
