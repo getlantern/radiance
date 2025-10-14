@@ -228,8 +228,12 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
-	// Append device ID to user data
-	resp.LegacyUserData.DeviceID = deviceId
+
+	//this can be nil if the user has reached the device limit
+	if resp.LegacyUserData != nil {
+		// Append device ID to user data
+		resp.LegacyUserData.DeviceID = deviceId
+	}
 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
