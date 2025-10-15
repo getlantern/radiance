@@ -551,3 +551,21 @@ func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkRes
 	}
 	return resp, nil
 }
+
+func (a *APIClient) ReferralAttach(ctx context.Context, code string) (bool, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach")
+	defer span.End()
+	data := map[string]string{
+		"code": code,
+	}
+	req := a.proWC.NewRequest(nil, nil, data)
+	resp := &protos.BaseResponse{}
+	if err := a.proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
+		return false, traces.RecordError(ctx, err)
+	}
+	if  resp.Error != "" {
+		return false, traces.RecordError(ctx, fmt.Errorf("failed to attach referral code: %s", resp.Error))
+	}
+	return true, nil
+
+}
