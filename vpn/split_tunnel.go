@@ -25,12 +25,14 @@ const (
 	splitTunnelTag  = "split-tunnel"
 	splitTunnelFile = splitTunnelTag + ".json"
 
-	TypeDomain        = "domain"
-	TypeDomainSuffix  = "domainSuffix"
-	TypeDomainKeyword = "domainKeyword"
-	TypeDomainRegex   = "domainRegex"
-	TypeProcessName   = "processName"
-	TypePackageName   = "packageName"
+	TypeDomain           = "domain"
+	TypeDomainSuffix     = "domainSuffix"
+	TypeDomainKeyword    = "domainKeyword"
+	TypeDomainRegex      = "domainRegex"
+	TypeProcessName      = "processName"
+	TypeProcessPath      = "processPath"
+	TypeProcessPathRegex = "processPathRegex"
+	TypePackageName      = "packageName"
 )
 
 // SplitTunnel manages the split tunneling feature, allowing users to specify which domains,
@@ -102,12 +104,14 @@ func (s *SplitTunnel) Filters() Filter {
 	s.access.Lock()
 	defer s.access.Unlock()
 	return Filter{
-		Domain:        slices.Clone(s.activeFilter.Domain),
-		DomainSuffix:  slices.Clone(s.activeFilter.DomainSuffix),
-		DomainKeyword: slices.Clone(s.activeFilter.DomainKeyword),
-		DomainRegex:   slices.Clone(s.activeFilter.DomainRegex),
-		ProcessName:   slices.Clone(s.activeFilter.ProcessName),
-		PackageName:   slices.Clone(s.activeFilter.PackageName),
+		Domain:           slices.Clone(s.activeFilter.Domain),
+		DomainSuffix:     slices.Clone(s.activeFilter.DomainSuffix),
+		DomainKeyword:    slices.Clone(s.activeFilter.DomainKeyword),
+		DomainRegex:      slices.Clone(s.activeFilter.DomainRegex),
+		ProcessName:      slices.Clone(s.activeFilter.ProcessName),
+		ProcessPath:      slices.Clone(s.activeFilter.ProcessPath),
+		ProcessPathRegex: slices.Clone(s.activeFilter.ProcessPathRegex),
+		PackageName:      slices.Clone(s.activeFilter.PackageName),
 	}
 }
 
@@ -150,12 +154,14 @@ func (s *SplitTunnel) RemoveItems(items Filter) error {
 }
 
 type Filter struct {
-	Domain        []string
-	DomainSuffix  []string
-	DomainKeyword []string
-	DomainRegex   []string
-	ProcessName   []string
-	PackageName   []string
+	Domain           []string
+	DomainSuffix     []string
+	DomainKeyword    []string
+	DomainRegex      []string
+	ProcessName      []string
+	ProcessPath      []string
+	ProcessPathRegex []string
+	PackageName      []string
 }
 
 func (f Filter) String() string {
@@ -174,6 +180,12 @@ func (f Filter) String() string {
 	}
 	if len(f.ProcessName) > 0 {
 		str = append(str, fmt.Sprintf("processName: %v", f.ProcessName))
+	}
+	if len(f.ProcessPath) > 0 {
+		str = append(str, fmt.Sprintf("processPath: %v", f.ProcessPath))
+	}
+	if len(f.ProcessPathRegex) > 0 {
+		str = append(str, fmt.Sprintf("processPathRegex: %v", f.ProcessPathRegex))
 	}
 	if len(f.PackageName) > 0 {
 		str = append(str, fmt.Sprintf("packageName: %v", f.PackageName))
@@ -199,6 +211,10 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 		s.activeFilter.DomainRegex = fn(s.activeFilter.DomainRegex, items)
 	case TypeProcessName:
 		s.activeFilter.ProcessName = fn(s.activeFilter.ProcessName, items)
+	case TypeProcessPath:
+		s.activeFilter.ProcessPath = fn(s.activeFilter.ProcessPath, items)
+	case TypeProcessPathRegex:
+		s.activeFilter.ProcessPathRegex = fn(s.activeFilter.ProcessPathRegex, items)
 	case TypePackageName:
 		s.activeFilter.PackageName = fn(s.activeFilter.PackageName, items)
 	default:
@@ -224,6 +240,12 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	}
 	if len(diff.ProcessName) > 0 {
 		s.activeFilter.ProcessName = fn(s.activeFilter.ProcessName, diff.ProcessName)
+	}
+	if len(diff.ProcessPath) > 0 {
+		s.activeFilter.ProcessPath = fn(s.activeFilter.ProcessPath, diff.ProcessPath)
+	}
+	if len(diff.ProcessPathRegex) > 0 {
+		s.activeFilter.ProcessPathRegex = fn(s.activeFilter.ProcessPathRegex, diff.ProcessPathRegex)
 	}
 	if len(diff.PackageName) > 0 {
 		s.activeFilter.PackageName = fn(s.activeFilter.PackageName, diff.PackageName)
@@ -271,15 +293,19 @@ func (s *SplitTunnel) saveToFile() error {
 	}
 	buf, err := json.Marshal(rs)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshalling rule set: %w", err)
 	}
-	return os.WriteFile(s.ruleFile, buf, 0644)
+	if err := os.WriteFile(s.ruleFile, buf, 0644); err != nil {
+		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
+	}
+	return nil
 }
 
 func isEmptyRule(rule O.DefaultHeadlessRule) bool {
 	return len(rule.Domain) == 0 && len(rule.DomainSuffix) == 0 &&
 		len(rule.DomainKeyword) == 0 && len(rule.DomainRegex) == 0 &&
-		len(rule.ProcessName) == 0 && len(rule.PackageName) == 0
+		len(rule.ProcessName) == 0 && len(rule.PackageName) == 0 &&
+		len(rule.ProcessPath) == 0 && len(rule.ProcessPathRegex) == 0
 }
 
 func (s *SplitTunnel) loadRule() error {
