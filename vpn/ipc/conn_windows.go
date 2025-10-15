@@ -81,38 +81,7 @@ func (l *winioListener) Accept() (conn net.Conn, err error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			c.Close()
-		}
-	}()
-
-	// verify that the pipe client is the same user as the process that created the pipe.
-	wc, ok := c.(winioConn)
-	if !ok {
-		return nil, fmt.Errorf("expected winio.Conn, got %T", c)
-	}
-	pipeToken, err := getPipeClientToken(wc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pipe client token: %w", err)
-	}
-	defer pipeToken.Close()
-
-	procToken, err := getServerProcessToken()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get process token: %w", err)
-	}
-	defer procToken.Close()
-
-	// if the tokens are not the same user, reject the connection.
-	sameUser, err := verifySameUser(pipeToken, procToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to verify same user: %w", err)
-	}
-	if !sameUser {
-		return nil, fmt.Errorf("pipe client and process are not the same user")
-	}
-	return wc, nil
+	return c, nil
 }
 
 func tokenUserSID(t windows.Token) (*windows.SID, error) {
