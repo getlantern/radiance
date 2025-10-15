@@ -563,8 +563,8 @@ func (a *APIClient) ReferralAttach(ctx context.Context, code string) (bool, erro
 	if err := a.proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
 		return false, traces.RecordError(ctx, err)
 	}
-	if  resp.Error != "" {
-		return false, traces.RecordError(ctx, fmt.Errorf("failed to attach referral code: %s", resp.Error))
+	if resp.Error != "" {
+		return false, traces.RecordError(ctx, fmt.Errorf("%s", resp.Error))
 	}
 	return true, nil
 
