@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
@@ -39,7 +40,8 @@ type SplitTunnel struct {
 	activeFilter *O.DefaultHeadlessRule
 	ruleFile     string
 
-	access sync.Mutex
+	enabled *atomic.Bool
+	access  sync.Mutex
 }
 
 func NewSplitTunnelHandler() (*SplitTunnel, error) {
@@ -56,6 +58,7 @@ func newSplitTunnel(path string) *SplitTunnel {
 		rule:         rule,
 		ruleFile:     filepath.Join(path, splitTunnelFile),
 		activeFilter: &(rule.Rules[1].DefaultOptions),
+		enabled:      &atomic.Bool{},
 	}
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
 		slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
@@ -64,32 +67,35 @@ func newSplitTunnel(path string) *SplitTunnel {
 	return s
 }
 
-func (s *SplitTunnel) Enable() {
-	if s.IsEnabled() {
-		return
-	}
-	s.access.Lock()
-	s.rule.Mode = C.LogicalTypeOr
-	s.access.Unlock()
-	s.saveToFile()
-	slog.Log(context.Background(), internal.LevelTrace, "enabled split tunneling")
+func (s *SplitTunnel) Enable() error {
+	return s.setEnabled(true)
 }
 
-func (s *SplitTunnel) Disable() {
-	if !s.IsEnabled() {
-		return
+func (s *SplitTunnel) Disable() error {
+	return s.setEnabled(false)
+}
+
+func (s *SplitTunnel) setEnabled(enabled bool) error {
+	if s.enabled.Load() == enabled {
+		return nil
 	}
-	s.access.Lock()
-	s.rule.Mode = C.LogicalTypeAnd
-	s.access.Unlock()
-	s.saveToFile()
-	slog.Log(context.Background(), internal.LevelTrace, "disabled split tunneling")
+	mode := C.LogicalTypeAnd
+	if enabled {
+		mode = C.LogicalTypeOr
+	}
+	prev := s.rule.Mode
+	s.rule.Mode = mode
+	if err := s.saveToFile(); err != nil {
+		s.rule.Mode = prev
+		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
+	}
+	s.enabled.Store(enabled)
+	slog.Log(context.Background(), internal.LevelTrace, "Updated split-tunneling", "enabled", enabled)
+	return nil
 }
 
 func (s *SplitTunnel) IsEnabled() bool {
-	s.access.Lock()
-	defer s.access.Unlock()
-	return s.rule.Mode == C.LogicalTypeOr
+	return s.enabled.Load()
 }
 
 func (s *SplitTunnel) Filters() Filter {
@@ -300,6 +306,7 @@ func (s *SplitTunnel) loadRule() error {
 		})
 	}
 	s.activeFilter = &(s.rule.Rules[1].DefaultOptions)
+	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 
 	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
 		"file", s.ruleFile, "filters", s.Filters().String(), "enabled", s.IsEnabled(),

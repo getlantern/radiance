@@ -1,8 +1,16 @@
 package vpn
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	O "github.com/sagernet/sing-box/option"
+	R "github.com/sagernet/sing-box/route/rule"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -12,17 +20,18 @@ import (
 func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
 	common.SetPathsForTesting(t)
 	s := newSplitTunnel(common.DataPath())
-	_ = s.saveToFile()
 	return s
 }
 
 func TestEnableDisableIsEnabled(t *testing.T) {
 	st := setupTestSplitTunnel(t)
 
-	st.Disable()
-	assert.False(t, st.IsEnabled(), "expected split tunnel to be disabled")
-	st.Enable()
-	assert.True(t, st.IsEnabled(), "expected split tunnel to be enabled")
+	if assert.NoError(t, st.Disable()) {
+		assert.False(t, st.IsEnabled(), "split tunnel should be disabled")
+	}
+	if assert.NoError(t, st.Enable()) {
+		assert.True(t, st.IsEnabled(), "split tunnel should be enabled")
+	}
 }
 
 func TestAddRemoveItem(t *testing.T) {
@@ -63,6 +72,19 @@ func TestAddRemoveItems(t *testing.T) {
 	assert.Empty(t, f.ProcessName)
 }
 
+func TestFilterPersistence(t *testing.T) {
+	st := setupTestSplitTunnel(t)
+	require.NoError(t, st.AddItem("domain", "example.com"))
+
+	f := st.Filters()
+	assert.Equal(t, []string{"example.com"}, f.Domain)
+
+	st = newSplitTunnel(common.DataPath())
+	assert.NoError(t, st.loadRule())
+	f = st.Filters()
+	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")
+}
+
 func TestUpdateFilterUnsupportedType(t *testing.T) {
 	st := setupTestSplitTunnel(t)
 	err := st.AddItem("unsupported", "foo")
@@ -86,4 +108,78 @@ func TestRemoveEdgeCases(t *testing.T) {
 	// Remove multiple items
 	out = remove([]string{"a", "b", "c"}, []string{"a", "c"})
 	assert.Equal(t, []string{"b"}, out)
+}
+
+func TestMatch(t *testing.T) {
+	st := setupTestSplitTunnel(t)
+	require.NoError(t, st.AddItem("domain", "example.com"))
+
+	ruleOpts := O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				RuleSet: []string{splitTunnelTag},
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeRoute,
+				RouteOptions: O.RouteActionOptions{
+					Outbound: "direct",
+				},
+			},
+		},
+	}
+	rsetOpts := O.RuleSet{
+		Type: C.RuleSetTypeLocal,
+		Tag:  splitTunnelTag,
+		LocalOptions: O.LocalRuleSet{
+			Path: st.ruleFile,
+		},
+		Format: C.RuleSetFormatSource,
+	}
+
+	ctx := service.ContextWithDefaultRegistry(context.Background())
+	logger := log.NewNOPFactory().Logger()
+
+	router := &mockRouter{}
+	service.MustRegister[adapter.Router](ctx, router)
+	service.MustRegister(ctx, new(adapter.NetworkManager))
+
+	ruleSet, err := R.NewRuleSet(ctx, logger, rsetOpts)
+	require.NoError(t, err)
+	require.NoError(t, ruleSet.StartContext(ctx, new(adapter.HTTPStartContext)))
+	defer ruleSet.Close()
+
+	router.ruleSet = ruleSet
+
+	rule, err := R.NewRule(ctx, logger, ruleOpts, false)
+	require.NoError(t, err)
+	require.NoError(t, rule.Start())
+	defer rule.Close()
+
+	metadata := &adapter.InboundContext{Domain: "example.com"}
+
+	rsStr := ruleSet.String()
+	require.NoError(t, st.Enable())
+	require.Eventually(t, func() bool {
+		return ruleSet.String() != rsStr
+	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
+
+	assert.True(t, rule.Match(metadata), "rule should match when split tunnel is enabled")
+
+	rsStr = ruleSet.String()
+	require.NoError(t, st.Disable())
+	require.Eventually(t, func() bool {
+		return ruleSet.String() != rsStr
+	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
+
+	assert.False(t, rule.Match(metadata), "rule should not match when split tunnel is not enabled")
+}
+
+type mockRouter struct {
+	adapter.Router
+	ruleSet adapter.RuleSet
+}
+
+func (r *mockRouter) RuleSet(tag string) (adapter.RuleSet, bool) {
+	return r.ruleSet, true
 }
