@@ -4,13 +4,14 @@ go 1.24
 
 toolchain go1.24.1
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a
+//replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.12-0.20250716231657-20b15178474a
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.16-lantern
 
 replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5.0.20250310145906-45220d8aec77
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
-// replace github.com/sagernet/sing-box => ../sing-box-minimal
+//replace github.com/sagernet/sing-box => ../sing-box-minimal
 
 //replace github.com/getlantern/common => ../common
 
@@ -20,7 +21,7 @@ require (
 	github.com/1Password/srp v0.2.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20250711182004-51a659011c7a
+	github.com/getlantern/common v1.2.1-0.20250714155632-4ba0853d882a
 	github.com/getlantern/fronted v0.0.0-20250619212426-1120fc75a5e4
 	github.com/getlantern/kindling v0.0.0-20250506175908-d622fb5c9990
 	github.com/getlantern/sing-box-extensions v0.0.6-0.20251009215920-c16fd17c3f99
