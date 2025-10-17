@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/getlantern/appdir"
+	"github.com/getlantern/common"
 	"github.com/getlantern/osversion"
 
 	C "github.com/getlantern/common"
@@ -275,7 +276,7 @@ func initOTEL(deviceID string, configResponse C.ConfigResponse) error {
 		OSName:     runtime.GOOS,
 		OSArch:     runtime.GOARCH,
 		GeoCountry: configResponse.Country,
-		Pro:        configResponse.Pro,
+		Pro:        configResponse.Level == common.UserLevelPro,
 	}
 	if osStr, err := osversion.GetHumanReadable(); err == nil {
 		attrs.OSVersion = osStr

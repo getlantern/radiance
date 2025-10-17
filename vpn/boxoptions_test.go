@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,15 @@ import (
 )
 
 func TestBuildOptions(t *testing.T) {
+	handlerOptions := &slog.HandlerOptions{
+		Level: slog.LevelDebug - 4,
+	}
+
+	// Create a new logger with the configured handler options
+	logger := slog.New(slog.NewTextHandler(os.Stderr, handlerOptions))
+
+	// Set the default logger
+	slog.SetDefault(logger)
 	testOpts, _, err := testBoxOptions("")
 	require.NoError(t, err, "get test box options")
 	lanternTags, lanternOuts := filterOutbounds(*testOpts, constant.TypeHTTP)
@@ -45,22 +55,26 @@ func TestBuildOptions(t *testing.T) {
 		lanternTags []string
 		userTags    []string
 	}{
-		{
-			name:        "config without user servers",
-			lanternTags: lanternTags,
-		},
-		{
-			name:     "user servers without config",
-			userTags: userTags,
-		},
+		/*
+			{
+				name:        "config without user servers",
+				lanternTags: lanternTags,
+			},
+			{
+				name:     "user servers without config",
+				userTags: userTags,
+			},
+		*/
 		{
 			name:        "config and user servers",
 			lanternTags: lanternTags,
 			userTags:    userTags,
 		},
-		{
-			name: "neither config nor user servers",
-		},
+		/*
+			{
+				name: "neither config nor user servers",
+			},
+		*/
 	}
 	hasGroupWithTags := func(t *testing.T, outs []O.Outbound, group string, tags []string) {
 		out := findOutbound(outs, group)

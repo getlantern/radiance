@@ -78,6 +78,7 @@ type ConfigHandler struct {
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath         string
 	preferredLocation atomic.Pointer[C.ServerLocation]
+	userInfo          common.UserInfo
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
@@ -93,6 +94,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		configListeners: make([]ListenerFunc, 0),
 		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),
 		svrManager:      options.SvrManager,
+		userInfo:        options.User,
 	}
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(&C.ServerLocation{})
@@ -331,6 +333,8 @@ func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
 	slog.Info("saved new config")
 	go ch.notifyListeners(oldConfig, cfg)
 	slog.Info("Config set")
+
+	ch.userInfo.SetData(&cfg.ConfigResponse.UserData)
 	return nil
 }
 
@@ -435,4 +439,10 @@ func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
 	fn(cfg)
 	ch.configMu.Unlock()
 	ch.setConfigAndNotify(cfg)
+}
+
+func (ch *ConfigHandler) RefreshConfig() {
+	if err := ch.fetchConfig(); err != nil {
+		slog.Error("Failed to refresh config", "error", err)
+	}
 }

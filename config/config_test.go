@@ -9,19 +9,19 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/getlantern/common"
 	C "github.com/getlantern/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
+	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
 )
 
 func TestSaveConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, rcommon.ConfigFileName)
 
 	// Create a sample config to save
 	expectedConfig := Config{
@@ -51,7 +51,7 @@ func TestSaveConfig(t *testing.T) {
 func TestGetConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, rcommon.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
@@ -89,7 +89,7 @@ func TestGetConfig(t *testing.T) {
 func TestSetPreferredServerLocation(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, rcommon.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
@@ -130,7 +130,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 func TestHandlerFetchConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, rcommon.ConfigFileName)
 
 	// Mock fetcher
 	mockFetcher := &MockFetcher{}
@@ -230,17 +230,18 @@ func (mf *MockFetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey strin
 type UserStub struct{}
 
 // Verify that a UserStub implements the User interface
-var _ common.UserInfo = (*UserStub)(nil)
+var _ rcommon.UserInfo = (*UserStub)(nil)
 
-func (u *UserStub) GetData() (*protos.LoginResponse, error) {
-	return &protos.LoginResponse{
-		LegacyID:    123456789,
-		LegacyToken: "test-legacy-token",
+func (u *UserStub) GetData() (*common.UserData, error) {
+	return &common.UserData{
+		UserId: 123456789,
+		Token:  "test-legacy-token",
+		Locale: "en-US",
 	}, nil
 }
-func (u *UserStub) Locale() string                           { return "en-US" }
-func (u *UserStub) DeviceID() string                         { return "test-device-id" }
-func (u *UserStub) LegacyID() int64                          { return 123456789 }
-func (u *UserStub) LegacyToken() string                      { return "test-legacy-token" }
-func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
-func (u *UserStub) SetLocale(locale string)                  {}
+func (u *UserStub) Locale() string                      { return "en-US" }
+func (u *UserStub) DeviceID() string                    { return "test-device-id" }
+func (u *UserStub) ID() int64                           { return 123456789 }
+func (u *UserStub) Token() string                       { return "test-legacy-token" }
+func (u *UserStub) SetData(data *common.UserData) error { return nil }
+func (u *UserStub) SetLocale(locale string)             {}

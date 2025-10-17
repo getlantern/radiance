@@ -29,7 +29,7 @@ import (
 	"github.com/getlantern/radiance/issue"
 )
 
-const configPollInterval = 10 * time.Minute
+const configPollInterval = 30 * time.Second
 const tracerName = "github.com/getlantern/radiance"
 
 //go:generate mockgen -destination=radiance_mock_test.go -package=radiance github.com/getlantern/radiance configHandler
@@ -122,7 +122,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
 	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
@@ -144,6 +143,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
+
+	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir, confHandler)
 	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,

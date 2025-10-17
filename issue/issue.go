@@ -11,14 +11,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/osversion"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
+	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
-
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -31,14 +31,14 @@ const (
 type IssueReporter struct {
 	httpClient *http.Client
 
-	userConfig common.UserInfo
+	userInfo rcommon.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
 func NewIssueReporter(
 	httpClient *http.Client,
-	userConfig common.UserInfo,
+	userConfig rcommon.UserInfo,
 ) (*IssueReporter, error) {
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
@@ -46,7 +46,7 @@ func NewIssueReporter(
 	httpClient.Transport = traces.NewRoundTripper(httpClient.Transport)
 	return &IssueReporter{
 		httpClient: httpClient,
-		userConfig: userConfig,
+		userInfo:   userConfig,
 	}, nil
 }
 
@@ -101,11 +101,11 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	}
 
 	userStatus := "free"
-	userData, err := ir.userConfig.GetData()
+	userData, err := ir.userInfo.GetData()
 	if err != nil {
 		slog.Error("Unable to get user data", "error", err)
 	} else {
-		if userData != nil && userData.LegacyUserData.UserLevel == "pro" {
+		if userData != nil && userData.Level == common.UserLevelPro {
 			userStatus = "pro"
 		}
 	}
@@ -124,17 +124,17 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	r := &ReportIssueRequest{
 		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
 		CountryCode:       country,
-		AppVersion:        common.Version,
+		AppVersion:        rcommon.Version,
 		SubscriptionLevel: userStatus,
-		Platform:          common.Platform,
+		Platform:          rcommon.Platform,
 		Description:       report.Description,
 		UserEmail:         userEmail,
-		DeviceId:          ir.userConfig.DeviceID(),
-		UserId:            strconv.FormatInt(ir.userConfig.LegacyID(), 10),
+		DeviceId:          ir.userInfo.DeviceID(),
+		UserId:            strconv.FormatInt(ir.userInfo.ID(), 10),
 		Device:            report.Device,
 		Model:             report.Model,
 		OsVersion:         osVersion,
-		Language:          ir.userConfig.Locale(),
+		Language:          ir.userInfo.Locale(),
 	}
 
 	for _, attachment := range report.Attachments {
@@ -149,9 +149,9 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	slog.Debug("zipping log files for issue report")
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
-	logDir := common.LogPath()
+	logDir := rcommon.LogPath()
 	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxLogSize)
-	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
+	if _, zipErr := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); zipErr == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
 			Name:    "logs.zip",
@@ -159,13 +159,14 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		})
 	} else {
 		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSize)
+		return traces.RecordError(ctx, fmt.Errorf("Could not zip log files: %w", zipErr))
 	}
 
 	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
 	if err != nil {
 		slog.Error("unable to marshal issue report", "error", err)
-		return err
+		return traces.RecordError(ctx, fmt.Errorf("Could not marshal issue report %w", err))
 	}
 
 	req, err := backend.NewIssueRequest(
@@ -173,7 +174,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		http.MethodPost,
 		requestURL,
 		bytes.NewReader(out),
-		ir.userConfig,
+		ir.userInfo,
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)

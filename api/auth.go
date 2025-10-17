@@ -61,8 +61,8 @@ func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupReques
 	var resp protos.EmptyResponse
 	header := map[string]string{
 		backend.DeviceIDHeader: c.userInfo.DeviceID(),
-		backend.UserIDHeader:   strconv.FormatInt(c.userInfo.LegacyID(), 10),
-		backend.ProTokenHeader: c.userInfo.LegacyToken(),
+		backend.UserIDHeader:   strconv.FormatInt(c.userInfo.ID(), 10),
+		backend.ProTokenHeader: c.userInfo.Token(),
 	}
 	req := c.wc.NewRequest(nil, header, signupData)
 	return c.wc.Post(ctx, "/users/signup", req, &resp)

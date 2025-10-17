@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
+	rcommon "github.com/getlantern/radiance/common"
 )
 
 func TestSignUp(t *testing.T) {
@@ -57,13 +58,16 @@ func TestLogin(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	ac := &APIClient{
-		saltPath:   filepath.Join(t.TempDir(), saltFileName),
-		userData:   &protos.LoginResponse{Id: "test@example.com"},
-		userInfo:   &mockUserInfo{},
+		saltPath: filepath.Join(t.TempDir(), saltFileName),
+		userInfo: newUserInfo(&common.UserData{
+			Email: "test@example.com",
+		}),
+		//userData:   &protos.LoginResponse{Id: "test@example.com"},
+		//userInfo:   &mockUserInfo{},
 		authClient: &mockAuthClient{},
 		deviceID:   "deviceId",
 	}
-	err := ac.Logout(context.Background(), "test@example.com")
+	_, err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
 }
 
@@ -102,9 +106,9 @@ func TestStartChangeEmail(t *testing.T) {
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userData: &protos.LoginResponse{LegacyUserData: &protos.LoginResponse_UserData{
+		userInfo: newUserInfo(&common.UserData{
 			Email: email,
-		}},
+		}),
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
@@ -115,14 +119,55 @@ func TestStartChangeEmail(t *testing.T) {
 func TestCompleteChangeEmail(t *testing.T) {
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userData: &protos.LoginResponse{Id: "test@example.com", LegacyUserData: &protos.LoginResponse_UserData{
+		userInfo: newUserInfo(&common.UserData{
 			Email: "test@example.com",
-		}},
+		}),
+		/*
+			userData: &protos.LoginResponse{Id: "test@example.com", LegacyUserData: &protos.LoginResponse_UserData{
+				Email: "test@example.com",
+			}},
+		*/
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
+		//userInfo:   &mockUserInfo{},
 	}
 	err := ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
 	assert.NoError(t, err)
+}
+
+func newUserInfo(data *common.UserData) rcommon.UserInfo {
+	return &userInfoStub{data: data}
+}
+
+type userInfoStub struct {
+	data *common.UserData
+}
+
+func (u *userInfoStub) GetData() (*common.UserData, error) {
+	return u.data, nil
+}
+
+func (u *userInfoStub) SetData(userData *common.UserData) error {
+	u.data = userData
+	return nil
+}
+
+func (u *userInfoStub) DeviceID() string {
+	return "deviceId"
+}
+
+func (u *userInfoStub) ID() int64 {
+	return u.data.UserId
+}
+func (u *userInfoStub) Token() string {
+	return u.data.Token
+}
+
+func (u *userInfoStub) Locale() string {
+	return u.data.Locale
+}
+
+func (u *userInfoStub) SetLocale(locale string) {
+	u.data.Locale = locale
 }
 
 func TestDeleteAccount(t *testing.T) {
@@ -135,7 +180,7 @@ func TestDeleteAccount(t *testing.T) {
 		salt:       authClient.salt[email],
 		userInfo:   &mockUserInfo{},
 	}
-	err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
@@ -254,18 +299,18 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 	return &protos.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
 }
 
-var _ common.UserInfo = (*mockUserInfo)(nil)
+var _ rcommon.UserInfo = (*mockUserInfo)(nil)
 
 // Mock implementation of User config for testing purposes
 type mockUserInfo struct{}
 
-func (m *mockUserInfo) GetData() (*protos.LoginResponse, error) {
-	return &protos.LoginResponse{}, nil
+func (m *mockUserInfo) GetData() (*common.UserData, error) {
+	return &common.UserData{}, nil
 }
 
-func (m *mockUserInfo) SetData(userData *protos.LoginResponse) error { return nil }
-func (m *mockUserInfo) DeviceID() string                             { return "deviceId" }
-func (m *mockUserInfo) LegacyID() int64                              { return 1 }
-func (m *mockUserInfo) LegacyToken() string                          { return "legacyToken" }
-func (m *mockUserInfo) Locale() string                               { return "en-US" }
-func (m *mockUserInfo) SetLocale(locale string)                      {}
+func (m *mockUserInfo) SetData(userData *common.UserData) error { return nil }
+func (m *mockUserInfo) DeviceID() string                        { return "deviceId" }
+func (m *mockUserInfo) ID() int64                               { return 1 }
+func (m *mockUserInfo) Token() string                           { return "legacyToken" }
+func (m *mockUserInfo) Locale() string                          { return "en-US" }
+func (m *mockUserInfo) SetLocale(locale string)                 {}

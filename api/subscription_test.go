@@ -8,8 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
+	rcommon "github.com/getlantern/radiance/common"
 )
 
 func TestSubscriptionPaymentRedirect(t *testing.T) {
@@ -67,8 +68,8 @@ func TestPlans(t *testing.T) {
 	assert.NotNil(t, resp.Plans)
 }
 
-func userInfo(dataPath string) common.UserInfo {
-	return common.NewUserConfig("HFJDFJ-75885F", dataPath, "en-US")
+func userInfo(dataPath string) rcommon.UserInfo {
+	return rcommon.NewUserConfig("HFJDFJ-75885F", dataPath, "en-US")
 }
 
 type MockAPIClient struct {
@@ -79,10 +80,11 @@ func mockAPIClient(t *testing.T) *MockAPIClient {
 	return &MockAPIClient{
 		APIClient: &APIClient{
 			saltPath: filepath.Join(t.TempDir(), saltFileName),
-			userData: &protos.LoginResponse{Id: "test@example.com"},
+			userInfo: newUserInfo(&common.UserData{
+				Email: "test@example.com",
+			}),
 			deviceID: "deviceId",
 			salt:     []byte{1, 2, 3, 4, 5},
-			userInfo: &mockUserInfo{},
 		},
 	}
 }

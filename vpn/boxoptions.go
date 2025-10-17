@@ -460,7 +460,7 @@ func lanternRegexForPlatform() []string {
 			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
 		}
 	case "darwin":
-		return []string{`(?i)^/Lantern.app/Contents/MacOS/lantern$`}
+		return []string{`/Applications/Lantern.app/Contents/MacOS/lantern$`}
 	case "linux":
 		return []string{
 			`(?i)^/opt/lantern/lantern$`,
