@@ -62,10 +62,7 @@ func newFetcher(client *http.Client, user common.UserInfo, locale string, apiCli
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	// If we don't have a user ID or token, create a new user.
-	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
-		f.apiClient.NewUser(ctx)
-		slog.Info("Created new user", "id", f.user.LegacyID(), "token", f.user.LegacyToken())
-	}
+	f.ensureUser(ctx)
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,
@@ -99,6 +96,21 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 
 	f.lastModified = time.Now()
 	return buf, nil
+}
+
+func (f *fetcher) ensureUser(ctx context.Context) {
+	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
+		if f.apiClient == nil {
+			slog.Error("API client is nil, cannot create new user")
+			return
+		}
+		_, err := f.apiClient.NewUser(ctx)
+		if err != nil {
+			slog.Error("Failed to create new user", "error", err)
+		} else {
+			slog.Info("Created new user")
+		}
+	}
 }
 
 // send sends a request to the server with the given body and returns the response.
