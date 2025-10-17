@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -95,7 +96,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	ch := &ConfigHandler{
 		configPath: configPath,
 		config:     atomic.Value{},
-		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US"),
+		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US", nil),
 	}
 
 	ch.config.Store(&Config{
@@ -217,13 +218,16 @@ type mockSrvManager struct{}
 
 func (m *mockSrvManager) SetServers(_ string, _ servers.Options) error { return nil }
 
+// Make sure MockFetcher implements the Fetcher interface
+var _ Fetcher = (*MockFetcher)(nil)
+
 // MockFetcher is a mock implementation of the fetcher used for testing
 type MockFetcher struct {
 	response []byte
 	err      error
 }
 
-func (mf *MockFetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
+func (mf *MockFetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	return mf.response, mf.err
 }
 

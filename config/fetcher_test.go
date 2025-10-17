@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 )
 
@@ -100,9 +101,9 @@ func TestFetchConfig(t *testing.T) {
 			}
 			fetcher := newFetcher(&http.Client{
 				Transport: mockRT,
-			}, mockUser, "en-US")
+			}, mockUser, "en-US", &api.APIClient{})
 
-			gotConfig, err := fetcher.fetchConfig(*tt.preferredServerLoc, privateKey.PublicKey().String())
+			gotConfig, err := fetcher.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
 
 			if tt.expectedErrorMessage != "" {
 				require.Error(t, err)
