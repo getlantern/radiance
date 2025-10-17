@@ -58,7 +58,6 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_user")
 	defer span.End()
 	var resp UserDataResponse
-
 	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
