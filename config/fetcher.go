@@ -19,6 +19,7 @@ import (
 
 	"github.com/getlantern/sing-box-extensions/protocol"
 
+	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
@@ -34,7 +35,7 @@ type Fetcher interface {
 	// preferred is used to select the server location.
 	// If preferred is empty, the server will select the best location.
 	// The lastModified time is used to check if the configuration has changed since the last request.
-	fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error)
+	fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error)
 }
 
 // fetcher is responsible for fetching the configuration from the server.
@@ -44,20 +45,27 @@ type fetcher struct {
 	lastModified time.Time
 	locale       string
 	etag         string
+	apiClient    *api.APIClient
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserInfo, locale string) Fetcher {
+func newFetcher(client *http.Client, user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
 	return &fetcher{
 		httpClient:   client,
 		user:         user,
 		lastModified: time.Time{},
 		locale:       locale,
+		apiClient:    apiClient,
 	}
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
+func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
+	// If we don't have a user ID or token, create a new user.
+	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
+		f.apiClient.NewUser(ctx)
+		slog.Info("Created new user", "id", f.user.LegacyID(), "token", f.user.LegacyToken())
+	}
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,

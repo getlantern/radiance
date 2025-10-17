@@ -4,6 +4,7 @@ Package config provides a handler for fetching and storing proxy configurations.
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	sbx "github.com/getlantern/sing-box-extensions"
 	exO "github.com/getlantern/sing-box-extensions/option"
 
+	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -56,6 +58,7 @@ type Options struct {
 	User         common.UserInfo
 	DataDir      string
 	Locale       string
+	APIHandler   *api.APIClient
 }
 
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
@@ -106,7 +109,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	if !ch.fetchDisabled {
-		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale)
+		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
 	}
 	return ch
@@ -214,7 +217,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 
 	slog.Info("Fetching config")
-	resp, err := ch.ftr.fetchConfig(preferred, privateKey.PublicKey().String())
+	resp, err := ch.ftr.fetchConfig(context.Background(), preferred, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}

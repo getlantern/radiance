@@ -138,6 +138,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		User:         userInfo,
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
+		APIHandler:   apiHandler,
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
