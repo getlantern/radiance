@@ -1,14 +1,19 @@
-// Package metrics provides OpenTelemetry setup for radiance
-package metrics
+// Package telemetry provides OpenTelemetry setup for radiance
+package telemetry
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/getlantern/common"
+	"github.com/getlantern/osversion"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -20,6 +25,15 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"google.golang.org/grpc/credentials"
+
+	rcommon "github.com/getlantern/radiance/common"
+)
+
+var (
+	initMutex                   sync.Mutex
+	shutdownOTEL                func(context.Context) error
+	harvestConnections          sync.Once
+	harvestConnectionTickerStop func()
 )
 
 type Attributes struct {
@@ -36,6 +50,94 @@ type Attributes struct {
 	OSVersion      string
 	Timezone       string
 	Pro            bool
+}
+
+// OnNewConfig handles OpenTelemetry re-initialization when the configuration changes.
+func OnNewConfig(oldConfig, newConfig common.ConfigResponse, deviceID string, userInfo rcommon.UserInfo) error {
+	// Check if the old OTEL configuration is the same as the new one.
+	if reflect.DeepEqual(oldConfig.OTEL, newConfig.OTEL) {
+		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+		return nil
+	}
+	userData, err := userInfo.GetData()
+	if err != nil {
+		slog.Error("Failed to get user data for OpenTelemetry initialization", "error", err)
+		return nil
+	}
+	if err := initialize(deviceID, newConfig, userData.LegacyUserData.UserLevel == "pro"); err != nil {
+		slog.Error("Failed to initialize OpenTelemetry", "error", err)
+		return nil
+	}
+	return nil
+}
+
+func initialize(deviceID string, configResponse common.ConfigResponse, pro bool) error {
+	initMutex.Lock()
+	defer initMutex.Unlock()
+
+	if configResponse.OTEL.Endpoint == "" {
+		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+		return nil
+	}
+
+	if shutdownOTEL != nil {
+		slog.Info("Shutting down existing OpenTelemetry SDK")
+		if err := shutdownOTEL(context.Background()); err != nil {
+			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
+			return fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err)
+		}
+		shutdownOTEL = nil
+	}
+
+	attrs := Attributes{
+		App:        "radiance",
+		DeviceID:   deviceID,
+		AppVersion: rcommon.ClientVersion,
+		Platform:   rcommon.Platform,
+		GoVersion:  runtime.Version(),
+		OSName:     runtime.GOOS,
+		OSArch:     runtime.GOARCH,
+		GeoCountry: configResponse.Country,
+		Pro:        pro,
+	}
+	if osStr, err := osversion.GetHumanReadable(); err == nil {
+		attrs.OSVersion = osStr
+	}
+
+	shutdown, err := setupOTelSDK(context.Background(), attrs, configResponse)
+	if err != nil {
+		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
+		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
+	}
+
+	shutdownOTEL = shutdown
+
+	harvestConnections.Do(func() {
+		harvestConnectionTickerStop = harvestConnectionMetrics(1 * time.Minute)
+	})
+	return nil
+}
+
+func Close(ctx context.Context) error {
+	initMutex.Lock()
+	defer initMutex.Unlock()
+
+	var errs error
+
+	// stop collecting connection metrics
+	if harvestConnectionTickerStop != nil {
+		harvestConnectionTickerStop()
+	}
+
+	if shutdownOTEL != nil {
+		slog.Info("Shutting down existing OpenTelemetry SDK")
+		if err := shutdownOTEL(ctx); err != nil {
+			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
+			errs = errors.Join(errs, fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err))
+		}
+		shutdownOTEL = nil
+	}
+	return errs
 }
 
 func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
@@ -57,9 +159,9 @@ func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 	}
 }
 
-// SetupOTelSDK bootstraps the OpenTelemetry pipeline.
+// setupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func SetupOTelSDK(ctx context.Context, attributes Attributes, cfg common.ConfigResponse) (func(context.Context) error, error) {
+func setupOTelSDK(ctx context.Context, attributes Attributes, cfg common.ConfigResponse) (func(context.Context) error, error) {
 	if cfg.Features == nil {
 		cfg.Features = make(map[string]bool)
 	}

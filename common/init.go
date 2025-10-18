@@ -3,14 +3,11 @@ package common
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,32 +15,19 @@ import (
 	"time"
 
 	"github.com/getlantern/appdir"
-	"github.com/getlantern/osversion"
-
-	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/metrics"
 	"github.com/getlantern/radiance/vpn/ipc"
-)
-
-const (
-	defaultLogLevel = "info"
 )
 
 var (
 	initMutex   sync.Mutex
 	initialized bool
 
-	dataPath                    atomic.Value
-	logPath                     atomic.Value
-	oldConfig                   *config
-	configFileWatcher           *internal.FileWatcher
-	shutdownOTEL                func(context.Context) error
-	harvestConnections          sync.Once
-	harvestConnectionTickerStop func()
+	dataPath atomic.Value
+	logPath  atomic.Value
 )
 
 func init() {
@@ -83,45 +67,8 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 		ipc.SetSocketPath(dataDir)
 	}
 
-	// creating file watcher to monitor changes to config file and initialize whatever depends on it
-	configPath := filepath.Join(dataDir, ConfigFileName)
-	slog.Debug("created config file watcher for opentelemetry")
-	configFileWatcher = internal.NewFileWatcher(configPath, func() {
-		afterConfigIsAvailableCallback(configPath, deviceID)
-	})
-	configFileWatcher.Start()
 	initialized = true
 	return nil
-}
-
-func afterConfigIsAvailableCallback(configPath, deviceID string) {
-	f, err := os.Open(configPath)
-	if err != nil {
-		slog.Error("Failed to open config file", "error", err)
-		return
-	}
-	defer f.Close()
-	// unmarshaling with json is fine here since we only care about OTEL section of the config
-	cfg := new(config)
-	if err := json.NewDecoder(f).Decode(cfg); err != nil {
-		slog.Error("Failed to decode config file", "error", err)
-		return
-	}
-
-	// Check if the old OTEL configuration is the same as the new one.
-	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, cfg.ConfigResponse.OTEL) {
-		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
-		return
-	}
-
-	if err := initOTEL(deviceID, cfg.ConfigResponse); err != nil {
-		slog.Error("Failed to initialize OpenTelemetry", "error", err)
-		return
-	}
-
-	harvestConnections.Do(func() {
-		harvestConnectionTickerStop = metrics.HarvestConnectionMetrics(1 * time.Minute)
-	})
 }
 
 func Close(ctx context.Context) error {
@@ -131,28 +78,7 @@ func Close(ctx context.Context) error {
 		return nil
 	}
 
-	var errs error
-	if configFileWatcher != nil {
-		if err := configFileWatcher.Close(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to close config file watcher: %w", err))
-		}
-	}
-
-	// stop collecting connection metrics
-	if harvestConnectionTickerStop != nil {
-		harvestConnectionTickerStop()
-	}
-
-	if shutdownOTEL != nil {
-		slog.Info("Shutting down existing OpenTelemetry SDK")
-		if err := shutdownOTEL(ctx); err != nil {
-			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
-			errs = errors.Join(errs, fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err))
-		}
-		shutdownOTEL = nil
-	}
-
-	return errs
+	return nil
 }
 
 // initLogger reconfigures the default slog.Logger to write to a file and stdout and sets the log level.
@@ -241,53 +167,6 @@ func initLogger(logPath, level string) error {
 		},
 	}))
 	slog.SetDefault(logger)
-	return nil
-}
-
-type config struct {
-	ConfigResponse C.ConfigResponse
-}
-
-func initOTEL(deviceID string, configResponse C.ConfigResponse) error {
-	initMutex.Lock()
-	defer initMutex.Unlock()
-
-	if configResponse.OTEL.Endpoint == "" {
-		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
-		return nil
-	}
-
-	if shutdownOTEL != nil {
-		slog.Info("Shutting down existing OpenTelemetry SDK")
-		if err := shutdownOTEL(context.Background()); err != nil {
-			slog.Error("Failed to shutdown OpenTelemetry SDK", "error", err)
-			return fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err)
-		}
-		shutdownOTEL = nil
-	}
-
-	attrs := metrics.Attributes{
-		App:        "radiance",
-		DeviceID:   deviceID,
-		AppVersion: ClientVersion,
-		Platform:   Platform,
-		GoVersion:  runtime.Version(),
-		OSName:     runtime.GOOS,
-		OSArch:     runtime.GOARCH,
-		GeoCountry: configResponse.Country,
-		Pro:        configResponse.Pro,
-	}
-	if osStr, err := osversion.GetHumanReadable(); err == nil {
-		attrs.OSVersion = osStr
-	}
-
-	shutdown, err := metrics.SetupOTelSDK(context.Background(), attrs, configResponse)
-	if err != nil {
-		slog.Error("Failed to start OpenTelemetry SDK", "error", err)
-		return fmt.Errorf("failed to start OpenTelemetry SDK: %w", err)
-	}
-
-	shutdownOTEL = shutdown
 	return nil
 }
 
