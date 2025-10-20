@@ -132,6 +132,7 @@ func baseOpts(basePath string) O.Options {
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules:               baseRoutingRules(),
+			Final:               "block",
 			RuleSet: []O.RuleSet{
 				{
 					Type: C.RuleSetTypeLocal,
@@ -240,17 +241,6 @@ func baseRoutingRules() []O.Rule {
 	rules = append(rules, groupRule(autoAllTag))
 	rules = append(rules, groupRule(servers.SGLantern))
 	rules = append(rules, groupRule(servers.SGUser))
-
-	// catch-all rule to ensure no fallthrough
-	rules = append(rules, O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	})
 
 	return rules
 }
