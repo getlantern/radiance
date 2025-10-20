@@ -367,13 +367,13 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
 
-	// if src.Route != nil {
-	// 	dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
-	// 	dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
-	// }
-	// if src.DNS != nil {
-	// 	dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
-	// }
+	if src.Route != nil {
+		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
+		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
+	}
+	if src.DNS != nil {
+		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
+	}
 
 	var tags []string
 	for _, out := range src.Outbounds {
