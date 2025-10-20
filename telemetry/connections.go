@@ -1,4 +1,4 @@
-package metrics
+package telemetry
 
 import (
 	"context"
@@ -12,10 +12,10 @@ import (
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
-// HarvestConnectionMetrics periodically polls the number of active connections and their total
+// harvestConnectionMetrics periodically polls the number of active connections and their total
 // upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
 // that can be called to stop the polling.
-func HarvestConnectionMetrics(pollInterval time.Duration) func() {
+func harvestConnectionMetrics(pollInterval time.Duration) func() {
 	ticker := time.NewTicker(pollInterval)
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
 	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))

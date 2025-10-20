@@ -23,6 +23,7 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 
 	"github.com/getlantern/radiance/config"
@@ -145,6 +146,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
+	confHandler.AddConfigListener(
+		func(oldConfig, newConfig *config.Config) error {
+			slog.Info("Config changed", "oldConfig", oldConfig, "newConfig", newConfig)
+			return telemetry.OnNewConfig(oldConfig.ConfigResponse, newConfig.ConfigResponse, platformDeviceID, userInfo)
+		},
+	)
 	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
@@ -156,15 +163,18 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
-	r.addShutdownFunc(common.Close)
+	r.addShutdownFunc(common.Close, telemetry.Close)
 	return r, nil
 }
 
-// addShutdownFunc adds a shutdown function to the Radiance instance.
-// This function is called when the Radiance instance is closed to ensure that all resources are cleaned up properly.
-func (r *Radiance) addShutdownFunc(fn func(context.Context) error) {
-	if fn != nil {
-		r.shutdownFuncs = append(r.shutdownFuncs, fn)
+// addShutdownFunc adds a shutdown function(s) to the Radiance instance.
+// This function is called when the Radiance instance is closed to ensure that all
+// resources are cleaned up properly.
+func (r *Radiance) addShutdownFunc(fns ...func(context.Context) error) {
+	for _, fn := range fns {
+		if fn != nil {
+			r.shutdownFuncs = append(r.shutdownFuncs, fn)
+		}
 	}
 }
 
