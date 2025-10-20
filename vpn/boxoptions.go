@@ -48,6 +48,14 @@ func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
 	directPath := filepath.Join(basePath, directFile)
 
+	adBlockPath := filepath.Join(basePath, adBlockFile)
+	if _, err := os.Stat(adBlockPath); os.IsNotExist(err) {
+		if err := os.WriteFile(adBlockPath, []byte(emptyRuleSetJSON), 0644); err != nil {
+			slog.Warn("Failed to create ad-block ruleset file", "path", adBlockPath, "error", err)
+		} else {
+			slog.Info("Created ad-block ruleset file", "path", adBlockPath)
+		}
+	}
 	// Write the domains to access directly to a file to disk.
 	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
 		slog.Warn("Failed to write inline direct rule set to file", "path", directPath, "error", err)
@@ -149,6 +157,12 @@ func baseOpts(basePath string) O.Options {
 					},
 					Format: C.RuleSetFormatSource,
 				},
+				{
+					Type:         C.RuleSetTypeLocal,
+					Tag:          adBlockTag,
+					LocalOptions: O.LocalRuleSet{Path: adBlockPath},
+					Format:       C.RuleSetFormatSource,
+				},
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
@@ -237,6 +251,23 @@ func baseRoutingRules() []O.Rule {
 			},
 		})
 	}
+
+	// insert ad block rule
+	rules = append(rules, O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				RuleSet: []string{adBlockTag},
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeRoute,
+				RouteOptions: O.RouteActionOptions{
+					Outbound: "block",
+				},
+			},
+		},
+	})
+
 	rules = append(rules, groupRule(autoAllTag))
 	rules = append(rules, groupRule(servers.SGLantern))
 	rules = append(rules, groupRule(servers.SGUser))

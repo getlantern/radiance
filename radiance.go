@@ -58,6 +58,7 @@ type Radiance struct {
 	issueReporter issueReporter
 	apiHandler    *api.APIClient
 	srvManager    *servers.Manager
+	adblock       *adblockHost
 
 	// user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
@@ -75,6 +76,7 @@ type Options struct {
 	Locale   string
 	DeviceID string
 	LogLevel string
+	AdBlock  *AdBlockOptions
 }
 
 // NewRadiance creates a new Radiance VPN client. opts includes the platform interface used to
@@ -121,6 +123,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	httpClientWithTimeout := k.NewHTTPClient()
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
+	adblockCtx, adblockCancel := context.WithCancel(context.Background())
+	abHost, abCleanup, err := newAdBlockHost(adblockCtx, httpClientWithTimeout, opts.AdBlock)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize ad blocker: %w", err)
+	}
+
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
 	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
@@ -155,7 +163,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
+		adblock:       abHost,
 	}
+	r.addShutdownFunc(func(ctx context.Context) error {
+		adblockCancel()
+		return abCleanup(ctx)
+	})
 	r.addShutdownFunc(common.Close)
 	return r, nil
 }
@@ -280,4 +293,28 @@ func (r *Radiance) ServerLocations() ([]lcommon.ServerLocation, error) {
 	}
 	slog.Debug("Returning server locations from config", "locations", cfg.ConfigResponse.Servers)
 	return cfg.ConfigResponse.Servers, nil
+}
+
+// SetAdBlockEnabled toggles the built-in ad blocker
+func (r *Radiance) SetAdBlockEnabled(enabled bool) error {
+	if r.adblock == nil {
+		return fmt.Errorf("ad blocker is not available")
+	}
+	return r.adblock.setEnabled(enabled)
+}
+
+// IsAdBlockEnabled reports whether ad blocking is currently active
+func (r *Radiance) IsAdBlockEnabled() bool {
+	if r.adblock == nil {
+		return false
+	}
+	return r.adblock.isEnabled()
+}
+
+// RefreshAdBlock forces a refresh of the remote ruleset
+func (r *Radiance) RefreshAdBlock(ctx context.Context) error {
+	if r.adblock == nil {
+		return fmt.Errorf("ad blocker is not available")
+	}
+	return r.adblock.refresh(ctx)
 }
