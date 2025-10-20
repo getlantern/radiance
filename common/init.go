@@ -20,6 +20,8 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var (
@@ -102,16 +104,19 @@ func initLogger(logPath, level string) error {
 		return nil
 	}
 
-	// If the log file does not exist, create it.
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
+	logRotator := &lumberjack.Logger{
+		Filename:   logPath, // Log file path
+		MaxSize:    25,      // Rotate log when it reaches 100 MB
+		MaxBackups: 4,       // Keep up to 5 rotated log files
+		MaxAge:     30,      // Retain old log files for up to 30 days
+		Compress:   true,    // Compress rotated log files
 	}
+
 	var logWriter io.Writer
 	if noStdout, _ := env.Get[bool](env.DisableStdout); noStdout {
-		logWriter = f
+		logWriter = logRotator
 	} else {
-		logWriter = io.MultiWriter(os.Stdout, f)
+		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
