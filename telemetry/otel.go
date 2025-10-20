@@ -62,11 +62,11 @@ func OnNewConfig(oldConfig, newConfig common.ConfigResponse, deviceID string, us
 	userData, err := userInfo.GetData()
 	if err != nil {
 		slog.Error("Failed to get user data for OpenTelemetry initialization", "error", err)
-		return nil
+		return fmt.Errorf("Could not get user data %w", err)
 	}
 	if err := initialize(deviceID, newConfig, userData.LegacyUserData.UserLevel == "pro"); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
-		return nil
+		return fmt.Errorf("Failed to initialize OpenTelemetry: %w", err)
 	}
 	return nil
 }
@@ -76,7 +76,7 @@ func initialize(deviceID string, configResponse common.ConfigResponse, pro bool)
 	defer initMutex.Unlock()
 
 	if configResponse.OTEL.Endpoint == "" {
-		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+		slog.Debug("No otel endpoint configured, skipping OpenTelemetry initialization")
 		return nil
 	}
 
