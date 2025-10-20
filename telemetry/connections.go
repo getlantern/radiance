@@ -64,7 +64,7 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 						attribute.String("inbound", c.Inbound),
 						attribute.String("network", c.Network),
 						attribute.String("protocol", c.Protocol),
-						attribute.Int("ip_version", int(c.IPVersion)),
+						attribute.Int("ip_version", c.IPVersion),
 						attribute.String("rule", c.Rule),
 						attribute.StringSlice("chain_list", c.ChainList),
 					)
@@ -89,8 +89,8 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 						connectionDuration.Record(ctx, duration/1000, metric.WithAttributeSet(attributes))
 					}
 
-					downlinkBytes.Add(ctx, int64(c.Downlink), metric.WithAttributeSet(attributes))
-					uplinkBytes.Add(ctx, int64(c.Uplink), metric.WithAttributeSet(attributes))
+					downlinkBytes.Add(ctx, c.Downlink, metric.WithAttributeSet(attributes))
+					uplinkBytes.Add(ctx, c.Uplink, metric.WithAttributeSet(attributes))
 				}
 			}
 		}

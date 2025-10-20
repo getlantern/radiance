@@ -13,7 +13,6 @@ import (
 
 	"github.com/getlantern/common"
 	"github.com/getlantern/osversion"
-
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
