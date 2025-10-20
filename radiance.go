@@ -171,7 +171,11 @@ func NewRadiance(opts Options) (*Radiance, error) {
 // This function is called when the Radiance instance is closed to ensure that all
 // resources are cleaned up properly.
 func (r *Radiance) addShutdownFunc(fns ...func(context.Context) error) {
-	r.shutdownFuncs = append(r.shutdownFuncs, fns...)
+	for _, fn := range fns {
+		if fn != nil {
+			r.shutdownFuncs = append(r.shutdownFuncs, fn)
+		}
+	}
 }
 
 func (r *Radiance) Close() {
