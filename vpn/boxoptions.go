@@ -10,15 +10,14 @@ import (
 	"path/filepath"
 	"time"
 
+	sbx "github.com/getlantern/sing-box-extensions"
+	sbxconstant "github.com/getlantern/sing-box-extensions/constant"
+	sbxoption "github.com/getlantern/sing-box-extensions/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
-
-	sbx "github.com/getlantern/sing-box-extensions"
-	sbxconstant "github.com/getlantern/sing-box-extensions/constant"
-	sbxoption "github.com/getlantern/sing-box-extensions/option"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/config"
@@ -471,9 +470,9 @@ var inlineDirectRuleSet string = `
     {
       "domain_suffix": [
         "iantem.io",
-		"a248.e.akamai.net",
-		"cloudfront.net",
-		"raw.githubusercontent.com"
+        "a248.e.akamai.net",
+        "cloudfront.net",
+        "raw.githubusercontent.com"
       ]
     }
   ]
