@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/getlantern/appdir"
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
@@ -28,6 +29,8 @@ var (
 
 	dataPath atomic.Value
 	logPath  atomic.Value
+
+	ENV = os.Getenv("RADIANCE_ENV")
 )
 
 func init() {
@@ -38,6 +41,18 @@ func init() {
 	if v, _ := env.Get[bool](env.Testing); v {
 		slog.SetLogLoggerLevel(internal.Disable)
 	}
+}
+
+// Prod returns true if the application is running in production environment.
+// Treating ENV == "" as production is intentional: if RADIANCE_ENV is unset,
+// we default to production mode to ensure the application runs with safe, non-debug settings.
+func Prod() bool {
+	return ENV == "production" || ENV == "prod" || ENV == ""
+}
+
+// Dev returns true if the application is running in development environment.
+func Dev() bool {
+	return ENV == "development" || ENV == "dev"
 }
 
 // Init initializes the common components of the application. This includes setting up the directories
@@ -102,16 +117,19 @@ func initLogger(logPath, level string) error {
 		return nil
 	}
 
-	// If the log file does not exist, create it.
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
+	logRotator := &lumberjack.Logger{
+		Filename:   logPath, // Log file path
+		MaxSize:    25,      // Rotate log when it reaches 25 MB
+		MaxBackups: 4,       // Keep up to 4 rotated log files
+		MaxAge:     30,      // Retain old log files for up to 30 days
+		Compress:   Prod(),  // Compress rotated log files
 	}
+
 	var logWriter io.Writer
 	if noStdout, _ := env.Get[bool](env.DisableStdout); noStdout {
-		logWriter = f
+		logWriter = logRotator
 	} else {
-		logWriter = io.MultiWriter(os.Stdout, f)
+		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,

@@ -149,7 +149,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	confHandler.AddConfigListener(
 		func(oldConfig, newConfig *config.Config) error {
 			slog.Info("Config changed", "oldConfig", oldConfig, "newConfig", newConfig)
-			return telemetry.OnNewConfig(oldConfig.ConfigResponse, newConfig.ConfigResponse, platformDeviceID, userInfo)
+			return telemetry.OnNewConfig(oldConfig, newConfig, platformDeviceID, userInfo)
 		},
 	)
 	r := &Radiance{
