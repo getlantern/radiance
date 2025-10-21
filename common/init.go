@@ -15,13 +15,12 @@ import (
 	"time"
 
 	"github.com/getlantern/appdir"
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
-
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var (
@@ -30,6 +29,8 @@ var (
 
 	dataPath atomic.Value
 	logPath  atomic.Value
+
+	ENV = os.Getenv("RADIANCE_ENV")
 )
 
 func init() {
@@ -40,6 +41,16 @@ func init() {
 	if v, _ := env.Get[bool](env.Testing); v {
 		slog.SetLogLoggerLevel(internal.Disable)
 	}
+}
+
+// Prod returns true if the application is running in production environment.
+func Prod() bool {
+	return ENV == "production" || ENV == "prod" || ENV == ""
+}
+
+// Dev returns true if the application is running in development environment.
+func Dev() bool {
+	return ENV == "development" || ENV == "dev"
 }
 
 // Init initializes the common components of the application. This includes setting up the directories
@@ -109,7 +120,7 @@ func initLogger(logPath, level string) error {
 		MaxSize:    25,      // Rotate log when it reaches 25 MB
 		MaxBackups: 4,       // Keep up to 4 rotated log files
 		MaxAge:     30,      // Retain old log files for up to 30 days
-		Compress:   true,    // Compress rotated log files
+		Compress:   Prod(),  // Compress rotated log files
 	}
 
 	var logWriter io.Writer
