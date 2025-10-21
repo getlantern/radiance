@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/config"
 )
 
 var (
@@ -52,18 +53,19 @@ type Attributes struct {
 }
 
 // OnNewConfig handles OpenTelemetry re-initialization when the configuration changes.
-func OnNewConfig(oldConfig, newConfig common.ConfigResponse, deviceID string, userInfo rcommon.UserInfo) error {
-	// Check if the old OTEL configuration is the same as the new one.
-	if reflect.DeepEqual(oldConfig.OTEL, newConfig.OTEL) {
-		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
-		return nil
-	}
+func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string, userInfo rcommon.UserInfo) error {
 	userData, err := userInfo.GetData()
 	if err != nil {
 		slog.Error("Failed to get user data for OpenTelemetry initialization", "error", err)
 		return fmt.Errorf("Could not get user data %w", err)
 	}
-	if err := initialize(deviceID, newConfig, userData.LegacyUserData.UserLevel == "pro"); err != nil {
+
+	// Check if the old OTEL configuration is the same as the new one.
+	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, newConfig.ConfigResponse.OTEL) {
+		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
+		return nil
+	}
+	if err := initialize(deviceID, newConfig.ConfigResponse, userData.LegacyUserData.UserLevel == "pro"); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
 		return fmt.Errorf("Failed to initialize OpenTelemetry: %w", err)
 	}
