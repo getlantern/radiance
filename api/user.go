@@ -37,7 +37,7 @@ const (
 
 	saltFileName = ".salt"
 
-	baseURL = "https://iantem.io/api/v1"
+	baseURL = "https://api.iantem.io/v1"
 )
 
 // Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
@@ -516,7 +516,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 
 // OAuthLogin initiates the OAuth login process for the specified provider.
 func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
-	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://df.iantem.io/api/v1", "users/oauth2", provider))
+	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://api.iantem.io/v1", "users/oauth2", provider))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}

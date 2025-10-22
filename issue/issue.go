@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	requestURL = "https://iantem.io/api/v1/issue"
+	requestURL = "https://api.iantem.io/v1/issue"
 	maxLogSize = 20 * 1024 * 1024 // 20 MB
 	tracerName = "github.com/getlantern/radiance/issue"
 )
@@ -151,7 +151,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	// zip * under folder common.LogDir
 	logDir := common.LogPath()
 	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxLogSize)
-	if _, err := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); err == nil {
+	if _, zipErr := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); zipErr == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
 			Name:    "logs.zip",
@@ -165,7 +165,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	out, err := proto.Marshal(r)
 	if err != nil {
 		slog.Error("unable to marshal issue report", "error", err)
-		return err
+		return fmt.Errorf("Error marshaling proto: %w", err)
 	}
 
 	req, err := backend.NewIssueRequest(
