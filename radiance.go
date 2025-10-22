@@ -22,6 +22,7 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/fronted"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -107,7 +108,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	dataDir := common.DataPath()
-	f, err := newFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"))
+	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), &slogWriter{Logger: slog.Default()})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
@@ -116,7 +117,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
 		kindling.WithDomainFronting(f),
-		kindling.WithProxyless("api.iantem.io"),
+		kindling.WithProxyless("df.iantem.io"),
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
@@ -290,4 +291,14 @@ func (r *Radiance) ServerLocations() ([]lcommon.ServerLocation, error) {
 	}
 	slog.Debug("Returning server locations from config", "locations", cfg.ConfigResponse.Servers)
 	return cfg.ConfigResponse.Servers, nil
+}
+
+type slogWriter struct {
+	*slog.Logger
+}
+
+func (w *slogWriter) Write(p []byte) (n int, err error) {
+	// Convert the byte slice to a string and log it
+	w.Info(string(p))
+	return len(p), nil
 }
