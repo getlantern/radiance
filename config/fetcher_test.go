@@ -40,6 +40,23 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 	// We expect a 500 error since the user does not have any matching tracks.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
+}
+
+func TestProxylessFetchConfig(t *testing.T) {
+	// Disable this test for now since it depends on external service.
+	t.Skip("Skipping TestProxylessFetchConfig since it depends on external service.")
+	k := kindling.NewKindling(kindling.WithProxyless("df.iantem.io"))
+	httpClient := k.NewHTTPClient()
+	mockUser := &mockUser{}
+	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+
+	privateKey, err := wgtypes.GenerateKey()
+	require.NoError(t, err)
+
+	_, err = fetcher.fetchConfig(context.Background(), C.ServerLocation{Country: "US"}, privateKey.PublicKey().String())
+	// We expect a 500 error since the user does not have any matching tracks.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
 
 }
 
