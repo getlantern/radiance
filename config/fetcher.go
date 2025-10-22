@@ -62,7 +62,7 @@ func newFetcher(client *http.Client, user common.UserInfo, locale string, apiCli
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "config_fetcher.fetchConfig")
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.fetchConfig")
 	defer span.End()
 	// If we don't have a user ID or token, create a new user.
 	f.ensureUser(ctx)
@@ -87,7 +87,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	}
 
 	slog.Debug("sending config request", "request", string(buf))
-	buf, err = f.send(bytes.NewReader(buf))
+	buf, err = f.send(ctx, bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -102,7 +102,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 }
 
 func (f *fetcher) ensureUser(ctx context.Context) {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "config_fetcher.ensureUser")
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.ensureUser")
 	defer span.End()
 	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
 		if f.apiClient == nil {
@@ -121,8 +121,8 @@ func (f *fetcher) ensureUser(ctx context.Context) {
 }
 
 // send sends a request to the server with the given body and returns the response.
-func (f *fetcher) send(body io.Reader) ([]byte, error) {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "config_fetcher.send")
+func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.send")
 	defer span.End()
 	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body, f.user)
 	if err != nil {
