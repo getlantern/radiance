@@ -6,16 +6,42 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	C "github.com/getlantern/common"
+	"github.com/getlantern/kindling"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
+	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/fronted"
 )
+
+func TestDomainFrontingFetchConfig(t *testing.T) {
+	// Disable this test for now since it depends on external service.
+	t.Skip("Skipping TestDomainFrontingFetchConfig since it depends on external service.")
+	dataDir := t.TempDir()
+	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), io.Discard)
+	require.NoError(t, err)
+	k := kindling.NewKindling(kindling.WithDomainFronting(f))
+	httpClient := k.NewHTTPClient()
+	mockUser := &mockUser{}
+	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+
+	privateKey, err := wgtypes.GenerateKey()
+	require.NoError(t, err)
+
+	_, err = fetcher.fetchConfig(context.Background(), C.ServerLocation{Country: "US"}, privateKey.PublicKey().String())
+	// We expect a 500 error since the user does not have any matching tracks.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
+
+}
 
 type mockRoundTripper struct {
 	req  *http.Request
@@ -29,7 +55,7 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 type mockUser struct {
-	common.UserInfo
+	rcommon.UserInfo
 }
 
 func (m *mockUser) DeviceID() string {

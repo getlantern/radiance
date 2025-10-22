@@ -27,7 +27,7 @@ import (
 	"github.com/getlantern/radiance/traces"
 )
 
-const configURL = "https://api.iantem.io/v1/config-new"
+const configURL = "https://df.iantem.io/api/v1/config-new"
 const tracerName = "github.com/getlantern/radiance/config"
 
 type Fetcher interface {

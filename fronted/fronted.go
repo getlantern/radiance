@@ -1,4 +1,4 @@
-package radiance
+package fronted
 
 import (
 	"fmt"
@@ -15,7 +15,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, error) {
+const tracerName = "github.com/getlantern/radiance/fronted"
+
+func NewFronted(panicListener func(string), cacheFile string, logWriter io.Writer) (fronted.Fronted, error) {
 	// Parse the domain from the URL.
 	configURL := "https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz"
 	u, err := url.Parse(configURL)
@@ -24,8 +26,6 @@ func newFronted(panicListener func(string), cacheFile string) (fronted.Fronted, 
 	}
 	// Extract the domain from the URL.
 	domain := u.Host
-
-	logWriter := &slogWriter{Logger: slog.Default()}
 
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.
@@ -91,14 +91,4 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 	}
 	return res, err
-}
-
-type slogWriter struct {
-	*slog.Logger
-}
-
-func (w *slogWriter) Write(p []byte) (n int, err error) {
-	// Convert the byte slice to a string and log it
-	w.Info(string(p))
-	return len(p), nil
 }

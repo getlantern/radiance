@@ -37,7 +37,7 @@ const (
 
 	saltFileName = ".salt"
 
-	baseURL = "https://api.iantem.io/v1"
+	baseURL = "https://df.iantem.io/api/v1"
 )
 
 // Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
