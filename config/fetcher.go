@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 
 	"fmt"
 	"io"
@@ -61,6 +62,8 @@ func newFetcher(client *http.Client, user common.UserInfo, locale string, apiCli
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "config_fetcher.fetchConfig")
+	defer span.End()
 	// If we don't have a user ID or token, create a new user.
 	f.ensureUser(ctx)
 	confReq := C.ConfigRequest{
@@ -99,14 +102,18 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 }
 
 func (f *fetcher) ensureUser(ctx context.Context) {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "config_fetcher.ensureUser")
+	defer span.End()
 	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
 		if f.apiClient == nil {
 			slog.Error("API client is nil, cannot create new user")
+			span.RecordError(errors.New("API client is nil"))
 			return
 		}
 		_, err := f.apiClient.NewUser(ctx)
 		if err != nil {
 			slog.Error("Failed to create new user", "error", err)
+			span.RecordError(err)
 		} else {
 			slog.Info("Created new user")
 		}
