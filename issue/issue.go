@@ -165,7 +165,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	out, err := proto.Marshal(r)
 	if err != nil {
 		slog.Error("unable to marshal issue report", "error", err)
-		return fmt.Errorf("Error marshaling proto: %w", err)
+		return fmt.Errorf("error marshaling proto: %w", err)
 	}
 
 	req, err := backend.NewIssueRequest(
