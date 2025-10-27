@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	requestURL = "https://df.iantem.io/api/v1/issue"
-	maxLogSize = 20 * 1024 * 1024 // 20 MB
-	tracerName = "github.com/getlantern/radiance/issue"
+	requestURL             = "https://df.iantem.io/api/v1/issue"
+	maxLogSizeUncompressed = 50 * 1024 * 1024 // 50 MB
+	tracerName             = "github.com/getlantern/radiance/issue"
 )
 
 // IssueReporter is used to send issue reports to backend
@@ -150,15 +150,15 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
 	logDir := common.LogPath()
-	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxLogSize)
-	if _, zipErr := zipLogFiles(buf, logDir, maxLogSize, int64(maxLogSize)); zipErr == nil {
+	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxLogSizeUncompressed)
+	if _, zipErr := zipLogFiles(buf, logDir, maxLogSizeUncompressed, int64(maxLogSizeUncompressed)); zipErr == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
 			Name:    "logs.zip",
 			Content: buf.Bytes(),
 		})
 	} else {
-		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSize)
+		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxLogSizeUncompressed)
 	}
 
 	// send message to lantern-cloud
