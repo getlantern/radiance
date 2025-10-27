@@ -240,17 +240,6 @@ func baseRoutingRules() []O.Rule {
 	rules = append(rules, groupRule(servers.SGLantern))
 	rules = append(rules, groupRule(servers.SGUser))
 
-	// catch-all rule to ensure no fallthrough
-	rules = append(rules, O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	})
-
 	return rules
 }
 
@@ -321,6 +310,9 @@ func buildOptions(group, path string) (O.Options, error) {
 	// Add auto all outbound
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
 
+	// catch-all rule to ensure no fallthrough
+	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
+
 	slog.Debug("Finished building options")
 	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
 	return opts, nil
@@ -366,15 +358,13 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
 
-	/*
-		if src.Route != nil {
-			dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
-			dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
-		}
-		if src.DNS != nil {
-			dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
-		}
-	*/
+	if src.Route != nil {
+		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
+		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
+	}
+	if src.DNS != nil {
+		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
+	}
 
 	var tags []string
 	for _, out := range src.Outbounds {
@@ -445,6 +435,18 @@ func groupRule(group string) O.Rule {
 				RouteOptions: O.RouteActionOptions{
 					Outbound: group,
 				},
+			},
+		},
+	}
+}
+
+func catchAllBlockerRule() O.Rule {
+	return O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
 			},
 		},
 	}
