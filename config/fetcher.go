@@ -117,6 +117,13 @@ func (f *fetcher) ensureUser(ctx context.Context) {
 		} else {
 			slog.Info("Created new user")
 		}
+	} else {
+		slog.Debug("User already exists, getting user data")
+		_, err := f.apiClient.UserData(ctx)
+		if err != nil {
+			slog.Error("Failed to fetch user data", "error", err)
+			span.RecordError(err)
+		}
 	}
 }
 
