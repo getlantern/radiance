@@ -120,8 +120,10 @@ func initLogger(logPath, level string) error {
 	// lumberjack will create the log file if it does not exist with permissions 0600 otherwise it
 	// carries over the existing permissions. So we create it here with 0644 so we don't need root/admin
 	// privileges or chown/chmod to read it.
-	f, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if f != nil {
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		slog.Warn("Failed to pre-create log file", "error", err, "path", logPath)
+	} else {
 		f.Close()
 	}
 

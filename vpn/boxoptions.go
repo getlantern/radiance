@@ -156,8 +156,8 @@ func baseRoutingRules() []O.Rule {
 	// 2. * Hijack DNS to allow sing-box to handle DNS requests
 	// 3. * Route private IPs to direct outbound
 	// 4. * Split tunnel rule
-	// 5-7. Group rules for auto, lantern, and user 	| these might need to be rethought out.
-	// 8. Other rules...											| <-- never evaluated because group rules eval first
+	// 5-7. Group rules for auto, lantern, and user
+	// 8. Other rules...
 	// 9. * Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//   by previous rules does not automatically bypass the VPN.
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -319,6 +319,7 @@ func buildOptions(group, path string) (O.Options, error) {
 
 	if common.Dev() {
 		// write box options
+		// we can ignore the errors here since the tunnel will error out anyway if something is wrong
 		buf, _ := json.MarshalContext(sbx.BoxContext(), opts)
 		var b bytes.Buffer
 		stdjson.Indent(&b, buf, "", "  ")
