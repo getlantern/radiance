@@ -21,11 +21,21 @@ const (
 	DisableFetch  Key = "RADIANCE_DISABLE_FETCH_CONFIG"
 	PrintCurl     Key = "RADIANCE_PRINT_CURL"
 	DisableStdout Key = "RADIANCE_DISABLE_STDOUT_LOG"
+	ENV           Key = "RADIANCE_ENV"
 
-	Testing = "RADIANCE_TESTING"
+	Testing Key = "RADIANCE_TESTING"
 )
 
 var (
+	keys = []Key{
+		LogLevel,
+		LogPath,
+		DataPath,
+		DisableFetch,
+		PrintCurl,
+		DisableStdout,
+		ENV,
+	}
 	envVars = map[string]any{}
 )
 
@@ -51,7 +61,7 @@ func init() {
 	}
 
 	// Check for environment variables and populate envVars, overriding any values from the .env file
-	for _, key := range []string{LogLevel, LogPath, DataPath, DisableFetch} {
+	for _, key := range keys {
 		if value, exists := os.LookupEnv(key); exists {
 			parseAndSet(key, value)
 		}

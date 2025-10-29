@@ -75,7 +75,7 @@ func (fw *FileWatcher) watchLoop() {
 			if !ok {
 				return
 			}
-			if event.Name != fw.path && (!event.Has(fsnotify.Create) || !event.Has(fsnotify.Write)) {
+			if event.Name != fw.path || (!event.Has(fsnotify.Create) && !event.Has(fsnotify.Write)) {
 				continue
 			}
 
