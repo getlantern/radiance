@@ -78,6 +78,25 @@ func baseOpts(basePath string) O.Options {
 					Address: "223.5.5.5",
 					Detour:  "direct",
 				},
+				{
+					Tag:     "dns-sb-dot",
+					Address: "tls://185.222.222.222",
+				},
+				{
+					Tag:             "dns-google-doh",
+					Address:         "https://dns.google/dns-query",
+					AddressResolver: "dns-google-dot",
+				},
+				{
+					Tag:             "dns-cloudflare-doh",
+					Address:         "https://cloudflare-dns.com/dns-query",
+					AddressResolver: "dns-cloudflare-dot",
+				},
+				{
+					Tag:             "dns-sb-doh",
+					Address:         "https://doh.dns.sb/dns-query",
+					AddressResolver: "dns-sb-dot",
+				},
 			},
 			DNSClientOptions: O.DNSClientOptions{
 				Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
