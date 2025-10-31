@@ -54,7 +54,7 @@ func listen(_ string) (net.Listener, error) {
 // is needed to call Windows API functions that require a handle.
 type winioConn interface {
 	net.Conn
-	FD() uintptr
+	Fd() uintptr
 }
 
 type winioListener struct {
@@ -116,7 +116,7 @@ func verifySameUser(t1, t2 windows.Token) (bool, error) {
 
 // getPipeClientToken retrieves the impersonation token for the pipe client.
 func getPipeClientToken(conn winioConn) (windows.Token, error) {
-	ph := windows.Handle(conn.FD())
+	ph := windows.Handle(conn.Fd())
 	if ph == 0 {
 		return 0, fmt.Errorf("invalid pipe handle")
 	}
@@ -155,7 +155,7 @@ func getProcessToken(pc winioConn) (windows.Token, error) {
 }
 
 func getPipeClientPID(pc winioConn) (uint32, error) {
-	ph := windows.Handle(pc.FD())
+	ph := windows.Handle(pc.Fd())
 	if ph == 0 {
 		return 0, fmt.Errorf("invalid pipe handle")
 	}
