@@ -29,8 +29,6 @@ var (
 
 	dataPath atomic.Value
 	logPath  atomic.Value
-
-	ENV = os.Getenv("RADIANCE_ENV")
 )
 
 func init() {
@@ -47,12 +45,14 @@ func init() {
 // Treating ENV == "" as production is intentional: if RADIANCE_ENV is unset,
 // we default to production mode to ensure the application runs with safe, non-debug settings.
 func Prod() bool {
-	return ENV == "production" || ENV == "prod" || ENV == ""
+	e, _ := env.Get[string](env.ENV)
+	return e == "production" || e == "prod" || e == ""
 }
 
 // Dev returns true if the application is running in development environment.
 func Dev() bool {
-	return ENV == "development" || ENV == "dev"
+	e, _ := env.Get[string](env.ENV)
+	return e == "development" || e == "dev"
 }
 
 // Init initializes the common components of the application. This includes setting up the directories
@@ -117,6 +117,16 @@ func initLogger(logPath, level string) error {
 		return nil
 	}
 
+	// lumberjack will create the log file if it does not exist with permissions 0600 otherwise it
+	// carries over the existing permissions. So we create it here with 0644 so we don't need root/admin
+	// privileges or chown/chmod to read it.
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		slog.Warn("Failed to pre-create log file", "error", err, "path", logPath)
+	} else {
+		f.Close()
+	}
+
 	logRotator := &lumberjack.Logger{
 		Filename:   logPath, // Log file path
 		MaxSize:    25,      // Rotate log when it reaches 25 MB
@@ -138,7 +148,7 @@ func initLogger(logPath, level string) error {
 			switch a.Key {
 			case slog.TimeKey:
 				if t, ok := a.Value.Any().(time.Time); ok {
-					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000"))
+					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
 				}
 				return a
 			case slog.SourceKey:

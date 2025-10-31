@@ -1,6 +1,8 @@
 package vpn
 
 import (
+	"bytes"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -72,6 +74,11 @@ func baseOpts(basePath string) O.Options {
 					Address: "tls://1.1.1.1",
 				},
 				{
+					Tag:     "local",
+					Address: "223.5.5.5",
+					Detour:  "direct",
+				},
+				{
 					Tag:     "dns-sb-dot",
 					Address: "tls://185.222.222.222",
 				},
@@ -89,11 +96,6 @@ func baseOpts(basePath string) O.Options {
 					Tag:             "dns-sb-doh",
 					Address:         "https://doh.dns.sb/dns-query",
 					AddressResolver: "dns-sb-dot",
-				},
-				{
-					Tag:     "local",
-					Address: "223.5.5.5",
-					Detour:  "direct",
 				},
 			},
 			DNSClientOptions: O.DNSClientOptions{
@@ -168,8 +170,26 @@ func baseOpts(basePath string) O.Options {
 func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
-	// DO NOT change the order of the first three rules or things will break. They MUST always
-	// be the first three rules.
+	// The rules MUST be in this order to ensure proper functionality:
+	// 1. * Enable traffic sniffing
+	// 2. * Hijack DNS to allow sing-box to handle DNS requests
+	// 3. * Route private IPs to direct outbound
+	// 4. * Split tunnel rule
+	// 5-7. Group rules for auto, lantern, and user
+	// 8. Other rules...
+	// 9. * Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	//   by previous rules does not automatically bypass the VPN.
+	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
+	//   rules or their order can break certain functionalities like DNS resolution or split tunneling.
+
+	// The default rule type uses the following matching logic:
+	// (domain || domain_suffix || domain_keyword || domain_regex || geosite || geoip || ip_cidr || ip_is_private) &&
+	// (port || port_range) &&
+	// (source_geoip || source_ip_cidr || source_ip_is_private) &&
+	// (source_port || source_port_range) &&
+	// other fields
+	//
+	// rule-sets are merged into the appropriate fields before evaluation instead of being evaluated separately.
 	rules := []O.Rule{
 		{
 			Type: C.RuleTypeDefault,
@@ -191,11 +211,11 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-		{ // split tunnel rule
+		{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					RuleSet: []string{splitTunnelTag, directTag},
+					IPIsPrivate: true,
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -205,11 +225,11 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-		{
+		{ // split tunnel rule
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					IPIsPrivate: true,
+					RuleSet: []string{splitTunnelTag, directTag},
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -315,6 +335,15 @@ func buildOptions(group, path string) (O.Options, error) {
 
 	slog.Debug("Finished building options")
 	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
+
+	if common.Dev() {
+		// write box options
+		// we can ignore the errors here since the tunnel will error out anyway if something is wrong
+		buf, _ := json.MarshalContext(sbx.BoxContext(), opts)
+		var b bytes.Buffer
+		stdjson.Indent(&b, buf, "", "  ")
+		os.WriteFile(filepath.Join(path, "debug-lantern-box-options.json"), b.Bytes(), 0644)
+	}
 	return opts, nil
 }
 
@@ -406,7 +435,7 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 		Tag:  tag,
 		Options: &sbxoption.MutableURLTestOutboundOptions{
 			Outbounds:   outbounds,
-			URL:         "http://connectivitycheck.gstatic.com/generate_204",
+			URL:         "https://google.com/generate_204",
 			Interval:    badoption.Duration(urlTestInterval),
 			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
 		},
