@@ -50,7 +50,7 @@ func listen(_ string) (net.Listener, error) {
 	return &winioListener{ln}, nil
 }
 
-// winioConn is an helper interface to access the underlying file descriptor of a winio.Conn. This
+// winioConn is a helper interface to access the underlying file descriptor of a winio.Conn. This
 // is needed to call Windows API functions that require a handle.
 type winioConn interface {
 	net.Conn
@@ -143,7 +143,7 @@ func getProcessToken(pc winioConn) (windows.Token, error) {
 	}
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION, false, pid)
 	if err != nil {
-		return 0, fmt.Errorf("failed to open process token: %w", err)
+		return 0, fmt.Errorf("failed to open process handle: %w", err)
 	}
 	defer windows.CloseHandle(h)
 
