@@ -103,7 +103,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	shutdownFuncs := []func(context.Context) error{}
-	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel, platformDeviceID); err != nil {
+	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 
