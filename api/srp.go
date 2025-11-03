@@ -72,7 +72,7 @@ func (c *authClient) SignUp(ctx context.Context, email string, password string) 
 		Verifier:              verifierKey.Bytes(),
 		SkipEmailConfirmation: true,
 		// Set temp always to true for now
-		// If new user got crash they should be able to signup again
+		// If new user faces any issue while sign up user can sign up again
 		Temp: true,
 	}
 
