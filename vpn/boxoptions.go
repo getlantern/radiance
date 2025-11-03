@@ -56,6 +56,14 @@ func baseOpts(basePath string) O.Options {
 		slog.Info("Wrote inline direct rule set to file", "path", directPath)
 	}
 
+	// For whatever reason, sing-box seems to append the path to the base path on Windows, so we
+	// just use the file names directly.
+	if common.IsWindows() {
+		splitTunnelPath = splitTunnelFile
+		directPath = directFile
+		slog.Info("Adjusted split tunnel and direct paths for Windows", "splitTunnelPath", splitTunnelPath, "directPath", directPath)
+	}
+
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -301,7 +309,7 @@ func buildOptions(group, path string) (O.Options, error) {
 	var lanternTags []string
 	switch {
 	case len(configOpts.RawMessage) == 0:
-		slog.Info("No config found")
+		slog.Info("No config found at", "path", confPath)
 	case len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0:
 		slog.Warn("Config loaded but no outbounds or endpoints found")
 		fallthrough // Proceed to merge with base options
@@ -334,7 +342,6 @@ func buildOptions(group, path string) (O.Options, error) {
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
 
 	slog.Debug("Finished building options")
-	slog.Log(nil, internal.LevelTrace, "complete options", "options", opts)
 
 	if common.Dev() {
 		// write box options
