@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,7 +56,8 @@ func Dev() bool {
 
 // Init initializes the common components of the application. This includes setting up the directories
 // for data and logs, initializing the logger, and setting up reporting.
-func Init(dataDir, logDir, logLevel, deviceID string) error {
+func Init(dataDir, logDir, logLevel string) error {
+	slog.Info("Initializing common package")
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if initialized {
@@ -75,10 +75,11 @@ func Init(dataDir, logDir, logLevel, deviceID string) error {
 
 	err = initLogger(filepath.Join(logDir, LogFileName), logLevel)
 	if err != nil {
+		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
 
-	if runtime.GOOS != "windows" {
+	if !IsWindows() {
 		ipc.SetSocketPath(dataDir)
 	}
 
@@ -222,6 +223,7 @@ func setupDirectories(data, logs string) error {
 		}
 	}
 
+	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	dataPath.Store(data)
 	logPath.Store(logs)
 	return nil

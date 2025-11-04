@@ -3,7 +3,7 @@ package vpn
 import (
 	"context"
 	"fmt"
-	"runtime"
+	"log/slog"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -28,7 +28,7 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
 		return nil
 	}
 	platIfceProvider = provider
-	if runtime.GOOS != "windows" && basePath != "" {
+	if !common.IsWindows() && basePath != "" {
 		ipc.SetSocketPath(basePath)
 	}
 
@@ -39,6 +39,15 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
 		if path == "" {
 			path = common.DataPath()
 		}
+		// Initialize common package if not already done.
+		if path == "" {
+			if err := common.Init("", "", "debug"); err != nil {
+				slog.Error("Failed to initialize common package", "error", err)
+				return nil, fmt.Errorf("initialize common package: %w", err)
+			}
+		}
+		path = common.DataPath()
+		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", path)
 
 		_ = newSplitTunnel(path)
 
