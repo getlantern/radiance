@@ -53,6 +53,7 @@ func NewUserConfig(deviceID, dataDir, locale string, eh *event.Handler) UserInfo
 		data:     data,
 		dataPath: path,
 		locale:   locale,
+		eh:       eh,
 	}
 	return u
 }
