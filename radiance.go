@@ -23,7 +23,7 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/event"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/fronted"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
@@ -59,7 +59,6 @@ type Radiance struct {
 	issueReporter issueReporter
 	apiHandler    *api.APIClient
 	srvManager    *servers.Manager
-	eventHandler  *event.Handler
 
 	// user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
@@ -123,9 +122,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	httpClientWithTimeout := k.NewHTTPClient()
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
-	eh := event.NewHandler()
-
-	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale, eh)
+	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
 	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
 	if err != nil {
@@ -143,19 +140,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
 		APIHandler:   apiHandler,
-		EventHandler: eh,
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-	eh.Subscribe(config.NewConfigEvent{}, func(data any) {
-		evt, ok := data.(config.NewConfigEvent)
-		if !ok {
-			slog.Warn("Received invalid config event data", "listener", "telemetry")
-			return
-		}
+	events.Subscribe(func(evt config.NewConfigEvent) {
 		slog.Info("Config changed", "oldConfig", evt.Old, "newConfig", evt.New)
 		if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
 			slog.Error("Failed to handle new config for telemetry", "error", err)
@@ -204,11 +195,9 @@ func (r *Radiance) Close() {
 
 // AddConfigListener adds a listener that is called whenever the configuration changes.
 //
-// Deprecated: Use event handler subscriptions instead.
+// Deprecated: Use events handler subscriptions instead.
 func (r *Radiance) AddConfigListener(onChange func()) {
-	if eh := r.eventHandler; eh != nil {
-		eh.Subscribe(config.NewConfigEvent{}, func(data any) { onChange() })
-	}
+	events.Subscribe(func(evt config.NewConfigEvent) { onChange() })
 }
 
 // APIHandler returns the API handler for the Radiance client.

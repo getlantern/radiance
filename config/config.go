@@ -29,7 +29,7 @@ import (
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/event"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
 )
@@ -61,7 +61,6 @@ type Options struct {
 	DataDir      string
 	Locale       string
 	APIHandler   *api.APIClient
-	EventHandler *event.Handler
 }
 
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
@@ -77,8 +76,7 @@ type ConfigHandler struct {
 	configPath string
 	configMu   sync.RWMutex
 
-	svrManager   ServerManager
-	eventHandler *event.Handler
+	svrManager ServerManager
 
 	// wgKeyPath is the path to the WireGuard private key file.
 	wgKeyPath         string
@@ -97,7 +95,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		configPath:    configPath,
 		wgKeyPath:     filepath.Join(options.DataDir, "wg.key"),
 		svrManager:    options.SvrManager,
-		eventHandler:  options.EventHandler,
 	}
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(&C.ServerLocation{})
@@ -113,22 +110,15 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	if !ch.fetchDisabled {
 		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
-		if eh := options.EventHandler; eh != nil {
-			eh.Subscribe(common.UserChangeEvent{}, func(data any) {
-				evt, ok := data.(common.UserChangeEvent)
-				if !ok {
-					slog.Warn("invalid event data for UserChangeEvent")
-					return
-				}
-				// Only fetch a new config if the legacy token has changed.
-				if evt.New == nil || (evt.Old != nil && evt.New.GetLegacyToken() == evt.Old.GetLegacyToken()) {
-					return
-				}
-				if err := ch.fetchConfig(); err != nil {
-					slog.Error("Failed to fetch config", "error", err)
-				}
-			})
-		}
+		events.Subscribe(func(evt common.UserChangeEvent) {
+			// Only fetch a new config if the legacy token has changed.
+			if evt.New == nil || (evt.Old != nil && evt.New.GetLegacyToken() == evt.Old.GetLegacyToken()) {
+				return
+			}
+			if err := ch.fetchConfig(); err != nil {
+				slog.Error("Failed to fetch config", "error", err)
+			}
+		})
 	}
 	return ch
 }
@@ -338,7 +328,7 @@ func (ch *ConfigHandler) loadConfig() error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 	ch.config.Store(cfg)
-	emit(ch.eventHandler, nil, cfg)
+	emit(nil, cfg)
 	return nil
 }
 
@@ -404,7 +394,7 @@ func (ch *ConfigHandler) setConfig(cfg *Config) error {
 	}
 	slog.Info("saved new config")
 	slog.Info("Config set")
-	emit(ch.eventHandler, oldConfig, cfg)
+	emit(oldConfig, cfg)
 	return nil
 }
 
@@ -414,9 +404,9 @@ type NewConfigEvent struct {
 	New *Config
 }
 
-func emit(eh *event.Handler, old, new *Config) {
-	if eh != nil && !reflect.DeepEqual(old, new) {
-		eh.Emit(NewConfigEvent{}, NewConfigEvent{Old: old, New: new})
+func emit(old, new *Config) {
+	if !reflect.DeepEqual(old, new) {
+		events.Emit(NewConfigEvent{Old: old, New: new})
 	}
 }
 
