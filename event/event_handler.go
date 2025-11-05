@@ -53,10 +53,6 @@ func (eh *Handler) Unsubscribe(sub *Subscription) {
 // Emit notifies all subscribers of the event, passing event data.
 // Callbacks are invoked asynchronously in separate goroutines.
 func (eh *Handler) Emit(event Event, data any) {
-	go eh.emit(event, data)
-}
-
-func (eh *Handler) emit(event Event, data any) {
 	eh.mu.RLock()
 	defer eh.mu.RUnlock()
 	if subs, ok := eh.subscribers[event]; ok {
