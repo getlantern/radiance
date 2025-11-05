@@ -81,6 +81,10 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	}
 	// update the user data
 	ac.userData = login
+
+	if eh := ac.eventHandler; eh != nil {
+		eh.Emit(NewUserEvent, ac.userInfo)
+	}
 	return &resp, nil
 }
 
@@ -168,7 +172,7 @@ var ErrNoSalt = errors.New("not salt available, call GetSalt/Signup first")
 var ErrNotLoggedIn = errors.New("not logged in")
 var ErrInvalidCode = errors.New("invalid code")
 
-// SignUpEmailResendCode requests that the sign-up code be resent via email.
+// SignupEmailResendCode requests that the sign-up code be resent via email.
 func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_resend_code")
 	defer span.End()
@@ -514,7 +518,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 	return traces.RecordError(ctx, a.userInfo.SetData(nil))
 }
 
-// OAuthLogin initiates the OAuth login process for the specified provider.
+// OAuthLoginUrl initiates the OAuth login process for the specified provider.
 func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
 	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", "https://df.iantem.io/v1", "users/oauth2", provider))
 	if err != nil {
