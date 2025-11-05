@@ -125,8 +125,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	eh := event.NewHandler()
 
-	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir, eh)
+	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale, eh)
+	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
 	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
@@ -150,8 +150,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Info("Disabling config fetch")
 	}
 	confHandler := config.NewConfigHandler(cOpts)
-	eh.Subscribe(config.ConfigEvent{}, func(data any) {
-		evt, ok := data.(config.ConfigEvent)
+	eh.Subscribe(config.NewConfigEvent{}, func(data any) {
+		evt, ok := data.(config.NewConfigEvent)
 		if !ok {
 			slog.Warn("Received invalid config event data", "listener", "telemetry")
 			return
@@ -207,7 +207,7 @@ func (r *Radiance) Close() {
 // Deprecated: Use event handler subscriptions instead.
 func (r *Radiance) AddConfigListener(onChange func()) {
 	if eh := r.eventHandler; eh != nil {
-		eh.Subscribe(config.ConfigEvent{}, func(data any) { onChange() })
+		eh.Subscribe(config.NewConfigEvent{}, func(data any) { onChange() })
 	}
 }
 

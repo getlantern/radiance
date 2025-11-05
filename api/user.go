@@ -81,10 +81,6 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	}
 	// update the user data
 	ac.userData = login
-
-	if eh := ac.eventHandler; eh != nil {
-		eh.Emit(NewUserEvent, ac.userInfo)
-	}
 	return &resp, nil
 }
 

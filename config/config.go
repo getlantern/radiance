@@ -114,8 +114,16 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
 		if eh := options.EventHandler; eh != nil {
-			eh.Subscribe(api.NewUserEvent, func(_ any) {
-				slog.Debug("New user event received, fetching config")
+			eh.Subscribe(common.UserChangeEvent{}, func(data any) {
+				evt, ok := data.(common.UserChangeEvent)
+				if !ok {
+					slog.Warn("invalid event data for UserChangeEvent")
+					return
+				}
+				// Only fetch a new config if the legacy token has changed.
+				if evt.New == nil || (evt.Old != nil && evt.New.GetLegacyToken() == evt.Old.GetLegacyToken()) {
+					return
+				}
 				if err := ch.fetchConfig(); err != nil {
 					slog.Error("Failed to fetch config", "error", err)
 				}

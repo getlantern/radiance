@@ -11,15 +11,10 @@ import (
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/event"
 	"github.com/getlantern/radiance/traces"
 )
 
-const (
-	tracerName = "github.com/getlantern/radiance/api"
-
-	NewUserEvent = "api.new_user"
-)
+const tracerName = "github.com/getlantern/radiance/api"
 
 type APIClient struct {
 	authWc *webClient
@@ -31,11 +26,9 @@ type APIClient struct {
 	deviceID   string
 	authClient AuthClient
 	userInfo   common.UserInfo
-
-	eventHandler *event.Handler
 }
 
-func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string, eh *event.Handler) *APIClient {
+func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
 	httpClient.Transport = traces.NewRoundTripper(httpClient.Transport)
 
 	userData, err := userInfo.GetData()
@@ -61,14 +54,13 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	})
 	wc := newWebClient(httpClient, baseURL)
 	return &APIClient{
-		authWc:       wc,
-		proWC:        proWC,
-		salt:         salt,
-		saltPath:     path,
-		userData:     userData,
-		deviceID:     userInfo.DeviceID(),
-		authClient:   &authClient{wc, userInfo},
-		userInfo:     userInfo,
-		eventHandler: eh,
+		authWc:     wc,
+		proWC:      proWC,
+		salt:       salt,
+		saltPath:   path,
+		userData:   userData,
+		deviceID:   userInfo.DeviceID(),
+		authClient: &authClient{wc, userInfo},
+		userInfo:   userInfo,
 	}
 }

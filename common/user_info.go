@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/event"
 )
 
 const userDataFileName = ".userData"
@@ -33,10 +34,11 @@ type userInfo struct {
 	data     *protos.LoginResponse
 	dataPath string
 	locale   string
+	eh       *event.Handler
 }
 
 // NewUserConfig creates a new UserInfo object
-func NewUserConfig(deviceID, dataDir, locale string) UserInfo {
+func NewUserConfig(deviceID, dataDir, locale string, eh *event.Handler) UserInfo {
 	path := filepath.Join(dataDir, userDataFileName)
 	data, err := load(path)
 	if err != nil {
@@ -81,8 +83,17 @@ func (u *userInfo) SetLocale(locale string) {
 	u.locale = locale
 }
 
+type UserChangeEvent struct {
+	Old *protos.LoginResponse
+	New *protos.LoginResponse
+}
+
 func (u *userInfo) SetData(data *protos.LoginResponse) error {
+	old := u.data
 	u.data = data
+	if u.eh != nil && data != nil && !proto.Equal(old, data) {
+		u.eh.Emit(UserChangeEvent{}, UserChangeEvent{Old: old, New: data})
+	}
 	return save(data, u.dataPath)
 }
 

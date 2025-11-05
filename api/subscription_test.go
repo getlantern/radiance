@@ -68,7 +68,7 @@ func TestPlans(t *testing.T) {
 }
 
 func userInfo(dataPath string) common.UserInfo {
-	return common.NewUserConfig("HFJDFJ-75885F", dataPath, "en-US")
+	return common.NewUserConfig("HFJDFJ-75885F", dataPath, "en-US", nil)
 }
 
 type MockAPIClient struct {
