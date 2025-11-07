@@ -17,6 +17,7 @@ func TestSendReport(t *testing.T) {
 		fronted.WithConfigURL("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"),
 	)
 	k := kindling.NewKindling(
+		"radiance-issue-test",
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("api.iantem.io"),
 	)

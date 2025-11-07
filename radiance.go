@@ -114,6 +114,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	k := kindling.NewKindling(
+		"radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
 		kindling.WithDomainFronting(f),
