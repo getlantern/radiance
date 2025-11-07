@@ -111,8 +111,8 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
 		events.Subscribe(func(evt common.UserChangeEvent) {
-			// Only fetch a new config if the legacy token has changed.
-			if evt.New == nil || (evt.Old != nil && evt.New.GetLegacyToken() == evt.Old.GetLegacyToken()) {
+
+			if shouldSkipConfigFetch(evt) {
 				return
 			}
 			if err := ch.fetchConfig(); err != nil {
@@ -121,6 +121,25 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		})
 	}
 	return ch
+}
+
+// shouldSkipConfigFetch determines whether we should skip fetching the config
+// fetch config on when user legacy token changes or user level changes
+func shouldSkipConfigFetch(evt common.UserChangeEvent) bool {
+	if evt.New == nil {
+		return true
+	}
+	if evt.New.GetLegacyToken() != evt.Old.GetLegacyToken() {
+		return false
+	}
+
+	if evt.New.LegacyUserData == nil || evt.Old.LegacyUserData == nil {
+		return true
+	}
+	if evt.New.LegacyUserData.UserLevel != evt.Old.LegacyUserData.UserLevel {
+		return false
+	}
+	return true
 }
 
 var ErrNoWGKey = errors.New("no wg key")
