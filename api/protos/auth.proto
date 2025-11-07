@@ -7,6 +7,10 @@ message SignupRequest {
   bytes salt = 2;
   bytes verifier = 3;
   bool skip_email_confirmation = 4;
+  // If true, creates a temporary user account that has not yet been confirmed.
+  // A subsequent signup request for the same email will replace this temporary user.
+  // The user becomes permanent upon actions like email confirmation or password recovery.
+  bool temp = 5;
 }
 
 message EmptyResponse{}

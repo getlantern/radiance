@@ -28,8 +28,12 @@ type SignupRequest struct {
 	Salt                  []byte                 `protobuf:"bytes,2,opt,name=salt,proto3" json:"salt,omitempty"`
 	Verifier              []byte                 `protobuf:"bytes,3,opt,name=verifier,proto3" json:"verifier,omitempty"`
 	SkipEmailConfirmation bool                   `protobuf:"varint,4,opt,name=skip_email_confirmation,json=skipEmailConfirmation,proto3" json:"skip_email_confirmation,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// If true, creates a temporary user account that has not yet been confirmed.
+	// A subsequent signup request for the same email will replace this temporary user.
+	// The user becomes permanent upon actions like email confirmation or password recovery.
+	Temp          bool `protobuf:"varint,5,opt,name=temp,proto3" json:"temp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SignupRequest) Reset() {
@@ -86,6 +90,13 @@ func (x *SignupRequest) GetVerifier() []byte {
 func (x *SignupRequest) GetSkipEmailConfirmation() bool {
 	if x != nil {
 		return x.SkipEmailConfirmation
+	}
+	return false
+}
+
+func (x *SignupRequest) GetTemp() bool {
+	if x != nil {
+		return x.Temp
 	}
 	return false
 }
@@ -1533,12 +1544,13 @@ var File_api_protos_auth_proto protoreflect.FileDescriptor
 
 const file_api_protos_auth_proto_rawDesc = "" +
 	"\n" +
-	"\x15api/protos/auth.proto\"\x8d\x01\n" +
+	"\x15api/protos/auth.proto\"\xa1\x01\n" +
 	"\rSignupRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x12\n" +
 	"\x04salt\x18\x02 \x01(\fR\x04salt\x12\x1a\n" +
 	"\bverifier\x18\x03 \x01(\fR\bverifier\x126\n" +
-	"\x17skip_email_confirmation\x18\x04 \x01(\bR\x15skipEmailConfirmation\"\x0f\n" +
+	"\x17skip_email_confirmation\x18\x04 \x01(\bR\x15skipEmailConfirmation\x12\x12\n" +
+	"\x04temp\x18\x05 \x01(\bR\x04temp\"\x0f\n" +
 	"\rEmptyResponse\"D\n" +
 	"\x18SignupEmailResendRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x12\n" +
