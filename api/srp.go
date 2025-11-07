@@ -71,6 +71,9 @@ func (c *authClient) SignUp(ctx context.Context, email string, password string) 
 		Salt:                  salt,
 		Verifier:              verifierKey.Bytes(),
 		SkipEmailConfirmation: true,
+		// Set temp always to true for now
+		// If new user faces any issue while sign up user can sign up again
+		Temp: true,
 	}
 
 	if err := c.signUp(ctx, signUpRequestBody); err != nil {
