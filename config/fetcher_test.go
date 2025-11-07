@@ -28,7 +28,10 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 	dataDir := t.TempDir()
 	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), io.Discard)
 	require.NoError(t, err)
-	k := kindling.NewKindling(kindling.WithDomainFronting(f))
+	k := kindling.NewKindling(
+		"radiance-df-test",
+		kindling.WithDomainFronting(f),
+	)
 	httpClient := k.NewHTTPClient()
 	mockUser := &mockUser{}
 	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
@@ -45,7 +48,10 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 func TestProxylessFetchConfig(t *testing.T) {
 	// Disable this test for now since it depends on external service.
 	t.Skip("Skipping TestProxylessFetchConfig since it depends on external service.")
-	k := kindling.NewKindling(kindling.WithProxyless("df.iantem.io"))
+	k := kindling.NewKindling(
+		"radiance-df-test",
+		kindling.WithProxyless("df.iantem.io"),
+	)
 	httpClient := k.NewHTTPClient()
 	mockUser := &mockUser{}
 	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
