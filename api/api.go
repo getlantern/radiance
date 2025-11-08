@@ -6,11 +6,12 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/go-resty/resty/v2"
+
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
-	"github.com/go-resty/resty/v2"
 )
 
 const tracerName = "github.com/getlantern/radiance/api"

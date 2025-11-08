@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
 )
@@ -71,10 +73,8 @@ type ConfigHandler struct {
 	closeOnce     *sync.Once
 	fetchDisabled bool
 
-	configPath        string
-	configListeners   []ListenerFunc
-	configListenersMu sync.RWMutex
-	configMu          sync.RWMutex
+	configPath string
+	configMu   sync.RWMutex
 
 	svrManager ServerManager
 
@@ -88,14 +88,13 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	options.HTTPClient.Transport = traces.NewRoundTripper(options.HTTPClient.Transport)
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ch := &ConfigHandler{
-		config:          atomic.Value{},
-		stopC:           make(chan struct{}),
-		closeOnce:       &sync.Once{},
-		fetchDisabled:   options.PollInterval <= 0,
-		configPath:      configPath,
-		configListeners: make([]ListenerFunc, 0),
-		wgKeyPath:       filepath.Join(options.DataDir, "wg.key"),
-		svrManager:      options.SvrManager,
+		config:        atomic.Value{},
+		stopC:         make(chan struct{}),
+		closeOnce:     &sync.Once{},
+		fetchDisabled: options.PollInterval <= 0,
+		configPath:    configPath,
+		wgKeyPath:     filepath.Join(options.DataDir, "wg.key"),
+		svrManager:    options.SvrManager,
 	}
 	// Set the preferred location to an empty struct to define the underlying type.
 	ch.preferredLocation.Store(&C.ServerLocation{})
@@ -111,8 +110,24 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	if !ch.fetchDisabled {
 		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
+		events.Subscribe(func(evt common.UserChangeEvent) {
+			if !shouldRefetch(evt.New, evt.Old) {
+				return
+			}
+			if err := ch.fetchConfig(); err != nil {
+				slog.Error("Failed to fetch config", "error", err)
+			}
+		})
 	}
 	return ch
+}
+
+// shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
+func shouldRefetch(new, old common.UserInfo) bool {
+	return new != old &&
+		(new == nil || old == nil || // sanity check
+			new.LegacyToken() != old.LegacyToken() || // user ID changed
+			new.AccountType() != old.AccountType()) // changed between free and pro
 }
 
 var ErrNoWGKey = errors.New("no wg key")
@@ -149,38 +164,6 @@ func (ch *ConfigHandler) SetPreferredServerLocation(country, city string) {
 			slog.Error("Failed to fetch config: %v", "error", err)
 		}
 	}()
-}
-
-// AddConfigListener adds a listener for new Configs.
-func (ch *ConfigHandler) AddConfigListener(listener ListenerFunc) {
-	ch.configListenersMu.Lock()
-	ch.configListeners = append(ch.configListeners, listener)
-	ch.configListenersMu.Unlock()
-	cfg, err := ch.GetConfig()
-	if err != nil {
-		// There is no config yet, so we can't notify the listener.
-		slog.Info("getting config", "error", err)
-		return
-	}
-	go func() {
-		err := listener(nil, cfg)
-		if err != nil {
-			slog.Error("Listener error", "error", err)
-		}
-	}()
-}
-
-func (ch *ConfigHandler) notifyListeners(oldConfig, newConfig *Config) {
-	ch.configListenersMu.RLock()
-	defer ch.configListenersMu.RUnlock()
-	for _, listener := range ch.configListeners {
-		go func() {
-			err := listener(oldConfig, newConfig)
-			if err != nil {
-				slog.Error("Listener error", "error", err)
-			}
-		}()
-	}
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
@@ -248,7 +231,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
-	if err := ch.setConfigAndNotify(&Config{ConfigResponse: confResp}); err == nil {
+	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
 		cfg := ch.config.Load().(*Config).ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
 		for k, v := range cfg.OutboundLocations {
@@ -311,32 +294,6 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 	return nil
 }
 
-func (ch *ConfigHandler) setConfigAndNotify(cfg *Config) error {
-	slog.Info("Setting config")
-	if cfg == nil {
-		slog.Warn("Config is nil, not setting")
-		return nil
-	}
-	oldConfig, _ := ch.GetConfig()
-	if cfg.PreferredLocation == (C.ServerLocation{}) {
-		storedLocation := ch.preferredLocation.Load()
-		if storedLocation != nil {
-			cfg.PreferredLocation = *storedLocation
-		}
-	}
-
-	ch.config.Store(cfg)
-	slog.Debug("Saving config", "path", ch.configPath)
-	if err := saveConfig(cfg, ch.configPath); err != nil {
-		slog.Error("saving config", "error", err)
-		return fmt.Errorf("saving config: %w", err)
-	}
-	slog.Info("saved new config")
-	go ch.notifyListeners(oldConfig, cfg)
-	slog.Info("Config set")
-	return nil
-}
-
 // fetchLoop fetches the configuration every pollInterval.
 func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 	if err := ch.fetchConfig(); err != nil {
@@ -378,7 +335,7 @@ func (ch *ConfigHandler) loadConfig() error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 	ch.config.Store(cfg)
-	go ch.notifyListeners(nil, cfg)
+	emit(nil, cfg)
 	return nil
 }
 
@@ -422,6 +379,45 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 	return cfg.(*Config), nil
 }
 
+func (ch *ConfigHandler) setConfig(cfg *Config) error {
+	slog.Info("Setting config")
+	if cfg == nil {
+		slog.Warn("Config is nil, not setting")
+		return nil
+	}
+	oldConfig, _ := ch.GetConfig()
+	if cfg.PreferredLocation == (C.ServerLocation{}) {
+		storedLocation := ch.preferredLocation.Load()
+		if storedLocation != nil {
+			cfg.PreferredLocation = *storedLocation
+		}
+	}
+
+	ch.config.Store(cfg)
+	slog.Debug("Saving config", "path", ch.configPath)
+	if err := saveConfig(cfg, ch.configPath); err != nil {
+		slog.Error("saving config", "error", err)
+		return fmt.Errorf("saving config: %w", err)
+	}
+	slog.Info("saved new config")
+	slog.Info("Config set")
+	emit(oldConfig, cfg)
+	return nil
+}
+
+// NewConfigEvent is emitted when the configuration changes.
+type NewConfigEvent struct {
+	events.Event
+	Old *Config
+	New *Config
+}
+
+func emit(old, new *Config) {
+	if !reflect.DeepEqual(old, new) {
+		events.Emit(NewConfigEvent{Old: old, New: new})
+	}
+}
+
 // modifyConfig saves the config to the disk with the given config. It creates the config file
 // if it doesn't exist.
 func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
@@ -437,5 +433,5 @@ func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
 	// and save the config to the disk.
 	fn(cfg)
 	ch.configMu.Unlock()
-	ch.setConfigAndNotify(cfg)
+	ch.setConfig(cfg)
 }

@@ -248,3 +248,4 @@ func (u *UserStub) LegacyID() int64                          { return 123456789 
 func (u *UserStub) LegacyToken() string                      { return "test-legacy-token" }
 func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
 func (u *UserStub) SetLocale(locale string)                  {}
+func (u *UserStub) AccountType() string                      { return "free" }
