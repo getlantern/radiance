@@ -1,29 +1,59 @@
 // Package events provides a simple publish-subscribe mechanism for event handling.
+//
+// This package does not define specific events; instead, publishers define their own event types
+// by embedding the Event interface in their structs. Subscribers can subscribe to these custom
+// events by providing callback functions that accept the event type as a parameter.
+//
+// Example:
+//
+// package somepkg
+//
+//	type SomeEvent struct {
+//	    events.Event // embedding marks this as an event type
+//	    Message string
+//	}
+//
+//	func doSomething() {
+//		events.Emit(SomeEvent{Message: "hello world"})
+//	}
+//
+// package other
+//
+//	func doOtherthing() {
+//		sub := events.Subscribe(func(evt somepkg.SomeEvent) {
+//		    fmt.Println("Received event:", evt.Message)
+//		})
+//	}
 package events
 
 import (
 	"sync"
 )
 
-type Event comparable
+type Event interface {
+	// IsEvent is a marker method for the Event interface; it has no runtime use.
+	IsEvent()
+}
 
 var (
-	subscriptions   = make(map[any]map[*Subscription[any]]func(any))
+	subscriptions   = make(map[any]map[*Subscription[Event]]func(any))
 	subscriptionsMu sync.RWMutex
 )
 
 // Subscription allows unsubscribing from an event.
 type Subscription[T Event] struct{}
 
+// Subscribe registers a callback function for the given event type T. Returns a Subscription handle
+// that can be used to unsubscribe later.
 func Subscribe[T Event](callback func(evt T)) *Subscription[T] {
 	subscriptionsMu.Lock()
 	defer subscriptionsMu.Unlock()
 	var evt T
 	if subscriptions[evt] == nil {
-		subscriptions[evt] = make(map[*Subscription[any]]func(any))
+		subscriptions[evt] = make(map[*Subscription[Event]]func(any))
 	}
 	sub := &Subscription[T]{}
-	subscriptions[evt][(*Subscription[any])(sub)] = func(e any) { callback(e.(T)) }
+	subscriptions[evt][(*Subscription[Event])(sub)] = func(e any) { callback(e.(T)) }
 	return sub
 }
 
@@ -33,15 +63,15 @@ func Unsubscribe[T Event](sub *Subscription[T]) {
 	defer subscriptionsMu.Unlock()
 	var evt T
 	if subs, ok := subscriptions[evt]; ok {
-		delete(subs, (*Subscription[any])(sub))
+		delete(subs, (*Subscription[Event])(sub))
 		if len(subs) == 0 {
 			delete(subscriptions, evt)
 		}
 	}
 }
 
-// Emit notifies all subscribers of the event, passing event data.
-// Callbacks are invoked asynchronously in separate goroutines.
+// Emit notifies all subscribers of the event, passing event data. Callbacks are invoked
+// asynchronously in separate goroutines.
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()

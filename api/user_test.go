@@ -269,3 +269,4 @@ func (m *mockUserInfo) LegacyID() int64                              { return 1 
 func (m *mockUserInfo) LegacyToken() string                          { return "legacyToken" }
 func (m *mockUserInfo) Locale() string                               { return "en-US" }
 func (m *mockUserInfo) SetLocale(locale string)                      {}
+func (m *mockUserInfo) AccountType() string                          { return "free" }

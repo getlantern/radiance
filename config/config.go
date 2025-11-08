@@ -111,8 +111,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
 		events.Subscribe(func(evt common.UserChangeEvent) {
-
-			if shouldSkipConfigFetch(evt) {
+			if !shouldRefetch(evt.New, evt.Old) {
 				return
 			}
 			if err := ch.fetchConfig(); err != nil {
@@ -123,23 +122,12 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	return ch
 }
 
-// shouldSkipConfigFetch determines whether we should skip fetching the config
-// fetch config on when user legacy token changes or user level changes
-func shouldSkipConfigFetch(evt common.UserChangeEvent) bool {
-	if evt.New == nil {
-		return true
-	}
-	if evt.New.GetLegacyToken() != evt.Old.GetLegacyToken() {
-		return false
-	}
-
-	if evt.New.LegacyUserData == nil || evt.Old.LegacyUserData == nil {
-		return true
-	}
-	if evt.New.LegacyUserData.UserLevel != evt.Old.LegacyUserData.UserLevel {
-		return false
-	}
-	return true
+// shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
+func shouldRefetch(new, old common.UserInfo) bool {
+	return new != old &&
+		(new == nil || old == nil || // sanity check
+			new.LegacyToken() != old.LegacyToken() || // user ID changed
+			new.AccountType() != old.AccountType()) // changed between free and pro
 }
 
 var ErrNoWGKey = errors.New("no wg key")
@@ -419,6 +407,7 @@ func (ch *ConfigHandler) setConfig(cfg *Config) error {
 
 // NewConfigEvent is emitted when the configuration changes.
 type NewConfigEvent struct {
+	events.Event
 	Old *Config
 	New *Config
 }

@@ -25,6 +25,7 @@ type UserInfo interface {
 	GetData() (*protos.LoginResponse, error)
 	Locale() string
 	SetLocale(string)
+	AccountType() string
 }
 
 // userInfo is a struct that implements the UserInfo interface
@@ -82,16 +83,29 @@ func (u *userInfo) SetLocale(locale string) {
 	u.locale = locale
 }
 
+// AccountType returns the account type of the user (e.g., "free", "pro")
+func (u *userInfo) AccountType() string {
+	if u.data == nil || u.data.LegacyUserData == nil {
+		return ""
+	}
+	typ := u.data.LegacyUserData.UserLevel
+	if typ == "" {
+		return "free"
+	}
+	return typ
+}
+
 type UserChangeEvent struct {
-	Old *protos.LoginResponse
-	New *protos.LoginResponse
+	events.Event
+	Old UserInfo
+	New UserInfo
 }
 
 func (u *userInfo) SetData(data *protos.LoginResponse) error {
-	old := u.data
+	old := *u
 	u.data = data
-	if data != nil && !proto.Equal(old, data) {
-		events.Emit(UserChangeEvent{Old: old, New: data})
+	if data != nil && !proto.Equal(old.data, data) {
+		events.Emit(UserChangeEvent{Old: &old, New: u})
 	}
 	return save(data, u.dataPath)
 }
