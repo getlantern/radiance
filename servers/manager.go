@@ -478,7 +478,7 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 
 // AddServerBasedOnURLs adds a server(s) based on the provided URL string.
 // The URL can be comma-separated list of URLs or URLs separated by new lines.
-func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string) error {
+func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCertVerification *bool) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBasedOnURLs")
 	defer span.End()
 	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
@@ -489,6 +489,26 @@ func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to parse URLs: %w", err))
 	}
+
+	if skipCertVerification != nil {
+		cfgURLs, ok := cfg.Options.([]url.URL)
+		if !ok || len(urls) == 0 {
+			return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
+		}
+		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
+		for _, v := range cfgURLs {
+			queryParams := v.Query()
+			if *skipCertVerification {
+				queryParams.Add("allowInsecure", "1")
+			} else {
+				queryParams.Add("allowInsecure", "")
+			}
+			v.RawQuery = queryParams.Encode()
+			urlsWithCustomOptions = append(urlsWithCustomOptions, v)
+		}
+		cfg.Options = urlsWithCustomOptions
+	}
+
 	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
 	if !loaded {
 		return traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))

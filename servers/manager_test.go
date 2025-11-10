@@ -221,12 +221,26 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 		"trojan://password@host:443?security=tls&sni=example.com#Trojan+with+TLS",
 	}, "\n")
 	t.Run("adding server based on URLs should work", func(t *testing.T) {
-		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls))
+		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, nil))
 		assert.Contains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
 		assert.Contains(t, manager.optsMaps[SGUser], "Trojan+with+TLS")
 	})
 
 	t.Run("using empty URLs should return an error", func(t *testing.T) {
-		require.Error(t, manager.AddServerBasedOnURLs(ctx, ""))
+		require.Error(t, manager.AddServerBasedOnURLs(ctx, "", nil))
+	})
+
+	t.Run("skip certificate verification option works", func(t *testing.T) {
+		manager.RemoveServer("VLESS+over+WS+with+TLS")
+		manager.RemoveServer("Trojan+with+TLS")
+		skipCertVerification := true
+		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, &skipCertVerification))
+		opts, isOutbound := manager.optsMaps[SGUser]["Trojan+with+TLS"].(option.Outbound)
+		require.True(t, isOutbound)
+		trojanSettings, ok := opts.Options.(*option.TrojanOutboundOptions)
+		require.True(t, ok)
+		require.NotNil(t, trojanSettings)
+		require.NotNil(t, trojanSettings.TLS)
+		assert.True(t, trojanSettings.OutboundTLSOptionsContainer.TLS.Insecure, trojanSettings.OutboundTLSOptionsContainer.TLS)
 	})
 }
