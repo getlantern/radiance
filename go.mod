@@ -21,6 +21,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20251018002705-bb54703a7fcb
 	github.com/getlantern/fronted v0.0.0-20251107001409-e279bdc4b5fe
 	github.com/getlantern/kindling v0.0.0-20251107184409-8287fd38bb77
+	github.com/getlantern/pluriconfig v0.0.0-20251030140129-5f8b183a6d35
 	github.com/getlantern/sing-box-extensions v0.0.6-0.20251103164448-2fc19f5f1b7a
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
@@ -83,7 +84,6 @@ require (
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d // indirect
 	github.com/getlantern/lantern-water v0.0.0-20250331153903-07abebe611e8 // indirect
-	github.com/getlantern/pluriconfig v0.0.0-20251030140129-5f8b183a6d35 // indirect
 	github.com/getlantern/tlsdialer/v3 v3.0.3 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
 	github.com/go-llsqlite/crawshaw v0.4.0 // indirect
