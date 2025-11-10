@@ -492,7 +492,7 @@ func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCer
 
 	if skipCertVerification != nil {
 		cfgURLs, ok := cfg.Options.([]url.URL)
-		if !ok || len(urls) == 0 {
+		if !ok || len(cfgURLs) == 0 {
 			return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
 		}
 		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
