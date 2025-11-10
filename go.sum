@@ -228,6 +228,8 @@ github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNi
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534/go.mod h1:ZsLfOY6gKQOTyEcPYNA9ws5/XHZQFroxqCOhHjGcs9Y=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175 h1:JWH5BB2o0eAeGs0tZnFPpQGx+nMIo/WmxKnj2hnGjgE=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175/go.mod h1:h3S9LBmmzN/xM+lwYZHE4abzTtCTtidKtG+nxZcCZX0=
+github.com/getlantern/pluriconfig v0.0.0-20251030140129-5f8b183a6d35 h1:2V9+cQd0Ga1pwZU/7Xre2Lu34pchPGSIDDhUKM0G7Ng=
+github.com/getlantern/pluriconfig v0.0.0-20251030140129-5f8b183a6d35/go.mod h1:M7h4TqTJ8DdWPCAdq9/oLjwIaurITsoyLgwDK/lgbFk=
 github.com/getlantern/sing-box-extensions v0.0.6-0.20251103164448-2fc19f5f1b7a h1:d+RHIpecSJiNNjunNqyfOQnoXo83TDTXUX3lYFTqbL8=
 github.com/getlantern/sing-box-extensions v0.0.6-0.20251103164448-2fc19f5f1b7a/go.mod h1:OGGsI9wHLuUdFYj7JTnYD5OcvAgcRwNw0DPxl9sKays=
 github.com/getlantern/sing-box-minimal v1.11.16-lantern.0.20251103164629-13fd9318fa6f h1:WI6Vk+LRugMRdYBUQbQxw7WFfmpPLWHmD0f8U7mbxKs=
@@ -284,6 +286,7 @@ github.com/gobwas/ws v1.4.0 h1:CTaoG1tojrh4ucGPcoJFiAQUAsEWekEWvLy7GsVNqGs=
 github.com/gobwas/ws v1.4.0/go.mod h1:G3gNqMNtPppf5XUz7O4shetPpcZ1VJ7zt18dlUeakrc=
 github.com/goccy/go-yaml v1.15.13 h1:Xd87Yddmr2rC1SLLTm2MNDcTjeO/GYo0JGiww6gSTDg=
 github.com/goccy/go-yaml v1.15.13/go.mod h1:XBurs7gK8ATbW4ZPGKgcbrY1Br56PdM69F7LkFRi1kA=
+github.com/goccy/go-yaml v1.18.0/go.mod h1:XBurs7gK8ATbW4ZPGKgcbrY1Br56PdM69F7LkFRi1kA=
 github.com/gofrs/uuid/v5 v5.3.2 h1:2jfO8j3XgSwlz/wHqemAEugfnTlikAYHhnqQ8Xh4fE0=
 github.com/gofrs/uuid/v5 v5.3.2/go.mod h1:CDOjlDMVAtN56jqyRUZh58JT31Tiw7/oQyEXZV+9bD8=
 github.com/gogo/protobuf v1.1.1/go.mod h1:r8qH/GZQm5c6nD/R0oafs1akxWv10x8SbQlK7atdtwQ=
