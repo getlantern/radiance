@@ -494,6 +494,7 @@ func lanternRegexForPlatform() []string {
 	switch common.Platform {
 	case "windows":
 		return []string{
+			`(?i)^C:\\Program Files\\Lantern\\lantern\.exe$`,
 			`(?i)^C:\\Program Files( \(x86\))?\\Lantern\\lantern\.exe$`,
 			`(?i)^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\Lantern\\lantern\.exe$`,
 			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
