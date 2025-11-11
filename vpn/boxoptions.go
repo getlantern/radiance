@@ -248,7 +248,7 @@ func baseRoutingRules() []O.Rule {
 			},
 		},
 	}
-	if common.Platform != "android" {
+	if !common.IsAndroid() && !common.IsIOS() {
 		rules = append(rules, O.Rule{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
