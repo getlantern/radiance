@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"unicode"
+	"unicode/utf8"
 
 	"fmt"
 	"net/http"
@@ -86,7 +88,7 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
-	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
+	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
 	if curl, _ := env.Get[bool](env.PrintCurl); curl {
 		req = req.SetDebug(true).EnableGenerateCurlOnDebug()
 	}
@@ -125,11 +127,22 @@ func (wc *webClient) send(ctx context.Context, method, path string, req *resty.R
 }
 
 func sanitizeResponseBody(data []byte) []byte {
-	var cleaned []byte
-	for _, b := range data {
-		if unicode.IsPrint(rune(b)) {
-			cleaned = append(cleaned, b)
+	var out bytes.Buffer
+	r := bytes.NewReader(data)
+	for {
+		ch, size, err := r.ReadRune()
+		if err != nil {
+			break
 		}
+		// Skip invalid UTF-8 sequences
+		if ch == utf8.RuneError && size == 1 {
+			continue
+		}
+		// Skip control characters (optional)
+		if unicode.IsControl(ch) && ch != '\n' && ch != '\r' && ch != '\t' {
+			continue
+		}
+		out.WriteRune(ch)
 	}
-	return cleaned
+	return out.Bytes()
 }
