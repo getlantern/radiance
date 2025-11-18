@@ -219,12 +219,12 @@ func initLogger(logPath, level string) error {
 	slog.SetDefault(logger)
 	if !loggingToStdOut {
 		if IsWindows() {
-			slog.Info("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
+			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
 		} else {
-			slog.Info("Logging to file only -- RADIANCE_DISABLE_STDOUT_LOG is set", "path", logPath, "level", internal.FormatLogLevel(lvl))
+			fmt.Printf("Logging to file only -- RADIANCE_DISABLE_STDOUT_LOG is set path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
 		}
 	} else {
-		slog.Info("Logging to file and stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
+		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
 	}
 	return nil
 }
