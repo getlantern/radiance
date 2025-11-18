@@ -179,17 +179,20 @@ func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
 	// The rules MUST be in this order to ensure proper functionality:
-	// 1. * Enable traffic sniffing
-	// 2. * Hijack DNS to allow sing-box to handle DNS requests
-	// 3. * Route private IPs to direct outbound
-	// 4. * Split tunnel rule
-	// 5-7. Group rules for auto, lantern, and user
-	// 8. Other rules...
-	// 9. * Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
-	//   by previous rules does not automatically bypass the VPN.
+	// 1.   Enable traffic sniffing
+	// 2.   Hijack DNS to allow sing-box to handle DNS requests
+	// 3.   Route private IPs to direct outbound
+	// 4.   Split tunnel rule
+	// 5.   Bypass Lantern process traffic (not on mobile)
+	// 6.   rules from config file (added in buildOptions)
+	// 7-9. Group rules for auto, lantern, and user (added in buildOptions)
+	// 10.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	//      by previous rules does not automatically bypass the VPN.
+	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
-	//   rules or their order can break certain functionalities like DNS resolution or split tunneling.
-
+	//   rules or their order can break certain functionalities like DNS resolution, smart connect,
+	//   or split tunneling.
+	//
 	// The default rule type uses the following matching logic:
 	// (domain || domain_suffix || domain_keyword || domain_regex || geosite || geoip || ip_cidr || ip_is_private) &&
 	// (port || port_range) &&
@@ -264,10 +267,6 @@ func baseRoutingRules() []O.Rule {
 			},
 		})
 	}
-	rules = append(rules, groupRule(autoAllTag))
-	rules = append(rules, groupRule(servers.SGLantern))
-	rules = append(rules, groupRule(servers.SGUser))
-
 	return rules
 }
 
@@ -337,6 +336,11 @@ func buildOptions(group, path string) (O.Options, error) {
 
 	// Add auto all outbound
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
+
+	// Add routing rules for the groups
+	opts.Route.Rules = append(opts.Route.Rules, groupRule(autoAllTag))
+	opts.Route.Rules = append(opts.Route.Rules, groupRule(servers.SGLantern))
+	opts.Route.Rules = append(opts.Route.Rules, groupRule(servers.SGUser))
 
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
