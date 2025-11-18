@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,16 @@ func Init(dataDir, logDir, logLevel string) error {
 
 	if !IsWindows() {
 		ipc.SetSocketPath(dataDir)
+	}
+
+	crashFilePath := filepath.Join(logDir, "lantern_crash.log")
+	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		slog.Error("Failed to open crash log file", "error", err)
+	} else {
+		debug.SetCrashOutput(f, debug.CrashOptions{})
+		// We can close f after SetCrashOutput because it duplicates the file descriptor.
+		defer f.Close()
 	}
 
 	initialized = true
