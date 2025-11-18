@@ -147,9 +147,19 @@ func initLogger(logPath, level string) error {
 		Compress:   Prod(),  // Compress rotated log files
 	}
 
+	loggingToStdOut := true
 	var logWriter io.Writer
 	if noStdout, _ := env.Get[bool](env.DisableStdout); noStdout {
 		logWriter = logRotator
+		loggingToStdOut = false
+	} else if isWindowsProd() {
+		// For some reason, logging to both stdout and a file on Windows
+		// causes issues with some Windows services where the logs
+		// do not get written to the file. So in prod mode on Windows,
+		// we log to file only. See:
+		// https://www.reddit.com/r/golang/comments/1fpo3cg/golang_windows_service_cannot_write_log_files/
+		logWriter = logRotator
+		loggingToStdOut = false
 	} else {
 		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
@@ -207,7 +217,23 @@ func initLogger(logPath, level string) error {
 		},
 	}))
 	slog.SetDefault(logger)
+	if !loggingToStdOut {
+		if IsWindows() {
+			slog.Info("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
+		} else {
+			slog.Info("Logging to file only -- RADIANCE_DISABLE_STDOUT_LOG is set", "path", logPath, "level", internal.FormatLogLevel(lvl))
+		}
+	} else {
+		slog.Info("Logging to file and stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
+	}
 	return nil
+}
+
+func isWindowsProd() bool {
+	if !IsWindows() {
+		return false
+	}
+	return !Dev()
 }
 
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do
