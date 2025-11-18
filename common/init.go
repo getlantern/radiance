@@ -218,7 +218,7 @@ func initLogger(logPath, level string) error {
 	}))
 	slog.SetDefault(logger)
 	if !loggingToStdOut {
-		slog.Info("Logging to file only. No stdout on Windows prod -- run with RADIANCE_ENV=dev to enable stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
+		slog.Info("Logging to file only. No stdout on Windows prod or RADIANCE_DISABLE_STDOUT_LOG set -- run with RADIANCE_ENV=dev to enable stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
 	} else {
 		slog.Info("Logging to file and stdout", "path", logPath, "level", internal.FormatLogLevel(lvl))
 	}
