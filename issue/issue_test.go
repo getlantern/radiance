@@ -6,20 +6,50 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 
+	"github.com/getlantern/osversion"
 	"github.com/getlantern/radiance/common"
-
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestSendReport(t *testing.T) {
-	var receivedReport *ReportIssueRequest
-	srv := newTestServer(t, &receivedReport)
+	userConfig := common.NewUserConfig("radiance-test", "", "")
+	
+	// Get OS version for expected report
+	osVer, err := osversion.GetHumanReadable()
+	require.NoError(t, err)
+	
+	// Build expected report
+	want := &ReportIssueRequest{
+		Type:              ReportIssueRequest_NO_ACCESS,
+		CountryCode:       "US",
+		AppVersion:        common.Version,
+		SubscriptionLevel: "free",
+		Platform:          common.Platform,
+		Description:       "Description placeholder-test only",
+		UserEmail:         "radiancetest@getlantern.org",
+		DeviceId:          userConfig.DeviceID(),
+		UserId:            strconv.FormatInt(userConfig.LegacyID(), 10),
+		Device:            "Samsung Galaxy S10",
+		Model:             "SM-G973F",
+		OsVersion:         osVer,
+		Language:          userConfig.Locale(),
+		Attachments: []*ReportIssueRequest_Attachment{
+			{
+				Type:    "application/zip",
+				Name:    "Hello.txt",
+				Content: []byte("Hello World"),
+			},
+		},
+	}
+	
+	srv := newTestServer(t, want)
 	defer srv.Close()
 
-	userConfig := common.NewUserConfig("radiance-test", "", "")
 	reporter := &IssueReporter{
 		httpClient: newTestClient(t, srv.URL),
 		userConfig: userConfig,
@@ -37,34 +67,8 @@ func TestSendReport(t *testing.T) {
 		Model:  "SM-G973F",
 	}
 
-	err := reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
+	err = reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
 	require.NoError(t, err)
-
-	// Validate the received report
-	require.NotNil(t, receivedReport, "server should have received a report")
-	require.Equal(t, ReportIssueRequest_NO_ACCESS, receivedReport.Type, "issue type should match")
-	require.Equal(t, "Description placeholder-test only", receivedReport.Description, "description should match")
-	require.Equal(t, "radiancetest@getlantern.org", receivedReport.UserEmail, "email should match")
-	require.Equal(t, "US", receivedReport.CountryCode, "country code should match")
-	require.Equal(t, "Samsung Galaxy S10", receivedReport.Device, "device should match")
-	require.Equal(t, "SM-G973F", receivedReport.Model, "model should match")
-	require.Equal(t, common.Version, receivedReport.AppVersion, "app version should match")
-	require.Equal(t, common.Platform, receivedReport.Platform, "platform should match")
-	require.Equal(t, userConfig.DeviceID(), receivedReport.DeviceId, "device ID should match")
-	
-	// Validate attachments (should have the test attachment plus logs)
-	require.GreaterOrEqual(t, len(receivedReport.Attachments), 1, "should have at least the test attachment")
-	
-	// Find and validate the Hello.txt attachment
-	var foundHelloTxt bool
-	for _, att := range receivedReport.Attachments {
-		if att.Name == "Hello.txt" {
-			foundHelloTxt = true
-			require.Equal(t, []byte("Hello World"), att.Content, "attachment content should match")
-			require.Equal(t, "application/zip", att.Type, "attachment type should be application/zip")
-		}
-	}
-	require.True(t, foundHelloTxt, "Hello.txt attachment should be present")
 }
 
 func newTestClient(t *testing.T, testURL string) *http.Client {
@@ -87,19 +91,62 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func newTestServer(t *testing.T, receivedReport **ReportIssueRequest) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// testServer wraps httptest.Server and holds the expected report for comparison
+type testServer struct {
+	*httptest.Server
+	want *ReportIssueRequest
+}
+
+func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
+	ts := &testServer{want: want}
+	ts.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Read and unmarshal the request body
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err, "should read request body")
 		
-		var report ReportIssueRequest
-		err = proto.Unmarshal(body, &report)
+		var got ReportIssueRequest
+		err = proto.Unmarshal(body, &got)
 		require.NoError(t, err, "should unmarshal protobuf request")
 		
-		// Store the received report for validation in the test
-		*receivedReport = &report
-		
-		w.WriteHeader(http.StatusOK)
+		// Compare received report with expected report
+		// Note: We only compare the fields we set in want, ignoring dynamic fields like logs.zip attachment
+		if assert.Equal(t, ts.want.Type, got.Type) &&
+			assert.Equal(t, ts.want.CountryCode, got.CountryCode) &&
+			assert.Equal(t, ts.want.AppVersion, got.AppVersion) &&
+			assert.Equal(t, ts.want.SubscriptionLevel, got.SubscriptionLevel) &&
+			assert.Equal(t, ts.want.Platform, got.Platform) &&
+			assert.Equal(t, ts.want.Description, got.Description) &&
+			assert.Equal(t, ts.want.UserEmail, got.UserEmail) &&
+			assert.Equal(t, ts.want.DeviceId, got.DeviceId) &&
+			assert.Equal(t, ts.want.UserId, got.UserId) &&
+			assert.Equal(t, ts.want.Device, got.Device) &&
+			assert.Equal(t, ts.want.Model, got.Model) &&
+			assert.Equal(t, ts.want.OsVersion, got.OsVersion) &&
+			assert.Equal(t, ts.want.Language, got.Language) &&
+			assert.GreaterOrEqual(t, len(got.Attachments), len(ts.want.Attachments)) {
+			
+			// Verify expected attachments are present
+			for _, wantAtt := range ts.want.Attachments {
+				found := false
+				for _, gotAtt := range got.Attachments {
+					if wantAtt.Name == gotAtt.Name &&
+						wantAtt.Type == gotAtt.Type &&
+						assert.Equal(t, wantAtt.Content, gotAtt.Content) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected attachment %s not found in received report", wantAtt.Name)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			}
+			
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+		}
 	}))
+	return ts
 }
