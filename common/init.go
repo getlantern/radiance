@@ -91,7 +91,7 @@ func Init(dataDir, logDir, logLevel string) error {
 	} else {
 		debug.SetCrashOutput(f, debug.CrashOptions{})
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
-		defer f.Close()
+		f.Close()
 	}
 
 	initialized = true
