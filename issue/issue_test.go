@@ -2,10 +2,10 @@ package issue
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
-
-	"github.com/getlantern/fronted"
-	"github.com/getlantern/kindling"
 
 	"github.com/getlantern/radiance/common"
 
@@ -13,17 +13,14 @@ import (
 )
 
 func TestSendReport(t *testing.T) {
-	f := fronted.NewFronted(
-		fronted.WithConfigURL("https://raw.githubusercontent.com/getlantern/lantern-binaries/refs/heads/main/fronted.yaml.gz"),
-	)
-	k := kindling.NewKindling(
-		"radiance-issue-test",
-		kindling.WithDomainFronting(f),
-		kindling.WithProxyless("api.iantem.io"),
-	)
+	srv := newTestServer(t)
+	defer srv.Close()
+
 	userConfig := common.NewUserConfig("radiance-test", "", "")
-	reporter, err := NewIssueReporter(k.NewHTTPClient(), userConfig)
-	require.NoError(t, err)
+	reporter := &IssueReporter{
+		httpClient: newTestClient(t, srv.URL),
+		userConfig: userConfig,
+	}
 	report := IssueReport{
 		Type:        "Cannot access blocked sites",
 		Description: "Description placeholder-test only",
@@ -36,6 +33,34 @@ func TestSendReport(t *testing.T) {
 		Device: "Samsung Galaxy S10",
 		Model:  "SM-G973F",
 	}
-	err = reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
+
+	err := reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
 	require.NoError(t, err)
+}
+
+func newTestClient(t *testing.T, testURL string) *http.Client {
+	return &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			parsedURL, err := url.Parse(testURL)
+			if err != nil {
+				t.Fatalf("failed to parse testURL: %v", err)
+			}
+			req.URL = parsedURL
+			return http.DefaultTransport.RoundTrip(req)
+		}),
+	}
+}
+
+// roundTripperFunc allows using a function as http.RoundTripper
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newTestServer(t *testing.T) *httptest.Server {
+	// TODO: verify the received report content
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 }
