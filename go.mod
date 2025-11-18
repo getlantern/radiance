@@ -19,8 +19,8 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20251018002705-bb54703a7fcb
-	github.com/getlantern/fronted v0.0.0-20251107001409-e279bdc4b5fe
-	github.com/getlantern/kindling v0.0.0-20251107184409-8287fd38bb77
+	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
+	github.com/getlantern/kindling v0.0.0-20251118001040-e62fa3a32e8b
 	github.com/getlantern/pluriconfig v0.0.0-20251030140129-5f8b183a6d35
 	github.com/getlantern/sing-box-extensions v0.0.6-0.20251103164448-2fc19f5f1b7a
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9

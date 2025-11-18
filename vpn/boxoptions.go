@@ -248,7 +248,7 @@ func baseRoutingRules() []O.Rule {
 			},
 		},
 	}
-	if common.Platform != "android" {
+	if !common.IsAndroid() && !common.IsIOS() {
 		rules = append(rules, O.Rule{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
@@ -494,6 +494,7 @@ func lanternRegexForPlatform() []string {
 	switch common.Platform {
 	case "windows":
 		return []string{
+			`(?i)^C:\\Program Files\\Lantern\\lantern\.exe$`,
 			`(?i)^C:\\Program Files( \(x86\))?\\Lantern\\lantern\.exe$`,
 			`(?i)^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\Lantern\\lantern\.exe$`,
 			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
