@@ -108,41 +108,21 @@ func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
 		err = proto.Unmarshal(body, &got)
 		require.NoError(t, err, "should unmarshal protobuf request")
 		
-		// Compare received report with expected report
-		// Note: We only compare the fields we set in want, ignoring dynamic fields like logs.zip attachment
-		if assert.Equal(t, ts.want.Type, got.Type) &&
-			assert.Equal(t, ts.want.CountryCode, got.CountryCode) &&
-			assert.Equal(t, ts.want.AppVersion, got.AppVersion) &&
-			assert.Equal(t, ts.want.SubscriptionLevel, got.SubscriptionLevel) &&
-			assert.Equal(t, ts.want.Platform, got.Platform) &&
-			assert.Equal(t, ts.want.Description, got.Description) &&
-			assert.Equal(t, ts.want.UserEmail, got.UserEmail) &&
-			assert.Equal(t, ts.want.DeviceId, got.DeviceId) &&
-			assert.Equal(t, ts.want.UserId, got.UserId) &&
-			assert.Equal(t, ts.want.Device, got.Device) &&
-			assert.Equal(t, ts.want.Model, got.Model) &&
-			assert.Equal(t, ts.want.OsVersion, got.OsVersion) &&
-			assert.Equal(t, ts.want.Language, got.Language) &&
-			assert.GreaterOrEqual(t, len(got.Attachments), len(ts.want.Attachments)) {
-			
-			// Verify expected attachments are present
+		// Filter got.Attachments to only include the ones we're testing
+		// (exclude logs.zip and other dynamic attachments)
+		filteredAttachments := make([]*ReportIssueRequest_Attachment, 0)
+		for _, gotAtt := range got.Attachments {
 			for _, wantAtt := range ts.want.Attachments {
-				found := false
-				for _, gotAtt := range got.Attachments {
-					if wantAtt.Name == gotAtt.Name &&
-						wantAtt.Type == gotAtt.Type &&
-						assert.Equal(t, wantAtt.Content, gotAtt.Content) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("expected attachment %s not found in received report", wantAtt.Name)
-					w.WriteHeader(http.StatusBadRequest)
-					return
+				if gotAtt.Name == wantAtt.Name {
+					filteredAttachments = append(filteredAttachments, gotAtt)
+					break
 				}
 			}
-			
+		}
+		got.Attachments = filteredAttachments
+		
+		// Compare received report with expected report using proto.Equal
+		if assert.True(t, proto.Equal(ts.want, &got), "received report should match expected report") {
 			w.WriteHeader(http.StatusOK)
 		} else {
 			w.WriteHeader(http.StatusBadRequest)
