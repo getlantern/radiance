@@ -56,18 +56,18 @@ func Dev() bool {
 
 // Init initializes the common components of the application. This includes setting up the directories
 // for data and logs, initializing the logger, and setting up reporting.
-func Init(dataDir, logDir, logLevel string) error {
+func Init(dataDir, logDir, logLevel string) (string, string, error) {
 	slog.Info("Initializing common package")
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if initialized {
-		return nil
+		return "", "", nil
 	}
 
 	reporting.Init(Version)
 	err := setupDirectories(dataDir, logDir)
 	if err != nil {
-		return fmt.Errorf("failed to setup directories: %w", err)
+		return "", "", fmt.Errorf("failed to setup directories: %w", err)
 	}
 
 	dataDir = dataPath.Load().(string)
@@ -76,7 +76,7 @@ func Init(dataDir, logDir, logLevel string) error {
 	err = initLogger(filepath.Join(logDir, LogFileName), logLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
-		return fmt.Errorf("initialize log: %w", err)
+		return dataDir, logDir, fmt.Errorf("initialize log: %w", err)
 	}
 
 	if !IsWindows() {
@@ -84,7 +84,7 @@ func Init(dataDir, logDir, logLevel string) error {
 	}
 
 	initialized = true
-	return nil
+	return dataDir, logDir, nil
 }
 
 func Close(ctx context.Context) error {

@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	Name = "lantern"
+	Name = "Lantern"
 
 	// Placeholders to use in the request headers.
 	ClientVersion = "9.0.0"

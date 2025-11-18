@@ -94,11 +94,11 @@ func (u *userInfo) GetData() (*protos.LoginResponse, error) {
 	}
 	data, err := os.ReadFile(u.dataPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading user data file %w", err)
 	}
 	var resp protos.LoginResponse
 	if err := proto.Unmarshal(data, &resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error unmarshaling user data file %w", err)
 	}
 	return &resp, nil
 }
