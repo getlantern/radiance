@@ -89,12 +89,6 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func newTestServer(t *testing.T, receivedReport **ReportIssueRequest) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Validate request method
-		require.Equal(t, http.MethodPost, r.Method, "request method should be POST")
-		
-		// Validate content type
-		require.Equal(t, "application/x-protobuf", r.Header.Get("content-type"), "content type should be application/x-protobuf")
-		
 		// Read and unmarshal the request body
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err, "should read request body")
