@@ -157,7 +157,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	},
 	)
 
-	adBlocker, err := vpn.NewAdBlockerHandler()
+	adBlocker, err := vpn.NewAdBlocker()
 	if err != nil {
 		slog.Error("Unable to create ad blocker", "error", err)
 	}

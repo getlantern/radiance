@@ -55,9 +55,9 @@ type AdBlocker struct {
 	enabled  *atomic.Bool
 }
 
-// NewAdBlockerHandler wires ad blocking up to the data directory and loads
+// NewAdBlocker wires ad blocking up to the data directory and loads
 // or creates the rule file
-func NewAdBlockerHandler() (*AdBlocker, error) {
+func NewAdBlocker() (*AdBlocker, error) {
 	a := newAdBlocker(common.DataPath())
 	if _, err := os.Stat(a.ruleFile); os.IsNotExist(err) {
 		if err := a.save(); err != nil {
@@ -78,7 +78,7 @@ func newAdBlocker(path string) *AdBlocker {
 	}
 }
 
-// IsEnabled checks if ad blocking is currently turned on
+// IsEnabled returns whether or not ad blocking currently turned on
 func (a *AdBlocker) IsEnabled() bool { return a.enabled.Load() }
 
 // SetEnabled flips ad blocking on or off
@@ -98,7 +98,8 @@ func (a *AdBlocker) SetEnabled(enabled bool) error {
 	return nil
 }
 
-// save rewrites the adblock ruleset JSON on disk based on the current mode
+// save rewrites the adblock ruleset JSON with the current mode
+// and saves it to disk
 func (a *AdBlocker) save() error {
 	rs := adblockRuleSet{
 		Version: 3,

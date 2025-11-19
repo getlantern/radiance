@@ -100,8 +100,8 @@ func TestAdBlockerPersistence(t *testing.T) {
 	require.NoError(t, a.SetEnabled(true), "enable adblock")
 	assert.True(t, a.IsEnabled(), "adblock should be enabled before reload")
 
-	b, err := NewAdBlockerHandler()
-	require.NoError(t, err, "NewAdBlockerHandler (reload)")
+	b, err := NewAdBlocker()
+	require.NoError(t, err, "NewAdBlocker (reload)")
 
 	assert.True(t, b.IsEnabled(), "adblock should stay enabled after reload")
 	assert.Equal(t, C.LogicalTypeOr, b.mode, "mode should still be OR after reload")
