@@ -57,6 +57,10 @@ func baseOpts(basePath string) O.Options {
 		slog.Info("Wrote inline direct rule set to file", "path", directPath)
 	}
 
+	if err := newAdBlocker(basePath).save(); err != nil {
+		slog.Warn("Failed to save default adblock rule set", "path", adBlockPath, "error", err)
+	}
+
 	// For whatever reason, sing-box seems to append the path to the base path on Windows, so we
 	// just use the file names directly.
 	if common.IsWindows() {
