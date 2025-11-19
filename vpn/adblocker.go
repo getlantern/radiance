@@ -33,9 +33,7 @@ const (
 //   ]
 // }
 
-// adblockHeadlessRule is a minimal wrapper around the structures we need.
-// We reuse sing-box's LogicalHeadlessRule for the logical gate and use a string array
-// for the rule set reference
+// adblockHeadlessRule is a minimal wrapper for ad blocking around O.LogicalHeadlessRule
 type adblockHeadlessRule struct {
 	Type    string                 `json:"type"`
 	Logical *O.LogicalHeadlessRule `json:"logical,omitempty"`
@@ -55,8 +53,8 @@ type AdBlocker struct {
 	enabled  *atomic.Bool
 }
 
-// NewAdBlocker wires ad blocking up to the data directory and loads
-// or creates the rule file
+// NewAdBlocker creates a new instance of ad blocker, with ad blocking wired
+// up to the data directory and loads (or creates) the adblock rule file
 func NewAdBlocker() (*AdBlocker, error) {
 	a := newAdBlocker(common.DataPath())
 	if _, err := os.Stat(a.ruleFile); os.IsNotExist(err) {

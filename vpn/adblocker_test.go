@@ -16,7 +16,7 @@ func setupTestAdBlocker(t *testing.T) *AdBlocker {
 	t.Helper()
 	common.SetPathsForTesting(t)
 
-	a, err := NewAdBlockerHandler()
+	a, err := NewAdBlocker()
 	require.NoError(t, err, "NewAdBlockerHandler")
 	require.NotEmpty(t, a.ruleFile, "ruleFile must be set")
 	return a
