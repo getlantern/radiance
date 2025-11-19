@@ -96,8 +96,7 @@ func (a *AdBlocker) SetEnabled(enabled bool) error {
 	return nil
 }
 
-// save rewrites the adblock ruleset JSON with the current mode
-// and saves it to disk
+// save updates the current mode in the adblock ruleset JSON and saves it to disk
 func (a *AdBlocker) save() error {
 	rs := adblockRuleSet{
 		Version: 3,
