@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"runtime"
 
@@ -69,7 +70,7 @@ func GetStatus(ctx context.Context) (string, error) {
 		return StatusClosed, nil
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error getting status: %w", err)
 	}
 	return res.State, nil
 }
