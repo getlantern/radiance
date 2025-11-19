@@ -243,14 +243,12 @@ func setupDirectories(data, logs string) error {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
-		data = appdir.General(Name)
-		data = maybeAddSuffix(data, "data")
+		data = outDir("data")
 	}
 	if l, ok := env.Get[string](env.LogPath); ok {
 		logs = l
 	} else if logs == "" {
-		logs = appdir.Logs(Name)
-		logs = maybeAddSuffix(logs, "logs")
+		logs = outDir("logs")
 	}
 	data, _ = filepath.Abs(data)
 	logs, _ = filepath.Abs(logs)
@@ -264,6 +262,17 @@ func setupDirectories(data, logs string) error {
 	dataPath.Store(data)
 	logPath.Store(logs)
 	return nil
+}
+
+func outDir(subdir string) string {
+	var data string
+	if IsWindows() {
+		publicDir := os.Getenv("Public")
+		data = filepath.Join(publicDir, Name)
+	} else {
+		data = appdir.General(Name)
+	}
+	return maybeAddSuffix(data, subdir)
 }
 
 func maybeAddSuffix(path, suffix string) string {
