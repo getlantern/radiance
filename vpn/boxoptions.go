@@ -48,6 +48,7 @@ const (
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
 	directPath := filepath.Join(basePath, directFile)
+	adBlockPath := filepath.Join(basePath, adBlockFile)
 
 	// Write the domains to access directly to a file to disk.
 	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
@@ -61,7 +62,11 @@ func baseOpts(basePath string) O.Options {
 	if common.IsWindows() {
 		splitTunnelPath = splitTunnelFile
 		directPath = directFile
-		slog.Info("Adjusted split tunnel and direct paths for Windows", "splitTunnelPath", splitTunnelPath, "directPath", directPath)
+		adBlockPath = adBlockFile
+		slog.Info("Adjusted split tunnel and direct paths for Windows",
+			"splitTunnelPath", splitTunnelPath,
+			"directPath", directPath,
+			"adBlockPath", adBlockPath)
 	}
 
 	return O.Options{
@@ -158,6 +163,14 @@ func baseOpts(basePath string) O.Options {
 					},
 					Format: C.RuleSetFormatSource,
 				},
+				{
+					Type: C.RuleSetTypeLocal,
+					Tag:  adBlockTag,
+					LocalOptions: O.LocalRuleSet{
+						Path: adBlockPath,
+					},
+					Format: C.RuleSetFormatSource,
+				},
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
@@ -183,10 +196,11 @@ func baseRoutingRules() []O.Rule {
 	// 2.   Hijack DNS to allow sing-box to handle DNS requests
 	// 3.   Route private IPs to direct outbound
 	// 4.   Split tunnel rule
-	// 5.   Bypass Lantern process traffic (not on mobile)
-	// 6.   rules from config file (added in buildOptions)
-	// 7-9. Group rules for auto, lantern, and user (added in buildOptions)
-	// 10.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 5.   Ad-block rule
+	// 6.   Bypass Lantern process traffic (not on mobile)
+	// 7.   rules from config file (added in buildOptions)
+	// 8-10. Group rules for auto, lantern, and user (added in buildOptions)
+	// 11.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//      by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -246,6 +260,20 @@ func baseRoutingRules() []O.Rule {
 					Action: C.RuleActionTypeRoute,
 					RouteOptions: O.RouteActionOptions{
 						Outbound: "direct",
+					},
+				},
+			},
+		},
+		{ // ad-block rule
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					RuleSet: []string{adBlockTag},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "block",
 					},
 				},
 			},
