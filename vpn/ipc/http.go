@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 
@@ -14,7 +13,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -25,7 +23,9 @@ type empty struct{}
 
 // sendRequest sends an HTTP request to the specified endpoint with the given method and data.
 func sendRequest[T any](ctx context.Context, method, endpoint string, data any) (T, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "sendRequest", trace.WithAttributes(attribute.String("endpoint", endpoint)))
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "vpn.ipc",
+		trace.WithAttributes(attribute.String("endpoint", endpoint)),
+	)
 	defer span.End()
 
 	buf, err := json.Marshal(data)
@@ -38,14 +38,13 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 		return res, err
 	}
 	client := &http.Client{
-		Transport: traces.NewRoundTripper(&http.Transport{
+		Transport: &http.Transport{
 			DialContext: dialContext,
-		}),
+		},
 	}
 	resp, err := client.Do(req)
-	if isSocketError(err) &&
-		!slog.Default().Enabled(context.Background(), internal.LevelTrace) {
-		err = ErrServiceIsNotRunning
+	if errors.Is(err, os.ErrNotExist) {
+		err = ErrIPCNotRunning
 	}
 	if err != nil {
 		return res, traces.RecordError(ctx, fmt.Errorf("request failed: %w", err))
@@ -63,8 +62,4 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 		return res, traces.RecordError(ctx, fmt.Errorf("failed to decode response: %w", err))
 	}
 	return res, nil
-}
-
-func isSocketError(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission)
 }
