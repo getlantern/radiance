@@ -276,18 +276,17 @@ func cleanTags(cfg *C.ConfigResponse) {
 }
 
 func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
+	// Requires privilege and cannot conflict with existing system interfaces
+	// System tries to use system env; for mobile we need to tun device
+	system := !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
 	for _, endpoint := range endpoints {
 		switch opts := endpoint.Options.(type) {
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
-			// Requires privilege and cannot conflict with existing system interfaces
-			// System tries to use system env; for mobile we need to tun device
-			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
+			opts.System = opts.System && system
 		case *exO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
-			// Requires privilege and cannot conflict with existing system interfaces
-			// System tries to use system env; for mobile we need to tun device
-			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
+			opts.System = opts.System && system
 		default:
 		}
 	}
