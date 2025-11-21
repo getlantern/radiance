@@ -191,3 +191,55 @@ func TestAddServerWithSingBoxJSON(t *testing.T) {
 		require.Error(t, manager.AddServerWithSingboxJSON(ctx, json.RawMessage("{}")))
 	})
 }
+
+func TestAddServerBasedOnURLs(t *testing.T) {
+	dataPath := t.TempDir()
+	manager := &Manager{
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+			SGUser: Options{
+				Outbounds: make([]option.Outbound, 0),
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: make(map[string]C.ServerLocation),
+			},
+		},
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: make(map[string]any),
+			SGUser:    make(map[string]any),
+		},
+		serversFile:      filepath.Join(dataPath, common.ServersFileName),
+		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+	}
+	ctx := context.Background()
+
+	urls := strings.Join([]string{
+		"vless://uuid@host:443?encryption=none&security=tls&type=ws&host=example.com&path=/vless#VLESS+over+WS+with+TLS",
+		"trojan://password@host:443?security=tls&sni=example.com#Trojan+with+TLS",
+	}, "\n")
+	t.Run("adding server based on URLs should work", func(t *testing.T) {
+		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, false))
+		assert.Contains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
+		assert.Contains(t, manager.optsMaps[SGUser], "Trojan+with+TLS")
+	})
+
+	t.Run("using empty URLs should return an error", func(t *testing.T) {
+		require.Error(t, manager.AddServerBasedOnURLs(ctx, "", false))
+	})
+
+	t.Run("skip certificate verification option works", func(t *testing.T) {
+		manager.RemoveServer("VLESS+over+WS+with+TLS")
+		manager.RemoveServer("Trojan+with+TLS")
+		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, true))
+		opts, isOutbound := manager.optsMaps[SGUser]["Trojan+with+TLS"].(option.Outbound)
+		require.True(t, isOutbound)
+		trojanSettings, ok := opts.Options.(*option.TrojanOutboundOptions)
+		require.True(t, ok)
+		require.NotNil(t, trojanSettings)
+		require.NotNil(t, trojanSettings.TLS)
+		assert.True(t, trojanSettings.OutboundTLSOptionsContainer.TLS.Insecure, trojanSettings.OutboundTLSOptionsContainer.TLS)
+	})
+}
