@@ -28,6 +28,11 @@ import (
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 
+	"github.com/getlantern/pluriconfig"
+	"github.com/getlantern/pluriconfig/model"
+	_ "github.com/getlantern/pluriconfig/provider/singbox"
+	_ "github.com/getlantern/pluriconfig/provider/url"
+
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 )
@@ -469,4 +474,44 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
 	return nil
+}
+
+// AddServerBasedOnURLs adds a server(s) based on the provided URL string.
+// The URL can be comma-separated list of URLs or URLs separated by new lines.
+func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCertVerification bool) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBasedOnURLs")
+	defer span.End()
+	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
+	if !loaded {
+		return traces.RecordError(ctx, fmt.Errorf("URL config provider not loaded"))
+	}
+	cfg, err := urlProvider.Parse(ctx, []byte(urls))
+	if err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to parse URLs: %w", err))
+	}
+
+	if skipCertVerification {
+		cfgURLs, ok := cfg.Options.([]url.URL)
+		if !ok || len(cfgURLs) == 0 {
+			return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
+		}
+		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
+		for _, v := range cfgURLs {
+			queryParams := v.Query()
+			queryParams.Add("allowInsecure", "1")
+			v.RawQuery = queryParams.Encode()
+			urlsWithCustomOptions = append(urlsWithCustomOptions, v)
+		}
+		cfg.Options = urlsWithCustomOptions
+	}
+
+	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
+	if !loaded {
+		return traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))
+	}
+	singBoxCfg, err := singBoxProvider.Serialize(ctx, cfg)
+	if err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
+	}
+	return m.AddServerWithSingboxJSON(ctx, singBoxCfg)
 }

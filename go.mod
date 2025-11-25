@@ -1,8 +1,6 @@
 module github.com/getlantern/radiance
 
-go 1.24.0
-
-toolchain go1.24.1
+go 1.25.1
 
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.16-lantern.0.20251103164629-13fd9318fa6f
 
@@ -23,6 +21,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20251018002705-bb54703a7fcb
 	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
 	github.com/getlantern/kindling v0.0.0-20251118001040-e62fa3a32e8b
+	github.com/getlantern/pluriconfig v0.0.0-20251118161121-17ed43ebd22e
 	github.com/getlantern/sing-box-extensions v0.0.6-0.20251103164448-2fc19f5f1b7a
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
@@ -89,7 +88,7 @@ require (
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
 	github.com/go-llsqlite/crawshaw v0.4.0 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
-	github.com/goccy/go-yaml v1.15.13 // indirect
+	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 // indirect
