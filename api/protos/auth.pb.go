@@ -1425,19 +1425,20 @@ func (x *LoginResponse_UserData) GetDeviceID() string {
 }
 
 type LoginResponse_UserData_SubscriptionData struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	PlanID           string                 `protobuf:"bytes,1,opt,name=planID,proto3" json:"planID,omitempty"`
-	StripeCustomerID string                 `protobuf:"bytes,2,opt,name=stripeCustomerID,proto3" json:"stripeCustomerID,omitempty"`
-	StartAt          string                 `protobuf:"bytes,3,opt,name=startAt,proto3" json:"startAt,omitempty"`
-	CancelledAt      string                 `protobuf:"bytes,4,opt,name=cancelledAt,proto3" json:"cancelledAt,omitempty"`
-	AutoRenew        bool                   `protobuf:"varint,5,opt,name=autoRenew,proto3" json:"autoRenew,omitempty"`
-	SubscriptionID   string                 `protobuf:"bytes,6,opt,name=subscriptionID,proto3" json:"subscriptionID,omitempty"`
-	Status           string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
-	Provider         string                 `protobuf:"bytes,8,opt,name=provider,proto3" json:"provider,omitempty"`
-	CreatedAt        string                 `protobuf:"bytes,9,opt,name=createdAt,proto3" json:"createdAt,omitempty"`
-	EndAt            string                 `protobuf:"bytes,10,opt,name=endAt,proto3" json:"endAt,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	SubscriptionID     string                 `protobuf:"bytes,1,opt,name=subscriptionID,proto3" json:"subscriptionID,omitempty"`
+	PlanID             string                 `protobuf:"bytes,2,opt,name=planID,proto3" json:"planID,omitempty"`
+	StripeCustomerID   string                 `protobuf:"bytes,3,opt,name=stripeCustomerID,proto3" json:"stripeCustomerID,omitempty"`
+	Status             string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	CancellationReason string                 `protobuf:"bytes,5,opt,name=cancellationReason,proto3" json:"cancellationReason,omitempty"`
+	CreatedAt          int64                  `protobuf:"varint,6,opt,name=createdAt,proto3" json:"createdAt,omitempty"`
+	StartAt            int64                  `protobuf:"varint,7,opt,name=startAt,proto3" json:"startAt,omitempty"`
+	EndAt              int64                  `protobuf:"varint,8,opt,name=endAt,proto3" json:"endAt,omitempty"`
+	CancelledAt        int64                  `protobuf:"varint,9,opt,name=cancelledAt,proto3" json:"cancelledAt,omitempty"`
+	AutoRenew          bool                   `protobuf:"varint,10,opt,name=autoRenew,proto3" json:"autoRenew,omitempty"`
+	Provider           string                 `protobuf:"bytes,11,opt,name=provider,proto3" json:"provider,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *LoginResponse_UserData_SubscriptionData) Reset() {
@@ -1470,6 +1471,13 @@ func (*LoginResponse_UserData_SubscriptionData) Descriptor() ([]byte, []int) {
 	return file_api_protos_auth_proto_rawDescGZIP(), []int{8, 1, 0}
 }
 
+func (x *LoginResponse_UserData_SubscriptionData) GetSubscriptionID() string {
+	if x != nil {
+		return x.SubscriptionID
+	}
+	return ""
+}
+
 func (x *LoginResponse_UserData_SubscriptionData) GetPlanID() string {
 	if x != nil {
 		return x.PlanID
@@ -1484,18 +1492,46 @@ func (x *LoginResponse_UserData_SubscriptionData) GetStripeCustomerID() string {
 	return ""
 }
 
-func (x *LoginResponse_UserData_SubscriptionData) GetStartAt() string {
+func (x *LoginResponse_UserData_SubscriptionData) GetStatus() string {
 	if x != nil {
-		return x.StartAt
+		return x.Status
 	}
 	return ""
 }
 
-func (x *LoginResponse_UserData_SubscriptionData) GetCancelledAt() string {
+func (x *LoginResponse_UserData_SubscriptionData) GetCancellationReason() string {
+	if x != nil {
+		return x.CancellationReason
+	}
+	return ""
+}
+
+func (x *LoginResponse_UserData_SubscriptionData) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+func (x *LoginResponse_UserData_SubscriptionData) GetStartAt() int64 {
+	if x != nil {
+		return x.StartAt
+	}
+	return 0
+}
+
+func (x *LoginResponse_UserData_SubscriptionData) GetEndAt() int64 {
+	if x != nil {
+		return x.EndAt
+	}
+	return 0
+}
+
+func (x *LoginResponse_UserData_SubscriptionData) GetCancelledAt() int64 {
 	if x != nil {
 		return x.CancelledAt
 	}
-	return ""
+	return 0
 }
 
 func (x *LoginResponse_UserData_SubscriptionData) GetAutoRenew() bool {
@@ -1505,37 +1541,9 @@ func (x *LoginResponse_UserData_SubscriptionData) GetAutoRenew() bool {
 	return false
 }
 
-func (x *LoginResponse_UserData_SubscriptionData) GetSubscriptionID() string {
-	if x != nil {
-		return x.SubscriptionID
-	}
-	return ""
-}
-
-func (x *LoginResponse_UserData_SubscriptionData) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
-}
-
 func (x *LoginResponse_UserData_SubscriptionData) GetProvider() string {
 	if x != nil {
 		return x.Provider
-	}
-	return ""
-}
-
-func (x *LoginResponse_UserData_SubscriptionData) GetCreatedAt() string {
-	if x != nil {
-		return x.CreatedAt
-	}
-	return ""
-}
-
-func (x *LoginResponse_UserData_SubscriptionData) GetEndAt() string {
-	if x != nil {
-		return x.EndAt
 	}
 	return ""
 }
@@ -1569,7 +1577,7 @@ const file_api_protos_auth_proto_rawDesc = "" +
 	"\fLoginRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x14\n" +
 	"\x05proof\x18\x02 \x01(\fR\x05proof\x12\x1a\n" +
-	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\xc0\n" +
+	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\xf0\n" +
 	"\n" +
 	"\rLoginResponse\x12\x1a\n" +
 	"\blegacyID\x18\x01 \x01(\x03R\blegacyID\x12 \n" +
@@ -1583,7 +1591,7 @@ const file_api_protos_auth_proto_rawDesc = "" +
 	"\x06Device\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\xce\a\n" +
+	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\xfe\a\n" +
 	"\bUserData\x12\x16\n" +
 	"\x06userId\x18\x01 \x01(\x03R\x06userId\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x14\n" +
@@ -1609,19 +1617,20 @@ const file_api_protos_auth_proto_rawDesc = "" +
 	"\adevices\x18\x12 \x03(\v2\x15.LoginResponse.DeviceR\adevices\x12\"\n" +
 	"\fyinbiEnabled\x18\x13 \x01(\bR\fyinbiEnabled\x12T\n" +
 	"\x10subscriptionData\x18\x14 \x01(\v2(.LoginResponse.UserData.SubscriptionDataR\x10subscriptionData\x12\x1a\n" +
-	"\bdeviceID\x18\x15 \x01(\tR\bdeviceID\x1a\xc0\x02\n" +
-	"\x10SubscriptionData\x12\x16\n" +
-	"\x06planID\x18\x01 \x01(\tR\x06planID\x12*\n" +
-	"\x10stripeCustomerID\x18\x02 \x01(\tR\x10stripeCustomerID\x12\x18\n" +
-	"\astartAt\x18\x03 \x01(\tR\astartAt\x12 \n" +
-	"\vcancelledAt\x18\x04 \x01(\tR\vcancelledAt\x12\x1c\n" +
-	"\tautoRenew\x18\x05 \x01(\bR\tautoRenew\x12&\n" +
-	"\x0esubscriptionID\x18\x06 \x01(\tR\x0esubscriptionID\x12\x16\n" +
-	"\x06status\x18\a \x01(\tR\x06status\x12\x1a\n" +
-	"\bprovider\x18\b \x01(\tR\bprovider\x12\x1c\n" +
-	"\tcreatedAt\x18\t \x01(\tR\tcreatedAt\x12\x14\n" +
-	"\x05endAt\x18\n" +
-	" \x01(\tR\x05endAt\"3\n" +
+	"\bdeviceID\x18\x15 \x01(\tR\bdeviceID\x1a\xf0\x02\n" +
+	"\x10SubscriptionData\x12&\n" +
+	"\x0esubscriptionID\x18\x01 \x01(\tR\x0esubscriptionID\x12\x16\n" +
+	"\x06planID\x18\x02 \x01(\tR\x06planID\x12*\n" +
+	"\x10stripeCustomerID\x18\x03 \x01(\tR\x10stripeCustomerID\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12.\n" +
+	"\x12cancellationReason\x18\x05 \x01(\tR\x12cancellationReason\x12\x1c\n" +
+	"\tcreatedAt\x18\x06 \x01(\x03R\tcreatedAt\x12\x18\n" +
+	"\astartAt\x18\a \x01(\x03R\astartAt\x12\x14\n" +
+	"\x05endAt\x18\b \x01(\x03R\x05endAt\x12 \n" +
+	"\vcancelledAt\x18\t \x01(\x03R\vcancelledAt\x12\x1c\n" +
+	"\tautoRenew\x18\n" +
+	" \x01(\bR\tautoRenew\x12\x1a\n" +
+	"\bprovider\x18\v \x01(\tR\bprovider\"3\n" +
 	"\x1bStartRecoveryByEmailRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\"\x88\x01\n" +
 	"\x1eCompleteRecoveryByEmailRequest\x12\x14\n" +

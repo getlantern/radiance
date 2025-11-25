@@ -30,7 +30,6 @@ const (
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
 	httpClient *http.Client
-
 	userConfig common.UserInfo
 }
 

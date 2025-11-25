@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,17 +71,26 @@ func Init(dataDir, logDir, logLevel string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	dataDir = dataPath.Load().(string)
-	logDir = logPath.Load().(string)
-
-	err = initLogger(filepath.Join(logDir, LogFileName), logLevel)
+	err = initLogger(filepath.Join(LogPath(), LogFileName), logLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
 
+	slog.Info("Using data and log directories", "dataDir", DataPath(), "logDir", LogPath())
+
 	if !IsWindows() {
-		ipc.SetSocketPath(dataDir)
+		ipc.SetSocketPath(DataPath())
+	}
+
+	crashFilePath := filepath.Join(LogPath(), "lantern_crash.log")
+	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		slog.Error("Failed to open crash log file", "error", err)
+	} else {
+		debug.SetCrashOutput(f, debug.CrashOptions{})
+		// We can close f after SetCrashOutput because it duplicates the file descriptor.
+		f.Close()
 	}
 
 	initialized = true
@@ -136,9 +146,19 @@ func initLogger(logPath, level string) error {
 		Compress:   Prod(),  // Compress rotated log files
 	}
 
+	loggingToStdOut := true
 	var logWriter io.Writer
 	if noStdout, _ := env.Get[bool](env.DisableStdout); noStdout {
 		logWriter = logRotator
+		loggingToStdOut = false
+	} else if isWindowsProd() {
+		// For some reason, logging to both stdout and a file on Windows
+		// causes issues with some Windows services where the logs
+		// do not get written to the file. So in prod mode on Windows,
+		// we log to file only. See:
+		// https://www.reddit.com/r/golang/comments/1fpo3cg/golang_windows_service_cannot_write_log_files/
+		logWriter = logRotator
+		loggingToStdOut = false
 	} else {
 		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
@@ -196,7 +216,23 @@ func initLogger(logPath, level string) error {
 		},
 	}))
 	slog.SetDefault(logger)
+	if !loggingToStdOut {
+		if IsWindows() {
+			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
+		} else {
+			fmt.Printf("Logging to file only -- RADIANCE_DISABLE_STDOUT_LOG is set path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
+		}
+	} else {
+		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
+	}
 	return nil
+}
+
+func isWindowsProd() bool {
+	if !IsWindows() {
+		return false
+	}
+	return !Dev()
 }
 
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do
@@ -206,14 +242,12 @@ func setupDirectories(data, logs string) error {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
-		data = appdir.General(Name)
-		data = maybeAddSuffix(data, "data")
+		data = outDir("data")
 	}
 	if l, ok := env.Get[string](env.LogPath); ok {
 		logs = l
 	} else if logs == "" {
-		logs = appdir.Logs(Name)
-		logs = maybeAddSuffix(logs, "logs")
+		logs = outDir("logs")
 	}
 	data, _ = filepath.Abs(data)
 	logs, _ = filepath.Abs(logs)
@@ -223,10 +257,20 @@ func setupDirectories(data, logs string) error {
 		}
 	}
 
-	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	dataPath.Store(data)
 	logPath.Store(logs)
 	return nil
+}
+
+func outDir(subdir string) string {
+	var data string
+	if IsWindows() {
+		publicDir := os.Getenv("Public")
+		data = filepath.Join(publicDir, Name)
+	} else {
+		data = appdir.General(Name)
+	}
+	return maybeAddSuffix(data, subdir)
 }
 
 func maybeAddSuffix(path, suffix string) string {

@@ -112,8 +112,8 @@ func Reconnect(platIfce libbox.PlatformInterface) error {
 // Note, this does not check if the tunnel can connect to a server.
 func isOpen(ctx context.Context) bool {
 	state, err := ipc.GetStatus(ctx)
-	if !errors.Is(err, ipc.ErrServiceIsNotRunning) {
-		slog.Warn("Failed to get tunnel state", "error", err)
+	if err != nil {
+		slog.Error("Failed to get tunnel state", "error", err)
 	}
 	return state == ipc.StatusRunning
 }
