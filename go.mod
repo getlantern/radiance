@@ -8,6 +8,8 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
+replace github.com/getlantern/pluriconfig => ../pluriconfig
+
 //replace github.com/sagernet/sing-box => ../sing-box-minimal
 
 //replace github.com/getlantern/common => ../common
@@ -21,7 +23,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20251018002705-bb54703a7fcb
 	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
 	github.com/getlantern/kindling v0.0.0-20251118001040-e62fa3a32e8b
-	github.com/getlantern/pluriconfig v0.0.0-20251030140129-5f8b183a6d35
+	github.com/getlantern/pluriconfig v0.0.0-20251118161121-17ed43ebd22e
 	github.com/getlantern/sing-box-extensions v0.0.6-0.20251103164448-2fc19f5f1b7a
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
