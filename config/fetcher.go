@@ -18,7 +18,7 @@ import (
 	C "github.com/getlantern/common"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getlantern/sing-box-extensions/protocol"
+	"github.com/getlantern/lantern-box/protocol"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
