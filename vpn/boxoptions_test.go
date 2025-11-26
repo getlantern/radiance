@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	LC "github.com/getlantern/common"
-	sbx "github.com/getlantern/sing-box-extensions"
-	sbxO "github.com/getlantern/sing-box-extensions/option"
+	box "github.com/getlantern/lantern-box"
+	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/config"
@@ -68,11 +68,11 @@ func TestBuildOptions(t *testing.T) {
 			return
 		}
 		switch opts := out.Options.(type) {
-		case *sbxO.MutableSelectorOutboundOptions:
+		case *lbO.MutableSelectorOutboundOptions:
 			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
 		case *O.SelectorOutboundOptions:
 			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
-		case *sbxO.MutableURLTestOutboundOptions:
+		case *lbO.MutableURLTestOutboundOptions:
 			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
 		case *O.URLTestOutboundOptions:
 			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
@@ -141,7 +141,7 @@ func testBoxOptions(tmpPath string) (*option.Options, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	opts, err := json.UnmarshalExtendedContext[option.Options](sbx.BoxContext(), content)
+	opts, err := json.UnmarshalExtendedContext[option.Options](box.BoxContext(), content)
 	if err != nil {
 		return nil, "", err
 	}

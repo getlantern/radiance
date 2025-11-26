@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"time"
 
-	sbx "github.com/getlantern/sing-box-extensions"
-	sbxconstant "github.com/getlantern/sing-box-extensions/constant"
-	sbxoption "github.com/getlantern/sing-box-extensions/option"
+	box "github.com/getlantern/lantern-box"
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
@@ -350,7 +350,7 @@ func buildOptions(group, path string) (O.Options, error) {
 	if common.Dev() {
 		// write box options
 		// we can ignore the errors here since the tunnel will error out anyway if something is wrong
-		buf, _ := json.MarshalContext(sbx.BoxContext(), opts)
+		buf, _ := json.MarshalContext(box.BoxContext(), opts)
 		var b bytes.Buffer
 		stdjson.Indent(&b, buf, "", "  ")
 		os.WriteFile(filepath.Join(path, "debug-lantern-box-options.json"), b.Bytes(), 0644)
@@ -371,7 +371,7 @@ func loadConfigOptions(confPath string) (O.Options, error) {
 		return O.Options{}, nil
 	}
 	slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling", "config", content)
-	cfg, err := json.UnmarshalExtendedContext[config.Config](sbx.BoxContext(), content)
+	cfg, err := json.UnmarshalExtendedContext[config.Config](box.BoxContext(), content)
 	if err != nil {
 		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
 	}
@@ -442,9 +442,9 @@ func groupAutoTag(group string) string {
 
 func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: sbxconstant.TypeMutableURLTest,
+		Type: lbC.TypeMutableURLTest,
 		Tag:  tag,
-		Options: &sbxoption.MutableURLTestOutboundOptions{
+		Options: &lbO.MutableURLTestOutboundOptions{
 			Outbounds:   outbounds,
 			URL:         "https://google.com/generate_204",
 			Interval:    badoption.Duration(urlTestInterval),
@@ -455,9 +455,9 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 
 func selectorOutbound(group string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: sbxconstant.TypeMutableSelector,
+		Type: lbC.TypeMutableSelector,
 		Tag:  group,
-		Options: &sbxoption.MutableSelectorOutboundOptions{
+		Options: &lbO.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
 		},
 	}

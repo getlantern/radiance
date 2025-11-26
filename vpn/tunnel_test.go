@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/sing-box-extensions/adapter"
+	"github.com/getlantern/lantern-box/adapter"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"

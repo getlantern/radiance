@@ -24,8 +24,8 @@ import (
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
 
-	sbx "github.com/getlantern/sing-box-extensions"
-	exO "github.com/getlantern/sing-box-extensions/option"
+	box "github.com/getlantern/lantern-box"
+	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
@@ -220,7 +220,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), resp)
+	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BoxContext(), resp)
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
@@ -284,7 +284,7 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 			opts.System = opts.System && system
-		case *exO.AmneziaEndpointOptions:
+		case *lbO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
 			opts.System = opts.System && system
 		default:
@@ -347,7 +347,7 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
-	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), tmp.ConfigResponse)
+	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BoxContext(), tmp.ConfigResponse)
 	if err != nil {
 		return nil, err
 	}

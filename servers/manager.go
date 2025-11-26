@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"sync"
 
-	sbx "github.com/getlantern/sing-box-extensions"
+	box "github.com/getlantern/lantern-box"
 	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
@@ -301,7 +301,7 @@ func remove[T comparable](slice []T, item T) []T {
 
 func (m *Manager) saveServers() error {
 	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
-	ctx := sbx.BoxContext()
+	ctx := box.BoxContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
@@ -317,7 +317,7 @@ func (m *Manager) loadServers() error {
 	if err != nil {
 		return fmt.Errorf("read server file %q: %w", m.serversFile, err)
 	}
-	servers, err := json.UnmarshalExtendedContext[Servers](sbx.BoxContext(), buf)
+	servers, err := json.UnmarshalExtendedContext[Servers](box.BoxContext(), buf)
 	if err != nil {
 		return fmt.Errorf("unmarshal server options: %w", err)
 	}
@@ -362,7 +362,7 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 	}
 	defer resp.Body.Close()
 
-	ctx := sbx.BoxContext()
+	ctx := box.BoxContext()
 	servers, err := json.UnmarshalExtendedContext[Options](ctx, body)
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -464,7 +464,7 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerWithSingboxJSON")
 	defer span.End()
 	var option Options
-	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
+	if err := json.UnmarshalContext(box.BoxContext(), value, &option); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
 	if len(option.Endpoints) == 0 && len(option.Outbounds) == 0 {

@@ -15,11 +15,11 @@ import (
 	"time"
 
 	lcommon "github.com/getlantern/common"
+	box "github.com/getlantern/lantern-box"
 
-	sbx "github.com/getlantern/sing-box-extensions"
-	sbxadapter "github.com/getlantern/sing-box-extensions/adapter"
-	"github.com/getlantern/sing-box-extensions/adapter/groups"
-	sbxlog "github.com/getlantern/sing-box-extensions/log"
+	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/getlantern/lantern-box/adapter/groups"
+	lblog "github.com/getlantern/lantern-box/log"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
@@ -75,7 +75,7 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	t := &tunnel{}
 	t.status.Store(ipc.StatusInitializing)
 
-	t.ctx, t.cancel = context.WithCancel(sbx.BoxContext())
+	t.ctx, t.cancel = context.WithCancel(box.BoxContext())
 	if err := t.init(opts, dataPath, platIfce); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
@@ -144,7 +144,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
-	t.logFactory = sbxlog.NewFactory(slog.Default().Handler())
+	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
 	// create the cache file service
@@ -200,9 +200,9 @@ func newMutableGroupManager(
 		return nil, fmt.Errorf("outbound or endpoint manager not found in context")
 	}
 
-	var mutGroups []sbxadapter.MutableOutboundGroup
+	var mutGroups []lbA.MutableOutboundGroup
 	for _, out := range oMgr.Outbounds() {
-		if g, isMutGroup := out.(sbxadapter.MutableOutboundGroup); isMutGroup {
+		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
 			mutGroups = append(mutGroups, g)
 		}
 	}
@@ -323,7 +323,7 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
 	}
-	svrs, err := json.UnmarshalExtendedContext[servers.Servers](sbx.BoxContext(), content)
+	svrs, err := json.UnmarshalExtendedContext[servers.Servers](box.BoxContext(), content)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
@@ -394,7 +394,7 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 	// for each outbound/endpoint in current not in new, remove from group
 	for _, tag := range selector.All() {
 		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
-			if _, isMutGroup := out.(sbxadapter.MutableOutboundGroup); isMutGroup {
+			if _, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
 				continue // skip nested urltests
 			}
 		}
@@ -471,7 +471,7 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 
 func removeDuplicates(curr map[string][]byte, new servers.Options, group string) servers.Options {
 	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
-	ctx := sbx.BoxContext()
+	ctx := box.BoxContext()
 	deduped := servers.Options{
 		Outbounds: []O.Outbound{},
 		Endpoints: []O.Endpoint{},
