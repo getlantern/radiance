@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -127,17 +126,28 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 }
 
 // StripeBillingPortalUrl generates the Stripe billing portal URL for the given user ID.
-func (ac *APIClient) StripeBillingPortalUrl() (string, error) {
-	portalURL, err := url.Parse(fmt.Sprintf("%s/%s", proServerURL, "stripe-billing-portal"))
+func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "stripe_billing_portal_url")
+	defer span.End()
+	type response struct {
+		Redirect string
+	}
+	var resp response
+	params := map[string]string{
+		"referer": "https://lantern.io/",
+		"userId":  strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10),
+	}
+	headers := map[string]string{
+		backend.UserIDHeader:   strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10),
+		backend.ProTokenHeader: ac.userInfo.LegacyToken(),
+	}
+	req := ac.proWC.NewRequest(params, headers, nil)
+	err := ac.proWC.Get(ctx, "/stripe-billing-portal", req, &resp)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
-	query := portalURL.Query()
-	query.Set("referer", "https://lantern.io/")
-	query.Set("userId", strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10))
-	portalURL.RawQuery = query.Encode()
-
-	return portalURL.String(), nil
+	slog.Debug("retrieved stripe billing portal url", "url", resp.Redirect)
+	return resp.Redirect, nil
 }
 
 // SubscriptionPaymentRedirectURL generates a redirect URL for subscription payment.
