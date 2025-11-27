@@ -146,14 +146,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch")
 	}
-	confHandler := config.NewConfigHandler(cOpts)
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		slog.Info("Config changed", "oldConfig", evt.Old, "newConfig", evt.New)
 		if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
 			slog.Error("Failed to handle new config for telemetry", "error", err)
 		}
-	},
-	)
+	})
+	confHandler := config.NewConfigHandler(cOpts)
 	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
