@@ -135,7 +135,6 @@ func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error)
 	var resp response
 	params := map[string]string{
 		"referer": "https://lantern.io/",
-		"userId":  strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10),
 	}
 	headers := map[string]string{
 		backend.UserIDHeader:   strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10),
@@ -144,7 +143,7 @@ func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error)
 	req := ac.proWC.NewRequest(params, headers, nil)
 	err := ac.proWC.Get(ctx, "/stripe-billing-portal", req, &resp)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse URL: %w", err)
+		return "", fmt.Errorf("failed to retrieve stripe billing portal: %w", err)
 	}
 	slog.Debug("retrieved stripe billing portal url", "url", resp.Redirect)
 	return resp.Redirect, nil
