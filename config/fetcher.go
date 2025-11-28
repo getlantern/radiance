@@ -17,6 +17,7 @@ import (
 
 	C "github.com/getlantern/common"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/getlantern/lantern-box/protocol"
 
@@ -86,6 +87,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
 
+	span.SetAttributes(attribute.String("http.request.body", string(buf)))
 	slog.Debug("sending config request", "request", string(buf))
 	buf, err = f.send(ctx, bytes.NewReader(buf))
 	if err != nil {
