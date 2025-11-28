@@ -225,6 +225,8 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 
 // Login logs the user in.
 func (a *APIClient) Login(ctx context.Context, email string, password string, deviceId string) (*protos.LoginResponse, error) {
+	// clear any previous salt value
+	a.salt = nil
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
 	defer span.End()
 	salt, err := a.getSalt(ctx, email)
