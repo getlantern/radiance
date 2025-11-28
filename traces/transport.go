@@ -3,8 +3,10 @@ package traces
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/http/httptrace"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -48,4 +50,30 @@ func httpTrace(ctx context.Context) *httptrace.ClientTrace {
 			RecordError(ctx, err)
 		},
 	}
+}
+
+type headerAnnotatingRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	span := trace.SpanFromContext(ctx)
+
+	if span != nil {
+		for k, v := range req.Header {
+			span.SetAttributes(
+				attribute.StringSlice(fmt.Sprintf("http.request.header.%s", strings.ToLower(k)), v),
+			)
+		}
+	}
+
+	return h.next.RoundTrip(req)
+}
+
+// NewHeaderAnnotatingRoundTripper read the request headers during the roundtrip
+// operation and add the information as an attributes. Please be aware that
+// requests must have a context otherwise the info won't be added.
+func NewHeaderAnnotatingRoundTripper(base http.RoundTripper) http.RoundTripper {
+	return &headerAnnotatingRoundTripper{next: base}
 }
