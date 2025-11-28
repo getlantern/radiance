@@ -75,5 +75,8 @@ func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Respo
 // operation and adds the information as attributes. Please be aware that
 // requests must have a context otherwise the info won't be added.
 func NewHeaderAnnotatingRoundTripper(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	return &headerAnnotatingRoundTripper{next: base}
 }
