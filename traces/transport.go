@@ -62,18 +62,43 @@ func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Respo
 
 	if span != nil {
 		for k, v := range req.Header {
-			span.SetAttributes(
-				attribute.StringSlice(fmt.Sprintf("http.request.header.%s", strings.ToLower(k)), v),
-			)
+			headerName := strings.ToLower(k)
+			if isSensitiveHeader(headerName) {
+				if len(v) > 0 && len(v[0]) > 5 {
+					span.SetAttributes(
+						attribute.StringSlice(fmt.Sprintf("http.request.header.%s", headerName), []string{fmt.Sprintf("%s...", v[0][0:4])}),
+					)
+				} else {
+					span.SetAttributes(
+						attribute.StringSlice(fmt.Sprintf("http.request.header.%s", headerName), []string{"REDACTED"}),
+					)
+				}
+			} else {
+				span.SetAttributes(
+					attribute.StringSlice(fmt.Sprintf("http.request.header.%s", headerName), v),
+				)
+			}
 		}
 	}
 
 	return h.next.RoundTrip(req)
 }
 
+func isSensitiveHeader(header string) bool {
+	switch header {
+	case "authorization", "x-lantern-pro-token":
+		return true
+	default:
+		return false
+	}
+}
+
 // NewHeaderAnnotatingRoundTripper read the request headers during the roundtrip
 // operation and add the information as an attributes. Please be aware that
 // requests must have a context otherwise the info won't be added.
 func NewHeaderAnnotatingRoundTripper(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	return &headerAnnotatingRoundTripper{next: base}
 }
