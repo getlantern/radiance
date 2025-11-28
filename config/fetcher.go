@@ -17,6 +17,8 @@ import (
 
 	C "github.com/getlantern/common"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/lantern-box/protocol"
 
@@ -85,6 +87,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	if err != nil {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
+	addPayloadToSpan(ctx, confReq)
 
 	slog.Debug("sending config request", "request", string(buf))
 	buf, err = f.send(ctx, bytes.NewReader(buf))
@@ -99,6 +102,19 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 
 	f.lastModified = time.Now()
 	return buf, nil
+}
+
+func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
+	span := trace.SpanFromContext(ctx)
+	if len(req.UserID) > 5 {
+		req.UserID = fmt.Sprintf("%s...", req.UserID[0:5])
+	}
+	if len(req.ProToken) > 5 {
+		req.ProToken = fmt.Sprintf("%s...", req.ProToken[0:5])
+	}
+
+	b, _ := json.Marshal(req)
+	span.SetAttributes(attribute.String("http.request.body", string(b)))
 }
 
 func (f *fetcher) ensureUser(ctx context.Context) {
