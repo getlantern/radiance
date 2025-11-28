@@ -71,8 +71,8 @@ func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Respo
 	return h.next.RoundTrip(req)
 }
 
-// NewHeaderAnnotatingRoundTripper read the request headers during the roundtrip
-// operation and add the information as an attributes. Please be aware that
+// NewHeaderAnnotatingRoundTripper reads the request headers during the roundtrip
+// operation and adds the information as attributes. Please be aware that
 // requests must have a context otherwise the info won't be added.
 func NewHeaderAnnotatingRoundTripper(base http.RoundTripper) http.RoundTripper {
 	return &headerAnnotatingRoundTripper{next: base}
