@@ -118,12 +118,14 @@ func StopService(ctx context.Context) error {
 	return err
 }
 
-// SetService updates the service attached to the server.
-// Typically called when starting or replacing the VPN tunnel
-func (s *Server) SetService(svc Service) {
+// SetService updates the service attached to the server and returns the old service, if any.
+// Typically called when starting or replacing the VPN tunnel.
+func (s *Server) SetService(svc Service) Service {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	old := s.service
 	s.service = svc
+	return old
 }
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -159,8 +161,7 @@ func (s *Server) StartService(ctx context.Context, group, tag string) error {
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
-	svc := s.service
-	s.SetService(&closedService{})
+	svc := s.SetService(&closedService{})
 
 	if svc != nil {
 		if err := s.StopService(r.Context()); err != nil {
@@ -175,8 +176,7 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StopService(ctx context.Context) error {
-	svc := s.service
-	s.SetService(&closedService{})
+	svc := s.SetService(&closedService{})
 	if svc != nil {
 		if err := svc.Close(); err != nil {
 			return fmt.Errorf("error stopping service: %w", err)
@@ -186,8 +186,7 @@ func (s *Server) StopService(ctx context.Context) error {
 }
 
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
-	service := s.service
-	s.SetService(&closedService{})
+	service := s.SetService(&closedService{})
 	if err := service.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
