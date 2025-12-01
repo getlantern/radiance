@@ -146,7 +146,7 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
 	svc, err := s.startFn(ctx, group, tag)
 	if err != nil {
-		return fmt.Errorf("error starting service %w", err)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 	s.SetService(svc)
 	return nil
