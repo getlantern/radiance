@@ -25,7 +25,7 @@ func (closedSvc) Close() error                  { return nil }
 func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
 	if ipcServer != nil {
 		// already started
-		return nil, nil
+		return ipcServer, nil
 	}
 	platIfceProvider = provider
 	if !common.IsWindows() && basePath != "" {
