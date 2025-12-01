@@ -22,10 +22,10 @@ func (closedSvc) ClashServer() *clashapi.Server { return nil }
 func (closedSvc) Close() error                  { return nil }
 
 // InitIPC starts the long-lived IPC server and hooks it up to establishConnection
-func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
+func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
 	if ipcServer != nil {
 		// already started
-		return nil
+		return nil, nil
 	}
 	platIfceProvider = provider
 	if !common.IsWindows() && basePath != "" {
@@ -33,8 +33,8 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
 	}
 
 	ipcServer = ipc.NewServer(closedSvc{})
-	// start tunnel via IPC. How /service/start brings the tunnel up
-	ipcServer.SetStartFn(func(ctx context.Context, group, tag string) (ipc.Service, error) {
+
+	return ipcServer, ipcServer.Start(basePath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
 		path := basePath
 		if path == "" {
 			path = common.DataPath()
@@ -66,5 +66,4 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) error {
 		}
 		return tInstance, nil
 	})
-	return ipcServer.Start(basePath)
 }

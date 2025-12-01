@@ -100,3 +100,7 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+func (s *Server) GetStatus() string {
+	return s.service.Status()
+}

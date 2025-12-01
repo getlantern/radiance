@@ -68,7 +68,7 @@ func NewServer(service Service) *Server {
 
 // Start starts the IPC server. The socket file will be created in the "basePath" directory.
 // On Windows, the "basePath" is ignored and a default named pipe path is used.
-func (s *Server) Start(basePath string) error {
+func (s *Server) Start(basePath string, fn StartFn) error {
 	l, err := listen(basePath)
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
@@ -86,6 +86,9 @@ func (s *Server) Start(basePath string) error {
 			slog.Error("IPC server", "error", err)
 		}
 	}()
+
+	s.startFn = fn
+
 	return nil
 }
 
@@ -113,9 +116,6 @@ func StopService(ctx context.Context) error {
 	return err
 }
 
-// SetStartFn registers a function that will be called when the start endpoint is hit
-func (s *Server) SetStartFn(fn StartFn) { s.startFn = fn }
-
 // SetService updates the service attached to the server.
 // Typically called when starting or replacing the VPN tunnel
 func (s *Server) SetService(svc Service) { s.service = svc }
@@ -135,13 +135,21 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	svc, err := s.startFn(r.Context(), p.GroupTag, p.OutboundTag)
-	if err != nil {
+
+	if err := s.StartService(r.Context(), p.GroupTag, p.OutboundTag); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	s.SetService(svc)
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) StartService(ctx context.Context, group, tag string) error {
+	svc, err := s.startFn(ctx, group, tag)
+	if err != nil {
+		return fmt.Errorf("error starting service %w", err)
+	}
+	s.SetService(svc)
+	return nil
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +157,7 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	s.service = &closedService{}
 
 	if svc != nil {
-		if err := svc.Close(); err != nil {
+		if err := s.StopService(r.Context()); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -158,6 +166,17 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+func (s *Server) StopService(ctx context.Context) error {
+	svc := s.service
+	s.service = &closedService{}
+	if svc != nil {
+		if err := svc.Close(); err != nil {
+			return fmt.Errorf("error stopping service: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {

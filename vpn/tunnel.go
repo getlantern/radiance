@@ -111,12 +111,13 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	}
 	// fallback: start IPC server here for platforms that don't call InitIPC yet
 	isvr := ipc.NewServer(t)
-	if err := isvr.Start(dataPath); err != nil {
+	if err := isvr.Start(dataPath, func(ctx context.Context, group, tag string) (ipc.Service, error) { return t, nil }); err != nil {
 		slog.Error("Failed to start IPC server", "error", err)
 		t.close()
 		return fmt.Errorf("starting IPC server: %w", err)
 	}
 	ipcServer = isvr
+	ipcServer.SetService(t)
 	slog.Debug("IPC server started")
 	return nil
 }
