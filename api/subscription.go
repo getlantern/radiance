@@ -51,6 +51,7 @@ type SubscriptionResponse struct {
 	CustomerId     string `json:"customerId"`
 	SubscriptionId string `json:"subscriptionId"`
 	ClientSecret   string `json:"clientSecret"`
+	PublishableKey string `json:"publishableKey"`
 }
 
 // SubscriptionPlans retrieves available subscription plans for a given channel.
