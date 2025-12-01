@@ -100,3 +100,10 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+func (s *Server) GetStatus() string {
+	if s.service == nil {
+		return StatusClosed
+	}
+	return s.service.Status()
+}
