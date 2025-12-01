@@ -117,7 +117,6 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		return fmt.Errorf("starting IPC server: %w", err)
 	}
 	ipcServer = isvr
-	ipcServer.SetService(t)
 	slog.Debug("IPC server started")
 	return nil
 }
