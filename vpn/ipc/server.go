@@ -161,13 +161,9 @@ func (s *Server) StartService(ctx context.Context, group, tag string) error {
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
-	svc := s.SetService(&closedService{})
-
-	if svc != nil {
-		if err := s.StopService(r.Context()); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	if err := s.StopService(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if f, ok := w.(http.Flusher); ok {
