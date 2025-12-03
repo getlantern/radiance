@@ -310,11 +310,9 @@ func TestServers(t *testing.T) {
 		assert.Len(t, servers[SGLantern].Outbounds, 1)
 		assert.Len(t, servers[SGUser].Endpoints, 1)
 
-		// Modify the copy
-		lanternOpts := servers[SGLantern]
-		lanternOpts.Outbounds = append(servers[SGLantern].Outbounds, option.Outbound{Tag: "new-out"})
-		userOpts := servers[SGUser]
-		userOpts.Endpoints = append(servers[SGUser].Endpoints, option.Endpoint{Tag: "new-ep"})
+		// Modify the copy's slices directly
+		servers[SGLantern].Outbounds = append(servers[SGLantern].Outbounds, option.Outbound{Tag: "new-out"})
+		servers[SGUser].Endpoints = append(servers[SGUser].Endpoints, option.Endpoint{Tag: "new-ep"})
 
 		// Original should remain unchanged
 		originalServers := manager.Servers()

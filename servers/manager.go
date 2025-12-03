@@ -172,8 +172,8 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 		return fmt.Errorf("set servers: %w", err)
 	}
 
-	m.access.RLock()
-	defer m.access.RUnlock()
+	m.access.Lock()
+	defer m.access.Unlock()
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
