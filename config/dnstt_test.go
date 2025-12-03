@@ -75,10 +75,11 @@ dnstt:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			updated := make(chan struct{})
+			defer close(updated)
 			if tt.expectUpdate {
 				events.Subscribe(func(e NewDNSTTConfigEvent) {
 					assert.NotNil(t, e.New)
-					close(updated)
+					updated <- struct{}{}
 				})
 			}
 
@@ -116,12 +117,10 @@ dnstt:
 			defer cancel()
 			DNSTTConfigUpdate(ctx, url, client, 1*time.Minute)
 			if tt.expectUpdate {
-				select {
-				case <-updated:
-					assert.True(t, true, "onNewDNSTTConfig should be called")
-				case <-time.After(1000 * time.Millisecond):
-					t.Error("onNewDNSTTConfig was not called")
-				}
+				assert.Eventually(t, func() bool {
+					_, ok := <-updated
+					return ok
+				}, 1*time.Second, 10*time.Millisecond, "onNewDNSTTConfig should be called")
 			}
 		})
 	}
