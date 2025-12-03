@@ -141,7 +141,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		k.NewHTTPClient()
 	})
 	dnsttUpdaterCtx, cancel := context.WithCancel(context.Background())
-	config.DNSTTConfigUpdate(dnsttUpdaterCtx, "", httpClientWithTimeout, 12*time.Hour)
+	config.DNSTTConfigUpdate(dnsttUpdaterCtx, "https://raw.githubusercontent.com/getlantern/radiance/main/config/dnstt.yml.gz", httpClientWithTimeout, 12*time.Hour)
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
