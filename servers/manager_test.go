@@ -310,14 +310,12 @@ func TestServers(t *testing.T) {
 		assert.Len(t, servers[SGLantern].Outbounds, 1)
 		assert.Len(t, servers[SGUser].Endpoints, 1)
 
-		// Modify the copy's slices directly
-		servers[SGLantern].Outbounds = append(servers[SGLantern].Outbounds, option.Outbound{Tag: "new-out"})
-		servers[SGUser].Endpoints = append(servers[SGUser].Endpoints, option.Endpoint{Tag: "new-ep"})
+		// Modify the copy
+		servers[SGLantern].Outbounds[0].Tag = "modified-out"
 
 		// Original should remain unchanged
 		originalServers := manager.Servers()
-		assert.Len(t, originalServers[SGLantern].Outbounds, 1)
-		assert.Len(t, originalServers[SGUser].Endpoints, 1)
+		assert.NotEqual(t, originalServers[SGLantern].Outbounds[0].Tag, "modified-out")
 	})
 
 	t.Run("handles empty servers", func(t *testing.T) {
