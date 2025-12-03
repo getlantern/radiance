@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Xuanwo/go-locale"
+	"github.com/getlantern/dnstt"
 	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -112,16 +113,35 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 
+	dnsTunnel, err := dnstt.NewDNSTT(
+		dnstt.WithTunnelDomain("t.iantem.io"),
+		dnstt.WithDoH("https://cloudflare-dns.com/dns-query"),
+		dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build dns tunnel: %w", err)
+	}
+
 	k := kindling.NewKindling(
 		"radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("df.iantem.io"),
+		kindling.WithDNSTunnel(dnsTunnel),
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
+
+	events.Subscribe(func(e config.NewDNSTTConfigEvent) {
+		slog.Info("updating kindling with latest dnstt config")
+		// replacing dnstt roundtripper and making http client replace transports
+		k.ReplaceRoundTripGenerator("dnstt", e.New.NewRoundTripper)
+		k.NewHTTPClient()
+	})
+	dnsttUpdaterCtx, cancel := context.WithCancel(context.Background())
+	config.DNSTTConfigUpdate(dnsttUpdaterCtx, "https://raw.githubusercontent.com/getlantern/radiance/main/config/dnstt.yml.gz", httpClientWithTimeout, 12*time.Hour)
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
@@ -164,7 +184,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
-	r.addShutdownFunc(common.Close, telemetry.Close)
+	r.addShutdownFunc(common.Close, telemetry.Close, func(_ context.Context) error {
+		cancel()
+		return nil
+	})
 	return r, nil
 }
 
