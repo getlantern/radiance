@@ -35,7 +35,7 @@ func processYaml(gzippedYaml []byte) (dnsttConfig, error) {
 	if err != nil {
 		return dnsttConfig{}, fmt.Errorf("failed to read gzipped file: %w", err)
 	}
-	path, err := yaml.PathString("$.dsntt")
+	path, err := yaml.PathString("$.dnstt")
 	if err != nil {
 		return dnsttConfig{}, fmt.Errorf("failed to create config path: %w", err)
 	}
@@ -64,7 +64,7 @@ func dnsttConfigValidator() func([]byte) error {
 
 func DNSTTConfigUpdate(ctx context.Context, configURL string, httpClient *http.Client, pollInterval time.Duration) {
 	if configURL == "" {
-		slog.Debug("No config URL provided -- not updating fronting configuration")
+		slog.Debug("No config URL provided -- not updating dnstt configuration")
 		return
 	}
 
