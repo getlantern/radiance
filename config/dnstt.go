@@ -30,6 +30,7 @@ func processYaml(gzippedYaml []byte) (dnsttConfig, error) {
 	if gzipErr != nil {
 		return dnsttConfig{}, fmt.Errorf("failed to create gzip reader: %w", gzipErr)
 	}
+	defer r.Close()
 	yml, err := io.ReadAll(r)
 	if err != nil {
 		return dnsttConfig{}, fmt.Errorf("failed to read gzipped file: %w", err)
