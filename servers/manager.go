@@ -113,7 +113,18 @@ func NewManager(dataPath string) (*Manager, error) {
 
 // Servers returns the current server configurations for both groups ([SGLantern] and [SGUser]).
 func (m *Manager) Servers() Servers {
-	return m.servers
+	m.access.RLock()
+	defer m.access.RUnlock()
+
+	result := make(Servers, len(m.servers))
+	for group, opts := range m.servers {
+		result[group] = Options{
+			Outbounds: append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints: append([]option.Endpoint{}, opts.Endpoints...),
+			Locations: maps.Clone(opts.Locations),
+		}
+	}
+	return result
 }
 
 type Server struct {
@@ -160,6 +171,9 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	if err := m.setServers(group, options); err != nil {
 		return fmt.Errorf("set servers: %w", err)
 	}
+
+	m.access.Lock()
+	defer m.access.Unlock()
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}

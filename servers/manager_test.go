@@ -243,3 +243,108 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 		assert.True(t, trojanSettings.OutboundTLSOptionsContainer.TLS.Insecure, trojanSettings.OutboundTLSOptionsContainer.TLS)
 	})
 }
+func TestServers(t *testing.T) {
+	dataPath := t.TempDir()
+	manager := &Manager{
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: []option.Outbound{
+					{Tag: "lantern-out", Type: "shadowsocks"},
+				},
+				Endpoints: []option.Endpoint{
+					{Tag: "lantern-ep", Type: "shadowsocks"},
+				},
+				Locations: map[string]C.ServerLocation{
+					"lantern-out": {City: "New York", Country: "US"},
+				},
+			},
+			SGUser: Options{
+				Outbounds: []option.Outbound{
+					{Tag: "user-out", Type: "trojan"},
+				},
+				Endpoints: []option.Endpoint{
+					{Tag: "user-ep", Type: "vless"},
+				},
+				Locations: map[string]C.ServerLocation{
+					"user-out": {City: "London", Country: "GB"},
+				},
+			},
+		},
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: {
+				"lantern-out": option.Outbound{Tag: "lantern-out", Type: "shadowsocks"},
+				"lantern-ep":  option.Endpoint{Tag: "lantern-ep", Type: "shadowsocks"},
+			},
+			SGUser: {
+				"user-out": option.Outbound{Tag: "user-out", Type: "trojan"},
+				"user-ep":  option.Endpoint{Tag: "user-ep", Type: "vless"},
+			},
+		},
+		serversFile:      filepath.Join(dataPath, common.ServersFileName),
+		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+	}
+
+	t.Run("returns copy of servers", func(t *testing.T) {
+		servers := manager.Servers()
+
+		require.NotNil(t, servers)
+		require.Contains(t, servers, SGLantern)
+		require.Contains(t, servers, SGUser)
+
+		assert.Len(t, servers[SGLantern].Outbounds, 1)
+		assert.Len(t, servers[SGLantern].Endpoints, 1)
+		assert.Equal(t, "lantern-out", servers[SGLantern].Outbounds[0].Tag)
+		assert.Equal(t, "lantern-ep", servers[SGLantern].Endpoints[0].Tag)
+
+		assert.Len(t, servers[SGUser].Outbounds, 1)
+		assert.Len(t, servers[SGUser].Endpoints, 1)
+		assert.Equal(t, "user-out", servers[SGUser].Outbounds[0].Tag)
+		assert.Equal(t, "user-ep", servers[SGUser].Endpoints[0].Tag)
+
+		assert.Equal(t, "New York", servers[SGLantern].Locations["lantern-out"].City)
+		assert.Equal(t, "London", servers[SGUser].Locations["user-out"].City)
+	})
+
+	t.Run("modifications to returned copy don't affect original", func(t *testing.T) {
+		servers := manager.Servers()
+		assert.Len(t, servers[SGLantern].Outbounds, 1)
+		assert.Len(t, servers[SGUser].Endpoints, 1)
+
+		// Modify the copy
+		servers[SGLantern].Outbounds[0].Tag = "modified-out"
+
+		// Original should remain unchanged
+		originalServers := manager.Servers()
+		assert.NotEqual(t, originalServers[SGLantern].Outbounds[0].Tag, "modified-out")
+	})
+
+	t.Run("handles empty servers", func(t *testing.T) {
+		emptyManager := &Manager{
+			servers: Servers{
+				SGLantern: Options{
+					Outbounds: make([]option.Outbound, 0),
+					Endpoints: make([]option.Endpoint, 0),
+					Locations: make(map[string]C.ServerLocation),
+				},
+				SGUser: Options{
+					Outbounds: make([]option.Outbound, 0),
+					Endpoints: make([]option.Endpoint, 0),
+					Locations: make(map[string]C.ServerLocation),
+				},
+			},
+			optsMaps: map[ServerGroup]map[string]any{
+				SGLantern: make(map[string]any),
+				SGUser:    make(map[string]any),
+			},
+			serversFile:      filepath.Join(dataPath, common.ServersFileName),
+			fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+		}
+
+		servers := emptyManager.Servers()
+		require.NotNil(t, servers)
+		assert.Len(t, servers[SGLantern].Outbounds, 0)
+		assert.Len(t, servers[SGLantern].Endpoints, 0)
+		assert.Len(t, servers[SGUser].Outbounds, 0)
+		assert.Len(t, servers[SGUser].Endpoints, 0)
+	})
+}
