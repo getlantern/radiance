@@ -113,6 +113,8 @@ func NewManager(dataPath string) (*Manager, error) {
 
 // Servers returns the current server configurations for both groups ([SGLantern] and [SGUser]).
 func (m *Manager) Servers() Servers {
+	m.access.RLock()
+	defer m.access.RUnlock()
 	return m.servers
 }
 
@@ -300,6 +302,8 @@ func remove[T comparable](slice []T, item T) []T {
 }
 
 func (m *Manager) saveServers() error {
+	m.access.RLock()
+	defer m.access.RUnlock()
 	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
 	ctx := box.BoxContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
