@@ -115,18 +115,16 @@ func NewManager(dataPath string) (*Manager, error) {
 func (m *Manager) Servers() Servers {
 	m.access.RLock()
 	defer m.access.RUnlock()
-	// Convert servers to JSON and back to create a deep copy
-	buf, err := json.MarshalContext(box.BoxContext(), m.servers)
-	if err != nil {
-		slog.Error("Failed to marshal servers for copy", "error", err)
-		return m.servers
+
+	result := make(Servers, len(m.servers))
+	for group, opts := range m.servers {
+		result[group] = Options{
+			Outbounds: append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints: append([]option.Endpoint{}, opts.Endpoints...),
+			Locations: maps.Clone(opts.Locations),
+		}
 	}
-	var serversCopy Servers
-	if err := json.UnmarshalContext(box.BoxContext(), buf, &serversCopy); err != nil {
-		slog.Error("Failed to unmarshal servers for copy", "error", err)
-		return m.servers
-	}
-	return serversCopy
+	return result
 }
 
 type Server struct {
