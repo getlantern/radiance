@@ -171,6 +171,9 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	if err := m.setServers(group, options); err != nil {
 		return fmt.Errorf("set servers: %w", err)
 	}
+
+	m.access.RLock()
+	defer m.access.RUnlock()
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
@@ -311,8 +314,6 @@ func remove[T comparable](slice []T, item T) []T {
 }
 
 func (m *Manager) saveServers() error {
-	m.access.RLock()
-	defer m.access.RUnlock()
 	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
 	ctx := box.BoxContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
