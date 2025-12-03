@@ -8,7 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/getlantern/dnstt"
@@ -71,6 +71,9 @@ func DNSTTConfigUpdate(ctx context.Context, configURL string, httpClient *http.C
 	slog.Debug("Updating dnstt configuration", slog.String("url", configURL))
 	source := keepcurrent.FromWebWithClient(configURL, httpClient)
 	chDB := make(chan []byte)
+	closeChan := sync.OnceFunc(func() {
+		close(chDB)
+	})
 	dest := keepcurrent.ToChannel(chDB)
 
 	runner := keepcurrent.NewWithValidator(
@@ -80,17 +83,10 @@ func DNSTTConfigUpdate(ctx context.Context, configURL string, httpClient *http.C
 	)
 
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("panicked while waiting for dnstt config",
-					slog.Any("recover", r),
-					slog.String("stack", string(debug.Stack())))
-			}
-		}()
 		for {
 			select {
 			case <-ctx.Done():
-				close(chDB)
+				closeChan()
 				return
 			case data, ok := <-chDB:
 				if !ok {
