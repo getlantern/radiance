@@ -63,7 +63,7 @@ func dnsttConfigValidator() func([]byte) error {
 
 func DNSTTConfigUpdate(ctx context.Context, configURL string, httpClient *http.Client, pollInterval time.Duration) {
 	if configURL == "" {
-		slog.Debug("No config URL provided -- not updating fronting configuration")
+		slog.Debug("No config URL provided -- not updating dnstt configuration")
 		return
 	}
 
