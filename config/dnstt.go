@@ -34,7 +34,7 @@ func processYaml(gzippedYaml []byte) (dnsttConfig, error) {
 	if err != nil {
 		return dnsttConfig{}, fmt.Errorf("failed to read gzipped file: %w", err)
 	}
-	path, err := yaml.PathString("$.dsntt")
+	path, err := yaml.PathString("$.dnstt")
 	if err != nil {
 		return dnsttConfig{}, fmt.Errorf("failed to create config path: %w", err)
 	}
