@@ -5,6 +5,7 @@ package radiance
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"path/filepath"
