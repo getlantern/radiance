@@ -4,38 +4,25 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
-	"sync"
 	"time"
 
 	"github.com/getlantern/amp"
-	"github.com/getlantern/kindling"
-	"github.com/getlantern/radiance/traces"
 )
 
+// NewAMPClient creates a new AMP (Accelerated Mobile Pages) client for domain fronting.
+// It initializes the client with the provided context, log writer, and public key for verification.
+// The client automatically fetches and updates its configuration from a remote URL in the background.
+// The context parameter controls the lifecycle of background configuration updates.
+//   - ctx: Used to manage the lifecycle of background configuration updates.
+//   - logWriter: Writer for logging transport and client activity.
+//   - publicKey: Public key used to verify configuration signatures.
+//
+// Returns an initialized amp.Client or an error if setup fails.
 func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (amp.Client, error) {
 	configURL := "https://raw.githubusercontent.com/getlantern/radiance/main/config/amp.yml.gz"
-	u, err := url.Parse(configURL)
+	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, configURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
-	}
-	domain := u.Host
-	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
-	}
-	lz := &lazyDialingRoundTripper{
-		smartTransportMu: sync.Mutex{},
-		logWriter:        logWriter,
-		domain:           domain,
-	}
-	if trans != nil {
-		lz.smartTransport = trans
-	}
-
-	httpClient := &http.Client{
-		Transport: traces.NewRoundTripper(lz),
+		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
 	}
 
 	ampClient, err := amp.NewClientWithConfig(ctx,
