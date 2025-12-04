@@ -79,6 +79,9 @@ type Options struct {
 	LogLevel string
 }
 
+//go:embed assets/amp_public_key.pem
+var ampPublicKey string
+
 // NewRadiance creates a new Radiance VPN client. opts includes the platform interface used to
 // interact with the underlying platform on iOS, Android, and MacOS. On other platforms, it is
 // ignored and can be nil.
@@ -108,11 +111,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	dataDir := common.DataPath()
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), &slogWriter{Logger: slog.Default()})
+	kindlingLogger := &slogWriter{Logger: slog.Default()}
+	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), kindlingLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 
+	updaterCtx, cancel := context.WithCancel(context.Background())
 	dnsTunnel, err := dnstt.NewDNSTT(
 		dnstt.WithTunnelDomain("t.iantem.io"),
 		dnstt.WithDoH("https://cloudflare-dns.com/dns-query"),
@@ -122,13 +127,19 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to build dns tunnel: %w", err)
 	}
 
+	ampClient, err := fronted.NewAMPClient(updaterCtx, kindlingLogger, ampPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build amp client: %w", err)
+	}
+
 	k := kindling.NewKindling(
 		"radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
+		kindling.WithLogWriter(kindlingLogger),
 		kindling.WithDomainFronting(f),
 		kindling.WithProxyless("df.iantem.io"),
 		kindling.WithDNSTunnel(dnsTunnel),
+		kindling.WithAMPCache(ampClient),
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
@@ -140,8 +151,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		k.ReplaceRoundTripGenerator("dnstt", e.New.NewRoundTripper)
 		k.NewHTTPClient()
 	})
-	dnsttUpdaterCtx, cancel := context.WithCancel(context.Background())
-	config.DNSTTConfigUpdate(dnsttUpdaterCtx, "https://raw.githubusercontent.com/getlantern/radiance/main/config/dnstt.yml.gz", httpClientWithTimeout, 12*time.Hour)
+	config.DNSTTConfigUpdate(updaterCtx, "https://raw.githubusercontent.com/getlantern/radiance/main/config/dnstt.yml.gz", httpClientWithTimeout, 12*time.Hour)
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
