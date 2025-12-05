@@ -32,8 +32,13 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (a
 		amp.Config{
 			BrokerURL: "https://amp.iantem.io",
 			CacheURL:  "https://cdn.ampproject.org",
-			Fronts:    []string{"google.com", "youtube.com", "photos.google.com"},
 			PublicKey: publicKey,
+			Fronts: []string{
+				"google.com",
+				"youtube.com",
+				"photos.google.com",
+				"gmail.com",
+			},
 		},
 		amp.WithConfigURL(configURL),
 		amp.WithHTTPClient(httpClient),
