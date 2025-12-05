@@ -18,33 +18,14 @@ import (
 const tracerName = "github.com/getlantern/radiance/fronted"
 
 func NewFronted(panicListener func(string), cacheFile string, logWriter io.Writer) (fronted.Fronted, error) {
-	// Parse the domain from the URL.
 	configURL := "https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz"
-	u, err := url.Parse(configURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
-	}
-	// Extract the domain from the URL.
-	domain := u.Host
-
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.
-	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
+	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, configURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
-	}
-	lz := &lazyDialingRoundTripper{
-		smartTransportMu: sync.Mutex{},
-		logWriter:        logWriter,
-		domain:           domain,
-	}
-	if trans != nil {
-		lz.smartTransport = trans
+		return nil, fmt.Errorf("failed to build http client with smart HTTP transport: %w", err)
 	}
 
-	httpClient := &http.Client{
-		Transport: traces.NewRoundTripper(lz),
-	}
 	fronted.SetLogger(slog.Default())
 	return fronted.NewFronted(
 		fronted.WithPanicListener(panicListener),
@@ -52,6 +33,29 @@ func NewFronted(panicListener func(string), cacheFile string, logWriter io.Write
 		fronted.WithHTTPClient(httpClient),
 		fronted.WithConfigURL(configURL),
 	), nil
+}
+
+func newHTTPClientWithSmartTRansport(logWriter io.Writer, address string) (*http.Client, error) {
+	// Parse the domain from the URL.
+	u, err := url.Parse(address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %v", err)
+	}
+
+	// Extract the domain from the URL.
+	domain := u.Host
+	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
+	}
+	lz := &lazyDialingRoundTripper{
+		smartTransportMu: sync.Mutex{},
+		logWriter:        logWriter,
+		domain:           domain}
+	if trans != nil {
+		lz.smartTransport = trans
+	}
+	return &http.Client{Transport: traces.NewRoundTripper(lz)}, nil
 }
 
 // This is a lazy RoundTripper that allows radiance to start without an error

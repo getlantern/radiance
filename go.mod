@@ -17,6 +17,7 @@ replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/getlantern/amp v0.0.0-20251205131102-73f71f77fc4b
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20251018002705-bb54703a7fcb
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
@@ -27,7 +28,7 @@ require (
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
-	github.com/goccy/go-yaml v1.18.0
+	github.com/goccy/go-yaml v1.19.0
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.6.10
 	github.com/sagernet/sing-box v1.11.5
@@ -81,7 +82,6 @@ require (
 	github.com/flynn/noise v1.0.1-0.20220214164934-d803f5c4b0f4 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
-	github.com/getlantern/amp v0.0.0-20250917190847-6c24707a68c7 // indirect
 	github.com/getlantern/errors v1.0.4 // indirect
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20250331153903-07abebe611e8 // indirect
@@ -142,7 +142,7 @@ require (
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	modernc.org/libc v1.22.3 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
@@ -235,14 +235,14 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.42.0
+	golang.org/x/crypto v0.45.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
-	golang.org/x/mod v0.27.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.36.0
+	golang.org/x/mod v0.29.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0
 	golang.org/x/time v0.7.0 // indirect
-	golang.org/x/tools v0.36.0 // indirect
+	golang.org/x/tools v0.38.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0
