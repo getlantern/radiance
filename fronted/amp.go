@@ -2,8 +2,11 @@ package fronted
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/getlantern/amp"
@@ -34,7 +37,18 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (a
 		},
 		amp.WithConfigURL(configURL),
 		amp.WithHTTPClient(httpClient),
-		amp.WithPollInterval(12*time.Hour))
+		amp.WithPollInterval(12*time.Hour),
+		amp.WithDialer(func(network, address string) (net.Conn, error) {
+			addressWithPort := address
+			// if address doesn't contain a port, by default use :443
+			if !strings.Contains(addressWithPort, ":") {
+				addressWithPort = fmt.Sprintf("%s:443", address)
+			}
+			return tls.Dial("tcp", addressWithPort, &tls.Config{
+				ServerName: address,
+			})
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build amp client: %w", err)
 	}
