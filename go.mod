@@ -2,11 +2,11 @@ module github.com/getlantern/radiance
 
 go 1.25.1
 
-replace github.com/sagernet/sing => github.com/getlantern/sing v0.6.13-0.20251205174047-e00a702507ae
+replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.14-0.20251205174047-e00a702507ae
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.11.16-lantern.0.20251205011046-be268b083378
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.12.13-0.20251205011046-be268b083378
 
-replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.5-amnezia.0.20251205211434-fa87bd554827
+replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251205211434-fa87bd554827
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
