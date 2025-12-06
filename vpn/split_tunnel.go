@@ -18,6 +18,7 @@ import (
 	"github.com/sagernet/sing/common/json"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/internal"
 )
 
@@ -295,7 +296,7 @@ func (s *SplitTunnel) saveToFile() error {
 	if err != nil {
 		return fmt.Errorf("marshalling rule set: %w", err)
 	}
-	if err := os.WriteFile(s.ruleFile, buf, 0644); err != nil {
+	if err := atomicfile.WriteFile(s.ruleFile, buf, 0644); err != nil {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
 	return nil
@@ -309,7 +310,7 @@ func isEmptyRule(rule O.DefaultHeadlessRule) bool {
 }
 
 func (s *SplitTunnel) loadRule() error {
-	content, err := os.ReadFile(s.ruleFile)
+	content, err := atomicfile.ReadFile(s.ruleFile)
 	// the file should exist at this point, so we don't need to check for fs.ErrNotExist
 	if err != nil {
 		return fmt.Errorf("reading rule file %s: %w", s.ruleFile, err)

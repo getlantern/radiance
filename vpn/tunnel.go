@@ -75,7 +75,7 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	t := &tunnel{}
 	t.status.Store(ipc.StatusInitializing)
 
-	t.ctx, t.cancel = context.WithCancel(box.BoxContext())
+	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
 	if err := t.init(opts, dataPath, platIfce); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
@@ -325,7 +325,7 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
 	}
-	svrs, err := json.UnmarshalExtendedContext[servers.Servers](box.BoxContext(), content)
+	svrs, err := json.UnmarshalExtendedContext[servers.Servers](box.BaseContext(), content)
 	if err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
@@ -473,7 +473,7 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 
 func removeDuplicates(curr map[string][]byte, new servers.Options, group string) servers.Options {
 	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
-	ctx := box.BoxContext()
+	ctx := box.BaseContext()
 	deduped := servers.Options{
 		Outbounds: []O.Outbound{},
 		Endpoints: []O.Endpoint{},

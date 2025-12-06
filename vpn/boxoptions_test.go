@@ -141,7 +141,7 @@ func testBoxOptions(tmpPath string) (*option.Options, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	opts, err := json.UnmarshalExtendedContext[option.Options](box.BoxContext(), content)
+	opts, err := json.UnmarshalExtendedContext[option.Options](box.BaseContext(), content)
 	if err != nil {
 		return nil, "", err
 	}

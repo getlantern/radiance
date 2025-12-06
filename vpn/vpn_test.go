@@ -132,7 +132,7 @@ func TestAutoServerSelections(t *testing.T) {
 		User:    "http2-out",
 		AutoAll: "socks1-out",
 	}
-	ctx := box.BoxContext()
+	ctx := box.BaseContext()
 	service.MustRegister[adapter.OutboundManager](ctx, mgr)
 	m := &mockService{
 		ctx:    ctx,
@@ -206,7 +206,7 @@ func setupVpnTest(t *testing.T) *mockService {
 	_, boxOpts, err := testBoxOptions(path)
 	require.NoError(t, err, "failed to load test box options")
 
-	ctx := box.BoxContext()
+	ctx := box.BaseContext()
 
 	lb, err := libbox.NewServiceWithContext(ctx, boxOpts, nil)
 	require.NoError(t, err)
