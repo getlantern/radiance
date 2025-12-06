@@ -220,7 +220,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BoxContext(), resp)
+	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BaseContext(), resp)
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
@@ -347,7 +347,7 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
-	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BoxContext(), tmp.ConfigResponse)
+	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BaseContext(), tmp.ConfigResponse)
 	if err != nil {
 		return nil, err
 	}
