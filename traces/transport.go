@@ -3,8 +3,10 @@ package traces
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/http/httptrace"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -48,4 +50,55 @@ func httpTrace(ctx context.Context) *httptrace.ClientTrace {
 			RecordError(ctx, err)
 		},
 	}
+}
+
+type headerAnnotatingRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	span := trace.SpanFromContext(ctx)
+
+	if span != nil {
+		for k, v := range req.Header {
+			headerName := strings.ToLower(k)
+			if isSensitiveHeader(headerName) {
+				if len(v) > 0 && len(v[0]) > 5 {
+					span.SetAttributes(
+						attribute.StringSlice(fmt.Sprintf("http.request.header.%s", headerName), []string{fmt.Sprintf("%s...", v[0][0:4])}),
+					)
+				} else {
+					span.SetAttributes(
+						attribute.StringSlice(fmt.Sprintf("http.request.header.%s", headerName), []string{"REDACTED"}),
+					)
+				}
+			} else {
+				span.SetAttributes(
+					attribute.StringSlice(fmt.Sprintf("http.request.header.%s", headerName), v),
+				)
+			}
+		}
+	}
+
+	return h.next.RoundTrip(req)
+}
+
+func isSensitiveHeader(header string) bool {
+	switch header {
+	case "authorization", "x-lantern-pro-token":
+		return true
+	default:
+		return false
+	}
+}
+
+// NewHeaderAnnotatingRoundTripper reads the request headers during the roundtrip
+// operation and adds the information as attributes. Please be aware that
+// requests must have a context otherwise the info won't be added.
+func NewHeaderAnnotatingRoundTripper(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return &headerAnnotatingRoundTripper{next: base}
 }
