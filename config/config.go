@@ -29,6 +29,7 @@ import (
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -321,7 +322,7 @@ func (ch *ConfigHandler) Stop() {
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
 	slog.Debug("reading config file")
-	buf, err := os.ReadFile(ch.configPath)
+	buf, err := atomicfile.ReadFile(ch.configPath)
 	slog.Debug("config file read")
 	if os.IsNotExist(err) { // no config file
 		return nil
@@ -366,7 +367,7 @@ func saveConfig(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-	return os.WriteFile(path, buf, 0644)
+	return atomicfile.WriteFile(path, buf, 0644)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.

@@ -25,6 +25,7 @@ import (
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 
@@ -306,11 +307,11 @@ func (m *Manager) saveServers() error {
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
-	return os.WriteFile(m.serversFile, buf, 0644)
+	return atomicfile.WriteFile(m.serversFile, buf, 0644)
 }
 
 func (m *Manager) loadServers() error {
-	buf, err := os.ReadFile(m.serversFile)
+	buf, err := atomicfile.ReadFile(m.serversFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // file doesn't exist
 	}
