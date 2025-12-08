@@ -29,7 +29,7 @@ require (
 	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
 	github.com/getlantern/kindling v0.0.0-20251203201459-d8a38e5f1f1c
-	github.com/getlantern/lantern-box v0.0.6-0.20251206000008-ccedce04660a
+	github.com/getlantern/lantern-box v0.0.6-0.20251208211701-898d46ca0fa9
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
@@ -106,7 +106,6 @@ require (
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
 	github.com/go-llsqlite/crawshaw v0.4.0 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
-	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/snappy v0.0.4 // indirect
