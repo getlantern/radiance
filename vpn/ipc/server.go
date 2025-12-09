@@ -55,7 +55,7 @@ type StatusUpdateEvent struct {
 
 type VPNStatus string
 
-// Possible VNP statuses
+// Possible VPN statuses
 const (
 	connected     VPNStatus = "connected"
 	disconnected  VPNStatus = "disconnected"
