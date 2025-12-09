@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -38,33 +39,40 @@ type StartFn func(ctx context.Context, group, tag string) (Service, error)
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr     *http.Server
-	service Service
-
-	router  chi.Router
-	startFn StartFn
-
-	mutex sync.RWMutex
-
-	vpnStatusListeners []func(status string)
-	vpnStatus          atomic.Value // string
+	svr       *http.Server
+	service   Service
+	router    chi.Router
+	startFn   StartFn
+	mutex     sync.RWMutex
+	vpnStatus atomic.Value // string
 }
+
+// StatusUpdateEvent is emitted when the VPN status changes.
+type StatusUpdateEvent struct {
+	events.Event
+	Status VPNStatus
+}
+
+type VPNStatus string
 
 // Possible VNP statuses
 const (
-	connected     = "connected"
-	disconnected  = "disconnected"
-	connecting    = "connecting"
-	disconnecting = "disconnecting"
-	errorStatus   = "error"
+	connected     VPNStatus = "connected"
+	disconnected  VPNStatus = "disconnected"
+	connecting    VPNStatus = "connecting"
+	disconnecting VPNStatus = "disconnecting"
+	errorStatus   VPNStatus = "error"
 )
+
+func (vpn *VPNStatus) String() string {
+	return string(*vpn)
+}
 
 // NewServer creates a new Server instance with the provided Service.
 func NewServer(service Service) *Server {
 	s := &Server{
-		service:            service,
-		router:             chi.NewMux(),
-		vpnStatusListeners: make([]func(status string), 0),
+		service: service,
+		router:  chi.NewMux(),
 	}
 	s.vpnStatus.Store(disconnected)
 	s.router.Use(log, tracer)
@@ -225,22 +233,9 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (s *Server) setVPNStatus(status string) {
+func (s *Server) setVPNStatus(status VPNStatus) {
 	s.vpnStatus.Store(status)
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	for _, listener := range s.vpnStatusListeners {
-		go listener(status)
-	}
-}
-
-func (s *Server) AddVPNStatusListener(listener func(status string)) {
-	slog.Info("Adding VPN status listener")
-	// Add the listener func to the slice of listeners
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.vpnStatusListeners = append(s.vpnStatusListeners, listener)
-	listener(s.vpnStatus.Load().(string))
+	events.Emit(StatusUpdateEvent{Status: status})
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the
