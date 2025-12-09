@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -44,11 +45,28 @@ type Server struct {
 	startFn StartFn
 
 	mutex sync.RWMutex
+
+	vpnStatusListeners []func(status string)
+	vpnStatus          atomic.Value // string
 }
+
+// Possible VNP statuses
+const (
+	connected     = "connected"
+	disconnected  = "disconnected"
+	connecting    = "connecting"
+	disconnecting = "disconnecting"
+	errorStatus   = "error"
+)
 
 // NewServer creates a new Server instance with the provided Service.
 func NewServer(service Service) *Server {
-	s := &Server{service: service, router: chi.NewMux()}
+	s := &Server{
+		service:            service,
+		router:             chi.NewMux(),
+		vpnStatusListeners: make([]func(status string), 0),
+	}
+	s.vpnStatus.Store(disconnected)
 	s.router.Use(log, tracer)
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -152,10 +170,13 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
+	s.setVPNStatus(connecting)
 	svc, err := s.startFn(ctx, group, tag)
 	if err != nil {
+		s.setVPNStatus(errorStatus)
 		return fmt.Errorf("error starting service: %w", err)
 	}
+	s.setVPNStatus(connected)
 	s.SetService(svc)
 	return nil
 }
@@ -172,6 +193,8 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StopService(ctx context.Context) error {
+	s.setVPNStatus(disconnecting)
+	defer s.setVPNStatus(disconnected)
 	svc := s.SetService(&closedService{})
 	if svc != nil {
 		if err := svc.Close(); err != nil {
@@ -182,8 +205,9 @@ func (s *Server) StopService(ctx context.Context) error {
 }
 
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
-	service := s.SetService(&closedService{})
-	if err := service.Close(); err != nil {
+	slog.Info("Received request to close service via IPC")
+	svc := s.SetService(&closedService{})
+	if err := svc.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -199,6 +223,24 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 			traces.RecordError(context.Background(), err)
 		}
 	}()
+}
+
+func (s *Server) setVPNStatus(status string) {
+	s.vpnStatus.Store(status)
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	for _, listener := range s.vpnStatusListeners {
+		go listener(status)
+	}
+}
+
+func (s *Server) AddVPNStatusListener(listener func(status string)) {
+	slog.Info("Adding VPN status listener")
+	// Add the listener func to the slice of listeners
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.vpnStatusListeners = append(s.vpnStatusListeners, listener)
+	listener(s.vpnStatus.Load().(string))
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the
