@@ -2,11 +2,11 @@ module github.com/getlantern/radiance
 
 go 1.25.1
 
-replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.14-0.20251205174047-e00a702507ae
+replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.14-0.20251208213946-adbf4abe8692
 
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.12.13-0.20251205011046-be268b083378
 
-replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251205211434-fa87bd554827
+replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
@@ -30,14 +30,14 @@ require (
 	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
 	github.com/getlantern/kindling v0.0.0-20251203201459-d8a38e5f1f1c
-	github.com/getlantern/lantern-box v0.0.6-0.20251208211701-898d46ca0fa9
+	github.com/getlantern/lantern-box v0.0.6-0.20251209160042-946bd6638382
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.7.13
-	github.com/sagernet/sing-box v1.11.5
+	github.com/sagernet/sing-box v1.12.12
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.37.0
