@@ -136,10 +136,10 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 		BasePath: dataPath,
 		TempPath: filepath.Join(dataPath, "temp"),
 	}
-	switch common.Platform {
-	case "windows":
+	if !common.IsWindows() {
 		setupOpts.WorkingPath = dataPath
-	case "android":
+	}
+	if common.Platform == "android" {
 		setupOpts.FixAndroidStack = true
 	}
 
