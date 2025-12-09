@@ -133,15 +133,17 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 
 	// setup libbox service
 	setupOpts := &libbox.SetupOptions{
-		BasePath:    dataPath,
-		WorkingPath: dataPath,
-		TempPath:    filepath.Join(dataPath, "temp"),
+		BasePath: dataPath,
+		TempPath: filepath.Join(dataPath, "temp"),
+	}
+	if !common.IsWindows() {
+		setupOpts.WorkingPath = dataPath
 	}
 	if common.Platform == "android" {
 		setupOpts.FixAndroidStack = true
 	}
-	slog.Log(nil, internal.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
 
+	slog.Log(nil, internal.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
