@@ -56,14 +56,6 @@ func baseOpts(basePath string) O.Options {
 		slog.Info("Wrote inline direct rule set to file", "path", directPath)
 	}
 
-	// For whatever reason, sing-box seems to append the path to the base path on Windows, so we
-	// just use the file names directly.
-	if common.IsWindows() {
-		splitTunnelPath = splitTunnelFile
-		directPath = directFile
-		slog.Info("Adjusted split tunnel and direct paths for Windows", "splitTunnelPath", splitTunnelPath, "directPath", directPath)
-	}
-
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
