@@ -10,7 +10,7 @@ const (
 
 	// Placeholders to use in the request headers.
 	ClientVersion = "9.0.0"
-	Version       = "9.0.0"
+	Version       = "9.0.1"
 
 	Platform = runtime.GOOS
 
