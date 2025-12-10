@@ -19,7 +19,7 @@ const (
 	LogPath                        Key = "RADIANCE_LOG_PATH"
 	DataPath                       Key = "RADIANCE_DATA_PATH"
 	WaterWASMStorageDir            Key = "RADIANCE_WATER_WASM_STORAGE_DIR"
-	WaterWazeroCompilationCacheDir Key = "RADIANCE_WAZERO_COMPLIATION_CACHE_DIR"
+	WaterWazeroCompilationCacheDir Key = "RADIANCE_WAZERO_COMPILATION_CACHE_DIR"
 	DisableFetch                   Key = "RADIANCE_DISABLE_FETCH_CONFIG"
 	PrintCurl                      Key = "RADIANCE_PRINT_CURL"
 	DisableStdout                  Key = "RADIANCE_DISABLE_STDOUT_LOG"
