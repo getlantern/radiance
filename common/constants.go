@@ -6,11 +6,8 @@ import (
 )
 
 const (
-	Name = "lantern"
-
-	// Placeholders to use in the request headers.
-	ClientVersion = "9.0.0"
-	Version       = "9.0.1"
+	Name    = "lantern"
+	Version = "9.0.1"
 
 	Platform = runtime.GOOS
 
@@ -20,3 +17,5 @@ const (
 	ServersFileName    = "servers.json"
 	DefaultHTTPTimeout = (60 * time.Second)
 )
+
+var AppVersion = Version
