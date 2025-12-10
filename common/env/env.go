@@ -15,13 +15,15 @@ import (
 type Key = string
 
 const (
-	LogLevel      Key = "RADIANCE_LOG_LEVEL"
-	LogPath       Key = "RADIANCE_LOG_PATH"
-	DataPath      Key = "RADIANCE_DATA_PATH"
-	DisableFetch  Key = "RADIANCE_DISABLE_FETCH_CONFIG"
-	PrintCurl     Key = "RADIANCE_PRINT_CURL"
-	DisableStdout Key = "RADIANCE_DISABLE_STDOUT_LOG"
-	ENV           Key = "RADIANCE_ENV"
+	LogLevel                       Key = "RADIANCE_LOG_LEVEL"
+	LogPath                        Key = "RADIANCE_LOG_PATH"
+	DataPath                       Key = "RADIANCE_DATA_PATH"
+	WaterWASMStorageDir            Key = "RADIANCE_WATER_WASM_STORAGE_DIR"
+	WaterWazeroCompilationCacheDir Key = "RADIANCE_WAZERO_COMPLIATION_CACHE_DIR"
+	DisableFetch                   Key = "RADIANCE_DISABLE_FETCH_CONFIG"
+	PrintCurl                      Key = "RADIANCE_PRINT_CURL"
+	DisableStdout                  Key = "RADIANCE_DISABLE_STDOUT_LOG"
+	ENV                            Key = "RADIANCE_ENV"
 
 	Testing Key = "RADIANCE_TESTING"
 )
@@ -31,6 +33,8 @@ var (
 		LogLevel,
 		LogPath,
 		DataPath,
+		WaterWASMStorageDir,
+		WaterWazeroCompilationCacheDir,
 		DisableFetch,
 		PrintCurl,
 		DisableStdout,

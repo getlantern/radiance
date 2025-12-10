@@ -73,11 +73,9 @@ type Radiance struct {
 }
 
 type Options struct {
-	DataDir  string
-	LogDir   string
+	common.Options
 	Locale   string
 	DeviceID string
-	LogLevel string
 }
 
 //go:embed assets/amp_public_key.pem
@@ -107,7 +105,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	shutdownFuncs := []func(context.Context) error{}
-	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
+	if err := common.Init(opts.Options); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 

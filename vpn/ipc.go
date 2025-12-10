@@ -41,7 +41,7 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Se
 		}
 		// Initialize common package if not already done.
 		if path == "" {
-			if err := common.Init("", "", "debug"); err != nil {
+			if err := common.Init(common.Options{LogLevel: "debug"}); err != nil {
 				slog.Error("Failed to initialize common package", "error", err)
 				return nil, fmt.Errorf("initialize common package: %w", err)
 			}
