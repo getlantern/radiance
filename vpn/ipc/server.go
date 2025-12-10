@@ -57,11 +57,11 @@ type VPNStatus string
 
 // Possible VPN statuses
 const (
-	connected     VPNStatus = "connected"
-	disconnected  VPNStatus = "disconnected"
-	connecting    VPNStatus = "connecting"
-	disconnecting VPNStatus = "disconnecting"
-	errorStatus   VPNStatus = "error"
+	Connected     VPNStatus = "connected"
+	Disconnected  VPNStatus = "disconnected"
+	Connecting    VPNStatus = "connecting"
+	Disconnecting VPNStatus = "disconnecting"
+	ErrorStatus   VPNStatus = "error"
 )
 
 func (vpn *VPNStatus) String() string {
@@ -74,7 +74,7 @@ func NewServer(service Service) *Server {
 		service: service,
 		router:  chi.NewMux(),
 	}
-	s.vpnStatus.Store(disconnected)
+	s.vpnStatus.Store(Disconnected)
 	s.router.Use(log, tracer)
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -178,13 +178,12 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
-	s.setVPNStatus(connecting)
 	svc, err := s.startFn(ctx, group, tag)
 	if err != nil {
-		s.setVPNStatus(errorStatus)
+		s.setVPNStatus(ErrorStatus)
 		return fmt.Errorf("error starting service: %w", err)
 	}
-	s.setVPNStatus(connected)
+	s.setVPNStatus(Connected)
 	s.SetService(svc)
 	return nil
 }
@@ -201,8 +200,7 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StopService(ctx context.Context) error {
-	s.setVPNStatus(disconnecting)
-	defer s.setVPNStatus(disconnected)
+	defer s.setVPNStatus(Disconnected)
 	svc := s.SetService(&closedService{})
 	if svc != nil {
 		if err := svc.Close(); err != nil {
