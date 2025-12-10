@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -13,8 +14,10 @@ func TestNewRadiance(t *testing.T) {
 	t.Run("it should create a new Radiance instance successfully", func(t *testing.T) {
 		dir := t.TempDir()
 		r, err := NewRadiance(Options{
-			DataDir: dir,
-			Locale:  "en-US",
+			Options: common.Options{
+				DataDir: dir,
+			},
+			Locale: "en-US",
 		})
 		assert.NoError(t, err)
 		defer r.Close()
