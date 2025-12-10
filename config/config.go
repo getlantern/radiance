@@ -234,6 +234,8 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
+
+	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
 		cfg := ch.config.Load().(*Config).ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
@@ -294,6 +296,20 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 		}
 	}
 	return nil
+}
+
+func setCustomProtocolOptions(outbounds []option.Outbound) {
+	for _, outbound := range outbounds {
+		switch opts := outbound.Options.(type) {
+		case *lbO.WATEROutboundOptions:
+			opts.WASMStorageDir = common.WaterWASMDir()
+			opts.WazeroCompilationCacheDir = common.WaterWazeroCompilationDir()
+			// TODO: we need to measure the client upload and download metrics
+			// in order to set hysteria custom parameters and support brutal sender
+			// as congestion control
+		default:
+		}
+	}
 }
 
 // fetchLoop fetches the configuration every pollInterval.
