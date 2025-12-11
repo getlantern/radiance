@@ -11,7 +11,6 @@ import (
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/traces"
 )
 
 const tracerName = "github.com/getlantern/radiance/api"
@@ -29,8 +28,6 @@ type APIClient struct {
 }
 
 func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
-	httpClient.Transport = traces.NewRoundTripper(httpClient.Transport)
-
 	userData, err := userInfo.GetData()
 	if err != nil {
 		slog.Warn("failed to get user data", "error", err)

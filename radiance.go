@@ -144,13 +144,19 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
+	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
 	events.Subscribe(func(e config.NewDNSTTConfigEvent) {
 		slog.Info("updating kindling with latest dnstt config")
 		// replacing dnstt roundtripper and making http client replace transports
 		k.ReplaceRoundTripGenerator("dnstt", e.New.NewRoundTripper)
+		// kindling maintains an internal reference to the HTTP client, and calling NewHTTPClient()
+		// updates the internal transport used by the shared HTTP client pointer. This ensures that
+		// all packages using the shared HTTP client get the updated transport after replacing the round tripper.
 		k.NewHTTPClient()
+		// kindling replaces the transport by the race transport and we need to add the trace roundtripper again
+		httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
 	})
 	config.DNSTTConfigUpdate(updaterCtx, "https://raw.githubusercontent.com/getlantern/radiance/main/config/dnstt.yml.gz", httpClientWithTimeout, 12*time.Hour)
 
