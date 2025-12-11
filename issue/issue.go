@@ -156,10 +156,10 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 			Name:    "logs.zip",
 			Content: buf.Bytes(),
 		})
+		slog.Debug("log files zipped for issue report", "size", len(buf.Bytes()))
 	} else {
 		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxUncompressedLogSize)
 	}
-	slog.Debug("log files zipped for issue report", "size", len(buf.Bytes()))
 
 	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
