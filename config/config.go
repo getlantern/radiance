@@ -32,7 +32,6 @@ import (
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/traces"
 )
 
 var (
@@ -86,7 +85,6 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
-	options.HTTPClient.Transport = traces.NewHeaderAnnotatingRoundTripper(options.HTTPClient.Transport)
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ch := &ConfigHandler{
 		config:        atomic.Value{},
