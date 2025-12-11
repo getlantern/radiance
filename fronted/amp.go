@@ -45,7 +45,7 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (a
 		amp.WithPollInterval(12*time.Hour),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
 			serverName, _, semicolonExists := strings.Cut(address, ":")
-			var addressWithPort string
+			addressWithPort := address
 			// if address doesn't contain a port, by default use :443
 			if !semicolonExists {
 				addressWithPort = fmt.Sprintf("%s:443", serverName)
