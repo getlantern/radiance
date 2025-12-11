@@ -29,7 +29,7 @@ require (
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
 	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
-	github.com/getlantern/kindling v0.0.0-20251211184936-0cc23de3fceb
+	github.com/getlantern/kindling v0.0.0-20251211201728-7d71057ef4ea
 	github.com/getlantern/lantern-box v0.0.6-0.20251209160042-946bd6638382
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
