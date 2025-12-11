@@ -42,7 +42,6 @@ func NewIssueReporter(
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
-	httpClient.Transport = traces.NewRoundTripper(httpClient.Transport)
 	return &IssueReporter{
 		httpClient: httpClient,
 		userConfig: userConfig,

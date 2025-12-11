@@ -86,9 +86,7 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
-	options.HTTPClient.Transport = traces.NewRoundTripper(
-		traces.NewHeaderAnnotatingRoundTripper(options.HTTPClient.Transport),
-	)
+	options.HTTPClient.Transport = traces.NewHeaderAnnotatingRoundTripper(options.HTTPClient.Transport)
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ch := &ConfigHandler{
 		config:        atomic.Value{},
