@@ -44,13 +44,14 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (a
 		amp.WithHTTPClient(httpClient),
 		amp.WithPollInterval(12*time.Hour),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
-			addressWithPort := address
+			serverName, _, semicolonExists := strings.Cut(address, ":")
+			var addressWithPort string
 			// if address doesn't contain a port, by default use :443
-			if !strings.Contains(addressWithPort, ":") {
-				addressWithPort = fmt.Sprintf("%s:443", address)
+			if !semicolonExists {
+				addressWithPort = fmt.Sprintf("%s:443", serverName)
 			}
 			return tls.Dial("tcp", addressWithPort, &tls.Config{
-				ServerName: address,
+				ServerName: serverName,
 			})
 		}),
 	)
