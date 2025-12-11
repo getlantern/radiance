@@ -151,7 +151,9 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Info("updating kindling with latest dnstt config")
 		// replacing dnstt roundtripper and making http client replace transports
 		k.ReplaceRoundTripGenerator("dnstt", e.New.NewRoundTripper)
-		// since we're using a http client pointer for all other packages, we need to re-create the race transport
+		// kindling maintains an internal reference to the HTTP client, and calling NewHTTPClient()
+		// updates the internal transport used by the shared HTTP client pointer. This ensures that
+		// all packages using the shared HTTP client get the updated transport after replacing the round tripper.
 		k.NewHTTPClient()
 		// kindling replaces the transport by the race transport and we ned to add the trace roundtripper again
 		httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
