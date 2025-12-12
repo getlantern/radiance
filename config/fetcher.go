@@ -68,7 +68,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	defer span.End()
 	// If we don't have a user ID or token, create a new user.
 	if err := f.ensureUser(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating user: %w", err)
 	}
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
