@@ -27,14 +27,18 @@ var (
 	initMutex   sync.Mutex
 	initialized bool
 
-	dataPath atomic.Value
-	logPath  atomic.Value
+	dataPath                       atomic.Value
+	logPath                        atomic.Value
+	waterWASMStorageDir            atomic.Value
+	waterWazeroCompilationCacheDir atomic.Value
 )
 
 func init() {
 	// ensure dataPath and logPath are of type string
 	dataPath.Store("")
 	logPath.Store("")
+	waterWASMStorageDir.Store("")
+	waterWazeroCompilationCacheDir.Store("")
 
 	if v, _ := env.Get[bool](env.Testing); v {
 		slog.SetLogLoggerLevel(internal.Disable)
@@ -55,9 +59,17 @@ func Dev() bool {
 	return e == "development" || e == "dev"
 }
 
+type Options struct {
+	DataDir                        string
+	LogDir                         string
+	LogLevel                       string
+	WaterWASMStorageDir            string
+	WaterWazeroCompilationCacheDir string
+}
+
 // Init initializes the common components of the application. This includes setting up the directories
 // for data and logs, initializing the logger, and setting up reporting.
-func Init(dataDir, logDir, logLevel string) error {
+func Init(options Options) error {
 	slog.Info("Initializing common package")
 	initMutex.Lock()
 	defer initMutex.Unlock()
@@ -66,12 +78,12 @@ func Init(dataDir, logDir, logLevel string) error {
 	}
 
 	reporting.Init(Version)
-	err := setupDirectories(dataDir, logDir)
+	err := setupDirectories(options)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	err = initLogger(filepath.Join(LogPath(), LogFileName), logLevel)
+	err = initLogger(filepath.Join(LogPath(), LogFileName), options.LogLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
@@ -238,28 +250,47 @@ func isWindowsProd() bool {
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do
 // not exist. If data or logs are the empty string, it will use the user's config directory retrieved
 // from the OS. The resulting paths are stored in [dataPath] and [logPath] respectively.
-func setupDirectories(data, logs string) error {
-	if d, ok := env.Get[string](env.DataPath); ok {
-		data = d
-	} else if data == "" {
-		data = outDir("data")
+func setupDirectories(options Options) error {
+	data, err := setupDirectory(env.DataPath, options.DataDir, "data")
+	if err != nil {
+		return err
 	}
-	if l, ok := env.Get[string](env.LogPath); ok {
-		logs = l
-	} else if logs == "" {
-		logs = outDir("logs")
+
+	logs, err := setupDirectory(env.LogPath, options.LogDir, "logs")
+	if err != nil {
+		return err
 	}
-	data, _ = filepath.Abs(data)
-	logs, _ = filepath.Abs(logs)
-	for _, path := range []string{data, logs} {
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", path, err)
-		}
+
+	wasmDir, err := setupDirectory(env.WaterWASMStorageDir, options.WaterWASMStorageDir, "water_wasm_storage_dir")
+	if err != nil {
+		return err
+	}
+
+	wazeroCacheDir, err := setupDirectory(env.WaterWazeroCompilationCacheDir, options.WaterWazeroCompilationCacheDir, "water_wazero_compilation_cache_dir")
+	if err != nil {
+		return err
 	}
 
 	dataPath.Store(data)
 	logPath.Store(logs)
+	waterWASMStorageDir.Store(wasmDir)
+	waterWazeroCompilationCacheDir.Store(wazeroCacheDir)
 	return nil
+}
+
+func setupDirectory(key env.Key, v, name string) (string, error) {
+	if d, ok := env.Get[string](key); ok {
+		v = d
+	} else if v == "" {
+		v = outDir(name)
+	}
+
+	v, _ = filepath.Abs(v)
+	if err := os.MkdirAll(v, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory %s: %w", v, err)
+	}
+
+	return v, nil
 }
 
 func outDir(subdir string) string {
@@ -286,4 +317,12 @@ func DataPath() string {
 
 func LogPath() string {
 	return logPath.Load().(string)
+}
+
+func WaterWASMDir() string {
+	return waterWASMStorageDir.Load().(string)
+}
+
+func WaterWazeroCompilationDir() string {
+	return waterWazeroCompilationCacheDir.Load().(string)
 }
