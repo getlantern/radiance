@@ -196,7 +196,7 @@ func TestKindlingIntegrations(t *testing.T) {
 					"radiance",
 					kindling.WithPanicListener(reporting.PanicListener),
 					kindling.WithLogWriter(logger),
-					kindling.WithProxyless("df.iantem.io"),
+					kindling.WithProxyless("df.iantem.io", "detectportal.firefox.com"),
 				)
 
 				return k, nil
