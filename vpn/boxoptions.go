@@ -534,7 +534,7 @@ var inlineDirectRuleSet string = `
     {
       "domain_suffix": [
         "iantem.io",
-		"api.getiantem.org",
+        "api.getiantem.org",
         "a248.e.akamai.net",
         "cloudfront.net",
         "raw.githubusercontent.com"
