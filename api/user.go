@@ -451,8 +451,6 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 		Proof:    clientProof,
 	}
 
-	a.httpClientMutex.Lock()
-	defer a.httpClientMutex.Unlock()
 	return traces.RecordError(ctx, a.authClient.ChangeEmail(ctx, changeEmailRequestBody))
 }
 
