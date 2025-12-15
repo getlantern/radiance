@@ -55,7 +55,9 @@ func NewKindling(dataDir string, logger io.Writer) error {
 			kindling.WithPanicListener(reporting.PanicListener),
 			kindling.WithLogWriter(logger),
 			kindling.WithDomainFronting(f),
-			kindling.WithProxyless("df.iantem.io"),
+			// Most endpoints use df.iantem.io, but for some historical reasons
+			// "pro-server" calls still go to api.getiantem.org.
+			kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
 		)
 	}
 
