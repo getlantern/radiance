@@ -58,6 +58,10 @@ type SubscriptionResponse struct {
 func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*SubscriptionPlans, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_plans")
 	defer span.End()
+
+	ac.httpClientMutex.Lock()
+	defer ac.httpClientMutex.Unlock()
+
 	var resp SubscriptionPlans
 	params := map[string]string{
 		"locale":              ac.userInfo.Locale(),
@@ -81,6 +85,10 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*Su
 func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID string) (*SubscriptionResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_stripe_subscription")
 	defer span.End()
+
+	ac.httpClientMutex.Lock()
+	defer ac.httpClientMutex.Unlock()
+
 	data := map[string]string{
 		"email":  email,
 		"planId": planID,
@@ -102,6 +110,10 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 func (ac *APIClient) VerifySubscription(ctx context.Context, service SubscriptionService, data map[string]string) (status, subID string, err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "verify_subscription")
 	defer span.End()
+
+	ac.httpClientMutex.Lock()
+	defer ac.httpClientMutex.Unlock()
+
 	var path string
 	switch service {
 	case GoogleService:
@@ -148,6 +160,10 @@ func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error)
 func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data PaymentRedirectData) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_payment_redirect_url")
 	defer span.End()
+
+	ac.httpClientMutex.Lock()
+	defer ac.httpClientMutex.Unlock()
+
 	type response struct {
 		Redirect string
 	}
@@ -176,6 +192,10 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 func (ac *APIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectData) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "payment_redirect")
 	defer span.End()
+
+	ac.httpClientMutex.Lock()
+	defer ac.httpClientMutex.Unlock()
+
 	type response struct {
 		Redirect string
 	}
@@ -209,6 +229,10 @@ type PurchaseResponse struct {
 func (ac *APIClient) ActivationCode(ctx context.Context, email, resellerCode string) (*PurchaseResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "activation_code")
 	defer span.End()
+
+	ac.httpClientMutex.Lock()
+	defer ac.httpClientMutex.Unlock()
+
 	data := map[string]interface{}{
 		"idempotencyKey": strconv.FormatInt(time.Now().UnixNano(), 10),
 		"provider":       "reseller-code",
