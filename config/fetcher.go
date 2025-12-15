@@ -67,7 +67,9 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.fetchConfig")
 	defer span.End()
 	// If we don't have a user ID or token, create a new user.
-	f.ensureUser(ctx)
+	if err := f.ensureUser(ctx); err != nil {
+		return nil, fmt.Errorf("error creating user: %w", err)
+	}
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,
@@ -117,23 +119,25 @@ func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
 	span.SetAttributes(attribute.String("http.request.body", string(b)))
 }
 
-func (f *fetcher) ensureUser(ctx context.Context) {
+func (f *fetcher) ensureUser(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.ensureUser")
 	defer span.End()
 	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
 		if f.apiClient == nil {
 			slog.Error("API client is nil, cannot create new user")
 			span.RecordError(errors.New("API client is nil"))
-			return
+			return errors.New("API client is nil")
 		}
 		_, err := f.apiClient.NewUser(ctx)
 		if err != nil {
 			slog.Error("Failed to create new user", "error", err)
 			span.RecordError(err)
+			return fmt.Errorf("failed to create new user: %w", err)
 		} else {
 			slog.Info("Created new user")
 		}
 	}
+	return nil
 }
 
 // send sends a request to the server with the given body and returns the response.
