@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strconv"
+	sync "sync"
 	"time"
 
 	"github.com/getlantern/osversion"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
@@ -29,8 +32,9 @@ const (
 
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
-	httpClient *http.Client
-	userConfig common.UserInfo
+	httpClient      *http.Client
+	httpClientMutex sync.Mutex
+	userConfig      common.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
@@ -42,10 +46,16 @@ func NewIssueReporter(
 	if httpClient == nil {
 		return nil, fmt.Errorf("httpClient is nil")
 	}
-	return &IssueReporter{
+	reporter := &IssueReporter{
 		httpClient: httpClient,
 		userConfig: userConfig,
-	}, nil
+	}
+	events.Subscribe(func(kindling.ClientUpdated) {
+		reporter.httpClientMutex.Lock()
+		defer reporter.httpClientMutex.Unlock()
+		reporter.httpClient = kindling.HTTPClient()
+	})
+	return reporter, nil
 }
 
 func randStr(n int) string {
@@ -179,6 +189,8 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		return traces.RecordError(ctx, err)
 	}
 
+	ir.httpClientMutex.Lock()
+	defer ir.httpClientMutex.Unlock()
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
