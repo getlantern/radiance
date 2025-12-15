@@ -8,12 +8,10 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
@@ -23,9 +21,8 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/fronted"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -112,26 +109,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	dataDir := common.DataPath()
 	kindlingLogger := &slogWriter{Logger: slog.Default()}
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), kindlingLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create fronted: %w", err)
+	if err := kindling.NewKindling(dataDir, kindlingLogger); err != nil {
+		return nil, fmt.Errorf("failed to build kindling: %w", err)
 	}
 
-	k := kindling.NewKindling(
-		"radiance",
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(kindlingLogger),
-		kindling.WithDomainFronting(f),
-		kindling.WithProxyless("df.iantem.io"),
-	)
-
-	httpClientWithTimeout := k.NewHTTPClient()
-	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
-	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
-
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
+	apiHandler := api.NewAPIClient(kindling.HTTPClient(), userInfo, dataDir)
+	issueReporter, err := issue.NewIssueReporter(kindling.HTTPClient(), userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
@@ -141,7 +125,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
-		HTTPClient:   httpClientWithTimeout,
+		HTTPClient:   kindling.HTTPClient(),
 		SvrManager:   svrMgr,
 		User:         userInfo,
 		DataDir:      dataDir,
