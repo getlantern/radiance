@@ -559,8 +559,6 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 		DeviceId:  a.deviceID,
 	}
 
-	a.httpClientMutex.Lock()
-	defer a.httpClientMutex.Unlock()
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
 		return traces.RecordError(ctx, err)
 	}
