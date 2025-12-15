@@ -201,13 +201,6 @@ func (r *Radiance) Close() {
 	<-r.stopChan
 }
 
-// AddConfigListener adds a listener that is called whenever the configuration changes.
-//
-// Deprecated: Use events handler subscriptions instead.
-func (r *Radiance) AddConfigListener(onChange func()) {
-	events.Subscribe(func(evt config.NewConfigEvent) { onChange() })
-}
-
 // APIHandler returns the API handler for the Radiance client.
 func (r *Radiance) APIHandler() *api.APIClient {
 	return r.apiHandler
