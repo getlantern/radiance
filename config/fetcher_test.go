@@ -19,7 +19,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/fronted"
+	"github.com/getlantern/radiance/kindling/fronted"
 )
 
 func TestDomainFrontingFetchConfig(t *testing.T) {
