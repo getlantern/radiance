@@ -5,6 +5,8 @@ package radiance
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -188,6 +190,19 @@ func TestKindlingIntegrations(t *testing.T) {
 			dataDir := t.TempDir()
 			logDir := t.TempDir()
 			require.NoError(t, common.Init(dataDir, logDir, "TRACE"))
+			// create a txt file in log dir with random content with 1mb size
+			//  ~1MB payload
+			const size = 0.007 * 1000000
+			// Base64 inflates: 3 bytes → 4 chars
+			raw := make([]byte, size*3/4+3) // +3 to avoid truncation issues
+
+			_, err := rand.Read(raw)
+			require.NoError(t, err)
+
+			s := base64.RawURLEncoding.EncodeToString(raw)
+			s = s[:size] // exact length
+			require.NoError(t, os.WriteFile(logDir+"/largefile.txt", []byte(s), 0644))
+
 			kindlingLogger := &slogWriter{Logger: slog.Default()}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -205,17 +220,7 @@ func TestKindlingIntegrations(t *testing.T) {
 			require.NoError(t, err)
 
 			t.Run("reporting issue should work", func(t *testing.T) {
-				//  ~15MB payload
-				// const size = 1 * 1000000
-				// Base64 inflates: 3 bytes → 4 chars
-				// raw := make([]byte, size*3/4+3) // +3 to avoid truncation issues
-
-				// _, err = rand.Read(raw)
-				// require.NoError(t, err)
-
-				// s := base64.RawURLEncoding.EncodeToString(raw)
-				// s = s[:size] // exact length
-				assert.NoError(t, reporter.Report(
+				tc.assert(t, reporter.Report(
 					context.Background(),
 					issue.IssueReport{
 						Type:        "Other",
