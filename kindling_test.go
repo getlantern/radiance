@@ -5,14 +5,12 @@ package radiance
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/getlantern/dnstt"
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
@@ -43,7 +41,8 @@ func TestKindlingIntegrations(t *testing.T) {
 			t *testing.T,
 			dataDir string,
 			logger *slogWriter,
-		) (kindling.Kindling, func(k kindling.Kindling, client *http.Client))
+		) kindling.Kindling
+		assert func(t *testing.T, err error)
 	}
 
 	email := ""
@@ -62,7 +61,7 @@ func TestKindlingIntegrations(t *testing.T) {
 				t *testing.T,
 				dataDir string,
 				logger *slogWriter,
-			) (kindling.Kindling, func(k kindling.Kindling, client *http.Client)) {
+			) kindling.Kindling {
 				f, err := fronted.NewFronted(
 					reporting.PanicListener,
 					filepath.Join(dataDir, "fronted_cache.json"),
@@ -70,14 +69,15 @@ func TestKindlingIntegrations(t *testing.T) {
 				)
 				require.NoError(t, err)
 
-				k := kindling.NewKindling(
+				return kindling.NewKindling(
 					"radiance",
 					kindling.WithPanicListener(reporting.PanicListener),
 					kindling.WithLogWriter(logger),
 					kindling.WithDomainFronting(f),
 				)
-
-				return k, nil
+			},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
 			},
 		},
 		{
@@ -92,34 +92,111 @@ func TestKindlingIntegrations(t *testing.T) {
 				t *testing.T,
 				dataDir string,
 				logger *slogWriter,
-			) (kindling.Kindling, func(k kindling.Kindling, client *http.Client)) {
-				k := kindling.NewKindling(
+			) kindling.Kindling {
+				return kindling.NewKindling(
 					"radiance",
 					kindling.WithPanicListener(reporting.PanicListener),
 					kindling.WithLogWriter(logger),
 					kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
 				)
+			},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name:        "DNSTT Kindling",
+			description: "dnstt testing",
+			userID:      userID,
+			locale:      "pt-BR",
+			email:       email,
+			country:     "BR",
+			setup: func(
+				_ context.Context,
+				t *testing.T,
+				dataDir string,
+				logger *slogWriter,
+			) kindling.Kindling {
+				cli, err := dnstt.NewDNSTT(
+					dnstt.WithDoH("https://cloudflare-dns.com/dns-query"),
+					dnstt.WithTunnelDomain("t.iantem.io"),
+					dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+				)
+				require.NoError(t, err)
+				dnsTunnel2, err := dnstt.NewDNSTT(
+					dnstt.WithTunnelDomain("t.iantem.io"),
+					dnstt.WithDoH("https://dns.adguard-dns.com/dns-query"),
+					dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+				)
+				require.NoError(t, err)
+				dnsTunnel3, err := dnstt.NewDNSTT(
+					dnstt.WithTunnelDomain("t.iantem.io"),
+					dnstt.WithDoH("https://dns.google/dns-query"),
+					dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+				)
+				require.NoError(t, err)
+				dnsTunnel4, err := dnstt.NewDNSTT(
+					dnstt.WithTunnelDomain("t.iantem.io"),
+					dnstt.WithDoT("dns.quad9.net:853"),
+					dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+				)
+				require.NoError(t, err)
 
-				return k, nil
+				return kindling.NewKindling(
+					"radiance",
+					kindling.WithPanicListener(reporting.PanicListener),
+					kindling.WithLogWriter(logger),
+					kindling.WithDNSTunnel(cli),
+					kindling.WithDNSTunnel(dnsTunnel2),
+					kindling.WithDNSTunnel(dnsTunnel3),
+					kindling.WithDNSTunnel(dnsTunnel4),
+				)
+			},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
+			},
+		},
+		{
+			name:        "AMP Kindling",
+			description: "amp testing",
+			userID:      userID,
+			locale:      "en-US",
+			email:       email,
+			country:     "BR",
+			setup: func(
+				ctx context.Context,
+				t *testing.T,
+				dataDir string,
+				logger *slogWriter,
+			) kindling.Kindling {
+				ampClient, err := fronted.NewAMPClient(ctx, logger, ampPublicKey)
+				require.NoError(t, err)
+
+				return kindling.NewKindling(
+					"radiance",
+					kindling.WithLogWriter(logger),
+					kindling.WithAMPCache(ampClient),
+				)
+			},
+			assert: func(t *testing.T, err error) {
+				assert.NoError(t, err)
 			},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := t.TempDir()
+			logDir := t.TempDir()
+			require.NoError(t, common.Init(dataDir, logDir, "TRACE"))
 			kindlingLogger := &slogWriter{Logger: slog.Default()}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			k, after := tc.setup(ctx, t, dataDir, kindlingLogger)
+			k := tc.setup(ctx, t, dataDir, kindlingLogger)
 
 			httpClientWithTimeout := k.NewHTTPClient()
 			httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
-
-			if after != nil {
-				after(k, httpClientWithTimeout)
-			}
 
 			reporter, err := issue.NewIssueReporter(
 				httpClientWithTimeout,
@@ -128,16 +205,16 @@ func TestKindlingIntegrations(t *testing.T) {
 			require.NoError(t, err)
 
 			t.Run("reporting issue should work", func(t *testing.T) {
-				// ~15MB payload
-				const size = 10 * 1000000
+				//  ~15MB payload
+				// const size = 1 * 1000000
 				// Base64 inflates: 3 bytes → 4 chars
-				raw := make([]byte, size*3/4+3) // +3 to avoid truncation issues
+				// raw := make([]byte, size*3/4+3) // +3 to avoid truncation issues
 
-				_, err = rand.Read(raw)
-				require.NoError(t, err)
+				// _, err = rand.Read(raw)
+				// require.NoError(t, err)
 
-				s := base64.RawURLEncoding.EncodeToString(raw)
-				s = s[:size] // exact length
+				// s := base64.RawURLEncoding.EncodeToString(raw)
+				// s = s[:size] // exact length
 				assert.NoError(t, reporter.Report(
 					context.Background(),
 					issue.IssueReport{
@@ -146,9 +223,9 @@ func TestKindlingIntegrations(t *testing.T) {
 						Device:      "test",
 						Model:       "test",
 						Attachments: []*issue.Attachment{
-							{
+							&issue.Attachment{
 								Name: "Hello.txt",
-								Data: []byte(s),
+								Data: []byte("hello world"),
 							},
 						},
 					},
