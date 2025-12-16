@@ -19,7 +19,7 @@ import (
 
 var (
 	httpClient *http.Client
-	// defaultOptions is generally do not change after the first time
+	// defaultOptions generally does not change after the first time
 	// or if they change, it's handled internally
 	defaultOptions = make([]kindling.Option, 0)
 	// dnsttRenewableOptions is a list that is overwritten whenever we receive

@@ -59,7 +59,7 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 
 		newHTTPClient := kindling.HTTPClient()
 		cli.proWC = buildProWebClient(newHTTPClient, proServerURL, userInfo)
-		cli.authWc = newWebClient(httpClient, baseURL)
+		cli.authWc = newWebClient(newHTTPClient, baseURL)
 		cli.authClient = &authClient{cli.authWc, userInfo}
 	})
 	return cli
