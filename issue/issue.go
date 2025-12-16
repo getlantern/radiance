@@ -179,6 +179,8 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		return traces.RecordError(ctx, err)
 	}
 
+	req.Header.Set("Content-Length", strconv.Itoa(len(out)))
+
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
