@@ -76,9 +76,6 @@ type Options struct {
 	LogLevel string
 }
 
-//go:embed assets/amp_public_key.pem
-var ampPublicKey string
-
 // NewRadiance creates a new Radiance VPN client. opts includes the platform interface used to
 // interact with the underlying platform on iOS, Android, and MacOS. On other platforms, it is
 // ignored and can be nil.
