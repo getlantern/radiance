@@ -10,16 +10,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/radiance/traces"
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
+
+	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/traces"
 )
 
 var (
-	ErrServiceIsNotReady   = errors.New("service is not ready")
-	ErrServiceIsNotRunning = errors.New("service is not running")
+	ErrServiceIsNotReady = errors.New("service is not ready")
+	ErrIPCNotRunning     = errors.New("IPC not running")
 )
 
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
@@ -35,16 +39,43 @@ type StartFn func(ctx context.Context, group, tag string) (Service, error)
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr     *http.Server
-	service Service
+	svr       *http.Server
+	service   Service
+	router    chi.Router
+	startFn   StartFn
+	mutex     sync.RWMutex
+	vpnStatus atomic.Value // string
+}
 
-	router  chi.Router
-	startFn StartFn
+// StatusUpdateEvent is emitted when the VPN status changes.
+type StatusUpdateEvent struct {
+	events.Event
+	Status VPNStatus
+	Error  error
+}
+
+type VPNStatus string
+
+// Possible VPN statuses
+const (
+	Connected     VPNStatus = "connected"
+	Disconnected  VPNStatus = "disconnected"
+	Connecting    VPNStatus = "connecting"
+	Disconnecting VPNStatus = "disconnecting"
+	ErrorStatus   VPNStatus = "error"
+)
+
+func (vpn *VPNStatus) String() string {
+	return string(*vpn)
 }
 
 // NewServer creates a new Server instance with the provided Service.
 func NewServer(service Service) *Server {
-	s := &Server{service: service, router: chi.NewMux()}
+	s := &Server{
+		service: service,
+		router:  chi.NewMux(),
+	}
+	s.vpnStatus.Store(Disconnected)
 	s.router.Use(log, tracer)
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -67,7 +98,8 @@ func NewServer(service Service) *Server {
 
 // Start starts the IPC server. The socket file will be created in the "basePath" directory.
 // On Windows, the "basePath" is ignored and a default named pipe path is used.
-func (s *Server) Start(basePath string) error {
+func (s *Server) Start(basePath string, fn StartFn) error {
+	s.startFn = fn
 	l, err := listen(basePath)
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
@@ -85,6 +117,7 @@ func (s *Server) Start(basePath string) error {
 			slog.Error("IPC server", "error", err)
 		}
 	}()
+
 	return nil
 }
 
@@ -112,12 +145,15 @@ func StopService(ctx context.Context) error {
 	return err
 }
 
-// SetStartFn registers a function that will be called when the start endpoint is hit
-func (s *Server) SetStartFn(fn StartFn) { s.startFn = fn }
-
-// SetService updates the service attached to the server.
-// Typically called when starting or replacing the VPN tunnel
-func (s *Server) SetService(svc Service) { s.service = svc }
+// SetService updates the service attached to the server and returns the old service, if any.
+// Typically called when starting or replacing the VPN tunnel.
+func (s *Server) SetService(svc Service) Service {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	old := s.service
+	s.service = svc
+	return old
+}
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if s.startFn == nil {
@@ -125,7 +161,7 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// check if service is already running
-	if s.service != nil && s.service.Status() == StatusRunning {
+	if s.GetStatus() == StatusRunning {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -134,24 +170,29 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	svc, err := s.startFn(r.Context(), p.GroupTag, p.OutboundTag)
-	if err != nil {
+
+	if err := s.StartService(r.Context(), p.GroupTag, p.OutboundTag); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	s.SetService(svc)
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
-	svc := s.service
-	s.service = &closedService{}
+func (s *Server) StartService(ctx context.Context, group, tag string) error {
+	svc, err := s.startFn(ctx, group, tag)
+	if err != nil {
+		s.setVPNStatus(ErrorStatus, err)
+		return fmt.Errorf("error starting service: %w", err)
+	}
+	s.setVPNStatus(Connected, nil)
+	s.SetService(svc)
+	return nil
+}
 
-	if svc != nil {
-		if err := svc.Close(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.StopService(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if f, ok := w.(http.Flusher); ok {
@@ -159,10 +200,21 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) StopService(ctx context.Context) error {
+	defer s.setVPNStatus(Disconnected, nil)
+	svc := s.SetService(&closedService{})
+	if svc != nil {
+		if err := svc.Close(); err != nil {
+			return fmt.Errorf("error stopping service: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
-	service := s.service
-	s.service = &closedService{}
-	if err := service.Close(); err != nil {
+	slog.Info("Received request to close service via IPC")
+	svc := s.SetService(&closedService{})
+	if err := svc.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -178,6 +230,11 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 			traces.RecordError(context.Background(), err)
 		}
 	}()
+}
+
+func (s *Server) setVPNStatus(status VPNStatus, err error) {
+	s.vpnStatus.Store(status)
+	events.Emit(StatusUpdateEvent{Status: status, Error: err})
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the

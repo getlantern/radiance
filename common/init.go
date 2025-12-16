@@ -71,20 +71,19 @@ func Init(dataDir, logDir, logLevel string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	dataDir = dataPath.Load().(string)
-	logDir = logPath.Load().(string)
-
-	err = initLogger(filepath.Join(logDir, LogFileName), logLevel)
+	err = initLogger(filepath.Join(LogPath(), LogFileName), logLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
 
+	slog.Info("Using data and log directories", "dataDir", DataPath(), "logDir", LogPath())
+
 	if !IsWindows() {
-		ipc.SetSocketPath(dataDir)
+		ipc.SetSocketPath(DataPath())
 	}
 
-	crashFilePath := filepath.Join(logDir, "lantern_crash.log")
+	crashFilePath := filepath.Join(LogPath(), "lantern_crash.log")
 	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		slog.Error("Failed to open crash log file", "error", err)
@@ -142,7 +141,7 @@ func initLogger(logPath, level string) error {
 	logRotator := &lumberjack.Logger{
 		Filename:   logPath, // Log file path
 		MaxSize:    25,      // Rotate log when it reaches 25 MB
-		MaxBackups: 4,       // Keep up to 4 rotated log files
+		MaxBackups: 2,       // Keep up to 2 rotated log files
 		MaxAge:     30,      // Retain old log files for up to 30 days
 		Compress:   Prod(),  // Compress rotated log files
 	}
@@ -258,7 +257,6 @@ func setupDirectories(data, logs string) error {
 		}
 	}
 
-	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	dataPath.Store(data)
 	logPath.Store(logs)
 	return nil

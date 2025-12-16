@@ -5,6 +5,7 @@ package radiance
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -80,6 +81,9 @@ type Options struct {
 	LogLevel string
 }
 
+//go:embed assets/amp_public_key.pem
+var ampPublicKey string
+
 // NewRadiance creates a new Radiance VPN client. opts includes the platform interface used to
 // interact with the underlying platform on iOS, Android, and MacOS. On other platforms, it is
 // ignored and can be nil.
@@ -109,7 +113,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 
 	dataDir := common.DataPath()
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), &slogWriter{Logger: slog.Default()})
+	kindlingLogger := &slogWriter{Logger: slog.Default()}
+	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), kindlingLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
@@ -117,12 +122,15 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	k := kindling.NewKindling(
 		"radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
+		kindling.WithLogWriter(kindlingLogger),
 		kindling.WithDomainFronting(f),
-		kindling.WithProxyless("df.iantem.io"),
+		// Most endpoints use df.iantem.io, but for some historical reasons
+		// "pro-server" calls still go to api.getiantem.org.
+		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
+	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
@@ -148,19 +156,20 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch")
 	}
-	confHandler := config.NewConfigHandler(cOpts)
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		slog.Info("Config changed", "oldConfig", evt.Old, "newConfig", evt.New)
 		if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
 			slog.Error("Failed to handle new config for telemetry", "error", err)
 		}
-	},
-	)
+
+	})
 
 	adBlocker, err := vpn.NewAdBlocker()
 	if err != nil {
 		slog.Error("Unable to create ad blocker", "error", err)
 	}
+
+	confHandler := config.NewConfigHandler(cOpts)
 
 	r := &Radiance{
 		confHandler:   confHandler,

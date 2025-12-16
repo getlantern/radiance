@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"time"
 
-	sbx "github.com/getlantern/sing-box-extensions"
-	sbxconstant "github.com/getlantern/sing-box-extensions/constant"
-	sbxoption "github.com/getlantern/sing-box-extensions/option"
+	box "github.com/getlantern/lantern-box"
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	dns "github.com/sagernet/sing-dns"
@@ -81,42 +81,19 @@ func baseOpts(basePath string) O.Options {
 			DisableColor: true,
 		},
 		DNS: &O.DNSOptions{
-			Servers: []O.DNSServerOptions{
-				{
-					Tag:     "dns-google-dot",
-					Address: "tls://8.8.4.4",
+			RawDNSOptions: O.RawDNSOptions{
+				Servers: []O.DNSServerOptions{
+					newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
+					newDNSServerOptions(C.DNSTypeTLS, "dns-cloudflare-dot", "1.1.1.1", ""),
+					newDNSServerOptions(C.DNSTypeLocal, "local", "", ""),
+					newDNSServerOptions(C.DNSTypeTLS, "dns-sb-dot", "185.222.222.222", ""),
+					newDNSServerOptions(C.DNSTypeHTTPS, "dns-google-doh", "dns.google", "dns-google-dot"),
+					newDNSServerOptions(C.DNSTypeHTTPS, "dns-cloudflare-doh", "cloudflare-dns.com", "dns-cloudflare-dot"),
+					newDNSServerOptions(C.DNSTypeHTTPS, "dns-sb-doh", "doh.dns.sb", "dns-sb-dot"),
 				},
-				{
-					Tag:     "dns-cloudflare-dot",
-					Address: "tls://1.1.1.1",
+				DNSClientOptions: O.DNSClientOptions{
+					Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
 				},
-				{
-					Tag:     "local",
-					Address: "223.5.5.5",
-					Detour:  "direct",
-				},
-				{
-					Tag:     "dns-sb-dot",
-					Address: "tls://185.222.222.222",
-				},
-				{
-					Tag:             "dns-google-doh",
-					Address:         "https://dns.google/dns-query",
-					AddressResolver: "dns-google-dot",
-				},
-				{
-					Tag:             "dns-cloudflare-doh",
-					Address:         "https://cloudflare-dns.com/dns-query",
-					AddressResolver: "dns-cloudflare-dot",
-				},
-				{
-					Tag:             "dns-sb-doh",
-					Address:         "https://doh.dns.sb/dns-query",
-					AddressResolver: "dns-sb-dot",
-				},
-			},
-			DNSClientOptions: O.DNSClientOptions{
-				Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
 			},
 		},
 		Inbounds: []O.Inbound{
@@ -382,7 +359,7 @@ func buildOptions(group, path string) (O.Options, error) {
 	if common.Dev() {
 		// write box options
 		// we can ignore the errors here since the tunnel will error out anyway if something is wrong
-		buf, _ := json.MarshalContext(sbx.BoxContext(), opts)
+		buf, _ := json.MarshalContext(box.BaseContext(), opts)
 		var b bytes.Buffer
 		stdjson.Indent(&b, buf, "", "  ")
 		os.WriteFile(filepath.Join(path, "debug-lantern-box-options.json"), b.Bytes(), 0644)
@@ -403,7 +380,7 @@ func loadConfigOptions(confPath string) (O.Options, error) {
 		return O.Options{}, nil
 	}
 	slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling", "config", content)
-	cfg, err := json.UnmarshalExtendedContext[config.Config](sbx.BoxContext(), content)
+	cfg, err := json.UnmarshalExtendedContext[config.Config](box.BaseContext(), content)
 	if err != nil {
 		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
 	}
@@ -474,9 +451,9 @@ func groupAutoTag(group string) string {
 
 func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: sbxconstant.TypeMutableURLTest,
+		Type: lbC.TypeMutableURLTest,
 		Tag:  tag,
-		Options: &sbxoption.MutableURLTestOutboundOptions{
+		Options: &lbO.MutableURLTestOutboundOptions{
 			Outbounds:   outbounds,
 			URL:         "https://google.com/generate_204",
 			Interval:    badoption.Duration(urlTestInterval),
@@ -487,9 +464,9 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 
 func selectorOutbound(group string, outbounds []string) O.Outbound {
 	return O.Outbound{
-		Type: sbxconstant.TypeMutableSelector,
+		Type: lbC.TypeMutableSelector,
 		Tag:  group,
-		Options: &sbxoption.MutableSelectorOutboundOptions{
+		Options: &lbO.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
 		},
 	}
@@ -549,6 +526,46 @@ func lanternRegexForPlatform() []string {
 	}
 }
 
+func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
+	var serverOpts any
+	remoteOpts := O.RemoteDNSServerOptions{
+		DNSServerAddressOptions: O.DNSServerAddressOptions{
+			Server: server,
+		},
+	}
+	if domainResolver != "" {
+		remoteOpts.LocalDNSServerOptions = O.LocalDNSServerOptions{
+			DialerOptions: O.DialerOptions{
+				DomainResolver: &O.DomainResolveOptions{
+					Server: domainResolver,
+				},
+			},
+		}
+	}
+	switch typ {
+	case C.DNSTypeTCP, C.DNSTypeUDP:
+		serverOpts = remoteOpts
+	case C.DNSTypeTLS:
+		serverOpts = &O.RemoteTLSDNSServerOptions{
+			RemoteDNSServerOptions: remoteOpts,
+		}
+	case C.DNSTypeHTTPS:
+		serverOpts = &O.RemoteHTTPSDNSServerOptions{
+			RemoteTLSDNSServerOptions: O.RemoteTLSDNSServerOptions{
+				RemoteDNSServerOptions: remoteOpts,
+			},
+		}
+	default:
+		serverOpts = &O.LocalDNSServerOptions{}
+	}
+
+	return O.DNSServerOptions{
+		Tag:     tag,
+		Type:    typ,
+		Options: serverOpts,
+	}
+}
+
 // These are embedded domains that should always bypass the VPN.
 var inlineDirectRuleSet string = `
 {
@@ -557,6 +574,7 @@ var inlineDirectRuleSet string = `
     {
       "domain_suffix": [
         "iantem.io",
+        "api.getiantem.org",
         "a248.e.akamai.net",
         "cloudfront.net",
         "raw.githubusercontent.com"

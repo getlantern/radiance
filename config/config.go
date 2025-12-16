@@ -24,14 +24,14 @@ import (
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
 
-	sbx "github.com/getlantern/sing-box-extensions"
-	exO "github.com/getlantern/sing-box-extensions/option"
+	box "github.com/getlantern/lantern-box"
+	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/traces"
 )
 
 var (
@@ -85,7 +85,6 @@ type ConfigHandler struct {
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
-	options.HTTPClient.Transport = traces.NewRoundTripper(options.HTTPClient.Transport)
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ch := &ConfigHandler{
 		config:        atomic.Value{},
@@ -220,7 +219,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	// because the error could have been due to temporary network issues, such as brief
 	// power loss or internet disconnection.
 	// On the other hand, if we have a new config, we want to overwrite any previous error.
-	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), resp)
+	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BaseContext(), resp)
 	if err != nil {
 		slog.Error("failed to parse config", "error", err)
 		return fmt.Errorf("parsing config: %w", err)
@@ -276,18 +275,17 @@ func cleanTags(cfg *C.ConfigResponse) {
 }
 
 func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
+	// Requires privilege and cannot conflict with existing system interfaces
+	// System tries to use system env; for mobile we need to tun device
+	system := !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
 	for _, endpoint := range endpoints {
 		switch opts := endpoint.Options.(type) {
 		case *option.WireGuardEndpointOptions:
 			opts.PrivateKey = privateKey.String()
-			// Requires privilege and cannot conflict with existing system interfaces
-			// System tries to use system env; for mobile we need to tun device
-			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
-		case *exO.AmneziaEndpointOptions:
+			opts.System = opts.System && system
+		case *lbO.AmneziaEndpointOptions:
 			opts.PrivateKey = privateKey.String()
-			// Requires privilege and cannot conflict with existing system interfaces
-			// System tries to use system env; for mobile we need to tun device
-			opts.System = !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
+			opts.System = opts.System && system
 		default:
 		}
 	}
@@ -322,7 +320,7 @@ func (ch *ConfigHandler) Stop() {
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
 	slog.Debug("reading config file")
-	buf, err := os.ReadFile(ch.configPath)
+	buf, err := atomicfile.ReadFile(ch.configPath)
 	slog.Debug("config file read")
 	if os.IsNotExist(err) { // no config file
 		return nil
@@ -348,7 +346,7 @@ func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
-	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](sbx.BoxContext(), tmp.ConfigResponse)
+	opts, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BaseContext(), tmp.ConfigResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +365,7 @@ func saveConfig(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-	return os.WriteFile(path, buf, 0644)
+	return atomicfile.WriteFile(path, buf, 0644)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.

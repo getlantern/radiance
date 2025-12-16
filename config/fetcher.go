@@ -17,8 +17,10 @@ import (
 
 	C "github.com/getlantern/common"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
-	"github.com/getlantern/sing-box-extensions/protocol"
+	"github.com/getlantern/lantern-box/protocol"
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
@@ -65,7 +67,9 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.fetchConfig")
 	defer span.End()
 	// If we don't have a user ID or token, create a new user.
-	f.ensureUser(ctx)
+	if err := f.ensureUser(ctx); err != nil {
+		return nil, fmt.Errorf("error creating user: %w", err)
+	}
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,
@@ -85,6 +89,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	if err != nil {
 		return nil, fmt.Errorf("marshal config request: %w", err)
 	}
+	addPayloadToSpan(ctx, confReq)
 
 	slog.Debug("sending config request", "request", string(buf))
 	buf, err = f.send(ctx, bytes.NewReader(buf))
@@ -101,23 +106,38 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	return buf, nil
 }
 
-func (f *fetcher) ensureUser(ctx context.Context) {
+func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
+	span := trace.SpanFromContext(ctx)
+	if len(req.UserID) > 5 {
+		req.UserID = fmt.Sprintf("%s...", req.UserID[0:5])
+	}
+	if len(req.ProToken) > 5 {
+		req.ProToken = fmt.Sprintf("%s...", req.ProToken[0:5])
+	}
+
+	b, _ := json.Marshal(req)
+	span.SetAttributes(attribute.String("http.request.body", string(b)))
+}
+
+func (f *fetcher) ensureUser(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.ensureUser")
 	defer span.End()
 	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
 		if f.apiClient == nil {
 			slog.Error("API client is nil, cannot create new user")
 			span.RecordError(errors.New("API client is nil"))
-			return
+			return errors.New("API client is nil")
 		}
 		_, err := f.apiClient.NewUser(ctx)
 		if err != nil {
 			slog.Error("Failed to create new user", "error", err)
 			span.RecordError(err)
+			return fmt.Errorf("failed to create new user: %w", err)
 		} else {
 			slog.Info("Created new user")
 		}
 	}
+	return nil
 }
 
 // send sends a request to the server with the given body and returns the response.

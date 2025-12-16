@@ -19,14 +19,20 @@ import (
 	"strconv"
 	"sync"
 
-	sbx "github.com/getlantern/sing-box-extensions"
+	box "github.com/getlantern/lantern-box"
 	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
+
+	"github.com/getlantern/pluriconfig"
+	"github.com/getlantern/pluriconfig/model"
+	_ "github.com/getlantern/pluriconfig/provider/singbox"
+	_ "github.com/getlantern/pluriconfig/provider/url"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -108,7 +114,18 @@ func NewManager(dataPath string) (*Manager, error) {
 
 // Servers returns the current server configurations for both groups ([SGLantern] and [SGUser]).
 func (m *Manager) Servers() Servers {
-	return m.servers
+	m.access.RLock()
+	defer m.access.RUnlock()
+
+	result := make(Servers, len(m.servers))
+	for group, opts := range m.servers {
+		result[group] = Options{
+			Outbounds: append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints: append([]option.Endpoint{}, opts.Endpoints...),
+			Locations: maps.Clone(opts.Locations),
+		}
+	}
+	return result
 }
 
 type Server struct {
@@ -155,6 +172,9 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	if err := m.setServers(group, options); err != nil {
 		return fmt.Errorf("set servers: %w", err)
 	}
+
+	m.access.Lock()
+	defer m.access.Unlock()
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
@@ -296,23 +316,23 @@ func remove[T comparable](slice []T, item T) []T {
 
 func (m *Manager) saveServers() error {
 	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
-	ctx := sbx.BoxContext()
+	ctx := box.BaseContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
-	return os.WriteFile(m.serversFile, buf, 0644)
+	return atomicfile.WriteFile(m.serversFile, buf, 0644)
 }
 
 func (m *Manager) loadServers() error {
-	buf, err := os.ReadFile(m.serversFile)
+	buf, err := atomicfile.ReadFile(m.serversFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // file doesn't exist
 	}
 	if err != nil {
 		return fmt.Errorf("read server file %q: %w", m.serversFile, err)
 	}
-	servers, err := json.UnmarshalExtendedContext[Servers](sbx.BoxContext(), buf)
+	servers, err := json.UnmarshalExtendedContext[Servers](box.BaseContext(), buf)
 	if err != nil {
 		return fmt.Errorf("unmarshal server options: %w", err)
 	}
@@ -357,7 +377,7 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 	}
 	defer resp.Body.Close()
 
-	ctx := sbx.BoxContext()
+	ctx := box.BaseContext()
 	servers, err := json.UnmarshalExtendedContext[Options](ctx, body)
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -459,7 +479,7 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerWithSingboxJSON")
 	defer span.End()
 	var option Options
-	if err := json.UnmarshalContext(sbx.BoxContext(), value, &option); err != nil {
+	if err := json.UnmarshalContext(box.BaseContext(), value, &option); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
 	if len(option.Endpoints) == 0 && len(option.Outbounds) == 0 {
@@ -469,4 +489,44 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
 	return nil
+}
+
+// AddServerBasedOnURLs adds a server(s) based on the provided URL string.
+// The URL can be comma-separated list of URLs or URLs separated by new lines.
+func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCertVerification bool) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBasedOnURLs")
+	defer span.End()
+	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
+	if !loaded {
+		return traces.RecordError(ctx, fmt.Errorf("URL config provider not loaded"))
+	}
+	cfg, err := urlProvider.Parse(ctx, []byte(urls))
+	if err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to parse URLs: %w", err))
+	}
+
+	if skipCertVerification {
+		cfgURLs, ok := cfg.Options.([]url.URL)
+		if !ok || len(cfgURLs) == 0 {
+			return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
+		}
+		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
+		for _, v := range cfgURLs {
+			queryParams := v.Query()
+			queryParams.Add("allowInsecure", "1")
+			v.RawQuery = queryParams.Encode()
+			urlsWithCustomOptions = append(urlsWithCustomOptions, v)
+		}
+		cfg.Options = urlsWithCustomOptions
+	}
+
+	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
+	if !loaded {
+		return traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))
+	}
+	singBoxCfg, err := singBoxProvider.Serialize(ctx, cfg)
+	if err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
+	}
+	return m.AddServerWithSingboxJSON(ctx, singBoxCfg)
 }

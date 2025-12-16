@@ -51,6 +51,7 @@ type SubscriptionResponse struct {
 	CustomerId     string `json:"customerId"`
 	SubscriptionId string `json:"subscriptionId"`
 	ClientSecret   string `json:"clientSecret"`
+	PublishableKey string `json:"publishableKey"`
 }
 
 // SubscriptionPlans retrieves available subscription plans for a given channel.
@@ -127,16 +128,19 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 }
 
 // StripeBillingPortalUrl generates the Stripe billing portal URL for the given user ID.
-func (ac *APIClient) StripeBillingPortalUrl() (string, error) {
+func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "stripe_billing_portal_url")
+	defer span.End()
 	portalURL, err := url.Parse(fmt.Sprintf("%s/%s", proServerURL, "stripe-billing-portal"))
 	if err != nil {
-		return "", fmt.Errorf("failed to parse URL: %w", err)
+		slog.Error("parsing portal URL", "error", err)
+		return "", traces.RecordError(ctx, fmt.Errorf("parsing portal URL: %w", err))
 	}
 	query := portalURL.Query()
 	query.Set("referer", "https://lantern.io/")
 	query.Set("userId", strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10))
+	query.Set("proToken", ac.userInfo.LegacyToken())
 	portalURL.RawQuery = query.Encode()
-
 	return portalURL.String(), nil
 }
 

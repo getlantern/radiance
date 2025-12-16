@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"runtime"
 
 	"github.com/sagernet/sing-box/common/conntrack"
@@ -64,14 +66,31 @@ type state struct {
 
 // GetStatus retrieves the current status of the service.
 func GetStatus(ctx context.Context) (string, error) {
+	// try to dial first to check if IPC server is even running and avoid waiting for timeout
+	if canDial, err := tryDial(ctx); !canDial {
+		return StatusClosed, err
+	}
+
 	res, err := sendRequest[state](ctx, "GET", statusEndpoint, nil)
-	if errors.Is(err, ErrServiceIsNotRunning) || errors.Is(err, ErrServiceIsNotReady) {
+	if errors.Is(err, ErrIPCNotRunning) || errors.Is(err, ErrServiceIsNotReady) {
 		return StatusClosed, nil
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error getting status: %w", err)
 	}
 	return res.State, nil
+}
+
+func tryDial(ctx context.Context) (bool, error) {
+	conn, err := dialContext(ctx, "", "")
+	if err == nil {
+		conn.Close()
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil // IPC server is not running so don't treat it as an error
+	}
+	return false, err
 }
 
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
@@ -80,4 +99,11 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+func (s *Server) GetStatus() string {
+	if s.service == nil {
+		return StatusClosed
+	}
+	return s.service.Status()
 }

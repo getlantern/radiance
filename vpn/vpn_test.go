@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	sbx "github.com/getlantern/sing-box-extensions"
+	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -132,14 +132,14 @@ func TestAutoServerSelections(t *testing.T) {
 		User:    "http2-out",
 		AutoAll: "socks1-out",
 	}
-	ctx := sbx.BoxContext()
+	ctx := box.BaseContext()
 	service.MustRegister[adapter.OutboundManager](ctx, mgr)
 	m := &mockService{
 		ctx:    ctx,
 		status: ipc.StatusRunning,
 	}
 	ipcServer = ipc.NewServer(m)
-	require.NoError(t, ipcServer.Start(common.DataPath()))
+	require.NoError(t, ipcServer.Start(common.DataPath(), func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
 
 	got, err := AutoServerSelections()
 	require.NoError(t, err, "should not error when getting auto server selections")
@@ -206,7 +206,7 @@ func setupVpnTest(t *testing.T) *mockService {
 	_, boxOpts, err := testBoxOptions(path)
 	require.NoError(t, err, "failed to load test box options")
 
-	ctx := sbx.BoxContext()
+	ctx := box.BaseContext()
 
 	lb, err := libbox.NewServiceWithContext(ctx, boxOpts, nil)
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ func setupVpnTest(t *testing.T) *mockService {
 		cacheFile.Close()
 		clashServer.Close()
 	})
-	require.NoError(t, ipcServer.Start(path))
+	require.NoError(t, ipcServer.Start(path, func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
 
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))
