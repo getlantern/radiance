@@ -292,6 +292,13 @@ func (r *Radiance) Features() map[string]bool {
 	return cfg.ConfigResponse.Features
 }
 
+// EnableTelemetry enable OpenTelemetry instrumentation for the Radiance client.
+// After enabling it, it should initialize telemetry again once a new config
+// is available
+func (r *Radiance) EnableTelemetry() {
+	r.telemetryConsent.Store(true)
+}
+
 // DisableTelemetry disables OpenTelemetry instrumentation for the Radiance client.
 func (r *Radiance) DisableTelemetry() {
 	r.telemetryConsent.Store(false)
