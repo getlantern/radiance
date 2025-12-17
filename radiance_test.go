@@ -25,6 +25,10 @@ func TestNewRadiance(t *testing.T) {
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.stopChan)
 		assert.NotNil(t, r.issueReporter)
+		assert.DirExists(t, common.DataPath())
+		assert.DirExists(t, common.LogPath())
+		assert.DirExists(t, common.WaterWASMDir())
+		assert.DirExists(t, common.WaterWazeroCompilationDir())
 	})
 }
 
