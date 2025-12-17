@@ -261,12 +261,12 @@ func setupDirectories(options Options) error {
 		return err
 	}
 
-	wasmDir, err := setupDirectory(env.WaterWASMStorageDir, options.WaterWASMStorageDir, "water_wasm_storage_dir")
+	wasmDir, err := setupDirectory(env.WaterWASMStorageDir, options.WaterWASMStorageDir, "data/water/water_wasm_storage_dir")
 	if err != nil {
 		return err
 	}
 
-	wazeroCacheDir, err := setupDirectory(env.WaterWazeroCompilationCacheDir, options.WaterWazeroCompilationCacheDir, "water_wazero_compilation_cache_dir")
+	wazeroCacheDir, err := setupDirectory(env.WaterWazeroCompilationCacheDir, options.WaterWazeroCompilationCacheDir, "data/water/water_wazero_compilation_cache_dir")
 	if err != nil {
 		return err
 	}
