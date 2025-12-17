@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	"github.com/getlantern/dnstt"
 	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -116,41 +115,19 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 
-	updaterCtx, cancel := context.WithCancel(context.Background())
-	dnsTunnel, err := dnstt.NewDNSTT(
-		dnstt.WithTunnelDomain("t.iantem.io"),
-		dnstt.WithDoH("https://cloudflare-dns.com/dns-query"),
-		dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build dns tunnel: %w", err)
-	}
-
-	ampClient, err := fronted.NewAMPClient(updaterCtx, kindlingLogger, ampPublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build amp client: %w", err)
-	}
-
 	k := kindling.NewKindling(
 		"radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(kindlingLogger),
 		kindling.WithDomainFronting(f),
-		kindling.WithProxyless("df.iantem.io"),
-		kindling.WithDNSTunnel(dnsTunnel),
-		kindling.WithAMPCache(ampClient),
+		// Most endpoints use df.iantem.io, but for some historical reasons
+		// "pro-server" calls still go to api.getiantem.org.
+		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
+	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
-
-	events.Subscribe(func(e config.NewDNSTTConfigEvent) {
-		slog.Info("updating kindling with latest dnstt config")
-		// replacing dnstt roundtripper and making http client replace transports
-		k.ReplaceRoundTripGenerator("dnstt", e.New.NewRoundTripper)
-		k.NewHTTPClient()
-	})
-	config.DNSTTConfigUpdate(updaterCtx, "https://raw.githubusercontent.com/getlantern/radiance/main/config/dnstt.yml.gz", httpClientWithTimeout, 12*time.Hour)
 
 	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
@@ -193,10 +170,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
-	r.addShutdownFunc(common.Close, telemetry.Close, func(_ context.Context) error {
-		cancel()
-		return nil
-	})
+	r.addShutdownFunc(common.Close, telemetry.Close)
 	return r, nil
 }
 

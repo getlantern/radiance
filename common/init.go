@@ -153,7 +153,7 @@ func initLogger(logPath, level string) error {
 	logRotator := &lumberjack.Logger{
 		Filename:   logPath, // Log file path
 		MaxSize:    25,      // Rotate log when it reaches 25 MB
-		MaxBackups: 4,       // Keep up to 4 rotated log files
+		MaxBackups: 2,       // Keep up to 2 rotated log files
 		MaxAge:     30,      // Retain old log files for up to 30 days
 		Compress:   Prod(),  // Compress rotated log files
 	}

@@ -51,6 +51,7 @@ type Server struct {
 type StatusUpdateEvent struct {
 	events.Event
 	Status VPNStatus
+	Error  error
 }
 
 type VPNStatus string
@@ -180,10 +181,10 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
 	svc, err := s.startFn(ctx, group, tag)
 	if err != nil {
-		s.setVPNStatus(ErrorStatus)
+		s.setVPNStatus(ErrorStatus, err)
 		return fmt.Errorf("error starting service: %w", err)
 	}
-	s.setVPNStatus(Connected)
+	s.setVPNStatus(Connected, nil)
 	s.SetService(svc)
 	return nil
 }
@@ -200,7 +201,7 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StopService(ctx context.Context) error {
-	defer s.setVPNStatus(Disconnected)
+	defer s.setVPNStatus(Disconnected, nil)
 	svc := s.SetService(&closedService{})
 	if svc != nil {
 		if err := svc.Close(); err != nil {
@@ -231,9 +232,9 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (s *Server) setVPNStatus(status VPNStatus) {
+func (s *Server) setVPNStatus(status VPNStatus, err error) {
 	s.vpnStatus.Store(status)
-	events.Emit(StatusUpdateEvent{Status: status})
+	events.Emit(StatusUpdateEvent{Status: status, Error: err})
 }
 
 // closedService is a stub service that always returns "closed" status. It's used to replace the

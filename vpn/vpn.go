@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -251,6 +252,12 @@ type AutoSelections struct {
 	Lantern string
 	User    string
 	AutoAll string
+}
+
+// AutoSelectionsEvent is emitted when server location changes for any auto server group.
+type AutoSelectionsEvent struct {
+	events.Event
+	Selections AutoSelections
 }
 
 // AutoServerSelections returns the currently active server for each auto server group. If the group

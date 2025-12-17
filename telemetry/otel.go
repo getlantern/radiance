@@ -93,7 +93,7 @@ func initialize(deviceID string, configResponse common.ConfigResponse, pro bool)
 	attrs := Attributes{
 		App:        "radiance",
 		DeviceID:   deviceID,
-		AppVersion: rcommon.ClientVersion,
+		AppVersion: rcommon.AppVersion,
 		Platform:   rcommon.Platform,
 		GoVersion:  runtime.Version(),
 		OSName:     runtime.GOOS,
