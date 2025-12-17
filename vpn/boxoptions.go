@@ -46,31 +46,15 @@ const (
 // this is the base options that is need for everything to work correctly. this should not be
 // changed unless you know what you're doing.
 func baseOpts(basePath string) O.Options {
-	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
-	directPath := filepath.Join(basePath, directFile)
-	adBlockPath := filepath.Join(basePath, adBlockFile)
+	splitTunnelPath := localBoxPath(basePath, splitTunnelFile)
+	directPath := localBoxPath(basePath, directFile)
+	adBlockPath := localBoxPath(basePath, adBlockFile)
 
 	// Write the domains to access directly to a file to disk.
 	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
 		slog.Warn("Failed to write inline direct rule set to file", "path", directPath, "error", err)
 	} else {
 		slog.Info("Wrote inline direct rule set to file", "path", directPath)
-	}
-
-	if err := newAdBlocker(basePath).save(); err != nil {
-		slog.Warn("Failed to save default adblock rule set", "path", adBlockPath, "error", err)
-	}
-
-	// For whatever reason, sing-box seems to append the path to the base path on Windows, so we
-	// just use the file names directly.
-	if common.IsWindows() {
-		splitTunnelPath = splitTunnelFile
-		directPath = directFile
-		adBlockPath = adBlockFile
-		slog.Info("Adjusted split tunnel and direct paths for Windows",
-			"splitTunnelPath", splitTunnelPath,
-			"directPath", directPath,
-			"adBlockPath", adBlockPath)
 	}
 
 	return O.Options{
@@ -167,6 +151,13 @@ func baseOpts(basePath string) O.Options {
 			},
 		},
 	}
+}
+
+func localBoxPath(basePath, name string) string {
+	if common.IsWindows() {
+		return name
+	}
+	return filepath.Join(basePath, name)
 }
 
 func baseRoutingRules() []O.Rule {
@@ -287,7 +278,7 @@ func buildOptions(group, path string) (O.Options, error) {
 	slog.Debug("Base options initialized")
 
 	// update default options and paths
-	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
+	opts.Experimental.CacheFile.Path = localBoxPath(path, cacheFileName)
 	opts.Experimental.ClashAPI.DefaultMode = group
 
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
