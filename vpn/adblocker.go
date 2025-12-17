@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 
 	C "github.com/sagernet/sing-box/constant"
-	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
 	"github.com/getlantern/radiance/common"
@@ -28,17 +27,21 @@ const (
 	adBlockFile    = adBlockTag + ".json"
 )
 
-// adblockHeadlessRule is a minimal wrapper for ad blocking around O.LogicalHeadlessRule
-type adblockHeadlessRule struct {
-	Type    string                 `json:"type"`
-	Logical *O.LogicalHeadlessRule `json:"logical,omitempty"`
-	RuleSet []string               `json:"rule_set,omitempty"`
+type adblockRuleSetFile struct {
+	Version int           `json:"version"`
+	Rules   []adblockRule `json:"rules"`
 }
 
-// adblockRuleSet is the top-level struct for persisting ad blocking rules
-type adblockRuleSet struct {
-	Version int                   `json:"version"`
-	Rules   []adblockHeadlessRule `json:"rules"`
+type adblockRule struct {
+	Type string `json:"type,omitempty"`
+
+	// logical
+	Mode  string        `json:"mode,omitempty"`
+	Rules []adblockRule `json:"rules,omitempty"`
+
+	// default match fields we need
+	Domain []string `json:"domain,omitempty"`
+	Invert bool     `json:"invert,omitempty"`
 }
 
 // AdBlocker tracks whether ad blocking is on and where its rules live
@@ -144,35 +147,25 @@ func (a *AdBlocker) save() error {
 	return a.saveLocked()
 }
 
-// saveLocked assumes a.access is already held.
 func (a *AdBlocker) saveLocked() error {
-	rs := adblockRuleSet{
+	rs := adblockRuleSetFile{
 		Version: 3,
-		Rules: []adblockHeadlessRule{
+		Rules: []adblockRule{
 			{
 				Type: "logical",
-				Logical: &O.LogicalHeadlessRule{
-					Mode: a.mode,
-					Rules: []O.HeadlessRule{
-						{
-							Type: "default",
-							DefaultOptions: O.DefaultHeadlessRule{
-								Domain: []string{"disable.rule"},
-							},
-						},
-						{
-							Type: "default",
-							DefaultOptions: O.DefaultHeadlessRule{
-								Domain: []string{"disable.rule"},
-								Invert: true,
-							},
+				Mode: a.mode, // AND disables, OR enables
+				Rules: []adblockRule{
+					// always-false “disable” gate
+					{
+						Type: "logical",
+						Mode: C.LogicalTypeAnd,
+						Rules: []adblockRule{
+							{Type: "default", Domain: []string{"disable.rule"}},
+							{Type: "default", Domain: []string{"disable.rule"}, Invert: true},
 						},
 					},
+					{Type: "default", Domain: []string{"disable.rule"}, Invert: true},
 				},
-			},
-			{
-				Type:    "rule_set",
-				RuleSet: []string{adBlockListTag},
 			},
 		},
 	}
@@ -181,7 +174,6 @@ func (a *AdBlocker) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("marshal adblock ruleset: %w", err)
 	}
-
 	if err := atomicfile.WriteFile(a.ruleFile, buf, 0o644); err != nil {
 		return fmt.Errorf("write adblock file: %w", err)
 	}
@@ -201,16 +193,16 @@ func (a *AdBlocker) loadLocked() error {
 		return fmt.Errorf("read adblock file: %w", err)
 	}
 
-	var rs adblockRuleSet
+	var rs adblockRuleSetFile
 	if err := json.Unmarshal(content, &rs); err != nil {
 		return fmt.Errorf("unmarshal adblock: %w", err)
 	}
 
-	if len(rs.Rules) == 0 || rs.Rules[0].Logical == nil {
+	if len(rs.Rules) == 0 || rs.Rules[0].Type != "logical" {
 		return fmt.Errorf("adblock file missing logical rule")
 	}
 
-	a.mode = rs.Rules[0].Logical.Mode
+	a.mode = rs.Rules[0].Mode
 	a.enabled.Store(a.mode == C.LogicalTypeOr)
 	return nil
 }

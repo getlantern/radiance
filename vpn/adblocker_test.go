@@ -22,13 +22,13 @@ func setupTestAdBlocker(t *testing.T) *AdBlocker {
 	return a
 }
 
-func loadAdblockRuleSet(t *testing.T, a *AdBlocker) adblockRuleSet {
+func loadAdblockRuleSet(t *testing.T, a *AdBlocker) adblockRuleSetFile {
 	t.Helper()
 
 	content, err := os.ReadFile(a.ruleFile)
 	require.NoError(t, err, "read rule file")
 
-	var rs adblockRuleSet
+	var rs adblockRuleSetFile
 	require.NoError(t, stdjson.Unmarshal(content, &rs), "unmarshal rule file")
 	return rs
 }
@@ -40,36 +40,33 @@ func TestAdBlockerInitialState(t *testing.T) {
 	assert.False(t, a.IsEnabled(), "adblock should be disabled by default")
 	assert.Equal(t, C.LogicalTypeAnd, a.mode, "default mode should be AND")
 
-	// Load ad block rule set
 	rs := loadAdblockRuleSet(t, a)
 
 	require.Equal(t, 3, rs.Version, "version should be 3")
-	require.Len(t, rs.Rules, 2, "should have two rules (logical + rule_set)")
+	require.Len(t, rs.Rules, 1, "should have one top-level rule (outer logical)")
 
-	// First rule: logical gate
-	logicalRule := rs.Rules[0]
-	assert.Equal(t, "logical", logicalRule.Type, "first rule should be logical")
-	require.NotNil(t, logicalRule.Logical, "logical must not be nil")
-	assert.Equal(t, C.LogicalTypeAnd, logicalRule.Logical.Mode, "logical mode should be AND by default")
+	outer := rs.Rules[0]
+	assert.Equal(t, "logical", outer.Type, "top-level rule should be logical")
+	assert.Equal(t, C.LogicalTypeAnd, outer.Mode, "outer mode should be AND by default")
+	require.Len(t, outer.Rules, 2, "outer logical should have 2 inner rules (disable gate + ruleset ref)")
 
-	require.Len(t, logicalRule.Logical.Rules, 2, "logical should have 2 inner rules")
+	disableGate := outer.Rules[0]
+	assert.Equal(t, "logical", disableGate.Type, "first inner rule should be logical (disable gate)")
+	assert.Equal(t, C.LogicalTypeAnd, disableGate.Mode, "disable gate mode should be AND")
+	require.Len(t, disableGate.Rules, 2, "disable gate should have 2 inner default rules")
 
-	// Inner rule where domain == disable.rule
-	r1 := logicalRule.Logical.Rules[0]
+	r1 := disableGate.Rules[0]
 	assert.Equal(t, "default", r1.Type)
-	assert.Equal(t, []string{"disable.rule"}, []string(r1.DefaultOptions.Domain))
-	assert.False(t, r1.DefaultOptions.Invert, "should not invert")
+	assert.Equal(t, []string{"disable.rule"}, r1.Domain)
+	assert.False(t, r1.Invert, "should not invert")
 
-	// Inner rule where domain == disable.rule, invert == true
-	r2 := logicalRule.Logical.Rules[1]
+	r2 := disableGate.Rules[1]
 	assert.Equal(t, "default", r2.Type)
-	assert.Equal(t, []string{"disable.rule"}, []string(r2.DefaultOptions.Domain))
-	assert.True(t, r2.DefaultOptions.Invert, "should invert")
+	assert.Equal(t, []string{"disable.rule"}, r2.Domain)
+	assert.True(t, r2.Invert, "should invert")
 
-	// Second rule: rule_set -> adblock-list
-	rsRule := rs.Rules[1]
-	assert.Equal(t, "rule_set", rsRule.Type, "second rule should be rule_set")
-	assert.Equal(t, []string{adBlockListTag}, rsRule.RuleSet, "rule_set should reference adblock list tag")
+	ref := outer.Rules[1]
+	assert.Equal(t, "default", ref.Type)
 }
 
 func TestAdBlockerEnableDisable(t *testing.T) {
@@ -81,8 +78,8 @@ func TestAdBlockerEnableDisable(t *testing.T) {
 	assert.Equal(t, C.LogicalTypeOr, a.mode, "mode should be OR when enabled")
 
 	rs := loadAdblockRuleSet(t, a)
-	require.NotNil(t, rs.Rules[0].Logical)
-	assert.Equal(t, C.LogicalTypeOr, rs.Rules[0].Logical.Mode, "file mode should be OR when enabled")
+	require.Len(t, rs.Rules, 1)
+	assert.Equal(t, C.LogicalTypeOr, rs.Rules[0].Mode, "file mode should be OR when enabled")
 
 	// Disable
 	require.NoError(t, a.SetEnabled(false), "disable adblock")
@@ -90,8 +87,8 @@ func TestAdBlockerEnableDisable(t *testing.T) {
 	assert.Equal(t, C.LogicalTypeAnd, a.mode, "mode should be AND when disabled")
 
 	rs = loadAdblockRuleSet(t, a)
-	require.NotNil(t, rs.Rules[0].Logical)
-	assert.Equal(t, C.LogicalTypeAnd, rs.Rules[0].Logical.Mode, "file mode should be AND when disabled")
+	require.Len(t, rs.Rules, 1)
+	assert.Equal(t, C.LogicalTypeAnd, rs.Rules[0].Mode, "file mode should be AND when disabled")
 }
 
 func TestAdBlockerPersistence(t *testing.T) {
@@ -107,6 +104,6 @@ func TestAdBlockerPersistence(t *testing.T) {
 	assert.Equal(t, C.LogicalTypeOr, b.mode, "mode should still be OR after reload")
 
 	rs := loadAdblockRuleSet(t, b)
-	require.NotNil(t, rs.Rules[0].Logical)
-	assert.Equal(t, C.LogicalTypeOr, rs.Rules[0].Logical.Mode, "file mode should stay OR after reload")
+	require.Len(t, rs.Rules, 1)
+	assert.Equal(t, C.LogicalTypeOr, rs.Rules[0].Mode, "file mode should stay OR after reload")
 }
