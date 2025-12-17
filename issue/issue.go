@@ -50,10 +50,10 @@ func NewIssueReporter(
 		httpClient: httpClient,
 		userConfig: userConfig,
 	}
-	events.Subscribe(func(kindling.ClientUpdated) {
+	events.Subscribe(func(client kindling.ClientUpdated) {
 		reporter.httpClientMutex.Lock()
 		defer reporter.httpClientMutex.Unlock()
-		reporter.httpClient = kindling.HTTPClient()
+		reporter.httpClient = client.Client
 	})
 	return reporter, nil
 }

@@ -53,11 +53,11 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		authClient: &authClient{wc, userInfo},
 		userInfo:   userInfo,
 	}
-	events.Subscribe(func(kindling.ClientUpdated) {
+	events.Subscribe(func(client kindling.ClientUpdated) {
 		cli.httpClientMutex.Lock()
 		defer cli.httpClientMutex.Unlock()
 
-		newHTTPClient := kindling.HTTPClient()
+		newHTTPClient := client.Client
 		cli.proWC = buildProWebClient(newHTTPClient, proServerURL, userInfo)
 		cli.authWc = newWebClient(httpClient, baseURL)
 		cli.authClient = &authClient{cli.authWc, userInfo}

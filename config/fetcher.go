@@ -64,10 +64,10 @@ func newFetcher(client *http.Client, user common.UserInfo, locale string, apiCli
 		locale:       locale,
 		apiClient:    apiClient,
 	}
-	events.Subscribe(func(kindling.ClientUpdated) {
+	events.Subscribe(func(client kindling.ClientUpdated) {
 		f.httpClientMutex.Lock()
 		defer f.httpClientMutex.Unlock()
-		f.httpClient = kindling.HTTPClient()
+		f.httpClient = client.Client
 	})
 	return f
 }

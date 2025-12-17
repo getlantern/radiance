@@ -67,6 +67,7 @@ func NewKindling(dataDir string, logger io.Writer) error {
 
 type ClientUpdated struct {
 	events.Event
+	Client *http.Client
 }
 
 // KindlingUpdater start event subscriptions that might need to rebuild kindling
@@ -86,6 +87,6 @@ func KindlingUpdater() {
 		// build new http client
 		newHTTPClient(kindling.NewKindling("radiance", append(defaultOptions, dnsttRenewableOptions...)...))
 		// notify that a new client is available
-		events.Emit(ClientUpdated{})
+		events.Emit(ClientUpdated{Client: HTTPClient()})
 	})
 }
