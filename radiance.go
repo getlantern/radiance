@@ -15,7 +15,9 @@ import (
 	"github.com/Xuanwo/go-locale"
 	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
+	traceNoop "go.opentelemetry.io/otel/trace/noop"
 
 	lcommon "github.com/getlantern/common"
 
@@ -77,6 +79,8 @@ type Options struct {
 	Locale   string
 	DeviceID string
 	LogLevel string
+	//User choice for telemetry consent
+	TelemetryConsent bool
 }
 
 //go:embed assets/amp_public_key.pem
@@ -156,8 +160,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		slog.Info("Config changed", "oldConfig", evt.Old, "newConfig", evt.New)
-		if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
-			slog.Error("Failed to handle new config for telemetry", "error", err)
+		if opts.TelemetryConsent {
+			slog.Info("Telemetry consent given; handling new config for telemetry")
+			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
+				slog.Error("Failed to handle new config for telemetry", "error", err)
+			}
+		} else {
+			slog.Info("Telemetry consent not given; skipping telemetry initialization")
 		}
 	})
 	confHandler := config.NewConfigHandler(cOpts)
@@ -279,6 +288,12 @@ func (r *Radiance) Features() map[string]bool {
 		return map[string]bool{}
 	}
 	return cfg.ConfigResponse.Features
+}
+
+// DisableTelemetry disables OpenTelemetry instrumentation for the Radiance client.
+func (r *Radiance) DisableTelemetry() {
+	otel.SetTracerProvider(traceNoop.NewTracerProvider())
+	otel.SetMeterProvider(noop.NewMeterProvider())
 }
 
 // ServerLocations returns the list of server locations where the user can connect to proxies.
