@@ -234,6 +234,9 @@ func readSalt(path string) ([]byte, error) {
 }
 
 // getSalt retrieves the salt for the given email address or it's cached value.
+// Since this operation use a http client, we need to lock the mutex before using it
+// since it could be affected by a update, if you're using this function, make sure
+// the HTTP client mutex isn't getting locked otherwise it might produce a dead lock.
 func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "get_salt")
 	defer span.End()
@@ -263,6 +266,7 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 		return nil, err
 	}
 
+	// locking after getSalt since it uses the httpClientMutex
 	a.httpClientMutex.Lock()
 	defer a.httpClientMutex.Unlock()
 	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
@@ -414,6 +418,7 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 		A:     A.Bytes(),
 	}
 
+	// locking after getSalt since it uses the httpClientMutex
 	a.httpClientMutex.Lock()
 	defer a.httpClientMutex.Unlock()
 
@@ -524,6 +529,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 		A:     A.Bytes(),
 	}
 
+	// locking after getSalt since it uses the httpClientMutex
 	a.httpClientMutex.Lock()
 	defer a.httpClientMutex.Unlock()
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
