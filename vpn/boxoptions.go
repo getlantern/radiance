@@ -46,8 +46,9 @@ const (
 // this is the base options that is need for everything to work correctly. this should not be
 // changed unless you know what you're doing.
 func baseOpts(basePath string) O.Options {
-	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
-	directPath := filepath.Join(basePath, directFile)
+	splitTunnelPath := localBoxPath(basePath, splitTunnelFile)
+	directPath := localBoxPath(basePath, directFile)
+	adBlockPath := localBoxPath(basePath, adBlockFile)
 
 	// Write the domains to access directly to a file to disk.
 	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
@@ -127,6 +128,14 @@ func baseOpts(basePath string) O.Options {
 					},
 					Format: C.RuleSetFormatSource,
 				},
+				{
+					Type: C.RuleSetTypeLocal,
+					Tag:  adBlockTag,
+					LocalOptions: O.LocalRuleSet{
+						Path: adBlockPath,
+					},
+					Format: C.RuleSetFormatSource,
+				},
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
@@ -144,6 +153,13 @@ func baseOpts(basePath string) O.Options {
 	}
 }
 
+func localBoxPath(basePath, name string) string {
+	if common.IsWindows() {
+		return name
+	}
+	return filepath.Join(basePath, name)
+}
+
 func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
@@ -152,10 +168,11 @@ func baseRoutingRules() []O.Rule {
 	// 2.   Hijack DNS to allow sing-box to handle DNS requests
 	// 3.   Route private IPs to direct outbound
 	// 4.   Split tunnel rule
-	// 5.   Bypass Lantern process traffic (not on mobile)
-	// 6.   rules from config file (added in buildOptions)
-	// 7-9. Group rules for auto, lantern, and user (added in buildOptions)
-	// 10.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 5.   Ad-block rule
+	// 6.   Bypass Lantern process traffic (not on mobile)
+	// 7.   rules from config file (added in buildOptions)
+	// 8-10. Group rules for auto, lantern, and user (added in buildOptions)
+	// 11.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//      by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -219,6 +236,20 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
+		{ // ad-block rule
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					RuleSet: []string{adBlockTag},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "block",
+					},
+				},
+			},
+		},
 	}
 	if !common.IsAndroid() && !common.IsIOS() {
 		rules = append(rules, O.Rule{
@@ -247,7 +278,7 @@ func buildOptions(group, path string) (O.Options, error) {
 	slog.Debug("Base options initialized")
 
 	// update default options and paths
-	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
+	opts.Experimental.CacheFile.Path = localBoxPath(path, cacheFileName)
 	opts.Experimental.ClashAPI.DefaultMode = group
 
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",

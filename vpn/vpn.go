@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -88,6 +87,8 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	path := common.DataPath()
 	_ = newSplitTunnel(path) // ensure split tunnel rule file exists to prevent sing-box from complaining
+	createAdBlockRuleFile(path)
+
 	opts, err := buildOptions(group, path)
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
@@ -187,7 +188,7 @@ func selectedServer(ctx context.Context) (string, string, error) {
 	}
 	slog.Log(nil, internal.LevelTrace, "Tunnel not running, reading from cache file")
 	opts := baseOpts(common.DataPath()).Experimental.CacheFile
-	opts.Path = filepath.Join(common.DataPath(), cacheFileName)
+	opts.Path = localBoxPath(common.DataPath(), cacheFileName)
 	cacheFile := cachefile.New(context.Background(), *opts)
 	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
 		return "", "", fmt.Errorf("failed to start cache file: %w", err)

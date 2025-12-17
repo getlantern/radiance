@@ -29,6 +29,7 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/vpn"
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -62,8 +63,9 @@ type Radiance struct {
 	srvManager    *servers.Manager
 
 	// user config is the user config object that contains the device ID and other user data
-	userInfo common.UserInfo
-	locale   string
+	userInfo  common.UserInfo
+	locale    string
+	adBlocker *vpn.AdBlocker
 
 	shutdownFuncs []func(context.Context) error
 	closeOnce     sync.Once
@@ -159,11 +161,20 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
 			slog.Error("Failed to handle new config for telemetry", "error", err)
 		}
+
 	})
+
+	adBlocker, err := vpn.NewAdBlocker()
+	if err != nil {
+		slog.Error("Unable to create ad blocker", "error", err)
+	}
+
 	confHandler := config.NewConfigHandler(cOpts)
+
 	r := &Radiance{
 		confHandler:   confHandler,
 		issueReporter: issueReporter,
+		adBlocker:     adBlocker,
 		apiHandler:    apiHandler,
 		srvManager:    svrMgr,
 		userInfo:      userInfo,
@@ -293,12 +304,28 @@ func (r *Radiance) ServerLocations() ([]lcommon.ServerLocation, error) {
 	return cfg.ConfigResponse.Servers, nil
 }
 
+// slogWriter is used to bridge kindling/fronted logs into slog
 type slogWriter struct {
 	*slog.Logger
 }
 
 func (w *slogWriter) Write(p []byte) (n int, err error) {
-	// Convert the byte slice to a string and log it
 	w.Info(string(p))
 	return len(p), nil
+}
+
+// AdBlockEnabled returns whether or not ad blocking is currently enabled
+func (r *Radiance) AdBlockEnabled() bool {
+	if r == nil || r.adBlocker == nil {
+		return false
+	}
+	return r.adBlocker.IsEnabled()
+}
+
+// SetAdBlockEnabled toggles ad blocking by updating the underlying sing-box ruleset
+func (r *Radiance) SetAdBlockEnabled(enabled bool) error {
+	if r == nil || r.adBlocker == nil {
+		return fmt.Errorf("adblocker not initialized")
+	}
+	return r.adBlocker.SetEnabled(enabled)
 }

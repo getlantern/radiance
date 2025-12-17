@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,8 +12,6 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/getlantern/lantern-box/adapter"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
@@ -107,24 +106,24 @@ func TestUpdateServers(t *testing.T) {
 	}
 }
 
-func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
-	outbounds := outboundMgr.Outbounds()
-	var iGroups []adapter.MutableOutboundGroup
-	for _, it := range outbounds {
-		if group, isGroup := it.(adapter.MutableOutboundGroup); isGroup {
-			iGroups = append(iGroups, group)
-		}
-	}
-	return iGroups
-}
-
 func testEstablishConnection(t *testing.T, opts sbO.Options) {
 	tmp := common.DataPath()
 
-	opts.Route.RuleSet = baseOpts(common.DataPath()).Route.RuleSet
+	base := baseOpts(tmp)
+	opts.Route.RuleSet = base.Route.RuleSet
 	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts(common.DataPath()).Route.Rules[2]}, opts.Route.Rules...)
+	opts.Route.RuleSet[1].LocalOptions.Path = filepath.Join(tmp, directFile)
+	opts.Route.RuleSet[2].LocalOptions.Path = filepath.Join(tmp, adBlockFile)
+
 	newSplitTunnel(tmp)
+	require.NoError(t, createAdBlockRuleFile(tmp))
+	require.NoError(t, os.WriteFile(
+		opts.Route.RuleSet[1].LocalOptions.Path,
+		[]byte(inlineDirectRuleSet),
+		0644,
+	))
+
+	opts.Route.Rules = append([]sbO.Rule{base.Route.Rules[2]}, opts.Route.Rules...)
 
 	err := establishConnection("", "", opts, tmp, nil)
 	require.NoError(t, err, "failed to establish connection")
