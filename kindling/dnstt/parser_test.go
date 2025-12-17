@@ -5,9 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -30,12 +28,6 @@ func gzipYAML(yaml []byte) []byte {
 }
 
 func TestDNSTTConfigUpdate(t *testing.T) {
-	slog.SetDefault(slog.New(slog.NewTextHandler(
-		os.Stdout,
-		&slog.HandlerOptions{
-			AddSource: true,
-		},
-	)))
 	validYAML := []byte(`
 dnsttConfigs:
   - dohResolver: https://localhost/dns
