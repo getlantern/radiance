@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/sagernet/sing-box/constant"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
+	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -150,4 +152,144 @@ func testBoxOptions(tmpPath string) (*option.Options, string, error) {
 	opts.Experimental.CacheFile.CacheID = cacheID
 	buf, _ := json.Marshal(opts)
 	return &opts, string(buf), nil
+}
+
+func TestMergeDNSOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		dst  *O.DNSOptions
+		src  *O.DNSOptions
+		want *O.DNSOptions
+	}{
+		{
+			name: "src nil",
+			dst: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{Final: "final"},
+			},
+			want: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{Final: "final"},
+			},
+		},
+		{
+			name: "append servers and rules",
+			dst: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{
+					Servers: []O.DNSServerOptions{
+						newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
+					},
+					Rules: []O.DNSRule{
+						{
+							Type: C.RuleTypeDefault,
+							DefaultOptions: O.DefaultDNSRule{
+								RawDefaultDNSRule: O.RawDefaultDNSRule{
+									ClashMode: "current-rule",
+								},
+							},
+						},
+					},
+				},
+			},
+			src: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{
+					Servers: []O.DNSServerOptions{
+						newDNSServerOptions(C.DNSTypeTLS, "dns-cloudflare-dot", "1.1.1.1", ""),
+					},
+					Rules: []O.DNSRule{
+						{
+							Type: C.RuleTypeDefault,
+							DefaultOptions: O.DefaultDNSRule{
+								RawDefaultDNSRule: O.RawDefaultDNSRule{
+									ClashMode: "new-rule",
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{
+					Servers: []O.DNSServerOptions{
+						newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
+						newDNSServerOptions(C.DNSTypeTLS, "dns-cloudflare-dot", "1.1.1.1", ""),
+					},
+					Rules: []O.DNSRule{
+						{
+							Type: C.RuleTypeDefault,
+							DefaultOptions: O.DefaultDNSRule{
+								RawDefaultDNSRule: O.RawDefaultDNSRule{
+									ClashMode: "current-rule",
+								},
+							},
+						},
+						{
+							Type: C.RuleTypeDefault,
+							DefaultOptions: O.DefaultDNSRule{
+								RawDefaultDNSRule: O.RawDefaultDNSRule{
+									ClashMode: "new-rule",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "update non-zero fields",
+			dst: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{
+					Servers: []O.DNSServerOptions{
+						newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
+					},
+					Rules: []O.DNSRule{
+						{
+							Type: C.RuleTypeDefault,
+							DefaultOptions: O.DefaultDNSRule{
+								RawDefaultDNSRule: O.RawDefaultDNSRule{
+									ClashMode: "current-rule",
+								},
+							},
+						},
+					},
+					ReverseMapping:   true,
+					DNSClientOptions: O.DNSClientOptions{},
+				},
+			},
+			src: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{
+					Final: "final",
+					DNSClientOptions: O.DNSClientOptions{
+						Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
+					},
+				},
+			},
+			want: &O.DNSOptions{
+				RawDNSOptions: O.RawDNSOptions{
+					Servers: []O.DNSServerOptions{
+						newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
+					},
+					Rules: []O.DNSRule{
+						{
+							Type: C.RuleTypeDefault,
+							DefaultOptions: O.DefaultDNSRule{
+								RawDefaultDNSRule: O.RawDefaultDNSRule{
+									ClashMode: "current-rule",
+								},
+							},
+						},
+					},
+					Final:          "final",
+					ReverseMapping: true,
+					DNSClientOptions: O.DNSClientOptions{
+						Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mergeDNSOptions(tt.dst, tt.src)
+			assert.Equal(t, tt.want, tt.dst, "merged options not equal")
+		})
+	}
 }
