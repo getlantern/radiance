@@ -371,9 +371,7 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
 		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
 	}
-	if src.DNS != nil {
-		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
-	}
+	mergeDNSOptions(dst.DNS, src.DNS)
 
 	var tags []string
 	for _, out := range src.Outbounds {
@@ -383,6 +381,28 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
+}
+
+// mergeDNSOptions merges src into dst DNS options, preferring non-zero values from src.
+// Servers and Rules slices are appended.
+func mergeDNSOptions(dst, src *O.DNSOptions) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.Servers = append(dst.Servers, src.Servers...)
+	dst.Rules = append(dst.Rules, src.Rules...)
+	dst.Final = useIfNotZero(src.Final, dst.Final)
+	dst.ReverseMapping = useIfNotZero(src.ReverseMapping, dst.ReverseMapping)
+	dst.DNSClientOptions = useIfNotZero(src.DNSClientOptions, dst.DNSClientOptions)
+	dst.LegacyDNSOptions = useIfNotZero(src.LegacyDNSOptions, dst.LegacyDNSOptions)
+}
+
+func useIfNotZero[T comparable](newVal, oldVal T) T {
+	var zero T
+	if newVal != zero {
+		return newVal
+	}
+	return oldVal
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string) {
