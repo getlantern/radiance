@@ -169,12 +169,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
-	if opts.TelemetryConsent {
-		r.telemetryConsent.Store(true)
-	}
+	r.telemetryConsent.Store(opts.TelemetryConsent)
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		if r.telemetryConsent.Load() {
-			slog.Info("Telemetry consent given; handling new config for telemetry", "oldConfig", evt.Old, "newConfig", evt.New)
+			slog.Info("Telemetry consent given; handling new config for telemetry")
 			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
 				slog.Error("Failed to handle new config for telemetry", "error", err)
 			}
@@ -296,11 +294,13 @@ func (r *Radiance) Features() map[string]bool {
 // After enabling it, it should initialize telemetry again once a new config
 // is available
 func (r *Radiance) EnableTelemetry() {
+	slog.Info("Enabling telemetry")
 	r.telemetryConsent.Store(true)
 }
 
 // DisableTelemetry disables OpenTelemetry instrumentation for the Radiance client.
 func (r *Radiance) DisableTelemetry() {
+	slog.Info("Disabling telemetry")
 	r.telemetryConsent.Store(false)
 	otel.SetTracerProvider(traceNoop.NewTracerProvider())
 	otel.SetMeterProvider(noop.NewMeterProvider())
