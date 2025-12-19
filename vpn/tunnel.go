@@ -20,8 +20,10 @@ import (
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
 	lblog "github.com/getlantern/lantern-box/log"
+	"github.com/getlantern/lantern-box/tracker/clientcontext"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -165,6 +167,28 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
+	infoFn := func() clientcontext.ClientInfo {
+		// TODO:
+		// 	- get real deviceID -- deviceID.Get doesn't work for mobile
+		// 	- get country code
+		deviceID := deviceid.Get()
+		user := common.NewUserConfig(deviceID, dataPath, "")
+		return clientcontext.ClientInfo{
+			DeviceID:    deviceID,
+			Platform:    common.Platform,
+			IsPro:       user.IsPro(),
+			CountryCode: "",
+			Version:     common.Version,
+		}
+	}
+	// use any for now, we'll restrict it to lantern servers only later
+	matchBounds := clientcontext.MatchBounds{
+		Inbound:  []string{"any"},
+		Outbound: []string{"any"},
+	}
+
+	router := service.FromContext[adapter.Router](t.ctx)
+	router.AppendTracker(clientcontext.NewClientContextInjector(infoFn, matchBounds))
 	t.lbService = lb
 
 	history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
