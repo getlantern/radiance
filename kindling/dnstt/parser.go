@@ -1,4 +1,4 @@
-package config
+package dnstt
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/getlantern/dnstt"
 	"github.com/getlantern/keepcurrent"
+	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/events"
 	"github.com/goccy/go-yaml"
 )
@@ -25,31 +26,26 @@ type dnsttConfig struct {
 	UTLSDistribution *string `yaml:"utlsDistribution,omitempty"`
 }
 
-func processYaml(gzippedYaml []byte) (dnsttConfig, error) {
+func processYaml(gzippedYaml []byte) ([]dnsttConfig, error) {
 	r, gzipErr := gzip.NewReader(bytes.NewReader(gzippedYaml))
 	if gzipErr != nil {
-		return dnsttConfig{}, fmt.Errorf("failed to create gzip reader: %w", gzipErr)
+		return nil, fmt.Errorf("failed to create gzip reader: %w", gzipErr)
 	}
 	defer r.Close()
 	yml, err := io.ReadAll(r)
 	if err != nil {
-		return dnsttConfig{}, fmt.Errorf("failed to read gzipped file: %w", err)
+		return nil, fmt.Errorf("failed to read gzipped file: %w", err)
 	}
-	path, err := yaml.PathString("$.dnstt")
+	path, err := yaml.PathString("$.dnsttConfigs")
 	if err != nil {
-		return dnsttConfig{}, fmt.Errorf("failed to create config path: %w", err)
+		return nil, fmt.Errorf("failed to create config path: %w", err)
 	}
-	var cfg dnsttConfig
+	var cfg []dnsttConfig
 	if err = path.Read(bytes.NewReader(yml), &cfg); err != nil {
-		return dnsttConfig{}, fmt.Errorf("failed to read config: %w", err)
+		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
 	return cfg, nil
-}
-
-type NewDNSTTConfigEvent struct {
-	events.Event
-	New dnstt.DNSTT
 }
 
 func dnsttConfigValidator() func([]byte) error {
@@ -103,38 +99,50 @@ func DNSTTConfigUpdate(ctx context.Context, configURL string, httpClient *http.C
 	runner.Start(pollInterval)
 }
 
+type DNSTTUpdateEvent struct {
+	events.Event
+	YML string
+}
+
 func onNewDNSTTConfig(gzippedYML []byte) error {
-	cfg, err := processYaml(gzippedYML)
-	if err != nil {
-		return fmt.Errorf("failed to process dnstt config: %w", err)
-	}
-
-	opts := make([]dnstt.Option, 0)
-	if cfg.Domain != "" {
-		opts = append(opts, dnstt.WithTunnelDomain(cfg.Domain))
-	}
-	if cfg.PublicKey != "" {
-		opts = append(opts, dnstt.WithPublicKey(cfg.PublicKey))
-	}
-	if cfg.DoHResolver != nil {
-		opts = append(opts, dnstt.WithDoH(*cfg.DoHResolver))
-	}
-	if cfg.DoTResolver != nil {
-		opts = append(opts, dnstt.WithDoT(*cfg.DoTResolver))
-	}
-	if cfg.UTLSDistribution != nil {
-		opts = append(opts, dnstt.WithUTLSDistribution(*cfg.UTLSDistribution))
-	}
-
-	d, err := dnstt.NewDNSTT(opts...)
-	if err != nil {
-		return fmt.Errorf("failed to build new dnstt: %w", err)
-	}
-
-	slog.Info("applied new dnstt configuration", slog.Any("config", cfg))
-	events.Emit(NewDNSTTConfigEvent{
-		New: d,
+	slog.Debug("received new dnstt configs")
+	events.Emit(DNSTTUpdateEvent{
+		YML: string(gzippedYML),
 	})
-
 	return nil
+}
+
+func ParseDNSTTConfigs(gzipyml string) ([]kindling.Option, error) {
+	cfgs, err := processYaml([]byte(gzipyml))
+	if err != nil {
+		return nil, err
+	}
+
+	options := make([]kindling.Option, 0)
+	for _, cfg := range cfgs {
+		opts := make([]dnstt.Option, 0)
+		if cfg.Domain != "" {
+			opts = append(opts, dnstt.WithTunnelDomain(cfg.Domain))
+		}
+		if cfg.PublicKey != "" {
+			opts = append(opts, dnstt.WithPublicKey(cfg.PublicKey))
+		}
+		if cfg.DoHResolver != nil {
+			opts = append(opts, dnstt.WithDoH(*cfg.DoHResolver))
+		}
+		if cfg.DoTResolver != nil {
+			opts = append(opts, dnstt.WithDoT(*cfg.DoTResolver))
+		}
+		if cfg.UTLSDistribution != nil {
+			opts = append(opts, dnstt.WithUTLSDistribution(*cfg.UTLSDistribution))
+		}
+
+		d, err := dnstt.NewDNSTT(opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build new dnstt: %w", err)
+		}
+		options = append(options, kindling.WithDNSTunnel(d))
+	}
+
+	return options, nil
 }

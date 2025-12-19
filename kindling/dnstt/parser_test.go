@@ -1,4 +1,4 @@
-package config
+package dnstt
 
 import (
 	"bytes"
@@ -29,9 +29,9 @@ func gzipYAML(yaml []byte) []byte {
 
 func TestDNSTTConfigUpdate(t *testing.T) {
 	validYAML := []byte(`
-dnstt:
-  dohResolver: https://localhost/dns
-  domain: "example.com"
+dnsttConfigs:
+  - dohResolver: https://localhost/dns
+    domain: "example.com"
 `)
 	invalidGzip := []byte("not a gzip file")
 
@@ -77,8 +77,8 @@ dnstt:
 			updated := make(chan struct{})
 			defer close(updated)
 			if tt.expectUpdate {
-				events.Subscribe(func(e NewDNSTTConfigEvent) {
-					assert.NotNil(t, e.New)
+				events.Subscribe(func(e DNSTTUpdateEvent) {
+					assert.NotEmpty(t, e.YML)
 					updated <- struct{}{}
 				})
 			}
