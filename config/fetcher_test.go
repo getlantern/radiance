@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
 	C "github.com/getlantern/common"
+	"github.com/getlantern/dnstt"
 	"github.com/getlantern/kindling"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +66,76 @@ func TestProxylessFetchConfig(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
 
+}
+
+func TestAMPFetchConfig(t *testing.T) {
+	// Disable this test for now since it depends on external service.
+	t.Skip("Skipping TestAMPFetchConfig since it depends on external service.")
+	ampPublicKey := ""
+	ampClient, err := fronted.NewAMPClient(context.Background(), os.Stderr, ampPublicKey)
+	require.NoError(t, err)
+	k := kindling.NewKindling(
+		"radiance-df-test",
+		kindling.WithAMPCache(ampClient),
+	)
+	httpClient := k.NewHTTPClient()
+	mockUser := &mockUser{}
+	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+
+	privateKey, err := wgtypes.GenerateKey()
+	require.NoError(t, err)
+
+	_, err = fetcher.fetchConfig(context.Background(), C.ServerLocation{Country: "US"}, privateKey.PublicKey().String())
+	// We expect a 500 error since the user does not have any matching tracks.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
+}
+
+func TestDNSTTFetchConfig(t *testing.T) {
+	t.Skip("Skipping TestDNSTTFetchConfig since it depends on external service.")
+	cli, err := dnstt.NewDNSTT(
+		dnstt.WithDoH("https://cloudflare-dns.com/dns-query"),
+		dnstt.WithTunnelDomain("t.iantem.io"),
+		dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+	)
+	require.NoError(t, err)
+	dnsTunnel2, err := dnstt.NewDNSTT(
+		dnstt.WithTunnelDomain("t.iantem.io"),
+		dnstt.WithDoH("https://dns.adguard-dns.com/dns-query"),
+		dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+	)
+	require.NoError(t, err)
+	dnsTunnel3, err := dnstt.NewDNSTT(
+		dnstt.WithTunnelDomain("t.iantem.io"),
+		dnstt.WithDoH("https://dns.google/dns-query"),
+		dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+	)
+	require.NoError(t, err)
+	dnsTunnel4, err := dnstt.NewDNSTT(
+		dnstt.WithTunnelDomain("t.iantem.io"),
+		dnstt.WithDoT("dns.quad9.net:853"),
+		dnstt.WithPublicKey("405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977"),
+	)
+	require.NoError(t, err)
+
+	k := kindling.NewKindling(
+		"radiance-df-test",
+		kindling.WithDNSTunnel(cli),
+		kindling.WithDNSTunnel(dnsTunnel2),
+		kindling.WithDNSTunnel(dnsTunnel3),
+		kindling.WithDNSTunnel(dnsTunnel4),
+	)
+	httpClient := k.NewHTTPClient()
+	mockUser := &mockUser{}
+	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+
+	privateKey, err := wgtypes.GenerateKey()
+	require.NoError(t, err)
+
+	_, err = fetcher.fetchConfig(context.Background(), C.ServerLocation{Country: "US"}, privateKey.PublicKey().String())
+	// We expect a 500 error since the user does not have any matching tracks.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
 }
 
 type mockRoundTripper struct {
