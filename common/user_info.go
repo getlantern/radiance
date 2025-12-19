@@ -26,6 +26,7 @@ type UserInfo interface {
 	Locale() string
 	SetLocale(string)
 	AccountType() string
+	IsPro() bool
 }
 
 // userInfo is a struct that implements the UserInfo interface
@@ -93,6 +94,10 @@ func (u *userInfo) AccountType() string {
 		return "free"
 	}
 	return typ
+}
+
+func (u *userInfo) IsPro() bool {
+	return u.AccountType() == "pro"
 }
 
 type UserChangeEvent struct {
