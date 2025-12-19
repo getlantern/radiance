@@ -296,6 +296,21 @@ func (r *Radiance) Features() map[string]bool {
 func (r *Radiance) EnableTelemetry() {
 	slog.Info("Enabling telemetry")
 	r.telemetryConsent.Store(true)
+	// If a config is already available, initialize telemetry immediately instead of
+	// waiting for the next config change event.
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		slog.Warn("Failed to get config while enabling telemetry; telemetry will be initialized on next config update", "error", err)
+		return
+	}
+	if cfg == nil {
+		slog.Info("No config available while enabling telemetry; telemetry will be initialized on next config update")
+		return
+	}
+	cErr := telemetry.OnNewConfig(nil, cfg, r.userInfo.DeviceID(), r.userInfo)
+	if cErr != nil {
+		slog.Warn("Failed to initialize telemetry on enabling", "error", cErr)
+	}
 }
 
 // DisableTelemetry disables OpenTelemetry instrumentation for the Radiance client.
