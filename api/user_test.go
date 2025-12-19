@@ -270,3 +270,4 @@ func (m *mockUserInfo) LegacyToken() string                          { return "l
 func (m *mockUserInfo) Locale() string                               { return "en-US" }
 func (m *mockUserInfo) SetLocale(locale string)                      {}
 func (m *mockUserInfo) AccountType() string                          { return "free" }
+func (m *mockUserInfo) IsPro() bool                                  { return false }
