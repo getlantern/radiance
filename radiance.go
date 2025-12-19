@@ -10,12 +10,15 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
 	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
+	traceNoop "go.opentelemetry.io/otel/trace/noop"
 
 	lcommon "github.com/getlantern/common"
 
@@ -65,10 +68,10 @@ type Radiance struct {
 	userInfo common.UserInfo
 	locale   string
 
-	shutdownFuncs []func(context.Context) error
-	closeOnce     sync.Once
-	stopChan      chan struct{}
-	shutdownOTEL  func(context.Context) error
+	shutdownFuncs    []func(context.Context) error
+	closeOnce        sync.Once
+	stopChan         chan struct{}
+	telemetryConsent atomic.Bool
 }
 
 type Options struct {
@@ -77,6 +80,8 @@ type Options struct {
 	Locale   string
 	DeviceID string
 	LogLevel string
+	// User choice for telemetry consent
+	TelemetryConsent bool
 }
 
 //go:embed assets/amp_public_key.pem
@@ -154,15 +159,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		cOpts.PollInterval = -1
 		slog.Info("Disabling config fetch")
 	}
-	events.Subscribe(func(evt config.NewConfigEvent) {
-		slog.Info("Config changed", "oldConfig", evt.Old, "newConfig", evt.New)
-		if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
-			slog.Error("Failed to handle new config for telemetry", "error", err)
-		}
-	})
-	confHandler := config.NewConfigHandler(cOpts)
 	r := &Radiance{
-		confHandler:   confHandler,
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
 		srvManager:    svrMgr,
@@ -172,6 +169,18 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
+	r.telemetryConsent.Store(opts.TelemetryConsent)
+	events.Subscribe(func(evt config.NewConfigEvent) {
+		if r.telemetryConsent.Load() {
+			slog.Info("Telemetry consent given; handling new config for telemetry")
+			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
+				slog.Error("Failed to handle new config for telemetry", "error", err)
+			}
+		} else {
+			slog.Info("Telemetry consent not given; skipping telemetry initialization")
+		}
+	})
+	r.confHandler = config.NewConfigHandler(cOpts)
 	r.addShutdownFunc(common.Close, telemetry.Close)
 	return r, nil
 }
@@ -272,6 +281,37 @@ func (r *Radiance) Features() map[string]bool {
 		return map[string]bool{}
 	}
 	return cfg.ConfigResponse.Features
+}
+
+// EnableTelemetry enable OpenTelemetry instrumentation for the Radiance client.
+// After enabling it, it should initialize telemetry again once a new config
+// is available
+func (r *Radiance) EnableTelemetry() {
+	slog.Info("Enabling telemetry")
+	r.telemetryConsent.Store(true)
+	// If a config is already available, initialize telemetry immediately instead of
+	// waiting for the next config change event.
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		slog.Warn("Failed to get config while enabling telemetry; telemetry will be initialized on next config update", "error", err)
+		return
+	}
+	if cfg == nil {
+		slog.Info("No config available while enabling telemetry; telemetry will be initialized on next config update")
+		return
+	}
+	cErr := telemetry.OnNewConfig(nil, cfg, r.userInfo.DeviceID(), r.userInfo)
+	if cErr != nil {
+		slog.Warn("Failed to initialize telemetry on enabling", "error", cErr)
+	}
+}
+
+// DisableTelemetry disables OpenTelemetry instrumentation for the Radiance client.
+func (r *Radiance) DisableTelemetry() {
+	slog.Info("Disabling telemetry")
+	r.telemetryConsent.Store(false)
+	otel.SetTracerProvider(traceNoop.NewTracerProvider())
+	otel.SetMeterProvider(noop.NewMeterProvider())
 }
 
 // ServerLocations returns the list of server locations where the user can connect to proxies.
