@@ -43,7 +43,8 @@
       }
     ],
     "strategy": "prefer_ipv4",
-    "independent_cache": true
+    "independent_cache": true,
+    "final": "dns_remote"
   },
   "inbounds": [
   ],
