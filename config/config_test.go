@@ -231,7 +231,9 @@ func (mf *MockFetcher) fetchConfig(ctx context.Context, preferred C.ServerLocati
 	return mf.response, mf.err
 }
 
-type UserStub struct{}
+type UserStub struct {
+	common.UserInfo
+}
 
 // Verify that a UserStub implements the User interface
 var _ common.UserInfo = (*UserStub)(nil)
