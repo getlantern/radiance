@@ -9,7 +9,8 @@
         "tag": "dns_remote",
         "type": "https",
         "server": "9.9.9.9",
-        "server_port": 443
+        "server_port": 443,
+        "detour": "auto"
       },
       {
         "tag": "dns_local",
