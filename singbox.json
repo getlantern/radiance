@@ -10,6 +10,7 @@
         "type": "https",
         "server": "9.9.9.9",
         "server_port": 443,
+        "path": "/dns-query",
         "detour": "auto"
       },
       {
@@ -50,8 +51,15 @@
   "route": {
     "rules": [
       {
+        "action": "sniff"
+      },
+      {
         "protocol": "dns",
-        "outbound": "dns-out"
+        "action": "hijack-dns"
+      },
+  { 
+        "port": 53,
+        "action": "hijack-dns"
       },
       {
         "rule_set": ["geosite-cn", "geoip-cn", "geosite-ir", "geoip-ir"],
