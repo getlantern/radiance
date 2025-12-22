@@ -18,10 +18,6 @@
         "server_port": 443
       },
       {
-        "tag": "dns_resolver",
-        "address": "223.5.5.5"
-      },
-      {
         "tag": "dns_fakeip",
         "type": "fakeip",
         "inet4_range": "198.18.0.0/15",
@@ -29,10 +25,6 @@
       }
     ],
     "rules": [
-      {
-        "outbound": "any",
-        "server": "dns_resolver"
-      },
       {
         "rule_set": ["geosite-cn", "geosite-ir"],
         "server": "dns_local"
