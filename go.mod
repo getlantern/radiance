@@ -25,7 +25,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/getlantern/amp v0.0.0-20251211213807-4cbc22624b9f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20251018002705-bb54703a7fcb
+	github.com/getlantern/common v1.2.1-0.20251223145917-671181028168
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
 	github.com/getlantern/fronted v0.0.0-20251118000818-058df28ec727
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
@@ -37,7 +37,7 @@ require (
 	github.com/goccy/go-yaml v1.19.0
 	github.com/google/uuid v1.6.0
 	github.com/sagernet/sing v0.7.13
-	github.com/sagernet/sing-box v1.12.12
+	github.com/sagernet/sing-box v1.12.13
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.37.0
