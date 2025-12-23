@@ -2,7 +2,7 @@ package common
 
 import (
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/cmd/updates/events"
+	"github.com/getlantern/radiance/events"
 )
 
 // UserInfo is an interface that defines the methods for user configuration
