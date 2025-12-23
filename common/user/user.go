@@ -195,8 +195,17 @@ func Load(path string) (*userInfo, error) {
 		return nil, err
 	}
 	var u userInfo
-	if err := json.Unmarshal(data, &u); err != nil {
+	if err := json.Unmarshal(data, &u); err == nil {
+		return &u, nil
+	} else {
+		// TODO: remove in a future release
+		// Try to unmarshal as legacy protobuf format
+		var loginData protos.LoginResponse
+		if perr := protojson.Unmarshal(data, &loginData); perr == nil {
+			return &userInfo{
+				data: &loginData,
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to unmarshal user data: %w", err)
 	}
-	return &u, nil
 }
