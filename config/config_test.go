@@ -93,10 +93,13 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		configPath: configPath,
 		config:     atomic.Value{},
 		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US", nil),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	ch.config.Store(&Config{
