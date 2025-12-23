@@ -1,7 +1,7 @@
 package user
 
 // this file contains the user info interface and the methods to read and write user data
-// use this acrosss the app to read and write user data in sync
+// use this across the app to read and write user data in sync
 import (
 	"encoding/json"
 	"fmt"
@@ -44,6 +44,9 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 		} else {
 			slog.Warn("Failed to load user data -- potential issue", "path", path, "error", err)
 		}
+	}
+	if u == nil {
+		u = &userInfo{}
 	}
 	u.deviceID = deviceID
 	u.dataPath = path
