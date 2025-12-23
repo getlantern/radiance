@@ -67,30 +67,28 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config        atomic.Value
-	ftr           Fetcher
-	stopC         chan struct{}
-	closeOnce     *sync.Once
-	fetchDisabled bool
-
-	configPath string
-	configMu   sync.RWMutex
-
+	config     atomic.Value
+	ftr        Fetcher
 	svrManager ServerManager
 
-	// wgKeyPath is the path to the WireGuard private key file.
+	ctx               context.Context
+	cancel            context.CancelFunc
+	fetchDisabled     bool
+	configPath        string
 	wgKeyPath         string
 	preferredLocation atomic.Pointer[C.ServerLocation]
+	configMu          sync.RWMutex
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		config:        atomic.Value{},
-		stopC:         make(chan struct{}),
-		closeOnce:     &sync.Once{},
 		fetchDisabled: options.PollInterval <= 0,
+		ctx:           ctx,
+		cancel:        cancel,
 		configPath:    configPath,
 		wgKeyPath:     filepath.Join(options.DataDir, "wg.key"),
 		svrManager:    options.SvrManager,
@@ -169,6 +167,9 @@ func (ch *ConfigHandler) fetchConfig() error {
 	if ch.fetchDisabled {
 		return fmt.Errorf("fetching config is disabled")
 	}
+	if ch.isClosed() {
+		return fmt.Errorf("config handler is closed")
+	}
 	slog.Debug("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
@@ -199,7 +200,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 
 	slog.Info("Fetching config")
-	resp, err := ch.ftr.fetchConfig(context.Background(), preferred, privateKey.PublicKey().String())
+	resp, err := ch.ftr.fetchConfig(ch.ctx, preferred, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -313,7 +314,7 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 	}
 	for {
 		select {
-		case <-ch.stopC:
+		case <-ch.ctx.Done():
 			return
 		case <-time.After(pollInterval):
 			if err := ch.fetchConfig(); err != nil {
@@ -325,9 +326,16 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 
 // Stop stops the ConfigHandler from fetching new configurations.
 func (ch *ConfigHandler) Stop() {
-	ch.closeOnce.Do(func() {
-		close(ch.stopC)
-	})
+	ch.cancel()
+}
+
+func (ch *ConfigHandler) isClosed() bool {
+	select {
+	case <-ch.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 // loadConfig loads the config file from the disk. If the config file is not found, it returns
@@ -413,7 +421,9 @@ func (ch *ConfigHandler) setConfig(cfg *Config) error {
 	}
 	slog.Info("saved new config")
 	slog.Info("Config set")
-	emit(oldConfig, cfg)
+	if !ch.isClosed() {
+		emit(oldConfig, cfg)
+	}
 	return nil
 }
 
