@@ -156,12 +156,10 @@ func (u *userInfo) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return err
 	}
-	u.mu.Lock()
 	u.deviceID = c.DeviceID
 	u.data = (*protos.LoginResponse)(c.Data)
 	u.locale = c.Locale
 	u.countryCode = c.Country
-	u.mu.Unlock()
 	return nil
 }
 
