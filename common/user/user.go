@@ -208,8 +208,10 @@ func Load(path string) (*userInfo, error) {
 	} else {
 		// TODO: remove in a future release
 		// Try to unmarshal as legacy protobuf format
+		slog.Info("Failed to unmarshal user data as JSON, trying legacy protobuf format", "error", err)
 		var loginData protos.LoginResponse
-		if perr := protojson.Unmarshal(data, &loginData); perr == nil {
+		if perr := proto.Unmarshal(data, &loginData); perr == nil {
+			slog.Info("Migrating user data to new JSON format")
 			return &userInfo{
 				data: &loginData,
 			}, nil
