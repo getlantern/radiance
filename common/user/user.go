@@ -118,17 +118,25 @@ func (u *userInfo) IsPro() bool {
 
 func (u *userInfo) SetData(data *protos.LoginResponse) error {
 	u.mu.Lock()
-	old := *u
+	old := &userInfo{
+		deviceID:    u.deviceID,
+		data:        u.data,
+		locale:      u.locale,
+		countryCode: u.countryCode,
+		dataPath:    u.dataPath,
+	}
 	u.data = data
 	u.mu.Unlock()
 	if data != nil && !proto.Equal(old.data, data) {
-		events.Emit(common.UserChangeEvent{Old: &old, New: u})
+		events.Emit(common.UserChangeEvent{Old: old, New: u})
 	}
 	return save(u, u.dataPath)
 }
 
 // GetUserData reads user data from file
 func (u *userInfo) GetData() (*protos.LoginResponse, error) {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
 	return u.data, nil
 }
 
