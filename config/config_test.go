@@ -140,6 +140,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 	mockFetcher := &MockFetcher{}
 
 	// Create a ConfigHandler with the mock parser and fetcher
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		configPath:        configPath,
 		config:            atomic.Value{},
@@ -147,6 +148,8 @@ func TestHandlerFetchConfig(t *testing.T) {
 		ftr:               mockFetcher,
 		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
 		svrManager:        &mockSrvManager{},
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	// Test case: No server location set
