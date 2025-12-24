@@ -189,7 +189,9 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 func registerPreStartTest(path string) {
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		vpn.PreStartTests(path)
+		if err := vpn.PreStartTests(path); err != nil {
+			slog.Error("VPN pre-start tests failed", "error", err, "path", path)
+		}
 	})
 }
 

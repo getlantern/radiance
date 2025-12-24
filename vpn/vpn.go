@@ -422,7 +422,7 @@ func preTest(path string) (map[string]uint16, error) {
 	}
 	tester, ok := outbound.(adapter.URLTestGroup)
 	if !ok {
-		return nil, errors.New("preTest outbound is a URLTestGroup")
+		return nil, errors.New("preTest outbound is not a URLTestGroup")
 	}
 	// run URL tests
 	results, err := tester.URLTest(ctx)

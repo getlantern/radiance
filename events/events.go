@@ -60,11 +60,14 @@ func Subscribe[T Event](callback func(evt T)) *Subscription[T] {
 // SubscribeOnce registers a callback function for the given event type T that will be invoked only
 // once. Returns a Subscription handle that can be used to unsubscribe if needed.
 func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
+	ready := make(chan struct{})
 	var sub *Subscription[T]
-	Subscribe(func(evt T) {
+	sub = Subscribe(func(evt T) {
+		<-ready
 		callback(evt)
 		sub.Unsubscribe()
 	})
+	close(ready)
 	return sub
 }
 
