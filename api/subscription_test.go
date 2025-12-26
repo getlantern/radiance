@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
 )
 
 func TestSubscriptionPaymentRedirect(t *testing.T) {
@@ -65,10 +64,6 @@ func TestPlans(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.Plans)
-}
-
-func userInfo(dataPath string) common.UserInfo {
-	return common.NewUserConfig("HFJDFJ-75885F", dataPath, "en-US")
 }
 
 type MockAPIClient struct {

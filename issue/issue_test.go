@@ -10,19 +10,21 @@ import (
 	"testing"
 
 	"github.com/getlantern/osversion"
-	"github.com/getlantern/radiance/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/user"
 )
 
 func TestSendReport(t *testing.T) {
-	userConfig := common.NewUserConfig("radiance-test", "", "")
-	
+	userConfig := user.NewUserConfig("radiance-test", "", "")
+
 	// Get OS version for expected report
 	osVer, err := osversion.GetHumanReadable()
 	require.NoError(t, err)
-	
+
 	// Build expected report
 	want := &ReportIssueRequest{
 		Type:              ReportIssueRequest_NO_ACCESS,
@@ -46,7 +48,7 @@ func TestSendReport(t *testing.T) {
 			},
 		},
 	}
-	
+
 	srv := newTestServer(t, want)
 	defer srv.Close()
 
@@ -103,11 +105,11 @@ func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
 		// Read and unmarshal the request body
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err, "should read request body")
-		
+
 		var got ReportIssueRequest
 		err = proto.Unmarshal(body, &got)
 		require.NoError(t, err, "should unmarshal protobuf request")
-		
+
 		// Filter got.Attachments to only include the ones we're testing
 		// (exclude logs.zip and other dynamic attachments)
 		filteredAttachments := make([]*ReportIssueRequest_Attachment, 0)
@@ -120,7 +122,7 @@ func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
 			}
 		}
 		got.Attachments = filteredAttachments
-		
+
 		// Compare received report with expected report using proto.Equal
 		if assert.True(t, proto.Equal(ts.want, &got), "received report should match expected report") {
 			w.WriteHeader(http.StatusOK)

@@ -17,7 +17,8 @@ func TestNewRadiance(t *testing.T) {
 			Locale:  "en-US",
 		})
 		assert.NoError(t, err)
-		defer r.Close()
+		r.Close()
+
 		assert.NotNil(t, r)
 		assert.NotNil(t, r.confHandler)
 		assert.NotNil(t, r.stopChan)
