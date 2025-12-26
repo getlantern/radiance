@@ -10,14 +10,22 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
+	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
@@ -328,4 +336,98 @@ func AutoSelectionsChangeListener(ctx context.Context, pollInterval time.Duratio
 		}
 	}()
 	return ch
+}
+
+var (
+	preStartOnce sync.Once
+	preStartErr  error
+)
+
+// PreStartTests performs pre-start URL tests for all outbounds defined in configs. This can improve
+// initial connection times by determining reachability and latency to servers before the tunnel is
+// started. PreStartTests is only performed once per application run; usually at application startup.
+func PreStartTests(path string) error {
+	preStartOnce.Do(func() {
+		results, err := preTest(path)
+		preStartErr = err
+		if err != nil {
+			slog.Error("Pre-start URL test failed", "error", err)
+			return
+		}
+
+		var fmttedResults []string
+		for tag, delay := range results {
+			fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+		}
+		slog.Log(nil, internal.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
+	})
+	return preStartErr
+}
+
+func preTest(path string) (map[string]uint16, error) {
+	slog.Info("Performing pre-start URL tests")
+
+	confPath := filepath.Join(path, common.ConfigFileName)
+	slog.Debug("Loading config file", "confPath", confPath)
+	cfgOpts, err := loadConfigOptions(confPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config options: %w", err)
+	}
+
+	slog.Debug("Loading user servers")
+	userOpts, err := loadUserOptions(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load user options: %w", err)
+	}
+
+	// since we are only doing URL tests, we only need the outbounds from both configs; we skip
+	// endpoints as most/all require elevated privileges to use. just using outbounds is sufficient
+	// to improve initial connect times.
+	outbounds := append(cfgOpts.Outbounds, userOpts.Outbounds...)
+	tags := make([]string, 0, len(outbounds))
+	for _, ob := range outbounds {
+		tags = append(tags, ob.Tag)
+	}
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags))
+
+	base := baseOpts(path)
+	base.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
+	base.Log.Disabled = true
+	options := option.Options{
+		Log:          base.Log,
+		Outbounds:    outbounds,
+		Experimental: base.Experimental,
+	}
+
+	// create pre-started box instance. we just use the standard box since we don't need a
+	// platform interface for testing.
+	ctx := box.BaseContext()
+	service.ContextWith[filemanager.Manager](ctx, nil)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
+	defer cancel()
+	instance, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: options,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sing-box instance: %w", err)
+	}
+	defer instance.Close()
+	if err := instance.PreStart(); err != nil {
+		return nil, fmt.Errorf("failed to start sing-box instance: %w", err)
+	}
+	outbound, ok := instance.Outbound().Outbound("preTest")
+	if !ok {
+		return nil, errors.New("preTest outbound not found")
+	}
+	tester, ok := outbound.(adapter.URLTestGroup)
+	if !ok {
+		return nil, errors.New("preTest outbound is not a URLTestGroup")
+	}
+	// run URL tests
+	results, err := tester.URLTest(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform URL tests: %w", err)
+	}
+	return results, nil
 }
