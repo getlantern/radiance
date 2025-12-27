@@ -30,8 +30,8 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 
-	"github.com/getlantern/radiance/cmd/common/atomicfile"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
