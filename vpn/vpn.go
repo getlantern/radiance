@@ -5,9 +5,11 @@ package vpn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +18,7 @@ import (
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
@@ -27,6 +30,7 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 
+	"github.com/getlantern/radiance/cmd/common/atomicfile"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
@@ -338,6 +342,8 @@ func AutoSelectionsChangeListener(ctx context.Context, pollInterval time.Duratio
 	return ch
 }
 
+const urlTestHistoryFileName = "url_test_history.json"
+
 var (
 	preStartOnce sync.Once
 	preStartErr  error
@@ -403,6 +409,10 @@ func preTest(path string) (map[string]uint16, error) {
 	// platform interface for testing.
 	ctx := box.BaseContext()
 	service.ContextWith[filemanager.Manager](ctx, nil)
+	urlTestHistoryStorage := urltest.NewHistoryStorage()
+	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
+	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
+
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
 	defer cancel()
 	instance, err := sbox.New(sbox.Options{
@@ -429,5 +439,43 @@ func preTest(path string) (map[string]uint16, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform URL tests: %w", err)
 	}
+
+	historyPath := filepath.Join(path, urlTestHistoryFileName)
+	if err := saveURLTestResults(urlTestHistoryStorage, historyPath, results); err != nil {
+		return results, fmt.Errorf("failed to save URL test results: %w", err)
+	}
 	return results, nil
+}
+
+func saveURLTestResults(storage *urltest.HistoryStorage, path string, results map[string]uint16) error {
+	slog.Debug("Saving URL test history", "path", path)
+	history := make(map[string]*adapter.URLTestHistory, len(results))
+	for tag := range results {
+		history[tag] = storage.LoadURLTestHistory(tag)
+	}
+	buf, err := json.Marshal(history)
+	if err != nil {
+		return fmt.Errorf("failed to marshal URL test history: %w", err)
+	}
+	return atomicfile.WriteFile(path, buf, 0o644)
+}
+
+func loadURLTestHistory(storage *urltest.HistoryStorage, path string) error {
+	slog.Debug("Loading URL test history", "path", path)
+	buf, err := atomicfile.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read URL test history file: %w", err)
+	}
+
+	history := make(map[string]*adapter.URLTestHistory)
+	if err := json.Unmarshal(buf, &history); err != nil {
+		return fmt.Errorf("failed to unmarshal URL test history: %w", err)
+	}
+	for tag, result := range history {
+		storage.StoreURLTestHistory(tag, result)
+	}
+	return nil
 }
