@@ -23,7 +23,6 @@ var ampPublicKey string
 // The context parameter controls the lifecycle of background configuration updates.
 //   - ctx: Used to manage the lifecycle of background configuration updates.
 //   - logWriter: Writer for logging transport and client activity.
-//   - publicKey: Public key used to verify configuration signatures.
 //
 // Returns an initialized amp.Client or an error if setup fails.
 func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) {
