@@ -142,7 +142,7 @@ func TestDeleteAccount(t *testing.T) {
 func TestOAuthLoginUrl(t *testing.T) {
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userInfo: userInfo(t.TempDir()),
+		userInfo: &mockUserInfo{},
 	}
 	url, err := ac.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
@@ -257,7 +257,9 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 var _ common.UserInfo = (*mockUserInfo)(nil)
 
 // Mock implementation of User config for testing purposes
-type mockUserInfo struct{}
+type mockUserInfo struct {
+	common.UserInfo
+}
 
 func (m *mockUserInfo) GetData() (*protos.LoginResponse, error) {
 	return &protos.LoginResponse{}, nil

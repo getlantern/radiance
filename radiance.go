@@ -26,6 +26,7 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/user"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/fronted"
 	"github.com/getlantern/radiance/servers"
@@ -141,7 +142,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
-	userInfo := common.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
+	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
 	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
 	if err != nil {
