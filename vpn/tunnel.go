@@ -27,6 +27,7 @@ import (
 	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -165,6 +166,11 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 		return fmt.Errorf("create libbox service: %w", err)
 	}
 	t.lbService = lb
+
+	history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
+	if err := loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName)); err != nil {
+		return fmt.Errorf("load urltest history: %w", err)
+	}
 
 	// set memory limit for Android and iOS
 	switch common.Platform {

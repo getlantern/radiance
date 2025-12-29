@@ -31,6 +31,7 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/vpn"
 
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/issue"
@@ -184,12 +185,21 @@ func NewRadiance(opts Options) (*Radiance, error) {
 			slog.Info("Telemetry consent not given; skipping telemetry initialization")
 		}
 	})
+	registerPreStartTest(dataDir)
 	r.confHandler = config.NewConfigHandler(cOpts)
 	r.addShutdownFunc(common.Close, telemetry.Close, func(context.Context) error {
 		cancel()
 		return nil
 	})
 	return r, nil
+}
+
+func registerPreStartTest(path string) {
+	events.SubscribeOnce(func(evt config.NewConfigEvent) {
+		if err := vpn.PreStartTests(path); err != nil {
+			slog.Error("VPN pre-start tests failed", "error", err, "path", path)
+		}
+	})
 }
 
 // addShutdownFunc adds a shutdown function(s) to the Radiance instance.
