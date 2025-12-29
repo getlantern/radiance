@@ -5,7 +5,6 @@ package radiance
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -84,9 +83,6 @@ type Options struct {
 	TelemetryConsent bool
 }
 
-//go:embed assets/amp_public_key.pem
-var ampPublicKey string
-
 // NewRadiance creates a new Radiance VPN client. opts includes the platform interface used to
 // interact with the underlying platform on iOS, Android, and MacOS. On other platforms, it is
 // ignored and can be nil.
@@ -122,6 +118,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create fronted: %w", err)
 	}
 
+	kindlingConfigUpdaterCtx, cancel := context.WithCancel(context.Background())
+	ampClient, err := fronted.NewAMPClient(kindlingConfigUpdaterCtx, kindlingLogger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create amp client: %w", err)
+	}
+
 	k := kindling.NewKindling(
 		"radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
@@ -130,6 +132,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
 		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
+		// Kindling will skip amp transports if the request has a payload lager than 6kb
+		kindling.WithAMPCache(ampClient),
 	)
 
 	httpClientWithTimeout := k.NewHTTPClient()
@@ -181,7 +185,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		}
 	})
 	r.confHandler = config.NewConfigHandler(cOpts)
-	r.addShutdownFunc(common.Close, telemetry.Close)
+	r.addShutdownFunc(common.Close, telemetry.Close, func(context.Context) error {
+		cancel()
+		return nil
+	})
 	return r, nil
 }
 
