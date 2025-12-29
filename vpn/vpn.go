@@ -395,20 +395,15 @@ func preTest(path string) (map[string]uint16, error) {
 		tags = append(tags, ob.Tag)
 	}
 	outbounds = append(outbounds, urlTestOutbound("preTest", tags))
-
-	base := baseOpts(path)
-	base.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
-	base.Log.Disabled = true
 	options := option.Options{
-		Log:          base.Log,
-		Outbounds:    outbounds,
-		Experimental: base.Experimental,
+		Log:       &option.LogOptions{Disabled: true},
+		Outbounds: outbounds,
 	}
 
 	// create pre-started box instance. we just use the standard box since we don't need a
 	// platform interface for testing.
 	ctx := box.BaseContext()
-	service.ContextWith[filemanager.Manager](ctx, nil)
+	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 	urlTestHistoryStorage := urltest.NewHistoryStorage()
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
