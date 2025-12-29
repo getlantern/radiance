@@ -132,7 +132,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
 		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-		// Kindling will skip amp transports if the request has a payload lager than 6kb
+		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
 	)
 
