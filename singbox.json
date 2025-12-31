@@ -34,8 +34,7 @@
       },
       {
         "query_type": ["A", "AAAA"],
-        "server": "dns_fakeip",
-        "rewrite_ttl": 1
+        "server": "dns_fakeip"
       }
     ],
     "final": "dns_local"
@@ -60,10 +59,6 @@
       {
         "port": 53,
         "action": "hijack-dns"
-      },
-      {
-        "clash_mode": "Direct",
-        "outbound": "direct"
       },
       {
         "rule_set": ["geosite-cn", "geoip-cn", "geosite-ir", "geoip-ir"],
