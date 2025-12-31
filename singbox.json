@@ -46,10 +46,6 @@
     {
       "type": "direct",
       "tag": "direct"
-    },
-    {
-      "type": "dns",
-      "tag": "dns-out"
     }
   ],
   "route": {
@@ -65,7 +61,6 @@
         "port": 53,
         "action": "hijack-dns"
       },
-      // 2. EXCLUSION: Prevent sing-box components from being hijacked again
       {
         "clash_mode": "Direct",
         "outbound": "direct"
