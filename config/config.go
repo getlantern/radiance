@@ -111,6 +111,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 			if !shouldRefetch(evt.New, evt.Old) {
 				return
 			}
+			slog.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				slog.Error("Failed to fetch config", "error", err)
 			}
@@ -121,9 +122,8 @@ func NewConfigHandler(options Options) *ConfigHandler {
 
 // shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
 func shouldRefetch(new, old common.UserInfo) bool {
-	return new != old &&
-		(new == nil || old == nil || // sanity check
-			new.LegacyToken() != old.LegacyToken() || // user ID changed
+	return new != nil && old != nil && old.LegacyID() != 0 &&
+		(new.LegacyToken() != old.LegacyToken() || // user ID changed
 			new.AccountType() != old.AccountType()) // changed between free and pro
 }
 
@@ -170,7 +170,6 @@ func (ch *ConfigHandler) fetchConfig() error {
 	if ch.isClosed() {
 		return fmt.Errorf("config handler is closed")
 	}
-	slog.Debug("Fetching config")
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
