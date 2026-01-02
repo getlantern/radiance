@@ -8,7 +8,8 @@ import (
 
 const waitScale = 10 * time.Millisecond // scale factor for backoff timing
 
-// Backoff implements an exponential backoff strategy with jitter.
+// Backoff implements an quadratic backoff strategy with jitter. Should not be used by multiple
+// goroutines concurrently.
 type Backoff struct {
 	n       int // number of consecutive failures
 	maxWait time.Duration
@@ -28,7 +29,7 @@ func (b *Backoff) Wait(ctx context.Context) {
 	}
 
 	b.n++
-	// exponential backoff: waitScale * n^2, capped at maxWait
+	// quadratic backoff: waitScale * n^2, capped at maxWait
 	wait := waitScale * time.Duration(b.n*b.n)
 	wait = min(wait, b.maxWait)
 

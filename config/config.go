@@ -318,6 +318,9 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 		if err := ch.fetchConfig(); err != nil {
 			slog.Error("Failed to fetch config. Retrying", "error", err)
 			backoff.Wait(ch.ctx)
+			if ch.ctx.Err() != nil {
+				return
+			}
 			continue
 		}
 		backoff.Reset()
