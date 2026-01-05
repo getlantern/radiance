@@ -34,6 +34,10 @@ import (
 	"github.com/getlantern/radiance/servers"
 )
 
+const (
+	maxRetryDelay = 2 * time.Minute
+)
+
 var (
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when if there was an error
 	// fetching the configuration.
@@ -308,17 +312,21 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 
 // fetchLoop fetches the configuration every pollInterval.
 func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
-	if err := ch.fetchConfig(); err != nil {
-		slog.Error("Failed to fetch config. Retrying", "error", err, "interval", pollInterval)
-	}
+	backoff := common.NewBackoff(maxRetryDelay)
 	for {
+		if err := ch.fetchConfig(); err != nil {
+			slog.Error("Failed to fetch config. Retrying", "error", err)
+			backoff.Wait(ch.ctx)
+			if ch.ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		backoff.Reset()
 		select {
 		case <-ch.ctx.Done():
 			return
 		case <-time.After(pollInterval):
-			if err := ch.fetchConfig(); err != nil {
-				slog.Error("Failed to fetch config in select. Retrying", "error", err, "interval", pollInterval)
-			}
 		}
 	}
 }
