@@ -171,10 +171,8 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	}
 
 	// setup client info tracker
-	clientContextInjector, err := newClientContextInjector(t.mutGrpMgr, dataPath)
-	if err != nil {
-		return fmt.Errorf("create client context injector: %w", err)
-	}
+	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
+	clientContextInjector := newClientContextInjector(outboundMgr, dataPath)
 	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
 	t.clientContextTracker = clientContextInjector
 	router := service.FromContext[adapter.Router](t.ctx)
@@ -213,7 +211,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	return nil
 }
 
-func newClientContextInjector(outboundMgr *groups.MutableGroupManager, userFilePath string) (*clientcontext.ClientContextInjector, error) {
+func newClientContextInjector(outboundMgr adapter.OutboundManager, userFilePath string) *clientcontext.ClientContextInjector {
 	slog.Debug("Creating ClientContextInjector")
 	infoFn := func() clientcontext.ClientInfo {
 		user, err := user.Load(userFilePath)
@@ -232,17 +230,17 @@ func newClientContextInjector(outboundMgr *groups.MutableGroupManager, userFileP
 			Version:     common.Version,
 		}
 	}
-	outbound, exists := outboundMgr.OutboundGroup(servers.SGLantern)
-	if !exists {
-		return nil, fmt.Errorf("lantern outbound not found")
-	}
-	// Note: this should only contain lantern outbounds with servers that support client context
-	// tracking. otherwise, the connections will fail.
 	matchBounds := clientcontext.MatchBounds{
 		Inbound:  []string{"any"},
-		Outbound: append(outbound.All(), servers.SGLantern, groupAutoTag(servers.SGLantern)),
+		Outbound: []string{},
 	}
-	return clientcontext.NewClientContextInjector(infoFn, matchBounds), nil
+	if outbound, exists := outboundMgr.Outbound(servers.SGLantern); exists {
+		// Note: this should only contain lantern outbounds with servers that support client context
+		// tracking. otherwise, the connections will fail.
+		tags := outbound.(adapter.OutboundGroup).All()
+		matchBounds.Outbound = append(tags, servers.SGLantern, groupAutoTag(servers.SGLantern))
+	}
+	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
 }
 
 func newMutableGroupManager(
@@ -388,11 +386,12 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	if t.clientContextTracker != nil {
 		// temporarily merge the new lantern tags into the clientContextInjector match bounds to capture
 		// any new connections before updateServers completes
-		slog.Log(nil, internal.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
-		matchBounds := t.clientContextTracker.MatchBounds()
-		tags := svrs[servers.SGLantern].AllTags()
-		matchBounds.Outbound = append(matchBounds.Outbound, tags...)
-		t.clientContextTracker.SetBounds(matchBounds)
+		if tags := svrs[servers.SGLantern].AllTags(); len(tags) > 0 {
+			slog.Log(nil, internal.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
+			matchBounds := t.clientContextTracker.MatchBounds()
+			matchBounds.Outbound = append(matchBounds.Outbound, tags...)
+			t.clientContextTracker.SetBounds(matchBounds)
+		}
 	}
 
 	err = t.updateServers(svrs)
@@ -403,17 +402,24 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 		return fmt.Errorf("update server configs: %w", err)
 	}
 
-	if t.clientContextTracker != nil {
-		// finally, set the clientContextInjector match bounds to the new set of lantern tags
-		// Note, again, that this should only contain lantern outbounds with servers that support
-		// client context
-		outbound, _ := t.mutGrpMgr.OutboundGroup(servers.SGLantern)
-		slog.Debug("Setting updated lantern tags into ClientContextInjector")
-		t.clientContextTracker.SetBounds(clientcontext.MatchBounds{
-			Inbound:  []string{"any"},
-			Outbound: append(outbound.All(), servers.SGLantern, groupAutoTag(servers.SGLantern)),
-		})
+	if t.clientContextTracker == nil {
+		return nil
 	}
+
+	// finally, set the clientContextInjector match bounds to the new set of lantern tags
+	// Note, again, that this should only contain lantern outbounds with servers that support
+	// client context
+	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
+	outbound, exists := outboundMgr.Outbound(servers.SGLantern)
+	if !exists {
+		return nil
+	}
+	outGroup := outbound.(adapter.OutboundGroup)
+	slog.Debug("Setting updated lantern tags into ClientContextInjector")
+	t.clientContextTracker.SetBounds(clientcontext.MatchBounds{
+		Inbound:  []string{"any"},
+		Outbound: append(outGroup.All(), servers.SGLantern, groupAutoTag(servers.SGLantern)),
+	})
 	return nil
 }
 
