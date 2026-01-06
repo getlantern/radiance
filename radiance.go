@@ -67,7 +67,6 @@ type Radiance struct {
 
 	// user config is the user config object that contains the device ID and other user data
 	userInfo common.UserInfo
-	locale   string
 
 	shutdownFuncs    []func(context.Context) error
 	closeOnce        sync.Once
@@ -170,7 +169,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		apiHandler:    apiHandler,
 		srvManager:    svrMgr,
 		userInfo:      userInfo,
-		locale:        opts.Locale,
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},

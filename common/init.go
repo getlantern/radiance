@@ -95,6 +95,8 @@ func Init(dataDir, logDir, logLevel string) error {
 		f.Close()
 	}
 
+	initUserConfig(DataPath())
+
 	initialized = true
 	return nil
 }
