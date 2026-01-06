@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"log/slog"
 	"net/netip"
 
 	"github.com/getlantern/radiance/common"
@@ -84,13 +85,16 @@ var aliDNSLocales = map[string]struct{}{
 
 func localDNSIP() string {
 	// First, normalize the locale to upper case and remove any hyphens or underscores.
-	normalizedLocale := normalizeLocale(viper.GetString(common.LocaleKey))
+	locale := viper.GetString(common.LocaleKey)
+	normalizedLocale := normalizeLocale(locale)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
+		slog.Info("Using AliDNS for locale", "locale", locale)
 		// AliDNS
 		return "223.5.5.5"
 	}
 	// Quad9, which is more privacy preserving by doing things such as
 	// not sending EDNS Client-Subnet data
+	slog.Info("Using Quad9 for locale", "locale", locale)
 	return "9.9.9.9"
 }
 
