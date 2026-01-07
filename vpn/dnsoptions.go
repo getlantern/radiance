@@ -13,10 +13,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-// buildDNSServers returns a list of of three DNSServerOptions, a local DNS server
-// used for local requests (e.g. government domains); a remote DNS server (like quad9)
+// buildDNSServers returns a list of three DNSServerOptions, a local DNS server
+// used for local requests; a remote DNS server (like quad9)
 // for remote websites without sharing user private IP; and fake IP dns server, which
-// generates a random IP and uses it when sending the DNS requests.
+// effectively resolves DNS locally while allowing us to route traffic based on
+// domains.
 func buildDNSServers() []option.DNSServerOptions {
 	local := option.DNSServerOptions{
 		Tag:  "dns_local",
