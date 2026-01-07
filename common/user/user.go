@@ -37,7 +37,7 @@ type userInfo struct {
 // NewUserConfig creates a new UserInfo object
 func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	path := filepath.Join(dataDir, userDataFileName)
-	u, err := Load(path)
+	u, err := load(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			slog.Info("Failed to load user data -- presumably the first run", "path", path, "error", err)
@@ -53,11 +53,9 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	u.locale = locale
 	save(u, path)
 
-	var sub *events.Subscription[config.NewConfigEvent]
-	sub = events.Subscribe(func(evt config.NewConfigEvent) {
+	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
 			u.countryCode = evt.New.ConfigResponse.Country
-			events.Unsubscribe(sub)
 			save(u, path)
 		}
 	})
