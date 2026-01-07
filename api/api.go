@@ -16,8 +16,8 @@ import (
 const tracerName = "github.com/getlantern/radiance/api"
 
 type APIClient struct {
-	authWc *webClient
-	proWC  *webClient
+	authWcFunc func() *webClient
+	proWCFunc  func() *webClient
 
 	salt       []byte
 	saltPath   string
@@ -27,7 +27,7 @@ type APIClient struct {
 	userInfo   common.UserInfo
 }
 
-func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
+func NewAPIClient(httpClientFunc func() *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
 	userData, err := userInfo.GetData()
 	if err != nil {
 		slog.Warn("failed to get user data", "error", err)
@@ -37,27 +37,30 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	if err != nil {
 		slog.Warn("failed to read salt", "error", err)
 	}
-
-	proWC := newWebClient(httpClient, proServerURL)
-	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
-		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
-		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
-		}
-		return nil
-	})
-	wc := newWebClient(httpClient, baseURL)
+	authWcFunc := func() *webClient {
+		return newWebClient(httpClientFunc, "")
+	}
 	return &APIClient{
-		authWc:     wc,
-		proWC:      proWC,
+		authWcFunc: authWcFunc,
+		proWCFunc: func() *webClient {
+			proWC := newWebClient(httpClientFunc, proServerURL)
+			proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
+				req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
+				if userInfo.LegacyToken() != "" {
+					req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
+				}
+				if userInfo.LegacyID() != 0 {
+					req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
+				}
+				return nil
+			})
+			return proWC
+		},
 		salt:       salt,
 		saltPath:   path,
 		userData:   userData,
 		deviceID:   userInfo.DeviceID(),
-		authClient: &authClient{wc, userInfo},
+		authClient: &authClient{authWcFunc, userInfo},
 		userInfo:   userInfo,
 	}
 }

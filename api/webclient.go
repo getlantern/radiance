@@ -23,13 +23,16 @@ type webClient struct {
 	client *resty.Client
 }
 
-func newWebClient(httpClient *http.Client, baseURL string) *webClient {
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: common.DefaultHTTPTimeout,
+func newWebClient(httpClientFunc func() *http.Client, baseURL string) *webClient {
+	if httpClientFunc == nil {
+		slog.Warn("No HTTP client configured")
+		httpClientFunc = func() *http.Client {
+			return &http.Client{
+				Timeout: common.DefaultHTTPTimeout,
+			}
 		}
 	}
-	client := resty.NewWithClient(httpClient)
+	client := resty.NewWithClient(httpClientFunc())
 	if baseURL != "" {
 		client.SetBaseURL(baseURL)
 	}

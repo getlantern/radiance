@@ -3,120 +3,90 @@ package user
 // this file contains the user info interface and the methods to read and write user data
 // use this across the app to read and write user data in sync
 import (
-	"encoding/json"
-	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+
+	"github.com/spf13/viper"
 )
 
-const userDataFileName = ".userData"
+//const userDataFileName = ".userData"
 
 // userInfo is a struct that implements the UserInfo interface
 // it contains the device ID, user data, data directory, and locale
 type userInfo struct {
-	deviceID    string
-	data        *protos.LoginResponse
-	locale      string
-	countryCode string
-	dataPath    string
-	mu          sync.RWMutex
+	//data *protos.LoginResponse
+	/*
+		deviceID    string
+		data        *protos.LoginResponse
+		locale      string
+		countryCode string
+		dataPath    string
+		mu          sync.RWMutex
+	*/
 }
 
 // NewUserConfig creates a new UserInfo object
 func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
-	path := filepath.Join(dataDir, userDataFileName)
-	u, err := Load(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			slog.Info("Failed to load user data -- presumably the first run", "path", path, "error", err)
-		} else {
-			slog.Warn("Failed to load user data -- potential issue", "path", path, "error", err)
-		}
-	}
-	if u == nil {
-		u = &userInfo{}
-	}
-	u.deviceID = deviceID
-	u.dataPath = path
-	u.locale = locale
-	save(u, path)
+	viper.Set(common.DeviceIDKey, deviceID)
+	viper.Set(common.LocaleKey, locale)
+	viper.Set(common.DataDirKey, dataDir)
+	viper.WriteConfig()
 
 	var sub *events.Subscription[config.NewConfigEvent]
 	sub = events.Subscribe(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
-			u.countryCode = evt.New.ConfigResponse.Country
 			events.Unsubscribe(sub)
-			save(u, path)
+			viper.Set(common.CountryCodeKey, evt.New.ConfigResponse.Country)
+			viper.WriteConfig()
 		}
 	})
-	return u
+	return &userInfo{}
 }
 
 func (u *userInfo) DeviceID() string {
-	return u.deviceID
+	return viper.GetString(common.DeviceIDKey)
 }
 
 func (u *userInfo) LegacyID() int64 {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	if u.data != nil {
-		return u.data.LegacyID
-	}
-	return 0
+	return viper.GetInt64(common.UserIdKey)
 }
 
 func (u *userInfo) LegacyToken() string {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	if u.data != nil {
-		return u.data.LegacyToken
-	}
-	return ""
+	return viper.GetString(common.TokenKey)
 }
 
 func (u *userInfo) Locale() string {
-	return u.locale
+	return viper.GetString(common.LocaleKey)
 }
-
 func (u *userInfo) SetLocale(locale string) {
-	u.locale = locale
+	viper.Set(common.LocaleKey, locale)
+	viper.WriteConfig()
 }
 
 func (u *userInfo) CountryCode() string {
-	return u.countryCode
+	return viper.GetString(common.CountryCodeKey)
 }
 
 // AccountType returns the account type of the user (e.g., "free", "pro")
 func (u *userInfo) AccountType() string {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	if u.data == nil || u.data.LegacyUserData == nil {
-		return ""
-	}
-	typ := u.data.LegacyUserData.UserLevel
-	if typ == "" {
-		return "free"
-	}
-	return typ
+	return viper.GetString(common.TierKey)
 }
 
 func (u *userInfo) IsPro() bool {
-	return strings.ToLower(u.AccountType()) == "pro"
+	return viper.GetString(common.TierKey) == "pro"
 }
 
 func (u *userInfo) SetData(data *protos.LoginResponse) error {
+	/*
+		viper.Set(common.UserIdKey, data.UserId)
+		viper.Set(common.TokenKey, data.Token)
+		viper.Set(common.CountryCodeKey, data.CountryCode)
+		viper.Set(common.LocaleKey, data.Locale)
+		return viper.WriteConfig()
+	*/
+
 	u.mu.Lock()
 	old := &userInfo{
 		deviceID:    u.deviceID,
@@ -127,19 +97,21 @@ func (u *userInfo) SetData(data *protos.LoginResponse) error {
 	}
 	u.data = data
 	u.mu.Unlock()
-	if data != nil && !proto.Equal(old.data, data) {
+	if data != nil && !json.Equal(old.data, data) {
 		events.Emit(common.UserChangeEvent{Old: old, New: u})
 	}
 	return save(u, u.dataPath)
 }
 
 // GetUserData reads user data from file
+
 func (u *userInfo) GetData() (*protos.LoginResponse, error) {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.data, nil
 }
 
+/*
 type _user struct {
 	DeviceID string         `json:"device_id"`
 	Data     *loginResponse `json:"data,omitempty"`
@@ -182,6 +154,8 @@ func (lr *loginResponse) UnmarshalJSON(data []byte) error {
 }
 
 // Save user to file
+
+
 func save(user *userInfo, path string) error {
 	slog.Debug("Saving user data", "path", path)
 	bytes, err := json.Marshal(user)
@@ -193,7 +167,9 @@ func save(user *userInfo, path string) error {
 	}
 	return nil
 }
+*/
 
+/*
 func Load(path string) (*userInfo, error) {
 	data, err := atomicfile.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -219,3 +195,4 @@ func Load(path string) (*userInfo, error) {
 		return nil, fmt.Errorf("failed to unmarshal user data: %w", err)
 	}
 }
+*/

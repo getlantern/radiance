@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -137,13 +138,19 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		kindling.WithAMPCache(ampClient),
 	)
 
-	httpClientWithTimeout := k.NewHTTPClient()
-	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
-	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
+	newHttpClient := func() *http.Client {
+		client := k.NewHTTPClient()
+		client.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
+		client.Timeout = common.DefaultHTTPTimeout
+		return client
+	}
+	//httpClientWithTimeout := k.NewHTTPClient()
+	//httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
+	//httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
 	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
+	apiHandler := api.NewAPIClient(newHttpClient, userInfo, dataDir)
+	issueReporter, err := issue.NewIssueReporter(newHttpClient, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
@@ -152,13 +159,12 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
 	cOpts := config.Options{
-		PollInterval: configPollInterval,
-		HTTPClient:   httpClientWithTimeout,
-		SvrManager:   svrMgr,
-		User:         userInfo,
-		DataDir:      dataDir,
-		Locale:       opts.Locale,
-		APIHandler:   apiHandler,
+		PollInterval:   configPollInterval,
+		HTTPClientFunc: newHttpClient,
+		SvrManager:     svrMgr,
+		DataDir:        dataDir,
+		Locale:         opts.Locale,
+		APIHandler:     apiHandler,
 	}
 	if disableFetch, ok := env.Get[bool](env.DisableFetch); ok && disableFetch {
 		cOpts.PollInterval = -1

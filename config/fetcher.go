@@ -43,22 +43,22 @@ type Fetcher interface {
 
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
-	httpClient   *http.Client
-	user         common.UserInfo
-	lastModified time.Time
-	locale       string
-	etag         string
-	apiClient    *api.APIClient
+	httpClientFunc func() *http.Client
+	user           common.UserInfo
+	lastModified   time.Time
+	locale         string
+	etag           string
+	apiClient      *api.APIClient
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
+func newFetcher(opts Options) Fetcher {
 	return &fetcher{
-		httpClient:   client,
-		user:         user,
-		lastModified: time.Time{},
-		locale:       locale,
-		apiClient:    apiClient,
+		httpClientFunc: opts.HTTPClientFunc,
+		user:           opts.User,
+		lastModified:   time.Time{},
+		locale:         opts.Locale,
+		apiClient:      opts.APIHandler,
 	}
 }
 
@@ -158,7 +158,8 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 		req.Header.Set("If-None-Match", f.etag)
 	}
 
-	resp, err := f.httpClient.Do(req)
+	client := f.httpClientFunc()
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not send request: %w", err))
 	}

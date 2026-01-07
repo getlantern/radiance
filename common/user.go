@@ -1,7 +1,6 @@
 package common
 
 import (
-	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/events"
 )
 
@@ -10,8 +9,8 @@ type UserInfo interface {
 	DeviceID() string
 	LegacyID() int64
 	LegacyToken() string
-	SetData(*protos.LoginResponse) error
-	GetData() (*protos.LoginResponse, error)
+	//SetData(*protos.LoginResponse) error
+	//GetData() (*protos.LoginResponse, error)
 	Locale() string
 	SetLocale(string)
 	CountryCode() string

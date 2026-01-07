@@ -29,22 +29,22 @@ const (
 
 // IssueReporter is used to send issue reports to backend
 type IssueReporter struct {
-	httpClient *http.Client
-	userConfig common.UserInfo
+	httpClientFunc func() *http.Client
+	userConfig     common.UserInfo
 }
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
 func NewIssueReporter(
-	httpClient *http.Client,
+	httpClientFunc func() *http.Client,
 	userConfig common.UserInfo,
 ) (*IssueReporter, error) {
-	if httpClient == nil {
-		return nil, fmt.Errorf("httpClient is nil")
+	if httpClientFunc == nil {
+		return nil, fmt.Errorf("httpClientFunc is nil")
 	}
 	return &IssueReporter{
-		httpClient: httpClient,
-		userConfig: userConfig,
+		httpClientFunc: httpClientFunc,
+		userConfig:     userConfig,
 	}, nil
 }
 
@@ -179,7 +179,8 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		return traces.RecordError(ctx, err)
 	}
 
-	resp, err := ir.httpClient.Do(req)
+	client := ir.httpClientFunc()
+	resp, err := client.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
 		return traces.RecordError(ctx, err)

@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/1Password/srp"
+	"github.com/spf13/viper"
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -58,7 +60,7 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_user")
 	defer span.End()
 	var resp UserDataResponse
-	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
+	err := ac.proWCFunc().Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
@@ -74,7 +76,10 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 		LegacyToken:    resp.Token,
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
-	err = ac.userInfo.SetData(login)
+	viper.Set(common.UserIdKey, resp.UserId)
+	viper.Set(common.TokenKey, resp.Token)
+	//viper.Set(common.DeviceIDKey, ac.userInfo.DeviceID())
+	//err = ac.userInfo.SetData(login)
 	if err != nil {
 		slog.Error("setting user data", "error", err)
 		return nil, traces.RecordError(ctx, err)
@@ -89,7 +94,7 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "user_data")
 	defer span.End()
 	var resp UserDataResponse
-	err := ac.proWC.Get(ctx, "/user-data", nil, &resp)
+	err := ac.proWCFunc().Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
 		slog.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
@@ -144,8 +149,9 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	defer span.End()
 	datacap := &DataCapInfo{}
 	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", a.userInfo.LegacyID(), a.userInfo.DeviceID())
-	newReq := a.authWc.NewRequest(nil, nil, nil)
-	err := a.authWc.Get(ctx, getUrl, newReq, &datacap)
+	authWc := a.authWcFunc()
+	newReq := authWc.NewRequest(nil, nil, nil)
+	err := authWc.Get(ctx, getUrl, newReq, &datacap)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
@@ -543,9 +549,10 @@ func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkRes
 	data := map[string]string{
 		"deviceId": deviceID,
 	}
-	req := a.proWC.NewRequest(nil, nil, data)
+	proWc := a.proWCFunc()
+	req := proWc.NewRequest(nil, nil, data)
 	resp := &LinkResponse{}
-	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
+	if err := proWc.Post(ctx, "/user-link-remove", req, resp); err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
@@ -560,9 +567,10 @@ func (a *APIClient) ReferralAttach(ctx context.Context, code string) (bool, erro
 	data := map[string]string{
 		"code": code,
 	}
-	req := a.proWC.NewRequest(nil, nil, data)
+	proWc := a.proWCFunc()
+	req := proWc.NewRequest(nil, nil, data)
 	resp := &protos.BaseResponse{}
-	if err := a.proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
+	if err := proWc.Post(ctx, "/referral-attach", req, resp); err != nil {
 		return false, traces.RecordError(ctx, err)
 	}
 	if resp.Error != "" {

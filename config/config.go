@@ -58,13 +58,13 @@ type ServerManager interface {
 type ListenerFunc func(oldConfig, newConfig *Config) error
 
 type Options struct {
-	PollInterval time.Duration
-	HTTPClient   *http.Client
-	SvrManager   ServerManager
-	User         common.UserInfo
-	DataDir      string
-	Locale       string
-	APIHandler   *api.APIClient
+	PollInterval   time.Duration
+	HTTPClientFunc func() *http.Client
+	SvrManager     ServerManager
+	User           common.UserInfo
+	DataDir        string
+	Locale         string
+	APIHandler     *api.APIClient
 }
 
 // ConfigHandler handles fetching the proxy configuration from the proxy server. It provides access
@@ -109,7 +109,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	if !ch.fetchDisabled {
-		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
+		ch.ftr = newFetcher(options)
 		go ch.fetchLoop(options.PollInterval)
 		events.Subscribe(func(evt common.UserChangeEvent) {
 			if !shouldRefetch(evt.New, evt.Old) {
