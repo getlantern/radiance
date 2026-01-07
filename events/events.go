@@ -41,7 +41,9 @@ var (
 )
 
 // Subscription allows unsubscribing from an event.
-type Subscription[T Event] struct{}
+type Subscription[T Event] struct {
+	_ byte // padding to avoid empty struct optimizations
+}
 
 // Subscribe registers a callback function for the given event type T. Returns a Subscription handle
 // that can be used to unsubscribe later.
