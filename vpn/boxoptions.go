@@ -303,6 +303,10 @@ func buildOptions(group, path string) (O.Options, error) {
 	}
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
 
+	if len(lanternTags) == 0 && len(userTags) == 0 {
+		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+	}
+
 	// Add auto all outbound
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
 
