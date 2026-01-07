@@ -17,7 +17,6 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
-	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 
@@ -65,18 +64,10 @@ func baseOpts(basePath string) O.Options {
 		},
 		DNS: &O.DNSOptions{
 			RawDNSOptions: O.RawDNSOptions{
-				Servers: []O.DNSServerOptions{
-					newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
-					newDNSServerOptions(C.DNSTypeTLS, "dns-cloudflare-dot", "1.1.1.1", ""),
-					newDNSServerOptions(C.DNSTypeLocal, "local", "", ""),
-					newDNSServerOptions(C.DNSTypeTLS, "dns-sb-dot", "185.222.222.222", ""),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-google-doh", "dns.google", "dns-google-dot"),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-cloudflare-doh", "cloudflare-dns.com", "dns-cloudflare-dot"),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-sb-doh", "doh.dns.sb", "dns-sb-dot"),
-				},
-				DNSClientOptions: O.DNSClientOptions{
-					Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
-				},
+				Servers: buildDNSServers(),
+				Rules:   buildDNSRules(),
+				// Fallback DNS when no rules match.
+				Final: "dns_local",
 			},
 		},
 		Inbounds: []O.Inbound{
