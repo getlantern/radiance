@@ -3,6 +3,7 @@ package vpn
 import (
 	"log/slog"
 	"net/netip"
+	"strings"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/miekg/dns"
@@ -99,17 +100,7 @@ func localDNSIP() string {
 }
 
 func normalizeLocale(locale string) string {
-	normalizedLocale := ""
-	for _, r := range locale {
-		if r != '-' && r != '_' {
-			if r >= 'a' && r <= 'z' {
-				normalizedLocale += string(r - ('a' - 'A'))
-			} else {
-				normalizedLocale += string(r)
-			}
-		}
-	}
-	return normalizedLocale
+	return strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(locale), "-", ""), "_", "")
 }
 
 // buildDNSRules look for rule sets that have a DNS Server value registered,
