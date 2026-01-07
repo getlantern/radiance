@@ -27,15 +27,16 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/user"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/fronted"
+	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
 
-	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/issue"
+	"github.com/spf13/viper"
 )
 
 const configPollInterval = 10 * time.Minute
@@ -111,6 +112,8 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
+	viper.Set(common.LocaleKey, opts.Locale)
+	viper.WriteConfig()
 
 	dataDir := common.DataPath()
 	kindlingLogger := &slogWriter{Logger: slog.Default()}
