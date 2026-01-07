@@ -37,7 +37,12 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	if err != nil {
 		slog.Warn("failed to read salt", "error", err)
 	}
-
+	proServerURL := proServerURL
+	if common.Stage() {
+		// switch to staging server
+		proServerURL = stageProServerURL
+		slog.Info("Using staging pro server", "url", proServerURL)
+	}
 	proWC := newWebClient(httpClient, proServerURL)
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
 		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
@@ -49,6 +54,12 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		}
 		return nil
 	})
+	baseURL := baseURL
+	if common.Stage() {
+		// switch to staging server
+		baseURL = stageURL
+		slog.Info("Using staging auth server", "url", baseURL)
+	}
 	wc := newWebClient(httpClient, baseURL)
 	return &APIClient{
 		authWc:     wc,

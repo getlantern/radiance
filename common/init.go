@@ -57,6 +57,12 @@ func Dev() bool {
 	return e == "development" || e == "dev"
 }
 
+// Stage returns true if the application is running in staging environment.
+func Stage() bool {
+	e, _ := env.Get[string](env.ENV)
+	return e == "stage" || e == "staging"
+}
+
 // Init initializes the common components of the application. This includes setting up the directories
 // for data and logs, initializing the logger, and setting up reporting.
 func Init(dataDir, logDir, logLevel string) error {
