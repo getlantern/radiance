@@ -44,6 +44,7 @@ func TestBuildOptions(t *testing.T) {
 		name        string
 		lanternTags []string
 		userTags    []string
+		shouldError bool
 	}{
 		{
 			name:        "config without user servers",
@@ -59,7 +60,8 @@ func TestBuildOptions(t *testing.T) {
 			userTags:    userTags,
 		},
 		{
-			name: "neither config nor user servers",
+			name:        "neither config nor user servers",
+			shouldError: true,
 		},
 	}
 	hasGroupWithTags := func(t *testing.T, outs []O.Outbound, group string, tags []string) {
@@ -90,6 +92,10 @@ func TestBuildOptions(t *testing.T) {
 				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
 			}
 			opts, err := buildOptions(autoAllTag, path)
+			if tt.shouldError {
+				require.Error(t, err, "expected error but got none")
+				return
+			}
 			require.NoError(t, err)
 
 			gotOutbounds := opts.Outbounds
