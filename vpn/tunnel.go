@@ -211,10 +211,10 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	return nil
 }
 
-func newClientContextInjector(outboundMgr adapter.OutboundManager, userFilePath string) *clientcontext.ClientContextInjector {
+func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
 	slog.Debug("Creating ClientContextInjector")
 	infoFn := func() clientcontext.ClientInfo {
-		user, err := user.Load(userFilePath)
+		user, err := user.Load(dataPath)
 		if err != nil {
 			slog.Error("Failed to load user data for client context", "error", err)
 			return clientcontext.ClientInfo{
