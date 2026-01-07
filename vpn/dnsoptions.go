@@ -83,6 +83,9 @@ var aliDNSLocales = map[string]struct{}{
 	"FAIR": {},
 	"ZHCN": {},
 	"RURU": {},
+	"CN":   {},
+	"IR":   {},
+	"RU":   {},
 }
 
 func localDNSIP() string {
@@ -100,13 +103,14 @@ func localDNSIP() string {
 	return "9.9.9.9"
 }
 
+// normalizeLocale normalizes the locale string by converting it to upper case
+// and removing any hyphens or underscores. Locales can come it from all platforms in various
+// formats, so this helps standardize them for comparison.
 func normalizeLocale(locale string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(locale), "-", ""), "_", "")
 }
 
-// buildDNSRules look for rule sets that have a DNS Server value registered,
-// map them and generate a list of DNS rules. It also adds an additional DNS rule
-// for fake ip.
+// buildDNSRules adds a DNS rule for fake ip.
 func buildDNSRules() []option.DNSRule {
 	dnsRules := make([]option.DNSRule, 0)
 	dnsRules = append(dnsRules, option.DNSRule{
