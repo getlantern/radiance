@@ -115,8 +115,11 @@ func GetStruct(key string, out any) error {
 
 func Set(key string, value any) error {
 	k.Lock()
-	k.k.Set(key, value)
+	err := k.k.Set(key, value)
 	k.Unlock()
+	if err != nil {
+		return fmt.Errorf("Could not set key %s: %w", key, err)
+	}
 	return save()
 }
 

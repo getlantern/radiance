@@ -25,13 +25,22 @@ type userInfo struct {
 // NewUserConfig creates a new UserInfo object
 func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	u := &userInfo{}
-	settings.Set(settings.DeviceIDKey, deviceID)
-	settings.Set(settings.LocaleKey, locale)
+	if err := settings.Set(settings.DeviceIDKey, deviceID); err != nil {
+		slog.Error("failed to set device ID in settings", "error", err)
+	}
+	if err := settings.Set(settings.DataPathKey, dataDir); err != nil {
+		slog.Error("failed to set data path in settings", "error", err)
+	}
+	if err := settings.Set(settings.LocaleKey, locale); err != nil {
+		slog.Error("failed to set locale in settings", "error", err)
+	}
 
 	var sub *events.Subscription[config.NewConfigEvent]
 	sub = events.Subscribe(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
-			settings.Set(settings.CountryCodeKey, evt.New.ConfigResponse.Country)
+			if err := settings.Set(settings.CountryCodeKey, evt.New.ConfigResponse.Country); err != nil {
+				slog.Error("failed to set country code in settings", "error", err)
+			}
 			slog.Info("Set country code from config response", "country_code", evt.New.ConfigResponse.Country)
 			events.Unsubscribe(sub)
 		}
@@ -44,8 +53,6 @@ func (u *userInfo) DeviceID() string {
 }
 
 func (u *userInfo) LegacyID() int64 {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
 	data, err := u.GetData()
 	if err != nil {
 		slog.Info("failed to get login data from settings", "error", err)
@@ -58,8 +65,6 @@ func (u *userInfo) LegacyID() int64 {
 }
 
 func (u *userInfo) LegacyToken() string {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
 	data, err := u.GetData()
 	if err != nil {
 		slog.Info("failed to get login data from settings", "error", err)
@@ -76,7 +81,9 @@ func (u *userInfo) Locale() string {
 }
 
 func (u *userInfo) SetLocale(locale string) {
-	settings.Set(settings.LocaleKey, locale)
+	if err := settings.Set(settings.LocaleKey, locale); err != nil {
+		slog.Error("failed to set locale in settings", "error", err)
+	}
 }
 
 func (u *userInfo) CountryCode() string {
@@ -85,8 +92,6 @@ func (u *userInfo) CountryCode() string {
 
 // AccountType returns the account type of the user (e.g., "free", "pro")
 func (u *userInfo) AccountType() string {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
 	data, err := u.GetData()
 	if err != nil {
 		slog.Info("failed to get login data from settings", "error", err)
@@ -109,12 +114,13 @@ func (u *userInfo) IsPro() bool {
 func (u *userInfo) SetData(data *protos.LoginResponse) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-
-	oldData, err := u.GetData()
+	oldData, err := u.getDataNoLock()
 	if err != nil {
 		slog.Warn("failed to get login data from settings", "error", err)
 	}
-	err = settings.Set(settings.LoginDataKey, data)
+	if err = settings.Set(settings.LoginDataKey, data); err != nil {
+		slog.Error("failed to set login data in settings", "error", err)
+	}
 
 	if data != nil && !proto.Equal(oldData, data) {
 		events.Emit(common.UserChangeEvent{Old: oldData, New: data})
@@ -126,6 +132,11 @@ func (u *userInfo) SetData(data *protos.LoginResponse) error {
 func (u *userInfo) GetData() (*protos.LoginResponse, error) {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
+	return u.getDataNoLock()
+}
+
+// getDataNoLock reads user data from file without acquiring locks
+func (u *userInfo) getDataNoLock() (*protos.LoginResponse, error) {
 	data := &protos.LoginResponse{}
 	err := settings.GetStruct(settings.LoginDataKey, data)
 	if err != nil {
