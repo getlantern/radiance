@@ -167,5 +167,10 @@ func (u *userInfo) getDataNoLock() (*protos.LoginResponse, error) {
 		slog.Warn("failed to get login data from settings", "error", err)
 		return nil, err
 	}
+	// If no login data exists, settings.GetStruct may leave data as a zero-value struct.
+	// Normalize this case to nil so callers can reliably use nil to mean "not logged in".
+	if proto.Equal(data, &protos.LoginResponse{}) {
+		return nil, nil
+	}
 	return data, nil
 }
