@@ -103,7 +103,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	if err != nil {
 		slog.Error("Unable to get user data", "error", err)
 	} else {
-		if userData != nil && userData.LegacyUserData.UserLevel == "pro" {
+		if userData != nil && ir.userConfig.IsPro() {
 			userStatus = "pro"
 		}
 	}

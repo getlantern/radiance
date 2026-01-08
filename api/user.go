@@ -32,12 +32,8 @@ type DataCapInfo struct {
 type Tier int
 
 const (
-	TierFree = 0
-	TierPro  = 1
-
 	saltFileName = ".salt"
-
-	baseURL = "https://df.iantem.io/api/v1"
+	baseURL      = "https://df.iantem.io/api/v1"
 )
 
 // Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
@@ -63,24 +59,10 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
 	}
-	if resp.LoginResponse_UserData == nil {
-		slog.Error("creating new user", "error", "no user data in response")
-		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
-	}
-	// Append device ID to user data
-	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
-	login := &protos.LoginResponse{
-		LegacyID:       resp.UserId,
-		LegacyToken:    resp.Token,
-		LegacyUserData: resp.LoginResponse_UserData,
-	}
-	err = ac.userInfo.SetData(login)
+	err = ac.storeData(ctx, resp)
 	if err != nil {
-		slog.Error("setting user data", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return nil, err
 	}
-	// update the user data
-	ac.userData = login
 	return &resp, nil
 }
 
@@ -94,14 +76,22 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		slog.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
 	}
+	err = ac.storeData(ctx, resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (ac *APIClient) storeData(ctx context.Context, resp UserDataResponse) error {
 	if resp.BaseResponse != nil && resp.Error != "" {
-		err = fmt.Errorf("recevied bad response: %s", resp.Error)
+		err := fmt.Errorf("recevied bad response: %s", resp.Error)
 		slog.Error("user data", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return traces.RecordError(ctx, err)
 	}
 	if resp.LoginResponse_UserData == nil {
 		slog.Error("user data", "error", "no user data in response")
-		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
+		return traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	// Append device ID to user data
 	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
@@ -110,25 +100,24 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		LegacyToken:    resp.Token,
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
-	err = ac.userInfo.SetData(login)
-	if err != nil {
+	if err := ac.userInfo.SetData(login); err != nil {
 		slog.Error("setting user data", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return traces.RecordError(ctx, err)
 	}
-	// update the user data
-	ac.userData = login
-	return &resp, nil
+	return nil
 }
 
 // user-server requests
 
 // Devices returns a list of devices associated with this user account.
 func (a *APIClient) Devices() ([]Device, error) {
-	if a.userData == nil {
-		return nil, ErrNotLoggedIn
+	data, err := a.userInfo.GetData()
+	if err != nil {
+		slog.Info("failed to get login data from settings", "error", err)
+		return nil, err
 	}
 	ret := []Device{}
-	for _, d := range a.userData.Devices {
+	for _, d := range data.Devices {
 		ret = append(ret, Device{
 			Name: d.Name,
 			ID:   d.Id,
@@ -247,7 +236,6 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	// regardless of state we need to save login information
 	// We have device flow limit on login
 	a.userInfo.SetData(resp)
-	a.userData = resp
 	a.salt = salt
 	if err := writeSalt(salt, a.saltPath); err != nil {
 		return nil, traces.RecordError(ctx, err)
@@ -268,8 +256,7 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
-	// clean up local data
-	a.userData = nil
+	a.userInfo.SetData(nil)
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
@@ -342,10 +329,7 @@ const group = srp.RFC5054Group3072
 func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_change_email")
 	defer span.End()
-	if a.userData == nil {
-		return traces.RecordError(ctx, ErrNotLoggedIn)
-	}
-	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
+	lowerCaseEmail := strings.ToLower(a.userInfo.GetEmail())
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
@@ -425,7 +409,7 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    a.userData.LegacyUserData.Email,
+		OldEmail:    a.userInfo.GetEmail(),
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -436,12 +420,11 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err := writeSalt(newSalt, a.saltPath); err != nil {
 		return traces.RecordError(ctx, err)
 	}
-
-	if err := a.userInfo.SetData(a.userData); err != nil {
+	if err := a.userInfo.SetEmail(newEmail); err != nil {
 		return traces.RecordError(ctx, err)
 	}
+
 	a.salt = newSalt
-	a.userData.LegacyUserData.Email = newEmail
 	return nil
 }
 
@@ -501,14 +484,14 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,
-		DeviceId:  a.deviceID,
+		DeviceId:  a.userInfo.DeviceID(),
 	}
 
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
 		return traces.RecordError(ctx, err)
 	}
 	// clean up local data
-	a.userData = nil
+	a.userInfo.SetData(nil)
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))

@@ -17,6 +17,8 @@ type UserInfo interface {
 	CountryCode() string
 	AccountType() string
 	IsPro() bool
+	SetEmail(string) error
+	GetEmail() string
 }
 
 type UserChangeEvent struct {

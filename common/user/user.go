@@ -111,6 +111,30 @@ func (u *userInfo) IsPro() bool {
 	return strings.ToLower(u.AccountType()) == "pro"
 }
 
+func (u *userInfo) GetEmail() string {
+	data, err := u.GetData()
+	if err != nil {
+		return ""
+	}
+	if data == nil || data.LegacyUserData == nil {
+		return ""
+	}
+	return data.LegacyUserData.Email
+}
+
+func (u *userInfo) SetEmail(email string) error {
+	data, err := u.GetData()
+	if err != nil {
+		slog.Info("failed to get login data from settings", "error", err)
+		return err
+	}
+	if data == nil || data.LegacyUserData == nil {
+		return nil
+	}
+	data.LegacyUserData.Email = email
+	return u.SetData(data)
+}
+
 func (u *userInfo) SetData(data *protos.LoginResponse) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
