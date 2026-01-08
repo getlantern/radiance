@@ -107,6 +107,9 @@ func TestSetStruct(t *testing.T) {
 
 	Reset()
 	err := InitSettings(tempDir)
+	if err != nil {
+		t.Fatalf("expected no error initializing settings, got %v", err)
+	}
 
 	err = Set("testStruct", struct {
 		Field1 string
