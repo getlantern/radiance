@@ -112,12 +112,12 @@ func normalizeLocale(locale string) string {
 // buildDNSRules adds a DNS rule for fake ip.
 func buildDNSRules() []option.DNSRule {
 	dnsRules := make([]option.DNSRule, 0)
-	dnsRules = addFakeIP(&dnsRules)
+	dnsRules = addFakeIP(dnsRules)
 	return dnsRules
 }
 
-func addFakeIP(dnsRules *[]option.DNSRule) []option.DNSRule {
-	return append(*dnsRules, option.DNSRule{
+func addFakeIP(dnsRules []option.DNSRule) []option.DNSRule {
+	return append(dnsRules, option.DNSRule{
 		Type: constant.RuleTypeDefault,
 		DefaultOptions: option.DefaultDNSRule{
 			RawDefaultDNSRule: option.RawDefaultDNSRule{
