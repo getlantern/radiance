@@ -96,7 +96,9 @@ func Init(dataDir, logDir, logLevel string) error {
 		f.Close()
 	}
 
-	settings.InitSettings(DataPath())
+	if err := settings.InitSettings(DataPath()); err != nil {
+		return fmt.Errorf("failed to initialize settings: %w", err)
+	}
 
 	initialized = true
 	return nil

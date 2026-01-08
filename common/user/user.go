@@ -98,7 +98,7 @@ func (u *userInfo) AccountType() string {
 		return "free"
 	}
 	if data == nil || data.LegacyUserData == nil {
-		return ""
+		return "free"
 	}
 	typ := data.LegacyUserData.UserLevel
 	if typ == "" {
