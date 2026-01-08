@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/getlantern/radiance/common/atomicfile"
@@ -28,6 +29,7 @@ type settings struct {
 	k        *koanf.Koanf
 	filePath string
 	parser   koanf.Parser
+	sync.RWMutex
 }
 
 var k = &settings{
@@ -51,8 +53,7 @@ func InitSettings(dataDir string) error {
 		} else {
 			// 3. If it doesn't exist, create it with default settings
 			slog.Info("creating new config file with default settings", "path", k.filePath)
-			k.k.Set(LocaleKey, "fa-IR")
-			save()
+			Set(LocaleKey, "fa-IR")
 		}
 	} else {
 		// 4. If it exists and is valid, load it into koanf
@@ -64,43 +65,64 @@ func InitSettings(dataDir string) error {
 }
 
 func Get(key string) any {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Get(key)
 }
 
 func GetString(key string) string {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.String(key)
 }
 
 func GetBool(key string) bool {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Bool(key)
 }
 
 func GetInt(key string) int {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Int(key)
 }
 
 func GetFloat64(key string) float64 {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Float64(key)
 }
 
 func GetStringSlice(key string) []string {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Strings(key)
 }
 
 func GetDuration(key string) time.Duration {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Duration(key)
 }
 
 func GetStruct(key string, out any) error {
+	k.RLock()
+	defer k.RUnlock()
 	return k.k.Unmarshal(key, out)
 }
 
 func Set(key string, value any) error {
+	k.Lock()
+	defer k.Unlock()
 	k.k.Set(key, value)
 	return save()
 }
 
 func save() error {
+	k.RLock()
+	defer k.RUnlock()
+
 	out, err := k.k.Marshal(k.parser)
 	if err != nil {
 		return fmt.Errorf("Could not marshall koanf file: %w", err)
