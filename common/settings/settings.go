@@ -42,7 +42,9 @@ func InitSettings(dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
+	k.Lock()
 	k.filePath = filepath.Join(dataDir, "local.json")
+	k.Unlock()
 
 	// 1. Try to atomically read the existing config file
 	if raw, err := atomicfile.ReadFile(k.filePath); err != nil {
