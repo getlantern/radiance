@@ -52,7 +52,9 @@ func InitSettings(dataDir string) error {
 			return fmt.Errorf("error loading koanf config file: %w", err)
 		} else {
 			// 3. If it doesn't exist, create it with default settings
-			slog.Info("creating new config file with default settings", "path", k.filePath)
+			if err := save(); err != nil {
+				return fmt.Errorf("failed to save default settings: %w", err)
+			}
 			Set(LocaleKey, "fa-IR")
 		}
 	} else {
