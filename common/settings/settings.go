@@ -3,7 +3,6 @@ package settings
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -127,7 +126,7 @@ func save() error {
 
 	out, err := k.k.Marshal(k.parser)
 	if err != nil {
-		return fmt.Errorf("Could not marshall koanf file: %w", err)
+		return fmt.Errorf("Could not marshal koanf file: %w", err)
 	}
 
 	err = atomicfile.WriteFile(k.filePath, out, 0644)
