@@ -118,7 +118,7 @@ func Set(key string, value any) error {
 	err := k.k.Set(key, value)
 	k.Unlock()
 	if err != nil {
-		return fmt.Errorf("Could not set key %s: %w", key, err)
+		return fmt.Errorf("could not set key %s: %w", key, err)
 	}
 	return save()
 }
@@ -129,12 +129,12 @@ func save() error {
 
 	out, err := k.k.Marshal(k.parser)
 	if err != nil {
-		return fmt.Errorf("Could not marshal koanf file: %w", err)
+		return fmt.Errorf("could not marshal koanf file: %w", err)
 	}
 
 	err = atomicfile.WriteFile(k.filePath, out, 0644)
 	if err != nil {
-		return fmt.Errorf("Could not write koanf file: %w", err)
+		return fmt.Errorf("could not write koanf file: %w", err)
 	}
 	return nil
 }
