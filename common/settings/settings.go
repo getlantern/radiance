@@ -115,8 +115,8 @@ func GetStruct(key string, out any) error {
 
 func Set(key string, value any) error {
 	k.Lock()
-	defer k.Unlock()
 	k.k.Set(key, value)
+	k.Unlock()
 	return save()
 }
 
@@ -134,4 +134,10 @@ func save() error {
 		return fmt.Errorf("Could not write koanf file: %w", err)
 	}
 	return nil
+}
+
+func reset() {
+	k.Lock()
+	defer k.Unlock()
+	k.k = koanf.New(".")
 }
