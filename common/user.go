@@ -21,6 +21,6 @@ type UserInfo interface {
 
 type UserChangeEvent struct {
 	events.Event
-	Old UserInfo
-	New UserInfo
+	Old *protos.LoginResponse
+	New *protos.LoginResponse
 }

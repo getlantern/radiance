@@ -36,8 +36,6 @@ import (
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
-
-	"github.com/spf13/viper"
 )
 
 const configPollInterval = 10 * time.Minute
@@ -113,8 +111,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
-	viper.Set(settings.LocaleKey, opts.Locale)
-	viper.WriteConfig()
+	settings.Set(settings.LocaleKey, opts.Locale)
 
 	dataDir := common.DataPath()
 	kindlingLogger := &slogWriter{Logger: slog.Default()}

@@ -6,8 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/spf13/viper"
+	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/knadh/koanf/parsers/json"
+	"github.com/knadh/koanf/providers/rawbytes"
+	"github.com/knadh/koanf/v2"
 )
 
 // LocaleKey is the key used to store and retrieve the user's locale setting, which is typically
@@ -15,36 +19,96 @@ import (
 const (
 	CountryCodeKey = "country_code"
 	LocaleKey      = "locale"
+	DeviceIDKey    = "device_id"
+	DataPathKey    = "data_path"
+	LoginDataKey   = "login_data"
 )
 
-// InitSettings initializes the viper config for user settings, which can be used by both the tunnel process and
+type settings struct {
+	k        *koanf.Koanf
+	filePath string
+	parser   koanf.Parser
+}
+
+var k = &settings{
+	k:      koanf.New("."),
+	parser: json.Parser(),
+}
+
+// InitSettings initializes the config for user settings, which can be used by both the tunnel process and
 // the main application process to read user preferences like locale.
 func InitSettings(dataDir string) error {
-	viper.SetConfigName("local.json")
-	viper.AddConfigPath(dataDir)
-	viper.SetConfigType("json")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
-	var fileLookupError viper.ConfigFileNotFoundError
-	if err := viper.ReadInConfig(); err != nil {
-		if errors.As(err, &fileLookupError) {
-			// Indicates an explicitly set config file is not found (such as with
-			// using `viper.SetConfigFile`) or that no config file was found in
-			// any search path (such as when using `viper.AddConfigPath`)
-			// This likely means first run, so we can ignore this error.
-			slog.Info("No existing user config file found; assuming first run", "path", dataDir)
-			viper.SetDefault(LocaleKey, "fa-IR")
+	k.filePath = filepath.Join(dataDir, "local.json")
 
-			if writeErr := viper.SafeWriteConfigAs(filepath.Join(dataDir, "local.json")); writeErr != nil {
-				slog.Error("Failed to write default config file", "path", dataDir, "error", writeErr)
-				return fmt.Errorf("Error writing default config file %w", writeErr)
-			}
+	// 1. Try to atomically read the existing config file
+	if raw, err := atomicfile.ReadFile(k.filePath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			// 2. If it exists but is invalid, return an error
+			return fmt.Errorf("error loading koanf config file: %w", err)
 		} else {
-			// Config file was found but another error was produced.
-			return fmt.Errorf("Error loading config file %w", err)
+			// 3. If it doesn't exist, create it with default settings
+			slog.Info("creating new config file with default settings", "path", k.filePath)
+			k.k.Set(LocaleKey, "fa-IR")
+			save()
+		}
+	} else {
+		// 4. If it exists and is valid, load it into koanf
+		if err := k.k.Load(rawbytes.Provider(raw), k.parser); err != nil {
+			return fmt.Errorf("error parsing koanf config file: %w", err)
 		}
 	}
-	// Config file found and successfully parsed
+	return nil
+}
+
+func Get(key string) any {
+	return k.k.Get(key)
+}
+
+func GetString(key string) string {
+	return k.k.String(key)
+}
+
+func GetBool(key string) bool {
+	return k.k.Bool(key)
+}
+
+func GetInt(key string) int {
+	return k.k.Int(key)
+}
+
+func GetFloat64(key string) float64 {
+	return k.k.Float64(key)
+}
+
+func GetStringSlice(key string) []string {
+	return k.k.Strings(key)
+}
+
+func GetDuration(key string) time.Duration {
+	return k.k.Duration(key)
+}
+
+func GetStruct(key string, out any) error {
+	return k.k.Unmarshal(key, out)
+}
+
+func Set(key string, value any) error {
+	k.k.Set(key, value)
+	return save()
+}
+
+func save() error {
+	out, err := k.k.Marshal(k.parser)
+	if err != nil {
+		return fmt.Errorf("Could not marshall koanf file: %w", err)
+	}
+
+	err = atomicfile.WriteFile(k.filePath, out, 0644)
+	if err != nil {
+		return fmt.Errorf("Could not write koanf file: %w", err)
+	}
 	return nil
 }

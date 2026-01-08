@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spf13/viper"
+	"github.com/knadh/koanf/v2"
 )
 
 func TestInitSettings(t *testing.T) {
@@ -18,16 +18,13 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create temp directory: %v", err)
 		}
 
-		// Reset viper state
-		viper.Reset()
-
 		err := InitSettings(tempDir)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
 		// Verify default locale was set
-		locale := viper.GetString(LocaleKey)
+		locale := Get(LocaleKey)
 		if locale != "fa-IR" {
 			t.Errorf("expected default locale 'fa-IR', got %s", locale)
 		}
@@ -36,21 +33,6 @@ func TestInitSettings(t *testing.T) {
 		configPath := filepath.Join(tempDir, "local.json")
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			t.Error("expected config file to be created")
-		}
-
-		viper.Reset()
-
-		viper.SetConfigName("local.json")
-		viper.AddConfigPath(tempDir)
-		viper.SetConfigType("json")
-		if err := viper.ReadInConfig(); err != nil {
-			t.Fatalf("failed to read config file: %v", err)
-		}
-
-		// Verify default locale persists after re-reading config
-		locale = viper.GetString(LocaleKey)
-		if locale != "fa-IR" {
-			t.Errorf("expected default locale 'fa-IR' after re-reading config, got %s", locale)
 		}
 	})
 
@@ -69,8 +51,7 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create test config file: %v", err)
 		}
 
-		// Reset viper state
-		viper.Reset()
+		k.k = koanf.New(".")
 
 		err := InitSettings(tempDir)
 		if err != nil {
@@ -78,12 +59,12 @@ func TestInitSettings(t *testing.T) {
 		}
 
 		// Verify config was loaded
-		locale := viper.GetString(LocaleKey)
+		locale := Get(LocaleKey)
 		if locale != "en-US" {
 			t.Errorf("expected locale 'en-US', got %s", locale)
 		}
 
-		countryCode := viper.GetString(CountryCodeKey)
+		countryCode := Get(CountryCodeKey)
 		if countryCode != "US" {
 			t.Errorf("expected country_code 'US', got %s", countryCode)
 		}
@@ -100,8 +81,7 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create test config file: %v", err)
 		}
 
-		// Reset viper state
-		viper.Reset()
+		k.k = koanf.New(".")
 
 		err := InitSettings(tempDir)
 		if err == nil {
@@ -110,8 +90,7 @@ func TestInitSettings(t *testing.T) {
 	})
 
 	t.Run("non-existent directory", func(t *testing.T) {
-		// Reset viper state
-		viper.Reset()
+		k.k = koanf.New(".")
 
 		// Use a non-existent directory
 		nonExistentDir := filepath.Join(os.TempDir(), "non-existent-dir-123456789")
@@ -121,4 +100,73 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("expected no error for non-existent directory (first run), got %v", err)
 		}
 	})
+}
+
+func TestSetStruct(t *testing.T) {
+	tempDir := t.TempDir()
+	// Ensure the directory exists
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		t.Fatalf("failed to create temp directory: %v", err)
+	}
+
+	k.k = koanf.New(".")
+	err := InitSettings(tempDir)
+
+	err = Set("testStruct", struct {
+		Field1 string
+		Field2 int
+	}{
+		Field1: "value1",
+		Field2: 42,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	var result struct {
+		Field1 string
+		Field2 int
+	}
+	err = GetStruct("testStruct", &result)
+	if err != nil {
+		t.Fatalf("expected no error retrieving struct, got %v", err)
+	}
+
+	if result.Field1 != "value1" || result.Field2 != 42 {
+		t.Errorf("expected struct {Field1: 'value1', Field2: 42}, got %+v", result)
+	}
+
+	// Reset koanf state and re-read from disk.
+	k.k = koanf.New(".")
+	result.Field1 = ""
+	result.Field2 = 0
+
+	// At first, the struct should not be present.
+	err = GetStruct("testStruct", &result)
+	if err != nil {
+		t.Fatalf("expected no error retrieving struct, got %v", err)
+	}
+
+	if result.Field1 != "" || result.Field2 != 0 {
+		t.Errorf("expected struct {Field1: '', Field2: 0}, got %+v", result)
+	}
+
+	err = InitSettings(tempDir)
+	if err != nil {
+		t.Fatalf("expected no error re-initializing settings, got %v", err)
+	}
+
+	var result2 struct {
+		Field1 string
+		Field2 int
+	}
+	err = GetStruct("testStruct", &result2)
+	if err != nil {
+		t.Fatalf("expected no error retrieving struct after re-init, got %v", err)
+	}
+
+	if result2.Field1 != "value1" || result2.Field2 != 42 {
+		t.Errorf("expected struct {Field1: 'value1', Field2: 42} after re-init, got %+v", result2)
+	}
+
 }

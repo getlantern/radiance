@@ -10,7 +10,6 @@ import (
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
-	"github.com/spf13/viper"
 )
 
 // buildDNSServers returns a list of three DNSServerOptions, a local DNS server
@@ -90,7 +89,7 @@ var aliDNSLocales = map[string]struct{}{
 
 func localDNSIP() string {
 	// First, normalize the locale to upper case and remove any hyphens or underscores.
-	locale := viper.GetString(settings.LocaleKey)
+	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
 		slog.Info("Using AliDNS for locale", "locale", locale)

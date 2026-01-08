@@ -28,6 +28,7 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/api"
+	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/events"
@@ -125,10 +126,10 @@ func NewConfigHandler(options Options) *ConfigHandler {
 }
 
 // shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
-func shouldRefetch(new, old common.UserInfo) bool {
-	return new != nil && old != nil && old.LegacyID() != 0 &&
-		(new.LegacyToken() != old.LegacyToken() || // user ID changed
-			new.AccountType() != old.AccountType()) // changed between free and pro
+func shouldRefetch(new, old *protos.LoginResponse) bool {
+	return new != nil && old != nil && old.LegacyID != 0 &&
+		(new.LegacyID != old.LegacyID || // user ID changed
+			new.LegacyUserData.UserLevel != old.LegacyUserData.UserLevel) // changed between free and pro
 }
 
 var ErrNoWGKey = errors.New("no wg key")
