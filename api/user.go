@@ -85,7 +85,7 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 
 func (ac *APIClient) storeData(ctx context.Context, resp UserDataResponse) error {
 	if resp.BaseResponse != nil && resp.Error != "" {
-		err := fmt.Errorf("recevied bad response: %s", resp.Error)
+		err := fmt.Errorf("received bad response: %s", resp.Error)
 		slog.Error("user data", "error", err)
 		return traces.RecordError(ctx, err)
 	}
