@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/getlantern/radiance/common/atomicfile"
@@ -27,7 +26,6 @@ type settings struct {
 	k        *koanf.Koanf
 	filePath string
 	parser   koanf.Parser
-	sync.RWMutex
 }
 
 var k = &settings{
@@ -41,13 +39,10 @@ func InitSettings(dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
-	filePath := filepath.Join(dataDir, "local.json")
-	k.Lock()
-	k.filePath = filePath
-	k.Unlock()
+	k.filePath = filepath.Join(dataDir, "local.json")
 
 	// 1. Try to atomically read the existing config file
-	if raw, err := atomicfile.ReadFile(filePath); err != nil {
+	if raw, err := atomicfile.ReadFile(k.filePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// 2. If it exists but is invalid, return an error
 			return fmt.Errorf("error loading koanf config file: %w", err)
@@ -67,56 +62,38 @@ func InitSettings(dataDir string) error {
 }
 
 func Get(key string) any {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Get(key)
 }
 
 func GetString(key string) string {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.String(key)
 }
 
 func GetBool(key string) bool {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Bool(key)
 }
 
 func GetInt(key string) int {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Int(key)
 }
 
 func GetFloat64(key string) float64 {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Float64(key)
 }
 
 func GetStringSlice(key string) []string {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Strings(key)
 }
 
 func GetDuration(key string) time.Duration {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Duration(key)
 }
 
 func GetStruct(key string, out any) error {
-	k.RLock()
-	defer k.RUnlock()
 	return k.k.Unmarshal(key, out)
 }
 
 func Set(key string, value any) error {
-	k.Lock()
-	defer k.Unlock()
 	err := k.k.Set(key, value)
 	if err != nil {
 		return fmt.Errorf("could not set key %s: %w", key, err)
@@ -141,8 +118,6 @@ func save() error {
 }
 
 func Reset() {
-	k.Lock()
-	defer k.Unlock()
 	k.k = koanf.New(".")
 	k.filePath = ""
 }
