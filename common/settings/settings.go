@@ -141,4 +141,5 @@ func Reset() {
 	k.Lock()
 	defer k.Unlock()
 	k.k = koanf.New(".")
+	k.filePath = ""
 }
