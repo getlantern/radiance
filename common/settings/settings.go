@@ -41,12 +41,13 @@ func InitSettings(dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
+	filePath := filepath.Join(dataDir, "local.json")
 	k.Lock()
-	k.filePath = filepath.Join(dataDir, "local.json")
+	k.filePath = filePath
 	k.Unlock()
 
 	// 1. Try to atomically read the existing config file
-	if raw, err := atomicfile.ReadFile(k.filePath); err != nil {
+	if raw, err := atomicfile.ReadFile(filePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// 2. If it exists but is invalid, return an error
 			return fmt.Errorf("error loading koanf config file: %w", err)
@@ -55,7 +56,6 @@ func InitSettings(dataDir string) error {
 			if err := Set(LocaleKey, "fa-IR"); err != nil {
 				return fmt.Errorf("failed to set default locale: %w", err)
 			}
-
 		}
 	} else {
 		// 4. If it exists and is valid, load it into koanf
@@ -125,6 +125,9 @@ func Set(key string, value any) error {
 }
 
 func save() error {
+	if k.filePath == "" {
+		return errors.New("settings file path is not set")
+	}
 	out, err := k.k.Marshal(k.parser)
 	if err != nil {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
