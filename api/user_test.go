@@ -257,7 +257,6 @@ var _ common.UserInfo = (*mockUserInfo)(nil)
 
 // Mock implementation of User config for testing purposes
 type mockUserInfo struct {
-	common.UserInfo
 	data *protos.LoginResponse
 }
 
@@ -275,3 +274,24 @@ func (m *mockUserInfo) LegacyToken() string                          { return "l
 func (m *mockUserInfo) Locale() string                               { return "en-US" }
 func (m *mockUserInfo) SetLocale(locale string)                      {}
 func (m *mockUserInfo) AccountType() string                          { return "free" }
+func (m *mockUserInfo) GetEmail() string {
+	if m.data != nil && m.data.LegacyUserData != nil {
+		return m.data.LegacyUserData.Email
+	}
+	return ""
+}
+func (m *mockUserInfo) SetEmail(email string) error {
+	if m.data != nil && m.data.LegacyUserData != nil {
+		m.data.LegacyUserData.Email = email
+	}
+	return nil
+}
+
+func (m *mockUserInfo) IsPro() bool {
+	if m.data != nil && m.data.LegacyUserData != nil {
+		return m.data.LegacyUserData.UserLevel == "pro"
+	}
+	return false
+}
+
+func (m *mockUserInfo) CountryCode() string { return "US" }

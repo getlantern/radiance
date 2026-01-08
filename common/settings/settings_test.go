@@ -9,11 +9,6 @@ import (
 func TestInitSettings(t *testing.T) {
 	t.Run("first run - no config file exists", func(t *testing.T) {
 		tempDir := t.TempDir()
-		// Ensure the directory exists
-		if err := os.MkdirAll(tempDir, 0755); err != nil {
-			t.Fatalf("failed to create temp directory: %v", err)
-		}
-
 		err := InitSettings(tempDir)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
@@ -35,10 +30,6 @@ func TestInitSettings(t *testing.T) {
 	t.Run("existing valid config file", func(t *testing.T) {
 		// Create a temporary directory
 		tempDir := t.TempDir()
-		// Ensure the directory exists
-		if err := os.MkdirAll(tempDir, 0755); err != nil {
-			t.Fatalf("failed to create temp directory: %v", err)
-		}
 
 		// Create a valid config file
 		configPath := filepath.Join(tempDir, "local.json")
@@ -100,11 +91,6 @@ func TestInitSettings(t *testing.T) {
 
 func TestSetStruct(t *testing.T) {
 	tempDir := t.TempDir()
-	// Ensure the directory exists
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		t.Fatalf("failed to create temp directory: %v", err)
-	}
-
 	Reset()
 	err := InitSettings(tempDir)
 	if err != nil {
