@@ -5,7 +5,7 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -90,7 +90,7 @@ var aliDNSLocales = map[string]struct{}{
 
 func localDNSIP() string {
 	// First, normalize the locale to upper case and remove any hyphens or underscores.
-	locale := viper.GetString(common.LocaleKey)
+	locale := viper.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
 		slog.Info("Using AliDNS for locale", "locale", locale)
@@ -113,7 +113,12 @@ func normalizeLocale(locale string) string {
 // buildDNSRules adds a DNS rule for fake ip.
 func buildDNSRules() []option.DNSRule {
 	dnsRules := make([]option.DNSRule, 0)
-	dnsRules = append(dnsRules, option.DNSRule{
+	dnsRules = addFakeIP(&dnsRules)
+	return dnsRules
+}
+
+func addFakeIP(dnsRules *[]option.DNSRule) []option.DNSRule {
+	return append(*dnsRules, option.DNSRule{
 		Type: constant.RuleTypeDefault,
 		DefaultOptions: option.DefaultDNSRule{
 			RawDefaultDNSRule: option.RawDefaultDNSRule{
@@ -127,6 +132,4 @@ func buildDNSRules() []option.DNSRule {
 			},
 		},
 	})
-
-	return dnsRules
 }

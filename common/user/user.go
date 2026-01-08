@@ -17,8 +17,10 @@ import (
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/spf13/viper"
 )
 
 const userDataFileName = ".userData"
@@ -51,16 +53,16 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	u.deviceID = deviceID
 	u.dataPath = path
 	u.locale = locale
-	save(u, path)
 
 	var sub *events.Subscription[config.NewConfigEvent]
 	sub = events.Subscribe(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
-			u.countryCode = evt.New.ConfigResponse.Country
+			viper.Set(settings.CountryCodeKey, evt.New.ConfigResponse.Country)
+			slog.Info("Set country code from config response", "country_code", evt.New.ConfigResponse.Country)
 			events.Unsubscribe(sub)
-			save(u, path)
 		}
 	})
+	save(u, path)
 	return u
 }
 

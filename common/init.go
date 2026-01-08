@@ -21,6 +21,7 @@ import (
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
@@ -95,7 +96,7 @@ func Init(dataDir, logDir, logLevel string) error {
 		f.Close()
 	}
 
-	initUserConfig(DataPath())
+	settings.InitSettings(DataPath())
 
 	initialized = true
 	return nil

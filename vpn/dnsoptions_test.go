@@ -3,7 +3,7 @@ package vpn
 import (
 	"testing"
 
-	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/spf13/viper"
 )
 
@@ -135,7 +135,7 @@ func TestLocalDNSIP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup: Set the locale in viper
-			viper.Set(common.LocaleKey, tt.locale)
+			viper.Set(settings.LocaleKey, tt.locale)
 			defer viper.Reset()
 
 			result := localDNSIP()

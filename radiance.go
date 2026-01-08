@@ -26,6 +26,7 @@ import (
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/common/user"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
@@ -112,7 +113,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
-	viper.Set(common.LocaleKey, opts.Locale)
+	viper.Set(settings.LocaleKey, opts.Locale)
 	viper.WriteConfig()
 
 	dataDir := common.DataPath()
@@ -281,12 +282,11 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
 func (r *Radiance) Features() map[string]bool {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "features")
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "features")
 	defer span.End()
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		slog.Error("Failed to get config for features", "error", err)
-		traces.RecordError(ctx, err, trace.WithStackTrace(true))
+		slog.Info("Failed to get config for features", "error", err)
 		return map[string]bool{}
 	}
 	if cfg == nil {
