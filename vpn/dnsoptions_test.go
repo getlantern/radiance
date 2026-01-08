@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/spf13/viper"
 )
 
 func TestNormalizeLocale(t *testing.T) {
@@ -134,9 +133,9 @@ func TestLocalDNSIP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Setup: Set the locale in viper
-			viper.Set(settings.LocaleKey, tt.locale)
-			defer viper.Reset()
+			// Setup: Set the locale in settings
+			settings.Set(settings.LocaleKey, tt.locale)
+			defer settings.Reset()
 
 			result := localDNSIP()
 			if result != tt.expected {

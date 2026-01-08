@@ -47,7 +47,7 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create test config file: %v", err)
 		}
 
-		reset()
+		Reset()
 
 		err := InitSettings(tempDir)
 		if err != nil {
@@ -77,7 +77,7 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create test config file: %v", err)
 		}
 
-		reset()
+		Reset()
 
 		err := InitSettings(tempDir)
 		if err == nil {
@@ -86,7 +86,7 @@ func TestInitSettings(t *testing.T) {
 	})
 
 	t.Run("non-existent directory", func(t *testing.T) {
-		reset()
+		Reset()
 
 		// Use a non-existent directory
 		nonExistentDir := filepath.Join(os.TempDir(), "non-existent-dir-123456789")
@@ -105,7 +105,7 @@ func TestSetStruct(t *testing.T) {
 		t.Fatalf("failed to create temp directory: %v", err)
 	}
 
-	reset()
+	Reset()
 	err := InitSettings(tempDir)
 
 	err = Set("testStruct", struct {
@@ -133,7 +133,7 @@ func TestSetStruct(t *testing.T) {
 	}
 
 	// Reset koanf state and re-read from disk.
-	reset()
+	Reset()
 	result.Field1 = ""
 	result.Field2 = 0
 

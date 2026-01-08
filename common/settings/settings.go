@@ -139,7 +139,7 @@ func save() error {
 	return nil
 }
 
-func reset() {
+func Reset() {
 	k.Lock()
 	defer k.Unlock()
 	k.k = koanf.New(".")
