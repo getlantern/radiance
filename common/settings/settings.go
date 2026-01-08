@@ -14,8 +14,7 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-// LocaleKey is the key used to store and retrieve the user's locale setting, which is typically
-// passed in from the frontend and used to customize user experience based on their language.
+// Keys for various settings.
 const (
 	CountryCodeKey = "country_code"
 	LocaleKey      = "locale"
@@ -52,11 +51,11 @@ func InitSettings(dataDir string) error {
 			// 2. If it exists but is invalid, return an error
 			return fmt.Errorf("error loading koanf config file: %w", err)
 		} else {
-			// 3. If it doesn't exist, create it with default settings
-			if err := save(); err != nil {
-				return fmt.Errorf("failed to save default settings: %w", err)
+			// 3. If it doesn't exist, create it with default locale
+			if err := Set(LocaleKey, "fa-IR"); err != nil {
+				return fmt.Errorf("failed to set default locale: %w", err)
 			}
-			Set(LocaleKey, "fa-IR")
+
 		}
 	} else {
 		// 4. If it exists and is valid, load it into koanf
@@ -117,8 +116,8 @@ func GetStruct(key string, out any) error {
 
 func Set(key string, value any) error {
 	k.Lock()
+	defer k.Unlock()
 	err := k.k.Set(key, value)
-	k.Unlock()
 	if err != nil {
 		return fmt.Errorf("could not set key %s: %w", key, err)
 	}
@@ -126,9 +125,6 @@ func Set(key string, value any) error {
 }
 
 func save() error {
-	k.RLock()
-	defer k.RUnlock()
-
 	out, err := k.k.Marshal(k.parser)
 	if err != nil {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
