@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/go-resty/resty/v2"
 
@@ -22,6 +23,7 @@ type APIClient struct {
 	saltPath   string
 	authClient AuthClient
 	userInfo   common.UserInfo
+	mu         sync.RWMutex
 }
 
 func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {

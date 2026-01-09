@@ -4,9 +4,7 @@ package user
 // use this across the app to read and write user data in sync
 import (
 	"log/slog"
-	"sync"
 
-	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
@@ -16,7 +14,6 @@ import (
 // userInfo is a struct that implements the UserInfo interface
 // it contains the device ID, user data, data directory, and locale
 type userInfo struct {
-	mu sync.RWMutex
 }
 
 // NewUserConfig creates a new UserInfo object
@@ -43,51 +40,4 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 		}
 	})
 	return u
-}
-
-func (u *userInfo) SetData(data *protos.LoginResponse) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	var changed bool
-	if data == nil || data.LegacyUserData == nil {
-		slog.Info("no user data to set")
-		return
-	}
-
-	if data.LegacyUserData.UserLevel != "" {
-		oldUserLevel := settings.GetString(settings.UserLevelKey)
-		changed = changed || oldUserLevel != data.LegacyUserData.UserLevel
-		if err := settings.Set(settings.UserLevelKey, data.LegacyUserData.UserLevel); err != nil {
-			slog.Error("failed to set user level in settings", "error", err)
-		}
-	}
-	if data.LegacyUserData.Email != "" {
-		oldEmail := settings.GetString(settings.EmailKey)
-		changed = changed || oldEmail != "" && oldEmail != data.LegacyUserData.Email
-		if err := settings.Set(settings.EmailKey, data.LegacyUserData.Email); err != nil {
-			slog.Error("failed to set email in settings", "error", err)
-		}
-	}
-	if data.LegacyID != 0 {
-		oldUserID := settings.GetInt64(settings.UserIDKey)
-		changed = changed || oldUserID != 0 && oldUserID != data.LegacyID
-		if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
-			slog.Error("failed to set user ID in settings", "error", err)
-		}
-	}
-
-	devices := []settings.Device{}
-	for _, d := range data.Devices {
-		devices = append(devices, settings.Device{
-			Name: d.Name,
-			ID:   d.Id,
-		})
-	}
-	if err := settings.Set(settings.DevicesKey, devices); err != nil {
-		slog.Error("failed to set devices in settings", "error", err)
-	}
-
-	if changed {
-		events.Emit(common.UserChangeEvent{})
-	}
 }
