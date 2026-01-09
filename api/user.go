@@ -17,6 +17,7 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -89,7 +90,7 @@ func (ac *APIClient) storeData(ctx context.Context, resp UserDataResponse) error
 		return traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	// Append device ID to user data
-	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
+	resp.LoginResponse_UserData.DeviceID = settings.GetString(settings.DeviceIDKey)
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
 		LegacyToken:    resp.Token,
@@ -111,7 +112,7 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
 	datacap := &DataCapInfo{}
-	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", a.userInfo.LegacyID(), a.userInfo.DeviceID())
+	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", settings.GetInt64(settings.UserIDKey), settings.GetString(settings.DeviceIDKey))
 	newReq := a.authWc.NewRequest(nil, nil, nil)
 	err := a.authWc.Get(ctx, getUrl, newReq, &datacap)
 	if err != nil {
@@ -228,8 +229,8 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 	defer span.End()
 	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
-		DeviceId:     a.userInfo.DeviceID(),
-		LegacyUserID: a.userInfo.LegacyID(),
+		DeviceId:     settings.GetString(settings.DeviceIDKey),
+		LegacyUserID: settings.GetInt64(settings.UserIDKey),
 		LegacyToken:  a.userInfo.LegacyToken(),
 	})
 	if err != nil {
@@ -463,7 +464,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,
-		DeviceId:  a.userInfo.DeviceID(),
+		DeviceId:  settings.GetString(settings.DeviceIDKey),
 	}
 
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
@@ -485,8 +486,8 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
 	query := loginURL.Query()
-	query.Set("deviceId", a.userInfo.DeviceID())
-	query.Set("userId", strconv.FormatInt(a.userInfo.LegacyID(), 10))
+	query.Set("deviceId", settings.GetString(settings.DeviceIDKey))
+	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 	query.Set("proToken", a.userInfo.LegacyToken())
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil

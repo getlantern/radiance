@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/timezone"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 const (
@@ -42,10 +43,10 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 
 	req.Header.Set(AppVersionHeader, common.AppVersion)
 	req.Header.Set(VersionHeader, common.Version)
-	req.Header.Set(UserIDHeader, strconv.FormatInt(user.LegacyID(), 10))
+	req.Header.Set(UserIDHeader, strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 	req.Header.Set(PlatformHeader, common.Platform)
 	req.Header.Set(AppNameHeader, common.Name)
-	req.Header.Set(DeviceIDHeader, user.DeviceID())
+	req.Header.Set(DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
 	return req, nil
 }
 

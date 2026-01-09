@@ -25,6 +25,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 )
@@ -74,8 +75,8 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,
 		AppName:        common.Name,
-		DeviceID:       f.user.DeviceID(),
-		UserID:         fmt.Sprintf("%d", f.user.LegacyID()),
+		DeviceID:       settings.GetString(settings.DeviceIDKey),
+		UserID:         fmt.Sprintf("%d", settings.GetInt64(settings.UserIDKey)),
 		ProToken:       f.user.LegacyToken(),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
@@ -122,7 +123,7 @@ func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
 func (f *fetcher) ensureUser(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.ensureUser")
 	defer span.End()
-	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
+	if settings.GetInt64(settings.UserIDKey) == 0 || f.user.LegacyToken() == "" {
 		if f.apiClient == nil {
 			slog.Error("API client is nil, cannot create new user")
 			span.RecordError(errors.New("API client is nil"))

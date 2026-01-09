@@ -316,7 +316,7 @@ func (r *Radiance) EnableTelemetry() {
 		slog.Info("No config available while enabling telemetry; telemetry will be initialized on next config update")
 		return
 	}
-	cErr := telemetry.OnNewConfig(nil, cfg, r.userInfo.DeviceID(), r.userInfo)
+	cErr := telemetry.OnNewConfig(nil, cfg, settings.GetString(settings.DeviceIDKey), r.userInfo)
 	if cErr != nil {
 		slog.Warn("Failed to initialize telemetry on enabling", "error", cErr)
 	}

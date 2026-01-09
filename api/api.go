@@ -10,6 +10,7 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 const tracerName = "github.com/getlantern/radiance/api"
@@ -32,12 +33,12 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 
 	proWC := newWebClient(httpClient, proServerURL)
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
-		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
+		req.Header.Set(backend.DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
 		if userInfo.LegacyToken() != "" {
 			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
 		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
+		if settings.GetInt64(settings.UserIDKey) != 0 {
+			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 		}
 		return nil
 	})

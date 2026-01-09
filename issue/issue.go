@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
@@ -118,12 +119,12 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		Platform:          common.Platform,
 		Description:       report.Description,
 		UserEmail:         userEmail,
-		DeviceId:          ir.userConfig.DeviceID(),
-		UserId:            strconv.FormatInt(ir.userConfig.LegacyID(), 10),
+		DeviceId:          settings.GetString(settings.DeviceIDKey),
+		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
 		Device:            report.Device,
 		Model:             report.Model,
 		OsVersion:         osVersion,
-		Language:          ir.userConfig.Locale(),
+		Language:          settings.GetString(settings.LocaleKey),
 	}
 
 	for _, attachment := range report.Attachments {

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/common/user"
 )
 
@@ -34,12 +35,12 @@ func TestSendReport(t *testing.T) {
 		Platform:          common.Platform,
 		Description:       "Description placeholder-test only",
 		UserEmail:         "radiancetest@getlantern.org",
-		DeviceId:          userConfig.DeviceID(),
-		UserId:            strconv.FormatInt(userConfig.LegacyID(), 10),
+		DeviceId:          settings.GetString(settings.DeviceIDKey),
+		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
 		Device:            "Samsung Galaxy S10",
 		Model:             "SM-G973F",
 		OsVersion:         osVer,
-		Language:          userConfig.Locale(),
+		Language:          settings.GetString(settings.LocaleKey),
 		Attachments: []*ReportIssueRequest_Attachment{
 			{
 				Type:    "application/zip",

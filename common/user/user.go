@@ -46,20 +46,8 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	return u
 }
 
-func (u *userInfo) DeviceID() string {
-	return settings.GetString(settings.DeviceIDKey)
-}
-
-func (u *userInfo) LegacyID() int64 {
-	return settings.GetInt64(settings.UserIDKey)
-}
-
 func (u *userInfo) LegacyToken() string {
 	return settings.GetString(settings.TokenKey)
-}
-
-func (u *userInfo) Locale() string {
-	return settings.GetString(settings.LocaleKey)
 }
 
 func (u *userInfo) CountryCode() string {
