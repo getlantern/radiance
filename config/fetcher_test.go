@@ -76,6 +76,11 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 func TestFetchConfig(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "mock-device-id")
+	settings.Set(settings.UserIDKey, 1234567890)
+	settings.Set(settings.TokenKey, "mock-legacy-token")
+
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
 
@@ -122,6 +127,8 @@ func TestFetchConfig(t *testing.T) {
 		},
 	}
 
+	apiClient := &api.APIClient{}
+	defer apiClient.Reset()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockRT := &mockRoundTripper{
@@ -130,7 +137,7 @@ func TestFetchConfig(t *testing.T) {
 			}
 			fetcher := newFetcher(&http.Client{
 				Transport: mockRT,
-			}, "en-US", &api.APIClient{})
+			}, "en-US", apiClient)
 
 			gotConfig, err := fetcher.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
 

@@ -236,7 +236,7 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
-	a.setData(nil)
+	a.Reset()
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
@@ -471,7 +471,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 		return traces.RecordError(ctx, err)
 	}
 	// clean up local data
-	a.setData(nil)
+	a.Reset()
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
@@ -538,12 +538,7 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if data == nil {
-		// Clear user data
-		settings.Set(settings.UserIDKey, int64(0))
-		settings.Set(settings.TokenKey, "")
-		settings.Set(settings.UserLevelKey, "")
-		settings.Set(settings.EmailKey, "")
-		settings.Set(settings.DevicesKey, []settings.Device{})
+		a.Reset()
 		return
 	}
 	var changed bool
@@ -588,4 +583,14 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 	if changed {
 		events.Emit(settings.UserChangeEvent{})
 	}
+}
+
+func (a *APIClient) Reset() {
+	// Clear user data
+	settings.Set(settings.UserIDKey, int64(0))
+	settings.Set(settings.TokenKey, "")
+	settings.Set(settings.UserLevelKey, "")
+	settings.Set(settings.EmailKey, "")
+	settings.Set(settings.DevicesKey, []settings.Device{})
+
 }
