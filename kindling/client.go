@@ -37,7 +37,7 @@ func HTTPClient() *http.Client {
 }
 
 // SetHTTPClient set the HTTP client returned by this package when calling
-// `HTTPClient()`. This function is useful for testing purposes
+// `HTTPClient()`. This function is useful for testing purposes.
 func SetHTTPClient(c *http.Client) {
 	mutexOptions.Lock()
 	defer mutexOptions.Unlock()
@@ -82,11 +82,6 @@ func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
 	return nil
 }
 
-type ClientUpdated struct {
-	events.Event
-	Client *http.Client
-}
-
 // KindlingUpdater start event subscriptions that might need to rebuild kindling
 func KindlingUpdater() {
 	events.Subscribe(func(e dnstt.DNSTTUpdateEvent) {
@@ -103,7 +98,5 @@ func KindlingUpdater() {
 
 		// build new http client
 		newHTTPClient(kindling.NewKindling("radiance", append(defaultOptions, dnsttRenewableOptions...)...))
-		// notify that a new client is available
-		events.Emit(ClientUpdated{Client: HTTPClient()})
 	})
 }
