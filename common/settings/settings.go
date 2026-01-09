@@ -48,19 +48,15 @@ func InitSettings(dataDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	filePath := filepath.Join(dataDir, "local.json")
-	Set(filePathKey, filePath)
 	// 1. Try to atomically read the existing config file
 	if raw, err := atomicfile.ReadFile(filePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// 2. If it exists but is invalid, return an error
 			return fmt.Errorf("error loading koanf config file: %w", err)
 		} else {
-			// 3. If it doesn't exist, create it with default locale
-			if err := Set(LocaleKey, "fa-IR"); err != nil {
-				return fmt.Errorf("failed to set default locale: %w", err)
-			}
-			if err := Set(UserLevelKey, "free"); err != nil {
-				return fmt.Errorf("failed to set default user level: %w", err)
+			// 3. If it doesn't exist, create it with default settings
+			if err := setDefaults(filePath); err != nil {
+				return fmt.Errorf("error setting defaults %w", err)
 			}
 		}
 	} else {
@@ -70,6 +66,20 @@ func InitSettings(dataDir string) error {
 		}
 	}
 	Set(DataPathKey, dataDir)
+	return nil
+}
+
+func setDefaults(filePath string) error {
+	// We need to set the file path first, as otherwise the save function can't read it to save!
+	if err := Set(filePathKey, filePath); err != nil {
+		return fmt.Errorf("failed to set file path: %w", err)
+	}
+	if err := Set(LocaleKey, "fa-IR"); err != nil {
+		return fmt.Errorf("failed to set default locale: %w", err)
+	}
+	if err := Set(UserLevelKey, "free"); err != nil {
+		return fmt.Errorf("failed to set default user level: %w", err)
+	}
 	return nil
 }
 
