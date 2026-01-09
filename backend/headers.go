@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/timezone"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 const (
@@ -30,7 +31,7 @@ const (
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
-func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader, user common.UserInfo) (*http.Request, error) {
+func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
@@ -42,16 +43,16 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 
 	req.Header.Set(AppVersionHeader, common.AppVersion)
 	req.Header.Set(VersionHeader, common.Version)
-	req.Header.Set(UserIDHeader, strconv.FormatInt(user.LegacyID(), 10))
+	req.Header.Set(UserIDHeader, strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 	req.Header.Set(PlatformHeader, common.Platform)
 	req.Header.Set(AppNameHeader, common.Name)
-	req.Header.Set(DeviceIDHeader, user.DeviceID())
+	req.Header.Set(DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
 	return req, nil
 }
 
 // NewIssueRequest creates a new HTTP request with the required headers for issue reporting.
-func NewIssueRequest(ctx context.Context, method, url string, body io.Reader, user common.UserInfo) (*http.Request, error) {
-	req, err := NewRequestWithHeaders(ctx, method, url, body, user)
+func NewIssueRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+	req, err := NewRequestWithHeaders(ctx, method, url, body)
 	if err != nil {
 		return nil, err
 	}

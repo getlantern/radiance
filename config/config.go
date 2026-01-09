@@ -29,6 +29,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 )
@@ -59,7 +60,6 @@ type ListenerFunc func(oldConfig, newConfig *Config) error
 type Options struct {
 	PollInterval time.Duration
 	SvrManager   ServerManager
-	User         common.UserInfo
 	DataDir      string
 	Locale       string
 	APIHandler   *api.APIClient
@@ -107,12 +107,9 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	if !ch.fetchDisabled {
-		ch.ftr = newFetcher(options.User, options.Locale, options.APIHandler)
+		ch.ftr = newFetcher(options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
-		events.Subscribe(func(evt common.UserChangeEvent) {
-			if !shouldRefetch(evt.New, evt.Old) {
-				return
-			}
+		events.Subscribe(func(evt settings.UserChangeEvent) {
 			slog.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				slog.Error("Failed to fetch config", "error", err)
@@ -120,13 +117,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		})
 	}
 	return ch
-}
-
-// shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
-func shouldRefetch(new, old common.UserInfo) bool {
-	return new != nil && old != nil && old.LegacyID() != 0 &&
-		(new.LegacyToken() != old.LegacyToken() || // user ID changed
-			new.AccountType() != old.AccountType()) // changed between free and pro
 }
 
 var ErrNoWGKey = errors.New("no wg key")
@@ -261,7 +251,7 @@ func setCustomProtocolOptions(outbounds []option.Outbound) {
 	for _, outbound := range outbounds {
 		switch opts := outbound.Options.(type) {
 		case *lbO.WATEROutboundOptions:
-			opts.Dir = filepath.Join(common.DataPath(), "water")
+			opts.Dir = filepath.Join(settings.GetString(settings.DataPathKey), "water")
 			// TODO: we need to measure the client upload and download metrics
 			// in order to set hysteria custom parameters and support brutal sender
 			// as congestion control

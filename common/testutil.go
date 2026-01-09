@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
@@ -13,9 +14,9 @@ func SetPathsForTesting(t *testing.T) {
 	}
 	t.Helper()
 	tmp := t.TempDir()
-	dataPath.Store(tmp)
-	logPath.Store(tmp)
+	settings.Set(settings.DataPathKey, tmp)
+	settings.Set(settings.LogPathKey, tmp)
 	if runtime.GOOS != "windows" {
-		ipc.SetSocketPath(dataPath.Load().(string))
+		ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
 	}
 }

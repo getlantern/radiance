@@ -3,8 +3,7 @@ package vpn
 import (
 	"testing"
 
-	"github.com/getlantern/radiance/common"
-	"github.com/spf13/viper"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func TestNormalizeLocale(t *testing.T) {
@@ -134,14 +133,48 @@ func TestLocalDNSIP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Setup: Set the locale in viper
-			viper.Set(common.LocaleKey, tt.locale)
-			defer viper.Reset()
+			// Setup: Set the locale in settings
+			t.Cleanup(settings.Reset)
+			settings.Set(settings.LocaleKey, tt.locale)
 
 			result := localDNSIP()
 			if result != tt.expected {
 				t.Errorf("localDNSIP() with locale %q = %q, expected %q", tt.locale, result, tt.expected)
 			}
 		})
+	}
+}
+func TestBuildDNSRules(t *testing.T) {
+	rules := buildDNSRules()
+
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 DNS rule, got %d", len(rules))
+	}
+
+	rule := rules[0]
+
+	if rule.Type != "default" {
+		t.Errorf("expected rule type 'default', got %q", rule.Type)
+	}
+
+	if rule.DefaultOptions.DNSRuleAction.Action != "route" {
+		t.Errorf("expected action 'route', got %q", rule.DefaultOptions.DNSRuleAction.Action)
+	}
+
+	if rule.DefaultOptions.DNSRuleAction.RouteOptions.Server != "dns_fakeip" {
+		t.Errorf("expected server 'dns_fakeip', got %q", rule.DefaultOptions.DNSRuleAction.RouteOptions.Server)
+	}
+
+	queryTypes := rule.DefaultOptions.RawDefaultDNSRule.QueryType
+	if len(queryTypes) != 2 {
+		t.Fatalf("expected 2 query types, got %d", len(queryTypes))
+	}
+
+	if queryTypes[0] != 1 { // dns.TypeA
+		t.Errorf("expected first query type to be TypeA (1), got %d", queryTypes[0])
+	}
+
+	if queryTypes[1] != 28 { // dns.TypeAAAA
+		t.Errorf("expected second query type to be TypeAAAA (28), got %d", queryTypes[1])
 	}
 }

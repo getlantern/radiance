@@ -15,13 +15,14 @@ import (
 	"github.com/getlantern/lantern-box/adapter"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func TestEstablishConnection(t *testing.T) {
 	common.SetPathsForTesting(t)
-	tOpts, _, err := testBoxOptions(common.DataPath())
+	tOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
 	testEstablishConnection(t, *tOpts)
@@ -32,10 +33,10 @@ func TestEstablishConnection(t *testing.T) {
 
 func TestUpdateServers(t *testing.T) {
 	common.SetPathsForTesting(t)
-	testOpts, _, err := testBoxOptions(common.DataPath())
+	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
-	baseOuts := baseOpts(common.DataPath()).Outbounds
+	baseOuts := baseOpts(settings.GetString(settings.DataPathKey)).Outbounds
 	allOutbounds := map[string]sbO.Outbound{
 		"direct": baseOuts[0],
 		"block":  baseOuts[1],
@@ -119,11 +120,11 @@ func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
 }
 
 func testEstablishConnection(t *testing.T, opts sbO.Options) {
-	tmp := common.DataPath()
+	tmp := settings.GetString(settings.DataPathKey)
 
-	opts.Route.RuleSet = baseOpts(common.DataPath()).Route.RuleSet
+	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
 	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts(common.DataPath()).Route.Rules[2]}, opts.Route.Rules...)
+	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
 	newSplitTunnel(tmp)
 
 	err := establishConnection("", "", opts, tmp, nil)

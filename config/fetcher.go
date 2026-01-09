@@ -25,6 +25,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/traces"
@@ -44,7 +45,6 @@ type Fetcher interface {
 
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
-	user         common.UserInfo
 	lastModified time.Time
 	locale       string
 	etag         string
@@ -52,9 +52,8 @@ type fetcher struct {
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
+func newFetcher(locale string, apiClient *api.APIClient) Fetcher {
 	return &fetcher{
-		user:         user,
 		lastModified: time.Time{},
 		locale:       locale,
 		apiClient:    apiClient,
@@ -73,9 +72,9 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,
 		AppName:        common.Name,
-		DeviceID:       f.user.DeviceID(),
-		UserID:         fmt.Sprintf("%d", f.user.LegacyID()),
-		ProToken:       f.user.LegacyToken(),
+		DeviceID:       settings.GetString(settings.DeviceIDKey),
+		UserID:         fmt.Sprintf("%d", settings.GetInt64(settings.UserIDKey)),
+		ProToken:       settings.GetString(settings.TokenKey),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
@@ -121,7 +120,7 @@ func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
 func (f *fetcher) ensureUser(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.ensureUser")
 	defer span.End()
-	if f.user.LegacyID() == 0 || f.user.LegacyToken() == "" {
+	if settings.GetInt64(settings.UserIDKey) == 0 || settings.GetString(settings.TokenKey) == "" {
 		if f.apiClient == nil {
 			slog.Error("API client is nil, cannot create new user")
 			span.RecordError(errors.New("API client is nil"))
@@ -143,7 +142,7 @@ func (f *fetcher) ensureUser(ctx context.Context) error {
 func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.send")
 	defer span.End()
-	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body, f.user)
+	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}

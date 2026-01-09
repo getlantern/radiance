@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn/ipc"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -37,7 +38,7 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Se
 	return ipcServer, ipcServer.Start(basePath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
 		path := basePath
 		if path == "" {
-			path = common.DataPath()
+			path = settings.GetString(settings.DataPathKey)
 		}
 		// Initialize common package if not already done.
 		if path == "" {
@@ -46,7 +47,7 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Se
 				return nil, fmt.Errorf("initialize common package: %w", err)
 			}
 		}
-		path = common.DataPath()
+		path = settings.GetString(settings.DataPathKey)
 		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", path)
 
 		_ = newSplitTunnel(path)

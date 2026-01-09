@@ -15,13 +15,13 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/user"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling"
 )
 
 func TestSendReport(t *testing.T) {
-	userConfig := user.NewUserConfig("radiance-test", "", "")
-
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
 	// Get OS version for expected report
 	osVer, err := osversion.GetHumanReadable()
 	require.NoError(t, err)
@@ -35,12 +35,12 @@ func TestSendReport(t *testing.T) {
 		Platform:          common.Platform,
 		Description:       "Description placeholder-test only",
 		UserEmail:         "radiancetest@getlantern.org",
-		DeviceId:          userConfig.DeviceID(),
-		UserId:            strconv.FormatInt(userConfig.LegacyID(), 10),
+		DeviceId:          settings.GetString(settings.DeviceIDKey),
+		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
 		Device:            "Samsung Galaxy S10",
 		Model:             "SM-G973F",
 		OsVersion:         osVer,
-		Language:          userConfig.Locale(),
+		Language:          settings.GetString(settings.LocaleKey),
 		Attachments: []*ReportIssueRequest_Attachment{
 			{
 				Type:    "application/zip",
@@ -53,9 +53,7 @@ func TestSendReport(t *testing.T) {
 	srv := newTestServer(t, want)
 	defer srv.Close()
 
-	reporter := &IssueReporter{
-		userConfig: userConfig,
-	}
+	reporter := &IssueReporter{}
 	kindling.SetKindling(&mockKindling{newTestClient(t, srv.URL)})
 	report := IssueReport{
 		Type:        "Cannot access blocked sites",

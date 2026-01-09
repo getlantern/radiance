@@ -10,6 +10,7 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
 )
@@ -61,7 +62,7 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*Su
 
 	var resp SubscriptionPlans
 	params := map[string]string{
-		"locale":              ac.userInfo.Locale(),
+		"locale":              settings.GetString(settings.LocaleKey),
 		"distributionChannel": channel,
 	}
 	proWC := ac.proWebClient()
@@ -144,8 +145,8 @@ func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error)
 	}
 	query := portalURL.Query()
 	query.Set("referer", "https://lantern.io/")
-	query.Set("userId", strconv.FormatInt(int64(ac.userInfo.LegacyID()), 10))
-	query.Set("proToken", ac.userInfo.LegacyToken())
+	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
+	query.Set("proToken", settings.GetString(settings.TokenKey))
 	portalURL.RawQuery = query.Encode()
 	return portalURL.String(), nil
 }
@@ -224,7 +225,7 @@ func (ac *APIClient) ActivationCode(ctx context.Context, email, resellerCode str
 		"idempotencyKey": strconv.FormatInt(time.Now().UnixNano(), 10),
 		"provider":       "reseller-code",
 		"email":          email,
-		"deviceName":     ac.userInfo.DeviceID(),
+		"deviceName":     settings.GetString(settings.DeviceIDKey),
 		"resellerCode":   resellerCode,
 	}
 	var resp PurchaseResponse
