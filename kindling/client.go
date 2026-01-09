@@ -1,6 +1,7 @@
 package kindling
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +43,7 @@ func newHTTPClient(k kindling.Kindling) {
 }
 
 // NewKindling build a kindling client and bootstrap this package
-func NewKindling(dataDir string, logger io.Writer) error {
+func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
 	mutexOptions.Lock()
 	defer mutexOptions.Unlock()
 
@@ -51,6 +52,12 @@ func NewKindling(dataDir string, logger io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("failed to create fronted: %w", err)
 		}
+
+		ampClient, err := fronted.NewAMPClient(ctx, logger)
+		if err != nil {
+			return fmt.Errorf("failed to create amp client: %w", err)
+		}
+
 		defaultOptions = append(defaultOptions,
 			kindling.WithPanicListener(reporting.PanicListener),
 			kindling.WithLogWriter(logger),
@@ -58,6 +65,8 @@ func NewKindling(dataDir string, logger io.Writer) error {
 			// Most endpoints use df.iantem.io, but for some historical reasons
 			// "pro-server" calls still go to api.getiantem.org.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
+			// Kindling will skip amp transports if the request has a payload larger than 6kb
+			kindling.WithAMPCache(ampClient),
 		)
 	}
 

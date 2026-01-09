@@ -41,7 +41,9 @@ var (
 )
 
 // Subscription allows unsubscribing from an event.
-type Subscription[T Event] struct{}
+type Subscription[T Event] struct {
+	_ byte // padding to avoid empty struct optimizations
+}
 
 // Subscribe registers a callback function for the given event type T. Returns a Subscription handle
 // that can be used to unsubscribe later.
@@ -57,6 +59,20 @@ func Subscribe[T Event](callback func(evt T)) *Subscription[T] {
 	return sub
 }
 
+// SubscribeOnce registers a callback function for the given event type T that will be invoked only
+// once. Returns a Subscription handle that can be used to unsubscribe if needed.
+func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
+	ready := make(chan struct{})
+	var sub *Subscription[T]
+	sub = Subscribe(func(evt T) {
+		<-ready
+		callback(evt)
+		sub.Unsubscribe()
+	})
+	close(ready)
+	return sub
+}
+
 // Unsubscribe removes the given subscription.
 func Unsubscribe[T Event](sub *Subscription[T]) {
 	subscriptionsMu.Lock()
@@ -68,6 +84,10 @@ func Unsubscribe[T Event](sub *Subscription[T]) {
 			delete(subscriptions, evt)
 		}
 	}
+}
+
+func (e *Subscription[T]) Unsubscribe() {
+	Unsubscribe(e)
 }
 
 // Emit notifies all subscribers of the event, passing event data. Callbacks are invoked

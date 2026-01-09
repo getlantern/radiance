@@ -17,7 +17,6 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
-	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 
@@ -65,18 +64,10 @@ func baseOpts(basePath string) O.Options {
 		},
 		DNS: &O.DNSOptions{
 			RawDNSOptions: O.RawDNSOptions{
-				Servers: []O.DNSServerOptions{
-					newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
-					newDNSServerOptions(C.DNSTypeTLS, "dns-cloudflare-dot", "1.1.1.1", ""),
-					newDNSServerOptions(C.DNSTypeLocal, "local", "", ""),
-					newDNSServerOptions(C.DNSTypeTLS, "dns-sb-dot", "185.222.222.222", ""),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-google-doh", "dns.google", "dns-google-dot"),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-cloudflare-doh", "cloudflare-dns.com", "dns-cloudflare-dot"),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-sb-doh", "doh.dns.sb", "dns-sb-dot"),
-				},
-				DNSClientOptions: O.DNSClientOptions{
-					Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
-				},
+				Servers: buildDNSServers(),
+				Rules:   buildDNSRules(),
+				// Fallback DNS when no rules match.
+				Final: "dns_local",
 			},
 		},
 		Inbounds: []O.Inbound{
@@ -303,6 +294,10 @@ func buildOptions(group, path string) (O.Options, error) {
 	}
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
 
+	if len(lanternTags) == 0 && len(userTags) == 0 {
+		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+	}
+
 	// Add auto all outbound
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
 
@@ -371,8 +366,10 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
 		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
 	}
+	// overwrite base DNS options with config from src (server)
 	if src.DNS != nil {
-		dst.DNS.Servers = append(dst.DNS.Servers, src.DNS.Servers...)
+		dns := *src.DNS
+		dst.DNS = &dns
 	}
 
 	var tags []string
@@ -383,6 +380,14 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
+}
+
+func useIfNotZero[T comparable](newVal, oldVal T) T {
+	var zero T
+	if newVal != zero {
+		return newVal
+	}
+	return oldVal
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string) {

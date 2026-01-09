@@ -93,10 +93,13 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	configPath := filepath.Join(tempDir, common.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		configPath: configPath,
 		config:     atomic.Value{},
 		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US", nil),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	ch.config.Store(&Config{
@@ -137,6 +140,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 	mockFetcher := &MockFetcher{}
 
 	// Create a ConfigHandler with the mock parser and fetcher
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		configPath:        configPath,
 		config:            atomic.Value{},
@@ -144,6 +148,8 @@ func TestHandlerFetchConfig(t *testing.T) {
 		ftr:               mockFetcher,
 		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
 		svrManager:        &mockSrvManager{},
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	// Test case: No server location set
@@ -231,7 +237,9 @@ func (mf *MockFetcher) fetchConfig(ctx context.Context, preferred C.ServerLocati
 	return mf.response, mf.err
 }
 
-type UserStub struct{}
+type UserStub struct {
+	common.UserInfo
+}
 
 // Verify that a UserStub implements the User interface
 var _ common.UserInfo = (*UserStub)(nil)
@@ -249,3 +257,4 @@ func (u *UserStub) LegacyToken() string                      { return "test-lega
 func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
 func (u *UserStub) SetLocale(locale string)                  {}
 func (u *UserStub) AccountType() string                      { return "free" }
+func (u *UserStub) IsPro() bool                              { return false }

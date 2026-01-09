@@ -579,7 +579,6 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
 func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
-
 	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", baseURL, "users/oauth2", provider))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)

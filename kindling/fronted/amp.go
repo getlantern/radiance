@@ -9,8 +9,13 @@ import (
 	"strings"
 	"time"
 
+	_ "embed"
+
 	"github.com/getlantern/amp"
 )
+
+//go:embed amp_public_key.pem
+var ampPublicKey string
 
 // NewAMPClient creates a new AMP (Accelerated Mobile Pages) client for domain fronting.
 // It initializes the client with the provided context, log writer, and public key for verification.
@@ -18,11 +23,10 @@ import (
 // The context parameter controls the lifecycle of background configuration updates.
 //   - ctx: Used to manage the lifecycle of background configuration updates.
 //   - logWriter: Writer for logging transport and client activity.
-//   - publicKey: Public key used to verify configuration signatures.
 //
 // Returns an initialized amp.Client or an error if setup fails.
-func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (amp.Client, error) {
-	configURL := "https://raw.githubusercontent.com/getlantern/radiance/main/config/amp.yml.gz"
+func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) {
+	configURL := "https://raw.githubusercontent.com/getlantern/radiance/main/fronted/amp.yml.gz"
 	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, configURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
@@ -32,12 +36,24 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer, publicKey string) (a
 		amp.Config{
 			BrokerURL: "https://amp.iantem.io",
 			CacheURL:  "https://cdn.ampproject.org",
-			PublicKey: publicKey,
+			PublicKey: ampPublicKey,
 			Fronts: []string{
 				"google.com",
-				"youtube.com",
-				"photos.google.com",
-				"gmail.com",
+				"developers.google.com",
+				"docs.google.com",
+				"drive.google.com",
+				"console.firebase.google.com",
+				"appengine.google.com",
+				"compute.googleapis.com",
+				"run.googleapis.com",
+				"cloudfunctions.googleapis.com",
+				"container.googleapis.com",
+				"pubsub.googleapis.com",
+				"fonts.googleapis.com",
+				"fonts.gstatic.com",
+				"blogspot.com",
+				"play.google.com",
+				"developers.google.cn",
 			},
 		},
 		amp.WithConfigURL(configURL),

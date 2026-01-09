@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/getlantern/appdir"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -92,6 +94,8 @@ func Init(dataDir, logDir, logLevel string) error {
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
 	}
+
+	initUserConfig(DataPath())
 
 	initialized = true
 	return nil
@@ -264,13 +268,32 @@ func setupDirectories(data, logs string) error {
 
 func outDir(subdir string) string {
 	var data string
+	var name string
+	if IsWindows() || IsMacOS() {
+		name = capitalizeFirstLetter(Name)
+	} else {
+		name = Name
+	}
 	if IsWindows() {
 		publicDir := os.Getenv("Public")
-		data = filepath.Join(publicDir, Name)
+		data = filepath.Join(publicDir, name)
 	} else {
-		data = appdir.General(Name)
+		data = appdir.General(name)
 	}
 	return maybeAddSuffix(data, subdir)
+}
+
+func capitalizeFirstLetter(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	r, size := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError { // Handle invalid UTF-8 sequences
+		return s // Or handle error as needed
+	}
+
+	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 func maybeAddSuffix(path, suffix string) string {

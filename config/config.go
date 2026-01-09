@@ -34,6 +34,10 @@ import (
 	"github.com/getlantern/radiance/servers"
 )
 
+const (
+	maxRetryDelay = 2 * time.Minute
+)
+
 var (
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when if there was an error
 	// fetching the configuration.
@@ -67,30 +71,28 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config        atomic.Value
-	ftr           Fetcher
-	stopC         chan struct{}
-	closeOnce     *sync.Once
-	fetchDisabled bool
-
-	configPath string
-	configMu   sync.RWMutex
-
+	config     atomic.Value
+	ftr        Fetcher
 	svrManager ServerManager
 
-	// wgKeyPath is the path to the WireGuard private key file.
+	ctx               context.Context
+	cancel            context.CancelFunc
+	fetchDisabled     bool
+	configPath        string
 	wgKeyPath         string
 	preferredLocation atomic.Pointer[C.ServerLocation]
+	configMu          sync.RWMutex
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(options Options) *ConfigHandler {
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		config:        atomic.Value{},
-		stopC:         make(chan struct{}),
-		closeOnce:     &sync.Once{},
 		fetchDisabled: options.PollInterval <= 0,
+		ctx:           ctx,
+		cancel:        cancel,
 		configPath:    configPath,
 		wgKeyPath:     filepath.Join(options.DataDir, "wg.key"),
 		svrManager:    options.SvrManager,
@@ -113,6 +115,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 			if !shouldRefetch(evt.New, evt.Old) {
 				return
 			}
+			slog.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				slog.Error("Failed to fetch config", "error", err)
 			}
@@ -123,9 +126,8 @@ func NewConfigHandler(options Options) *ConfigHandler {
 
 // shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
 func shouldRefetch(new, old common.UserInfo) bool {
-	return new != old &&
-		(new == nil || old == nil || // sanity check
-			new.LegacyToken() != old.LegacyToken() || // user ID changed
+	return new != nil && old != nil && old.LegacyID() != 0 &&
+		(new.LegacyToken() != old.LegacyToken() || // user ID changed
 			new.AccountType() != old.AccountType()) // changed between free and pro
 }
 
@@ -169,7 +171,9 @@ func (ch *ConfigHandler) fetchConfig() error {
 	if ch.fetchDisabled {
 		return fmt.Errorf("fetching config is disabled")
 	}
-	slog.Debug("Fetching config")
+	if ch.isClosed() {
+		return fmt.Errorf("config handler is closed")
+	}
 	var preferred C.ServerLocation
 	oldConfig, err := ch.GetConfig()
 	if err != nil {
@@ -199,7 +203,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 
 	slog.Info("Fetching config")
-	resp, err := ch.ftr.fetchConfig(context.Background(), preferred, privateKey.PublicKey().String())
+	resp, err := ch.ftr.fetchConfig(ch.ctx, preferred, privateKey.PublicKey().String())
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -230,6 +234,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 		slog.Error("failed to replace private key", "error", err)
 		return fmt.Errorf("setting wireguard private key: %w", err)
 	}
+	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
 		cfg := ch.config.Load().(*Config).ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
@@ -252,6 +257,19 @@ func (ch *ConfigHandler) fetchConfig() error {
 
 	slog.Info("Config fetched")
 	return nil
+}
+
+func setCustomProtocolOptions(outbounds []option.Outbound) {
+	for _, outbound := range outbounds {
+		switch opts := outbound.Options.(type) {
+		case *lbO.WATEROutboundOptions:
+			opts.Dir = filepath.Join(common.DataPath(), "water")
+			// TODO: we need to measure the client upload and download metrics
+			// in order to set hysteria custom parameters and support brutal sender
+			// as congestion control
+		default:
+		}
+	}
 }
 
 // TODO: move this to lantern-cloud
@@ -294,26 +312,37 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 
 // fetchLoop fetches the configuration every pollInterval.
 func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
-	if err := ch.fetchConfig(); err != nil {
-		slog.Error("Failed to fetch config. Retrying", "error", err, "interval", pollInterval)
-	}
+	backoff := common.NewBackoff(maxRetryDelay)
 	for {
+		if err := ch.fetchConfig(); err != nil {
+			slog.Error("Failed to fetch config. Retrying", "error", err)
+			backoff.Wait(ch.ctx)
+			if ch.ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		backoff.Reset()
 		select {
-		case <-ch.stopC:
+		case <-ch.ctx.Done():
 			return
 		case <-time.After(pollInterval):
-			if err := ch.fetchConfig(); err != nil {
-				slog.Error("Failed to fetch config in select. Retrying", "error", err, "interval", pollInterval)
-			}
 		}
 	}
 }
 
 // Stop stops the ConfigHandler from fetching new configurations.
 func (ch *ConfigHandler) Stop() {
-	ch.closeOnce.Do(func() {
-		close(ch.stopC)
-	})
+	ch.cancel()
+}
+
+func (ch *ConfigHandler) isClosed() bool {
+	select {
+	case <-ch.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 // loadConfig loads the config file from the disk. If the config file is not found, it returns
@@ -399,7 +428,9 @@ func (ch *ConfigHandler) setConfig(cfg *Config) error {
 	}
 	slog.Info("saved new config")
 	slog.Info("Config set")
-	emit(oldConfig, cfg)
+	if !ch.isClosed() {
+		emit(oldConfig, cfg)
+	}
 	return nil
 }
 
