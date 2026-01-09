@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
@@ -19,35 +20,40 @@ import (
 )
 
 var (
-	httpClient *http.Client
+	k kindling.Kindling
 	// defaultOptions generally does not change after the first time
 	// or if they change, it's handled internally
 	defaultOptions = make([]kindling.Option, 0)
-	// dnsttRenewableOptions is a list that is overwritten whenever we receive
-	// a new dnstt config and we use that for rebuilding kindling
-	dnsttRenewableOptions = make([]kindling.Option, 0)
-	mutexOptions          sync.Mutex
+	mutexOptions   sync.Mutex
 )
 
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
 	mutexOptions.Lock()
 	defer mutexOptions.Unlock()
+
+	if k == nil {
+		mutexOptions.Unlock()
+		err := NewKindling(context.Background(), settings.GetString(settings.DataPathKey), &slogWriter{Logger: slog.Default()})
+		if err != nil {
+			slog.Error("failed to build kindling", slog.Any("error", err))
+			return &http.Client{}
+		}
+		mutexOptions.Lock()
+	}
+
+	httpClient := k.NewHTTPClient()
+	httpClient.Timeout = common.DefaultHTTPTimeout
+	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
 	return httpClient
 }
 
-// SetHTTPClient set the HTTP client returned by this package when calling
-// `HTTPClient()`. This function is useful for testing purposes.
-func SetHTTPClient(c *http.Client) {
+// SetKindling sets the kindling method used for building the HTTP client
+// This function is useful for testing purposes.
+func SetKindling(a kindling.Kindling) {
 	mutexOptions.Lock()
 	defer mutexOptions.Unlock()
-	httpClient = c
-}
-
-func newHTTPClient(k kindling.Kindling) {
-	httpClient = k.NewHTTPClient()
-	httpClient.Timeout = common.DefaultHTTPTimeout
-	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
+	k = a
 }
 
 // NewKindling build a kindling client and bootstrap this package
@@ -78,7 +84,7 @@ func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
 		)
 	}
 
-	newHTTPClient(kindling.NewKindling("radiance", defaultOptions...))
+	k = kindling.NewKindling("radiance", defaultOptions...)
 	return nil
 }
 
@@ -94,9 +100,16 @@ func KindlingUpdater() {
 			return
 		}
 		// replace dnstt renewable options once there's new options available
-		dnsttRenewableOptions = options
-
-		// build new http client
-		newHTTPClient(kindling.NewKindling("radiance", append(defaultOptions, dnsttRenewableOptions...)...))
+		k = kindling.NewKindling("radiance", append(defaultOptions, options...)...)
 	})
+}
+
+type slogWriter struct {
+	*slog.Logger
+}
+
+func (w *slogWriter) Write(p []byte) (n int, err error) {
+	// Convert the byte slice to a string and log it
+	w.Info(string(p))
+	return len(p), nil
 }

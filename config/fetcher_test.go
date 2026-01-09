@@ -33,7 +33,7 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 		"radiance-df-test",
 		kindling.WithDomainFronting(f),
 	)
-	rkindling.SetHTTPClient(k.NewHTTPClient())
+	rkindling.SetKindling(k)
 	fetcher := newFetcher("en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
@@ -52,7 +52,7 @@ func TestProxylessFetchConfig(t *testing.T) {
 		"radiance-df-test",
 		kindling.WithProxyless("df.iantem.io"),
 	)
-	rkindling.SetHTTPClient(k.NewHTTPClient())
+	rkindling.SetKindling(k)
 	fetcher := newFetcher("en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
@@ -136,8 +136,10 @@ func TestFetchConfig(t *testing.T) {
 				resp: tt.mockResponse,
 				err:  tt.mockError,
 			}
-			rkindling.SetHTTPClient(&http.Client{
-				Transport: mockRT,
+			rkindling.SetKindling(&mockKindling{
+				&http.Client{
+					Transport: mockRT,
+				},
 			})
 			fetcher := newFetcher("en-US", &api.APIClient{})
 
@@ -173,4 +175,18 @@ func TestFetchConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+type mockKindling struct {
+	c *http.Client
+}
+
+// NewHTTPClient returns a new HTTP client that is configured to use kindling.
+func (m *mockKindling) NewHTTPClient() *http.Client {
+	return m.c
+}
+
+// ReplaceTransport replaces an existing transport RoundTripper generator with the provided one.
+func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
+	panic("not implemented") // TODO: Implement
 }
