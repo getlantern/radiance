@@ -48,7 +48,6 @@ func NewAPIClient(httpClient *http.Client, dataDir string) *APIClient {
 		proWC:      proWC,
 		salt:       salt,
 		saltPath:   path,
-		authClient: &authClient{wc, userInfo},
-		userInfo:   userInfo,
+		authClient: &authClient{wc},
 	}
 }
