@@ -153,5 +153,57 @@ func TestSetStruct(t *testing.T) {
 	if result2.Field1 != "value1" || result2.Field2 != 42 {
 		t.Errorf("expected struct {Field1: 'value1', Field2: 42} after re-init, got %+v", result2)
 	}
+}
 
+func TestStructSlicePersistence(t *testing.T) {
+	tempDir := t.TempDir()
+	Reset()
+	err := InitSettings(tempDir)
+	if err != nil {
+		t.Fatalf("expected no error initializing settings, got %v", err)
+	}
+
+	type Item struct {
+		Name  string
+		Value int
+	}
+
+	items := []Item{
+		{Name: "item1", Value: 1},
+		{Name: "item2", Value: 2},
+	}
+
+	err = Set("itemList", items)
+	if err != nil {
+		t.Fatalf("expected no error setting struct slice, got %v", err)
+	}
+
+	var retrievedItems []Item
+	err = GetStruct("itemList", &retrievedItems)
+	if err != nil {
+		t.Fatalf("expected no error retrieving struct slice, got %v", err)
+	}
+
+	if len(retrievedItems) != 2 || retrievedItems[0].Name != "item1" || retrievedItems[1].Value != 2 {
+		t.Errorf("retrieved struct slice does not match expected values: %+v", retrievedItems)
+	}
+
+	// Reset koanf state and re-read from disk.
+	Reset()
+	retrievedItems = nil
+
+	err = InitSettings(tempDir)
+	if err != nil {
+		t.Fatalf("expected no error re-initializing settings, got %v", err)
+	}
+
+	var retrievedItems2 []Item
+	err = GetStruct("itemList", &retrievedItems2)
+	if err != nil {
+		t.Fatalf("expected no error retrieving struct slice after re-init, got %v", err)
+	}
+
+	if len(retrievedItems2) != 2 || retrievedItems2[0].Name != "item1" || retrievedItems2[1].Value != 2 {
+		t.Errorf("retrieved struct slice after re-init does not match expected values: %+v", retrievedItems2)
+	}
 }

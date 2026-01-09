@@ -77,7 +77,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 		AppName:        common.Name,
 		DeviceID:       settings.GetString(settings.DeviceIDKey),
 		UserID:         fmt.Sprintf("%d", settings.GetInt64(settings.UserIDKey)),
-		ProToken:       f.user.LegacyToken(),
+		ProToken:       settings.GetString(settings.TokenKey),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
@@ -123,7 +123,7 @@ func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
 func (f *fetcher) ensureUser(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.ensureUser")
 	defer span.End()
-	if settings.GetInt64(settings.UserIDKey) == 0 || f.user.LegacyToken() == "" {
+	if settings.GetInt64(settings.UserIDKey) == 0 || settings.GetString(settings.TokenKey) == "" {
 		if f.apiClient == nil {
 			slog.Error("API client is nil, cannot create new user")
 			span.RecordError(errors.New("API client is nil"))

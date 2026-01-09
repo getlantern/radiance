@@ -260,45 +260,4 @@ type mockUserInfo struct {
 	data *protos.LoginResponse
 }
 
-func (m *mockUserInfo) GetData() (*protos.LoginResponse, error) {
-	if m.data != nil {
-		return m.data, nil
-	}
-	return &protos.LoginResponse{}, nil
-}
-
 func (m *mockUserInfo) SetData(userData *protos.LoginResponse) {}
-func (m *mockUserInfo) DeviceID() string                       { return "deviceId" }
-func (m *mockUserInfo) LegacyID() int64                        { return 1 }
-func (m *mockUserInfo) LegacyToken() string                    { return "legacyToken" }
-func (m *mockUserInfo) Locale() string                         { return "en-US" }
-func (m *mockUserInfo) SetLocale(locale string)                {}
-func (m *mockUserInfo) AccountType() string                    { return "free" }
-func (m *mockUserInfo) GetEmail() string {
-	if m.data != nil && m.data.LegacyUserData != nil {
-		return m.data.LegacyUserData.Email
-	}
-	return ""
-}
-func (m *mockUserInfo) SetEmail(email string) error {
-	if m.data != nil && m.data.LegacyUserData != nil {
-		m.data.LegacyUserData.Email = email
-	}
-	return nil
-}
-
-func (m *mockUserInfo) IsPro() bool {
-	if m.data != nil && m.data.LegacyUserData != nil {
-		return m.data.LegacyUserData.UserLevel == "pro"
-	}
-	return false
-}
-
-func (m *mockUserInfo) CountryCode() string { return "US" }
-
-func (m *mockUserInfo) Devices() ([]common.Device, error) {
-	return []common.Device{
-		{ID: "device1", Name: "Device 1"},
-		{ID: "device2", Name: "Device 2"},
-	}, nil
-}

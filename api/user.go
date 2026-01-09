@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 )
@@ -103,8 +102,8 @@ func (ac *APIClient) storeData(ctx context.Context, resp UserDataResponse) error
 // user-server requests
 
 // Devices returns a list of devices associated with this user account.
-func (a *APIClient) Devices() ([]common.Device, error) {
-	return a.userInfo.Devices()
+func (a *APIClient) Devices() ([]settings.Device, error) {
+	return settings.Devices()
 }
 
 // DataCapInfo returns information about this user's data cap
@@ -231,7 +230,7 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 		Email:        email,
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
 		LegacyUserID: settings.GetInt64(settings.UserIDKey),
-		LegacyToken:  a.userInfo.LegacyToken(),
+		LegacyToken:  settings.GetString(settings.TokenKey),
 	})
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
@@ -309,7 +308,7 @@ const group = srp.RFC5054Group3072
 func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_change_email")
 	defer span.End()
-	lowerCaseEmail := strings.ToLower(a.userInfo.GetEmail())
+	lowerCaseEmail := strings.ToLower(settings.GetString(settings.EmailKey))
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
@@ -389,7 +388,7 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	}
 
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    a.userInfo.GetEmail(),
+		OldEmail:    settings.GetString(settings.EmailKey),
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -400,7 +399,7 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err := writeSalt(newSalt, a.saltPath); err != nil {
 		return traces.RecordError(ctx, err)
 	}
-	if err := a.userInfo.SetEmail(newEmail); err != nil {
+	if err := settings.Set(settings.EmailKey, newEmail); err != nil {
 		return traces.RecordError(ctx, err)
 	}
 
@@ -488,7 +487,7 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 	query := loginURL.Query()
 	query.Set("deviceId", settings.GetString(settings.DeviceIDKey))
 	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
-	query.Set("proToken", a.userInfo.LegacyToken())
+	query.Set("proToken", settings.GetString(settings.TokenKey))
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
 }

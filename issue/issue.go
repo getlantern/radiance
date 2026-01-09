@@ -99,7 +99,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
 	}
 
-	userStatus := ir.userConfig.AccountType()
+	userStatus := settings.GetString(settings.UserLevelKey)
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)

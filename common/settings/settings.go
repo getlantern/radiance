@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/getlantern/radiance/common/atomicfile"
@@ -131,4 +132,20 @@ func save() error {
 func Reset() {
 	k.k = koanf.New(".")
 	k.filePath = ""
+}
+
+func IsPro() bool {
+	return strings.ToLower(GetString(UserLevelKey)) == "pro"
+}
+
+// Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
+type Device struct {
+	ID   string
+	Name string
+}
+
+func Devices() ([]Device, error) {
+	devices := []Device{}
+	err := GetStruct(DevicesKey, &devices)
+	return devices, err
 }

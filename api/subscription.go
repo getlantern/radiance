@@ -140,7 +140,7 @@ func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error)
 	query := portalURL.Query()
 	query.Set("referer", "https://lantern.io/")
 	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
-	query.Set("proToken", ac.userInfo.LegacyToken())
+	query.Set("proToken", settings.GetString(settings.TokenKey))
 	portalURL.RawQuery = query.Encode()
 	return portalURL.String(), nil
 }

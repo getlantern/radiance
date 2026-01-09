@@ -4,7 +4,6 @@ package user
 // use this across the app to read and write user data in sync
 import (
 	"log/slog"
-	"strings"
 	"sync"
 
 	"github.com/getlantern/radiance/api/protos"
@@ -46,43 +45,6 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	return u
 }
 
-func (u *userInfo) LegacyToken() string {
-	return settings.GetString(settings.TokenKey)
-}
-
-func (u *userInfo) CountryCode() string {
-	return settings.GetString(settings.CountryCodeKey)
-}
-
-// AccountType returns the account type of the user (e.g., "free", "pro")
-func (u *userInfo) AccountType() string {
-	return settings.GetString(settings.UserLevelKey)
-}
-
-func (u *userInfo) IsPro() bool {
-	return strings.ToLower(u.AccountType()) == "pro"
-}
-
-func (u *userInfo) GetEmail() string {
-	return settings.GetString(settings.EmailKey)
-}
-
-func (u *userInfo) SetEmail(email string) error {
-	return settings.Set(settings.EmailKey, email)
-}
-
-type Devices struct {
-	Devices []common.Device
-}
-
-func (u *userInfo) Devices() ([]common.Device, error) {
-	d := &Devices{
-		Devices: []common.Device{},
-	}
-	err := settings.GetStruct(settings.DevicesKey, d)
-	return d.Devices, err
-}
-
 func (u *userInfo) SetData(data *protos.LoginResponse) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -114,17 +76,14 @@ func (u *userInfo) SetData(data *protos.LoginResponse) {
 		}
 	}
 
-	devices := []common.Device{}
+	devices := []settings.Device{}
 	for _, d := range data.Devices {
-		devices = append(devices, common.Device{
+		devices = append(devices, settings.Device{
 			Name: d.Name,
 			ID:   d.Id,
 		})
 	}
-	d := &Devices{
-		Devices: devices,
-	}
-	if err := settings.Set(settings.DevicesKey, d); err != nil {
+	if err := settings.Set(settings.DevicesKey, devices); err != nil {
 		slog.Error("failed to set devices in settings", "error", err)
 	}
 

@@ -34,8 +34,8 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 	proWC := newWebClient(httpClient, proServerURL)
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
 		req.Header.Set(backend.DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
+		if settings.GetString(settings.TokenKey) != "" {
+			req.Header.Set(backend.ProTokenHeader, settings.GetString(settings.TokenKey))
 		}
 		if settings.GetInt64(settings.UserIDKey) != 0 {
 			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))

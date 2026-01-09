@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -59,7 +60,7 @@ func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string, userInfo 
 		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
 		return nil
 	}
-	if err := initialize(deviceID, newConfig.ConfigResponse, userInfo.IsPro()); err != nil {
+	if err := initialize(deviceID, newConfig.ConfigResponse, settings.IsPro()); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
 		return fmt.Errorf("Failed to initialize OpenTelemetry: %w", err)
 	}
