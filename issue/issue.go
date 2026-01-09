@@ -17,6 +17,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
@@ -29,21 +30,12 @@ const (
 )
 
 // IssueReporter is used to send issue reports to backend
-type IssueReporter struct {
-	httpClient *http.Client
-}
+type IssueReporter struct{}
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(
-	httpClient *http.Client,
-) (*IssueReporter, error) {
-	if httpClient == nil {
-		return nil, fmt.Errorf("httpClient is nil")
-	}
-	return &IssueReporter{
-		httpClient: httpClient,
-	}, nil
+func NewIssueReporter() *IssueReporter {
+	return &IssueReporter{}
 }
 
 func randStr(n int) string {
@@ -167,7 +159,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		return traces.RecordError(ctx, err)
 	}
 
-	resp, err := ir.httpClient.Do(req)
+	resp, err := kindling.HTTPClient().Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
 		return traces.RecordError(ctx, err)

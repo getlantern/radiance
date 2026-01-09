@@ -49,8 +49,9 @@ type UserDataResponse struct {
 func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_user")
 	defer span.End()
+
 	var resp UserDataResponse
-	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
+	err := ac.proWebClient().Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
@@ -66,8 +67,9 @@ func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
 func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "user_data")
 	defer span.End()
+
 	var resp UserDataResponse
-	err := ac.proWC.Get(ctx, "/user-data", nil, &resp)
+	err := ac.proWebClient().Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
 		slog.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
@@ -111,10 +113,12 @@ func (a *APIClient) Devices() ([]settings.Device, error) {
 func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
+
 	datacap := &DataCapInfo{}
 	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", settings.GetInt64(settings.UserIDKey), settings.GetString(settings.DeviceIDKey))
-	newReq := a.authWc.NewRequest(nil, nil, nil)
-	err := a.authWc.Get(ctx, getUrl, newReq, &datacap)
+	authWc := authWebClient()
+	newReq := authWc.NewRequest(nil, nil, nil)
+	err := authWc.Get(ctx, getUrl, newReq, &datacap)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
@@ -125,6 +129,7 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up")
 	defer span.End()
+
 	salt, err := a.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		a.salt = salt
@@ -141,6 +146,7 @@ var ErrInvalidCode = errors.New("invalid code")
 func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_resend_code")
 	defer span.End()
+
 	if a.salt == nil {
 		return traces.RecordError(ctx, ErrNoSalt)
 	}
@@ -154,6 +160,7 @@ func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) err
 func (a *APIClient) SignupEmailConfirmation(ctx context.Context, email, code string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_confirmation")
 	defer span.End()
+
 	return traces.RecordError(ctx, a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
@@ -182,6 +189,7 @@ func readSalt(path string) ([]byte, error) {
 func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "get_salt")
 	defer span.End()
+
 	if a.salt != nil {
 		return a.salt, nil // use cached value
 	}
@@ -198,10 +206,12 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 	a.salt = nil
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
 	defer span.End()
+
 	salt, err := a.getSalt(ctx, email)
 	if err != nil {
 		return nil, err
 	}
+
 	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
@@ -227,6 +237,7 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 func (a *APIClient) Logout(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
 	defer span.End()
+
 	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
@@ -248,6 +259,7 @@ func (a *APIClient) Logout(ctx context.Context, email string) error {
 func (a *APIClient) StartRecoveryByEmail(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_recovery_by_email")
 	defer span.End()
+
 	return traces.RecordError(ctx, a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
 	}))
@@ -290,6 +302,7 @@ func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassw
 func (a *APIClient) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "validate_email_recovery_code")
 	defer span.End()
+
 	resp, err := a.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
@@ -330,6 +343,7 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
+
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return traces.RecordError(ctx, err)
@@ -387,7 +401,6 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err != nil {
 		return traces.RecordError(ctx, err)
 	}
-
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
 		OldEmail:    settings.GetString(settings.EmailKey),
 		NewEmail:    newEmail,
@@ -503,12 +516,14 @@ type LinkResponse struct {
 func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "remove_device")
 	defer span.End()
+
 	data := map[string]string{
 		"deviceId": deviceID,
 	}
-	req := a.proWC.NewRequest(nil, nil, data)
+	proWC := a.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
 	resp := &LinkResponse{}
-	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
+	if err := proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
@@ -520,12 +535,14 @@ func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkRes
 func (a *APIClient) ReferralAttach(ctx context.Context, code string) (bool, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach")
 	defer span.End()
+
 	data := map[string]string{
 		"code": code,
 	}
-	req := a.proWC.NewRequest(nil, nil, data)
+	proWC := a.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
 	resp := &protos.BaseResponse{}
-	if err := a.proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
+	if err := proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
 		return false, traces.RecordError(ctx, err)
 	}
 	if resp.Error != "" {

@@ -59,13 +59,15 @@ type SubscriptionResponse struct {
 func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*SubscriptionPlans, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_plans")
 	defer span.End()
+
 	var resp SubscriptionPlans
 	params := map[string]string{
 		"locale":              settings.GetString(settings.LocaleKey),
 		"distributionChannel": channel,
 	}
-	req := ac.proWC.NewRequest(params, nil, nil)
-	err := ac.proWC.Get(ctx, "/plans-v5", req, &resp)
+	proWC := ac.proWebClient()
+	req := proWC.NewRequest(params, nil, nil)
+	err := proWC.Get(ctx, "/plans-v5", req, &resp)
 	if err != nil {
 		slog.Error("retrieving plans", "error", err)
 		return nil, traces.RecordError(ctx, err)
@@ -82,13 +84,15 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*Su
 func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID string) (*SubscriptionResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_stripe_subscription")
 	defer span.End()
+
 	data := map[string]string{
 		"email":  email,
 		"planId": planID,
 	}
-	req := ac.proWC.NewRequest(nil, nil, data)
+	proWC := ac.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
 	var resp SubscriptionResponse
-	err := ac.proWC.Post(ctx, "/stripe-subscription", req, &resp)
+	err := proWC.Post(ctx, "/stripe-subscription", req, &resp)
 	if err != nil {
 		slog.Error("creating new subscription", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("creating new subscription: %w", err))
@@ -103,6 +107,7 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 func (ac *APIClient) VerifySubscription(ctx context.Context, service SubscriptionService, data map[string]string) (status, subID string, err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "verify_subscription")
 	defer span.End()
+
 	var path string
 	switch service {
 	case GoogleService:
@@ -114,13 +119,14 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 		return "", "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}
 
-	req := ac.proWC.NewRequest(nil, nil, data)
+	proWC := ac.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
 	type response struct {
 		Status         string
 		SubscriptionId string
 	}
 	var resp response
-	err = ac.proWC.Post(ctx, path, req, &resp)
+	err = proWC.Post(ctx, path, req, &resp)
 	if err != nil {
 		slog.Error("verifying subscription", "error", err)
 		return "", "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
@@ -149,6 +155,7 @@ func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error)
 func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data PaymentRedirectData) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_payment_redirect_url")
 	defer span.End()
+
 	type response struct {
 		Redirect string
 	}
@@ -163,8 +170,9 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 		"email":       data.Email,
 		"billingType": string(data.BillingType),
 	}
-	req := ac.proWC.NewRequest(params, headers, nil)
-	err := ac.proWC.Get(ctx, "/subscription-payment-redirect", req, &resp)
+	proWC := ac.proWebClient()
+	req := proWC.NewRequest(params, headers, nil)
+	err := proWC.Get(ctx, "/subscription-payment-redirect", req, &resp)
 	if err != nil {
 		slog.Error("subscription payment redirect", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("subscription payment redirect: %w", err))
@@ -177,6 +185,7 @@ func (ac *APIClient) SubscriptionPaymentRedirectURL(ctx context.Context, data Pa
 func (ac *APIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectData) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "payment_redirect")
 	defer span.End()
+
 	type response struct {
 		Redirect string
 	}
@@ -190,8 +199,9 @@ func (ac *APIClient) PaymentRedirect(ctx context.Context, data PaymentRedirectDa
 		"deviceName": data.DeviceName,
 		"email":      data.Email,
 	}
-	req := ac.proWC.NewRequest(mapping, headers, nil)
-	err := ac.proWC.Get(ctx, "/payment-redirect", req, &resp)
+	proWC := ac.proWebClient()
+	req := proWC.NewRequest(mapping, headers, nil)
+	err := proWC.Get(ctx, "/payment-redirect", req, &resp)
 	if err != nil {
 		slog.Error("subscription payment redirect", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("subscription payment redirect: %w", err))
@@ -210,6 +220,7 @@ type PurchaseResponse struct {
 func (ac *APIClient) ActivationCode(ctx context.Context, email, resellerCode string) (*PurchaseResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "activation_code")
 	defer span.End()
+
 	data := map[string]interface{}{
 		"idempotencyKey": strconv.FormatInt(time.Now().UnixNano(), 10),
 		"provider":       "reseller-code",
@@ -218,8 +229,9 @@ func (ac *APIClient) ActivationCode(ctx context.Context, email, resellerCode str
 		"resellerCode":   resellerCode,
 	}
 	var resp PurchaseResponse
-	req := ac.proWC.NewRequest(nil, nil, data)
-	err := ac.proWC.Post(ctx, "/purchase", req, &resp)
+	proWC := ac.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
+	err := proWC.Post(ctx, "/purchase", req, &resp)
 	if err != nil {
 		slog.Error("retrieving subscription status", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("retrieving subscription status: %w", err))

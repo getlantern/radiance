@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling"
 )
 
 func TestSendReport(t *testing.T) {
@@ -52,9 +53,8 @@ func TestSendReport(t *testing.T) {
 	srv := newTestServer(t, want)
 	defer srv.Close()
 
-	reporter := &IssueReporter{
-		httpClient: newTestClient(t, srv.URL),
-	}
+	reporter := &IssueReporter{}
+	kindling.SetHTTPClient(newTestClient(t, srv.URL))
 	report := IssueReport{
 		Type:        "Cannot access blocked sites",
 		Description: "Description placeholder-test only",

@@ -7,13 +7,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
@@ -25,12 +23,11 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/fronted"
 	"github.com/getlantern/radiance/issue"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -109,47 +106,22 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	settings.Set(settings.LocaleKey, opts.Locale)
 
 	dataDir := common.DataPath()
-	kindlingLogger := &slogWriter{Logger: slog.Default()}
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), kindlingLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create fronted: %w", err)
-	}
-
 	kindlingConfigUpdaterCtx, cancel := context.WithCancel(context.Background())
-	ampClient, err := fronted.NewAMPClient(kindlingConfigUpdaterCtx, kindlingLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create amp client: %w", err)
+	kindlingLogger := &slogWriter{Logger: slog.Default()}
+	if err := kindling.NewKindling(kindlingConfigUpdaterCtx, dataDir, kindlingLogger); err != nil {
+		return nil, fmt.Errorf("failed to build kindling: %w", err)
 	}
-
-	k := kindling.NewKindling(
-		"radiance",
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(kindlingLogger),
-		kindling.WithDomainFronting(f),
-		// Most endpoints use df.iantem.io, but for some historical reasons
-		// "pro-server" calls still go to api.getiantem.org.
-		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindling.WithAMPCache(ampClient),
-	)
-
-	httpClientWithTimeout := k.NewHTTPClient()
-	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
-	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
 	setUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, dataDir)
-	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
-	}
+	apiHandler := api.NewAPIClient(dataDir)
+	issueReporter := issue.NewIssueReporter()
+
 	svrMgr, err := servers.NewManager(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
-		HTTPClient:   httpClientWithTimeout,
 		SvrManager:   svrMgr,
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
