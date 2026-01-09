@@ -7,7 +7,7 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 type AuthClient interface {
@@ -32,9 +32,7 @@ type AuthClient interface {
 	SignOut(ctx context.Context, logoutData *protos.LogoutRequest) error
 }
 
-type authClient struct {
-	userInfo common.UserInfo
-}
+type authClient struct{}
 
 // Auth APIS
 // GetSalt is used to get the salt for a given email address
@@ -60,9 +58,9 @@ func (c *authClient) GetSalt(ctx context.Context, email string) (*protos.GetSalt
 func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupRequest) error {
 	var resp protos.EmptyResponse
 	header := map[string]string{
-		backend.DeviceIDHeader: c.userInfo.DeviceID(),
-		backend.UserIDHeader:   strconv.FormatInt(c.userInfo.LegacyID(), 10),
-		backend.ProTokenHeader: c.userInfo.LegacyToken(),
+		backend.DeviceIDHeader: settings.GetString(settings.DeviceIDKey),
+		backend.UserIDHeader:   strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
+		backend.ProTokenHeader: settings.GetString(settings.TokenKey),
 	}
 	wc := authWebClient()
 	req := wc.NewRequest(nil, header, signupData)

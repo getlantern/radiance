@@ -32,6 +32,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
@@ -98,7 +99,7 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 }
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
-	path := common.DataPath()
+	path := settings.GetString(settings.DataPathKey)
 	_ = newSplitTunnel(path) // ensure split tunnel rule file exists to prevent sing-box from complaining
 	opts, err := buildOptions(group, path)
 	if err != nil {
@@ -198,8 +199,8 @@ func selectedServer(ctx context.Context) (string, string, error) {
 		return group, tag, nil
 	}
 	slog.Log(nil, internal.LevelTrace, "Tunnel not running, reading from cache file")
-	opts := baseOpts(common.DataPath()).Experimental.CacheFile
-	opts.Path = filepath.Join(common.DataPath(), cacheFileName)
+	opts := baseOpts(settings.GetString(settings.DataPathKey)).Experimental.CacheFile
+	opts.Path = filepath.Join(settings.GetString(settings.DataPathKey), cacheFileName)
 	cacheFile := cachefile.New(context.Background(), *opts)
 	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
 		return "", "", fmt.Errorf("failed to start cache file: %w", err)

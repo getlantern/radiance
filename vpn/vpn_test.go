@@ -8,6 +8,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -75,7 +76,7 @@ func TestSelectedServer(t *testing.T) {
 	wantTag := "socks2-out"
 
 	common.SetPathsForTesting(t)
-	opts, _, err := testBoxOptions(common.DataPath())
+	opts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to load test box options")
 	cacheFile := cachefile.New(context.Background(), *opts.Experimental.CacheFile)
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
@@ -139,7 +140,7 @@ func TestAutoServerSelections(t *testing.T) {
 		status: ipc.StatusRunning,
 	}
 	ipcServer = ipc.NewServer(m)
-	require.NoError(t, ipcServer.Start(common.DataPath(), func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
+	require.NoError(t, ipcServer.Start(settings.GetString(settings.DataPathKey), func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
 
 	got, err := AutoServerSelections()
 	require.NoError(t, err, "should not error when getting auto server selections")
@@ -195,7 +196,7 @@ func (m *mockService) ClashServer() *clashapi.Server { return m.clash }
 func (m *mockService) Close() error                  { return nil }
 
 func setupVpnTest(t *testing.T) *mockService {
-	path := common.DataPath()
+	path := settings.GetString(settings.DataPathKey)
 	setupOpts := libbox.SetupOptions{
 		BasePath:    path,
 		WorkingPath: path,
