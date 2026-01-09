@@ -257,3 +257,4 @@ func (u *UserStub) LegacyToken() string                      { return "test-lega
 func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
 func (u *UserStub) SetLocale(locale string)                  {}
 func (u *UserStub) AccountType() string                      { return "free" }
+func (u *UserStub) IsPro() bool                              { return false }

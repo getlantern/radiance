@@ -30,14 +30,14 @@ type userInfo struct {
 	data        *protos.LoginResponse
 	locale      string
 	countryCode string
-	dataPath    string
+	filepath    string
 	mu          sync.RWMutex
 }
 
 // NewUserConfig creates a new UserInfo object
 func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 	path := filepath.Join(dataDir, userDataFileName)
-	u, err := Load(path)
+	u, err := load(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			slog.Info("Failed to load user data -- presumably the first run", "path", path, "error", err)
@@ -49,15 +49,13 @@ func NewUserConfig(deviceID, dataDir, locale string) common.UserInfo {
 		u = &userInfo{}
 	}
 	u.deviceID = deviceID
-	u.dataPath = path
+	u.filepath = path
 	u.locale = locale
 	save(u, path)
 
-	var sub *events.Subscription[config.NewConfigEvent]
-	sub = events.Subscribe(func(evt config.NewConfigEvent) {
+	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
 			u.countryCode = evt.New.ConfigResponse.Country
-			events.Unsubscribe(sub)
 			save(u, path)
 		}
 	})
@@ -123,14 +121,14 @@ func (u *userInfo) SetData(data *protos.LoginResponse) error {
 		data:        u.data,
 		locale:      u.locale,
 		countryCode: u.countryCode,
-		dataPath:    u.dataPath,
+		filepath:    u.filepath,
 	}
 	u.data = data
 	u.mu.Unlock()
 	if data != nil && !proto.Equal(old.data, data) {
 		events.Emit(common.UserChangeEvent{Old: old, New: u})
 	}
-	return save(u, u.dataPath)
+	return save(u, u.filepath)
 }
 
 // GetUserData reads user data from file
@@ -194,7 +192,7 @@ func save(user *userInfo, path string) error {
 	return nil
 }
 
-func Load(path string) (*userInfo, error) {
+func load(path string) (*userInfo, error) {
 	data, err := atomicfile.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil // File does not exist. could be first run
@@ -218,4 +216,9 @@ func Load(path string) (*userInfo, error) {
 		}
 		return nil, fmt.Errorf("failed to unmarshal user data: %w", err)
 	}
+}
+
+func Load(dataPath string) (*userInfo, error) {
+	path := filepath.Join(dataPath, userDataFileName)
+	return load(path)
 }
