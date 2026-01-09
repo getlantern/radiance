@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func TestSignUp(t *testing.T) {
@@ -90,6 +91,7 @@ func TestValidateEmailRecoveryCode(t *testing.T) {
 
 func TestStartChangeEmail(t *testing.T) {
 	email := "test@example.com"
+	settings.Set(settings.EmailKey, email)
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
@@ -101,11 +103,16 @@ func TestStartChangeEmail(t *testing.T) {
 }
 
 func TestCompleteChangeEmail(t *testing.T) {
+	old := "old@example.com"
+	tmp := t.TempDir()
+	err := settings.InitSettings(tmp)
+	require.NoError(t, err)
+	settings.Set(settings.EmailKey, old)
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	err := ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
+	err = ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
 	assert.NoError(t, err)
 }
 
