@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -59,7 +58,6 @@ type ListenerFunc func(oldConfig, newConfig *Config) error
 
 type Options struct {
 	PollInterval time.Duration
-	HTTPClient   *http.Client
 	SvrManager   ServerManager
 	User         common.UserInfo
 	DataDir      string
@@ -109,7 +107,7 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	if !ch.fetchDisabled {
-		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
+		ch.ftr = newFetcher(options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
 		events.Subscribe(func(evt common.UserChangeEvent) {
 			if !shouldRefetch(evt.New, evt.Old) {

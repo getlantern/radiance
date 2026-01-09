@@ -19,7 +19,8 @@ import (
 	"github.com/getlantern/radiance/common"
 	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/fronted"
+	rkindling "github.com/getlantern/radiance/kindling"
+	"github.com/getlantern/radiance/kindling/fronted"
 )
 
 func TestDomainFrontingFetchConfig(t *testing.T) {
@@ -32,9 +33,9 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 		"radiance-df-test",
 		kindling.WithDomainFronting(f),
 	)
-	httpClient := k.NewHTTPClient()
+	rkindling.SetHTTPClient(k.NewHTTPClient())
 	mockUser := &mockUser{}
-	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+	fetcher := newFetcher(mockUser, "en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
@@ -52,9 +53,9 @@ func TestProxylessFetchConfig(t *testing.T) {
 		"radiance-df-test",
 		kindling.WithProxyless("df.iantem.io"),
 	)
-	httpClient := k.NewHTTPClient()
+	rkindling.SetHTTPClient(k.NewHTTPClient())
 	mockUser := &mockUser{}
-	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+	fetcher := newFetcher(mockUser, "en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
@@ -148,9 +149,10 @@ func TestFetchConfig(t *testing.T) {
 				resp: tt.mockResponse,
 				err:  tt.mockError,
 			}
-			fetcher := newFetcher(&http.Client{
+			rkindling.SetHTTPClient(&http.Client{
 				Transport: mockRT,
-			}, mockUser, "en-US", &api.APIClient{})
+			})
+			fetcher := newFetcher(mockUser, "en-US", &api.APIClient{})
 
 			gotConfig, err := fetcher.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
 

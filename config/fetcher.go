@@ -26,6 +26,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -43,7 +44,6 @@ type Fetcher interface {
 
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
-	httpClient   *http.Client
 	user         common.UserInfo
 	lastModified time.Time
 	locale       string
@@ -52,9 +52,8 @@ type fetcher struct {
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
+func newFetcher(user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
 	return &fetcher{
-		httpClient:   client,
 		user:         user,
 		lastModified: time.Time{},
 		locale:       locale,
@@ -158,7 +157,7 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 		req.Header.Set("If-None-Match", f.etag)
 	}
 
-	resp, err := f.httpClient.Do(req)
+	resp, err := kindling.HTTPClient().Do(req)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not send request: %w", err))
 	}
