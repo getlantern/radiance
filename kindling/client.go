@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
@@ -30,6 +31,16 @@ var (
 func HTTPClient() *http.Client {
 	mutexOptions.Lock()
 	defer mutexOptions.Unlock()
+
+	if k == nil {
+		mutexOptions.Unlock()
+		err := NewKindling(context.Background(), settings.GetString(settings.DataPathKey), &slogWriter{Logger: slog.Default()})
+		if err != nil {
+			slog.Error("failed to build kindling", slog.Any("error", err))
+			return &http.Client{}
+		}
+		mutexOptions.Lock()
+	}
 
 	httpClient := k.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
@@ -91,4 +102,14 @@ func KindlingUpdater() {
 		// replace dnstt renewable options once there's new options available
 		k = kindling.NewKindling("radiance", append(defaultOptions, options...)...)
 	})
+}
+
+type slogWriter struct {
+	*slog.Logger
+}
+
+func (w *slogWriter) Write(p []byte) (n int, err error) {
+	// Convert the byte slice to a string and log it
+	w.Info(string(p))
+	return len(p), nil
 }
