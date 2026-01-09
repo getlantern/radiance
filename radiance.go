@@ -122,17 +122,14 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	httpClientWithTimeout := kindling.HTTPClient()
 	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
-	}
+	issueReporter := issue.NewIssueReporter(userInfo)
 	svrMgr, err := servers.NewManager(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
-		HTTPClient:   kindling.HTTPClient(),
+		HTTPClient:   httpClientWithTimeout,
 		SvrManager:   svrMgr,
 		User:         userInfo,
 		DataDir:      dataDir,
