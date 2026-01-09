@@ -19,6 +19,8 @@ import (
 )
 
 func TestSendReport(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
 	// Get OS version for expected report
 	osVer, err := osversion.GetHumanReadable()
 	require.NoError(t, err)
