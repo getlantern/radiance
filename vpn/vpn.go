@@ -376,10 +376,11 @@ func preTest(path string) (map[string]uint16, error) {
 
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
-	cfgOpts, err := loadConfigOptions(confPath)
+	cfg, err := loadConfig(confPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config options: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
 	userOpts, err := loadUserOptions(path)

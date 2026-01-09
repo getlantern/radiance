@@ -5,12 +5,13 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
+
+	lcommon "github.com/getlantern/common"
 
 	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
@@ -259,23 +260,33 @@ func buildOptions(group, path string) (O.Options, error) {
 	// Load config file
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
-	configOpts, err := loadConfigOptions(confPath)
+	cfg, err := loadConfig(confPath)
 	if err != nil {
 		slog.Error("Failed to load config options", "error", err)
 		return O.Options{}, err
 	}
 
 	var lanternTags []string
-	switch {
-	case len(configOpts.RawMessage) == 0:
-		slog.Info("No config found at", "path", confPath)
-	case len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0:
+	configOpts := cfg.Options
+	if len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0 {
 		slog.Warn("Config loaded but no outbounds or endpoints found")
-		fallthrough // Proceed to merge with base options
-	default:
-		lanternTags = mergeAndCollectTags(&opts, &configOpts)
-		slog.Debug("Merged config options", "tags", lanternTags)
 	}
+	lanternTags = mergeAndCollectTags(&opts, &configOpts)
+	slog.Debug("Merged config options", "tags", lanternTags)
+
+	// add smart routing and ad block rules
+	if len(cfg.SmartRouting) > 0 {
+		outbounds, rules, rulesets := smartRoutingOptions(cfg.SmartRouting)
+		opts.Outbounds = append(opts.Outbounds, outbounds...)
+		opts.Route.Rules = append(opts.Route.Rules, rules...)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+	}
+	if len(cfg.AdBlock) > 0 {
+		rule, rulesets := adBlockRule(cfg.AdBlock)
+		opts.Route.Rules = append(opts.Route.Rules, rule)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+	}
+
 	appendGroupOutbounds(&opts, servers.SGLantern, autoLanternTag, lanternTags)
 
 	// Load user servers
@@ -326,26 +337,15 @@ func buildOptions(group, path string) (O.Options, error) {
 // Helper functions //
 //////////////////////
 
-func loadConfigOptions(confPath string) (O.Options, error) {
-	content, err := os.ReadFile(confPath)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return O.Options{}, fmt.Errorf("read config file: %w", err)
-	}
-	if len(content) == 0 {
-		return O.Options{}, nil
-	}
-	slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling", "config", content)
-	cfg, err := json.UnmarshalExtendedContext[config.Config](box.BaseContext(), content)
+func loadConfig(path string) (lcommon.ConfigResponse, error) {
+	cfg, err := config.Load(path)
 	if err != nil {
-		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
+		return lcommon.ConfigResponse{}, fmt.Errorf("load config: %w", err)
 	}
-	conf := cfg.ConfigResponse
-
-	c := conf
-	c.Options.RawMessage = nil
-	slog.Log(nil, internal.LevelTrace, "Loaded config", "config", c)
-
-	return conf.Options, nil
+	if cfg == nil {
+		return lcommon.ConfigResponse{}, nil
+	}
+	return cfg.ConfigResponse, nil
 }
 
 func loadUserOptions(path string) (O.Options, error) {
@@ -380,6 +380,81 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
+}
+
+func smartRoutingOptions(smartRules []lcommon.SmartRoutingRule) ([]O.Outbound, []O.Rule, []O.RuleSet) {
+	outbounds := []O.Outbound{}
+	rules := []O.Rule{}
+	rulesets := []O.RuleSet{}
+	for _, sr := range smartRules {
+		tags, rs := toSBRuleSet(sr.RuleSets)
+		rule := O.Rule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					RuleSet: tags,
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: sr.Category,
+					},
+				},
+			},
+		}
+		rules = append(rules, rule)
+		rulesets = append(rulesets, rs...)
+		outbounds = append(outbounds, O.Outbound{
+			Type: C.TypeURLTest,
+			Tag:  sr.Category,
+			Options: &O.URLTestOutboundOptions{
+				Outbounds:   sr.Outbounds,
+				URL:         "https://google.com/generate_204",
+				Interval:    badoption.Duration(urlTestInterval),
+				IdleTimeout: badoption.Duration(urlTestIdleTimeout),
+			},
+		})
+	}
+	return outbounds, rules, rulesets
+}
+
+func adBlockRule(rules []lcommon.RuleSet) (O.Rule, []O.RuleSet) {
+	tags, rulesets := toSBRuleSet(rules)
+	rule := O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				RuleSet: tags,
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
+			},
+		},
+	}
+	return rule, rulesets
+}
+
+func toSBRuleSet(rules []lcommon.RuleSet) ([]string, []O.RuleSet) {
+	rulesets := []O.RuleSet{}
+	tags := []string{}
+	for _, rule := range rules {
+		format := rule.Format
+		if format == "" {
+			format = C.RuleSetFormatBinary
+		}
+		rulesets = append(rulesets, O.RuleSet{
+			Type:   C.RuleSetTypeRemote,
+			Tag:    rule.Tag,
+			Format: format,
+			RemoteOptions: O.RemoteRuleSet{
+				URL:            rule.URL,
+				DownloadDetour: "direct",
+				UpdateInterval: badoption.Duration(24 * time.Hour),
+			},
+		})
+		tags = append(tags, rule.Tag)
+	}
+	return tags, rulesets
 }
 
 func useIfNotZero[T comparable](newVal, oldVal T) T {
