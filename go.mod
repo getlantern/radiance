@@ -30,7 +30,7 @@ require (
 	github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
 	github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461
-	github.com/getlantern/lantern-box v0.0.6-0.20260106193059-bc4a6c15f1e2
+	github.com/getlantern/lantern-box v0.0.6-0.20260109195635-79fc82eae39d
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
@@ -260,7 +260,6 @@ require (
 	github.com/sagernet/netlink v0.0.0-20240612041022-b9a21c07ac6a // indirect
 	github.com/sagernet/nftables v0.3.0-beta.4 // indirect
 	github.com/sagernet/quic-go v0.52.0-sing-box-mod.3 // indirect
-	github.com/sagernet/sing-dns v0.4.6
 	github.com/sagernet/sing-mux v0.3.3 // indirect
 	github.com/sagernet/sing-quic v0.5.2-0.20250909083218-00a55617c0fb // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
