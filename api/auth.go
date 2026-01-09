@@ -33,7 +33,6 @@ type AuthClient interface {
 }
 
 type authClient struct {
-	wc       *webClient
 	userInfo common.UserInfo
 }
 
@@ -48,8 +47,9 @@ func (c *authClient) GetSalt(ctx context.Context, email string) (*protos.GetSalt
 		"Content-Type": "application/x-protobuf",
 		"Accept":       "application/x-protobuf",
 	}
-	req := c.wc.NewRequest(query, header, nil)
-	if err := c.wc.Get(ctx, "/users/salt", req, &resp); err != nil {
+	wc := authWebClient()
+	req := wc.NewRequest(query, header, nil)
+	if err := wc.Get(ctx, "/users/salt", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -64,31 +64,35 @@ func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupReques
 		backend.UserIDHeader:   strconv.FormatInt(c.userInfo.LegacyID(), 10),
 		backend.ProTokenHeader: c.userInfo.LegacyToken(),
 	}
-	req := c.wc.NewRequest(nil, header, signupData)
-	return c.wc.Post(ctx, "/users/signup", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, header, signupData)
+	return wc.Post(ctx, "/users/signup", req, &resp)
 }
 
 // SignupEmailResendCode is used to resend the email confirmation code
 // Params: ctx context.Context, data *SignupEmailResendRequest
 func (c *authClient) SignupEmailResendCode(ctx context.Context, data *protos.SignupEmailResendRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, data)
-	return c.wc.Post(ctx, "/users/signup/resend/email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, data)
+	return wc.Post(ctx, "/users/signup/resend/email", req, &resp)
 }
 
 // SignupEmailConfirmation is used to confirm the email address once user enter code
 // Params: ctx context.Context, data *ConfirmSignupRequest
 func (c *authClient) SignupEmailConfirmation(ctx context.Context, data *protos.ConfirmSignupRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, data)
-	return c.wc.Post(ctx, "/users/signup/complete/email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, data)
+	return wc.Post(ctx, "/users/signup/complete/email", req, &resp)
 }
 
 // LoginPrepare does the initial login preparation with come make sure the user exists and match user salt
 func (c *authClient) LoginPrepare(ctx context.Context, loginData *protos.PrepareRequest) (*protos.PrepareResponse, error) {
 	var model protos.PrepareResponse
-	req := c.wc.NewRequest(nil, nil, loginData)
-	if err := c.wc.Post(ctx, "/users/prepare", req, &model); err != nil {
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, loginData)
+	if err := wc.Post(ctx, "/users/prepare", req, &model); err != nil {
 		// Send custom error to show error on client side
 		return nil, fmt.Errorf("user_not_found %w", err)
 	}
@@ -98,8 +102,9 @@ func (c *authClient) LoginPrepare(ctx context.Context, loginData *protos.Prepare
 // Login is used to login a user with the LoginRequest
 func (c *authClient) login(ctx context.Context, loginData *protos.LoginRequest) (*protos.LoginResponse, error) {
 	var resp protos.LoginResponse
-	req := c.wc.NewRequest(nil, nil, loginData)
-	if err := c.wc.Post(ctx, "/users/login", req, &resp); err != nil {
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, loginData)
+	if err := wc.Post(ctx, "/users/login", req, &resp); err != nil {
 		return nil, err
 	}
 
@@ -109,22 +114,25 @@ func (c *authClient) login(ctx context.Context, loginData *protos.LoginRequest) 
 // StartRecoveryByEmail is used to start the recovery process by sending a recovery code to the user's email
 func (c *authClient) StartRecoveryByEmail(ctx context.Context, loginData *protos.StartRecoveryByEmailRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, loginData)
-	return c.wc.Post(ctx, "/users/recovery/start/email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, loginData)
+	return wc.Post(ctx, "/users/recovery/start/email", req, &resp)
 }
 
 // CompleteRecoveryByEmail is used to complete the recovery process by validating the recovery code
 func (c *authClient) CompleteRecoveryByEmail(ctx context.Context, loginData *protos.CompleteRecoveryByEmailRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, loginData)
-	return c.wc.Post(ctx, "/users/recovery/complete/email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, loginData)
+	return wc.Post(ctx, "/users/recovery/complete/email", req, &resp)
 }
 
 // // ValidateEmailRecoveryCode is used to validate the recovery code
 func (c *authClient) ValidateEmailRecoveryCode(ctx context.Context, recoveryData *protos.ValidateRecoveryCodeRequest) (*protos.ValidateRecoveryCodeResponse, error) {
 	var resp protos.ValidateRecoveryCodeResponse
-	req := c.wc.NewRequest(nil, nil, recoveryData)
-	err := c.wc.Post(ctx, "/users/recovery/validate/email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, recoveryData)
+	err := wc.Post(ctx, "/users/recovery/validate/email", req, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -137,29 +145,33 @@ func (c *authClient) ValidateEmailRecoveryCode(ctx context.Context, recoveryData
 // ChangeEmail is used to change the email address of a user
 func (c *authClient) ChangeEmail(ctx context.Context, loginData *protos.ChangeEmailRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, loginData)
-	return c.wc.Post(ctx, "/users/change_email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, loginData)
+	return wc.Post(ctx, "/users/change_email", req, &resp)
 }
 
 // CompleteChangeEmail is used to complete the email change process
 func (c *authClient) CompleteChangeEmail(ctx context.Context, loginData *protos.CompleteChangeEmailRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, loginData)
-	return c.wc.Post(ctx, "/users/change_email/complete/email", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, loginData)
+	return wc.Post(ctx, "/users/change_email/complete/email", req, &resp)
 }
 
 // DeleteAccount is used to delete the account of a user
 // Once account is delete make sure to create new account
 func (c *authClient) DeleteAccount(ctx context.Context, accountData *protos.DeleteUserRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, accountData)
-	return c.wc.Post(ctx, "/users/delete", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, accountData)
+	return wc.Post(ctx, "/users/delete", req, &resp)
 }
 
 // DeleteAccount is used to delete the account of a user
 // Once account is delete make sure to create new account
 func (c *authClient) SignOut(ctx context.Context, logoutData *protos.LogoutRequest) error {
 	var resp protos.EmptyResponse
-	req := c.wc.NewRequest(nil, nil, logoutData)
-	return c.wc.Post(ctx, "/users/logout", req, &resp)
+	wc := authWebClient()
+	req := wc.NewRequest(nil, nil, logoutData)
+	return wc.Post(ctx, "/users/logout", req, &resp)
 }

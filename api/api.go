@@ -2,27 +2,20 @@ package api
 
 import (
 	"log/slog"
-	"net/http"
 	"path/filepath"
 	"strconv"
-	"sync"
 
 	"github.com/go-resty/resty/v2"
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling"
 )
 
 const tracerName = "github.com/getlantern/radiance/api"
 
 type APIClient struct {
-	authWc          *webClient
-	proWC           *webClient
-	httpClientMutex sync.Mutex
-
 	salt       []byte
 	saltPath   string
 	userData   *protos.LoginResponse
@@ -31,7 +24,7 @@ type APIClient struct {
 	userInfo   common.UserInfo
 }
 
-func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
+func NewAPIClient(userInfo common.UserInfo, dataDir string) *APIClient {
 	userData, err := userInfo.GetData()
 	if err != nil {
 		slog.Warn("failed to get user data", "error", err)
@@ -42,40 +35,33 @@ func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir str
 		slog.Warn("failed to read salt", "error", err)
 	}
 
-	wc := newWebClient(httpClient, baseURL)
 	cli := &APIClient{
-		authWc:     wc,
-		proWC:      buildProWebClient(httpClient, proServerURL, userInfo),
 		salt:       salt,
 		saltPath:   path,
 		userData:   userData,
 		deviceID:   userInfo.DeviceID(),
-		authClient: &authClient{wc, userInfo},
+		authClient: &authClient{userInfo},
 		userInfo:   userInfo,
 	}
-	events.Subscribe(func(client kindling.ClientUpdated) {
-		cli.httpClientMutex.Lock()
-		defer cli.httpClientMutex.Unlock()
-
-		newHTTPClient := client.Client
-		cli.proWC = buildProWebClient(newHTTPClient, proServerURL, userInfo)
-		cli.authWc = newWebClient(newHTTPClient, baseURL)
-		cli.authClient = &authClient{cli.authWc, userInfo}
-	})
 	return cli
 }
 
-func buildProWebClient(httpClient *http.Client, proServerURL string, userInfo common.UserInfo) *webClient {
+func (a *APIClient) proWebClient() *webClient {
+	httpClient := kindling.HTTPClient()
 	proWC := newWebClient(httpClient, proServerURL)
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
-		req.Header.Set(backend.DeviceIDHeader, userInfo.DeviceID())
-		if userInfo.LegacyToken() != "" {
-			req.Header.Set(backend.ProTokenHeader, userInfo.LegacyToken())
+		req.Header.Set(backend.DeviceIDHeader, a.userInfo.DeviceID())
+		if a.userInfo.LegacyToken() != "" {
+			req.Header.Set(backend.ProTokenHeader, a.userInfo.LegacyToken())
 		}
-		if userInfo.LegacyID() != 0 {
-			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(userInfo.LegacyID(), 10))
+		if a.userInfo.LegacyID() != 0 {
+			req.Header.Set(backend.UserIDHeader, strconv.FormatInt(a.userInfo.LegacyID(), 10))
 		}
 		return nil
 	})
 	return proWC
+}
+
+func authWebClient() *webClient {
+	return newWebClient(kindling.HTTPClient(), baseURL)
 }

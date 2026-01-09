@@ -121,7 +121,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	httpClientWithTimeout := kindling.HTTPClient()
 	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
+	apiHandler := api.NewAPIClient(userInfo, dataDir)
 	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
