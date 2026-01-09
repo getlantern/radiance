@@ -48,7 +48,7 @@ func HTTPClient() *http.Client {
 	return httpClient
 }
 
-// SetKindling set the kindling method used for building the HTTP client
+// SetKindling sets the kindling method used for building the HTTP client
 // This function is useful for testing purposes.
 func SetKindling(a kindling.Kindling) {
 	mutexOptions.Lock()
