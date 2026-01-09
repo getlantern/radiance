@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -35,12 +36,6 @@ const (
 	saltFileName = ".salt"
 	baseURL      = "https://df.iantem.io/api/v1"
 )
-
-// Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
-type Device struct {
-	ID   string
-	Name string
-}
 
 // pro-server requests
 
@@ -100,31 +95,15 @@ func (ac *APIClient) storeData(ctx context.Context, resp UserDataResponse) error
 		LegacyToken:    resp.Token,
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
-	if err := ac.userInfo.SetData(login); err != nil {
-		slog.Error("setting user data", "error", err)
-		return traces.RecordError(ctx, err)
-	}
+	ac.userInfo.SetData(login)
 	return nil
 }
 
 // user-server requests
 
 // Devices returns a list of devices associated with this user account.
-func (a *APIClient) Devices() ([]Device, error) {
-	data, err := a.userInfo.GetData()
-	if err != nil {
-		slog.Info("failed to get login data from settings", "error", err)
-		return nil, err
-	}
-	ret := []Device{}
-	for _, d := range data.Devices {
-		ret = append(ret, Device{
-			Name: d.Name,
-			ID:   d.Id,
-		})
-	}
-
-	return ret, nil
+func (a *APIClient) Devices() ([]common.Device, error) {
+	return a.userInfo.Devices()
 }
 
 // DataCapInfo returns information about this user's data cap
@@ -496,7 +475,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
-	return traces.RecordError(ctx, a.userInfo.SetData(nil))
+	return nil
 }
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.

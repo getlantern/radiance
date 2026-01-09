@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
@@ -53,37 +51,15 @@ func (u *userInfo) DeviceID() string {
 }
 
 func (u *userInfo) LegacyID() int64 {
-	data, err := u.GetData()
-	if err != nil {
-		slog.Info("failed to get login data from settings", "error", err)
-		return 0
-	}
-	if data != nil {
-		return data.LegacyID
-	}
-	return 0
+	return settings.GetInt64(settings.UserIDKey)
 }
 
 func (u *userInfo) LegacyToken() string {
-	data, err := u.GetData()
-	if err != nil {
-		slog.Info("failed to get login data from settings", "error", err)
-		return ""
-	}
-	if data != nil {
-		return data.LegacyToken
-	}
-	return ""
+	return settings.GetString(settings.TokenKey)
 }
 
 func (u *userInfo) Locale() string {
 	return settings.GetString(settings.LocaleKey)
-}
-
-func (u *userInfo) SetLocale(locale string) {
-	if err := settings.Set(settings.LocaleKey, locale); err != nil {
-		slog.Error("failed to set locale in settings", "error", err)
-	}
 }
 
 func (u *userInfo) CountryCode() string {
@@ -92,19 +68,7 @@ func (u *userInfo) CountryCode() string {
 
 // AccountType returns the account type of the user (e.g., "free", "pro")
 func (u *userInfo) AccountType() string {
-	data, err := u.GetData()
-	if err != nil {
-		slog.Info("failed to get login data from settings", "error", err)
-		return "free"
-	}
-	if data == nil || data.LegacyUserData == nil {
-		return "free"
-	}
-	typ := data.LegacyUserData.UserLevel
-	if typ == "" {
-		return "free"
-	}
-	return typ
+	return settings.GetString(settings.UserLevelKey)
 }
 
 func (u *userInfo) IsPro() bool {
@@ -112,65 +76,71 @@ func (u *userInfo) IsPro() bool {
 }
 
 func (u *userInfo) GetEmail() string {
-	data, err := u.GetData()
-	if err != nil {
-		return ""
-	}
-	if data == nil || data.LegacyUserData == nil {
-		return ""
-	}
-	return data.LegacyUserData.Email
+	return settings.GetString(settings.EmailKey)
 }
 
 func (u *userInfo) SetEmail(email string) error {
-	data, err := u.GetData()
-	if err != nil {
-		slog.Info("failed to get login data from settings", "error", err)
-		return err
-	}
-	if data == nil || data.LegacyUserData == nil {
-		return nil
-	}
-	data.LegacyUserData.Email = email
-	return u.SetData(data)
+	return settings.Set(settings.EmailKey, email)
 }
 
-func (u *userInfo) SetData(data *protos.LoginResponse) error {
+type Devices struct {
+	Devices []common.Device
+}
+
+func (u *userInfo) Devices() ([]common.Device, error) {
+	d := &Devices{
+		Devices: []common.Device{},
+	}
+	err := settings.GetStruct(settings.DevicesKey, d)
+	return d.Devices, err
+}
+
+func (u *userInfo) SetData(data *protos.LoginResponse) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	oldData, err := u.getDataNoLock()
-	if err != nil {
-		slog.Warn("failed to get login data from settings", "error", err)
-	}
-	if err = settings.Set(settings.LoginDataKey, data); err != nil {
-		slog.Error("failed to set login data in settings", "error", err)
+	var changed bool
+	if data == nil || data.LegacyUserData == nil {
+		slog.Info("no user data to set")
+		return
 	}
 
-	if data != nil && !proto.Equal(oldData, data) {
-		events.Emit(common.UserChangeEvent{Old: oldData, New: data})
+	if data.LegacyUserData.UserLevel != "" {
+		oldUserLevel := settings.GetString(settings.UserLevelKey)
+		changed = changed || oldUserLevel != data.LegacyUserData.UserLevel
+		if err := settings.Set(settings.UserLevelKey, data.LegacyUserData.UserLevel); err != nil {
+			slog.Error("failed to set user level in settings", "error", err)
+		}
 	}
-	return err
-}
+	if data.LegacyUserData.Email != "" {
+		oldEmail := settings.GetString(settings.EmailKey)
+		changed = changed || oldEmail != "" && oldEmail != data.LegacyUserData.Email
+		if err := settings.Set(settings.EmailKey, data.LegacyUserData.Email); err != nil {
+			slog.Error("failed to set email in settings", "error", err)
+		}
+	}
+	if data.LegacyID != 0 {
+		oldUserID := settings.GetInt64(settings.UserIDKey)
+		changed = changed || oldUserID != 0 && oldUserID != data.LegacyID
+		if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
+			slog.Error("failed to set user ID in settings", "error", err)
+		}
+	}
 
-// GetUserData reads user data from file
-func (u *userInfo) GetData() (*protos.LoginResponse, error) {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	return u.getDataNoLock()
-}
+	devices := []common.Device{}
+	for _, d := range data.Devices {
+		devices = append(devices, common.Device{
+			Name: d.Name,
+			ID:   d.Id,
+		})
+	}
+	d := &Devices{
+		Devices: devices,
+	}
+	if err := settings.Set(settings.DevicesKey, d); err != nil {
+		slog.Error("failed to set devices in settings", "error", err)
+	}
 
-// getDataNoLock reads user data from file without acquiring locks
-func (u *userInfo) getDataNoLock() (*protos.LoginResponse, error) {
-	data := &protos.LoginResponse{}
-	err := settings.GetStruct(settings.LoginDataKey, data)
-	if err != nil {
-		slog.Warn("failed to get login data from settings", "error", err)
-		return nil, err
+	if changed {
+		events.Emit(common.UserChangeEvent{})
 	}
-	// If no login data exists, settings.GetStruct may leave data as a zero-value struct.
-	// Normalize this case to nil so callers can reliably use nil to mean "not logged in".
-	if proto.Equal(data, &protos.LoginResponse{}) {
-		return nil, nil
-	}
-	return data, nil
 }

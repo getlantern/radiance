@@ -98,16 +98,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
 	}
 
-	userStatus := "free"
-	userData, err := ir.userConfig.GetData()
-	if err != nil {
-		slog.Error("Unable to get user data", "error", err)
-	} else {
-		if userData != nil && ir.userConfig.IsPro() {
-			userStatus = "pro"
-		}
-	}
-
+	userStatus := ir.userConfig.AccountType()
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)

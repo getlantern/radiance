@@ -28,7 +28,6 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/events"
@@ -113,9 +112,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
 		events.Subscribe(func(evt common.UserChangeEvent) {
-			if !userStatusChanged(evt.New, evt.Old) {
-				return
-			}
 			slog.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				slog.Error("Failed to fetch config", "error", err)
@@ -123,17 +119,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		})
 	}
 	return ch
-}
-
-// userStatusChanged determines whether a config refetch is needed based on user ID and account type changes.
-func userStatusChanged(new, old *protos.LoginResponse) bool {
-	// If there was an old user and a new user, check if the user ID or account type changed.
-	if new != nil && old != nil {
-		return old.LegacyID != new.LegacyID || // user ID changed
-			(old.LegacyUserData != nil && new.LegacyUserData != nil &&
-				old.LegacyUserData.UserLevel != new.LegacyUserData.UserLevel) // changed between free and pro
-	}
-	return false
 }
 
 var ErrNoWGKey = errors.New("no wg key")

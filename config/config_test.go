@@ -220,116 +220,6 @@ func TestHandlerFetchConfig(t *testing.T) {
 	})
 }
 
-func TestUserStatusChanged(t *testing.T) {
-	t.Run("BothNil", func(t *testing.T) {
-		result := userStatusChanged(nil, nil)
-		assert.False(t, result, "Should return false when both users are nil")
-	})
-
-	t.Run("OldNilNewNotNil", func(t *testing.T) {
-		newUser := &protos.LoginResponse{LegacyID: 123}
-		result := userStatusChanged(newUser, nil)
-		assert.False(t, result, "Should return false when old user is nil")
-	})
-
-	t.Run("NewNilOldNotNil", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{LegacyID: 123}
-		result := userStatusChanged(nil, oldUser)
-		assert.False(t, result, "Should return false when new user is nil")
-	})
-
-	t.Run("SameUserID_NoUserData", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{LegacyID: 123}
-		newUser := &protos.LoginResponse{LegacyID: 123}
-		result := userStatusChanged(newUser, oldUser)
-		assert.False(t, result, "Should return false when user ID is the same and no user data")
-	})
-
-	t.Run("DifferentUserID", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{LegacyID: 123}
-		newUser := &protos.LoginResponse{LegacyID: 456}
-		result := userStatusChanged(newUser, oldUser)
-		assert.True(t, result, "Should return true when user ID changed")
-	})
-
-	t.Run("SameUserID_SameUserLevel", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{
-			LegacyID: 123,
-			LegacyUserData: &protos.LoginResponse_UserData{
-				UserLevel: "free",
-			},
-		}
-		newUser := &protos.LoginResponse{
-			LegacyID: 123,
-			LegacyUserData: &protos.LoginResponse_UserData{
-				UserLevel: "free",
-			},
-		}
-		result := userStatusChanged(newUser, oldUser)
-		assert.False(t, result, "Should return false when user ID and level are the same")
-	})
-
-	t.Run("SameUserID_DifferentUserLevel", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{
-			LegacyID: 123,
-			LegacyUserData: &protos.LoginResponse_UserData{
-				UserLevel: "free",
-			},
-		}
-		newUser := &protos.LoginResponse{
-			LegacyID: 123,
-			LegacyUserData: &protos.LoginResponse_UserData{
-				UserLevel: "pro",
-			},
-		}
-		result := userStatusChanged(newUser, oldUser)
-		assert.True(t, result, "Should return true when user level changed")
-	})
-
-	t.Run("SameUserID_OldUserDataNil", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{
-			LegacyID:       123,
-			LegacyUserData: nil,
-		}
-		newUser := &protos.LoginResponse{
-			LegacyID: 123,
-			LegacyUserData: &protos.LoginResponse_UserData{
-				UserLevel: "pro",
-			},
-		}
-		result := userStatusChanged(newUser, oldUser)
-		assert.False(t, result, "Should return false when old user data is nil")
-	})
-
-	t.Run("SameUserID_NewUserDataNil", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{
-			LegacyID: 123,
-			LegacyUserData: &protos.LoginResponse_UserData{
-				UserLevel: "free",
-			},
-		}
-		newUser := &protos.LoginResponse{
-			LegacyID:       123,
-			LegacyUserData: nil,
-		}
-		result := userStatusChanged(newUser, oldUser)
-		assert.False(t, result, "Should return false when new user data is nil")
-	})
-
-	t.Run("SameUserID_BothUserDataNil", func(t *testing.T) {
-		oldUser := &protos.LoginResponse{
-			LegacyID:       123,
-			LegacyUserData: nil,
-		}
-		newUser := &protos.LoginResponse{
-			LegacyID:       123,
-			LegacyUserData: nil,
-		}
-		result := userStatusChanged(newUser, oldUser)
-		assert.False(t, result, "Should return false when both user data are nil")
-	})
-}
-
 type mockSrvManager struct{}
 
 func (m *mockSrvManager) SetServers(_ string, _ servers.Options) error { return nil }
@@ -360,10 +250,10 @@ func (u *UserStub) GetData() (*protos.LoginResponse, error) {
 		LegacyToken: "test-legacy-token",
 	}, nil
 }
-func (u *UserStub) Locale() string                           { return "en-US" }
-func (u *UserStub) DeviceID() string                         { return "test-device-id" }
-func (u *UserStub) LegacyID() int64                          { return 123456789 }
-func (u *UserStub) LegacyToken() string                      { return "test-legacy-token" }
-func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
-func (u *UserStub) SetLocale(locale string)                  {}
-func (u *UserStub) AccountType() string                      { return "free" }
+func (u *UserStub) Locale() string                     { return "en-US" }
+func (u *UserStub) DeviceID() string                   { return "test-device-id" }
+func (u *UserStub) LegacyID() int64                    { return 123456789 }
+func (u *UserStub) LegacyToken() string                { return "test-legacy-token" }
+func (u *UserStub) SetData(data *protos.LoginResponse) {}
+func (u *UserStub) SetLocale(locale string)            {}
+func (u *UserStub) AccountType() string                { return "free" }

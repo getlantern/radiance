@@ -19,7 +19,11 @@ const (
 	LocaleKey      = "locale"
 	DeviceIDKey    = "device_id"
 	DataPathKey    = "data_path"
-	LoginDataKey   = "login_data"
+	EmailKey       = "email"
+	UserLevelKey   = "user_level"
+	TokenKey       = "token"
+	UserIDKey      = "user_id"
+	DevicesKey     = "devices"
 )
 
 type settings struct {
@@ -51,6 +55,9 @@ func InitSettings(dataDir string) error {
 			if err := Set(LocaleKey, "fa-IR"); err != nil {
 				return fmt.Errorf("failed to set default locale: %w", err)
 			}
+			if err := Set(UserLevelKey, "free"); err != nil {
+				return fmt.Errorf("failed to set default user level: %w", err)
+			}
 		}
 	} else {
 		// 4. If it exists and is valid, load it into koanf
@@ -75,6 +82,10 @@ func GetBool(key string) bool {
 
 func GetInt(key string) int {
 	return k.k.Int(key)
+}
+
+func GetInt64(key string) int64 {
+	return k.k.Int64(key)
 }
 
 func GetFloat64(key string) float64 {
