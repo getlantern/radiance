@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -37,7 +38,8 @@ const (
 
 	saltFileName = ".salt"
 
-	baseURL = "https://df.iantem.io/api/v1"
+	baseURL  = "https://df.iantem.io/api/v1"
+	stageURL = "https://df.staging.iantem.io/api/v1"
 )
 
 // Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
@@ -518,7 +520,12 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
 func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
-	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", baseURL, "users/oauth2", provider))
+	OAuthBaseURL := baseURL
+	if common.Stage() {
+		// switch to staging server
+		OAuthBaseURL = stageURL
+	}
+	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", OAuthBaseURL, "users/oauth2", provider))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
