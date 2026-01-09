@@ -13,14 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
 )
 
 func TestSignUp(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
@@ -49,7 +47,6 @@ func TestLogin(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	_, err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
 	assert.NoError(t, err)
@@ -58,7 +55,6 @@ func TestLogin(t *testing.T) {
 func TestLogout(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
-		userInfo:   &mockUserInfo{},
 		authClient: &mockAuthClient{},
 	}
 	err := ac.Logout(context.Background(), "test@example.com")
@@ -69,7 +65,6 @@ func TestStartRecoveryByEmail(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.StartRecoveryByEmail(context.Background(), "test@example.com")
 	assert.NoError(t, err)
@@ -79,7 +74,6 @@ func TestCompleteRecoveryByEmail(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.CompleteRecoveryByEmail(context.Background(), "test@example.com", "newPassword", "code")
 	assert.NoError(t, err)
@@ -89,7 +83,6 @@ func TestValidateEmailRecoveryCode(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.ValidateEmailRecoveryCode(context.Background(), "test@example.com", "code")
 	assert.NoError(t, err)
@@ -102,10 +95,6 @@ func TestStartChangeEmail(t *testing.T) {
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: authClient,
 		salt:       authClient.salt[email],
-		userInfo: &mockUserInfo{
-			data: &protos.LoginResponse{LegacyUserData: &protos.LoginResponse_UserData{
-				Email: email,
-			}}},
 	}
 	err := ac.StartChangeEmail(context.Background(), "new@example.com", "password")
 	assert.NoError(t, err)
@@ -115,11 +104,6 @@ func TestCompleteChangeEmail(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo: &mockUserInfo{
-			data: &protos.LoginResponse{Id: "test@example.com", LegacyUserData: &protos.LoginResponse_UserData{
-				Email: "test@example.com",
-			}},
-		},
 	}
 	err := ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
 	assert.NoError(t, err)
@@ -132,7 +116,6 @@ func TestDeleteAccount(t *testing.T) {
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: authClient,
 		salt:       authClient.salt[email],
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
@@ -141,7 +124,6 @@ func TestDeleteAccount(t *testing.T) {
 func TestOAuthLoginUrl(t *testing.T) {
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userInfo: &mockUserInfo{},
 	}
 	url, err := ac.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
@@ -252,12 +234,3 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 	m.cache[req.Email] = hex.EncodeToString(state)
 	return &protos.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
 }
-
-var _ common.UserInfo = (*mockUserInfo)(nil)
-
-// Mock implementation of User config for testing purposes
-type mockUserInfo struct {
-	data *protos.LoginResponse
-}
-
-func (m *mockUserInfo) SetData(userData *protos.LoginResponse) {}

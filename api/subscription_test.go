@@ -75,9 +75,6 @@ func mockAPIClient(t *testing.T) *MockAPIClient {
 		APIClient: &APIClient{
 			saltPath: filepath.Join(t.TempDir(), saltFileName),
 			salt:     []byte{1, 2, 3, 4, 5},
-			userInfo: &mockUserInfo{
-				data: &protos.LoginResponse{Id: "test@example.com"},
-			},
 		},
 	}
 }

@@ -54,7 +54,7 @@ type Attributes struct {
 }
 
 // OnNewConfig handles OpenTelemetry re-initialization when the configuration changes.
-func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string, userInfo rcommon.UserInfo) error {
+func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string) error {
 	// Check if the old OTEL configuration is the same as the new one.
 	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, newConfig.ConfigResponse.OTEL) {
 		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")

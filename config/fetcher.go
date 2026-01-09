@@ -45,7 +45,6 @@ type Fetcher interface {
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
 	httpClient   *http.Client
-	user         common.UserInfo
 	lastModified time.Time
 	locale       string
 	etag         string
@@ -53,10 +52,9 @@ type fetcher struct {
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
+func newFetcher(client *http.Client, locale string, apiClient *api.APIClient) Fetcher {
 	return &fetcher{
 		httpClient:   client,
-		user:         user,
 		lastModified: time.Time{},
 		locale:       locale,
 		apiClient:    apiClient,
@@ -145,7 +143,7 @@ func (f *fetcher) ensureUser(ctx context.Context) error {
 func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.send")
 	defer span.End()
-	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body, f.user)
+	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}

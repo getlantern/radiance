@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
@@ -587,6 +586,6 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 	}
 
 	if changed {
-		events.Emit(common.UserChangeEvent{})
+		events.Emit(settings.UserChangeEvent{})
 	}
 }

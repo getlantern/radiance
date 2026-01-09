@@ -16,12 +16,9 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/common/user"
 )
 
 func TestSendReport(t *testing.T) {
-	userConfig := user.NewUserConfig("radiance-test", "", "")
-
 	// Get OS version for expected report
 	osVer, err := osversion.GetHumanReadable()
 	require.NoError(t, err)
@@ -55,7 +52,6 @@ func TestSendReport(t *testing.T) {
 
 	reporter := &IssueReporter{
 		httpClient: newTestClient(t, srv.URL),
-		userConfig: userConfig,
 	}
 	report := IssueReport{
 		Type:        "Cannot access blocked sites",

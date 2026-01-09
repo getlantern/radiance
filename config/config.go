@@ -30,6 +30,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 )
@@ -61,7 +62,6 @@ type Options struct {
 	PollInterval time.Duration
 	HTTPClient   *http.Client
 	SvrManager   ServerManager
-	User         common.UserInfo
 	DataDir      string
 	Locale       string
 	APIHandler   *api.APIClient
@@ -109,9 +109,9 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	if !ch.fetchDisabled {
-		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
+		ch.ftr = newFetcher(options.HTTPClient, options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
-		events.Subscribe(func(evt common.UserChangeEvent) {
+		events.Subscribe(func(evt settings.UserChangeEvent) {
 			slog.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				slog.Error("Failed to fetch config", "error", err)

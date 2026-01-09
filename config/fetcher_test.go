@@ -17,8 +17,8 @@ import (
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
-	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/fronted"
 )
 
@@ -33,8 +33,7 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 		kindling.WithDomainFronting(f),
 	)
 	httpClient := k.NewHTTPClient()
-	mockUser := &mockUser{}
-	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+	fetcher := newFetcher(httpClient, "en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
@@ -53,8 +52,7 @@ func TestProxylessFetchConfig(t *testing.T) {
 		kindling.WithProxyless("df.iantem.io"),
 	)
 	httpClient := k.NewHTTPClient()
-	mockUser := &mockUser{}
-	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+	fetcher := newFetcher(httpClient, "en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
@@ -77,25 +75,7 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return m.resp, m.err
 }
 
-type mockUser struct {
-	rcommon.UserInfo
-}
-
-func (m *mockUser) DeviceID() string {
-	return "mock-device-id"
-}
-func (m *mockUser) LegacyID() int64 {
-	return 1234567890
-}
-func (m *mockUser) AuthToken() string {
-	return "mock-auth-token"
-}
-func (m *mockUser) LegacyToken() string {
-	return "mock-legacy-token"
-}
-
 func TestFetchConfig(t *testing.T) {
-	mockUser := &mockUser{}
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
 
@@ -150,7 +130,7 @@ func TestFetchConfig(t *testing.T) {
 			}
 			fetcher := newFetcher(&http.Client{
 				Transport: mockRT,
-			}, mockUser, "en-US", &api.APIClient{})
+			}, "en-US", &api.APIClient{})
 
 			gotConfig, err := fetcher.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
 
@@ -176,7 +156,7 @@ func TestFetchConfig(t *testing.T) {
 
 				assert.Equal(t, common.Platform, confReq.Platform)
 				assert.Equal(t, common.Name, confReq.AppName)
-				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
+				assert.Equal(t, settings.GetString(settings.DeviceIDKey), confReq.DeviceID)
 				assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
 				if tt.preferredServerLoc != nil {
 					assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)

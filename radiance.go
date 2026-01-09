@@ -27,7 +27,6 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/common/user"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/fronted"
@@ -60,14 +59,10 @@ type issueReporter interface {
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
-	confHandler   configHandler
-	issueReporter issueReporter
-	apiHandler    *api.APIClient
-	srvManager    *servers.Manager
-
-	// user config is the user config object that contains the device ID and other user data
-	userInfo common.UserInfo
-
+	confHandler      configHandler
+	issueReporter    issueReporter
+	apiHandler       *api.APIClient
+	srvManager       *servers.Manager
 	shutdownFuncs    []func(context.Context) error
 	closeOnce        sync.Once
 	stopChan         chan struct{}
@@ -142,9 +137,9 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
 	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
 
-	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
+	setUserConfig(platformDeviceID, dataDir, opts.Locale)
+	apiHandler := api.NewAPIClient(httpClientWithTimeout, dataDir)
+	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
 	}
@@ -156,7 +151,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		PollInterval: configPollInterval,
 		HTTPClient:   httpClientWithTimeout,
 		SvrManager:   svrMgr,
-		User:         userInfo,
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
 		APIHandler:   apiHandler,
@@ -169,7 +163,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
 		srvManager:    svrMgr,
-		userInfo:      userInfo,
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
@@ -178,7 +171,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		if r.telemetryConsent.Load() {
 			slog.Info("Telemetry consent given; handling new config for telemetry")
-			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
+			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID); err != nil {
 				slog.Error("Failed to handle new config for telemetry", "error", err)
 			}
 		} else {
@@ -236,12 +229,6 @@ func (r *Radiance) APIHandler() *api.APIClient {
 // pass empty strings to auto select the server location
 func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string) {
 	r.confHandler.SetPreferredServerLocation(country, city)
-}
-
-// UserInfo returns the user info object for this client
-// This is the user config object that contains the device ID and other user data
-func (r *Radiance) UserInfo() common.UserInfo {
-	return r.userInfo
 }
 
 // ServerManager returns the server manager for the Radiance client.
@@ -316,7 +303,7 @@ func (r *Radiance) EnableTelemetry() {
 		slog.Info("No config available while enabling telemetry; telemetry will be initialized on next config update")
 		return
 	}
-	cErr := telemetry.OnNewConfig(nil, cfg, settings.GetString(settings.DeviceIDKey), r.userInfo)
+	cErr := telemetry.OnNewConfig(nil, cfg, settings.GetString(settings.DeviceIDKey))
 	if cErr != nil {
 		slog.Warn("Failed to initialize telemetry on enabling", "error", cErr)
 	}
@@ -357,4 +344,28 @@ func (w *slogWriter) Write(p []byte) (n int, err error) {
 	// Convert the byte slice to a string and log it
 	w.Info(string(p))
 	return len(p), nil
+}
+
+// setUserConfig creates a new UserInfo object
+func setUserConfig(deviceID, dataDir, locale string) {
+	if err := settings.Set(settings.DeviceIDKey, deviceID); err != nil {
+		slog.Error("failed to set device ID in settings", "error", err)
+	}
+	if err := settings.Set(settings.DataPathKey, dataDir); err != nil {
+		slog.Error("failed to set data path in settings", "error", err)
+	}
+	if err := settings.Set(settings.LocaleKey, locale); err != nil {
+		slog.Error("failed to set locale in settings", "error", err)
+	}
+
+	var sub *events.Subscription[config.NewConfigEvent]
+	sub = events.Subscribe(func(evt config.NewConfigEvent) {
+		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
+			if err := settings.Set(settings.CountryCodeKey, evt.New.ConfigResponse.Country); err != nil {
+				slog.Error("failed to set country code in settings", "error", err)
+			}
+			slog.Info("Set country code from config response", "country_code", evt.New.ConfigResponse.Country)
+			events.Unsubscribe(sub)
+		}
+	})
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -34,8 +33,7 @@ type AuthClient interface {
 }
 
 type authClient struct {
-	wc       *webClient
-	userInfo common.UserInfo
+	wc *webClient
 }
 
 // Auth APIS

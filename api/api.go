@@ -10,7 +10,6 @@ import (
 	"github.com/go-resty/resty/v2"
 
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -22,11 +21,10 @@ type APIClient struct {
 	salt       []byte
 	saltPath   string
 	authClient AuthClient
-	userInfo   common.UserInfo
 	mu         sync.RWMutex
 }
 
-func NewAPIClient(httpClient *http.Client, userInfo common.UserInfo, dataDir string) *APIClient {
+func NewAPIClient(httpClient *http.Client, dataDir string) *APIClient {
 	path := filepath.Join(dataDir, saltFileName)
 	salt, err := readSalt(path)
 	if err != nil {

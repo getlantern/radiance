@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/events"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
@@ -148,4 +149,8 @@ func Devices() ([]Device, error) {
 	devices := []Device{}
 	err := GetStruct(DevicesKey, &devices)
 	return devices, err
+}
+
+type UserChangeEvent struct {
+	events.Event
 }
