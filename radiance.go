@@ -358,14 +358,12 @@ func setUserConfig(deviceID, dataDir, locale string) {
 		slog.Error("failed to set locale in settings", "error", err)
 	}
 
-	var sub *events.Subscription[config.NewConfigEvent]
-	sub = events.Subscribe(func(evt config.NewConfigEvent) {
+	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
 			if err := settings.Set(settings.CountryCodeKey, evt.New.ConfigResponse.Country); err != nil {
 				slog.Error("failed to set country code in settings", "error", err)
 			}
 			slog.Info("Set country code from config response", "country_code", evt.New.ConfigResponse.Country)
-			events.Unsubscribe(sub)
 		}
 	})
 }
