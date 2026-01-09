@@ -175,8 +175,6 @@ github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHk
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
 github.com/fsnotify/fsnotify v1.4.9/go.mod h1:znqG4EE+3YCdAaPaxE2ZRY/06pZUdp0tY4IgpuI1SZQ=
-github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
-github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
 github.com/fxamacker/cbor/v2 v2.7.0 h1:iM5WgngdRBanHcxugY4JySA0nk1wZorNOpTgCMedv5E=
@@ -222,12 +220,8 @@ github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d h1:2/9rPC1x
 github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d/go.mod h1:enUAvxkJ15QUtTKOKoO9WJV2L5u33P8YmqkC+iu8iT4=
 github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461 h1:PwgggQLmIFSjlMr5SgvO0M8jK3XjrJsxLu7IccACs2Y=
 github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461/go.mod h1:eg1zov65hEXytiISbE4lcExN3gVhi+ZnPxkoiuVzC6c=
-github.com/getlantern/lantern-box v0.0.6-0.20251219200503-ebc276f06e75 h1:ZFxFKHjX79NIbjeaVx3s4l5BU1UlvsSgP3I1ufOYqr4=
-github.com/getlantern/lantern-box v0.0.6-0.20251219200503-ebc276f06e75/go.mod h1:UahcUmo7uITNOHJ481oTyNSEOTMi7zeMLXVBDUYEqSA=
-github.com/getlantern/lantern-box v0.0.6-0.20260106185953-0f753f794fa9 h1:dQBULnQbEcx0pnzVoTeZvRYWZ8+gCNYzKKb8mqZ+iAs=
-github.com/getlantern/lantern-box v0.0.6-0.20260106185953-0f753f794fa9/go.mod h1:UahcUmo7uITNOHJ481oTyNSEOTMi7zeMLXVBDUYEqSA=
-github.com/getlantern/lantern-box v0.0.6-0.20260106193059-bc4a6c15f1e2 h1:xkkLpULQWdzktpdtE7KEH/V5sS4YYFR20dqAQiARbSY=
-github.com/getlantern/lantern-box v0.0.6-0.20260106193059-bc4a6c15f1e2/go.mod h1:UahcUmo7uITNOHJ481oTyNSEOTMi7zeMLXVBDUYEqSA=
+github.com/getlantern/lantern-box v0.0.6-0.20260109195635-79fc82eae39d h1:wdyoc57yiNIac7BGyVtRnZrV3QpWjbTSEJzGG5pX1vo=
+github.com/getlantern/lantern-box v0.0.6-0.20260109195635-79fc82eae39d/go.mod h1:UahcUmo7uITNOHJ481oTyNSEOTMi7zeMLXVBDUYEqSA=
 github.com/getlantern/lantern-water v0.0.0-20250331153903-07abebe611e8 h1:w5Ff0OeAOEWkAs8BxCfHilE0MsXdCrI1101rSQT8Y8w=
 github.com/getlantern/lantern-water v0.0.0-20250331153903-07abebe611e8/go.mod h1:ZpSOrcdJkmb8MvaQn6mxaidxshlyi+RJLUerhW4L5Lo=
 github.com/getlantern/mockconn v0.0.0-20200818071412-cb30d065a848 h1:2MhMMVBTnaHrst6HyWFDhwQCaJ05PZuOv1bE2gN8WFY=
@@ -487,7 +481,6 @@ github.com/oschwald/maxminddb-golang v1.13.1 h1:G3wwjdN9JmIK2o/ermkHM+98oX5fS+k5
 github.com/oschwald/maxminddb-golang v1.13.1/go.mod h1:K4pgV9N/GcK694KSTmVSDTODk4IsCNThNdTmnaBZ/F8=
 github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c h1:rp5dCmg/yLR3mgFuSOe4oEnDDmGLROTvMragMUXpTQw=
 github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c/go.mod h1:X07ZCGwUbLaax7L0S3Tw4hpejzu63ZrrQiUe6W0hcy0=
-github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/philhofer/fwd v1.0.0/go.mod h1:gk3iGcWd9+svBvR0sR+KPcfE+RNWozjowpeBVG3ZVNU=
@@ -614,8 +607,6 @@ github.com/sagernet/nftables v0.3.0-beta.4 h1:kbULlAwAC3jvdGAC1P5Fa3GSxVwQJibNen
 github.com/sagernet/nftables v0.3.0-beta.4/go.mod h1:OQXAjvjNGGFxaTgVCSTRIhYB5/llyVDeapVoENYBDS8=
 github.com/sagernet/quic-go v0.52.0-sing-box-mod.3 h1:ySqffGm82rPqI1TUPqmtHIYd12pfEGScygnOxjTL56w=
 github.com/sagernet/quic-go v0.52.0-sing-box-mod.3/go.mod h1:OV+V5kEBb8kJS7k29MzDu6oj9GyMc7HA07sE1tedxz4=
-github.com/sagernet/sing-dns v0.4.6 h1:mjZC0o6d5sQ1sraoOBbK3G3apCbuL8wWYwu2RNu5rbM=
-github.com/sagernet/sing-dns v0.4.6/go.mod h1:dweQs54ng2YGzoJfz+F9dGuDNdP5pJ3PLeggnK5VWc8=
 github.com/sagernet/sing-mux v0.3.3 h1:YFgt9plMWzH994BMZLmyKL37PdIVaIilwP0Jg+EcLfw=
 github.com/sagernet/sing-mux v0.3.3/go.mod h1:pht8iFY4c9Xltj7rhVd208npkNaeCxzyXCgulDPLUDA=
 github.com/sagernet/sing-quic v0.5.2-0.20250909083218-00a55617c0fb h1:5Wx3XeTiKrrrcrAky7Hc1bO3CGxrvho2Vu5b/adlEIM=
