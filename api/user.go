@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -143,8 +144,11 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
 	datacap := &DataCapInfo{}
-	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", a.userInfo.LegacyID(), a.userInfo.DeviceID())
-	newReq := a.authWc.NewRequest(nil, nil, nil)
+	headers := map[string]string{
+		backend.ClientCountryHeader: a.userInfo.CountryCode(),
+	}
+	getUrl := fmt.Sprintf("/datacap/%s", a.userInfo.DeviceID())
+	newReq := a.authWc.NewRequest(nil, nil, headers)
 	err := a.authWc.Get(ctx, getUrl, newReq, &datacap)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)

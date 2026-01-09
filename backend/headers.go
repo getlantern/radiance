@@ -27,6 +27,8 @@ const (
 	RandomNoiseHeader       = "X-Lantern-Rand"
 	ProTokenHeader          = "X-Lantern-Pro-Token"
 	RefererHeader           = "referer"
+	ClientCountryHeader     = "X-Lantern-Client-Country"
+
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
