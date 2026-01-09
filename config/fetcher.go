@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sync"
 
 	"fmt"
 	"io"
@@ -26,7 +25,6 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/traces"
@@ -46,30 +44,21 @@ type Fetcher interface {
 
 // fetcher is responsible for fetching the configuration from the server.
 type fetcher struct {
-	httpClient      *http.Client
-	httpClientMutex sync.Mutex
-	user            common.UserInfo
-	lastModified    time.Time
-	locale          string
-	etag            string
-	apiClient       *api.APIClient
+	user         common.UserInfo
+	lastModified time.Time
+	locale       string
+	etag         string
+	apiClient    *api.APIClient
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(client *http.Client, user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
-	f := &fetcher{
-		httpClient:   client,
+func newFetcher(user common.UserInfo, locale string, apiClient *api.APIClient) Fetcher {
+	return &fetcher{
 		user:         user,
 		lastModified: time.Time{},
 		locale:       locale,
 		apiClient:    apiClient,
 	}
-	events.Subscribe(func(client kindling.ClientUpdated) {
-		f.httpClientMutex.Lock()
-		defer f.httpClientMutex.Unlock()
-		f.httpClient = client.Client
-	})
-	return f
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
@@ -168,9 +157,7 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 		req.Header.Set("If-None-Match", f.etag)
 	}
 
-	f.httpClientMutex.Lock()
-	defer f.httpClientMutex.Unlock()
-	resp, err := f.httpClient.Do(req)
+	resp, err := kindling.HTTPClient().Do(req)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not send request: %w", err))
 	}

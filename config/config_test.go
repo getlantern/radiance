@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -97,7 +96,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	ch := &ConfigHandler{
 		configPath: configPath,
 		config:     atomic.Value{},
-		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US", nil),
+		ftr:        newFetcher(&UserStub{}, "en-US", nil),
 		ctx:        ctx,
 		cancel:     cancel,
 	}

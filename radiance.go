@@ -119,7 +119,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		return nil, fmt.Errorf("failed to build kindling: %w", err)
 	}
 
-	httpClientWithTimeout := kindling.HTTPClient()
 	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(userInfo, dataDir)
 	issueReporter := issue.NewIssueReporter(userInfo)
@@ -129,7 +128,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
-		HTTPClient:   httpClientWithTimeout,
 		SvrManager:   svrMgr,
 		User:         userInfo,
 		DataDir:      dataDir,

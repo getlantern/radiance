@@ -36,6 +36,14 @@ func HTTPClient() *http.Client {
 	return httpClient
 }
 
+// SetHTTPClient set the HTTP client returned by this package when calling
+// `HTTPClient()`. This function is useful for testing purposes
+func SetHTTPClient(c *http.Client) {
+	mutexOptions.Lock()
+	defer mutexOptions.Unlock()
+	httpClient = c
+}
+
 func newHTTPClient(k kindling.Kindling) {
 	httpClient = k.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
