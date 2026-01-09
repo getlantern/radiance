@@ -21,17 +21,18 @@ const (
 	LocaleKey      = "locale"
 	DeviceIDKey    = "device_id"
 	DataPathKey    = "data_path"
+	LogPathKey     = "log_path"
 	EmailKey       = "email"
 	UserLevelKey   = "user_level"
 	TokenKey       = "token"
 	UserIDKey      = "user_id"
 	DevicesKey     = "devices"
+	filePathKey    = "file_path"
 )
 
 type settings struct {
-	k        *koanf.Koanf
-	filePath string
-	parser   koanf.Parser
+	k      *koanf.Koanf
+	parser koanf.Parser
 }
 
 var k = &settings{
@@ -41,14 +42,15 @@ var k = &settings{
 
 // InitSettings initializes the config for user settings, which can be used by both the tunnel process and
 // the main application process to read user preferences like locale.
+// func InitSettings() error {
 func InitSettings(dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
-	k.filePath = filepath.Join(dataDir, "local.json")
-
+	filePath := filepath.Join(dataDir, "local.json")
+	Set(filePathKey, filePath)
 	// 1. Try to atomically read the existing config file
-	if raw, err := atomicfile.ReadFile(k.filePath); err != nil {
+	if raw, err := atomicfile.ReadFile(filePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// 2. If it exists but is invalid, return an error
 			return fmt.Errorf("error loading koanf config file: %w", err)
@@ -67,6 +69,7 @@ func InitSettings(dataDir string) error {
 			return fmt.Errorf("error parsing koanf config file: %w", err)
 		}
 	}
+	Set(DataPathKey, dataDir)
 	return nil
 }
 
@@ -115,7 +118,7 @@ func Set(key string, value any) error {
 }
 
 func save() error {
-	if k.filePath == "" {
+	if GetString(filePathKey) == "" {
 		return errors.New("settings file path is not set")
 	}
 	out, err := k.k.Marshal(k.parser)
@@ -123,16 +126,16 @@ func save() error {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
 	}
 
-	err = atomicfile.WriteFile(k.filePath, out, 0644)
+	err = atomicfile.WriteFile(GetString(filePathKey), out, 0644)
 	if err != nil {
 		return fmt.Errorf("could not write koanf file: %w", err)
 	}
 	return nil
 }
 
+// Reset clears the current settings in memory primarily for testing purposes.
 func Reset() {
 	k.k = koanf.New(".")
-	k.filePath = ""
 }
 
 func IsPro() bool {

@@ -105,7 +105,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	settings.Set(settings.LocaleKey, opts.Locale)
 
-	dataDir := common.DataPath()
+	dataDir := settings.GetString(settings.DataPathKey)
 	kindlingConfigUpdaterCtx, cancel := context.WithCancel(context.Background())
 	kindlingLogger := &slogWriter{Logger: slog.Default()}
 	if err := kindling.NewKindling(kindlingConfigUpdaterCtx, dataDir, kindlingLogger); err != nil {

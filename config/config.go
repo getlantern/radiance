@@ -251,7 +251,7 @@ func setCustomProtocolOptions(outbounds []option.Outbound) {
 	for _, outbound := range outbounds {
 		switch opts := outbound.Options.(type) {
 		case *lbO.WATEROutboundOptions:
-			opts.Dir = filepath.Join(common.DataPath(), "water")
+			opts.Dir = filepath.Join(settings.GetString(settings.DataPathKey), "water")
 			// TODO: we need to measure the client upload and download metrics
 			// in order to set hysteria custom parameters and support brutal sender
 			// as congestion control

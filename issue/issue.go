@@ -128,7 +128,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	slog.Debug("zipping log files for issue report")
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
-	logDir := common.LogPath()
+	logDir := settings.GetString(settings.LogPathKey)
 	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxUncompressedLogSize)
 	if _, zipErr := zipLogFiles(buf, logDir, maxUncompressedLogSize, int64(maxUncompressedLogSize)); zipErr == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
