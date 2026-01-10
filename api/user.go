@@ -70,7 +70,7 @@ func (ac *APIClient) UserData() ([]byte, error) {
 	user := &protos.LoginResponse{}
 	err := settings.GetStruct(settings.LoginResponseKey, user)
 	if err != nil {
-		return nil, fmt.Errorf("error getting user data: %w [This is fine for first time user this is expected]", err)
+		return nil, fmt.Errorf("error getting user data: %w", err)
 	}
 	bytes, err := proto.Marshal(user)
 	if err != nil {
