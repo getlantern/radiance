@@ -54,6 +54,9 @@ func TestLogin(t *testing.T) {
 }
 
 func TestLogout(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
@@ -117,6 +120,9 @@ func TestCompleteChangeEmail(t *testing.T) {
 }
 
 func TestDeleteAccount(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
 	email := "test@example.com"
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{

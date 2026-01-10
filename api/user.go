@@ -272,13 +272,12 @@ func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
 	defer span.End()
 
-	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
+	if err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
 		LegacyUserID: settings.GetInt64(settings.UserIDKey),
 		LegacyToken:  settings.GetString(settings.TokenKey),
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
 	a.Reset()
