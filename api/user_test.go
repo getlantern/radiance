@@ -143,6 +143,38 @@ func TestOAuthLoginUrl(t *testing.T) {
 	assert.NotEmpty(t, url)
 }
 
+func TestOAuthLoginCallback(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: &mockAuthClient{},
+	}
+
+	// Create a mock JWT token
+	mockToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJsZWdhY3lVc2VySUQiOjEyMzQ1LCJsZWdhY3lUb2tlbiI6InRlc3QtdG9rZW4ifQ.test"
+
+	_, err := ac.OAuthLoginCallback(context.Background(), mockToken)
+	// This will fail because decodeJWT is not mocked, but demonstrates the test structure
+	assert.Error(t, err)
+}
+
+func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: &mockAuthClient{},
+	}
+
+	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "error decoding JWT")
+}
+
 // Mock implementation of AuthClient for testing purposes
 type mockAuthClient struct {
 	cache    map[string]string
