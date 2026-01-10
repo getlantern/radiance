@@ -11,7 +11,7 @@ type UserInfo struct {
 	UserID       string `json:"user_id"`
 	Email        string `json:"email"`
 	DeviceId     string `json:"device_id"`
-	LegacyUserId int64  `json:"legacy_user_id"`
+	LegacyUserID int64  `json:"legacy_user_id"`
 	LegacyToken  string `json:"legacy_token"`
 }
 
