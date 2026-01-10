@@ -7,7 +7,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type UserInfo struct {
+type JWTUserInfo struct {
 	UserID       string `json:"user_id"`
 	Email        string `json:"email"`
 	DeviceId     string `json:"device_id"`
@@ -15,7 +15,7 @@ type UserInfo struct {
 	LegacyToken  string `json:"legacy_token"`
 }
 
-func decodeJWT(tokenStr string) (*UserInfo, error) {
+func decodeJWT(tokenStr string) (*JWTUserInfo, error) {
 	claims := jwt.MapClaims{}
 	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, &claims)
 	if err != nil {
@@ -26,9 +26,9 @@ func decodeJWT(tokenStr string) (*UserInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal claims: %v", err)
 	}
-	var userInfo UserInfo
+	var userInfo JWTUserInfo
 	if err := json.Unmarshal(claimsJSON, &userInfo); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal to UserInfo: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal to JWTUserInfo: %v", err)
 	}
 
 	return &userInfo, nil

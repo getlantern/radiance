@@ -569,7 +569,7 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 
 	// Temporary  set user data to so api can read it
 	login := &protos.LoginResponse{
-		LegacyID:    jwtUserInfo.LegacyUserId,
+		LegacyID:    jwtUserInfo.LegacyUserID,
 		LegacyToken: jwtUserInfo.LegacyToken,
 	}
 	a.setData(login)

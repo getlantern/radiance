@@ -49,7 +49,7 @@ func TestLogin(t *testing.T) {
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	_, err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
+	_, err := ac.Login(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
