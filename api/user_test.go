@@ -58,7 +58,7 @@ func TestLogout(t *testing.T) {
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	err := ac.Logout(context.Background(), "test@example.com")
+	_, err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
 }
 
@@ -124,7 +124,7 @@ func TestDeleteAccount(t *testing.T) {
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
-	err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
