@@ -2,7 +2,6 @@
 package common
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,7 +9,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -26,8 +25,7 @@ import (
 )
 
 var (
-	initMutex   sync.Mutex
-	initialized bool
+	initialized atomic.Bool
 )
 
 func init() {
@@ -54,9 +52,7 @@ func Dev() bool {
 // for data and logs, initializing the logger, and setting up reporting.
 func Init(dataDir, logDir, logLevel string) error {
 	slog.Info("Initializing common package")
-	initMutex.Lock()
-	defer initMutex.Unlock()
-	if initialized {
+	if initialized.Swap(true) {
 		return nil
 	}
 
@@ -71,13 +67,40 @@ func Init(dataDir, logDir, logLevel string) error {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
+	settings.Set(settings.LogLevelKey, logLevel)
 
 	slog.Info("Using data and log directories", "dataDir", settings.GetString(settings.DataPathKey), "logDir", settings.GetString(settings.LogPathKey))
+	createCrashReporter()
+	return nil
+}
 
+// InitReadOnly initializes the common components in read-only mode. This is used in contexts where
+// settings should not be modified, such as in the IPC server or other auxiliary processes. This will
+// read all necessary settings from the provided settingsPath.
+func InitReadOnly(settingsPath string) error {
+	if initialized.Swap(true) {
+		return nil
+	}
+	slog.Info("Initializing read-only")
+	if err := settings.InitReadOnly(settingsPath, true); err != nil {
+		return fmt.Errorf("failed to initialize read-only settings: %w", err)
+	}
+	reporting.Init(Version)
+
+	logPath := settings.GetString(settings.LogPathKey)
+	level := settings.GetString(settings.LogLevelKey)
+	if err := initLogger(logPath, level); err != nil {
+		return fmt.Errorf("initialize log: %w", err)
+	}
 	if !IsWindows() {
 		ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
 	}
 
+	createCrashReporter()
+	return nil
+}
+
+func createCrashReporter() {
 	crashFilePath := filepath.Join(settings.GetString(settings.LogPathKey), "lantern_crash.log")
 	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -87,19 +110,6 @@ func Init(dataDir, logDir, logLevel string) error {
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
 	}
-
-	initialized = true
-	return nil
-}
-
-func Close(ctx context.Context) error {
-	initMutex.Lock()
-	defer initMutex.Unlock()
-	if !initialized {
-		return nil
-	}
-
-	return nil
 }
 
 // initLogger reconfigures the default slog.Logger to write to a file and stdout and sets the log level.
@@ -210,7 +220,6 @@ func initLogger(logPath, level string) error {
 			return a
 		},
 	}))
-	slog.SetDefault(logger)
 	if !loggingToStdOut {
 		if IsWindows() {
 			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
@@ -220,6 +229,7 @@ func initLogger(logPath, level string) error {
 	} else {
 		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
 	}
+	slog.SetDefault(logger)
 	return nil
 }
 
