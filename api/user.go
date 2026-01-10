@@ -583,7 +583,7 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 	a.setData(user)
 
 	slog.Debug("Fetched user data: Login ", "data", login)
-	protoUserData, err := proto.Marshal(login)
+	protoUserData, err := proto.Marshal(user)
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling user data: %w", err)
 	}
