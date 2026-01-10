@@ -69,28 +69,14 @@ func (ac *APIClient) UserData() ([]byte, error) {
 	slog.Debug("Getting user data")
 	user := &protos.LoginResponse{}
 	err := settings.GetStruct(settings.LoginResponseKey, user)
-	if err != nil {
-		return nil, fmt.Errorf("error getting user data: %w", err)
-	}
-	bytes, err := proto.Marshal(user)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling user data: %w", err)
-	}
-	return bytes, nil
+	return withMarshalProto(user, err)
 }
 
 // FetchUserData fetches user data from the server.
 func (ac *APIClient) FetchUserData(ctx context.Context) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "fetch_user_data")
 	defer span.End()
-	login, err := ac.fetchUserData(ctx)
-	slog.Debug("Fetched user data: Login ", "data", login)
-	protoUserData, err := proto.Marshal(login)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling user data: %w", err)
-	}
-	slog.Debug("Fetched user data: ", "data", string(protoUserData))
-	return protoUserData, nil
+	return withMarshalProto(ac.fetchUserData(ctx))
 }
 
 // fetchUserData calls the /user-data endpoint and stores the result via storeData.
@@ -142,15 +128,7 @@ func (a *APIClient) DataCapInfo(ctx context.Context) ([]byte, error) {
 	authWc := authWebClient()
 	newReq := authWc.NewRequest(nil, nil, nil)
 	err := authWc.Get(ctx, getUrl, newReq, &dataCap)
-	if err != nil {
-		return nil, fmt.Errorf("error getting data cap info: %w", err)
-	}
-	jsonBytes, err := json.Marshal(dataCap)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling data cap info: %w", err)
-	}
-	slog.Debug("Data cap info: ", "info", string(jsonBytes))
-	return jsonBytes, nil
+	return withMarshalJson(dataCap, err)
 }
 
 // SignUp signs the user up for an account.
@@ -259,12 +237,7 @@ func (a *APIClient) Login(ctx context.Context, email string, password string) ([
 	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
 		return nil, traces.RecordError(ctx, saltErr)
 	}
-	slog.Debug("Login response: ", "response", resp)
-	protoUserData, err := proto.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling user data: %w", err)
-	}
-	return protoUserData, nil
+	return withMarshalProto(resp, nil)
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
@@ -285,17 +258,29 @@ func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
 	}
-	// this call will save data
-	login, err := a.NewUser(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("error creating user: %w", err)
-	}
+	return withMarshalProto(a.NewUser(context.Background()))
+}
 
-	protoUserData, err := proto.Marshal(login)
+func withMarshalProto(resp *protos.LoginResponse, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	protoUserData, err := proto.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling login response: %w", err)
+	}
+	return protoUserData, nil
+}
+
+func withMarshalJson(data any, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	jsonUserData, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling user data: %w", err)
 	}
-	return protoUserData, nil
+	return jsonUserData, nil
 }
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
@@ -533,16 +518,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) (
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
 
-	login, err := a.NewUser(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("error creating user: %w", err)
-	}
-	protoUserData, err := proto.Marshal(login)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling user data: %w", err)
-	}
-
-	return protoUserData, nil
+	return withMarshalProto(a.NewUser(context.Background()))
 }
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
@@ -580,13 +556,7 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
 	a.setData(user)
-
-	slog.Debug("Fetched user data: Login ", "data", login)
-	protoUserData, err := proto.Marshal(user)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling user data: %w", err)
-	}
-	return protoUserData, nil
+	return withMarshalProto(user, nil)
 }
 
 type LinkResponse struct {
@@ -699,5 +669,4 @@ func (a *APIClient) Reset() {
 	settings.Set(settings.UserLevelKey, "")
 	settings.Set(settings.EmailKey, "")
 	settings.Set(settings.DevicesKey, []settings.Device{})
-
 }
