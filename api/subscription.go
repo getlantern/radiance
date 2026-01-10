@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -56,7 +57,7 @@ type SubscriptionResponse struct {
 }
 
 // SubscriptionPlans retrieves available subscription plans for a given channel.
-func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*SubscriptionPlans, error) {
+func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_plans")
 	defer span.End()
 
@@ -70,18 +71,24 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*Su
 	err := proWC.Get(ctx, "/plans-v5", req, &resp)
 	if err != nil {
 		slog.Error("retrieving plans", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return "", traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err = fmt.Errorf("received bad response: %s", resp.Error)
 		slog.Error("retrieving plans", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return "", traces.RecordError(ctx, err)
 	}
-	return &resp, nil
+	jsonData, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling plans: %w", err)
+	}
+	slog.Debug("Plans response:", "response", string(jsonData))
+	// Convert bytes to string and print
+	return string(jsonData), nil
 }
 
 // NewStripeSubscription creates a new Stripe subscription for the given email and plan ID.
-func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID string) (*SubscriptionResponse, error) {
+func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_stripe_subscription")
 	defer span.End()
 
@@ -95,9 +102,17 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 	err := proWC.Post(ctx, "/stripe-subscription", req, &resp)
 	if err != nil {
 		slog.Error("creating new subscription", "error", err)
-		return nil, traces.RecordError(ctx, fmt.Errorf("creating new subscription: %w", err))
+		return "", traces.RecordError(ctx, fmt.Errorf("creating new subscription: %w", err))
 	}
-	return &resp, nil
+	slog.Debug("StripeSubscription response:", "response", resp)
+	jsonData, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling stripe subscription: %w", err)
+	}
+	// Convert bytes to string and print
+	jsonString := string(jsonData)
+	slog.Debug("StripeSubscription response:", "response", jsonString)
+	return jsonString, nil
 }
 
 // VerifySubscription verifies a subscription for a given service (Google or Apple). data
