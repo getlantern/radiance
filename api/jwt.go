@@ -8,7 +8,7 @@ import (
 )
 
 type UserInfo struct {
-	UserId       string `json:"user_id"`
+	UserID       string `json:"user_id"`
 	Email        string `json:"email"`
 	DeviceId     string `json:"device_id"`
 	LegacyUserId int64  `json:"legacy_user_id"`
