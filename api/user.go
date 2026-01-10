@@ -276,11 +276,11 @@ func withMarshalJson(data any, err error) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	jsonUserData, err := json.Marshal(data)
+	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling user data: %w", err)
 	}
-	return jsonUserData, nil
+	return jsonData, nil
 }
 
 func withMarshalJsonString(data any, err error) (string, error) {
