@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -78,13 +77,7 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (str
 		slog.Error("retrieving plans", "error", err)
 		return "", traces.RecordError(ctx, err)
 	}
-	jsonData, err := json.Marshal(resp)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling plans: %w", err)
-	}
-	slog.Debug("Plans response:", "response", string(jsonData))
-	// Convert bytes to string and print
-	return string(jsonData), nil
+	return withMarshalJsonString(resp, nil)
 }
 
 // NewStripeSubscription creates a new Stripe subscription for the given email and plan ID.
@@ -100,19 +93,7 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 	req := proWC.NewRequest(nil, nil, data)
 	var resp SubscriptionResponse
 	err := proWC.Post(ctx, "/stripe-subscription", req, &resp)
-	if err != nil {
-		slog.Error("creating new subscription", "error", err)
-		return "", traces.RecordError(ctx, fmt.Errorf("creating new subscription: %w", err))
-	}
-	slog.Debug("StripeSubscription response:", "response", resp)
-	jsonData, err := json.Marshal(resp)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling stripe subscription: %w", err)
-	}
-	// Convert bytes to string and print
-	jsonString := string(jsonData)
-	slog.Debug("StripeSubscription response:", "response", jsonString)
-	return jsonString, nil
+	return withMarshalJsonString(resp, err)
 }
 
 // VerifySubscription verifies a subscription for a given service (Google or Apple). data

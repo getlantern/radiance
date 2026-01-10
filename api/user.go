@@ -283,6 +283,11 @@ func withMarshalJson(data any, err error) ([]byte, error) {
 	return jsonUserData, nil
 }
 
+func withMarshalJsonString(data any, err error) (string, error) {
+	raw, err := withMarshalJson(data, err)
+	return string(raw), err
+}
+
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
 func (a *APIClient) StartRecoveryByEmail(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_recovery_by_email")
