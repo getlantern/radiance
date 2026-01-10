@@ -93,7 +93,7 @@ func (ac *APIClient) FetchUserData(ctx context.Context) ([]byte, error) {
 	return protoUserData, nil
 }
 
-// FetchUserData fetches user data from the server.
+// fetchUserData calls the /user-data endpoint and stores the result via storeData.
 func (ac *APIClient) fetchUserData(ctx context.Context) (*protos.LoginResponse, error) {
 	var resp UserDataResponse
 	err := ac.proWebClient().Get(ctx, "/user-data", nil, &resp)
