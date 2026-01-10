@@ -22,6 +22,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
@@ -275,13 +276,13 @@ func buildOptions(group, path string) (O.Options, error) {
 	slog.Debug("Merged config options", "tags", lanternTags)
 
 	// add smart routing and ad block rules
-	if len(cfg.SmartRouting) > 0 {
+	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
 		outbounds, rules, rulesets := smartRoutingOptions(cfg.SmartRouting)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
-	if len(cfg.AdBlock) > 0 {
+	if settings.GetBool(settings.AdBlockKey) && len(cfg.AdBlock) > 0 {
 		rule, rulesets := adBlockRule(cfg.AdBlock)
 		opts.Route.Rules = append(opts.Route.Rules, rule)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)

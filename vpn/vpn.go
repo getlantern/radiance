@@ -476,3 +476,27 @@ func loadURLTestHistory(storage *urltest.HistoryStorage, path string) error {
 	}
 	return nil
 }
+
+func SmartRouting() bool {
+	return settings.GetBool(settings.SmartRoutingKey)
+}
+
+func SetSmartRouting(enabled bool) error {
+	return settings.Set(settings.SmartRoutingKey, enabled)
+}
+
+func AdBlock() bool {
+	return settings.GetBool(settings.AdBlockKey)
+}
+
+func SetAdBlock(enabled bool) error {
+	return settings.Set(settings.AdBlockKey, enabled)
+}
+
+func restartTunnel() error {
+	slog.Info("Restarting VPN tunnel")
+	if ipcServer == nil {
+		return errors.New("IPC server is not initialized")
+	}
+	return ipcServer.RestartService(context.Background())
+}
