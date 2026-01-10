@@ -152,7 +152,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	})
 	registerPreStartTest(dataDir)
 	r.confHandler = config.NewConfigHandler(cOpts)
-	r.addShutdownFunc(common.Close, telemetry.Close, func(context.Context) error {
+	r.addShutdownFunc(telemetry.Close, func(context.Context) error {
 		cancel()
 		return nil
 	})

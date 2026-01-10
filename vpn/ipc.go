@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/sagernet/sing-box/experimental/clashapi"
+	"github.com/sagernet/sing-box/experimental/libbox"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn/ipc"
-	"github.com/sagernet/sing-box/experimental/clashapi"
-	"github.com/sagernet/sing-box/experimental/libbox"
 )
 
 var platIfceProvider func() libbox.PlatformInterface
@@ -29,25 +30,17 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Se
 		return ipcServer, nil
 	}
 	platIfceProvider = provider
-	if !common.IsWindows() && basePath != "" {
-		ipc.SetSocketPath(basePath)
+	if err := common.InitReadOnly(basePath); err != nil {
+		slog.Error("Failed to initialize common package", "error", err)
+		return nil, fmt.Errorf("initialize common package: %w", err)
 	}
-
 	ipcServer = ipc.NewServer(closedSvc{})
 
 	return ipcServer, ipcServer.Start(basePath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
-		path := basePath
+		path := settings.GetString(settings.DataPathKey)
 		if path == "" {
-			path = settings.GetString(settings.DataPathKey)
+			path = basePath
 		}
-		// Initialize common package if not already done.
-		if path == "" {
-			if err := common.Init("", "", "debug"); err != nil {
-				slog.Error("Failed to initialize common package", "error", err)
-				return nil, fmt.Errorf("initialize common package: %w", err)
-			}
-		}
-		path = settings.GetString(settings.DataPathKey)
 		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", path)
 
 		_ = newSplitTunnel(path)

@@ -3,16 +3,20 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/events"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal"
 )
 
 // Keys for various settings.
@@ -27,12 +31,17 @@ const (
 	TokenKey       = "token"
 	UserIDKey      = "user_id"
 	DevicesKey     = "devices"
+	LogLevelKey    = "log_level"
 	filePathKey    = "file_path"
+
+	settingsFileName = "local.json"
 )
 
 type settings struct {
-	k      *koanf.Koanf
-	parser koanf.Parser
+	k           *koanf.Koanf
+	parser      koanf.Parser
+	readOnly    bool
+	initialized atomic.Bool
 }
 
 var k = &settings{
@@ -40,14 +49,24 @@ var k = &settings{
 	parser: json.Parser(),
 }
 
+var ErrReadOnly = errors.New("read-only")
+
 // InitSettings initializes the config for user settings, which can be used by both the tunnel process and
 // the main application process to read user preferences like locale.
 // func InitSettings() error {
 func InitSettings(dataDir string) error {
+	if k.initialized.Swap(true) {
+		return nil
+	}
+	return initialize(dataDir)
+}
+
+func initialize(dataDir string) error {
+	k.k = koanf.New(".")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
-	filePath := filepath.Join(dataDir, "local.json")
+	filePath := filepath.Join(dataDir, settingsFileName)
 	// 1. Try to atomically read the existing config file
 	if raw, err := atomicfile.ReadFile(filePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -80,6 +99,45 @@ func setDefaults(filePath string) error {
 	if err := Set(UserLevelKey, "free"); err != nil {
 		return fmt.Errorf("failed to set default user level: %w", err)
 	}
+	return nil
+}
+
+// InitReadOnly initializes the settings in read-only mode from the given directory. InitReadOnly
+// does not create a file if it does not exist and instead returns an error. In read-only mode, no
+// changes to settings can be made. If watchFile is true, changes to the file on disk will be
+// reloaded automatically.
+func InitReadOnly(fileDir string, watchFile bool) error {
+	if k.initialized.Swap(true) {
+		return nil
+	}
+	k.readOnly = true
+	path := filepath.Join(fileDir, settingsFileName)
+	if err := reloadSettings(path); err != nil {
+		return fmt.Errorf("initializing read-only settings: %w", err)
+	}
+	if watchFile {
+		watcher := internal.NewFileWatcher(path, func() {
+			if err := reloadSettings(path); err != nil {
+				slog.Error("reloading settings file", "error", err)
+			}
+		})
+		if err := watcher.Start(); err != nil {
+			return fmt.Errorf("starting settings file watcher: %w", err)
+		}
+	}
+	return nil
+}
+
+func reloadSettings(path string) error {
+	contents, err := atomicfile.ReadFile(path)
+	if err != nil { // including os.ErrNotExist as we only want read-only here
+		return fmt.Errorf("loading settings (read-only): %w", err)
+	}
+	kk := koanf.New(".")
+	if err := kk.Load(rawbytes.Provider(contents), k.parser); err != nil {
+		return fmt.Errorf("parsing settings: %w", err)
+	}
+	k.k = kk
 	return nil
 }
 
@@ -120,6 +178,9 @@ func GetStruct(key string, out any) error {
 }
 
 func Set(key string, value any) error {
+	if k.readOnly {
+		return ErrReadOnly
+	}
 	err := k.k.Set(key, value)
 	if err != nil {
 		return fmt.Errorf("could not set key %s: %w", key, err)
@@ -128,6 +189,9 @@ func Set(key string, value any) error {
 }
 
 func save() error {
+	if k.readOnly {
+		return ErrReadOnly
+	}
 	if GetString(filePathKey) == "" {
 		return errors.New("settings file path is not set")
 	}
@@ -141,11 +205,6 @@ func save() error {
 		return fmt.Errorf("could not write koanf file: %w", err)
 	}
 	return nil
-}
-
-// Reset clears the current settings in memory primarily for testing purposes.
-func Reset() {
-	k.k = koanf.New(".")
 }
 
 func IsPro() bool {

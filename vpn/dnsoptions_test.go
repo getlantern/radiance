@@ -134,7 +134,6 @@ func TestLocalDNSIP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup: Set the locale in settings
-			t.Cleanup(settings.Reset)
 			settings.Set(settings.LocaleKey, tt.locale)
 
 			result := localDNSIP()
