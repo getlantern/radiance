@@ -211,6 +211,27 @@ func (s *Server) StopService(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) RestartService(ctx context.Context) error {
+	svc := s.service
+	if svc.Status() != StatusRunning {
+		return ErrServiceIsNotReady
+	}
+	mode := svc.ClashServer().Mode()
+	groupOutbound, err := getGroupOutbound(svc.Ctx(), mode)
+	if err != nil {
+		return fmt.Errorf("error getting current outbound group: %w", err)
+	}
+	selected := groupOutbound.Now()
+
+	if err := s.StopService(ctx); err != nil {
+		return fmt.Errorf("error stopping service during restart: %w", err)
+	}
+	if err := s.StartService(ctx, mode, selected); err != nil {
+		return fmt.Errorf("error restarting service: %w", err)
+	}
+	return nil
+}
+
 func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Info("Received request to close service via IPC")
 	svc := s.SetService(&closedService{})

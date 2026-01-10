@@ -376,10 +376,11 @@ func preTest(path string) (map[string]uint16, error) {
 
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
-	cfgOpts, err := loadConfigOptions(confPath)
+	cfg, err := loadConfig(confPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config options: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
 	userOpts, err := loadUserOptions(path)
@@ -474,4 +475,28 @@ func loadURLTestHistory(storage *urltest.HistoryStorage, path string) error {
 		storage.StoreURLTestHistory(tag, result)
 	}
 	return nil
+}
+
+func SmartRouting() bool {
+	return settings.GetBool(settings.SmartRoutingKey)
+}
+
+func SetSmartRouting(enabled bool) error {
+	return settings.Set(settings.SmartRoutingKey, enabled)
+}
+
+func AdBlock() bool {
+	return settings.GetBool(settings.AdBlockKey)
+}
+
+func SetAdBlock(enabled bool) error {
+	return settings.Set(settings.AdBlockKey, enabled)
+}
+
+func restartTunnel() error {
+	slog.Info("Restarting VPN tunnel")
+	if ipcServer == nil {
+		return errors.New("IPC server is not initialized")
+	}
+	return ipcServer.RestartService(context.Background())
 }

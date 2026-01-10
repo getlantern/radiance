@@ -8,26 +8,30 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/events"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/events"
 )
 
 // Keys for various settings.
 const (
-	CountryCodeKey = "country_code"
-	LocaleKey      = "locale"
-	DeviceIDKey    = "device_id"
-	DataPathKey    = "data_path"
-	LogPathKey     = "log_path"
-	EmailKey       = "email"
-	UserLevelKey   = "user_level"
-	TokenKey       = "token"
-	UserIDKey      = "user_id"
-	DevicesKey     = "devices"
-	filePathKey    = "file_path"
+	CountryCodeKey  = "country_code"
+	LocaleKey       = "locale"
+	DeviceIDKey     = "device_id"
+	DataPathKey     = "data_path"
+	LogPathKey      = "log_path"
+	EmailKey        = "email"
+	UserLevelKey    = "user_level"
+	TokenKey        = "token"
+	UserIDKey       = "user_id"
+	DevicesKey      = "devices"
+	SmartRoutingKey = "smart_routing"
+	AdBlockKey      = "ad_block"
+
+	filePathKey = "file_path"
 )
 
 type settings struct {
