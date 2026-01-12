@@ -244,7 +244,6 @@ func (a *APIClient) Login(ctx context.Context, email string, password string) ([
 func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
 	defer span.End()
-
 	if err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
@@ -643,6 +642,13 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 		changed = changed && oldUserID != data.LegacyID
 		if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
 			slog.Error("failed to set user ID in settings", "error", err)
+		}
+	}
+	if data.LegacyToken != "" {
+		oldToken := settings.GetString(settings.TokenKey)
+		changed = changed && oldToken != data.LegacyToken
+		if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
+			slog.Error("failed to set token in settings", "error", err)
 		}
 	}
 
