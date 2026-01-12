@@ -18,35 +18,33 @@ import (
 
 // Keys for various settings.
 const (
-	CountryCodeKey  = "country_code"
-	LocaleKey       = "locale"
-	DeviceIDKey     = "device_id"
-	DataPathKey     = "data_path"
-	LogPathKey      = "log_path"
-	EmailKey        = "email"
-	UserLevelKey    = "user_level"
-	TokenKey        = "token"
-	UserIDKey       = "user_id"
-	DevicesKey      = "devices"
-	SmartRoutingKey = "smart_routing"
-	AdBlockKey      = "ad_block"
+	CountryCodeKey   = "country_code"
+	LocaleKey        = "locale"
+	DeviceIDKey      = "device_id"
+	DataPathKey      = "data_path"
+	LogPathKey       = "log_path"
+	EmailKey         = "email"
+	UserLevelKey     = "user_level"
+	TokenKey         = "token"
+	UserIDKey        = "user_id"
+	DevicesKey       = "devices"
+	LoginResponseKey = "login_response"
+	SmartRoutingKey  = "smart_routing"
+	AdBlockKey       = "ad_block"
 
 	filePathKey = "file_path"
 )
 
 type settings struct {
-	k      *koanf.Koanf
-	parser koanf.Parser
+	k *koanf.Koanf
 }
 
 var k = &settings{
-	k:      koanf.New("."),
-	parser: json.Parser(),
+	k: koanf.New("."),
 }
 
 // InitSettings initializes the config for user settings, which can be used by both the tunnel process and
 // the main application process to read user preferences like locale.
-// func InitSettings() error {
 func InitSettings(dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
@@ -65,7 +63,7 @@ func InitSettings(dataDir string) error {
 		}
 	} else {
 		// 4. If it exists and is valid, load it into koanf
-		if err := k.k.Load(rawbytes.Provider(raw), k.parser); err != nil {
+		if err := k.k.Load(rawbytes.Provider(raw), json.Parser()); err != nil {
 			return fmt.Errorf("error parsing koanf config file: %w", err)
 		}
 	}
@@ -74,7 +72,7 @@ func InitSettings(dataDir string) error {
 }
 
 func setDefaults(filePath string) error {
-	// We need to set the file path first, as otherwise the save function can't read it to save!
+	// We need to set the file path first because the save function reads it as soon as we set any key.
 	if err := Set(filePathKey, filePath); err != nil {
 		return fmt.Errorf("failed to set file path: %w", err)
 	}
@@ -135,7 +133,7 @@ func save() error {
 	if GetString(filePathKey) == "" {
 		return errors.New("settings file path is not set")
 	}
-	out, err := k.k.Marshal(k.parser)
+	out, err := k.k.Marshal(json.Parser())
 	if err != nil {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
 	}

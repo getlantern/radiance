@@ -56,7 +56,7 @@ type SubscriptionResponse struct {
 }
 
 // SubscriptionPlans retrieves available subscription plans for a given channel.
-func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*SubscriptionPlans, error) {
+func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_plans")
 	defer span.End()
 
@@ -70,18 +70,18 @@ func (ac *APIClient) SubscriptionPlans(ctx context.Context, channel string) (*Su
 	err := proWC.Get(ctx, "/plans-v5", req, &resp)
 	if err != nil {
 		slog.Error("retrieving plans", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return "", traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err = fmt.Errorf("received bad response: %s", resp.Error)
 		slog.Error("retrieving plans", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return "", traces.RecordError(ctx, err)
 	}
-	return &resp, nil
+	return withMarshalJsonString(resp, nil)
 }
 
 // NewStripeSubscription creates a new Stripe subscription for the given email and plan ID.
-func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID string) (*SubscriptionResponse, error) {
+func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_stripe_subscription")
 	defer span.End()
 
@@ -93,11 +93,7 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 	req := proWC.NewRequest(nil, nil, data)
 	var resp SubscriptionResponse
 	err := proWC.Post(ctx, "/stripe-subscription", req, &resp)
-	if err != nil {
-		slog.Error("creating new subscription", "error", err)
-		return nil, traces.RecordError(ctx, fmt.Errorf("creating new subscription: %w", err))
-	}
-	return &resp, nil
+	return withMarshalJsonString(resp, err)
 }
 
 // VerifySubscription verifies a subscription for a given service (Google or Apple). data

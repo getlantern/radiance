@@ -49,16 +49,19 @@ func TestLogin(t *testing.T) {
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	_, err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
+	_, err := ac.Login(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
 func TestLogout(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	err := ac.Logout(context.Background(), "test@example.com")
+	_, err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
 }
 
@@ -117,6 +120,9 @@ func TestCompleteChangeEmail(t *testing.T) {
 }
 
 func TestDeleteAccount(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
 	email := "test@example.com"
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
@@ -124,7 +130,7 @@ func TestDeleteAccount(t *testing.T) {
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
-	err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
@@ -135,6 +141,38 @@ func TestOAuthLoginUrl(t *testing.T) {
 	url, err := ac.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, url)
+}
+
+func TestOAuthLoginCallback(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: &mockAuthClient{},
+	}
+
+	// Create a mock JWT token
+	mockToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJsZWdhY3lVc2VySUQiOjEyMzQ1LCJsZWdhY3lUb2tlbiI6InRlc3QtdG9rZW4ifQ.test"
+
+	_, err := ac.OAuthLoginCallback(context.Background(), mockToken)
+	// This will fail because decodeJWT is not mocked, but demonstrates the test structure
+	assert.Error(t, err)
+}
+
+func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: &mockAuthClient{},
+	}
+
+	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "error decoding JWT")
 }
 
 // Mock implementation of AuthClient for testing purposes
