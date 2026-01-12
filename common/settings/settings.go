@@ -40,7 +40,7 @@ const (
 type settings struct {
 	k           *koanf.Koanf
 	parser      koanf.Parser
-	readOnly    bool
+	readOnly    atomic.Bool
 	initialized atomic.Bool
 }
 
@@ -58,7 +58,11 @@ func InitSettings(dataDir string) error {
 	if k.initialized.Swap(true) {
 		return nil
 	}
-	return initialize(dataDir)
+	if err := initialize(dataDir); err != nil {
+		k.initialized.Store(false)
+		return fmt.Errorf("initializing settings: %w", err)
+	}
+	return nil
 }
 
 func initialize(dataDir string) error {
@@ -106,11 +110,16 @@ func setDefaults(filePath string) error {
 // does not create a file if it does not exist and instead returns an error. In read-only mode, no
 // changes to settings can be made. If watchFile is true, changes to the file on disk will be
 // reloaded automatically.
-func InitReadOnly(fileDir string, watchFile bool) error {
+func InitReadOnly(fileDir string, watchFile bool) (err error) {
 	if k.initialized.Swap(true) {
 		return nil
 	}
-	k.readOnly = true
+	defer func() {
+		if err != nil {
+			k.initialized.Store(false)
+		}
+	}()
+	k.readOnly.Store(true)
 	path := filepath.Join(fileDir, settingsFileName)
 	if err := reloadSettings(path); err != nil {
 		return fmt.Errorf("initializing read-only settings: %w", err)
@@ -178,7 +187,7 @@ func GetStruct(key string, out any) error {
 }
 
 func Set(key string, value any) error {
-	if k.readOnly {
+	if k.readOnly.Load() {
 		return ErrReadOnly
 	}
 	err := k.k.Set(key, value)
@@ -189,7 +198,7 @@ func Set(key string, value any) error {
 }
 
 func save() error {
-	if k.readOnly {
+	if k.readOnly.Load() {
 		return ErrReadOnly
 	}
 	if GetString(filePathKey) == "" {
