@@ -319,28 +319,27 @@ func AutoServerSelections() (AutoSelections, error) {
 
 // AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
 // selection changes until the context is cancelled.
-func AutoSelectionsChangeListener(ctx context.Context, pollInterval time.Duration) <-chan AutoSelections {
-	ch := make(chan AutoSelections, 1)
+func AutoSelectionsChangeListener(ctx context.Context) {
 	go func() {
-		defer close(ch)
 		var prev AutoSelections
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(pollInterval):
+			case <-time.After(2 * time.Second):
 				curr, err := AutoServerSelections()
 				if err != nil {
 					continue
 				}
 				if curr != prev {
-					ch <- curr
 					prev = curr
+					events.Emit(AutoSelectionsEvent{
+						Selections: curr,
+					})
 				}
 			}
 		}
 	}()
-	return ch
 }
 
 const urlTestHistoryFileName = "url_test_history.json"
