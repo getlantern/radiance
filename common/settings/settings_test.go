@@ -180,6 +180,7 @@ func TestStructSlicePersistence(t *testing.T) {
 		t.Errorf("retrieved struct slice does not match expected values: %+v", retrievedItems)
 	}
 
+	retrievedItems = nil
 	err = initialize(tempDir)
 	if err != nil {
 		t.Fatalf("expected no error re-initializing settings, got %v", err)
