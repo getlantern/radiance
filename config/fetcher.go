@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 
 	"fmt"
 	"io"
@@ -148,6 +149,11 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
+
+	if val, exists := os.LookupEnv("RADIANCE_COUNTRY"); exists {
+		slog.Info("Setting x-lantern-client-country header", "country", val)
+		req.Header.Set("x-lantern-client-country", val)
+	}
 
 	// Add If-Modified-Since header to the request
 	// Note that on the first run, lastModified is zero, so the server will return the latest config.
