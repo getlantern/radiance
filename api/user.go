@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/1Password/srp"
 	"go.opentelemetry.io/otel"
@@ -23,10 +22,20 @@ import (
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
 // functionality.
 
-// DataCapInfo represents information about the data cap for a user account.
-type DataCapInfo struct {
-	BytesAllotted, BytesRemaining int
-	AllotmentStart, AllotmentEnd  time.Time
+// DataCapUsageResponse represents the data cap usage response
+type DataCapUsageResponse struct {
+	// Whether data cap is enabled for this device/user
+	Enabled bool `json:"enabled"`
+	// Data cap usage details (only populated if enabled is true)
+	Usage *DataCapUsageDetails `json:"usage,omitempty"`
+}
+
+// DataCapUsageDetails contains details of the data cap usage
+type DataCapUsageDetails struct {
+	BytesAllotted      string `json:"bytesAllotted"`
+	BytesUsed          string `json:"bytesUsed"`
+	AllotmentStartTime string `json:"allotmentStartTime"`
+	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
 // Tier is the level of subscription a user is currently at.
@@ -140,15 +149,16 @@ func (a *APIClient) Devices() ([]Device, error) {
 }
 
 // DataCapInfo returns information about this user's data cap
-func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
+func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapUsageResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
-	datacap := &DataCapInfo{}
+	datacap := &DataCapUsageResponse{}
 	headers := map[string]string{
 		backend.ClientCountryHeader: a.userInfo.CountryCode(),
+		backend.ContentTypeHeader:   "application/json",
 	}
 	getUrl := fmt.Sprintf("/datacap/%s", a.userInfo.DeviceID())
-	newReq := a.authWc.NewRequest(nil, nil, headers)
+	newReq := a.authWc.NewRequest(nil, headers, nil)
 	err := a.authWc.Get(ctx, getUrl, newReq, &datacap)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)

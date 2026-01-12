@@ -28,6 +28,8 @@ const (
 	ProTokenHeader          = "X-Lantern-Pro-Token"
 	RefererHeader           = "referer"
 	ClientCountryHeader     = "X-Lantern-Client-Country"
+	ContentTypeHeader       = "content-type"
+	AcceptHeader            = "accept"
 
 )
 
