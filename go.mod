@@ -35,6 +35,7 @@ require (
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
