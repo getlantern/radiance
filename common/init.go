@@ -74,20 +74,20 @@ func Init(dataDir, logDir, logLevel string) error {
 	return nil
 }
 
-// InitReadOnly initializes the common components in read-only mode. This is used in contexts where
-// settings should not be modified, such as in the IPC server or other auxiliary processes. This will
-// read all necessary settings from the provided settingsPath.
-func InitReadOnly(settingsPath string) error {
+// InitReadOnly locates the settings file in provided directory and initializes the common components
+// in read-only mode using the necessary settings from the settings file. This is used in contexts
+// where settings should not be modified, such as in the IPC server or other auxiliary processes.
+func InitReadOnly(settingsDir string) error {
 	if initialized.Swap(true) {
 		return nil
 	}
 	slog.Info("Initializing read-only")
-	if err := settings.InitReadOnly(settingsPath, true); err != nil {
+	if err := settings.InitReadOnly(settingsDir, true); err != nil {
 		return fmt.Errorf("failed to initialize read-only settings: %w", err)
 	}
 	reporting.Init(Version)
 
-	logPath := settings.GetString(settings.LogPathKey)
+	logPath := filepath.Join(settings.GetString(settings.LogPathKey), LogFileName)
 	level := settings.GetString(settings.LogLevelKey)
 	if err := initLogger(logPath, level); err != nil {
 		return fmt.Errorf("initialize log: %w", err)
