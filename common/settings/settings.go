@@ -42,6 +42,7 @@ type settings struct {
 	parser      koanf.Parser
 	readOnly    atomic.Bool
 	initialized atomic.Bool
+	watcher     *internal.FileWatcher
 }
 
 var k = &settings{
@@ -133,6 +134,7 @@ func InitReadOnly(fileDir string, watchFile bool) (err error) {
 		if err := watcher.Start(); err != nil {
 			return fmt.Errorf("starting settings file watcher: %w", err)
 		}
+		k.watcher = watcher
 	}
 	return nil
 }
@@ -148,6 +150,13 @@ func reloadSettings(path string) error {
 	}
 	k.k = kk
 	return nil
+}
+
+// StopWatching stops watching the settings file for changes. This is only relevant in read-only mode.
+func StopWatching() {
+	if k.initialized.Load() && k.watcher != nil {
+		k.watcher.Close()
+	}
 }
 
 func Get(key string) any {
