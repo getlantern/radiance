@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/knadh/koanf/v2"
 )
 
 func TestInitSettings(t *testing.T) {
@@ -117,7 +115,7 @@ func TestSetStruct(t *testing.T) {
 	}
 
 	// Reset koanf state
-	k.k = koanf.New(".")
+	Reset()
 	result.Field1 = ""
 	result.Field2 = 0
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,10 +41,10 @@ const (
 
 type settings struct {
 	k           *koanf.Koanf
-	parser      koanf.Parser
 	readOnly    atomic.Bool
-	initialized atomic.Bool
+	initialized bool
 	watcher     *internal.FileWatcher
+	mu          sync.Mutex
 }
 
 var k = &settings{
@@ -55,13 +56,15 @@ var ErrReadOnly = errors.New("read-only")
 // InitSettings initializes the config for user settings, which can be used by both the tunnel process and
 // the main application process to read user preferences like locale.
 func InitSettings(dataDir string) error {
-	if k.initialized.Swap(true) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.initialized {
 		return nil
 	}
 	if err := initialize(dataDir); err != nil {
-		k.initialized.Store(false)
 		return fmt.Errorf("initializing settings: %w", err)
 	}
+	k.initialized = true
 	return nil
 }
 
@@ -111,14 +114,11 @@ func setDefaults(filePath string) error {
 // changes to settings can be made. If watchFile is true, changes to the file on disk will be
 // reloaded automatically.
 func InitReadOnly(fileDir string, watchFile bool) (err error) {
-	if k.initialized.Swap(true) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.initialized {
 		return nil
 	}
-	defer func() {
-		if err != nil {
-			k.initialized.Store(false)
-		}
-	}()
 	k.readOnly.Store(true)
 	path := filepath.Join(fileDir, settingsFileName)
 	if err := reloadSettings(path); err != nil {
@@ -135,6 +135,7 @@ func InitReadOnly(fileDir string, watchFile bool) (err error) {
 		}
 		k.watcher = watcher
 	}
+	k.initialized = true
 	return nil
 }
 
@@ -144,7 +145,7 @@ func reloadSettings(path string) error {
 		return fmt.Errorf("loading settings (read-only): %w", err)
 	}
 	kk := koanf.New(".")
-	if err := kk.Load(rawbytes.Provider(contents), k.parser); err != nil {
+	if err := kk.Load(rawbytes.Provider(contents), json.Parser()); err != nil {
 		return fmt.Errorf("parsing settings: %w", err)
 	}
 	k.k = kk
@@ -153,7 +154,9 @@ func reloadSettings(path string) error {
 
 // StopWatching stops watching the settings file for changes. This is only relevant in read-only mode.
 func StopWatching() {
-	if k.initialized.Load() && k.watcher != nil {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.watcher != nil {
 		k.watcher.Close()
 	}
 }
@@ -222,6 +225,16 @@ func save() error {
 		return fmt.Errorf("could not write koanf file: %w", err)
 	}
 	return nil
+}
+
+// Reset clears the current settings in memory primarily for testing purposes.
+func Reset() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if !k.readOnly.Load() {
+		k.k = koanf.New(".")
+		k.initialized = false
+	}
 }
 
 func IsPro() bool {
