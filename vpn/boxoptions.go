@@ -268,14 +268,6 @@ func buildOptions(group, path string) (O.Options, error) {
 		return O.Options{}, err
 	}
 
-	var lanternTags []string
-	configOpts := cfg.Options
-	if len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0 {
-		slog.Warn("Config loaded but no outbounds or endpoints found")
-	}
-	lanternTags = mergeAndCollectTags(&opts, &configOpts)
-	slog.Debug("Merged config options", "tags", lanternTags)
-
 	// add smart routing and ad block rules
 	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
 		outbounds, rules, rulesets := smartRoutingOptions(cfg.SmartRouting)
@@ -288,6 +280,14 @@ func buildOptions(group, path string) (O.Options, error) {
 		opts.Route.Rules = append(opts.Route.Rules, rule)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
+
+	var lanternTags []string
+	configOpts := cfg.Options
+	if len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0 {
+		slog.Warn("Config loaded but no outbounds or endpoints found")
+	}
+	lanternTags = mergeAndCollectTags(&opts, &configOpts)
+	slog.Debug("Merged config options", "tags", lanternTags)
 
 	appendGroupOutbounds(&opts, servers.SGLantern, autoLanternTag, lanternTags)
 
@@ -408,7 +408,7 @@ func smartRoutingOptions(smartRules []lcommon.SmartRoutingRule) ([]O.Outbound, [
 		rulesets = append(rulesets, rs...)
 		outbounds = append(outbounds, O.Outbound{
 			Type: C.TypeURLTest,
-			Tag:  sr.Category,
+			Tag:  "sr-" + sr.Category,
 			Options: &O.URLTestOutboundOptions{
 				Outbounds:   sr.Outbounds,
 				URL:         "https://google.com/generate_204",

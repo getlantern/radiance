@@ -185,12 +185,13 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 	buf, err := os.ReadFile("testdata/config.json")
 	require.NoError(t, err, "read test config file")
 
-	tmp := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
-
-	require.NoError(t, settings.InitSettings(tmp))
-
 	t.Run("with smart routing", func(t *testing.T) {
+		tmp := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
+
+		require.NoError(t, settings.InitSettings(tmp))
+		t.Cleanup(settings.Reset)
+
 		settings.Set(settings.SmartRoutingKey, true)
 		options, err := buildOptions(autoAllTag, tmp)
 		require.NoError(t, err)
@@ -200,10 +201,16 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		assert.True(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
 	})
 	t.Run("with ad block", func(t *testing.T) {
+		tmp := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
+
+		require.NoError(t, settings.InitSettings(tmp))
+		t.Cleanup(settings.Reset)
+
 		settings.Set(settings.AdBlockKey, true)
 		options, err := buildOptions(autoAllTag, tmp)
 		require.NoError(t, err)
-		//check reject rule and rulesets are correctly built into options
+		// check reject rule and rulesets are correctly built into options
 		for _, rs := range wantAdBlockOpts.Route.RuleSet {
 			assert.True(t, contains(t, options.Route.RuleSet, rs), "missing ad block ruleset")
 		}
