@@ -3,6 +3,7 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -121,9 +122,6 @@ func InitReadOnly(fileDir string, watchFile bool) (err error) {
 	}
 	k.readOnly.Store(true)
 	path := filepath.Join(fileDir, settingsFileName)
-	if err := reloadSettings(path); err != nil {
-		return fmt.Errorf("initializing read-only settings: %w", err)
-	}
 	if watchFile {
 		watcher := internal.NewFileWatcher(path, func() {
 			if err := reloadSettings(path); err != nil {
@@ -135,12 +133,19 @@ func InitReadOnly(fileDir string, watchFile bool) (err error) {
 		}
 		k.watcher = watcher
 	}
+	if err := reloadSettings(path); err != nil {
+		return fmt.Errorf("initializing read-only settings: %w", err)
+	}
 	k.initialized = true
 	return nil
 }
 
 func reloadSettings(path string) error {
 	contents, err := atomicfile.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("settings file not found", "path", path) // file may not have been created yet
+		return nil
+	}
 	if err != nil { // including os.ErrNotExist as we only want read-only here
 		return fmt.Errorf("loading settings (read-only): %w", err)
 	}
