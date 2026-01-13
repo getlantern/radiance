@@ -239,6 +239,8 @@ func RestartService(ctx context.Context) error {
 }
 
 func (s *Server) RestartService(ctx context.Context) error {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 	svc := s.service
 	if svc.Status() != StatusRunning {
 		return ErrServiceIsNotReady
