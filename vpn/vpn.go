@@ -100,15 +100,11 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 
 func connect(group, tag string, platIfce libbox.PlatformInterface) error {
 	path := settings.GetString(settings.DataPathKey)
-	_ = newSplitTunnel(path) // ensure split tunnel rule file exists to prevent sing-box from complaining
-	opts, err := buildOptions(group, path)
+	ipcSvr, err := InitIPC(path, func() libbox.PlatformInterface { return platIfce })
 	if err != nil {
-		return fmt.Errorf("failed to build options: %w", err)
+		return fmt.Errorf("failed to initialize IPC: %w", err)
 	}
-	if err := establishConnection(group, tag, opts, path, platIfce); err != nil {
-		return fmt.Errorf("failed to open tunnel: %w", err)
-	}
-	return nil
+	return ipcSvr.StartService(context.Background(), group, tag)
 }
 
 // Reconnect attempts to reconnect to the last connected server.
@@ -487,6 +483,7 @@ func SetSmartRouting(enable bool) error {
 	if err := settings.Set(settings.SmartRoutingKey, enable); err != nil {
 		return err
 	}
+	slog.Info("Updated Smart-Routing", "enabled", enable)
 	return restartTunnel()
 }
 
@@ -501,6 +498,7 @@ func SetAdBlock(enable bool) error {
 	if err := settings.Set(settings.AdBlockKey, enable); err != nil {
 		return err
 	}
+	slog.Info("Updated Ad-Block", "enabled", enable)
 	return restartTunnel()
 }
 
@@ -509,6 +507,7 @@ func restartTunnel() error {
 	if !isOpen(ctx) {
 		return nil
 	}
+	slog.Info("Restarting tunnel")
 	if err := ipc.RestartService(ctx); err != nil {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}

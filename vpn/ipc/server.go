@@ -70,9 +70,9 @@ func (vpn *VPNStatus) String() string {
 }
 
 // NewServer creates a new Server instance with the provided Service.
-func NewServer(service Service) *Server {
+func NewServer() *Server {
 	s := &Server{
-		service: service,
+		service: &closedService{},
 		router:  chi.NewMux(),
 	}
 	s.vpnStatus.Store(Disconnected)
@@ -100,6 +100,9 @@ func NewServer(service Service) *Server {
 // Start starts the IPC server. The socket file will be created in the "basePath" directory.
 // On Windows, the "basePath" is ignored and a default named pipe path is used.
 func (s *Server) Start(basePath string, fn StartFn) error {
+	if fn == nil {
+		return errors.New("start function is required")
+	}
 	s.startFn = fn
 	l, err := listen(basePath)
 	if err != nil {
@@ -180,6 +183,9 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
+	if s.GetStatus() != StatusClosed {
+		return errors.New("service is already running")
+	}
 	svc, err := s.startFn(ctx, group, tag)
 	if err != nil {
 		s.setVPNStatus(ErrorStatus, err)
@@ -239,12 +245,14 @@ func RestartService(ctx context.Context) error {
 }
 
 func (s *Server) RestartService(ctx context.Context) error {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	svc := s.service
+	s.service = &closedService{}
 	if svc.Status() != StatusRunning {
 		return ErrServiceIsNotReady
 	}
+
 	mode := svc.ClashServer().Mode()
 	groupOutbound, err := getGroupOutbound(svc.Ctx(), mode)
 	if err != nil {
@@ -252,12 +260,17 @@ func (s *Server) RestartService(ctx context.Context) error {
 	}
 	selected := groupOutbound.Now()
 
-	if err := s.StopService(ctx); err != nil {
-		return fmt.Errorf("error stopping service during restart: %w", err)
+	if err := svc.Close(); err != nil {
+		return fmt.Errorf("stopping service: %w", err)
 	}
-	if err := s.StartService(ctx, mode, selected); err != nil {
-		return fmt.Errorf("error restarting service: %w", err)
+	s.vpnStatus.Store(Disconnected)
+
+	if svc, err = s.startFn(ctx, mode, selected); err != nil {
+		s.setVPNStatus(ErrorStatus, err)
+		return fmt.Errorf("error starting service: %w", err)
 	}
+	s.setVPNStatus(Connected, nil)
+	s.service = svc
 	return nil
 }
 
