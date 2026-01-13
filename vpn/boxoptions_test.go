@@ -120,7 +120,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		"outbounds": [
 			{
 				"type": "urltest",
-				"tag": "openai",
+				"tag": "sr-openai",
 				"outbounds": ["http1-out", "socks1-out"],
 				"url": "https://google.com/generate_204", 
 				"interval": "3m0s",
