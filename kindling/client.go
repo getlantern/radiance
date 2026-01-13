@@ -2,106 +2,84 @@ package kindling
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"sync"
 
 	"github.com/getlantern/kindling"
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
-	"github.com/getlantern/radiance/traces"
 )
 
-var (
-	k kindling.Kindling
-	// defaultOptions generally does not change after the first time
-	// or if they change, it's handled internally
-	defaultOptions = make([]kindling.Option, 0)
-	mutexOptions   sync.Mutex
-)
+var k kindling.Kindling = NewKindling()
+
+// NewKindling builds a kindling client and bootstrap this package
+func NewKindling(options ...kindling.Option) kindling.Kindling {
+	dataDir := settings.GetString(settings.DataPathKey)
+	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), &slogWriter{Logger: slog.Default()})
+	if err != nil {
+		return &mockKindling{}
+	}
+
+	ampClient, err := fronted.NewAMPClient(context.Background(), &slogWriter{Logger: slog.Default()})
+	if err != nil {
+		return &mockKindling{}
+	}
+
+	opts := []kindling.Option{
+		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
+		kindling.WithDomainFronting(f),
+		// Most endpoints use df.iantem.io, but for some historical reasons
+		// "pro-server" calls still go to api.getiantem.org.
+		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
+		// Kindling will skip amp transports if the request has a payload larger than 6kb
+		kindling.WithAMPCache(ampClient),
+	}
+	opts = append(opts, options...)
+	return kindling.NewKindling("radiance", opts...)
+}
 
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
-	mutexOptions.Lock()
-	defer mutexOptions.Unlock()
-
-	if k == nil {
-		mutexOptions.Unlock()
-		err := NewKindling(context.Background(), settings.GetString(settings.DataPathKey), &slogWriter{Logger: slog.Default()})
-		if err != nil {
-			slog.Error("failed to build kindling", slog.Any("error", err))
-			return &http.Client{}
-		}
-		mutexOptions.Lock()
-	}
-
-	httpClient := k.NewHTTPClient()
-	httpClient.Timeout = common.DefaultHTTPTimeout
-	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
-	return httpClient
+	return k.NewHTTPClient()
 }
 
 // SetKindling sets the kindling method used for building the HTTP client
 // This function is useful for testing purposes.
 func SetKindling(a kindling.Kindling) {
-	mutexOptions.Lock()
-	defer mutexOptions.Unlock()
 	k = a
-}
-
-// NewKindling build a kindling client and bootstrap this package
-func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
-	mutexOptions.Lock()
-	defer mutexOptions.Unlock()
-
-	if len(defaultOptions) == 0 {
-		f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
-		if err != nil {
-			return fmt.Errorf("failed to create fronted: %w", err)
-		}
-
-		ampClient, err := fronted.NewAMPClient(ctx, logger)
-		if err != nil {
-			return fmt.Errorf("failed to create amp client: %w", err)
-		}
-
-		defaultOptions = append(defaultOptions,
-			kindling.WithPanicListener(reporting.PanicListener),
-			kindling.WithLogWriter(logger),
-			kindling.WithDomainFronting(f),
-			// Most endpoints use df.iantem.io, but for some historical reasons
-			// "pro-server" calls still go to api.getiantem.org.
-			kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-			// Kindling will skip amp transports if the request has a payload larger than 6kb
-			kindling.WithAMPCache(ampClient),
-		)
-	}
-
-	k = kindling.NewKindling("radiance", defaultOptions...)
-	return nil
 }
 
 // KindlingUpdater start event subscriptions that might need to rebuild kindling
 func KindlingUpdater() {
 	events.Subscribe(func(e dnstt.DNSTTUpdateEvent) {
-		mutexOptions.Lock()
-		defer mutexOptions.Unlock()
-
 		options, err := dnstt.ParseDNSTTConfigs(e.YML)
 		if err != nil {
 			slog.Warn("could not update dnstt options", slog.Any("error", err))
 			return
 		}
 		// replace dnstt renewable options once there's new options available
-		k = kindling.NewKindling("radiance", append(defaultOptions, options...)...)
+		SetKindling(NewKindling(options...))
 	})
+}
+
+type mockKindling struct {
+	kindling.Kindling
+}
+
+// Make sure mockKindling implements kindling.Kindling
+var _ kindling.Kindling = (*mockKindling)(nil)
+
+func (m *mockKindling) NewHTTPClient() *http.Client {
+	return &http.Client{}
+}
+
+func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
+	return nil
 }
 
 type slogWriter struct {
