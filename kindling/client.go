@@ -9,15 +9,13 @@ import (
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 )
 
 var k kindling.Kindling = NewKindling()
 
 // NewKindling builds a kindling client and bootstrap this package
-func NewKindling(options ...kindling.Option) kindling.Kindling {
+func NewKindling() kindling.Kindling {
 	dataDir := settings.GetString(settings.DataPathKey)
 	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), &slogWriter{Logger: slog.Default()})
 	if err != nil {
@@ -29,7 +27,7 @@ func NewKindling(options ...kindling.Option) kindling.Kindling {
 		return &mockKindling{}
 	}
 
-	opts := []kindling.Option{
+	return kindling.NewKindling("radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(&slogWriter{Logger: slog.Default()}),
 		kindling.WithDomainFronting(f),
@@ -38,33 +36,13 @@ func NewKindling(options ...kindling.Option) kindling.Kindling {
 		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
-	}
-	opts = append(opts, options...)
-	return kindling.NewKindling("radiance", opts...)
+		// kindling.WithDNSTT(), // Enable DNSTT support
+	)
 }
 
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
 	return k.NewHTTPClient()
-}
-
-// SetKindling sets the kindling method used for building the HTTP client
-// This function is useful for testing purposes.
-func SetKindling(a kindling.Kindling) {
-	k = a
-}
-
-// KindlingUpdater start event subscriptions that might need to rebuild kindling
-func KindlingUpdater() {
-	events.Subscribe(func(e dnstt.DNSTTUpdateEvent) {
-		options, err := dnstt.ParseDNSTTConfigs(e.YML)
-		if err != nil {
-			slog.Warn("could not update dnstt options", slog.Any("error", err))
-			return
-		}
-		// replace dnstt renewable options once there's new options available
-		SetKindling(NewKindling(options...))
-	})
 }
 
 type mockKindling struct {
