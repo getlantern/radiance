@@ -143,17 +143,6 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	err := authWc.Get(ctx, getUrl, newReq, &datacap)
 	return withMarshalJsonString(datacap, err)
 }
-func (a *APIClient) DataCapInfo(ctx context.Context) ([]byte, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
-	defer span.End()
-
-	dataCap := &DataCapInfo{}
-	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", settings.GetInt64(settings.UserIDKey), settings.GetString(settings.DeviceIDKey))
-	authWc := authWebClient()
-	newReq := authWc.NewRequest(nil, nil, nil)
-	err := authWc.Get(ctx, getUrl, newReq, &dataCap)
-	return withMarshalJson(dataCap, err)
-}
 
 // SignUp signs the user up for an account.
 func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
