@@ -134,8 +134,7 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	defer span.End()
 	datacap := &DataCapUsageResponse{}
 	headers := map[string]string{
-		backend.ClientCountryHeader: settings.GetString(settings.CountryCodeKey),
-		backend.ContentTypeHeader:   "application/json",
+		backend.ContentTypeHeader: "application/json",
 	}
 	getUrl := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
