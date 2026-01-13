@@ -476,26 +476,41 @@ func loadURLTestHistory(storage *urltest.HistoryStorage, path string) error {
 	return nil
 }
 
-func SmartRouting() bool {
+func SmartRoutingEnabled() bool {
 	return settings.GetBool(settings.SmartRoutingKey)
 }
 
-func SetSmartRouting(enabled bool) error {
-	return settings.Set(settings.SmartRoutingKey, enabled)
+func SetSmartRouting(enable bool) error {
+	if SmartRoutingEnabled() == enable {
+		return nil
+	}
+	if err := settings.Set(settings.SmartRoutingKey, enable); err != nil {
+		return err
+	}
+	return restartTunnel()
 }
 
-func AdBlock() bool {
+func AdBlockEnabled() bool {
 	return settings.GetBool(settings.AdBlockKey)
 }
 
-func SetAdBlock(enabled bool) error {
-	return settings.Set(settings.AdBlockKey, enabled)
+func SetAdBlock(enable bool) error {
+	if AdBlockEnabled() == enable {
+		return nil
+	}
+	if err := settings.Set(settings.AdBlockKey, enable); err != nil {
+		return err
+	}
+	return restartTunnel()
 }
 
 func restartTunnel() error {
-	slog.Info("Restarting VPN tunnel")
-	if ipcServer == nil {
-		return errors.New("IPC server is not initialized")
+	ctx := context.Background()
+	if !isOpen(ctx) {
+		return nil
 	}
-	return ipcServer.RestartService(context.Background())
+	if err := ipc.RestartService(ctx); err != nil {
+		return fmt.Errorf("failed to restart tunnel: %w", err)
+	}
+	return nil
 }

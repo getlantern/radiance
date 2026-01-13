@@ -92,6 +92,7 @@ func NewServer(service Service) *Server {
 	s.router.Post(startServiceEndpoint, s.startServiceHandler)
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
+	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
 }
@@ -211,6 +212,32 @@ func (s *Server) StopService(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
+	slog.Info("Received request to close service via IPC")
+	svc := s.SetService(&closedService{})
+	if err := svc.Close(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.svr.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			traces.RecordError(context.Background(), err)
+		}
+	}()
+}
+
+func RestartService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", restartServiceEndpoint, nil)
+	return err
+}
+
 func (s *Server) RestartService(ctx context.Context) error {
 	svc := s.service
 	if svc.Status() != StatusRunning {
@@ -232,25 +259,12 @@ func (s *Server) RestartService(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
-	slog.Info("Received request to close service via IPC")
-	svc := s.SetService(&closedService{})
-	if err := svc.Close(); err != nil {
+func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.RestartService(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.svr.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			traces.RecordError(context.Background(), err)
-		}
-	}()
 }
 
 func (s *Server) setVPNStatus(status VPNStatus, err error) {

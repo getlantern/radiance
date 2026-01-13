@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	lcommon "github.com/getlantern/common"
@@ -441,7 +442,11 @@ func toSBRuleSet(rules []lcommon.RuleSet) ([]string, []O.RuleSet) {
 	for _, rule := range rules {
 		format := rule.Format
 		if format == "" {
-			format = C.RuleSetFormatBinary
+			if strings.HasSuffix(rule.URL, ".srs") {
+				format = C.RuleSetFormatBinary
+			} else {
+				format = C.RuleSetFormatSource
+			}
 		}
 		rulesets = append(rulesets, O.RuleSet{
 			Type:   C.RuleSetTypeRemote,
