@@ -25,15 +25,15 @@ var ampPublicKey string
 //   - logWriter: Writer for logging transport and client activity.
 //
 // Returns an initialized amp.Client or an error if setup fails.
-func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) {
+func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) (amp.Client, error) {
 	configURL := "https://raw.githubusercontent.com/getlantern/radiance/main/fronted/amp.yml.gz"
 	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, configURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
 	}
 
-	ampClient, err := amp.NewClientWithConfig(ctx,
-		amp.Config{
+	ampClient, err := amp.NewClientWithOptions(ctx,
+		amp.WithConfig(amp.Config{
 			BrokerURL: "https://amp.iantem.io",
 			CacheURL:  "https://cdn.ampproject.org",
 			PublicKey: ampPublicKey,
@@ -55,7 +55,8 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) 
 				"play.google.com",
 				"developers.google.cn",
 			},
-		},
+		}),
+		amp.WithConfigStoragePath(storagePath),
 		amp.WithConfigURL(configURL),
 		amp.WithHTTPClient(httpClient),
 		amp.WithPollInterval(12*time.Hour),
