@@ -11,13 +11,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/1Password/srp"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/api/protos"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
@@ -26,10 +26,20 @@ import (
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
 // functionality.
 
-// DataCapInfo represents information about the data cap for a user account.
-type DataCapInfo struct {
-	BytesAllotted, BytesRemaining int
-	AllotmentStart, AllotmentEnd  time.Time
+// DataCapUsageResponse represents the data cap usage response
+type DataCapUsageResponse struct {
+	// Whether data cap is enabled for this device/user
+	Enabled bool `json:"enabled"`
+	// Data cap usage details (only populated if enabled is true)
+	Usage *DataCapUsageDetails `json:"usage,omitempty"`
+}
+
+// DataCapUsageDetails contains details of the data cap usage
+type DataCapUsageDetails struct {
+	BytesAllotted      string `json:"bytesAllotted"`
+	BytesUsed          string `json:"bytesUsed"`
+	AllotmentStartTime string `json:"allotmentStartTime"`
+	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
 // Tier is the level of subscription a user is currently at.
@@ -119,16 +129,18 @@ func (a *APIClient) Devices() ([]settings.Device, error) {
 }
 
 // DataCapInfo returns information about this user's data cap
-func (a *APIClient) DataCapInfo(ctx context.Context) ([]byte, error) {
+func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
-
-	dataCap := &DataCapInfo{}
-	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", settings.GetInt64(settings.UserIDKey), settings.GetString(settings.DeviceIDKey))
+	datacap := &DataCapUsageResponse{}
+	headers := map[string]string{
+		backend.ContentTypeHeader: "application/json",
+	}
+	getUrl := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
-	newReq := authWc.NewRequest(nil, nil, nil)
-	err := authWc.Get(ctx, getUrl, newReq, &dataCap)
-	return withMarshalJson(dataCap, err)
+	newReq := authWc.NewRequest(nil, headers, nil)
+	err := authWc.Get(ctx, getUrl, newReq, &datacap)
+	return withMarshalJsonString(datacap, err)
 }
 
 // SignUp signs the user up for an account.
