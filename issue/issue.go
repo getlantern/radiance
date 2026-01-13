@@ -16,6 +16,8 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
@@ -28,24 +30,12 @@ const (
 )
 
 // IssueReporter is used to send issue reports to backend
-type IssueReporter struct {
-	httpClient *http.Client
-	userConfig common.UserInfo
-}
+type IssueReporter struct{}
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter(
-	httpClient *http.Client,
-	userConfig common.UserInfo,
-) (*IssueReporter, error) {
-	if httpClient == nil {
-		return nil, fmt.Errorf("httpClient is nil")
-	}
-	return &IssueReporter{
-		httpClient: httpClient,
-		userConfig: userConfig,
-	}, nil
+func NewIssueReporter() *IssueReporter {
+	return &IssueReporter{}
 }
 
 func randStr(n int) string {
@@ -98,16 +88,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		userEmail = "support+" + randStr(8) + "@getlantern.org"
 	}
 
-	userStatus := "free"
-	userData, err := ir.userConfig.GetData()
-	if err != nil {
-		slog.Error("Unable to get user data", "error", err)
-	} else {
-		if userData != nil && userData.LegacyUserData.UserLevel == "pro" {
-			userStatus = "pro"
-		}
-	}
-
+	userStatus := settings.GetString(settings.UserLevelKey)
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)
@@ -127,12 +108,12 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		Platform:          common.Platform,
 		Description:       report.Description,
 		UserEmail:         userEmail,
-		DeviceId:          ir.userConfig.DeviceID(),
-		UserId:            strconv.FormatInt(ir.userConfig.LegacyID(), 10),
+		DeviceId:          settings.GetString(settings.DeviceIDKey),
+		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
 		Device:            report.Device,
 		Model:             report.Model,
 		OsVersion:         osVersion,
-		Language:          ir.userConfig.Locale(),
+		Language:          settings.GetString(settings.LocaleKey),
 	}
 
 	for _, attachment := range report.Attachments {
@@ -147,7 +128,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	slog.Debug("zipping log files for issue report")
 	buf := &bytes.Buffer{}
 	// zip * under folder common.LogDir
-	logDir := common.LogPath()
+	logDir := settings.GetString(settings.LogPathKey)
 	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxUncompressedLogSize)
 	if _, zipErr := zipLogFiles(buf, logDir, maxUncompressedLogSize, int64(maxUncompressedLogSize)); zipErr == nil {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
@@ -172,14 +153,13 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		http.MethodPost,
 		requestURL,
 		bytes.NewReader(out),
-		ir.userConfig,
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)
 		return traces.RecordError(ctx, err)
 	}
 
-	resp, err := ir.httpClient.Do(req)
+	resp, err := kindling.HTTPClient().Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
 		return traces.RecordError(ctx, err)

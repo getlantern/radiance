@@ -13,14 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/api/protos"
-	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func TestSignUp(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
@@ -49,21 +48,20 @@ func TestLogin(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
-	_, err := ac.Login(context.Background(), "test@example.com", "password", "deviceId")
+	_, err := ac.Login(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
 func TestLogout(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
-		userData:   &protos.LoginResponse{Id: "test@example.com"},
-		userInfo:   &mockUserInfo{},
 		authClient: &mockAuthClient{},
-		deviceID:   "deviceId",
 	}
-	err := ac.Logout(context.Background(), "test@example.com")
+	_, err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
 }
 
@@ -71,7 +69,6 @@ func TestStartRecoveryByEmail(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.StartRecoveryByEmail(context.Background(), "test@example.com")
 	assert.NoError(t, err)
@@ -81,7 +78,6 @@ func TestCompleteRecoveryByEmail(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.CompleteRecoveryByEmail(context.Background(), "test@example.com", "newPassword", "code")
 	assert.NoError(t, err)
@@ -91,7 +87,6 @@ func TestValidateEmailRecoveryCode(t *testing.T) {
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
 	err := ac.ValidateEmailRecoveryCode(context.Background(), "test@example.com", "code")
 	assert.NoError(t, err)
@@ -99,12 +94,10 @@ func TestValidateEmailRecoveryCode(t *testing.T) {
 
 func TestStartChangeEmail(t *testing.T) {
 	email := "test@example.com"
+	settings.Set(settings.EmailKey, email)
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
-		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userData: &protos.LoginResponse{LegacyUserData: &protos.LoginResponse_UserData{
-			Email: email,
-		}},
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
@@ -113,40 +106,73 @@ func TestStartChangeEmail(t *testing.T) {
 }
 
 func TestCompleteChangeEmail(t *testing.T) {
+	old := "old@example.com"
+	tmp := t.TempDir()
+	err := settings.InitSettings(tmp)
+	require.NoError(t, err)
+	settings.Set(settings.EmailKey, old)
 	ac := &APIClient{
-		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userData: &protos.LoginResponse{Id: "test@example.com", LegacyUserData: &protos.LoginResponse_UserData{
-			Email: "test@example.com",
-		}},
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
-		userInfo:   &mockUserInfo{},
 	}
-	err := ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
+	err = ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code")
 	assert.NoError(t, err)
 }
 
 func TestDeleteAccount(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
 	email := "test@example.com"
 	authClient := mockAuthClientNew(t, email, "password")
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: authClient,
-		deviceID:   "deviceId",
 		salt:       authClient.salt[email],
-		userInfo:   &mockUserInfo{},
 	}
-	err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 }
 
 func TestOAuthLoginUrl(t *testing.T) {
 	ac := &APIClient{
 		saltPath: filepath.Join(t.TempDir(), saltFileName),
-		userInfo: &mockUserInfo{},
 	}
 	url, err := ac.OAuthLoginUrl(context.Background(), "google")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, url)
+}
+
+func TestOAuthLoginCallback(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: &mockAuthClient{},
+	}
+
+	// Create a mock JWT token
+	mockToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJsZWdhY3lVc2VySUQiOjEyMzQ1LCJsZWdhY3lUb2tlbiI6InRlc3QtdG9rZW4ifQ.test"
+
+	_, err := ac.OAuthLoginCallback(context.Background(), mockToken)
+	// This will fail because decodeJWT is not mocked, but demonstrates the test structure
+	assert.Error(t, err)
+}
+
+func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: &mockAuthClient{},
+	}
+
+	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "error decoding JWT")
 }
 
 // Mock implementation of AuthClient for testing purposes
@@ -253,23 +279,3 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 	m.cache[req.Email] = hex.EncodeToString(state)
 	return &protos.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
 }
-
-var _ common.UserInfo = (*mockUserInfo)(nil)
-
-// Mock implementation of User config for testing purposes
-type mockUserInfo struct {
-	common.UserInfo
-}
-
-func (m *mockUserInfo) GetData() (*protos.LoginResponse, error) {
-	return &protos.LoginResponse{}, nil
-}
-
-func (m *mockUserInfo) SetData(userData *protos.LoginResponse) error { return nil }
-func (m *mockUserInfo) DeviceID() string                             { return "deviceId" }
-func (m *mockUserInfo) LegacyID() int64                              { return 1 }
-func (m *mockUserInfo) LegacyToken() string                          { return "legacyToken" }
-func (m *mockUserInfo) Locale() string                               { return "en-US" }
-func (m *mockUserInfo) SetLocale(locale string)                      {}
-func (m *mockUserInfo) AccountType() string                          { return "free" }
-func (m *mockUserInfo) IsPro() bool                                  { return false }

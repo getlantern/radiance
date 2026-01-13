@@ -15,11 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
 	common.SetPathsForTesting(t)
-	s := newSplitTunnel(common.DataPath())
+	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
 	return s
 }
 
@@ -79,7 +80,7 @@ func TestFilterPersistence(t *testing.T) {
 	f := st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain)
 
-	st = newSplitTunnel(common.DataPath())
+	st = newSplitTunnel(settings.GetString(settings.DataPathKey))
 	assert.NoError(t, st.loadRule())
 	f = st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")

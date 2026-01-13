@@ -26,6 +26,7 @@ Available variables:
 *   `RADIANCE_DATA_PATH`: Sets the absolute path to the data directory.
 *   `RADIANCE_DISABLE_FETCH_CONFIG`: If set to `true`, disables fetching the remote config.
 *   `RADIANCE_DISABLE_STDOUT_LOG`: Disable printing `radiance` logs to STDOUT. Logs will still be written to the log file.
+*.  `RADIANCE_COUNTRY`: Simulate running from another country, specifically fetching a config as if running from X country. For example, `RADIANCE_COUNTRY=cn`
 
 ## Packages
 

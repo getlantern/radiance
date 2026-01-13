@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
@@ -28,16 +28,9 @@ import (
 var (
 	initMutex   sync.Mutex
 	initialized bool
-
-	dataPath atomic.Value
-	logPath  atomic.Value
 )
 
 func init() {
-	// ensure dataPath and logPath are of type string
-	dataPath.Store("")
-	logPath.Store("")
-
 	if v, _ := env.Get[bool](env.Testing); v {
 		slog.SetLogLoggerLevel(internal.Disable)
 	}
@@ -73,19 +66,19 @@ func Init(dataDir, logDir, logLevel string) error {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
 
-	err = initLogger(filepath.Join(LogPath(), LogFileName), logLevel)
+	err = initLogger(filepath.Join(settings.GetString(settings.LogPathKey), LogFileName), logLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
 
-	slog.Info("Using data and log directories", "dataDir", DataPath(), "logDir", LogPath())
+	slog.Info("Using data and log directories", "dataDir", settings.GetString(settings.DataPathKey), "logDir", settings.GetString(settings.LogPathKey))
 
 	if !IsWindows() {
-		ipc.SetSocketPath(DataPath())
+		ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
 	}
 
-	crashFilePath := filepath.Join(LogPath(), "lantern_crash.log")
+	crashFilePath := filepath.Join(settings.GetString(settings.LogPathKey), "lantern_crash.log")
 	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		slog.Error("Failed to open crash log file", "error", err)
@@ -94,8 +87,6 @@ func Init(dataDir, logDir, logLevel string) error {
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
 	}
-
-	initUserConfig(DataPath())
 
 	initialized = true
 	return nil
@@ -260,9 +251,10 @@ func setupDirectories(data, logs string) error {
 			return fmt.Errorf("failed to create directory %s: %w", path, err)
 		}
 	}
-
-	dataPath.Store(data)
-	logPath.Store(logs)
+	if err := settings.InitSettings(data); err != nil {
+		return fmt.Errorf("failed to initialize settings: %w", err)
+	}
+	settings.Set(settings.LogPathKey, logs)
 	return nil
 }
 
@@ -301,12 +293,4 @@ func maybeAddSuffix(path, suffix string) string {
 		path = filepath.Join(path, suffix)
 	}
 	return path
-}
-
-func DataPath() string {
-	return dataPath.Load().(string)
-}
-
-func LogPath() string {
-	return logPath.Load().(string)
 }

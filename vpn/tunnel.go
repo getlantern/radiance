@@ -23,7 +23,7 @@ import (
 	"github.com/getlantern/lantern-box/tracker/clientcontext"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/user"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -214,19 +214,11 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
 	slog.Debug("Creating ClientContextInjector")
 	infoFn := func() clientcontext.ClientInfo {
-		user, err := user.Load(dataPath)
-		if err != nil {
-			slog.Error("Failed to load user data for client context", "error", err)
-			return clientcontext.ClientInfo{
-				Platform: common.Platform,
-				Version:  common.Version,
-			}
-		}
 		return clientcontext.ClientInfo{
-			DeviceID:    user.DeviceID(),
+			DeviceID:    settings.GetString(settings.DeviceIDKey),
 			Platform:    common.Platform,
-			IsPro:       user.IsPro(),
-			CountryCode: user.CountryCode(),
+			IsPro:       settings.IsPro(),
+			CountryCode: settings.GetString(settings.CountryCodeKey),
 			Version:     common.Version,
 		}
 	}

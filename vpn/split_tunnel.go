@@ -17,8 +17,8 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 )
 
@@ -48,7 +48,7 @@ type SplitTunnel struct {
 }
 
 func NewSplitTunnelHandler() (*SplitTunnel, error) {
-	s := newSplitTunnel(common.DataPath())
+	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
 	if err := s.loadRule(); err != nil {
 		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", s.ruleFile, err)
 	}

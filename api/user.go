@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,9 +14,12 @@ import (
 
 	"github.com/1Password/srp"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -42,19 +46,9 @@ type DataCapUsageDetails struct {
 type Tier int
 
 const (
-	TierFree = 0
-	TierPro  = 1
-
 	saltFileName = ".salt"
-
-	baseURL = "https://df.iantem.io/api/v1"
+	baseURL      = "https://df.iantem.io/api/v1"
 )
-
-// Device is a machine registered to a user account (e.g. an Android phone or a Windows desktop).
-type Device struct {
-	ID   string
-	Name string
-}
 
 // pro-server requests
 
@@ -64,48 +58,51 @@ type UserDataResponse struct {
 }
 
 // NewUser creates a new user account
-func (ac *APIClient) NewUser(ctx context.Context) (*UserDataResponse, error) {
+func (ac *APIClient) NewUser(ctx context.Context) (*protos.LoginResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_user")
 	defer span.End()
+
 	var resp UserDataResponse
-	err := ac.proWC.Post(ctx, "/user-create", nil, &resp)
+	err := ac.proWebClient().Post(ctx, "/user-create", nil, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
 	}
-	if resp.LoginResponse_UserData == nil {
-		slog.Error("creating new user", "error", "no user data in response")
-		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
-	}
-	// Append device ID to user data
-	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
-	login := &protos.LoginResponse{
-		LegacyID:       resp.UserId,
-		LegacyToken:    resp.Token,
-		LegacyUserData: resp.LoginResponse_UserData,
-	}
-	err = ac.userInfo.SetData(login)
+	loginResponse, err := ac.storeData(ctx, resp)
 	if err != nil {
-		slog.Error("setting user data", "error", err)
-		return nil, traces.RecordError(ctx, err)
+		return nil, err
 	}
-	// update the user data
-	ac.userData = login
-	return &resp, nil
+	return loginResponse, nil
 }
 
-// UserData returns the user data
-func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "user_data")
+func (ac *APIClient) UserData() ([]byte, error) {
+	slog.Debug("Getting user data")
+	user := &protos.LoginResponse{}
+	err := settings.GetStruct(settings.LoginResponseKey, user)
+	return withMarshalProto(user, err)
+}
+
+// FetchUserData fetches user data from the server.
+func (ac *APIClient) FetchUserData(ctx context.Context) ([]byte, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "fetch_user_data")
 	defer span.End()
+	return withMarshalProto(ac.fetchUserData(ctx))
+}
+
+// fetchUserData calls the /user-data endpoint and stores the result via storeData.
+func (ac *APIClient) fetchUserData(ctx context.Context) (*protos.LoginResponse, error) {
 	var resp UserDataResponse
-	err := ac.proWC.Get(ctx, "/user-data", nil, &resp)
+	err := ac.proWebClient().Get(ctx, "/user-data", nil, &resp)
 	if err != nil {
 		slog.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
 	}
+	return ac.storeData(ctx, resp)
+}
+
+func (a *APIClient) storeData(ctx context.Context, resp UserDataResponse) (*protos.LoginResponse, error) {
 	if resp.BaseResponse != nil && resp.Error != "" {
-		err = fmt.Errorf("recevied bad response: %s", resp.Error)
+		err := fmt.Errorf("received bad response: %s", resp.Error)
 		slog.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, err)
 	}
@@ -114,62 +111,55 @@ func (ac *APIClient) UserData(ctx context.Context) (*UserDataResponse, error) {
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	// Append device ID to user data
-	resp.LoginResponse_UserData.DeviceID = ac.userInfo.DeviceID()
+	resp.LoginResponse_UserData.DeviceID = settings.GetString(settings.DeviceIDKey)
 	login := &protos.LoginResponse{
 		LegacyID:       resp.UserId,
 		LegacyToken:    resp.Token,
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
-	err = ac.userInfo.SetData(login)
-	if err != nil {
-		slog.Error("setting user data", "error", err)
-		return nil, traces.RecordError(ctx, err)
-	}
-	// update the user data
-	ac.userData = login
-	return &resp, nil
+	a.setData(login)
+	return login, nil
 }
 
 // user-server requests
 
 // Devices returns a list of devices associated with this user account.
-func (a *APIClient) Devices() ([]Device, error) {
-	if a.userData == nil {
-		return nil, ErrNotLoggedIn
-	}
-	ret := []Device{}
-	for _, d := range a.userData.Devices {
-		ret = append(ret, Device{
-			Name: d.Name,
-			ID:   d.Id,
-		})
-	}
-
-	return ret, nil
+func (a *APIClient) Devices() ([]settings.Device, error) {
+	return settings.Devices()
 }
 
 // DataCapInfo returns information about this user's data cap
-func (a *APIClient) DataCapInfo(ctx context.Context) (*DataCapUsageResponse, error) {
+func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
 	datacap := &DataCapUsageResponse{}
 	headers := map[string]string{
-		backend.ClientCountryHeader: a.userInfo.CountryCode(),
+		backend.ClientCountryHeader: settings.GetString(settings.CountryCodeKey),
 		backend.ContentTypeHeader:   "application/json",
 	}
-	getUrl := fmt.Sprintf("/datacap/%s", a.userInfo.DeviceID())
-	newReq := a.authWc.NewRequest(nil, headers, nil)
-	err := a.authWc.Get(ctx, getUrl, newReq, &datacap)
-	if err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
-	return datacap, nil
+	getUrl := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
+	authWc := authWebClient()
+	newReq := authWc.NewRequest(nil, headers, nil)
+	err := authWc.Get(ctx, getUrl, newReq, &datacap)
+	return withMarshalJsonString(datacap, err)
+}
+func (a *APIClient) DataCapInfo(ctx context.Context) ([]byte, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
+	defer span.End()
+
+	dataCap := &DataCapInfo{}
+	getUrl := fmt.Sprintf("/datacap/user/%d/device/%s/usage", settings.GetInt64(settings.UserIDKey), settings.GetString(settings.DeviceIDKey))
+	authWc := authWebClient()
+	newReq := authWc.NewRequest(nil, nil, nil)
+	err := authWc.Get(ctx, getUrl, newReq, &dataCap)
+	return withMarshalJson(dataCap, err)
 }
 
 // SignUp signs the user up for an account.
 func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up")
 	defer span.End()
+
 	salt, err := a.authClient.SignUp(ctx, email, password)
 	if err == nil {
 		a.salt = salt
@@ -186,6 +176,7 @@ var ErrInvalidCode = errors.New("invalid code")
 func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_resend_code")
 	defer span.End()
+
 	if a.salt == nil {
 		return traces.RecordError(ctx, ErrNoSalt)
 	}
@@ -199,6 +190,7 @@ func (a *APIClient) SignupEmailResendCode(ctx context.Context, email string) err
 func (a *APIClient) SignupEmailConfirmation(ctx context.Context, email, code string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up_email_confirmation")
 	defer span.End()
+
 	return traces.RecordError(ctx, a.authClient.SignupEmailConfirmation(ctx, &protos.ConfirmSignupRequest{
 		Email: email,
 		Code:  code,
@@ -227,6 +219,7 @@ func readSalt(path string) ([]byte, error) {
 func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "get_salt")
 	defer span.End()
+
 	if a.salt != nil {
 		return a.salt, nil // use cached value
 	}
@@ -238,15 +231,18 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 }
 
 // Login logs the user in.
-func (a *APIClient) Login(ctx context.Context, email string, password string, deviceId string) (*protos.LoginResponse, error) {
+func (a *APIClient) Login(ctx context.Context, email string, password string) ([]byte, error) {
 	// clear any previous salt value
 	a.salt = nil
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
 	defer span.End()
+
 	salt, err := a.getSalt(ctx, email)
 	if err != nil {
 		return nil, err
 	}
+
+	deviceId := settings.GetString(settings.DeviceIDKey)
 	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
@@ -260,41 +256,66 @@ func (a *APIClient) Login(ctx context.Context, email string, password string, de
 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
-	a.userInfo.SetData(resp)
-	a.userData = resp
+	a.setData(resp)
 	a.salt = salt
-	if err := writeSalt(salt, a.saltPath); err != nil {
-		return nil, traces.RecordError(ctx, err)
+	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
+		return nil, traces.RecordError(ctx, saltErr)
 	}
-	return resp, nil
+	return withMarshalProto(resp, nil)
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
-func (a *APIClient) Logout(ctx context.Context, email string) error {
+func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
 	defer span.End()
-	err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
+	if err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
 		Email:        email,
-		DeviceId:     a.userInfo.DeviceID(),
-		LegacyUserID: a.userInfo.LegacyID(),
-		LegacyToken:  a.userInfo.LegacyToken(),
-	})
-	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
+		DeviceId:     settings.GetString(settings.DeviceIDKey),
+		LegacyUserID: settings.GetInt64(settings.UserIDKey),
+		LegacyToken:  settings.GetString(settings.TokenKey),
+	}); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
-	// clean up local data
-	a.userData = nil
+	a.Reset()
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
 	}
-	return nil
+	return withMarshalProto(a.NewUser(context.Background()))
+}
+
+func withMarshalProto(resp *protos.LoginResponse, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	protoUserData, err := proto.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling login response: %w", err)
+	}
+	return protoUserData, nil
+}
+
+func withMarshalJson(data any, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling user data: %w", err)
+	}
+	return jsonData, nil
+}
+
+func withMarshalJsonString(data any, err error) (string, error) {
+	raw, err := withMarshalJson(data, err)
+	return string(raw), err
 }
 
 // StartRecoveryByEmail initializes the account recovery process for the provided email.
 func (a *APIClient) StartRecoveryByEmail(ctx context.Context, email string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_recovery_by_email")
 	defer span.End()
+
 	return traces.RecordError(ctx, a.authClient.StartRecoveryByEmail(ctx, &protos.StartRecoveryByEmailRequest{
 		Email: email,
 	}))
@@ -337,6 +358,7 @@ func (a *APIClient) CompleteRecoveryByEmail(ctx context.Context, email, newPassw
 func (a *APIClient) ValidateEmailRecoveryCode(ctx context.Context, email, code string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "validate_email_recovery_code")
 	defer span.End()
+
 	resp, err := a.authClient.ValidateEmailRecoveryCode(ctx, &protos.ValidateRecoveryCodeRequest{
 		Email: email,
 		Code:  code,
@@ -356,10 +378,7 @@ const group = srp.RFC5054Group3072
 func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_change_email")
 	defer span.End()
-	if a.userData == nil {
-		return traces.RecordError(ctx, ErrNotLoggedIn)
-	}
-	lowerCaseEmail := strings.ToLower(a.userData.LegacyUserData.Email)
+	lowerCaseEmail := strings.ToLower(settings.GetString(settings.EmailKey))
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
@@ -380,6 +399,7 @@ func (a *APIClient) StartChangeEmail(ctx context.Context, newEmail string, passw
 		Email: lowerCaseEmail,
 		A:     A.Bytes(),
 	}
+
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
 		return traces.RecordError(ctx, err)
@@ -437,9 +457,8 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err != nil {
 		return traces.RecordError(ctx, err)
 	}
-
 	if err := a.authClient.CompleteChangeEmail(ctx, &protos.CompleteChangeEmailRequest{
-		OldEmail:    a.userData.LegacyUserData.Email,
+		OldEmail:    settings.GetString(settings.EmailKey),
 		NewEmail:    newEmail,
 		Code:        code,
 		NewSalt:     newSalt,
@@ -450,29 +469,28 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 	if err := writeSalt(newSalt, a.saltPath); err != nil {
 		return traces.RecordError(ctx, err)
 	}
-
-	if err := a.userInfo.SetData(a.userData); err != nil {
+	if err := settings.Set(settings.EmailKey, newEmail); err != nil {
 		return traces.RecordError(ctx, err)
 	}
+
 	a.salt = newSalt
-	a.userData.LegacyUserData.Email = newEmail
 	return nil
 }
 
 // DeleteAccount deletes this user account.
-func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) error {
+func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "delete_account")
 	defer span.End()
 	lowerCaseEmail := strings.ToLower(email)
 	salt, err := a.getSalt(ctx, lowerCaseEmail)
 	if err != nil {
-		return traces.RecordError(ctx, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 
 	// Prepare login request body
 	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
 	if err != nil {
-		return traces.RecordError(ctx, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
 
@@ -487,47 +505,48 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) e
 
 	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
 	if err != nil {
-		return traces.RecordError(ctx, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 
 	B := big.NewInt(0).SetBytes(srpB.B)
 
 	if err = client.SetOthersPublic(B); err != nil {
-		return traces.RecordError(ctx, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 
 	clientKey, err := client.Key()
 	if err != nil || clientKey == nil {
-		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
 	}
 
 	// // check if the server proof is valid
 	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while checking server proof %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while checking server proof %w", err))
 	}
 
 	clientProof, err := client.ClientProof()
 	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
 	}
 
 	changeEmailRequestBody := &protos.DeleteUserRequest{
 		Email:     lowerCaseEmail,
 		Proof:     clientProof,
 		Permanent: true,
-		DeviceId:  a.deviceID,
+		DeviceId:  settings.GetString(settings.DeviceIDKey),
 	}
 
 	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
-		return traces.RecordError(ctx, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	// clean up local data
-	a.userData = nil
+	a.Reset()
 	a.salt = nil
 	if err := writeSalt(nil, a.saltPath); err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
-	return traces.RecordError(ctx, a.userInfo.SetData(nil))
+
+	return withMarshalProto(a.NewUser(context.Background()))
 }
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
@@ -537,11 +556,35 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
 	query := loginURL.Query()
-	query.Set("deviceId", a.userInfo.DeviceID())
-	query.Set("userId", strconv.FormatInt(a.userInfo.LegacyID(), 10))
-	query.Set("proToken", a.userInfo.LegacyToken())
+	query.Set("deviceId", settings.GetString(settings.DeviceIDKey))
+	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
+	query.Set("proToken", settings.GetString(settings.TokenKey))
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
+}
+
+func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) ([]byte, error) {
+	slog.Debug("Getting OAuth login callback")
+	jwtUserInfo, err := decodeJWT(oAuthToken)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JWT: %w", err)
+	}
+
+	// Temporary  set user data to so api can read it
+	login := &protos.LoginResponse{
+		LegacyID:    jwtUserInfo.LegacyUserID,
+		LegacyToken: jwtUserInfo.LegacyToken,
+	}
+	a.setData(login)
+	// Get user data from api this will also save data in user config
+	user, err := a.fetchUserData(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("error getting user data: %w", err)
+	}
+	user.Id = jwtUserInfo.Email
+	user.EmailConfirmed = true
+	a.setData(user)
+	return withMarshalProto(user, nil)
 }
 
 type LinkResponse struct {
@@ -554,12 +597,14 @@ type LinkResponse struct {
 func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "remove_device")
 	defer span.End()
+
 	data := map[string]string{
 		"deviceId": deviceID,
 	}
-	req := a.proWC.NewRequest(nil, nil, data)
+	proWC := a.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
 	resp := &LinkResponse{}
-	if err := a.proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
+	if err := proWC.Post(ctx, "/user-link-remove", req, resp); err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.BaseResponse != nil && resp.BaseResponse.Error != "" {
@@ -571,17 +616,92 @@ func (a *APIClient) RemoveDevice(ctx context.Context, deviceID string) (*LinkRes
 func (a *APIClient) ReferralAttach(ctx context.Context, code string) (bool, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach")
 	defer span.End()
+
 	data := map[string]string{
 		"code": code,
 	}
-	req := a.proWC.NewRequest(nil, nil, data)
+	proWC := a.proWebClient()
+	req := proWC.NewRequest(nil, nil, data)
 	resp := &protos.BaseResponse{}
-	if err := a.proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
+	if err := proWC.Post(ctx, "/referral-attach", req, resp); err != nil {
 		return false, traces.RecordError(ctx, err)
 	}
 	if resp.Error != "" {
 		return false, traces.RecordError(ctx, fmt.Errorf("%s", resp.Error))
 	}
 	return true, nil
+}
 
+func (a *APIClient) setData(data *protos.LoginResponse) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if data == nil {
+		a.Reset()
+		return
+	}
+	var changed bool
+	if data.LegacyUserData == nil {
+		slog.Info("no user data to set")
+		return
+	}
+
+	existingUser := settings.GetInt64(settings.UserIDKey) != 0
+
+	if data.LegacyUserData.UserLevel != "" {
+		oldUserLevel := settings.GetString(settings.UserLevelKey)
+		changed = changed || oldUserLevel != data.LegacyUserData.UserLevel
+		if err := settings.Set(settings.UserLevelKey, data.LegacyUserData.UserLevel); err != nil {
+			slog.Error("failed to set user level in settings", "error", err)
+		}
+	}
+	if data.LegacyUserData.Email != "" {
+		oldEmail := settings.GetString(settings.EmailKey)
+		changed = changed && oldEmail != data.LegacyUserData.Email
+		if err := settings.Set(settings.EmailKey, data.LegacyUserData.Email); err != nil {
+			slog.Error("failed to set email in settings", "error", err)
+		}
+	}
+	if data.LegacyID != 0 {
+		oldUserID := settings.GetInt64(settings.UserIDKey)
+		changed = changed && oldUserID != data.LegacyID
+		if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
+			slog.Error("failed to set user ID in settings", "error", err)
+		}
+	}
+	if data.LegacyToken != "" {
+		oldToken := settings.GetString(settings.TokenKey)
+		changed = changed && oldToken != data.LegacyToken
+		if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
+			slog.Error("failed to set token in settings", "error", err)
+		}
+	}
+
+	devices := []settings.Device{}
+	for _, d := range data.Devices {
+		devices = append(devices, settings.Device{
+			Name: d.Name,
+			ID:   d.Id,
+		})
+	}
+	if err := settings.Set(settings.DevicesKey, devices); err != nil {
+		slog.Error("failed to set devices in settings", "error", err)
+	}
+
+	if err := settings.Set(settings.LoginResponseKey, data); err != nil {
+		slog.Error("failed to set login response in settings", "error", err)
+	}
+
+	// We only consider the user to have changed if there was a previous user.
+	if existingUser && changed {
+		events.Emit(settings.UserChangeEvent{})
+	}
+}
+
+func (a *APIClient) Reset() {
+	// Clear user data
+	settings.Set(settings.UserIDKey, int64(0))
+	settings.Set(settings.TokenKey, "")
+	settings.Set(settings.UserLevelKey, "")
+	settings.Set(settings.EmailKey, "")
+	settings.Set(settings.DevicesKey, []settings.Device{})
 }

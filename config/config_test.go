@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -14,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
 )
@@ -97,7 +95,7 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	ch := &ConfigHandler{
 		configPath: configPath,
 		config:     atomic.Value{},
-		ftr:        newFetcher(http.DefaultClient, &UserStub{}, "en-US", nil),
+		ftr:        newFetcher("en-US", nil),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -236,25 +234,3 @@ type MockFetcher struct {
 func (mf *MockFetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	return mf.response, mf.err
 }
-
-type UserStub struct {
-	common.UserInfo
-}
-
-// Verify that a UserStub implements the User interface
-var _ common.UserInfo = (*UserStub)(nil)
-
-func (u *UserStub) GetData() (*protos.LoginResponse, error) {
-	return &protos.LoginResponse{
-		LegacyID:    123456789,
-		LegacyToken: "test-legacy-token",
-	}, nil
-}
-func (u *UserStub) Locale() string                           { return "en-US" }
-func (u *UserStub) DeviceID() string                         { return "test-device-id" }
-func (u *UserStub) LegacyID() int64                          { return 123456789 }
-func (u *UserStub) LegacyToken() string                      { return "test-legacy-token" }
-func (u *UserStub) SetData(data *protos.LoginResponse) error { return nil }
-func (u *UserStub) SetLocale(locale string)                  {}
-func (u *UserStub) AccountType() string                      { return "free" }
-func (u *UserStub) IsPro() bool                              { return false }
