@@ -62,26 +62,28 @@ func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
 	defer mutexOptions.Unlock()
 
 	if len(defaultOptions) == 0 {
-		f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
-		if err != nil {
-			return fmt.Errorf("failed to create fronted: %w", err)
-		}
-
-		ampClient, err := fronted.NewAMPClient(ctx, logger)
-		if err != nil {
-			return fmt.Errorf("failed to create amp client: %w", err)
-		}
-
 		defaultOptions = append(defaultOptions,
 			kindling.WithPanicListener(reporting.PanicListener),
 			kindling.WithLogWriter(logger),
-			kindling.WithDomainFronting(f),
 			// Most endpoints use df.iantem.io, but for some historical reasons
 			// "pro-server" calls still go to api.getiantem.org.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-			// Kindling will skip amp transports if the request has a payload larger than 6kb
-			kindling.WithAMPCache(ampClient),
 		)
+
+		f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
+		if err != nil {
+			return fmt.Errorf("failed to create fronted: %w", err)
+		} else {
+			defaultOptions = append(defaultOptions, kindling.WithDomainFronting(f))
+		}
+
+		ampClient, err := fronted.NewAMPClient(ctx, dataDir, logger)
+		if err != nil {
+			return fmt.Errorf("failed to create amp client: %w", err)
+		} else {
+			// Kindling will skip amp transports if the request has a payload larger than 6kb
+			defaultOptions = append(defaultOptions, kindling.WithAMPCache(ampClient))
+		}
 	}
 
 	k = kindling.NewKindling("radiance", defaultOptions...)
