@@ -448,13 +448,17 @@ func toSBRuleSet(rules []lcommon.RuleSet) ([]string, []O.RuleSet) {
 				format = C.RuleSetFormatSource
 			}
 		}
+		detour := rule.DownloadDetour
+		if detour == "" {
+			detour = "direct"
+		}
 		rulesets = append(rulesets, O.RuleSet{
 			Type:   C.RuleSetTypeRemote,
 			Tag:    rule.Tag,
 			Format: format,
 			RemoteOptions: O.RemoteRuleSet{
 				URL:            rule.URL,
-				DownloadDetour: "direct",
+				DownloadDetour: detour,
 				UpdateInterval: badoption.Duration(24 * time.Hour),
 			},
 		})

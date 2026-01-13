@@ -25,7 +25,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/getlantern/amp v0.0.0-20251211213807-4cbc22624b9f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20260109020250-db160bf6ea8c
+	github.com/getlantern/common v1.2.1-0.20260113231444-c651c79beddf
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
 	github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
