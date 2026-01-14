@@ -46,50 +46,48 @@ func Dev() bool {
 // for data and logs, initializing the logger, and setting up reporting.
 func Init(dataDir, logDir, logLevel string) error {
 	slog.Info("Initializing common package")
-	if initialized.Swap(true) {
-		return nil
-	}
-
-	reporting.Init(Version)
-	err := setupDirectories(dataDir, logDir)
-	if err != nil {
-		return fmt.Errorf("failed to setup directories: %w", err)
-	}
-
-	err = initLogger(filepath.Join(settings.GetString(settings.LogPathKey), LogFileName), logLevel)
-	if err != nil {
-		slog.Error("Error initializing logger", "error", err)
-		return fmt.Errorf("initialize log: %w", err)
-	}
-	settings.Set(settings.LogLevelKey, logLevel)
-
-	slog.Info("Using data and log directories", "dataDir", settings.GetString(settings.DataPathKey), "logDir", settings.GetString(settings.LogPathKey))
-	createCrashReporter()
-	return nil
+	return initialize(dataDir, logDir, logLevel, false)
 }
 
 // InitReadOnly locates the settings file in provided directory and initializes the common components
 // in read-only mode using the necessary settings from the settings file. This is used in contexts
 // where settings should not be modified, such as in the IPC server or other auxiliary processes.
-func InitReadOnly(settingsDir string) error {
+func InitReadOnly(dataDir, logDir, logLevel string) error {
+	slog.Info("Initializing in read-only")
+	return initialize(dataDir, logDir, logLevel, true)
+}
+
+func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 	if initialized.Swap(true) {
 		return nil
 	}
-	slog.Info("Initializing read-only")
-	if err := settings.InitReadOnly(settingsDir, true); err != nil {
-		return fmt.Errorf("failed to initialize read-only settings: %w", err)
-	}
-	reporting.Init(Version)
 
-	logPath := filepath.Join(settings.GetString(settings.LogPathKey), LogFileName)
-	level := settings.GetString(settings.LogLevelKey)
-	if err := initLogger(logPath, level); err != nil {
+	reporting.Init(Version)
+	data, logs, err := setupDirectories(dataDir, logDir)
+	if err != nil {
+		return fmt.Errorf("failed to setup directories: %w", err)
+	}
+	err = initLogger(filepath.Join(logs, LogFileName), logLevel)
+	if err != nil {
+		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
-	if !IsWindows() {
-		ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
+
+	if readonly {
+		settings.SetReadOnly(true)
+		if err := settings.StartWatching(); err != nil {
+			return fmt.Errorf("start watching settings file: %w", err)
+		}
+		if !IsWindows() {
+			ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
+		}
+	} else {
+		settings.Set(settings.DataPathKey, data)
+		settings.Set(settings.LogPathKey, logs)
+		settings.Set(settings.LogLevelKey, logLevel)
 	}
 
+	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	createCrashReporter()
 	return nil
 }
@@ -236,8 +234,8 @@ func isWindowsProd() bool {
 
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do
 // not exist. If data or logs are the empty string, it will use the user's config directory retrieved
-// from the OS. The resulting paths are stored in [dataPath] and [logPath] respectively.
-func setupDirectories(data, logs string) error {
+// from the OS.
+func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
@@ -252,15 +250,13 @@ func setupDirectories(data, logs string) error {
 	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
 		if err := os.MkdirAll(path, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", path, err)
+			return data, logs, fmt.Errorf("failed to create directory %s: %w", path, err)
 		}
 	}
 	if err := settings.InitSettings(data); err != nil {
-		return fmt.Errorf("failed to initialize settings: %w", err)
+		return data, logs, fmt.Errorf("failed to initialize settings: %w", err)
 	}
-	settings.Set(settings.LogPathKey, logs)
-	settings.Set(settings.DataPathKey, data)
-	return nil
+	return data, logs, nil
 }
 
 func outDir(subdir string) string {

@@ -30,7 +30,7 @@ func InitIPC(settingsFileDir string, provider func() libbox.PlatformInterface) (
 		return ipcServer, nil
 	}
 	platIfceProvider = provider
-	if err := common.InitReadOnly(settingsFileDir); err != nil {
+	if err := common.InitReadOnly(settingsFileDir, "", "debug"); err != nil {
 		slog.Error("Failed to initialize common package", "error", err)
 		return nil, fmt.Errorf("initialize common package: %w", err)
 	}
