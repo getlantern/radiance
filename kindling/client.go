@@ -51,33 +51,30 @@ func newKindling() kindling.Kindling {
 	logger := &slogWriter{Logger: slog.Default()}
 	updaterCtx, cancel := context.WithCancel(context.Background())
 
-	kindlingOptions := []kindling.Option{
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(logger),
-		// Most endpoints use df.iantem.io, but for some historical reasons
-		// "pro-server" calls still go to api.getiantem.org.
-		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-	}
-
 	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
 	if err != nil {
 		slog.Error("failed to create fronted client", slog.Any("error", err))
-	} else {
-		kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
 	}
 
 	ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 	if err != nil {
 		slog.Error("failed to create amp client", slog.Any("error", err))
-	} else {
-		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindlingOptions = append(kindlingOptions, kindling.WithAMPCache(ampClient))
 	}
 
 	kindlingMutex.Lock()
 	defer kindlingMutex.Unlock()
+
 	stopUpdater = cancel
-	return kindling.NewKindling("radiance", kindlingOptions...)
+	return kindling.NewKindling("radiance",
+		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithLogWriter(logger),
+		// Most endpoints use df.iantem.io, but for some historical reasons
+		// "pro-server" calls still go to api.getiantem.org.
+		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
+		kindling.WithDomainFronting(f),
+		// Kindling will skip amp transports if the request has a payload larger than 6kb
+		kindling.WithAMPCache(ampClient),
+	)
 }
 
 type slogWriter struct {
