@@ -23,6 +23,9 @@ var (
 
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
+	if k == nil {
+		SetKindling(NewKindling())
+	}
 	httpClient := k.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
 	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
