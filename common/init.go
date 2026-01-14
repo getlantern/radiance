@@ -28,12 +28,6 @@ var (
 	initialized atomic.Bool
 )
 
-func init() {
-	if v, _ := env.Get[bool](env.Testing); v {
-		slog.SetLogLoggerLevel(internal.Disable)
-	}
-}
-
 // Prod returns true if the application is running in production environment.
 // Treating ENV == "" as production is intentional: if RADIANCE_ENV is unset,
 // we default to production mode to ensure the application runs with safe, non-debug settings.
@@ -265,6 +259,7 @@ func setupDirectories(data, logs string) error {
 		return fmt.Errorf("failed to initialize settings: %w", err)
 	}
 	settings.Set(settings.LogPathKey, logs)
+	settings.Set(settings.DataPathKey, data)
 	return nil
 }
 

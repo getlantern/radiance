@@ -56,97 +56,54 @@ var ErrReadOnly = errors.New("read-only")
 
 // InitSettings initializes the config for user settings, which can be used by both the tunnel process and
 // the main application process to read user preferences like locale.
-func InitSettings(dataDir string) error {
+func InitSettings(fileDir string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.initialized {
 		return nil
 	}
-	if err := initialize(dataDir); err != nil {
+	if err := initialize(fileDir); err != nil {
 		return fmt.Errorf("initializing settings: %w", err)
 	}
 	k.initialized = true
 	return nil
 }
 
-func initialize(dataDir string) error {
+func initialize(fileDir string) error {
 	k.k = koanf.New(".")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(fileDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
-	filePath := filepath.Join(dataDir, settingsFileName)
-	// 1. Try to atomically read the existing config file
-	if raw, err := atomicfile.ReadFile(filePath); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			// 2. If it exists but is invalid, return an error
-			return fmt.Errorf("error loading koanf config file: %w", err)
-		} else {
-			// 3. If it doesn't exist, create it with default settings
-			if err := setDefaults(filePath); err != nil {
-				return fmt.Errorf("error setting defaults %w", err)
-			}
+	filePath := filepath.Join(fileDir, settingsFileName)
+	switch err := loadSettings(filePath); {
+	case errors.Is(err, fs.ErrNotExist):
+		slog.Warn("settings file not found", "path", filePath) // file may not have been created yet
+		if err := setDefaults(filePath); err != nil {
+			return fmt.Errorf("setting default settings: %w", err)
 		}
-	} else {
-		// 4. If it exists and is valid, load it into koanf
-		if err := k.k.Load(rawbytes.Provider(raw), json.Parser()); err != nil {
-			return fmt.Errorf("error parsing koanf config file: %w", err)
-		}
+	case err != nil:
+		return fmt.Errorf("loading settings: %w", err)
 	}
-	Set(DataPathKey, dataDir)
 	return nil
 }
 
 func setDefaults(filePath string) error {
 	// We need to set the file path first because the save function reads it as soon as we set any key.
-	if err := Set(filePathKey, filePath); err != nil {
+	if err := k.k.Set(filePathKey, filePath); err != nil {
 		return fmt.Errorf("failed to set file path: %w", err)
 	}
-	if err := Set(LocaleKey, "fa-IR"); err != nil {
+	if err := k.k.Set(LocaleKey, "fa-IR"); err != nil {
 		return fmt.Errorf("failed to set default locale: %w", err)
 	}
-	if err := Set(UserLevelKey, "free"); err != nil {
+	if err := k.k.Set(UserLevelKey, "free"); err != nil {
 		return fmt.Errorf("failed to set default user level: %w", err)
 	}
 	return nil
 }
 
-// InitReadOnly initializes the settings in read-only mode from the given directory. InitReadOnly
-// does not create a file if it does not exist and instead returns an error. In read-only mode, no
-// changes to settings can be made. If watchFile is true, changes to the file on disk will be
-// reloaded automatically.
-func InitReadOnly(fileDir string, watchFile bool) (err error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.initialized {
-		return nil
-	}
-	k.readOnly.Store(true)
-	path := filepath.Join(fileDir, settingsFileName)
-	if watchFile {
-		watcher := internal.NewFileWatcher(path, func() {
-			if err := reloadSettings(path); err != nil {
-				slog.Error("reloading settings file", "error", err)
-			}
-		})
-		if err := watcher.Start(); err != nil {
-			return fmt.Errorf("starting settings file watcher: %w", err)
-		}
-		k.watcher = watcher
-	}
-	if err := reloadSettings(path); err != nil {
-		return fmt.Errorf("initializing read-only settings: %w", err)
-	}
-	k.initialized = true
-	return nil
-}
-
-func reloadSettings(path string) error {
+func loadSettings(path string) error {
 	contents, err := atomicfile.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		slog.Warn("settings file not found", "path", path) // file may not have been created yet
-		return nil
-	}
-	if err != nil { // including os.ErrNotExist as we only want read-only here
+	if err != nil {
 		return fmt.Errorf("loading settings (read-only): %w", err)
 	}
 	kk := koanf.New(".")
@@ -154,6 +111,37 @@ func reloadSettings(path string) error {
 		return fmt.Errorf("parsing settings: %w", err)
 	}
 	k.k = kk
+	return nil
+}
+
+func SetReadOnly(readOnly bool) {
+	k.readOnly.Store(readOnly)
+}
+
+func StartWatching() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if !k.initialized {
+		return errors.New("settings not initialized")
+	}
+	if k.watcher != nil {
+		return errors.New("settings file watcher already started")
+	}
+
+	path := k.k.String(filePathKey)
+	watcher := internal.NewFileWatcher(path, func() {
+		if err := loadSettings(path); err != nil {
+			slog.Error("reloading settings file", "error", err)
+		}
+	})
+	if err := watcher.Start(); err != nil {
+		return fmt.Errorf("starting settings file watcher: %w", err)
+	}
+	k.watcher = watcher
+	// reload settings once at start in case there were changes before we started watching
+	if err := loadSettings(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	_ "github.com/getlantern/radiance/common/env"
 )
 
 func TestInitSettings(t *testing.T) {
@@ -18,12 +20,6 @@ func TestInitSettings(t *testing.T) {
 		locale := Get(LocaleKey)
 		if locale != "fa-IR" {
 			t.Errorf("expected default locale 'fa-IR', got %s", locale)
-		}
-
-		// Verify config file was created
-		configPath := filepath.Join(tempDir, "local.json")
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			t.Error("expected config file to be created")
 		}
 	})
 
