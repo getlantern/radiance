@@ -106,6 +106,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	settings.Set(settings.LocaleKey, opts.Locale)
 
 	dataDir := settings.GetString(settings.DataPathKey)
+	kindling.SetKindling(kindling.NewKindling())
 	setUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(dataDir)
 	issueReporter := issue.NewIssueReporter()

@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	k             kindling.Kindling = newKindling()
+	k             kindling.Kindling
 	kindlingMutex sync.Mutex
 	stopUpdater   func()
 )
@@ -45,8 +45,8 @@ func SetKindling(a kindling.Kindling) {
 	k = a
 }
 
-// newKindling build a kindling client and bootstrap this package
-func newKindling() kindling.Kindling {
+// NewKindling build a kindling client and bootstrap this package
+func NewKindling() kindling.Kindling {
 	dataDir := settings.GetString(settings.DataPathKey)
 	logger := &slogWriter{Logger: slog.Default()}
 	updaterCtx, cancel := context.WithCancel(context.Background())
@@ -60,9 +60,6 @@ func newKindling() kindling.Kindling {
 	if err != nil {
 		slog.Error("failed to create amp client", slog.Any("error", err))
 	}
-
-	kindlingMutex.Lock()
-	defer kindlingMutex.Unlock()
 
 	stopUpdater = cancel
 	return kindling.NewKindling("radiance",
