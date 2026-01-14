@@ -29,6 +29,7 @@ func HTTPClient() *http.Client {
 	return httpClient
 }
 
+// Close stop all concurrent config fetches that can be happening in background
 func Close(_ context.Context) error {
 	if stopUpdater != nil {
 		stopUpdater()
