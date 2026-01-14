@@ -34,8 +34,11 @@ var embeddedConfig []byte
 
 var localConfigMutex sync.Mutex
 
-func DNSTTOptions(ctx context.Context, localConfigFilepath string) ([]kindling.Option, error) {
-	options, err := ParseDNSTTConfigs(embeddedConfig)
+const dnsttConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main/kindling/dnstt/dnstt.yml.gz"
+const pollInterval = 12 * time.Hour
+
+func DNSTTOptions(ctx context.Context, localConfigFilepath string, client *http.Client) ([]kindling.Option, error) {
+	options, err := parseDNSTTConfigs(embeddedConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse dnstt embedded config: %w", err)
 	}
@@ -44,7 +47,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string) ([]kindling.O
 		localConfigMutex.Lock()
 		defer localConfigMutex.Unlock()
 		if config, err := os.ReadFile(localConfigFilepath); err == nil {
-			opts, err := ParseDNSTTConfigs(config)
+			opts, err := parseDNSTTConfigs(config)
 			if err != nil {
 				slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
 				return options, nil
@@ -54,6 +57,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string) ([]kindling.O
 			slog.Warn("failed to read dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
+	dnsttConfigUpdate(ctx, localConfigFilepath, client)
 	return options, nil
 }
 
@@ -89,14 +93,14 @@ func dnsttConfigValidator() func([]byte) error {
 	}
 }
 
-func DNSTTConfigUpdate(ctx context.Context, localConfigPath, configURL string, httpClient *http.Client, pollInterval time.Duration) {
-	if configURL == "" {
+func dnsttConfigUpdate(ctx context.Context, localConfigPath string, httpClient *http.Client) {
+	if dnsttConfigURL == "" {
 		slog.Debug("No config URL provided -- not updating dnstt configuration")
 		return
 	}
 
-	slog.Debug("Updating dnstt configuration", slog.String("url", configURL))
-	source := keepcurrent.FromWebWithClient(configURL, httpClient)
+	slog.Debug("Updating dnstt configuration", slog.String("url", dnsttConfigURL))
+	source := keepcurrent.FromWebWithClient(dnsttConfigURL, httpClient)
 	chDB := make(chan []byte)
 	closeChan := sync.OnceFunc(func() {
 		close(chDB)
@@ -146,7 +150,7 @@ func onNewDNSTTConfig(configFilepath string, gzippedYML []byte) error {
 	return os.WriteFile(configFilepath, gzippedYML, 0644)
 }
 
-func ParseDNSTTConfigs(gzipyml []byte) ([]kindling.Option, error) {
+func parseDNSTTConfigs(gzipyml []byte) ([]kindling.Option, error) {
 	cfgs, err := processYaml(gzipyml)
 	if err != nil {
 		return nil, err
