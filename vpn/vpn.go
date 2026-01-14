@@ -47,7 +47,7 @@ const (
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
-func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
+func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"quick_connect",
@@ -56,9 +56,9 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 
 	switch group {
 	case servers.SGLantern:
-		return traces.RecordError(ctx, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
+		return traces.RecordError(ctx, ConnectToServer(servers.SGLantern, autoLanternTag, nil))
 	case servers.SGUser:
-		return traces.RecordError(ctx, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
+		return traces.RecordError(ctx, ConnectToServer(servers.SGUser, autoUserTag, nil))
 	case autoAllTag, "all", "":
 		if isOpen(ctx) {
 			if err := ipc.SetClashMode(ctx, autoAllTag); err != nil {
@@ -67,7 +67,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 			return nil
 		}
 
-		return traces.RecordError(ctx, connect(autoAllTag, "", platIfce))
+		return traces.RecordError(ctx, connect(autoAllTag, ""))
 	default:
 		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
 	}
@@ -75,7 +75,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
-func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"connect_to_server",
@@ -95,27 +95,29 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 	if isOpen(ctx) {
 		return traces.RecordError(ctx, selectServer(ctx, group, tag))
 	}
-	return traces.RecordError(ctx, connect(group, tag, platIfce))
+	return traces.RecordError(ctx, connect(group, tag))
 }
 
-func connect(group, tag string, platIfce libbox.PlatformInterface) error {
-	path := settings.GetString(settings.DataPathKey)
-	ipcSvr, err := InitIPC(path, func() libbox.PlatformInterface { return platIfce })
-	if err != nil {
-		return fmt.Errorf("failed to initialize IPC: %w", err)
+func connect(group, tag string) error {
+	ipcMu.Lock()
+	if ipcServer == nil {
+		ipcMu.Unlock()
+		return fmt.Errorf("IPC server not initialized")
 	}
+	ipcSvr := ipcServer
+	ipcMu.Unlock()
 	return ipcSvr.StartService(context.Background(), group, tag)
 }
 
 // Reconnect attempts to reconnect to the last connected server.
-func Reconnect(platIfce libbox.PlatformInterface) error {
+func Reconnect() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
 	defer span.End()
 
 	if isOpen(ctx) {
 		return traces.RecordError(ctx, fmt.Errorf("tunnel is already open"))
 	}
-	return traces.RecordError(ctx, connect("", "", platIfce))
+	return traces.RecordError(ctx, connect("", ""))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.

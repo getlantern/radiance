@@ -2,7 +2,6 @@
 package common
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,7 +9,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -26,15 +25,8 @@ import (
 )
 
 var (
-	initMutex   sync.Mutex
-	initialized bool
+	initialized atomic.Bool
 )
-
-func init() {
-	if v, _ := env.Get[bool](env.Testing); v {
-		slog.SetLogLoggerLevel(internal.Disable)
-	}
-}
 
 // Prod returns true if the application is running in production environment.
 // Treating ENV == "" as production is intentional: if RADIANCE_ENV is unset,
@@ -54,30 +46,62 @@ func Dev() bool {
 // for data and logs, initializing the logger, and setting up reporting.
 func Init(dataDir, logDir, logLevel string) error {
 	slog.Info("Initializing common package")
-	initMutex.Lock()
-	defer initMutex.Unlock()
-	if initialized {
+	return initialize(dataDir, logDir, logLevel, false)
+}
+
+// InitReadOnly locates the settings file in provided directory and initializes the common components
+// in read-only mode using the necessary settings from the settings file. This is used in contexts
+// where settings should not be modified, such as in the IPC server or other auxiliary processes.
+func InitReadOnly(dataDir, logDir, logLevel string) error {
+	slog.Info("Initializing in read-only")
+	return initialize(dataDir, logDir, logLevel, true)
+}
+
+func initialize(dataDir, logDir, logLevel string, readonly bool) error {
+	if initialized.Swap(true) {
 		return nil
 	}
 
 	reporting.Init(Version)
-	err := setupDirectories(dataDir, logDir)
+	data, logs, err := setupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
-
-	err = initLogger(filepath.Join(settings.GetString(settings.LogPathKey), LogFileName), logLevel)
+	if readonly {
+		// in read-only mode, favor settings from the settings file if given parameters are empty
+		if logDir == "" && settings.GetString(settings.LogPathKey) != "" {
+			logs = settings.GetString(settings.LogPathKey)
+		}
+		if settings.GetString(settings.LogLevelKey) != "" {
+			logLevel = settings.GetString(settings.LogLevelKey)
+		}
+	}
+	err = initLogger(filepath.Join(logs, LogFileName), logLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
-
-	slog.Info("Using data and log directories", "dataDir", settings.GetString(settings.DataPathKey), "logDir", settings.GetString(settings.LogPathKey))
-
 	if !IsWindows() {
-		ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
+		ipc.SetSocketPath(data)
 	}
 
+	if readonly {
+		settings.SetReadOnly(true)
+		if err := settings.StartWatching(); err != nil {
+			return fmt.Errorf("start watching settings file: %w", err)
+		}
+	} else {
+		settings.Set(settings.DataPathKey, data)
+		settings.Set(settings.LogPathKey, logs)
+		settings.Set(settings.LogLevelKey, logLevel)
+	}
+
+	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
+	createCrashReporter()
+	return nil
+}
+
+func createCrashReporter() {
 	crashFilePath := filepath.Join(settings.GetString(settings.LogPathKey), "lantern_crash.log")
 	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -87,19 +111,6 @@ func Init(dataDir, logDir, logLevel string) error {
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
 	}
-
-	initialized = true
-	return nil
-}
-
-func Close(ctx context.Context) error {
-	initMutex.Lock()
-	defer initMutex.Unlock()
-	if !initialized {
-		return nil
-	}
-
-	return nil
 }
 
 // initLogger reconfigures the default slog.Logger to write to a file and stdout and sets the log level.
@@ -210,7 +221,6 @@ func initLogger(logPath, level string) error {
 			return a
 		},
 	}))
-	slog.SetDefault(logger)
 	if !loggingToStdOut {
 		if IsWindows() {
 			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
@@ -220,6 +230,7 @@ func initLogger(logPath, level string) error {
 	} else {
 		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
 	}
+	slog.SetDefault(logger)
 	return nil
 }
 
@@ -232,8 +243,8 @@ func isWindowsProd() bool {
 
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do
 // not exist. If data or logs are the empty string, it will use the user's config directory retrieved
-// from the OS. The resulting paths are stored in [dataPath] and [logPath] respectively.
-func setupDirectories(data, logs string) error {
+// from the OS.
+func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 	if d, ok := env.Get[string](env.DataPath); ok {
 		data = d
 	} else if data == "" {
@@ -248,14 +259,13 @@ func setupDirectories(data, logs string) error {
 	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
 		if err := os.MkdirAll(path, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", path, err)
+			return data, logs, fmt.Errorf("failed to create directory %s: %w", path, err)
 		}
 	}
 	if err := settings.InitSettings(data); err != nil {
-		return fmt.Errorf("failed to initialize settings: %w", err)
+		return data, logs, fmt.Errorf("failed to initialize settings: %w", err)
 	}
-	settings.Set(settings.LogPathKey, logs)
-	return nil
+	return data, logs, nil
 }
 
 func outDir(subdir string) string {
