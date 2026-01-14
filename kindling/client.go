@@ -13,8 +13,6 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
 )
@@ -88,22 +86,6 @@ func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
 
 	k = kindling.NewKindling("radiance", defaultOptions...)
 	return nil
-}
-
-// KindlingUpdater start event subscriptions that might need to rebuild kindling
-func KindlingUpdater() {
-	events.Subscribe(func(e dnstt.DNSTTUpdateEvent) {
-		mutexOptions.Lock()
-		defer mutexOptions.Unlock()
-
-		options, err := dnstt.ParseDNSTTConfigs(e.YML)
-		if err != nil {
-			slog.Warn("could not update dnstt options", slog.Any("error", err))
-			return
-		}
-		// replace dnstt renewable options once there's new options available
-		k = kindling.NewKindling("radiance", append(defaultOptions, options...)...)
-	})
 }
 
 type slogWriter struct {
