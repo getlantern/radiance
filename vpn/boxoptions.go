@@ -390,6 +390,10 @@ func smartRoutingOptions(smartRules []lcommon.SmartRoutingRule) ([]O.Outbound, [
 	rulesets := []O.RuleSet{}
 	for _, sr := range smartRules {
 		tags, rs := toSBRuleSet(sr.RuleSets)
+		detour := sr.Category
+		if len(sr.Outbounds) == 1 && sr.Outbounds[0] == "direct" {
+			detour = "direct"
+		}
 		rule := O.Rule{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
@@ -399,23 +403,25 @@ func smartRoutingOptions(smartRules []lcommon.SmartRoutingRule) ([]O.Outbound, [
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
 					RouteOptions: O.RouteActionOptions{
-						Outbound: sr.Category,
+						Outbound: detour,
 					},
 				},
 			},
 		}
 		rules = append(rules, rule)
 		rulesets = append(rulesets, rs...)
-		outbounds = append(outbounds, O.Outbound{
-			Type: C.TypeURLTest,
-			Tag:  "sr-" + sr.Category,
-			Options: &O.URLTestOutboundOptions{
-				Outbounds:   sr.Outbounds,
-				URL:         "https://google.com/generate_204",
-				Interval:    badoption.Duration(urlTestInterval),
-				IdleTimeout: badoption.Duration(urlTestIdleTimeout),
-			},
-		})
+		if detour != "direct" {
+			outbounds = append(outbounds, O.Outbound{
+				Type: C.TypeURLTest,
+				Tag:  "sr-" + sr.Category,
+				Options: &O.URLTestOutboundOptions{
+					Outbounds:   sr.Outbounds,
+					URL:         "https://google.com/generate_204",
+					Interval:    badoption.Duration(urlTestInterval),
+					IdleTimeout: badoption.Duration(urlTestIdleTimeout),
+				},
+			})
+		}
 	}
 	return outbounds, rules, rulesets
 }
