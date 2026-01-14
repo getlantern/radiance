@@ -17,6 +17,8 @@ import (
 //go:embed amp_public_key.pem
 var ampPublicKey string
 
+const ampConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main/kindling/fronted/amp.yml.gz"
+
 // NewAMPClient creates a new AMP (Accelerated Mobile Pages) client for domain fronting.
 // It initializes the client with the provided context, log writer, and public key for verification.
 // The client automatically fetches and updates its configuration from a remote URL in the background.
@@ -26,8 +28,7 @@ var ampPublicKey string
 //
 // Returns an initialized amp.Client or an error if setup fails.
 func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) (amp.Client, error) {
-	configURL := "https://raw.githubusercontent.com/getlantern/radiance/main/fronted/amp.yml.gz"
-	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, configURL)
+	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, ampConfigURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
 	}
@@ -57,7 +58,7 @@ func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) 
 			},
 		}),
 		amp.WithConfigStoragePath(storagePath),
-		amp.WithConfigURL(configURL),
+		amp.WithConfigURL(ampConfigURL),
 		amp.WithHTTPClient(httpClient),
 		amp.WithPollInterval(12*time.Hour),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
