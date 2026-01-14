@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -115,7 +116,7 @@ dnsttConfigs:
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			DNSTTConfigUpdate(ctx, url, client, 1*time.Minute)
+			DNSTTConfigUpdate(ctx, filepath.Join(t.TempDir(), "dnstt.yml.gz"), url, client, 1*time.Minute)
 			if tt.expectUpdate {
 				assert.Eventually(t, func() bool {
 					_, ok := <-updated
