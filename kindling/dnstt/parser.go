@@ -54,7 +54,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, client *http.
 			}
 			return opts, nil
 		} else {
-			slog.Warn("failed to read dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
+			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
 	dnsttConfigUpdate(ctx, localConfigFilepath, client)
