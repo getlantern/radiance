@@ -28,7 +28,7 @@ const ampConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main
 //
 // Returns an initialized amp.Client or an error if setup fails.
 func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) (amp.Client, error) {
-	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, ampConfigURL)
+	httpClient, err := newHTTPClientWithSmartTransport(logWriter, ampConfigURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
 	}
