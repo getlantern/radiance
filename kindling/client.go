@@ -29,10 +29,11 @@ func HTTPClient() *http.Client {
 	return httpClient
 }
 
-func Close() {
+func Close(_ context.Context) error {
 	if stopUpdater != nil {
 		stopUpdater()
 	}
+	return nil
 }
 
 // SetKindling sets the kindling method used for building the HTTP client
