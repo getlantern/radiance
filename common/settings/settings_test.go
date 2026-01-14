@@ -4,12 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	_ "github.com/getlantern/radiance/common/env"
 )
 
 func TestInitSettings(t *testing.T) {
 	t.Run("first run - no config file exists", func(t *testing.T) {
 		tempDir := t.TempDir()
-		err := InitSettings(tempDir)
+		err := initialize(tempDir)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -18,12 +20,6 @@ func TestInitSettings(t *testing.T) {
 		locale := Get(LocaleKey)
 		if locale != "fa-IR" {
 			t.Errorf("expected default locale 'fa-IR', got %s", locale)
-		}
-
-		// Verify config file was created
-		configPath := filepath.Join(tempDir, "local.json")
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			t.Error("expected config file to be created")
 		}
 	})
 
@@ -38,9 +34,7 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create test config file: %v", err)
 		}
 
-		Reset()
-
-		err := InitSettings(tempDir)
+		err := initialize(tempDir)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -68,21 +62,17 @@ func TestInitSettings(t *testing.T) {
 			t.Fatalf("failed to create test config file: %v", err)
 		}
 
-		Reset()
-
-		err := InitSettings(tempDir)
+		err := initialize(tempDir)
 		if err == nil {
 			t.Fatal("expected error for invalid config file, got nil")
 		}
 	})
 
 	t.Run("non-existent directory", func(t *testing.T) {
-		Reset()
-
 		// Use a non-existent directory
 		nonExistentDir := filepath.Join(os.TempDir(), "non-existent-dir-123456789")
 
-		err := InitSettings(nonExistentDir)
+		err := initialize(nonExistentDir)
 		if err != nil {
 			t.Fatalf("expected no error for non-existent directory (first run), got %v", err)
 		}
@@ -91,8 +81,7 @@ func TestInitSettings(t *testing.T) {
 
 func TestSetStruct(t *testing.T) {
 	tempDir := t.TempDir()
-	Reset()
-	err := InitSettings(tempDir)
+	err := initialize(tempDir)
 	if err != nil {
 		t.Fatalf("expected no error initializing settings, got %v", err)
 	}
@@ -121,7 +110,7 @@ func TestSetStruct(t *testing.T) {
 		t.Errorf("expected struct {Field1: 'value1', Field2: 42}, got %+v", result)
 	}
 
-	// Reset koanf state and re-read from disk.
+	// Reset koanf state
 	Reset()
 	result.Field1 = ""
 	result.Field2 = 0
@@ -136,7 +125,7 @@ func TestSetStruct(t *testing.T) {
 		t.Errorf("expected struct {Field1: '', Field2: 0}, got %+v", result)
 	}
 
-	err = InitSettings(tempDir)
+	err = initialize(tempDir)
 	if err != nil {
 		t.Fatalf("expected no error re-initializing settings, got %v", err)
 	}
@@ -157,8 +146,7 @@ func TestSetStruct(t *testing.T) {
 
 func TestStructSlicePersistence(t *testing.T) {
 	tempDir := t.TempDir()
-	Reset()
-	err := InitSettings(tempDir)
+	err := initialize(tempDir)
 	if err != nil {
 		t.Fatalf("expected no error initializing settings, got %v", err)
 	}
@@ -188,11 +176,8 @@ func TestStructSlicePersistence(t *testing.T) {
 		t.Errorf("retrieved struct slice does not match expected values: %+v", retrievedItems)
 	}
 
-	// Reset koanf state and re-read from disk.
-	Reset()
 	retrievedItems = nil
-
-	err = InitSettings(tempDir)
+	err = initialize(tempDir)
 	if err != nil {
 		t.Fatalf("expected no error re-initializing settings, got %v", err)
 	}

@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/sagernet/sing-box/experimental/clashapi"
+	"github.com/sagernet/sing-box/experimental/libbox"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn/ipc"
-	"github.com/sagernet/sing-box/experimental/clashapi"
-	"github.com/sagernet/sing-box/experimental/libbox"
 )
 
 var platIfceProvider func() libbox.PlatformInterface
@@ -23,36 +24,25 @@ func (closedSvc) ClashServer() *clashapi.Server { return nil }
 func (closedSvc) Close() error                  { return nil }
 
 // InitIPC starts the long-lived IPC server and hooks it up to establishConnection
-func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
+func InitIPC(settingsFileDir string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
 	if ipcServer != nil {
 		// already started
 		return ipcServer, nil
 	}
 	platIfceProvider = provider
-	if !common.IsWindows() && basePath != "" {
-		ipc.SetSocketPath(basePath)
+	if err := common.InitReadOnly(settingsFileDir, "", "debug"); err != nil {
+		slog.Error("Failed to initialize common package", "error", err)
+		return nil, fmt.Errorf("initialize common package: %w", err)
 	}
-
 	ipcServer = ipc.NewServer(closedSvc{})
 
-	return ipcServer, ipcServer.Start(basePath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
-		path := basePath
-		if path == "" {
-			path = settings.GetString(settings.DataPathKey)
-		}
-		// Initialize common package if not already done.
-		if path == "" {
-			if err := common.Init("", "", "debug"); err != nil {
-				slog.Error("Failed to initialize common package", "error", err)
-				return nil, fmt.Errorf("initialize common package: %w", err)
-			}
-		}
-		path = settings.GetString(settings.DataPathKey)
-		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", path)
+	dataPath := settings.GetString(settings.DataPathKey)
+	return ipcServer, ipcServer.Start(settingsFileDir, func(ctx context.Context, group, tag string) (ipc.Service, error) {
+		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", dataPath)
 
-		_ = newSplitTunnel(path)
+		_ = newSplitTunnel(dataPath)
 
-		opts, err := buildOptions(group, path)
+		opts, err := buildOptions(group, dataPath)
 		if err != nil {
 			return nil, fmt.Errorf("build options: %w", err)
 		}
@@ -62,7 +52,7 @@ func InitIPC(basePath string, provider func() libbox.PlatformInterface) (*ipc.Se
 			pi = platIfceProvider()
 		}
 
-		if err := establishConnection(group, tag, opts, path, pi); err != nil {
+		if err := establishConnection(group, tag, opts, dataPath, pi); err != nil {
 			return nil, err
 		}
 		return tInstance, nil
