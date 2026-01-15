@@ -343,14 +343,16 @@ func (ch *ConfigHandler) loadConfig() error {
 		return fmt.Errorf("reading config file: %w", err)
 	}
 	ch.config.Store(cfg)
-	emit(nil, cfg)
+	if cfg != nil {
+		emit(nil, cfg)
+	}
 	return nil
 }
 
 func Load(path string) (*Config, error) {
 	buf, err := atomicfile.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, err // No config file yet
+		return nil, nil // No config file yet
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
