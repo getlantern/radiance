@@ -270,12 +270,14 @@ func buildOptions(group, path string) (O.Options, error) {
 
 	// add smart routing and ad block rules
 	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
+		slog.Debug("Adding smart-routing rules")
 		outbounds, rules, rulesets := smartRoutingOptions(cfg.SmartRouting)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
 	if settings.GetBool(settings.AdBlockKey) && len(cfg.AdBlock) > 0 {
+		slog.Debug("Adding ad-block rules")
 		rule, rulesets := adBlockRule(cfg.AdBlock)
 		opts.Route.Rules = append(opts.Route.Rules, rule)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
