@@ -350,7 +350,7 @@ func (ch *ConfigHandler) loadConfig() error {
 func Load(path string) (*Config, error) {
 	buf, err := atomicfile.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil // No config file yet
+		return nil, err // No config file yet
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)

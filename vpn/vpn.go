@@ -324,7 +324,7 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(10 * time.Second):
 				curr, err := AutoServerSelections()
 				if err != nil {
 					continue
