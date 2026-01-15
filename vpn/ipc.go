@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
-	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/radiance/common"
@@ -13,35 +13,34 @@ import (
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
-var platIfceProvider func() libbox.PlatformInterface
+var (
+	platIfceProvider func() libbox.PlatformInterface
 
-// closedSvc is a stub service used while the tunnel is down
-type closedSvc struct{}
-
-func (closedSvc) Ctx() context.Context          { return context.Background() }
-func (closedSvc) Status() string                { return ipc.StatusClosed }
-func (closedSvc) ClashServer() *clashapi.Server { return nil }
-func (closedSvc) Close() error                  { return nil }
+	ipcServer *ipc.Server
+	ipcMu     sync.Mutex
+)
 
 // InitIPC starts the long-lived IPC server and hooks it up to establishConnection
-func InitIPC(settingsFileDir string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
+func InitIPC(dataPath, logPath, logLevel string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
+	ipcMu.Lock()
+	defer ipcMu.Unlock()
 	if ipcServer != nil {
 		// already started
 		return ipcServer, nil
 	}
-	platIfceProvider = provider
-	if err := common.InitReadOnly(settingsFileDir, "", "debug"); err != nil {
-		slog.Error("Failed to initialize common package", "error", err)
+
+	if err := common.InitReadOnly(dataPath, logPath, logLevel); err != nil {
 		return nil, fmt.Errorf("initialize common package: %w", err)
 	}
-	ipcServer = ipc.NewServer(closedSvc{})
+	if dataPath == "" {
+		dataPath = settings.GetString(settings.DataPathKey)
+	}
 
-	dataPath := settings.GetString(settings.DataPathKey)
-	return ipcServer, ipcServer.Start(settingsFileDir, func(ctx context.Context, group, tag string) (ipc.Service, error) {
+	platIfceProvider = provider
+	ipcServer = ipc.NewServer()
+	return ipcServer, ipcServer.Start(dataPath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
 		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", dataPath)
-
 		_ = newSplitTunnel(dataPath)
-
 		opts, err := buildOptions(group, dataPath)
 		if err != nil {
 			return nil, fmt.Errorf("build options: %w", err)

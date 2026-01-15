@@ -139,13 +139,13 @@ func TestAutoServerSelections(t *testing.T) {
 		ctx:    ctx,
 		status: ipc.StatusRunning,
 	}
-	ipcServer = ipc.NewServer(m)
+	ipcServer = ipc.NewServer()
 	require.NoError(t, ipcServer.Start(settings.GetString(settings.DataPathKey), func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
+	ipcServer.SetService(m)
 
 	got, err := AutoServerSelections()
 	require.NoError(t, err, "should not error when getting auto server selections")
 	require.Equal(t, want, got, "selections should match")
-	t.Logf("got auto selections: %+v", got)
 }
 
 type mockOutMgr struct {
@@ -219,14 +219,19 @@ func setupVpnTest(t *testing.T) *mockService {
 		status: ipc.StatusRunning,
 		clash:  clashServer.(*clashapi.Server),
 	}
-	ipcServer = ipc.NewServer(m)
+	ipcServer = ipc.NewServer()
 	t.Cleanup(func() {
 		lb.Close()
 		ipcServer.Close()
 		cacheFile.Close()
 		clashServer.Close()
 	})
-	require.NoError(t, ipcServer.Start(path, func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
+	require.NoError(t, ipcServer.Start(path,
+		func(ctx context.Context, group, tag string) (ipc.Service, error) {
+			return m, nil
+		},
+	))
+	ipcServer.SetService(m)
 
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))

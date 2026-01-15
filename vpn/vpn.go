@@ -47,7 +47,7 @@ const (
 // QuickConnect automatically connects to the best available server in the specified group. Valid
 // groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
 // the empty string will connect to the best available server across all groups.
-func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
+func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"quick_connect",
@@ -56,9 +56,9 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 
 	switch group {
 	case servers.SGLantern:
-		return traces.RecordError(ctx, ConnectToServer(servers.SGLantern, autoLanternTag, platIfce))
+		return traces.RecordError(ctx, ConnectToServer(servers.SGLantern, autoLanternTag, nil))
 	case servers.SGUser:
-		return traces.RecordError(ctx, ConnectToServer(servers.SGUser, autoUserTag, platIfce))
+		return traces.RecordError(ctx, ConnectToServer(servers.SGUser, autoUserTag, nil))
 	case autoAllTag, "all", "":
 		if isOpen(ctx) {
 			if err := ipc.SetClashMode(ctx, autoAllTag); err != nil {
@@ -67,7 +67,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 			return nil
 		}
 
-		return traces.RecordError(ctx, connect(autoAllTag, "", platIfce))
+		return traces.RecordError(ctx, connect(autoAllTag, ""))
 	default:
 		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
 	}
@@ -75,7 +75,7 @@ func QuickConnect(group string, platIfce libbox.PlatformInterface) (err error) {
 
 // ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
 // [servers.SGLantern] and [servers.SGUser].
-func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error {
+func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"connect_to_server",
@@ -95,31 +95,29 @@ func ConnectToServer(group, tag string, platIfce libbox.PlatformInterface) error
 	if isOpen(ctx) {
 		return traces.RecordError(ctx, selectServer(ctx, group, tag))
 	}
-	return traces.RecordError(ctx, connect(group, tag, platIfce))
+	return traces.RecordError(ctx, connect(group, tag))
 }
 
-func connect(group, tag string, platIfce libbox.PlatformInterface) error {
-	path := settings.GetString(settings.DataPathKey)
-	_ = newSplitTunnel(path) // ensure split tunnel rule file exists to prevent sing-box from complaining
-	opts, err := buildOptions(group, path)
-	if err != nil {
-		return fmt.Errorf("failed to build options: %w", err)
+func connect(group, tag string) error {
+	ipcMu.Lock()
+	if ipcServer == nil {
+		ipcMu.Unlock()
+		return fmt.Errorf("IPC server not initialized")
 	}
-	if err := establishConnection(group, tag, opts, path, platIfce); err != nil {
-		return fmt.Errorf("failed to open tunnel: %w", err)
-	}
-	return nil
+	ipcSvr := ipcServer
+	ipcMu.Unlock()
+	return ipcSvr.StartService(context.Background(), group, tag)
 }
 
 // Reconnect attempts to reconnect to the last connected server.
-func Reconnect(platIfce libbox.PlatformInterface) error {
+func Reconnect() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
 	defer span.End()
 
 	if isOpen(ctx) {
 		return traces.RecordError(ctx, fmt.Errorf("tunnel is already open"))
 	}
-	return traces.RecordError(ctx, connect("", "", platIfce))
+	return traces.RecordError(ctx, connect("", ""))
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -326,7 +324,7 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Second):
+			case <-time.After(10 * time.Second):
 				curr, err := AutoServerSelections()
 				if err != nil {
 					continue
@@ -375,10 +373,11 @@ func preTest(path string) (map[string]uint16, error) {
 
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
-	cfgOpts, err := loadConfigOptions(confPath)
+	cfg, err := loadConfig(confPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config options: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
 	userOpts, err := loadUserOptions(path)
@@ -471,6 +470,48 @@ func loadURLTestHistory(storage *urltest.HistoryStorage, path string) error {
 	}
 	for tag, result := range history {
 		storage.StoreURLTestHistory(tag, result)
+	}
+	return nil
+}
+
+func SmartRoutingEnabled() bool {
+	return settings.GetBool(settings.SmartRoutingKey)
+}
+
+func SetSmartRouting(enable bool) error {
+	if SmartRoutingEnabled() == enable {
+		return nil
+	}
+	if err := settings.Set(settings.SmartRoutingKey, enable); err != nil {
+		return err
+	}
+	slog.Info("Updated Smart-Routing", "enabled", enable)
+	return restartTunnel()
+}
+
+func AdBlockEnabled() bool {
+	return settings.GetBool(settings.AdBlockKey)
+}
+
+func SetAdBlock(enable bool) error {
+	if AdBlockEnabled() == enable {
+		return nil
+	}
+	if err := settings.Set(settings.AdBlockKey, enable); err != nil {
+		return err
+	}
+	slog.Info("Updated Ad-Block", "enabled", enable)
+	return restartTunnel()
+}
+
+func restartTunnel() error {
+	ctx := context.Background()
+	if !isOpen(ctx) {
+		return nil
+	}
+	slog.Info("Restarting tunnel")
+	if err := ipc.RestartService(ctx); err != nil {
+		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 	return nil
 }

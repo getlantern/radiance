@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -337,24 +338,33 @@ func (ch *ConfigHandler) isClosed() bool {
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
 	slog.Debug("reading config file")
-	buf, err := atomicfile.ReadFile(ch.configPath)
-	slog.Debug("config file read")
-	if os.IsNotExist(err) { // no config file
-		return nil
-	}
+	cfg, err := Load(ch.configPath)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
-	cfg, err := ch.unmarshalConfig(buf)
-	if err != nil {
-		return fmt.Errorf("parsing config: %w", err)
-	}
 	ch.config.Store(cfg)
-	emit(nil, cfg)
+	if cfg != nil {
+		emit(nil, cfg)
+	}
 	return nil
 }
 
-func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
+func Load(path string) (*Config, error) {
+	buf, err := atomicfile.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // No config file yet
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+	cfg, err := unmarshalConfig(buf)
+	if err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	return cfg, nil
+}
+
+func unmarshalConfig(data []byte) (*Config, error) {
 	type T struct {
 		ConfigResponse    json.RawMessage
 		PreferredLocation C.ServerLocation

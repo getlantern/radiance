@@ -67,19 +67,28 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
 	}
+	if readonly {
+		// in read-only mode, favor settings from the settings file if given parameters are empty
+		if logDir == "" && settings.GetString(settings.LogPathKey) != "" {
+			logs = settings.GetString(settings.LogPathKey)
+		}
+		if settings.GetString(settings.LogLevelKey) != "" {
+			logLevel = settings.GetString(settings.LogLevelKey)
+		}
+	}
 	err = initLogger(filepath.Join(logs, LogFileName), logLevel)
 	if err != nil {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
+	}
+	if !IsWindows() {
+		ipc.SetSocketPath(data)
 	}
 
 	if readonly {
 		settings.SetReadOnly(true)
 		if err := settings.StartWatching(); err != nil {
 			return fmt.Errorf("start watching settings file: %w", err)
-		}
-		if !IsWindows() {
-			ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
 		}
 	} else {
 		settings.Set(settings.DataPathKey, data)
