@@ -1,4 +1,5 @@
-//go:build +integration
+//go:build integration
+// +build integration
 
 package dnstt
 
@@ -9,10 +10,15 @@ import (
 	"testing"
 	"time"
 
+	_ "embed"
+
 	"github.com/getlantern/dnstt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+//go:embed dnstt.yml.gz
+var embeddedConfig []byte
 
 // TestEachDNSConfig load the dnstt.yml.gz config in memory
 // create a DNS tunnel and try to fetch a request for each one
