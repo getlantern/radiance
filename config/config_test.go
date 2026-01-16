@@ -55,7 +55,6 @@ func TestGetConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
 		configPath: configPath,
-		config:     atomic.Value{},
 	}
 
 	// Test case: No config set
@@ -94,7 +93,6 @@ func TestSetPreferredServerLocation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		configPath: configPath,
-		config:     atomic.Value{},
 		ftr:        newFetcher("en-US", nil),
 		ctx:        ctx,
 		cancel:     cancel,
@@ -141,7 +139,6 @@ func TestHandlerFetchConfig(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
 		configPath:        configPath,
-		config:            atomic.Value{},
 		preferredLocation: atomic.Pointer[C.ServerLocation]{},
 		ftr:               mockFetcher,
 		wgKeyPath:         filepath.Join(tempDir, "wg.key"),

@@ -42,17 +42,17 @@ import (
 var (
 	tInstance *tunnel
 	tAccess   sync.Mutex
-
-	ipcServer *ipc.Server
 )
 
 type tunnel struct {
-	ctx         context.Context
-	lbService   *libbox.BoxService
-	cacheFile   adapter.CacheFile
-	clashServer *clashapi.Server
-	logFactory  sblog.ObservableFactory
+	ctx          context.Context
+	platformIfce libbox.PlatformInterface
+	lbService    *libbox.BoxService
+	cacheFile    adapter.CacheFile
+	clashServer  *clashapi.Server
+	logFactory   sblog.ObservableFactory
 
+	dataPath       string
 	svrFileWatcher *internal.FileWatcher
 	reloadAccess   sync.Mutex
 	// optsMap is a map of current outbound/endpoint options JSON, used to deduplicate on reload
@@ -64,6 +64,7 @@ type tunnel struct {
 	status  atomic.Value
 	cancel  context.CancelFunc
 	closers []io.Closer
+	started atomic.Bool
 }
 
 // establishConnection initializes and starts the VPN tunnel with the provided options and platform interface.
@@ -77,11 +78,26 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 
 	slog.Info("Establishing VPN tunnel", "group", group, "tag", tag)
 
-	t := &tunnel{}
+	t := &tunnel{
+		platformIfce: platIfce,
+		dataPath:     dataPath,
+	}
+	if err := t.start(group, tag, opts); err != nil {
+		return fmt.Errorf("starting tunnel: %w", err)
+	}
+	tInstance = t
+
+	return nil
+}
+
+func (t *tunnel) start(group, tag string, opts O.Options) error {
+	if t.started.Swap(true) {
+		return errors.New("tunnel already started")
+	}
 	t.status.Store(ipc.StatusInitializing)
 
 	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
-	if err := t.init(opts, dataPath, platIfce); err != nil {
+	if err := t.init(opts); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
@@ -94,6 +110,7 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	}
 	t.closers = append(t.closers, t.cacheFile)
 
+	var err error
 	if group == "" { // group is empty, connect to last selected server
 		slog.Debug("Connecting to last selected server")
 		err = t.connect()
@@ -106,29 +123,11 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		return err
 	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
-
-	tInstance = t
 	t.status.Store(ipc.StatusRunning)
-	// If the IPC server is already running, make sure it points to the live tunnel
-	if ipcServer != nil {
-		ipcServer.SetService(t)
-		return nil
-	}
-	// fallback: start IPC server here for platforms that don't call InitIPC yet
-	isvr := ipc.NewServer(t)
-
-	// We pass nil as the start function to indicate this platform does not support starting the service via IPC.
-	if err := isvr.Start(dataPath, nil); err != nil {
-		slog.Error("Failed to start IPC server", "error", err)
-		t.close()
-		return fmt.Errorf("starting IPC server: %w", err)
-	}
-	ipcServer = isvr
-	slog.Debug("IPC server started")
 	return nil
 }
 
-func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
+func (t *tunnel) init(opts O.Options) error {
 	slog.Log(nil, internal.LevelTrace, "Initializing tunnel")
 
 	cfg, err := json.MarshalContext(t.ctx, opts)
@@ -137,6 +136,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	}
 
 	// setup libbox service
+	dataPath := t.dataPath
 	setupOpts := &libbox.SetupOptions{
 		BasePath: dataPath,
 		TempPath: filepath.Join(dataPath, "temp"),
@@ -165,7 +165,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	t.cacheFile = cacheFile
 
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
-	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
+	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), t.platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
@@ -335,6 +335,30 @@ func (t *tunnel) close() error {
 	}
 	slog.Debug("Tunnel closed")
 	return err
+}
+
+func (t *tunnel) Restart() error {
+	tAccess.Lock()
+	defer tAccess.Unlock()
+	if t.status.Swap(ipc.StatusClosed) == ipc.StatusClosed {
+		return nil
+	}
+	group := t.clashServer.Mode()
+	tag := t.cacheFile.LoadSelected(group)
+
+	slog.Info("Restarting tunnel")
+	if err := t.close(); err != nil {
+		return fmt.Errorf("closing tunnel: %w", err)
+	}
+	*t = tunnel{
+		platformIfce: t.platformIfce,
+		dataPath:     t.dataPath,
+	}
+	opts, err := buildOptions(group, t.dataPath)
+	if err != nil {
+		return fmt.Errorf("building options: %w", err)
+	}
+	return t.start(group, tag, opts)
 }
 
 func (t *tunnel) Ctx() context.Context {

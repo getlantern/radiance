@@ -10,7 +10,7 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
-//replace github.com/getlantern/common => ../common
+// replace github.com/getlantern/common => ../common
 
 // replace github.com/sagernet/sing => ../sing
 
@@ -25,7 +25,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20251223145917-671181028168
+	github.com/getlantern/common v1.2.1-0.20260113231444-c651c79beddf
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
 	github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
@@ -35,6 +35,7 @@ require (
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0

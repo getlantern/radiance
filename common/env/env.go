@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/getlantern/radiance/internal"
 )
 
 type Key = string
@@ -69,6 +71,7 @@ func init() {
 	if testing.Testing() {
 		envVars[Testing] = true
 		envVars[LogLevel] = "DISABLE"
+		slog.SetLogLoggerLevel(internal.Disable)
 	}
 }
 

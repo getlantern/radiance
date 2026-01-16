@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -69,7 +70,7 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config     atomic.Value
+	config     atomic.Pointer[Config]
 	ftr        Fetcher
 	svrManager ServerManager
 
@@ -87,7 +88,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
-		config:        atomic.Value{},
 		fetchDisabled: options.PollInterval <= 0,
 		ctx:           ctx,
 		cancel:        cancel,
@@ -224,7 +224,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
-		cfg := ch.config.Load().(*Config).ConfigResponse
+		cfg := ch.config.Load().ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
 		for k, v := range cfg.OutboundLocations {
 			if v == nil {
@@ -337,24 +337,33 @@ func (ch *ConfigHandler) isClosed() bool {
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
 	slog.Debug("reading config file")
-	buf, err := atomicfile.ReadFile(ch.configPath)
-	slog.Debug("config file read")
-	if os.IsNotExist(err) { // no config file
-		return nil
-	}
+	cfg, err := Load(ch.configPath)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
-	cfg, err := ch.unmarshalConfig(buf)
-	if err != nil {
-		return fmt.Errorf("parsing config: %w", err)
+	if cfg != nil {
+		ch.config.Store(cfg)
+		emit(nil, cfg)
 	}
-	ch.config.Store(cfg)
-	emit(nil, cfg)
 	return nil
 }
 
-func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
+func Load(path string) (*Config, error) {
+	buf, err := atomicfile.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // No config file yet
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+	cfg, err := unmarshalConfig(buf)
+	if err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	return cfg, nil
+}
+
+func unmarshalConfig(data []byte) (*Config, error) {
 	type T struct {
 		ConfigResponse    json.RawMessage
 		PreferredLocation C.ServerLocation
@@ -391,7 +400,7 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("no config yet -- first run?")
 	}
-	return cfg.(*Config), nil
+	return cfg, nil
 }
 
 func (ch *ConfigHandler) setConfig(cfg *Config) error {
