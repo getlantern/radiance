@@ -10,15 +10,10 @@ import (
 	"testing"
 	"time"
 
-	_ "embed"
-
 	"github.com/getlantern/dnstt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-//go:embed dnstt.yml.gz
-var embeddedConfig []byte
 
 // TestEachDNSConfig load the dnstt.yml.gz config in memory
 // create a DNS tunnel and try to fetch a request for each one
@@ -65,6 +60,7 @@ func TestEachDNSConfig(t *testing.T) {
 
 			d, err := dnstt.NewDNSTT(opts...)
 			require.NoError(t, err)
+			defer assert.NoError(t, d.Close())
 			rt, err := d.NewRoundTripper(ctx, "")
 			require.NoError(t, err)
 
