@@ -197,6 +197,9 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnstt.DNSTT, error) {
 }
 
 func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() error) {
+	if len(options) == 0 {
+		return []kindling.Option{}, []func() error{}
+	}
 	kindlingOptions := make([]kindling.Option, 0)
 	closeDNSTTTunnel := make([]func() error, 0)
 	for i := 0; i < 5; i++ {
