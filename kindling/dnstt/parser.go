@@ -196,13 +196,25 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnstt.DNSTT, error) {
 	return options, nil
 }
 
+const maxDNSTTOptions = 10
+
 func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() error) {
 	if len(options) == 0 {
 		return []kindling.Option{}, []func() error{}
 	}
 	kindlingOptions := make([]kindling.Option, 0)
 	closeDNSTTTunnel := make([]func() error, 0)
-	for i := 0; i < 5; i++ {
+
+	if len(options) < maxDNSTTOptions {
+		for _, opt := range options {
+			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(opt))
+			closeDNSTTTunnel = append(closeDNSTTTunnel, opt.Close)
+		}
+
+		return kindlingOptions, closeDNSTTTunnel
+	}
+
+	for i := 0; i < maxDNSTTOptions; i++ {
 		randomIndex := rand.Intn(len(options))
 		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(options[randomIndex]))
 		closeDNSTTTunnel = append(closeDNSTTTunnel, options[randomIndex].Close)
