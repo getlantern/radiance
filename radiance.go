@@ -106,12 +106,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	settings.Set(settings.LocaleKey, opts.Locale)
 
 	dataDir := settings.GetString(settings.DataPathKey)
-	kindlingConfigUpdaterCtx, cancel := context.WithCancel(context.Background())
-	kindlingLogger := &slogWriter{Logger: slog.Default()}
-	if err := kindling.NewKindling(kindlingConfigUpdaterCtx, dataDir, kindlingLogger); err != nil {
-		return nil, fmt.Errorf("failed to build kindling: %w", err)
-	}
-
+	kindling.SetKindling(kindling.NewKindling())
 	setUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(dataDir)
 	issueReporter := issue.NewIssueReporter()
@@ -152,10 +147,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	})
 	registerPreStartTest(dataDir)
 	r.confHandler = config.NewConfigHandler(cOpts)
-	r.addShutdownFunc(telemetry.Close, func(context.Context) error {
-		cancel()
-		return nil
-	})
+	r.addShutdownFunc(telemetry.Close, kindling.Close)
 	return r, nil
 }
 

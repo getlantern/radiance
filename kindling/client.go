@@ -2,8 +2,6 @@ package kindling
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -12,91 +10,79 @@ import (
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/kindling/dnstt"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
 )
 
 var (
-	httpClient *http.Client
-	// defaultOptions generally does not change after the first time
-	// or if they change, it's handled internally
-	defaultOptions = make([]kindling.Option, 0)
-	// dnsttRenewableOptions is a list that is overwritten whenever we receive
-	// a new dnstt config and we use that for rebuilding kindling
-	dnsttRenewableOptions = make([]kindling.Option, 0)
-	mutexOptions          sync.Mutex
+	k             kindling.Kindling
+	kindlingMutex sync.Mutex
+	stopUpdater   func()
 )
 
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
-	mutexOptions.Lock()
-	defer mutexOptions.Unlock()
+	if k == nil {
+		SetKindling(NewKindling())
+	}
+	httpClient := k.NewHTTPClient()
+	httpClient.Timeout = common.DefaultHTTPTimeout
+	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
 	return httpClient
 }
 
-// SetHTTPClient set the HTTP client returned by this package when calling
-// `HTTPClient()`. This function is useful for testing purposes.
-func SetHTTPClient(c *http.Client) {
-	mutexOptions.Lock()
-	defer mutexOptions.Unlock()
-	httpClient = c
-}
-
-func newHTTPClient(k kindling.Kindling) {
-	httpClient = k.NewHTTPClient()
-	httpClient.Timeout = common.DefaultHTTPTimeout
-	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
-}
-
-// NewKindling build a kindling client and bootstrap this package
-func NewKindling(ctx context.Context, dataDir string, logger io.Writer) error {
-	mutexOptions.Lock()
-	defer mutexOptions.Unlock()
-
-	if len(defaultOptions) == 0 {
-		f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
-		if err != nil {
-			return fmt.Errorf("failed to create fronted: %w", err)
-		}
-
-		ampClient, err := fronted.NewAMPClient(ctx, logger)
-		if err != nil {
-			return fmt.Errorf("failed to create amp client: %w", err)
-		}
-
-		defaultOptions = append(defaultOptions,
-			kindling.WithPanicListener(reporting.PanicListener),
-			kindling.WithLogWriter(logger),
-			kindling.WithDomainFronting(f),
-			// Most endpoints use df.iantem.io, but for some historical reasons
-			// "pro-server" calls still go to api.getiantem.org.
-			kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-			// Kindling will skip amp transports if the request has a payload larger than 6kb
-			kindling.WithAMPCache(ampClient),
-		)
+// Close stop all concurrent config fetches that can be happening in background
+func Close(_ context.Context) error {
+	if stopUpdater != nil {
+		stopUpdater()
 	}
-
-	newHTTPClient(kindling.NewKindling("radiance", defaultOptions...))
 	return nil
 }
 
-// KindlingUpdater start event subscriptions that might need to rebuild kindling
-func KindlingUpdater() {
-	events.Subscribe(func(e dnstt.DNSTTUpdateEvent) {
-		mutexOptions.Lock()
-		defer mutexOptions.Unlock()
+// SetKindling sets the kindling method used for building the HTTP client
+// This function is useful for testing purposes.
+func SetKindling(a kindling.Kindling) {
+	kindlingMutex.Lock()
+	defer kindlingMutex.Unlock()
+	k = a
+}
 
-		options, err := dnstt.ParseDNSTTConfigs(e.YML)
-		if err != nil {
-			slog.Warn("could not update dnstt options", slog.Any("error", err))
-			return
-		}
-		// replace dnstt renewable options once there's new options available
-		dnsttRenewableOptions = options
+// NewKindling build a kindling client and bootstrap this package
+func NewKindling() kindling.Kindling {
+	dataDir := settings.GetString(settings.DataPathKey)
+	logger := &slogWriter{Logger: slog.Default()}
+	updaterCtx, cancel := context.WithCancel(context.Background())
 
-		// build new http client
-		newHTTPClient(kindling.NewKindling("radiance", append(defaultOptions, dnsttRenewableOptions...)...))
-	})
+	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
+	if err != nil {
+		slog.Error("failed to create fronted client", slog.Any("error", err))
+	}
+
+	ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
+	if err != nil {
+		slog.Error("failed to create amp client", slog.Any("error", err))
+	}
+
+	stopUpdater = cancel
+	return kindling.NewKindling("radiance",
+		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithLogWriter(logger),
+		// Most endpoints use df.iantem.io, but for some historical reasons
+		// "pro-server" calls still go to api.getiantem.org.
+		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
+		kindling.WithDomainFronting(f),
+		// Kindling will skip amp transports if the request has a payload larger than 6kb
+		kindling.WithAMPCache(ampClient),
+	)
+}
+
+type slogWriter struct {
+	*slog.Logger
+}
+
+func (w *slogWriter) Write(p []byte) (n int, err error) {
+	// Convert the byte slice to a string and log it
+	w.Info(string(p))
+	return len(p), nil
 }
