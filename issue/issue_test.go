@@ -54,7 +54,7 @@ func TestSendReport(t *testing.T) {
 	defer srv.Close()
 
 	reporter := &IssueReporter{}
-	kindling.SetHTTPClient(newTestClient(t, srv.URL))
+	kindling.SetKindling(&mockKindling{newTestClient(t, srv.URL)})
 	report := IssueReport{
 		Type:        "Cannot access blocked sites",
 		Description: "Description placeholder-test only",
@@ -130,4 +130,18 @@ func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
 		}
 	}))
 	return ts
+}
+
+type mockKindling struct {
+	c *http.Client
+}
+
+// NewHTTPClient returns a new HTTP client that is configured to use kindling.
+func (m *mockKindling) NewHTTPClient() *http.Client {
+	return m.c
+}
+
+// ReplaceTransport replaces an existing transport RoundTripper generator with the provided one.
+func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
+	panic("not implemented") // TODO: Implement
 }
