@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/getlantern/keepcurrent"
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/kindling/smart"
 	"github.com/goccy/go-yaml"
 )
 
@@ -37,28 +39,42 @@ var localConfigMutex sync.Mutex
 const dnsttConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main/kindling/dnstt/dnstt.yml.gz"
 const pollInterval = 12 * time.Hour
 
-func DNSTTOptions(ctx context.Context, localConfigFilepath string, client *http.Client) ([]kindling.Option, error) {
-	options, err := parseDNSTTConfigs(embeddedConfig)
+// DNSTTOptions load the embedded DNSTT config and return kindling options so
+// it can be used as one of the transport options. If the local config filepath
+// is provided and exists, this config will be loaded and if successfully
+// parsed, will be returned instead of the embedded config.
+func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Writer) ([]kindling.Option, []func() error, error) {
+	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse dnstt embedded config: %w", err)
+		slog.Error("couldn't create http client for fetching dnstt configs", slog.Any("error", err))
+	} else {
+		// starting config updater/fetcher
+		defer dnsttConfigUpdate(ctx, localConfigFilepath, client)
 	}
 
+	// parsing embedded configs and loading options
+	options, err := parseDNSTTConfigs(embeddedConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse dnstt embedded config: %w", err)
+	}
+
+	// if local config is set and exists, parse, load the dnstt config and close the embedded dns tunnels
 	if localConfigFilepath != "" {
 		localConfigMutex.Lock()
 		defer localConfigMutex.Unlock()
 		if config, err := os.ReadFile(localConfigFilepath); err == nil {
 			opts, err := parseDNSTTConfigs(config)
-			if err != nil {
-				slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
-				return options, nil
+			if err == nil {
+				kindlingOptions, closeFuncs := selectDNSTTOptions(opts)
+				return kindlingOptions, closeFuncs, nil
 			}
-			return opts, nil
+			slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
 		} else {
 			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
-	dnsttConfigUpdate(ctx, localConfigFilepath, client)
-	return options, nil
+	kindlingOptions, closeFuncs := selectDNSTTOptions(options)
+	return kindlingOptions, closeFuncs, nil
 }
 
 func processYaml(gzippedYaml []byte) ([]dnsttConfig, error) {
@@ -145,13 +161,13 @@ func onNewDNSTTConfig(configFilepath string, gzippedYML []byte) error {
 	return os.WriteFile(configFilepath, gzippedYML, 0644)
 }
 
-func parseDNSTTConfigs(gzipyml []byte) ([]kindling.Option, error) {
+func parseDNSTTConfigs(gzipyml []byte) ([]dnstt.DNSTT, error) {
 	cfgs, err := processYaml(gzipyml)
 	if err != nil {
 		return nil, err
 	}
 
-	options := make([]kindling.Option, 0)
+	options := make([]dnstt.DNSTT, 0)
 	for _, cfg := range cfgs {
 		opts := make([]dnstt.Option, 0)
 		if cfg.Domain != "" {
@@ -174,8 +190,19 @@ func parseDNSTTConfigs(gzipyml []byte) ([]kindling.Option, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to build new dnstt: %w", err)
 		}
-		options = append(options, kindling.WithDNSTunnel(d))
+		options = append(options, d)
 	}
 
 	return options, nil
+}
+
+func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() error) {
+	kindlingOptions := make([]kindling.Option, 0)
+	closeDNSTTTunnel := make([]func() error, 0)
+	for i := 0; i < 5; i++ {
+		randomIndex := rand.Intn(len(options))
+		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(options[randomIndex]))
+		closeDNSTTTunnel = append(closeDNSTTTunnel, options[randomIndex].Close)
+	}
+	return kindlingOptions, closeDNSTTTunnel
 }
