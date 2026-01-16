@@ -11,14 +11,16 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
 )
 
 var (
-	k             kindling.Kindling
-	kindlingMutex sync.Mutex
-	stopUpdater   func()
+	k               kindling.Kindling
+	kindlingMutex   sync.Mutex
+	stopUpdater     func()
+	closeDNSTunnels []func() error
 )
 
 // HTTPClient returns a http client with kindling transport
@@ -36,6 +38,11 @@ func HTTPClient() *http.Client {
 func Close(_ context.Context) error {
 	if stopUpdater != nil {
 		stopUpdater()
+	}
+	for _, c := range closeDNSTunnels {
+		if c != nil {
+			c()
+		}
 	}
 	return nil
 }
@@ -64,8 +71,14 @@ func NewKindling() kindling.Kindling {
 		slog.Error("failed to create amp client", slog.Any("error", err))
 	}
 
+	dnsttOptions, closeTunnels, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
+	if err != nil {
+		slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
+	}
+
 	stopUpdater = cancel
-	return kindling.NewKindling("radiance",
+	closeDNSTunnels = closeTunnels
+	kindlingOpts := []kindling.Option{
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
 		// Most endpoints use df.iantem.io, but for some historical reasons
@@ -74,7 +87,9 @@ func NewKindling() kindling.Kindling {
 		kindling.WithDomainFronting(f),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
-	)
+	}
+	kindlingOpts = append(kindlingOpts, dnsttOptions...)
+	return kindling.NewKindling("radiance", kindlingOpts...)
 }
 
 type slogWriter struct {
