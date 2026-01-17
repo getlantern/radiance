@@ -540,6 +540,6 @@ func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCer
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
 	}
-	slog.Info("Adding server based on URLs with sing-box config", "config", singBoxCfg)
+	slog.Info("Adding servers based on URLs", "serverCount", len(cfgURLs), "skipCertVerification", skipCertVerification)
 	return m.AddServerWithSingboxJSON(ctx, singBoxCfg)
 }
