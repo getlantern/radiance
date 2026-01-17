@@ -68,6 +68,9 @@ type tunnel struct {
 func newTunnel(dataPath, logPath, logLevel string, platformIfce libbox.PlatformInterface) *tunnel {
 	t := &tunnel{
 		platformIfce: platformIfce,
+		dataPath:     dataPath,
+		logPath:      logPath,
+		logLevel:     logLevel,
 	}
 	t.status.Store(ipc.StatusClosed)
 	return t
