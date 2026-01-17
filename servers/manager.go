@@ -492,7 +492,7 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 }
 
 // AddServerBasedOnURLs adds a server(s) based on the provided URL string.
-// The URL can be comma-separated, a list of URLs or URLs separated by new lines, or a single URL.
+// The URL can be a comma-separated list of URLs, URLs separated by new lines, or a single URL.
 // Note that the UI allows the user to specify a server name. If there is only one URL, the server name overrides
 // the tag typically included in the URL. If there are multiple URLs, the server name is ignored.
 func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCertVerification bool, serverName string) error {
