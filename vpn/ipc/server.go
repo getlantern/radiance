@@ -124,12 +124,6 @@ func (s *Server) Close() error {
 	return s.svr.Close()
 }
 
-// CloseService sends a request to shutdown the service
-func CloseService(ctx context.Context) error {
-	_, err := sendRequest[empty](ctx, "POST", closeServiceEndpoint, nil)
-	return err
-}
-
 // StartService sends a request to start the service
 func StartService(ctx context.Context, group, tag string) error {
 	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, selection{GroupTag: group, OutboundTag: tag})
