@@ -41,7 +41,9 @@ func Close(_ context.Context) error {
 	}
 	for _, c := range closeDNSTunnels {
 		if c != nil {
-			c()
+			if err := c(); err != nil {
+				slog.Error("failed to close DNS tunnel", slog.Any("error", err))
+			}
 		}
 	}
 	return nil
