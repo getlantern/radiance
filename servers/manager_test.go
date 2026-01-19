@@ -215,6 +215,10 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
 	}
 	ctx := context.Background()
+	after := func() {
+		manager.RemoveServer("VLESS+over+WS+with+TLS")
+		manager.RemoveServer("Trojan+with+TLS")
+	}
 
 	urls := strings.Join([]string{
 		"vless://uuid@host:443?encryption=none&security=tls&type=ws&host=example.com&path=/vless#VLESS+over+WS+with+TLS",
@@ -224,6 +228,7 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, false, ""))
 		assert.Contains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
 		assert.Contains(t, manager.optsMaps[SGUser], "Trojan+with+TLS")
+		after()
 	})
 
 	t.Run("using empty URLs should return an error", func(t *testing.T) {
@@ -231,8 +236,6 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 	})
 
 	t.Run("skip certificate verification option works", func(t *testing.T) {
-		manager.RemoveServer("VLESS+over+WS+with+TLS")
-		manager.RemoveServer("Trojan+with+TLS")
 		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, true, ""))
 		opts, isOutbound := manager.optsMaps[SGUser]["Trojan+with+TLS"].(option.Outbound)
 		require.True(t, isOutbound)
@@ -241,6 +244,7 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 		require.NotNil(t, trojanSettings)
 		require.NotNil(t, trojanSettings.TLS)
 		assert.True(t, trojanSettings.OutboundTLSOptionsContainer.TLS.Insecure, trojanSettings.OutboundTLSOptionsContainer.TLS)
+		after()
 	})
 
 	url := "vless://uuid@host:443?encryption=none&security=tls&type=ws&host=example.com&path=/vless#VLESS+over+WS+with+TLS"
@@ -250,6 +254,7 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 
 		require.NoError(t, manager.AddServerBasedOnURLs(ctx, url, false, "SpecialName"))
 		assert.Contains(t, manager.optsMaps[SGUser], "SpecialName")
+		after()
 	})
 }
 func TestServers(t *testing.T) {
