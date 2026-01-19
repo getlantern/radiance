@@ -5,13 +5,16 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/getlantern/radiance/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -106,4 +109,77 @@ dnsttConfigs:
 			}
 		})
 	}
+}
+
+const validDNSTTYAML = `
+dnsttConfigs:
+  - domain: t.example.com
+    publicKey: 405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977
+    dohResolver: https://dns.example/dns-query
+`
+
+const invalidDNSTTYAML = `
+dnsttConfigs:
+  - domain: t.example.com
+    publicKey:
+`
+
+func TestDNSTTOptions(t *testing.T) {
+	logger := bytes.NewBuffer(nil)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelDebug,
+	})))
+	t.Run("embedded config only", func(t *testing.T) {
+		opts, closers, err := DNSTTOptions(context.Background(), "", logger)
+		assert.NoError(t, err)
+
+		assert.Len(t, opts, maxDNSTTOptions)
+		assert.Len(t, closers, maxDNSTTOptions)
+
+		for _, closeFn := range closers {
+			assert.NoError(t, closeFn())
+		}
+	})
+
+	t.Run("local config overrides embedded config", func(t *testing.T) {
+		tmp, err := os.CreateTemp(t.TempDir(), "dnstt-*.yml.gz")
+		require.NoError(t, err)
+		defer tmp.Close()
+		_, err = tmp.Write(gzipYAML([]byte(validDNSTTYAML)))
+		require.NoError(t, err)
+		opts, closers, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
+		assert.NoError(t, err)
+		assert.Len(t, opts, 1)
+		assert.Len(t, closers, 1)
+
+		for _, closeFn := range closers {
+			assert.NoError(t, closeFn())
+		}
+	})
+
+	t.Run("invalid local config falls back to embedded", func(t *testing.T) {
+		dir := t.TempDir()
+		tmp, err := os.CreateTemp(dir, "dnstt-invalid-*.yml.gz")
+		require.NoError(t, err)
+		defer tmp.Close()
+
+		_, err = tmp.Write(gzipYAML([]byte(invalidDNSTTYAML)))
+		require.NoError(t, err)
+		opts, closers, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
+		assert.NoError(t, err)
+		assert.Len(t, opts, maxDNSTTOptions)
+		assert.Len(t, closers, maxDNSTTOptions)
+		for _, closeFn := range closers {
+			assert.NoError(t, closeFn())
+		}
+	})
+
+	t.Run("context cancellation does not block", func(t *testing.T) {
+		_, closers, err := DNSTTOptions(context.Background(), "", logger)
+		assert.NoError(t, err)
+		for _, closeFn := range closers {
+			assert.NoError(t, closeFn())
+		}
+	})
 }

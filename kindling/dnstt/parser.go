@@ -47,10 +47,9 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
 	if err != nil {
 		slog.Error("couldn't create http client for fetching dnstt configs", slog.Any("error", err))
-	} else {
-		// starting config updater/fetcher
-		defer dnsttConfigUpdate(ctx, localConfigFilepath, client)
 	}
+	// starting config updater/fetcher
+	dnsttConfigUpdate(ctx, localConfigFilepath, client)
 
 	// parsing embedded configs and loading options
 	options, err := parseDNSTTConfigs(embeddedConfig)
@@ -113,22 +112,18 @@ func dnsttConfigUpdate(ctx context.Context, localConfigPath string, httpClient *
 	slog.Debug("Updating dnstt configuration", slog.String("url", dnsttConfigURL))
 	source := keepcurrent.FromWebWithClient(dnsttConfigURL, httpClient)
 	chDB := make(chan []byte)
-	closeChan := sync.OnceFunc(func() {
-		close(chDB)
-	})
 	dest := keepcurrent.ToChannel(chDB)
-
 	runner := keepcurrent.NewWithValidator(
 		dnsttConfigValidator(),
 		source,
 		dest,
 	)
-
+	stopRunner := runner.Start(pollInterval)
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				closeChan()
+				stopRunner()
 				return
 			case data, ok := <-chDB:
 				if !ok {
@@ -141,8 +136,6 @@ func dnsttConfigUpdate(ctx context.Context, localConfigPath string, httpClient *
 			}
 		}
 	}()
-
-	runner.Start(pollInterval)
 }
 
 type DNSTTUpdateEvent struct {
@@ -199,6 +192,7 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnstt.DNSTT, error) {
 const maxDNSTTOptions = 10
 
 func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() error) {
+	slog.Debug("selecting dnstt options", slog.Int("options", len(options)))
 	if len(options) == 0 {
 		return []kindling.Option{}, []func() error{}
 	}
@@ -206,6 +200,7 @@ func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() erro
 	closeDNSTTTunnel := make([]func() error, 0)
 
 	if len(options) < maxDNSTTOptions {
+		slog.Debug("options len is lower than max dnstt options, returning all options available", slog.Int("options", len(options)))
 		for _, opt := range options {
 			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(opt))
 			closeDNSTTTunnel = append(closeDNSTTTunnel, opt.Close)
@@ -214,10 +209,19 @@ func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() erro
 		return kindlingOptions, closeDNSTTTunnel
 	}
 
-	for i := 0; i < maxDNSTTOptions; i++ {
-		randomIndex := rand.Intn(len(options))
+	slog.Debug("selecting random options", slog.Int("options", len(options)))
+	for randomIndex := range generateRandomIndex(len(options), maxDNSTTOptions) {
 		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(options[randomIndex]))
 		closeDNSTTTunnel = append(closeDNSTTTunnel, options[randomIndex].Close)
 	}
 	return kindlingOptions, closeDNSTTTunnel
+}
+
+func generateRandomIndex(maxVal int, length int) map[int]struct{} {
+	selectedIndexes := make(map[int]struct{})
+	for len(selectedIndexes) < length {
+		slog.Debug("generating n", slog.Int("maxVal", maxVal), slog.Int("len", length))
+		selectedIndexes[rand.Intn(maxVal)] = struct{}{}
+	}
+	return selectedIndexes
 }
