@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -88,7 +91,7 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
-	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
+	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
 	if curl, _ := env.Get[bool](env.PrintCurl); curl {
 		req = req.SetDebug(true).EnableGenerateCurlOnDebug()
 	}
@@ -145,4 +148,56 @@ func sanitizeResponseBody(data []byte) []byte {
 		out.WriteRune(ch)
 	}
 	return out.Bytes()
+}
+
+// parseSSEStream parses an io.ReadCloser SSE stream and calls onEvent for each complete event.
+// onEvent receives (id, eventType, data). It returns when ctx is canceled or the reader is closed.
+// Note: caller is responsible for closing rc (we do not close it here — caller should).
+func parseSSEStream(ctx context.Context, rc io.Reader, onEvent func(data string)) error {
+	scanner := bufio.NewScanner(rc)
+	scanner.Buffer(make([]byte, 0, 64*1024), 5*1024*1024)
+
+	var data []string
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		line := scanner.Text()
+		slog.Debug("SSE line received", "line", line)
+		// Empty line = end of event
+		if line == "" {
+			if len(data) > 0 {
+				slog.Debug("")
+				onEvent(line)
+				data = data[:0]
+			}
+			continue
+		}
+
+		// Skip comments
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		// Parse data field only
+		if strings.HasPrefix(line, "data:") {
+			data = append(
+				data,
+				strings.TrimPrefix(line[5:], " "),
+			)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		// If context was canceled, this is expected
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("stream read error: %w", err)
+	}
+	return nil
 }

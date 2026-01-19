@@ -26,6 +26,11 @@ import (
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
 // functionality.
 
+const (
+	saltFileName = ".salt"
+	baseURL      = "https://df.iantem.io/api/v1"
+)
+
 // DataCapUsageResponse represents the data cap usage response
 type DataCapUsageResponse struct {
 	// Whether data cap is enabled for this device/user
@@ -42,16 +47,7 @@ type DataCapUsageDetails struct {
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
-// Tier is the level of subscription a user is currently at.
-type Tier int
-
-const (
-	saltFileName = ".salt"
-	baseURL      = "https://df.iantem.io/api/v1"
-)
-
 // pro-server requests
-
 type UserDataResponse struct {
 	*protos.BaseResponse           `json:",inline"`
 	*protos.LoginResponse_UserData `json:",inline"`
@@ -141,6 +137,49 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	newReq := authWc.NewRequest(nil, headers, nil)
 	err := authWc.Get(ctx, getUrl, newReq, &datacap)
 	return withMarshalJsonString(datacap, err)
+}
+
+type DataCapChangeEvent struct {
+	events.Event
+	*DataCapUsageResponse
+}
+
+// DataCapStream connects to the datacap SSE endpoint and continuously reads events.
+// It send events whenever there is an update in datacap usage with DataCapChangeEvent.
+// to receive those events use emits.Subscribe(&DataCapChangeEvent{}, func(e events.Event) { ... })
+func (a *APIClient) DataCapStream(ctx context.Context) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
+	defer span.End()
+	datacap := &DataCapUsageResponse{}
+	headers := map[string]string{
+		backend.ContentTypeHeader: "application/json",
+		backend.AcceptHeader:      "text/event-stream",
+	}
+	getUrl := fmt.Sprintf("/datacap/stream/%s", settings.GetString(settings.DeviceIDKey))
+	authWc := authWebClient()
+	newReq := authWc.NewRequest(nil, headers, nil)
+	// newReq.SetDoNotParseResponse(true)
+	resp, err := newReq.Get(getUrl)
+	if err != nil {
+		slog.Error("datacap stream request error", "error", err)
+		return err
+	}
+	if resp.StatusCode() != 200 {
+		slog.Error("datacap stream unexpected status", "status", resp.StatusCode())
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+	body := resp.RawResponse.Body
+	defer body.Close()
+	return parseSSEStream(ctx, body, func(data string) {
+		slog.Debug("received datacap event", "data", data)
+		err := json.Unmarshal([]byte(data), &datacap)
+		if err != nil {
+			slog.Error("datacap stream unmarshal error", "error", err)
+			return
+		}
+		events.Emit(&DataCapChangeEvent{DataCapUsageResponse: datacap})
+		slog.Info("datacap update", "data", datacap)
+	})
 }
 
 // SignUp signs the user up for an account.
