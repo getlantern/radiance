@@ -176,7 +176,9 @@ func TestDNSTTOptions(t *testing.T) {
 	})
 
 	t.Run("context cancellation does not block", func(t *testing.T) {
-		_, closers, err := DNSTTOptions(context.Background(), "", logger)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, closers, err := DNSTTOptions(ctx, "", logger)
 		assert.NoError(t, err)
 		for _, closeFn := range closers {
 			assert.NoError(t, closeFn())
