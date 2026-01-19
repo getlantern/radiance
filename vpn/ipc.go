@@ -27,6 +27,6 @@ func InitIPC(dataPath, logPath, logLevel string, provider func() libbox.Platform
 	if provider != nil {
 		platformIfce = provider()
 	}
-	ipcServer = ipc.NewServer(newTunnel(dataPath, logPath, logLevel, platformIfce))
+	ipcServer = ipc.NewServer(NewTunnelService(dataPath, logPath, logLevel, platformIfce))
 	return ipcServer, ipcServer.Start(dataPath)
 }

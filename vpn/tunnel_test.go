@@ -26,7 +26,7 @@ func TestEstablishConnection(t *testing.T) {
 	require.NoError(t, err, "failed to get test box options")
 
 	tun := testEstablishConnection(t, *tOpts)
-	assert.NoError(t, tun.Close(), "failed to close lbService")
+	assert.NoError(t, tun.close(), "failed to close lbService")
 	assert.Equal(t, ipc.StatusClosed, tun.Status(), "tun should be closed")
 }
 
@@ -62,7 +62,7 @@ func TestUpdateServers(t *testing.T) {
 	testOpts.Outbounds = outs
 	tun := testEstablishConnection(t, *testOpts)
 	defer func() {
-		tun.Close()
+		tun.close()
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -129,10 +129,10 @@ func testEstablishConnection(t *testing.T, opts sbO.Options) *tunnel {
 		dataPath: tmp,
 	}
 
-	err := tun.start("", "", opts)
+	err := tun.start("", "", opts, nil)
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
-		tun.Close()
+		tun.close()
 	})
 
 	assert.Equal(t, ipc.StatusRunning, tun.Status(), "tunnel should be running")
