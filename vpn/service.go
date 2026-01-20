@@ -63,7 +63,9 @@ func (s *TunnelService) start(group string, tag string) error {
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
-	t := tunnel{}
+	t := tunnel{
+		dataPath: s.dataPath,
+	}
 	if err := t.start(group, tag, opts, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
