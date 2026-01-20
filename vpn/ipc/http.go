@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -51,7 +52,7 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return res, traces.RecordError(ctx, fmt.Errorf("received error response: %s", resp.Status))
+		return res, traces.RecordError(ctx, readErrorResponse(resp))
 	}
 	if _, ok := any(&res).(*empty); ok {
 		return res, nil
@@ -62,4 +63,12 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 		return res, traces.RecordError(ctx, fmt.Errorf("failed to decode response: %w", err))
 	}
 	return res, nil
+}
+
+func readErrorResponse(resp *http.Response) error {
+	buf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read error response body: %w, status: %s", err, resp.Status)
+	}
+	return fmt.Errorf("%s: %s", resp.Status, buf)
 }
