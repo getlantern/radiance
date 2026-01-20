@@ -7,9 +7,13 @@ import (
 	"sync"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
@@ -39,11 +43,20 @@ func InitIPC(dataPath, logPath, logLevel string, provider func() libbox.Platform
 	platIfceProvider = provider
 	ipcServer = ipc.NewServer()
 	return ipcServer, ipcServer.Start(dataPath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
+		ctx, span := otel.Tracer(tracerName).Start(
+			context.Background(),
+			"ipcServer.Start",
+			trace.WithAttributes(
+				attribute.String("group", group),
+				attribute.String("tag", tag),
+			))
+		defer span.End()
+
 		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", dataPath)
 		_ = newSplitTunnel(dataPath)
 		opts, err := buildOptions(group, dataPath)
 		if err != nil {
-			return nil, fmt.Errorf("build options: %w", err)
+			return nil, traces.RecordError(ctx, fmt.Errorf("build options: %w", err))
 		}
 
 		var pi libbox.PlatformInterface
@@ -52,7 +65,7 @@ func InitIPC(dataPath, logPath, logLevel string, provider func() libbox.Platform
 		}
 
 		if err := establishConnection(group, tag, opts, dataPath, pi); err != nil {
-			return nil, err
+			return nil, traces.RecordError(ctx, err)
 		}
 		return tInstance, nil
 	})
