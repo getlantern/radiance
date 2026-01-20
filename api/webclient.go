@@ -91,7 +91,7 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 }
 
 func (wc *webClient) NewRequest(queryParams, headers map[string]string, body any) *resty.Request {
-	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body).SetDebug(true).EnableGenerateCurlOnDebug()
+	req := wc.client.NewRequest().SetQueryParams(queryParams).SetHeaders(headers).SetBody(body)
 	if curl, _ := env.Get[bool](env.PrintCurl); curl {
 		req = req.SetDebug(true).EnableGenerateCurlOnDebug()
 	}
