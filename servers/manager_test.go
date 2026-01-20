@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,33 +41,39 @@ func TestPrivateServerIntegration(t *testing.T) {
 			SGLantern: make(map[string]any),
 			SGUser:    make(map[string]any),
 		},
-		serversFile:      filepath.Join(dataPath, common.ServersFileName),
-		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+		serversFile: filepath.Join(dataPath, common.ServersFileName),
 	}
 
 	srv := newLanternServerManagerMock()
 	defer srv.Close()
 	parsedURL, _ := url.Parse(srv.URL)
 	port, _ := strconv.Atoi(parsedURL.Port())
+	trustingClient := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
 
 	t.Run("convert a token into a custom server", func(t *testing.T) {
-		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken"))
+		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", &trustingClient))
 		require.Contains(t, manager.optsMaps[SGUser], "s1", "server should be added to the manager")
 	})
 
 	t.Run("invite a user", func(t *testing.T) {
-		inviteToken, err := manager.InviteToPrivateServer(parsedURL.Hostname(), port, "rootToken", "invite1")
+		inviteToken, err := manager.InviteToPrivateServer(parsedURL.Hostname(), port, "rootToken", "invite1", &trustingClient)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, inviteToken)
 
-		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken))
+		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, &trustingClient))
 		require.Contains(t, manager.optsMaps[SGUser], "s2", "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
 			delete(manager.optsMaps[SGUser], "s1")
-			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
+			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1", &trustingClient))
 			// trying to access again with the same token should fail
-			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken))
+			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, &trustingClient))
 			assert.NotContains(t, manager.optsMaps[SGUser], "s1", "server should not be added after revoking invite")
 		})
 	})
@@ -158,8 +165,7 @@ func TestAddServerWithSingBoxJSON(t *testing.T) {
 			SGLantern: make(map[string]any),
 			SGUser:    make(map[string]any),
 		},
-		serversFile:      filepath.Join(dataPath, common.ServersFileName),
-		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+		serversFile: filepath.Join(dataPath, common.ServersFileName),
 	}
 
 	ctx := context.Background()
@@ -208,8 +214,7 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 			SGLantern: make(map[string]any),
 			SGUser:    make(map[string]any),
 		},
-		serversFile:      filepath.Join(dataPath, common.ServersFileName),
-		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+		serversFile: filepath.Join(dataPath, common.ServersFileName),
 	}
 	ctx := context.Background()
 
@@ -277,8 +282,7 @@ func TestServers(t *testing.T) {
 				"user-ep":  option.Endpoint{Tag: "user-ep", Type: "vless"},
 			},
 		},
-		serversFile:      filepath.Join(dataPath, common.ServersFileName),
-		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+		serversFile: filepath.Join(dataPath, common.ServersFileName),
 	}
 
 	t.Run("returns copy of servers", func(t *testing.T) {
@@ -333,8 +337,7 @@ func TestServers(t *testing.T) {
 				SGLantern: make(map[string]any),
 				SGUser:    make(map[string]any),
 			},
-			serversFile:      filepath.Join(dataPath, common.ServersFileName),
-			fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
+			serversFile: filepath.Join(dataPath, common.ServersFileName),
 		}
 
 		servers := emptyManager.Servers()
