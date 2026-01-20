@@ -157,38 +157,52 @@ func parseSSEStream(ctx context.Context, rc io.Reader, onEvent func(data string)
 	scanner := bufio.NewScanner(rc)
 	scanner.Buffer(make([]byte, 0, 64*1024), 5*1024*1024)
 
-	var data []string
-
+	var (
+		eventType string
+		data      []string
+	)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-
 		line := scanner.Text()
-		slog.Debug("SSE line received", "line", line)
 		// Empty line = end of event
 		if line == "" {
 			if len(data) > 0 {
-				slog.Debug("")
-				onEvent(line)
+				// Check for cap_exhausted event - stop streaming
+				if eventType == "cap_exhausted" {
+					deviceId := strings.Join(data, "\n")
+					slog.Debug("⚠️ Datacap exhausted for device: %s - stopping stream", deviceId)
+					return fmt.Errorf("datacap exhausted")
+				}
+
+				// Only process datacap events
+				if eventType == "datacap" {
+					onEvent(strings.Join(data, "\n"))
+				}
+
+				eventType = ""
 				data = data[:0]
 			}
 			continue
 		}
 
-		// Skip comments
+		// Skip comments (heartbeat)
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
 
 		// Parse data field only
-		if strings.HasPrefix(line, "data:") {
-			data = append(
-				data,
-				strings.TrimPrefix(line[5:], " "),
-			)
+		// Parse event type and data
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			slog.Debug("SSE event type", "type", eventType)
+		} else if strings.HasPrefix(line, "data:") {
+			val := strings.TrimPrefix(line, "data:")
+			val = strings.TrimPrefix(val, " ")
+			data = append(data, val)
 		}
 	}
 

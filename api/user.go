@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/1Password/srp"
 	"go.opentelemetry.io/otel"
@@ -41,8 +42,8 @@ type DataCapUsageResponse struct {
 
 // DataCapUsageDetails contains details of the data cap usage
 type DataCapUsageDetails struct {
-	BytesAllotted      string `json:"bytesAllotted"`
-	BytesUsed          string `json:"bytesUsed"`
+	BytesAllotted      int64  `json:"bytesAllotted"`
+	BytesUsed          int64  `json:"bytesUsed"`
 	AllotmentStartTime string `json:"allotmentStartTime"`
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
@@ -149,21 +150,25 @@ type DataCapChangeEvent struct {
 // to receive those events use emits.Subscribe(&DataCapChangeEvent{}, func(e events.Event) { ... })
 func (a *APIClient) DataCapStream(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
+	startTime := time.Now()
 	defer span.End()
 	datacap := &DataCapUsageResponse{}
 	headers := map[string]string{
 		backend.ContentTypeHeader: "application/json",
 		backend.AcceptHeader:      "text/event-stream",
 	}
-	getUrl := fmt.Sprintf("/datacap/stream/%s", settings.GetString(settings.DeviceIDKey))
+	getUrl := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
+	authWc.client.GetClient().Timeout = 0 // Disable timeout for SSE
 	newReq := authWc.NewRequest(nil, headers, nil)
-	// newReq.SetDoNotParseResponse(true)
+	newReq.SetDoNotParseResponse(true)
 	resp, err := newReq.Get(getUrl)
+	slog.Debug("datacap time taken for stream", "duration", time.Since(startTime))
 	if err != nil {
 		slog.Error("datacap stream request error", "error", err)
 		return err
 	}
+
 	if resp.StatusCode() != 200 {
 		slog.Error("datacap stream unexpected status", "status", resp.StatusCode())
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
@@ -177,8 +182,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 			slog.Error("datacap stream unmarshal error", "error", err)
 			return
 		}
-		events.Emit(&DataCapChangeEvent{DataCapUsageResponse: datacap})
-		slog.Info("datacap update", "data", datacap)
+		events.Emit(DataCapChangeEvent{DataCapUsageResponse: datacap})
 	})
 }
 
