@@ -194,11 +194,9 @@ func parseSSEStream(ctx context.Context, rc io.Reader, onEvent func(data string)
 			continue
 		}
 
-		// Parse data field only
 		// Parse event type and data
 		if strings.HasPrefix(line, "event:") {
 			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			slog.Debug("SSE event type", "type", eventType)
 		} else if strings.HasPrefix(line, "data:") {
 			val := strings.TrimPrefix(line, "data:")
 			val = strings.TrimPrefix(val, " ")

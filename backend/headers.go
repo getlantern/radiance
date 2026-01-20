@@ -31,7 +31,6 @@ const (
 	ClientCountryHeader     = "X-Lantern-Client-Country"
 	ContentTypeHeader       = "content-type"
 	AcceptHeader            = "accept"
-
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
