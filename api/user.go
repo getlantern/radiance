@@ -42,8 +42,8 @@ type DataCapUsageResponse struct {
 
 // DataCapUsageDetails contains details of the data cap usage
 type DataCapUsageDetails struct {
-	BytesAllotted      int64  `json:"bytesAllotted"`
-	BytesUsed          int64  `json:"bytesUsed"`
+	BytesAllotted      string `json:"bytesAllotted"`
+	BytesUsed          string `json:"bytesUsed"`
 	AllotmentStartTime string `json:"allotmentStartTime"`
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
