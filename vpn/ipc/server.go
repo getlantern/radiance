@@ -16,6 +16,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/events"
 )
@@ -156,6 +159,14 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
+	ctx, span := otel.Tracer(tracerName).Start(
+		ctx,
+		"ipc.Server.StartService",
+		trace.WithAttributes(
+			attribute.String("group", group),
+			attribute.String("tag", tag),
+		))
+	defer span.End()
 	if s.GetStatus() != StatusClosed {
 		return errors.New("service is already running")
 	}

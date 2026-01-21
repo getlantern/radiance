@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -28,12 +29,7 @@ const ampConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main
 //
 // Returns an initialized amp.Client or an error if setup fails.
 func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) (amp.Client, error) {
-	httpClient, err := newHTTPClientWithSmartTransport(logWriter, ampConfigURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
-	}
-
-	ampClient, err := amp.NewClientWithOptions(ctx,
+	ampOptions := []amp.Option{
 		amp.WithConfig(amp.Config{
 			BrokerURL: "https://amp.iantem.io",
 			CacheURL:  "https://cdn.ampproject.org",
@@ -58,9 +54,6 @@ func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) 
 			},
 		}),
 		amp.WithConfigStoragePath(storagePath),
-		amp.WithConfigURL(ampConfigURL),
-		amp.WithHTTPClient(httpClient),
-		amp.WithPollInterval(12*time.Hour),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
 			serverName, _, semicolonExists := strings.Cut(address, ":")
 			addressWithPort := address
@@ -72,7 +65,18 @@ func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) 
 				ServerName: serverName,
 			})
 		}),
-	)
+	}
+	httpClient, err := newHTTPClientWithSmartTransport(logWriter, ampConfigURL)
+	if err != nil {
+		slog.Error("failed to create smart HTTP client", slog.Any("error", err))
+	} else {
+		ampOptions = append(ampOptions,
+			amp.WithHTTPClient(httpClient),
+			amp.WithPollInterval(12*time.Hour),
+			amp.WithConfigURL(ampConfigURL))
+	}
+
+	ampClient, err := amp.NewClientWithOptions(ctx, ampOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build amp client: %w", err)
 	}
