@@ -250,10 +250,12 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 
 	url := "vless://uuid@host:443?encryption=none&security=tls&type=ws&host=example.com&path=/vless#VLESS+over+WS+with+TLS"
 	t.Run("adding single URL should work", func(t *testing.T) {
+		require.NoError(t, manager.AddServerBasedOnURLs(ctx, url, false, "SpecialName"))
+		assert.Contains(t, manager.optsMaps[SGUser], "SpecialName")
+		assert.NotContains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
+
 		require.NoError(t, manager.AddServerBasedOnURLs(ctx, url, false, ""))
 		assert.Contains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
-
-		require.NoError(t, manager.AddServerBasedOnURLs(ctx, url, false, "SpecialName"))
 		assert.Contains(t, manager.optsMaps[SGUser], "SpecialName")
 		after()
 	})
