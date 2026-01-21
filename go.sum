@@ -205,6 +205,8 @@ github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731 h1:v+vJ3LgV4nW4
 github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731/go.mod h1:XZwE+iIlAgr64OFbXKFNCllBwV4wEipPx8Hlo2gZdbM=
 github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f h1:DO5SrV7sZ8DYCXk1PxC4OGXEvtPILzSBJ3lfyeQqshM=
 github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f/go.mod h1:1a+iv1xzGxZWj/vCHzr8Z3dF9H1sNTuMSPHUqRsgbl0=
+github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2 h1:5YisMrA/e05uevx8mUnsgkM+sepFi82/Fp44GiQl2j0=
+github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2/go.mod h1:1a+iv1xzGxZWj/vCHzr8Z3dF9H1sNTuMSPHUqRsgbl0=
 github.com/getlantern/geo v0.0.0-20241129152027-2fc88c10f91e h1:vpikNz6IzvEoqVYmiK5Uq+lE4TCzvMDqbZdxFbtGK1g=
 github.com/getlantern/geo v0.0.0-20241129152027-2fc88c10f91e/go.mod h1:RjQ0krF8NTCc5xo2Q1995/vZBnYg33h8svn15do7dLg=
 github.com/getlantern/golog v0.0.0-20210606115803-bce9f9fe5a5f/go.mod h1:ZyIjgH/1wTCl+B+7yH1DqrWp6MPJqESmwmEQ89ZfhvA=

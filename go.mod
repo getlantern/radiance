@@ -27,7 +27,7 @@ require (
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20260113231444-c651c79beddf
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
-	github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f
+	github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
 	github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461
 	github.com/getlantern/lantern-box v0.0.6-0.20260109195635-79fc82eae39d
