@@ -3,6 +3,7 @@ package vpn
 import (
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -43,5 +44,9 @@ func InitIPC(dataPath, logPath, logLevel string, platformIfce libbox.PlatformInt
 		return nil, err
 	}
 	ipcServer = server
+	// Set the socket path in case client and server are in the same process.
+	if runtime.GOOS != "windows" {
+		ipc.SetSocketPath(dataPath)
+	}
 	return server, nil
 }
