@@ -520,6 +520,7 @@ func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCer
 		q.Del("tag")
 		cfgURLs[0].Fragment = serverName
 		cfgURLs[0].RawQuery = q.Encode()
+		cfg.Options = cfgURLs
 	}
 	if skipCertVerification {
 		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
