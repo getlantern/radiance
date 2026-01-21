@@ -21,18 +21,19 @@ func NewFronted(panicListener func(string), cacheFile string, logWriter io.Write
 	configURL := "https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz"
 	// First, download the file from the specified URL using the smart dialer.
 	// Then, create a new fronted instance with the downloaded file.
+	frontedOptions := []fronted.Option{
+		fronted.WithPanicListener(panicListener),
+		fronted.WithCacheFile(cacheFile),
+	}
 	httpClient, err := newHTTPClientWithSmartTransport(logWriter, configURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build http client with smart HTTP transport: %w", err)
+		slog.Error("failed to build http client with smart HTTP transport", slog.Any("error", err))
+	} else {
+		frontedOptions = append(frontedOptions, fronted.WithHTTPClient(httpClient), fronted.WithConfigURL(configURL))
 	}
 
 	fronted.SetLogger(slog.Default())
-	return fronted.NewFronted(
-		fronted.WithPanicListener(panicListener),
-		fronted.WithCacheFile(cacheFile),
-		fronted.WithHTTPClient(httpClient),
-		fronted.WithConfigURL(configURL),
-	), nil
+	return fronted.NewFronted(frontedOptions...), nil
 }
 
 func newHTTPClientWithSmartTransport(logWriter io.Writer, address string) (*http.Client, error) {
