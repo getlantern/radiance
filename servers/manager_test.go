@@ -42,21 +42,20 @@ func TestPrivateServerIntegration(t *testing.T) {
 			SGUser:    make(map[string]any),
 		},
 		serversFile: filepath.Join(dataPath, common.ServersFileName),
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		},
 	}
 
 	srv := newLanternServerManagerMock()
 	defer srv.Close()
 	parsedURL, _ := url.Parse(srv.URL)
 	port, _ := strconv.Atoi(parsedURL.Port())
-	trustingClient := http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
-	}
 
-	manager.httpClient = &trustingClient
 	t.Run("convert a token into a custom server", func(t *testing.T) {
 		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken"))
 		require.Contains(t, manager.optsMaps[SGUser], "s1", "server should be added to the manager")

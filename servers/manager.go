@@ -98,7 +98,10 @@ func NewManager(dataPath string) (*Manager, error) {
 		},
 		serversFile: filepath.Join(dataPath, common.ServersFileName),
 		access:      sync.RWMutex{},
-		httpClient:  http.DefaultClient,
+
+		// Note that we use the http.DefaultClient here because it is only used to access private
+		// servers the user has created.
+		httpClient: http.DefaultClient,
 	}
 
 	slog.Debug("Loading servers", "file", mgr.serversFile)
