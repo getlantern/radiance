@@ -12,7 +12,7 @@ It receives all it's arguments via environment variables.
 - `TOKEN`: The token to use.
 - `RUN_ID`: The run id to use. It will be added to honeycomb traces as value of attribute `pinger-id`. (you can use it for looking up traces for the specific run)
 - `TARGET_URL`: The target url to use. This is the url that will be pinged .
-- `DATA`: The path to use for config files and for logs. This is the path where the output will be written to (proxies.yaml, global.yaml, etc). You can place proxies.yaml there to use it instead of fetching.
+- `DATA`: The path to use for config files and for logs. This is the path where the output will be written to (config.json, etc). You can place custom config there to use it instead of fetching. (together with `STICKY=true` env var, see below)
 
 All of these are required.
 

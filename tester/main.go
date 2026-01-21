@@ -23,6 +23,7 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 	os.MkdirAll(dataDir, 0o755)
 	r, err := radiance.NewRadiance(radiance.Options{
 		DataDir: dataDir,
+		LogDir:  dataDir,
 		Locale:  "en-US",
 	})
 	if err != nil {
