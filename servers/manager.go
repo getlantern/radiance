@@ -1,6 +1,6 @@
 // Package servers provides management of server configurations, such as option.Endpoints and
 // option.Outbounds,and integration with remote server managers for adding, inviting, and revoking
-// private servers with trust-on-first-use (TOFU) fingerprint verification.
+// private servers
 package servers
 
 import (
@@ -44,8 +44,6 @@ const (
 	SGLantern ServerGroup = "lantern"
 	SGUser    ServerGroup = "user"
 
-	trustFingerprintFileName = "trusted_server_fingerprints.json"
-
 	tracerName = "github.com/getlantern/radiance/servers"
 )
 
@@ -75,8 +73,7 @@ type Manager struct {
 	servers  Servers
 	optsMaps map[ServerGroup]map[string]any // map of tag to option for quick access
 
-	serversFile      string
-	fingerprintsFile string
+	serversFile string
 }
 
 // NewManager creates a new Manager instance, loading server options from disk.
@@ -98,9 +95,8 @@ func NewManager(dataPath string) (*Manager, error) {
 			SGLantern: make(map[string]any),
 			SGUser:    make(map[string]any),
 		},
-		serversFile:      filepath.Join(dataPath, common.ServersFileName),
-		fingerprintsFile: filepath.Join(dataPath, trustFingerprintFileName),
-		access:           sync.RWMutex{},
+		serversFile: filepath.Join(dataPath, common.ServersFileName),
+		access:      sync.RWMutex{},
 	}
 
 	slog.Debug("Loading servers", "file", mgr.serversFile)
@@ -344,18 +340,7 @@ func (m *Manager) loadServers() error {
 // Lantern Server Manager Integration
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
-// Requires a trust fingerprint callback for certificate verification. If one isn't provided, it will
-// prompt the user to trust the fingerprint.
-func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, trustFingerprintCB TrustFingerprintCB) error {
-	if trustFingerprintCB == nil {
-		return fmt.Errorf("trustFingerprintCB is required")
-	}
-
-	client, err := m.getClientForTrustedFingerprint(ip, port, trustFingerprintCB)
-	if err != nil {
-		return err
-	}
-
+func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, httpClient *http.Client) error {
 	u := &url.URL{
 		Scheme: "https",
 		Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
@@ -364,18 +349,18 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 	q := u.Query()
 	q.Set("token", accessToken)
 	u.RawQuery = q.Encode()
-	resp, err := client.Get(u.String())
+	resp, err := httpClient.Get(u.String())
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("failed to get connect config: %w", err)
+		return fmt.Errorf("failed to get connect config, unexpected status: %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
-	defer resp.Body.Close()
 
 	ctx := box.BaseContext()
 	servers, err := json.UnmarshalExtendedContext[Options](ctx, body)
@@ -392,19 +377,15 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 }
 
 // InviteToPrivateServer invites another user to the server manager instance and returns a connection
-// token. The server must be added to the user's servers first and have a trusted fingerprint.
-func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
-	client, err := m.getClientForTrustedFingerprint(ip, port, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := client.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
+// token. The server must be added to the user's servers first.
+func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string, httpClient *http.Client) (string, error) {
+	resp, err := httpClient.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("failed to get connect config: %w", err)
+		return "", fmt.Errorf("failed to get connect config, invalid status code: %d", resp.StatusCode)
 	}
 	type tokenResp struct {
 		Token string
@@ -413,7 +394,6 @@ func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string,
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
-	defer resp.Body.Close()
 
 	var cs tokenResp
 	if err = json.Unmarshal(body, &cs); err != nil {
@@ -424,53 +404,17 @@ func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string,
 }
 
 // RevokePrivateServerInvite will revoke an invite to the server manager instance. The server must
-// be added to the user's servers first and have a trusted fingerprint.
-func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string) error {
-	client, err := m.getClientForTrustedFingerprint(ip, port, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := client.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
+// be added to the user's servers first.
+func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string, httpClient *http.Client) error {
+	resp, err := httpClient.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("failed to revoke invite: %w", err)
+		return fmt.Errorf("failed to revoke invite, invalid status code: %d", resp.StatusCode)
 	}
 	return nil
-}
-
-func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFingerprintCallback TrustFingerprintCB) (*http.Client, error) {
-	// get server fingerprints via TLS
-	details, err := getServerFingerprints(ip, port)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get server fingerprints: %w", err)
-	}
-	// check if we already have the trusted fingerprint
-	fingerprints, trustedFingerprint, err := getTrustedServerFingerprint(m.fingerprintsFile, ip, details)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get trusted server fingerprint: %w", err)
-	}
-	// if not - attempt to ask the user to select a fingerprint
-	if trustedFingerprint == "" && trustFingerprintCallback != nil {
-		if ct := trustFingerprintCallback(ip, details); ct == nil {
-			return nil, ErrTrustCancelled
-		} else {
-			// user accepted the fingerprint. save it
-			fingerprints[ip] = ct.Fingerprint
-			if err := writeTrustedServerFingerprints(m.fingerprintsFile, fingerprints); err != nil {
-				return nil, fmt.Errorf("failed to write trusted server fingerprints: %w", err)
-			}
-			trustedFingerprint = ct.Fingerprint
-		}
-	}
-	// assemble an http client with the trusted fingerprint
-	client, err := getTOFUClient(trustedFingerprint)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tofu client: %w", err)
-	}
-	return client, nil
 }
 
 // AddServerWithSingboxJSON parse a value that can be a JSON sing-box config.
@@ -478,14 +422,14 @@ func (m *Manager) getClientForTrustedFingerprint(ip string, port int, trustFinge
 func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerWithSingboxJSON")
 	defer span.End()
-	var option Options
-	if err := json.UnmarshalContext(box.BaseContext(), value, &option); err != nil {
+	var opts Options
+	if err := json.UnmarshalContext(box.BaseContext(), value, &opts); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
-	if len(option.Endpoints) == 0 && len(option.Outbounds) == 0 {
+	if len(opts.Endpoints) == 0 && len(opts.Outbounds) == 0 {
 		return traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
-	if err := m.AddServers(SGUser, option); err != nil {
+	if err := m.AddServers(SGUser, opts); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
 	return nil
