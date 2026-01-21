@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime"
 	"sync"
 
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
@@ -24,20 +24,32 @@ type TunnelService struct {
 
 	platformIfce libbox.PlatformInterface
 	dataPath     string
-	logPath      string
-	logLevel     string
+	logger       *slog.Logger
 
 	mu sync.Mutex
 }
 
 // NewTunnelService creates a new TunnelService instance with the provided configuration paths, log
 // level, and platform interface.
-func NewTunnelService(dataPath, logPath, logLevel string, platformIfce libbox.PlatformInterface) *TunnelService {
+func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce libbox.PlatformInterface) *TunnelService {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	switch logger.Handler().(type) {
+	case *slog.TextHandler, *slog.JSONHandler:
+	default:
+		os.MkdirAll(dataPath, 0o755)
+		f, err := os.OpenFile("radiance_vpn.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			slog.Error("Failed to open log file", "error", err)
+			return nil
+		}
+		logger = slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{AddSource: true, Level: internal.LevelTrace}))
+	}
 	return &TunnelService{
 		platformIfce: platformIfce,
 		dataPath:     dataPath,
-		logPath:      logPath,
-		logLevel:     logLevel,
+		logger:       logger,
 	}
 }
 
@@ -47,13 +59,10 @@ func (s *TunnelService) Start(group string, tag string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tunnel != nil && s.tunnel.Status() != ipc.StatusClosed {
+		s.logger.Warn("tunnel already started")
 		return errors.New("tunnel already started")
 	}
-	if err := common.InitReadOnly(s.dataPath, s.logPath, s.logLevel); err != nil {
-		return fmt.Errorf("initialize common package: %w", err)
-	}
-	s.dataPath = settings.GetString(settings.DataPathKey)
-
+	s.logger.Debug("Starting tunnel", "group", group, "tag", tag)
 	_ = newSplitTunnel(s.dataPath)
 	return s.start(group, tag)
 }
@@ -82,11 +91,11 @@ func (s *TunnelService) Close() error {
 	}
 	t := s.tunnel
 	s.tunnel = nil
-	slog.Info("Closing tunnel")
+	s.logger.Info("Closing tunnel")
 	if err := t.close(); err != nil {
 		return err
 	}
-	slog.Debug("Tunnel closed")
+	s.logger.Debug("Tunnel closed")
 	return nil
 }
 
@@ -106,7 +115,7 @@ func (s *TunnelService) Restart() error {
 	group := t.clashServer.Mode()
 	tag := t.cacheFile.LoadSelected(group)
 
-	slog.Info("Restarting tunnel")
+	s.logger.Info("Restarting tunnel")
 	if err := t.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}

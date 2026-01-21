@@ -10,17 +10,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal"
 )
 
 var (
@@ -44,7 +42,6 @@ type Server struct {
 	svr       *http.Server
 	service   Service
 	router    chi.Router
-	mutex     sync.RWMutex
 	vpnStatus atomic.Value // string
 }
 
@@ -104,6 +101,7 @@ func (s *Server) Start(basePath string) error {
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
 	}
+	slog.Log(nil, internal.LevelTrace, "IPC listening", "address", l.Addr().String())
 	svr := &http.Server{
 		Handler:      s.router,
 		ReadTimeout:  time.Second * 5,
@@ -140,8 +138,10 @@ func StopService(ctx context.Context) error {
 }
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
+	defer span.End()
 	// check if service is already running
-	if s.GetStatus() == StatusRunning {
+	if s.service.Status() != StatusClosed {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -151,51 +151,23 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.StartService(r.Context(), p.GroupTag, p.OutboundTag); err != nil {
+	if err := s.service.Start(p.GroupTag, p.OutboundTag); err != nil {
+		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) StartService(ctx context.Context, group, tag string) error {
-	ctx, span := otel.Tracer(tracerName).Start(
-		ctx,
-		"ipc.Server.StartService",
-		trace.WithAttributes(
-			attribute.String("group", group),
-			attribute.String("tag", tag),
-		))
-	defer span.End()
-	if s.GetStatus() != StatusClosed {
-		return errors.New("service is already running")
-	}
-	if err := s.service.Start(group, tag); err != nil {
-		s.setVPNStatus(ErrorStatus, err)
-		return fmt.Errorf("error starting service: %w", err)
-	}
 	s.setVPNStatus(Connected, nil)
-	return nil
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("Received request to stop service via IPC")
-	if err := s.StopService(r.Context()); err != nil {
+	defer s.setVPNStatus(Disconnected, nil)
+	if err := s.service.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (s *Server) StopService(ctx context.Context) error {
-	defer s.setVPNStatus(Disconnected, nil)
-	if err := s.service.Close(); err != nil {
-		return fmt.Errorf("error stopping service: %w", err)
-	}
-	return nil
 }
 
 func RestartService(ctx context.Context) error {
@@ -204,25 +176,17 @@ func RestartService(ctx context.Context) error {
 }
 
 func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
-	if err := s.RestartService(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) RestartService(ctx context.Context) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	if s.service.Status() != StatusRunning {
-		return ErrServiceIsNotReady
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusInternalServerError)
+		return
 	}
 	s.vpnStatus.Store(Disconnected)
 	if err := s.service.Restart(); err != nil {
-		return fmt.Errorf("error restarting service: %w", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	s.setVPNStatus(Connected, nil)
-	return nil
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) setVPNStatus(status VPNStatus, err error) {
