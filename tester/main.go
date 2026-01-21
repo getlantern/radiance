@@ -84,11 +84,11 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 	if err != nil {
 		return fmt.Errorf("failed to hit target url after vpn connect: %w", err)
 	}
+	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
-	defer res.Body.Close()
 
 	t3 := time.Now()
 
