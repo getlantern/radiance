@@ -74,6 +74,7 @@ type Manager struct {
 	optsMaps map[ServerGroup]map[string]any // map of tag to option for quick access
 
 	serversFile string
+	httpClient  *http.Client
 }
 
 // NewManager creates a new Manager instance, loading server options from disk.
@@ -97,6 +98,7 @@ func NewManager(dataPath string) (*Manager, error) {
 		},
 		serversFile: filepath.Join(dataPath, common.ServersFileName),
 		access:      sync.RWMutex{},
+		httpClient:  http.DefaultClient,
 	}
 
 	slog.Debug("Loading servers", "file", mgr.serversFile)
@@ -340,7 +342,7 @@ func (m *Manager) loadServers() error {
 // Lantern Server Manager Integration
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
-func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, httpClient *http.Client) error {
+func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string) error {
 	u := &url.URL{
 		Scheme: "https",
 		Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
@@ -349,7 +351,7 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 	q := u.Query()
 	q.Set("token", accessToken)
 	u.RawQuery = q.Encode()
-	resp, err := httpClient.Get(u.String())
+	resp, err := m.httpClient.Get(u.String())
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
@@ -378,8 +380,8 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 
 // InviteToPrivateServer invites another user to the server manager instance and returns a connection
 // token. The server must be added to the user's servers first.
-func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string, httpClient *http.Client) (string, error) {
-	resp, err := httpClient.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
+func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
+	resp, err := m.httpClient.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
@@ -405,8 +407,8 @@ func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string,
 
 // RevokePrivateServerInvite will revoke an invite to the server manager instance. The server must
 // be added to the user's servers first.
-func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string, httpClient *http.Client) error {
-	resp, err := httpClient.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
+func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string) error {
+	resp, err := m.httpClient.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
