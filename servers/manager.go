@@ -492,8 +492,10 @@ func (m *Manager) AddServerWithSingboxJSON(ctx context.Context, value []byte) er
 }
 
 // AddServerBasedOnURLs adds a server(s) based on the provided URL string.
-// The URL can be comma-separated list of URLs or URLs separated by new lines.
-func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCertVerification bool) error {
+// The URL can be a comma-separated list of URLs, URLs separated by new lines, or a single URL.
+// Note that the UI allows the user to specify a server name. If there is only one URL, the server name overrides
+// the tag typically included in the URL. If there are multiple URLs, the server name is ignored.
+func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCertVerification bool, serverName string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBasedOnURLs")
 	defer span.End()
 	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
@@ -504,12 +506,23 @@ func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCer
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to parse URLs: %w", err))
 	}
+	cfgURLs, ok := cfg.Options.([]url.URL)
+	if !ok || len(cfgURLs) == 0 {
+		return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
+	}
 
+	// If we only have a single URL, and the server name is specified, use that
+	// to override the tag specified in the anchor hash fragment.
+	if len(cfgURLs) == 1 && serverName != "" {
+		// override the tag, which is specified in the anchor hash fragment or
+		// in the tag query parameter.
+		q := cfgURLs[0].Query()
+		q.Del("tag")
+		cfgURLs[0].Fragment = serverName
+		cfgURLs[0].RawQuery = q.Encode()
+		cfg.Options = cfgURLs
+	}
 	if skipCertVerification {
-		cfgURLs, ok := cfg.Options.([]url.URL)
-		if !ok || len(cfgURLs) == 0 {
-			return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
-		}
 		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
 		for _, v := range cfgURLs {
 			queryParams := v.Query()
@@ -528,5 +541,6 @@ func (m *Manager) AddServerBasedOnURLs(ctx context.Context, urls string, skipCer
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
 	}
+	slog.Info("Adding servers based on URLs", "serverCount", len(cfgURLs), "skipCertVerification", skipCertVerification, "serverName", serverName)
 	return m.AddServerWithSingboxJSON(ctx, singBoxCfg)
 }
