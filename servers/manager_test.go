@@ -218,6 +218,7 @@ func TestAddServerBasedOnURLs(t *testing.T) {
 	after := func() {
 		manager.RemoveServer("VLESS+over+WS+with+TLS")
 		manager.RemoveServer("Trojan+with+TLS")
+		manager.RemoveServer("SpecialName")
 	}
 
 	urls := strings.Join([]string{
