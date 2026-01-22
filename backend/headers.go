@@ -31,7 +31,6 @@ const (
 	ClientCountryHeader     = "X-Lantern-Client-Country"
 	ContentTypeHeader       = "content-type"
 	AcceptHeader            = "accept"
-
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.
@@ -40,7 +39,6 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Lantern/"+common.AppVersion)
 	// We include a random length string here to make it harder for censors to identify lantern
 	// based on consistent packet lengths.
 	req.Header.Add(RandomNoiseHeader, randomizedString())
