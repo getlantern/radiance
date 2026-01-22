@@ -23,7 +23,7 @@ var _ ipc.Service = (*TunnelService)(nil)
 type TunnelService struct {
 	tunnel *tunnel
 
-	platformIfce func() libbox.PlatformInterface
+	platformIfce libbox.PlatformInterface
 	dataPath     string
 	logger       *slog.Logger
 
@@ -50,9 +50,8 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce libbox.
 		}
 		logger = slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{AddSource: true, Level: internal.LevelTrace}))
 	}
-	provider := func() libbox.PlatformInterface { return platformIfce }
 	return &TunnelService{
-		platformIfce: provider,
+		platformIfce: platformIfce,
 		dataPath:     dataPath,
 		logger:       logger,
 	}
@@ -80,7 +79,7 @@ func (s *TunnelService) start(group string, tag string) error {
 	t := tunnel{
 		dataPath: s.dataPath,
 	}
-	if err := t.start(group, tag, opts, s.platformIfce()); err != nil {
+	if err := t.start(group, tag, opts, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
 	s.tunnel = &t
@@ -101,6 +100,12 @@ func (s *TunnelService) Close() error {
 	s.logger.Info("Closing tunnel")
 	if err := t.close(); err != nil {
 		return err
+	}
+	if s.platformIfce != nil {
+		if pcloser, ok := s.platformIfce.(interface{ PostServiceClose() }); ok {
+			slog.Debug("Calling PostServiceClose on platform interface")
+			pcloser.PostServiceClose()
+		}
 	}
 	s.logger.Debug("Tunnel closed")
 	return nil
