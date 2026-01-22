@@ -291,9 +291,10 @@ func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.
 				return
 			}
 
+			mu.Lock()
+			defer mu.Unlock()
 			// Successful tunnel
 			if foundCount.Add(1) <= maxDNSTTOptions {
-				mu.Lock()
 				if opt.DoHResolver != nil {
 					slog.Debug("selected DOH", slog.String("resolver", *opt.DoHResolver))
 				}
@@ -302,7 +303,6 @@ func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.
 				}
 				selected = append(selected, dnst)
 				closeFuncs = append(closeFuncs, dnst.Close)
-				mu.Unlock()
 
 				// Cancel remaining work once we have enough
 				if foundCount.Load() >= maxDNSTTOptions {
