@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -39,12 +40,15 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce libbox.
 	case *slog.TextHandler, *slog.JSONHandler:
 	default:
 		os.MkdirAll(dataPath, 0o755)
+		var writer io.Writer
 		f, err := os.OpenFile("radiance_vpn.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			slog.Error("Failed to open log file", "error", err)
-			return nil
+			writer = os.Stdout
+		} else {
+			writer = f
 		}
-		logger = slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{AddSource: true, Level: internal.LevelTrace}))
+		logger = slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{AddSource: true, Level: internal.LevelTrace}))
 	}
 	return &TunnelService{
 		platformIfce: platformIfce,
