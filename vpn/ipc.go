@@ -24,7 +24,7 @@ var (
 func InitIPC(dataPath, logPath, logLevel string, platformIfce libbox.PlatformInterface) (*ipc.Server, error) {
 	ipcMu.Lock()
 	defer ipcMu.Unlock()
-	if ipcServer != nil {
+	if ipcServer != nil && !ipcServer.IsClosed() {
 		// already started
 		slog.Log(nil, internal.LevelTrace, "IPC server already started")
 		return ipcServer, nil

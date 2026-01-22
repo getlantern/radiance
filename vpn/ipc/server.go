@@ -43,6 +43,7 @@ type Server struct {
 	service   Service
 	router    chi.Router
 	vpnStatus atomic.Value // string
+	closed    atomic.Bool
 }
 
 // StatusUpdateEvent is emitted when the VPN status changes.
@@ -97,6 +98,9 @@ func NewServer(service Service) *Server {
 // Start starts the IPC server. The socket file will be created in the "basePath" directory.
 // On Windows, the "basePath" is ignored and a default named pipe path is used.
 func (s *Server) Start(basePath string) error {
+	if s.closed.Load() {
+		return errors.New("IPC server is closed")
+	}
 	l, err := listen(basePath)
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
@@ -114,6 +118,12 @@ func (s *Server) Start(basePath string) error {
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("IPC server", "error", err)
 		}
+		if s.service.Status() != StatusClosed {
+			slog.Warn("IPC server stopped unexpectedly, closing service")
+			s.service.Close()
+			s.closed.Store(true)
+			s.setVPNStatus(ErrorStatus, errors.New("IPC server stopped unexpectedly"))
+		}
 	}()
 
 	return nil
@@ -121,8 +131,15 @@ func (s *Server) Start(basePath string) error {
 
 // Close shuts down the IPC server.
 func (s *Server) Close() error {
+	if s.closed.Swap(true) {
+		return nil
+	}
 	slog.Info("Closing IPC server")
 	return s.svr.Close()
+}
+
+func (s *Server) IsClosed() bool {
+	return s.closed.Load()
 }
 
 // StartService sends a request to start the service
@@ -193,13 +210,3 @@ func (s *Server) setVPNStatus(status VPNStatus, err error) {
 	s.vpnStatus.Store(status)
 	events.Emit(StatusUpdateEvent{Status: status, Error: err})
 }
-
-// closedService is a stub service that always returns "closed" status. It's used to replace the
-// actual service when it's being closed, to prevent any new requests from being processed after
-// the close request.
-type closedService struct {
-	Service
-}
-
-func (s *closedService) Status() string { return StatusClosed }
-func (s *closedService) Close() error   { return nil }
