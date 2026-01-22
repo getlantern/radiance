@@ -67,6 +67,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 			if err != nil {
 				slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
 			} else {
+				slog.Debug("replacing embedded config by local dnstt config", slog.Int("options", len(opts)))
 				options = opts
 			}
 		} else {
