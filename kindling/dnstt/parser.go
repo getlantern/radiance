@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "embed"
 
+	"github.com/alitto/pond"
 	"github.com/getlantern/dnstt"
 	"github.com/getlantern/keepcurrent"
 	"github.com/getlantern/kindling"
@@ -63,16 +64,16 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		defer localConfigMutex.Unlock()
 		if config, err := os.ReadFile(localConfigFilepath); err == nil {
 			opts, err := parseDNSTTConfigs(config)
-			if err == nil {
-				kindlingOptions, closeFuncs := selectDNSTTOptions(opts)
-				return kindlingOptions, closeFuncs, nil
+			if err != nil {
+				slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
+			} else {
+				options = opts
 			}
-			slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
 		} else {
 			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
-	kindlingOptions, closeFuncs := selectDNSTTOptions(options)
+	kindlingOptions, closeFuncs := selectDNSTTOptions(ctx, options)
 	return kindlingOptions, closeFuncs, nil
 }
 
@@ -154,74 +155,162 @@ func onNewDNSTTConfig(configFilepath string, gzippedYML []byte) error {
 	return os.WriteFile(configFilepath, gzippedYML, 0644)
 }
 
-func parseDNSTTConfigs(gzipyml []byte) ([]dnstt.DNSTT, error) {
+func newDNSTT(cfg dnsttConfig) (dnstt.DNSTT, error) {
+	opts := make([]dnstt.Option, 0)
+	if cfg.Domain != "" {
+		opts = append(opts, dnstt.WithTunnelDomain(cfg.Domain))
+	}
+	if cfg.PublicKey != "" {
+		opts = append(opts, dnstt.WithPublicKey(cfg.PublicKey))
+	}
+	if cfg.DoHResolver != nil {
+		opts = append(opts, dnstt.WithDoH(*cfg.DoHResolver))
+	}
+	if cfg.DoTResolver != nil {
+		opts = append(opts, dnstt.WithDoT(*cfg.DoTResolver))
+	}
+	if cfg.UTLSDistribution != nil {
+		opts = append(opts, dnstt.WithUTLSDistribution(*cfg.UTLSDistribution))
+	}
+
+	d, err := dnstt.NewDNSTT(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build new dnstt: %w", err)
+	}
+	return d, nil
+}
+
+func parseDNSTTConfigs(gzipyml []byte) ([]dnsttConfig, error) {
 	cfgs, err := processYaml(gzipyml)
 	if err != nil {
 		return nil, err
 	}
 
-	options := make([]dnstt.DNSTT, 0)
 	for _, cfg := range cfgs {
-		opts := make([]dnstt.Option, 0)
-		if cfg.Domain != "" {
-			opts = append(opts, dnstt.WithTunnelDomain(cfg.Domain))
+		if cfg.Domain == "" || cfg.PublicKey == "" {
+			return nil, fmt.Errorf("missing required parameters")
 		}
-		if cfg.PublicKey != "" {
-			opts = append(opts, dnstt.WithPublicKey(cfg.PublicKey))
+		if cfg.DoHResolver == nil && cfg.DoTResolver == nil {
+			return nil, fmt.Errorf("missing resolver")
 		}
-		if cfg.DoHResolver != nil {
-			opts = append(opts, dnstt.WithDoH(*cfg.DoHResolver))
+		if cfg.DoHResolver != nil && cfg.DoTResolver != nil {
+			return nil, fmt.Errorf("only one DoTResolver or DoHResolver must be defined, not both")
 		}
-		if cfg.DoTResolver != nil {
-			opts = append(opts, dnstt.WithDoT(*cfg.DoTResolver))
-		}
-		if cfg.UTLSDistribution != nil {
-			opts = append(opts, dnstt.WithUTLSDistribution(*cfg.UTLSDistribution))
-		}
-
-		d, err := dnstt.NewDNSTT(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build new dnstt: %w", err)
-		}
-		options = append(options, d)
 	}
 
-	return options, nil
+	return cfgs, nil
 }
 
 const maxDNSTTOptions = 10
 
-func selectDNSTTOptions(options []dnstt.DNSTT) ([]kindling.Option, []func() error) {
-	slog.Debug("selecting dnstt options", slog.Int("options", len(options)))
+var waitFor = 30 * time.Second
+
+func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.Option, []func() error) {
+	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(options)))
+
 	if len(options) == 0 {
-		return []kindling.Option{}, []func() error{}
-	}
-	kindlingOptions := make([]kindling.Option, 0)
-	closeDNSTTTunnel := make([]func() error, 0)
-
-	if len(options) < maxDNSTTOptions {
-		slog.Debug("options len is lower than max dnstt options, returning all options available", slog.Int("options", len(options)))
-		for _, opt := range options {
-			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(opt))
-			closeDNSTTTunnel = append(closeDNSTTTunnel, opt.Close)
-		}
-
-		return kindlingOptions, closeDNSTTTunnel
+		return nil, nil
 	}
 
-	slog.Debug("selecting random options", slog.Int("options", len(options)))
-	for randomIndex := range generateRandomIndex(len(options), maxDNSTTOptions) {
-		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(options[randomIndex]))
-		closeDNSTTTunnel = append(closeDNSTTTunnel, options[randomIndex].Close)
-	}
-	return kindlingOptions, closeDNSTTTunnel
-}
+	ctx, cancel := context.WithTimeout(ctx, waitFor)
+	defer cancel()
 
-func generateRandomIndex(maxVal int, length int) map[int]struct{} {
-	selectedIndexes := make(map[int]struct{})
-	for len(selectedIndexes) < length {
-		slog.Debug("generating n", slog.Int("maxVal", maxVal), slog.Int("len", length))
-		selectedIndexes[rand.Intn(maxVal)] = struct{}{}
+	var (
+		mu         sync.Mutex
+		selected   []dnstt.DNSTT
+		closeFuncs []func() error
+		foundCount atomic.Int32
+	)
+
+	// Limit concurrency to something reasonable
+	poolSize := 10
+	if len(options) < poolSize {
+		poolSize = len(options)
 	}
-	return selectedIndexes
+
+	pool := pond.New(poolSize, len(options), pond.Context(ctx))
+	for _, opt := range options {
+		pool.Submit(func() {
+			// Stop early if we already have enough
+			if foundCount.Load() >= maxDNSTTOptions {
+				return
+			}
+
+			dnst, err := newDNSTT(opt)
+			if err != nil {
+				slog.Debug("couldn't build dns tunnel", slog.Any("error", err))
+				return
+			}
+
+			rt, err := dnst.NewRoundTripper(ctx, "")
+			if err != nil {
+				slog.Debug("failed to create round tripper", slog.Any("error", err))
+				dnst.Close()
+				return
+			}
+
+			client := &http.Client{
+				Transport: rt,
+				Timeout:   15 * time.Second,
+			}
+
+			ctx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
+			defer cancelReq()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
+			if err != nil {
+				dnst.Close()
+				return
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				slog.Debug("dnstt test request failed", slog.Any("error", err))
+				dnst.Close()
+				return
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				slog.Debug("dnstt test returned non-2xx", slog.Int("status", resp.StatusCode))
+				dnst.Close()
+				return
+			}
+
+			// Successful tunnel
+			if foundCount.Add(1) <= maxDNSTTOptions {
+				mu.Lock()
+				if opt.DoHResolver != nil {
+					slog.Debug("selected DOH", slog.String("resolver", *opt.DoHResolver))
+				}
+				if opt.DoTResolver != nil {
+					slog.Debug("selected DOT", slog.String("resolver", *opt.DoTResolver))
+				}
+				selected = append(selected, dnst)
+				closeFuncs = append(closeFuncs, dnst.Close)
+				mu.Unlock()
+
+				// Cancel remaining work once we have enough
+				if foundCount.Load() >= maxDNSTTOptions {
+					cancel()
+				}
+			} else {
+				// Extra tunnel found after limit
+				dnst.Close()
+			}
+		})
+	}
+	pool.StopAndWaitFor(waitFor)
+
+	kindlingOptions := make([]kindling.Option, 0, len(selected))
+	for _, opt := range selected {
+		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(opt))
+	}
+
+	slog.Debug(
+		"dnstt selection complete",
+		slog.Int("selected", len(kindlingOptions)),
+		slog.Int("available", len(options)),
+	)
+
+	return kindlingOptions, closeFuncs
 }

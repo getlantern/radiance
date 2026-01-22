@@ -112,9 +112,9 @@ dnsttConfigs:
 
 const validDNSTTYAML = `
 dnsttConfigs:
-  - domain: t.example.com
+  - domain: t.iantem.io
     publicKey: 405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977
-    dohResolver: https://dns.example/dns-query
+    dohResolver: https://cloudflare-dns.com/dns-query
 `
 
 const invalidDNSTTYAML = `
@@ -129,12 +129,13 @@ func TestDNSTTOptions(t *testing.T) {
 		AddSource: true,
 		Level:     slog.LevelDebug,
 	})))
+	waitFor = 15 * time.Second
 	t.Run("embedded config only", func(t *testing.T) {
 		opts, closers, err := DNSTTOptions(context.Background(), "", logger)
 		assert.NoError(t, err)
 
-		assert.Len(t, opts, maxDNSTTOptions)
-		assert.Len(t, closers, maxDNSTTOptions)
+		assert.GreaterOrEqual(t, len(opts), 1)
+		assert.Equal(t, len(opts), len(closers))
 
 		for _, closeFn := range closers {
 			assert.NoError(t, closeFn())
@@ -167,8 +168,8 @@ func TestDNSTTOptions(t *testing.T) {
 		require.NoError(t, err)
 		opts, closers, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
 		assert.NoError(t, err)
-		assert.Len(t, opts, maxDNSTTOptions)
-		assert.Len(t, closers, maxDNSTTOptions)
+		assert.GreaterOrEqual(t, len(opts), 1)
+		assert.Equal(t, len(opts), len(closers))
 		for _, closeFn := range closers {
 			assert.NoError(t, closeFn())
 		}
