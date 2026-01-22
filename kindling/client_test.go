@@ -2,7 +2,6 @@ package kindling
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,14 +21,11 @@ func TestNewClient(t *testing.T) {
 	cli := HTTPClient()
 	assert.NotNil(t, cli)
 
-	req, err := http.NewRequest(http.MethodGet, "https://google.com", http.NoBody)
+	req, err := http.NewRequest(http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 	assert.NoError(t, err)
 
 	resp, err := cli.Do(req)
 	assert.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	content, err := io.ReadAll(resp.Body)
-	assert.NoError(t, err)
-	t.Logf("content: %s", content)
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
