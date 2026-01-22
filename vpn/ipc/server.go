@@ -134,6 +134,7 @@ func (s *Server) Close() error {
 	if s.closed.Swap(true) {
 		return nil
 	}
+	s.service.Close()
 	slog.Info("Closing IPC server")
 	return s.svr.Close()
 }

@@ -37,6 +37,9 @@ func InitIPC(dataPath, logPath, logLevel string, platformIfce libbox.PlatformInt
 		dataPath = path
 	}
 
+	if platformIfce != nil {
+		slog.Debug("setting platform interface for IPC server", "platform", fmt.Sprintf("%T", platformIfce))
+	}
 	server := ipc.NewServer(NewTunnelService(dataPath, slog.Default().With("service", "ipc"), platformIfce))
 	slog.Debug("starting IPC server")
 	if err := server.Start(dataPath); err != nil {
