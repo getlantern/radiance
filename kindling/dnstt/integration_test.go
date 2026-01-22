@@ -60,7 +60,6 @@ func TestEachDNSConfig(t *testing.T) {
 
 			d, err := dnstt.NewDNSTT(opts...)
 			require.NoError(t, err)
-			defer assert.NoError(t, d.Close())
 			rt, err := d.NewRoundTripper(ctx, "")
 			require.NoError(t, err)
 
@@ -74,6 +73,7 @@ func TestEachDNSConfig(t *testing.T) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 			require.NoError(t, err)
 			resp, err := cli.Do(req)
+			assert.NoError(t, d.Close())
 			require.NoError(t, err)
 			assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 		})
