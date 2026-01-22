@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	box "github.com/getlantern/lantern-box"
 	"go.opentelemetry.io/otel"
@@ -99,9 +100,20 @@ func NewManager(dataPath string) (*Manager, error) {
 		serversFile: filepath.Join(dataPath, common.ServersFileName),
 		access:      sync.RWMutex{},
 
-		// Note that we use the http.DefaultClient here because it is only used to access private
+		// Note that we use a regular http.Client here because it is only used to access private
 		// servers the user has created.
-		httpClient: http.DefaultClient,
+		// Use the same configuration as http.DefaultClient.
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				ForceAttemptHTTP2:   true,
+				IdleConnTimeout:     90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
+		},
 	}
 
 	slog.Debug("Loading servers", "file", mgr.serversFile)
