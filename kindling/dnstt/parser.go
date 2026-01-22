@@ -55,14 +55,6 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		"DNSTTOptions",
 	)
 	defer span.End()
-	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
-	if err != nil {
-		span.RecordError(err)
-		slog.Error("couldn't create http client for fetching dnstt configs", slog.Any("error", err))
-	}
-	// starting config updater/fetcher
-	dnsttConfigUpdate(ctx, localConfigFilepath, client)
-
 	// parsing embedded configs and loading options
 	options, err := parseDNSTTConfigs(embeddedConfig)
 	if err != nil {
@@ -89,6 +81,15 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 	}
 	kindlingOptions, closeFuncs := selectDNSTTOptions(ctx, options)
 	span.AddEvent("selected dns tunnels", trace.WithAttributes(attribute.Int("options", len(kindlingOptions))))
+
+	// starting config updater/fetcher
+	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
+	if err != nil {
+		span.RecordError(err)
+		slog.Error("couldn't create http client for fetching dnstt configs", slog.Any("error", err))
+	}
+
+	dnsttConfigUpdate(ctx, localConfigFilepath, client)
 	return kindlingOptions, closeFuncs, nil
 }
 
