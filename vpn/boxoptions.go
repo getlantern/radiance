@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	lcommon "github.com/getlantern/common"
@@ -271,14 +270,14 @@ func buildOptions(group, path string) (O.Options, error) {
 	// add smart routing and ad block rules
 	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
 		slog.Debug("Adding smart-routing rules")
-		outbounds, rules, rulesets := smartRoutingOptions(cfg.SmartRouting)
+		outbounds, rules, rulesets := cfg.SmartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
 	if settings.GetBool(settings.AdBlockKey) && len(cfg.AdBlock) > 0 {
 		slog.Debug("Adding ad-block rules")
-		rule, rulesets := adBlockRule(cfg.AdBlock)
+		rule, rulesets := cfg.AdBlock.ToOptions()
 		opts.Route.Rules = append(opts.Route.Rules, rule)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
@@ -384,95 +383,6 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
-}
-
-func smartRoutingOptions(smartRules []lcommon.SmartRoutingRule) ([]O.Outbound, []O.Rule, []O.RuleSet) {
-	outbounds := []O.Outbound{}
-	rules := []O.Rule{}
-	rulesets := []O.RuleSet{}
-	for _, sr := range smartRules {
-		tags, rs := toSBRuleSet(sr.RuleSets)
-		detour := sr.Category
-		if len(sr.Outbounds) == 1 && sr.Outbounds[0] == "direct" {
-			detour = "direct"
-		}
-		rule := O.Rule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{
-					RuleSet: tags,
-				},
-				RuleAction: O.RuleAction{
-					Action: C.RuleActionTypeRoute,
-					RouteOptions: O.RouteActionOptions{
-						Outbound: detour,
-					},
-				},
-			},
-		}
-		rules = append(rules, rule)
-		rulesets = append(rulesets, rs...)
-		if detour != "direct" {
-			outbounds = append(outbounds, O.Outbound{
-				Type: C.TypeURLTest,
-				Tag:  "sr-" + sr.Category,
-				Options: &O.URLTestOutboundOptions{
-					Outbounds:   sr.Outbounds,
-					URL:         "https://google.com/generate_204",
-					Interval:    badoption.Duration(urlTestInterval),
-					IdleTimeout: badoption.Duration(urlTestIdleTimeout),
-				},
-			})
-		}
-	}
-	return outbounds, rules, rulesets
-}
-
-func adBlockRule(rules []lcommon.RuleSet) (O.Rule, []O.RuleSet) {
-	tags, rulesets := toSBRuleSet(rules)
-	rule := O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{
-				RuleSet: tags,
-			},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	}
-	return rule, rulesets
-}
-
-func toSBRuleSet(rules []lcommon.RuleSet) ([]string, []O.RuleSet) {
-	rulesets := []O.RuleSet{}
-	tags := []string{}
-	for _, rule := range rules {
-		format := rule.Format
-		if format == "" {
-			if strings.HasSuffix(rule.URL, ".srs") {
-				format = C.RuleSetFormatBinary
-			} else {
-				format = C.RuleSetFormatSource
-			}
-		}
-		detour := rule.DownloadDetour
-		if detour == "" {
-			detour = "direct"
-		}
-		rulesets = append(rulesets, O.RuleSet{
-			Type:   C.RuleSetTypeRemote,
-			Tag:    rule.Tag,
-			Format: format,
-			RemoteOptions: O.RemoteRuleSet{
-				URL:            rule.URL,
-				DownloadDetour: detour,
-				UpdateInterval: badoption.Duration(24 * time.Hour),
-			},
-		})
-		tags = append(tags, rule.Tag)
-	}
-	return tags, rulesets
 }
 
 func useIfNotZero[T comparable](newVal, oldVal T) T {
