@@ -19,11 +19,16 @@ import (
 
 var _ ipc.Service = (*TunnelService)(nil)
 
+type PlatformInterface interface {
+	libbox.PlatformInterface
+	PostServiceClose()
+}
+
 // TunnelService manages the lifecycle of the VPN tunnel.
 type TunnelService struct {
 	tunnel *tunnel
 
-	platformIfce libbox.PlatformInterface
+	platformIfce PlatformInterface
 	dataPath     string
 	logger       *slog.Logger
 
@@ -32,7 +37,7 @@ type TunnelService struct {
 
 // NewTunnelService creates a new TunnelService instance with the provided configuration paths, log
 // level, and platform interface.
-func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce libbox.PlatformInterface) *TunnelService {
+func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce PlatformInterface) *TunnelService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -102,10 +107,7 @@ func (s *TunnelService) Close() error {
 		return err
 	}
 	if s.platformIfce != nil {
-		if pcloser, ok := s.platformIfce.(interface{ PostServiceClose() }); ok {
-			slog.Debug("Calling PostServiceClose on platform interface")
-			pcloser.PostServiceClose()
-		}
+		s.platformIfce.PostServiceClose()
 	}
 	s.logger.Debug("Tunnel closed")
 	return nil
@@ -130,6 +132,9 @@ func (s *TunnelService) Restart() error {
 	s.logger.Info("Restarting tunnel")
 	if err := t.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
+	}
+	if s.platformIfce != nil {
+		s.platformIfce.PostServiceClose()
 	}
 	runtime.GC()
 
