@@ -21,7 +21,11 @@ import (
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling/smart"
+	"github.com/getlantern/radiance/traces"
 	"github.com/goccy/go-yaml"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type dnsttConfig struct {
@@ -39,14 +43,21 @@ var localConfigMutex sync.Mutex
 
 const dnsttConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main/kindling/dnstt/dnstt.yml.gz"
 const pollInterval = 12 * time.Hour
+const tracerName = "github.com/getlantern/radiance/kindling/dnstt"
 
 // DNSTTOptions load the embedded DNSTT config and return kindling options so
 // it can be used as one of the transport options. If the local config filepath
 // is provided and exists, this config will be loaded and if successfully
 // parsed, will be returned instead of the embedded config.
 func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Writer) ([]kindling.Option, []func() error, error) {
+	ctx, span := otel.Tracer(tracerName).Start(
+		ctx,
+		"DNSTTOptions",
+	)
+	defer span.End()
 	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
 	if err != nil {
+		span.RecordError(err)
 		slog.Error("couldn't create http client for fetching dnstt configs", slog.Any("error", err))
 	}
 	// starting config updater/fetcher
@@ -55,7 +66,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 	// parsing embedded configs and loading options
 	options, err := parseDNSTTConfigs(embeddedConfig)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse dnstt embedded config: %w", err)
+		return nil, nil, traces.RecordError(ctx, fmt.Errorf("failed to parse dnstt embedded config: %w", err))
 	}
 
 	// if local config is set and exists, parse, load the dnstt config and close the embedded dns tunnels
@@ -65,16 +76,19 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		if config, err := os.ReadFile(localConfigFilepath); err == nil {
 			opts, err := parseDNSTTConfigs(config)
 			if err != nil {
+				span.RecordError(err)
 				slog.Warn("failed to parse local dnstt config, returning embedded dnstt config", slog.Any("error", err))
 			} else {
 				slog.Debug("replacing embedded config by local dnstt config", slog.Int("options", len(opts)))
 				options = opts
 			}
 		} else {
+			span.RecordError(err)
 			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
 	kindlingOptions, closeFuncs := selectDNSTTOptions(ctx, options)
+	span.AddEvent("selected dns tunnels", trace.WithAttributes(attribute.Int("options", len(kindlingOptions))))
 	return kindlingOptions, closeFuncs, nil
 }
 
