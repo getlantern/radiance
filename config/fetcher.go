@@ -213,6 +213,7 @@ func moduleVersion(modulePath ...string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("could not read build info")
 	}
+	slog.Info("build info", slog.Any("info", info))
 
 	for _, mod := range info.Deps {
 		if slices.Contains(modulePath, mod.Path) {
