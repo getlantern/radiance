@@ -6,8 +6,6 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
-
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -21,7 +19,7 @@ var (
 
 // InitIPC initializes and starts the IPC server. If the server is already running, it returns the
 // existing instance.
-func InitIPC(dataPath, logPath, logLevel string, platformIfce libbox.PlatformInterface) (*ipc.Server, error) {
+func InitIPC(dataPath, logPath, logLevel string, platformIfce PlatformInterface) (*ipc.Server, error) {
 	ipcMu.Lock()
 	defer ipcMu.Unlock()
 	if ipcServer != nil && !ipcServer.IsClosed() {
