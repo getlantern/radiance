@@ -227,7 +227,7 @@ func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, waitFor)
+	pondCtx, cancel := context.WithTimeout(ctx, waitFor)
 	defer cancel()
 
 	var (
@@ -243,7 +243,7 @@ func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.
 		poolSize = len(options)
 	}
 
-	pool := pond.New(poolSize, len(options), pond.Context(ctx))
+	pool := pond.New(poolSize, len(options), pond.Context(pondCtx))
 	for _, opt := range options {
 		pool.Submit(func() {
 			// Stop early if we already have enough
@@ -269,9 +269,9 @@ func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.
 				Timeout:   15 * time.Second,
 			}
 
-			ctx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
+			reqCtx, cancelReq := context.WithTimeout(pondCtx, 15*time.Second)
 			defer cancelReq()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 			if err != nil {
 				dnst.Close()
 				return
