@@ -125,6 +125,10 @@ func dnsttConfigValidator() func([]byte) error {
 }
 
 func dnsttConfigUpdate(ctx context.Context, localConfigPath string, httpClient *http.Client) {
+	if httpClient == nil || localConfigPath == "" {
+		slog.Warn("missing http client or local config path parameters, required for updating dnstt configuration")
+		return
+	}
 	slog.Debug("Updating dnstt configuration", slog.String("url", dnsttConfigURL))
 	source := keepcurrent.FromWebWithClient(dnsttConfigURL, httpClient)
 	chDB := make(chan []byte)
