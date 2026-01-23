@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/option"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
@@ -19,6 +18,7 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/servers"
 )
@@ -44,6 +44,7 @@ func TestBuildOptions(t *testing.T) {
 		name        string
 		lanternTags []string
 		userTags    []string
+		shouldError bool
 	}{
 		{
 			name:        "config without user servers",
@@ -59,7 +60,8 @@ func TestBuildOptions(t *testing.T) {
 			userTags:    userTags,
 		},
 		{
-			name: "neither config nor user servers",
+			name:        "neither config nor user servers",
+			shouldError: true,
 		},
 	}
 	hasGroupWithTags := func(t *testing.T, outs []O.Outbound, group string, tags []string) {
@@ -90,6 +92,10 @@ func TestBuildOptions(t *testing.T) {
 				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
 			}
 			opts, err := buildOptions(autoAllTag, path)
+			if tt.shouldError {
+				require.Error(t, err, "expected error but got none")
+				return
+			}
 			require.NoError(t, err)
 
 			gotOutbounds := opts.Outbounds
@@ -106,6 +112,129 @@ func TestBuildOptions(t *testing.T) {
 			hasGroupWithTags(t, gotOutbounds, autoAllTag, []string{autoLanternTag, autoUserTag})
 		})
 	}
+}
+
+func TestBuildOptions_Rulesets(t *testing.T) {
+	smartRouteJSON := `
+	{
+		"outbounds": [
+			{
+				"type": "urltest",
+				"tag": "sr-openai",
+				"outbounds": ["http1-out", "socks1-out"],
+				"url": "https://google.com/generate_204", 
+				"interval": "3m0s",
+				"idle_timeout": "15m"
+			}
+		],
+		"route": {
+			"rules": [
+				{
+					"rule_set": "openai",
+					"outbound": "openai"
+				}
+			],
+			"rule_set": [
+				{
+				  "type": "remote",
+				  "tag": "openai",
+				  "url": "https://ruleset.com/openai.srs",
+				  "download_detour": "direct",
+				  "update_interval": "24h0m0s"
+				}
+			]
+		}
+	}
+	`
+	adBlockJSON := `
+	{
+		"route": {
+			"rules": [
+				{
+					"rule_set": [
+						"adblock-1",
+						"adblock-2"
+					],
+					"action": "reject"
+				}
+			],
+			"rule_set": [
+				{
+				  "type": "remote",
+				  "tag": "adblock-1",
+				  "url": "https://ruleset.com/adblock-1.srs",
+				  "download_detour": "direct",
+				  "update_interval": "24h0m0s"
+				},
+				{
+				  "type": "remote",
+				  "tag": "adblock-2",
+				  "url": "https://ruleset.com/adblock-2.srs",
+				  "download_detour": "direct",
+				  "update_interval": "24h0m0s"
+				}
+			]
+		}
+	}
+	`
+	wantSmartRoutingOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(smartRouteJSON))
+	require.NoError(t, err)
+	wantAdBlockOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(adBlockJSON))
+	require.NoError(t, err)
+
+	buf, err := os.ReadFile("testdata/config.json")
+	require.NoError(t, err, "read test config file")
+
+	t.Run("with smart routing", func(t *testing.T) {
+		tmp := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
+
+		require.NoError(t, settings.InitSettings(tmp))
+		t.Cleanup(settings.Reset)
+
+		settings.Set(settings.SmartRoutingKey, true)
+		options, err := buildOptions(autoAllTag, tmp)
+		require.NoError(t, err)
+		// check rules, rulesets, and outbounds are correctly built into options
+		assert.True(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
+		assert.True(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
+		assert.True(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
+	})
+	t.Run("with ad block", func(t *testing.T) {
+		tmp := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
+
+		require.NoError(t, settings.InitSettings(tmp))
+		t.Cleanup(settings.Reset)
+
+		settings.Set(settings.AdBlockKey, true)
+		options, err := buildOptions(autoAllTag, tmp)
+		require.NoError(t, err)
+		// check reject rule and rulesets are correctly built into options
+		for _, rs := range wantAdBlockOpts.Route.RuleSet {
+			assert.True(t, contains(t, options.Route.RuleSet, rs), "missing ad block ruleset")
+		}
+
+		adRule := wantAdBlockOpts.Route.Rules[0]
+		assert.True(t, contains(t, options.Route.Rules, adRule), "missing ad block rule")
+	})
+}
+
+func contains[S ~[]E, E any](t *testing.T, s S, e E) bool {
+	for _, v := range s {
+		if optsEqual(t, v, e) {
+			return true
+		}
+	}
+	return false
+}
+
+func optsEqual[T any](t *testing.T, want, got T) bool {
+	wantBuf, err := json.Marshal(want)
+	require.NoError(t, err, "marshal wanted options")
+	gotBuf, err := json.Marshal(got)
+	require.NoError(t, err, "marshal got options")
+	return string(wantBuf) == string(gotBuf)
 }
 
 func filterOutbounds(opts O.Options, typ string) ([]string, []O.Outbound) {
@@ -136,12 +265,12 @@ func testOptsToFile[T any](t *testing.T, opts T, path string) {
 	require.NoError(t, os.WriteFile(path, buf, 0644), "write options to file")
 }
 
-func testBoxOptions(tmpPath string) (*option.Options, string, error) {
+func testBoxOptions(tmpPath string) (*O.Options, string, error) {
 	content, err := os.ReadFile("testdata/boxopts.json")
 	if err != nil {
 		return nil, "", err
 	}
-	opts, err := json.UnmarshalExtendedContext[option.Options](box.BaseContext(), content)
+	opts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), content)
 	if err != nil {
 		return nil, "", err
 	}

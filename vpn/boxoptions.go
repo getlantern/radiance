@@ -5,23 +5,24 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
 
+	lcommon "github.com/getlantern/common"
+
 	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
-	dns "github.com/sagernet/sing-dns"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
@@ -65,18 +66,10 @@ func baseOpts(basePath string) O.Options {
 		},
 		DNS: &O.DNSOptions{
 			RawDNSOptions: O.RawDNSOptions{
-				Servers: []O.DNSServerOptions{
-					newDNSServerOptions(C.DNSTypeTLS, "dns-google-dot", "8.8.4.4", ""),
-					newDNSServerOptions(C.DNSTypeTLS, "dns-cloudflare-dot", "1.1.1.1", ""),
-					newDNSServerOptions(C.DNSTypeLocal, "local", "", ""),
-					newDNSServerOptions(C.DNSTypeTLS, "dns-sb-dot", "185.222.222.222", ""),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-google-doh", "dns.google", "dns-google-dot"),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-cloudflare-doh", "cloudflare-dns.com", "dns-cloudflare-dot"),
-					newDNSServerOptions(C.DNSTypeHTTPS, "dns-sb-doh", "doh.dns.sb", "dns-sb-dot"),
-				},
-				DNSClientOptions: O.DNSClientOptions{
-					Strategy: O.DomainStrategy(dns.DomainStrategyUseIPv4),
-				},
+				Servers: buildDNSServers(),
+				Rules:   buildDNSRules(),
+				// Fallback DNS when no rules match.
+				Final: "dns_local",
 			},
 		},
 		Inbounds: []O.Inbound{
@@ -268,23 +261,35 @@ func buildOptions(group, path string) (O.Options, error) {
 	// Load config file
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
-	configOpts, err := loadConfigOptions(confPath)
+	cfg, err := loadConfig(confPath)
 	if err != nil {
 		slog.Error("Failed to load config options", "error", err)
 		return O.Options{}, err
 	}
 
-	var lanternTags []string
-	switch {
-	case len(configOpts.RawMessage) == 0:
-		slog.Info("No config found at", "path", confPath)
-	case len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0:
-		slog.Warn("Config loaded but no outbounds or endpoints found")
-		fallthrough // Proceed to merge with base options
-	default:
-		lanternTags = mergeAndCollectTags(&opts, &configOpts)
-		slog.Debug("Merged config options", "tags", lanternTags)
+	// add smart routing and ad block rules
+	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
+		slog.Debug("Adding smart-routing rules")
+		outbounds, rules, rulesets := cfg.SmartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
+		opts.Outbounds = append(opts.Outbounds, outbounds...)
+		opts.Route.Rules = append(opts.Route.Rules, rules...)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
+	if settings.GetBool(settings.AdBlockKey) && len(cfg.AdBlock) > 0 {
+		slog.Debug("Adding ad-block rules")
+		rule, rulesets := cfg.AdBlock.ToOptions()
+		opts.Route.Rules = append(opts.Route.Rules, rule)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+	}
+
+	var lanternTags []string
+	configOpts := cfg.Options
+	if len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0 {
+		slog.Warn("Config loaded but no outbounds or endpoints found")
+	}
+	lanternTags = mergeAndCollectTags(&opts, &configOpts)
+	slog.Debug("Merged config options", "tags", lanternTags)
+
 	appendGroupOutbounds(&opts, servers.SGLantern, autoLanternTag, lanternTags)
 
 	// Load user servers
@@ -302,6 +307,10 @@ func buildOptions(group, path string) (O.Options, error) {
 		slog.Debug("Merged user server options", "tags", userTags)
 	}
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
+
+	if len(lanternTags) == 0 && len(userTags) == 0 {
+		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+	}
 
 	// Add auto all outbound
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
@@ -331,26 +340,15 @@ func buildOptions(group, path string) (O.Options, error) {
 // Helper functions //
 //////////////////////
 
-func loadConfigOptions(confPath string) (O.Options, error) {
-	content, err := os.ReadFile(confPath)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return O.Options{}, fmt.Errorf("read config file: %w", err)
-	}
-	if len(content) == 0 {
-		return O.Options{}, nil
-	}
-	slog.Log(nil, internal.LevelTrace, "Config file found, unmarshalling", "config", content)
-	cfg, err := json.UnmarshalExtendedContext[config.Config](box.BaseContext(), content)
+func loadConfig(path string) (lcommon.ConfigResponse, error) {
+	cfg, err := config.Load(path)
 	if err != nil {
-		return O.Options{}, fmt.Errorf("unmarshal config: %w", err)
+		return lcommon.ConfigResponse{}, fmt.Errorf("load config: %w", err)
 	}
-	conf := cfg.ConfigResponse
-
-	c := conf
-	c.Options.RawMessage = nil
-	slog.Log(nil, internal.LevelTrace, "Loaded config", "config", c)
-
-	return conf.Options, nil
+	if cfg == nil {
+		return lcommon.ConfigResponse{}, nil
+	}
+	return cfg.ConfigResponse, nil
 }
 
 func loadUserOptions(path string) (O.Options, error) {

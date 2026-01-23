@@ -7,13 +7,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	"github.com/getlantern/kindling"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
@@ -25,17 +23,15 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/common/user"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/fronted"
+	"github.com/getlantern/radiance/issue"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
-
-	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/issue"
 )
 
 const configPollInterval = 10 * time.Minute
@@ -60,15 +56,10 @@ type issueReporter interface {
 
 // Radiance is a local server that proxies all requests to a remote proxy server over a transport.StreamDialer.
 type Radiance struct {
-	confHandler   configHandler
-	issueReporter issueReporter
-	apiHandler    *api.APIClient
-	srvManager    *servers.Manager
-
-	// user config is the user config object that contains the device ID and other user data
-	userInfo common.UserInfo
-	locale   string
-
+	confHandler      configHandler
+	issueReporter    issueReporter
+	apiHandler       *api.APIClient
+	srvManager       *servers.Manager
 	shutdownFuncs    []func(context.Context) error
 	closeOnce        sync.Once
 	stopChan         chan struct{}
@@ -112,51 +103,21 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
+	settings.Set(settings.LocaleKey, opts.Locale)
 
-	dataDir := common.DataPath()
-	kindlingLogger := &slogWriter{Logger: slog.Default()}
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), kindlingLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create fronted: %w", err)
-	}
+	dataDir := settings.GetString(settings.DataPathKey)
+	kindling.SetKindling(kindling.NewKindling())
+	setUserConfig(platformDeviceID, dataDir, opts.Locale)
+	apiHandler := api.NewAPIClient(dataDir)
+	issueReporter := issue.NewIssueReporter()
 
-	kindlingConfigUpdaterCtx, cancel := context.WithCancel(context.Background())
-	ampClient, err := fronted.NewAMPClient(kindlingConfigUpdaterCtx, kindlingLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create amp client: %w", err)
-	}
-
-	k := kindling.NewKindling(
-		"radiance",
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(kindlingLogger),
-		kindling.WithDomainFronting(f),
-		// Most endpoints use df.iantem.io, but for some historical reasons
-		// "pro-server" calls still go to api.getiantem.org.
-		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindling.WithAMPCache(ampClient),
-	)
-
-	httpClientWithTimeout := k.NewHTTPClient()
-	httpClientWithTimeout.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClientWithTimeout.Transport))
-	httpClientWithTimeout.Timeout = common.DefaultHTTPTimeout
-
-	userInfo := user.NewUserConfig(platformDeviceID, dataDir, opts.Locale)
-	apiHandler := api.NewAPIClient(httpClientWithTimeout, userInfo, dataDir)
-	issueReporter, err := issue.NewIssueReporter(httpClientWithTimeout, userInfo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create issue reporter: %w", err)
-	}
 	svrMgr, err := servers.NewManager(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
 	cOpts := config.Options{
 		PollInterval: configPollInterval,
-		HTTPClient:   httpClientWithTimeout,
 		SvrManager:   svrMgr,
-		User:         userInfo,
 		DataDir:      dataDir,
 		Locale:       opts.Locale,
 		APIHandler:   apiHandler,
@@ -169,8 +130,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
 		srvManager:    svrMgr,
-		userInfo:      userInfo,
-		locale:        opts.Locale,
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
@@ -179,7 +138,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		if r.telemetryConsent.Load() {
 			slog.Info("Telemetry consent given; handling new config for telemetry")
-			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID, userInfo); err != nil {
+			if err := telemetry.OnNewConfig(evt.Old, evt.New, platformDeviceID); err != nil {
 				slog.Error("Failed to handle new config for telemetry", "error", err)
 			}
 		} else {
@@ -188,10 +147,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	})
 	registerPreStartTest(dataDir)
 	r.confHandler = config.NewConfigHandler(cOpts)
-	r.addShutdownFunc(common.Close, telemetry.Close, func(context.Context) error {
-		cancel()
-		return nil
-	})
+	r.addShutdownFunc(telemetry.Close, kindling.Close)
 	return r, nil
 }
 
@@ -239,12 +195,6 @@ func (r *Radiance) SetPreferredServer(ctx context.Context, country, city string)
 	r.confHandler.SetPreferredServerLocation(country, city)
 }
 
-// UserInfo returns the user info object for this client
-// This is the user config object that contains the device ID and other user data
-func (r *Radiance) UserInfo() common.UserInfo {
-	return r.userInfo
-}
-
 // ServerManager returns the server manager for the Radiance client.
 func (r *Radiance) ServerManager() *servers.Manager {
 	return r.srvManager
@@ -280,12 +230,11 @@ func (r *Radiance) ReportIssue(email string, report IssueReport) error {
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
 func (r *Radiance) Features() map[string]bool {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "features")
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "features")
 	defer span.End()
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		slog.Error("Failed to get config for features", "error", err)
-		traces.RecordError(ctx, err, trace.WithStackTrace(true))
+		slog.Info("Failed to get config for features", "error", err)
 		return map[string]bool{}
 	}
 	if cfg == nil {
@@ -318,7 +267,7 @@ func (r *Radiance) EnableTelemetry() {
 		slog.Info("No config available while enabling telemetry; telemetry will be initialized on next config update")
 		return
 	}
-	cErr := telemetry.OnNewConfig(nil, cfg, r.userInfo.DeviceID(), r.userInfo)
+	cErr := telemetry.OnNewConfig(nil, cfg, settings.GetString(settings.DeviceIDKey))
 	if cErr != nil {
 		slog.Warn("Failed to initialize telemetry on enabling", "error", cErr)
 	}
@@ -359,4 +308,26 @@ func (w *slogWriter) Write(p []byte) (n int, err error) {
 	// Convert the byte slice to a string and log it
 	w.Info(string(p))
 	return len(p), nil
+}
+
+// setUserConfig creates a new UserInfo object
+func setUserConfig(deviceID, dataDir, locale string) {
+	if err := settings.Set(settings.DeviceIDKey, deviceID); err != nil {
+		slog.Error("failed to set device ID in settings", "error", err)
+	}
+	if err := settings.Set(settings.DataPathKey, dataDir); err != nil {
+		slog.Error("failed to set data path in settings", "error", err)
+	}
+	if err := settings.Set(settings.LocaleKey, locale); err != nil {
+		slog.Error("failed to set locale in settings", "error", err)
+	}
+
+	events.SubscribeOnce(func(evt config.NewConfigEvent) {
+		if evt.New != nil && evt.New.ConfigResponse.Country != "" {
+			if err := settings.Set(settings.CountryCodeKey, evt.New.ConfigResponse.Country); err != nil {
+				slog.Error("failed to set country code in settings", "error", err)
+			}
+			slog.Info("Set country code from config response", "country_code", evt.New.ConfigResponse.Country)
+		}
+	})
 }

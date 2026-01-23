@@ -1,4 +1,4 @@
-package config
+package dnstt
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -29,43 +30,38 @@ func gzipYAML(yaml []byte) []byte {
 
 func TestDNSTTConfigUpdate(t *testing.T) {
 	validYAML := []byte(`
-dnstt:
-  dohResolver: https://localhost/dns
-  domain: "example.com"
+dnsttConfigs:
+  - dohResolver: https://localhost/dns
+    domain: "example.com"
 `)
 	invalidGzip := []byte("not a gzip file")
 
 	tests := []struct {
 		name         string
-		configURL    string
 		yaml         []byte
 		status       int
 		expectUpdate bool
 	}{
 		{
 			name:         "empty configURL",
-			configURL:    "",
 			yaml:         nil,
 			status:       200,
 			expectUpdate: false,
 		},
 		{
 			name:         "valid config",
-			configURL:    "/config",
 			yaml:         gzipYAML(validYAML),
 			status:       200,
 			expectUpdate: true,
 		},
 		{
 			name:         "invalid gzip",
-			configURL:    "/config",
 			yaml:         invalidGzip,
 			status:       200,
 			expectUpdate: false,
 		},
 		{
 			name:         "http error",
-			configURL:    "/notfound",
 			yaml:         nil,
 			status:       404,
 			expectUpdate: false,
@@ -77,22 +73,14 @@ dnstt:
 			updated := make(chan struct{})
 			defer close(updated)
 			if tt.expectUpdate {
-				events.Subscribe(func(e NewDNSTTConfigEvent) {
-					assert.NotNil(t, e.New)
+				events.Subscribe(func(e DNSTTUpdateEvent) {
+					assert.NotEmpty(t, e.YML)
 					updated <- struct{}{}
 				})
 			}
 
 			// Custom RoundTripper to mock HTTP responses
 			rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-				if tt.configURL == "" || req.URL.Path != tt.configURL {
-					return &http.Response{
-						StatusCode: tt.status,
-						Body:       http.NoBody,
-						Header:     make(http.Header),
-						Request:    req,
-					}, nil
-				}
 				resp := &http.Response{
 					StatusCode: tt.status,
 					Header:     make(http.Header),
@@ -107,15 +95,9 @@ dnstt:
 			})
 
 			client := &http.Client{Transport: rt}
-
-			url := ""
-			if tt.configURL != "" {
-				url = "http://mock" + tt.configURL
-			}
-
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			DNSTTConfigUpdate(ctx, url, client, 1*time.Minute)
+			dnsttConfigUpdate(ctx, filepath.Join(t.TempDir(), "dnstt.yml.gz"), client)
 			if tt.expectUpdate {
 				assert.Eventually(t, func() bool {
 					_, ok := <-updated

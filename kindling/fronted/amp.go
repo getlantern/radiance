@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ import (
 //go:embed amp_public_key.pem
 var ampPublicKey string
 
+const ampConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main/kindling/fronted/amp.yml.gz"
+
 // NewAMPClient creates a new AMP (Accelerated Mobile Pages) client for domain fronting.
 // It initializes the client with the provided context, log writer, and public key for verification.
 // The client automatically fetches and updates its configuration from a remote URL in the background.
@@ -25,15 +28,9 @@ var ampPublicKey string
 //   - logWriter: Writer for logging transport and client activity.
 //
 // Returns an initialized amp.Client or an error if setup fails.
-func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) {
-	configURL := "https://raw.githubusercontent.com/getlantern/radiance/main/fronted/amp.yml.gz"
-	httpClient, err := newHTTPClientWithSmartTRansport(logWriter, configURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP client: %w", err)
-	}
-
-	ampClient, err := amp.NewClientWithConfig(ctx,
-		amp.Config{
+func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) (amp.Client, error) {
+	ampOptions := []amp.Option{
+		amp.WithConfig(amp.Config{
 			BrokerURL: "https://amp.iantem.io",
 			CacheURL:  "https://cdn.ampproject.org",
 			PublicKey: ampPublicKey,
@@ -55,10 +52,8 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) 
 				"play.google.com",
 				"developers.google.cn",
 			},
-		},
-		amp.WithConfigURL(configURL),
-		amp.WithHTTPClient(httpClient),
-		amp.WithPollInterval(12*time.Hour),
+		}),
+		amp.WithConfigStoragePath(storagePath),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
 			serverName, _, semicolonExists := strings.Cut(address, ":")
 			addressWithPort := address
@@ -70,7 +65,18 @@ func NewAMPClient(ctx context.Context, logWriter io.Writer) (amp.Client, error) 
 				ServerName: serverName,
 			})
 		}),
-	)
+	}
+	httpClient, err := newHTTPClientWithSmartTransport(logWriter, ampConfigURL)
+	if err != nil {
+		slog.Error("failed to create smart HTTP client", slog.Any("error", err))
+	} else {
+		ampOptions = append(ampOptions,
+			amp.WithHTTPClient(httpClient),
+			amp.WithPollInterval(12*time.Hour),
+			amp.WithConfigURL(ampConfigURL))
+	}
+
+	ampClient, err := amp.NewClientWithOptions(ctx, ampOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build amp client: %w", err)
 	}

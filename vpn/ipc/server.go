@@ -70,9 +70,9 @@ func (vpn *VPNStatus) String() string {
 }
 
 // NewServer creates a new Server instance with the provided Service.
-func NewServer(service Service) *Server {
+func NewServer() *Server {
 	s := &Server{
-		service: service,
+		service: &closedService{},
 		router:  chi.NewMux(),
 	}
 	s.vpnStatus.Store(Disconnected)
@@ -92,6 +92,7 @@ func NewServer(service Service) *Server {
 	s.router.Post(startServiceEndpoint, s.startServiceHandler)
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
+	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
 }
@@ -99,6 +100,9 @@ func NewServer(service Service) *Server {
 // Start starts the IPC server. The socket file will be created in the "basePath" directory.
 // On Windows, the "basePath" is ignored and a default named pipe path is used.
 func (s *Server) Start(basePath string, fn StartFn) error {
+	if fn == nil {
+		return errors.New("start function is required")
+	}
 	s.startFn = fn
 	l, err := listen(basePath)
 	if err != nil {
@@ -179,6 +183,9 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartService(ctx context.Context, group, tag string) error {
+	if s.GetStatus() != StatusClosed {
+		return errors.New("service is already running")
+	}
 	svc, err := s.startFn(ctx, group, tag)
 	if err != nil {
 		s.setVPNStatus(ErrorStatus, err)
@@ -230,6 +237,49 @@ func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
 			traces.RecordError(context.Background(), err)
 		}
 	}()
+}
+
+func RestartService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", restartServiceEndpoint, nil)
+	return err
+}
+
+func (s *Server) RestartService(ctx context.Context) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	svc := s.service
+	s.service = &closedService{}
+	if svc.Status() != StatusRunning {
+		return ErrServiceIsNotReady
+	}
+
+	mode := svc.ClashServer().Mode()
+	groupOutbound, err := getGroupOutbound(svc.Ctx(), mode)
+	if err != nil {
+		return fmt.Errorf("error getting current outbound group: %w", err)
+	}
+	selected := groupOutbound.Now()
+
+	if err := svc.Close(); err != nil {
+		return fmt.Errorf("stopping service: %w", err)
+	}
+	s.vpnStatus.Store(Disconnected)
+
+	if svc, err = s.startFn(ctx, mode, selected); err != nil {
+		s.setVPNStatus(ErrorStatus, err)
+		return fmt.Errorf("error starting service: %w", err)
+	}
+	s.setVPNStatus(Connected, nil)
+	s.service = svc
+	return nil
+}
+
+func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.RestartService(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) setVPNStatus(status VPNStatus, err error) {

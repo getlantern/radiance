@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,6 +30,7 @@ import (
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 )
@@ -59,9 +60,7 @@ type ListenerFunc func(oldConfig, newConfig *Config) error
 
 type Options struct {
 	PollInterval time.Duration
-	HTTPClient   *http.Client
 	SvrManager   ServerManager
-	User         common.UserInfo
 	DataDir      string
 	Locale       string
 	APIHandler   *api.APIClient
@@ -71,7 +70,7 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config     atomic.Value
+	config     atomic.Pointer[Config]
 	ftr        Fetcher
 	svrManager ServerManager
 
@@ -89,7 +88,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	configPath := filepath.Join(options.DataDir, common.ConfigFileName)
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
-		config:        atomic.Value{},
 		fetchDisabled: options.PollInterval <= 0,
 		ctx:           ctx,
 		cancel:        cancel,
@@ -109,12 +107,9 @@ func NewConfigHandler(options Options) *ConfigHandler {
 	}
 
 	if !ch.fetchDisabled {
-		ch.ftr = newFetcher(options.HTTPClient, options.User, options.Locale, options.APIHandler)
+		ch.ftr = newFetcher(options.Locale, options.APIHandler)
 		go ch.fetchLoop(options.PollInterval)
-		events.Subscribe(func(evt common.UserChangeEvent) {
-			if !shouldRefetch(evt.New, evt.Old) {
-				return
-			}
+		events.Subscribe(func(evt settings.UserChangeEvent) {
 			slog.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				slog.Error("Failed to fetch config", "error", err)
@@ -122,13 +117,6 @@ func NewConfigHandler(options Options) *ConfigHandler {
 		})
 	}
 	return ch
-}
-
-// shouldRefetch determines whether a config refetch is needed based on user ID and account type changes.
-func shouldRefetch(new, old common.UserInfo) bool {
-	return new != nil && old != nil && old.LegacyID() != 0 &&
-		(new.LegacyToken() != old.LegacyToken() || // user ID changed
-			new.AccountType() != old.AccountType()) // changed between free and pro
 }
 
 var ErrNoWGKey = errors.New("no wg key")
@@ -236,7 +224,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
-		cfg := ch.config.Load().(*Config).ConfigResponse
+		cfg := ch.config.Load().ConfigResponse
 		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
 		for k, v := range cfg.OutboundLocations {
 			if v == nil {
@@ -263,7 +251,7 @@ func setCustomProtocolOptions(outbounds []option.Outbound) {
 	for _, outbound := range outbounds {
 		switch opts := outbound.Options.(type) {
 		case *lbO.WATEROutboundOptions:
-			opts.Dir = filepath.Join(common.DataPath(), "water")
+			opts.Dir = filepath.Join(settings.GetString(settings.DataPathKey), "water")
 			// TODO: we need to measure the client upload and download metrics
 			// in order to set hysteria custom parameters and support brutal sender
 			// as congestion control
@@ -349,24 +337,33 @@ func (ch *ConfigHandler) isClosed() bool {
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
 	slog.Debug("reading config file")
-	buf, err := atomicfile.ReadFile(ch.configPath)
-	slog.Debug("config file read")
-	if os.IsNotExist(err) { // no config file
-		return nil
-	}
+	cfg, err := Load(ch.configPath)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
-	cfg, err := ch.unmarshalConfig(buf)
-	if err != nil {
-		return fmt.Errorf("parsing config: %w", err)
+	if cfg != nil {
+		ch.config.Store(cfg)
+		emit(nil, cfg)
 	}
-	ch.config.Store(cfg)
-	emit(nil, cfg)
 	return nil
 }
 
-func (ch *ConfigHandler) unmarshalConfig(data []byte) (*Config, error) {
+func Load(path string) (*Config, error) {
+	buf, err := atomicfile.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // No config file yet
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+	cfg, err := unmarshalConfig(buf)
+	if err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	return cfg, nil
+}
+
+func unmarshalConfig(data []byte) (*Config, error) {
 	type T struct {
 		ConfigResponse    json.RawMessage
 		PreferredLocation C.ServerLocation
@@ -403,7 +400,7 @@ func (ch *ConfigHandler) GetConfig() (*Config, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("no config yet -- first run?")
 	}
-	return cfg.(*Config), nil
+	return cfg, nil
 }
 
 func (ch *ConfigHandler) setConfig(cfg *Config) error {

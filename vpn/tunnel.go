@@ -20,8 +20,10 @@ import (
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
 	lblog "github.com/getlantern/lantern-box/log"
+	"github.com/getlantern/lantern-box/tracker/clientcontext"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -40,26 +42,29 @@ import (
 var (
 	tInstance *tunnel
 	tAccess   sync.Mutex
-
-	ipcServer *ipc.Server
 )
 
 type tunnel struct {
-	ctx         context.Context
-	lbService   *libbox.BoxService
-	cacheFile   adapter.CacheFile
-	clashServer *clashapi.Server
-	logFactory  sblog.ObservableFactory
+	ctx          context.Context
+	platformIfce libbox.PlatformInterface
+	lbService    *libbox.BoxService
+	cacheFile    adapter.CacheFile
+	clashServer  *clashapi.Server
+	logFactory   sblog.ObservableFactory
 
+	dataPath       string
 	svrFileWatcher *internal.FileWatcher
 	reloadAccess   sync.Mutex
 	// optsMap is a map of current outbound/endpoint options JSON, used to deduplicate on reload
 	optsMap   map[string][]byte
 	mutGrpMgr *groups.MutableGroupManager
 
+	clientContextTracker *clientcontext.ClientContextInjector
+
 	status  atomic.Value
 	cancel  context.CancelFunc
 	closers []io.Closer
+	started atomic.Bool
 }
 
 // establishConnection initializes and starts the VPN tunnel with the provided options and platform interface.
@@ -73,11 +78,26 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 
 	slog.Info("Establishing VPN tunnel", "group", group, "tag", tag)
 
-	t := &tunnel{}
+	t := &tunnel{
+		platformIfce: platIfce,
+		dataPath:     dataPath,
+	}
+	if err := t.start(group, tag, opts); err != nil {
+		return fmt.Errorf("starting tunnel: %w", err)
+	}
+	tInstance = t
+
+	return nil
+}
+
+func (t *tunnel) start(group, tag string, opts O.Options) error {
+	if t.started.Swap(true) {
+		return errors.New("tunnel already started")
+	}
 	t.status.Store(ipc.StatusInitializing)
 
 	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
-	if err := t.init(opts, dataPath, platIfce); err != nil {
+	if err := t.init(opts); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
@@ -90,6 +110,7 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 	}
 	t.closers = append(t.closers, t.cacheFile)
 
+	var err error
 	if group == "" { // group is empty, connect to last selected server
 		slog.Debug("Connecting to last selected server")
 		err = t.connect()
@@ -102,29 +123,11 @@ func establishConnection(group, tag string, opts O.Options, dataPath string, pla
 		return err
 	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
-
-	tInstance = t
 	t.status.Store(ipc.StatusRunning)
-	// If the IPC server is already running, make sure it points to the live tunnel
-	if ipcServer != nil {
-		ipcServer.SetService(t)
-		return nil
-	}
-	// fallback: start IPC server here for platforms that don't call InitIPC yet
-	isvr := ipc.NewServer(t)
-
-	// We pass nil as the start function to indicate this platform does not support starting the service via IPC.
-	if err := isvr.Start(dataPath, nil); err != nil {
-		slog.Error("Failed to start IPC server", "error", err)
-		t.close()
-		return fmt.Errorf("starting IPC server: %w", err)
-	}
-	ipcServer = isvr
-	slog.Debug("IPC server started")
 	return nil
 }
 
-func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformInterface) error {
+func (t *tunnel) init(opts O.Options) error {
 	slog.Log(nil, internal.LevelTrace, "Initializing tunnel")
 
 	cfg, err := json.MarshalContext(t.ctx, opts)
@@ -133,6 +136,7 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	}
 
 	// setup libbox service
+	dataPath := t.dataPath
 	setupOpts := &libbox.SetupOptions{
 		BasePath: dataPath,
 		TempPath: filepath.Join(dataPath, "temp"),
@@ -161,10 +165,18 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	t.cacheFile = cacheFile
 
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
-	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platIfce)
+	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), t.platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
+
+	// setup client info tracker
+	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
+	clientContextInjector := newClientContextInjector(outboundMgr, dataPath)
+	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
+	t.clientContextTracker = clientContextInjector
+	router := service.FromContext[adapter.Router](t.ctx)
+	router.AppendTracker(clientContextInjector)
 	t.lbService = lb
 
 	history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
@@ -197,6 +209,30 @@ func (t *tunnel) init(opts O.Options, dataPath string, platIfce libbox.PlatformI
 	t.svrFileWatcher = svrWatcher
 	slog.Info("Tunnel initializated")
 	return nil
+}
+
+func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
+	slog.Debug("Creating ClientContextInjector")
+	infoFn := func() clientcontext.ClientInfo {
+		return clientcontext.ClientInfo{
+			DeviceID:    settings.GetString(settings.DeviceIDKey),
+			Platform:    common.Platform,
+			IsPro:       settings.IsPro(),
+			CountryCode: settings.GetString(settings.CountryCodeKey),
+			Version:     common.Version,
+		}
+	}
+	matchBounds := clientcontext.MatchBounds{
+		Inbound:  []string{"any"},
+		Outbound: []string{},
+	}
+	if outbound, exists := outboundMgr.Outbound(servers.SGLantern); exists {
+		// Note: this should only contain lantern outbounds with servers that support client context
+		// tracking. otherwise, the connections will fail.
+		tags := outbound.(adapter.OutboundGroup).All()
+		matchBounds.Outbound = append(tags, servers.SGLantern, groupAutoTag(servers.SGLantern))
+	}
+	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
 }
 
 func newMutableGroupManager(
@@ -301,6 +337,30 @@ func (t *tunnel) close() error {
 	return err
 }
 
+func (t *tunnel) Restart() error {
+	tAccess.Lock()
+	defer tAccess.Unlock()
+	if t.status.Swap(ipc.StatusClosed) == ipc.StatusClosed {
+		return nil
+	}
+	group := t.clashServer.Mode()
+	tag := t.cacheFile.LoadSelected(group)
+
+	slog.Info("Restarting tunnel")
+	if err := t.close(); err != nil {
+		return fmt.Errorf("closing tunnel: %w", err)
+	}
+	*t = tunnel{
+		platformIfce: t.platformIfce,
+		dataPath:     t.dataPath,
+	}
+	opts, err := buildOptions(group, t.dataPath)
+	if err != nil {
+		return fmt.Errorf("building options: %w", err)
+	}
+	return t.start(group, tag, opts)
+}
+
 func (t *tunnel) Ctx() context.Context {
 	return t.ctx
 }
@@ -338,6 +398,18 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 		return fmt.Errorf("unmarshal config: %w", err)
 	}
 	slog.Log(nil, internal.LevelTrace, "Parsed server options", "options", svrs)
+
+	if t.clientContextTracker != nil {
+		// temporarily merge the new lantern tags into the clientContextInjector match bounds to capture
+		// any new connections before updateServers completes
+		if tags := svrs[servers.SGLantern].AllTags(); len(tags) > 0 {
+			slog.Log(nil, internal.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
+			matchBounds := t.clientContextTracker.MatchBounds()
+			matchBounds.Outbound = append(matchBounds.Outbound, tags...)
+			t.clientContextTracker.SetBounds(matchBounds)
+		}
+	}
+
 	err = t.updateServers(svrs)
 	if errors.Is(err, context.Canceled) {
 		return nil // tunnel is closing, ignore the error
@@ -345,6 +417,25 @@ func (t *tunnel) reloadOptions(optsPath string) error {
 	if err != nil && !errors.Is(err, errLibboxClosed) {
 		return fmt.Errorf("update server configs: %w", err)
 	}
+
+	if t.clientContextTracker == nil {
+		return nil
+	}
+
+	// finally, set the clientContextInjector match bounds to the new set of lantern tags
+	// Note, again, that this should only contain lantern outbounds with servers that support
+	// client context
+	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
+	outbound, exists := outboundMgr.Outbound(servers.SGLantern)
+	if !exists {
+		return nil
+	}
+	outGroup := outbound.(adapter.OutboundGroup)
+	slog.Debug("Setting updated lantern tags into ClientContextInjector")
+	t.clientContextTracker.SetBounds(clientcontext.MatchBounds{
+		Inbound:  []string{"any"},
+		Outbound: append(outGroup.All(), servers.SGLantern, groupAutoTag(servers.SGLantern)),
+	})
 	return nil
 }
 

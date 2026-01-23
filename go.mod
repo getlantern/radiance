@@ -10,7 +10,7 @@ replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v
 
 replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero v1.7.1-w
 
-//replace github.com/getlantern/common => ../common
+// replace github.com/getlantern/common => ../common
 
 // replace github.com/sagernet/sing => ../sing
 
@@ -23,19 +23,23 @@ replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/getlantern/amp v0.0.0-20251211213807-4cbc22624b9f
+	github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20251223145917-671181028168
+	github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f
 	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
-	github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f
+	github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
 	github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461
-	github.com/getlantern/lantern-box v0.0.6-0.20251219200503-ebc276f06e75
+	github.com/getlantern/lantern-box v0.0.6-0.20260109195635-79fc82eae39d
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
+	github.com/knadh/koanf/parsers/json v1.0.0
+	github.com/knadh/koanf/providers/rawbytes v1.0.0
+	github.com/knadh/koanf/v2 v2.3.0
 	github.com/sagernet/sing v0.7.13
 	github.com/sagernet/sing-box v1.12.13
 	github.com/stretchr/testify v1.11.1
@@ -106,6 +110,7 @@ require (
 	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
 	github.com/go-llsqlite/crawshaw v0.4.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
@@ -121,6 +126,7 @@ require (
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.5 // indirect
 	github.com/klauspost/reedsolomon v1.12.0 // indirect
+	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
@@ -128,7 +134,9 @@ require (
 	github.com/metacubex/utls v1.8.3 // indirect
 	github.com/mholt/acmez/v3 v3.1.2 // indirect
 	github.com/mholt/archiver/v3 v3.5.1 // indirect
+	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
+	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/nwaples/rardecode v1.1.2 // indirect
 	github.com/oschwald/geoip2-golang v1.9.0 // indirect
@@ -205,7 +213,7 @@ require (
 	github.com/cloudflare/circl v1.6.0 // indirect
 	github.com/cretz/bine v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/fsnotify/fsnotify v1.7.0
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
 	github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731 // indirect
 	github.com/getlantern/hex v0.0.0-20220104173244-ad7e4b9194dc // indirect
@@ -238,7 +246,7 @@ require (
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/metacubex/tfo-go v0.0.0-20250921095601-b102db4216c0 // indirect
-	github.com/miekg/dns v1.1.67 // indirect
+	github.com/miekg/dns v1.1.67
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -250,7 +258,6 @@ require (
 	github.com/sagernet/netlink v0.0.0-20240612041022-b9a21c07ac6a // indirect
 	github.com/sagernet/nftables v0.3.0-beta.4 // indirect
 	github.com/sagernet/quic-go v0.52.0-sing-box-mod.3 // indirect
-	github.com/sagernet/sing-dns v0.4.6
 	github.com/sagernet/sing-mux v0.3.3 // indirect
 	github.com/sagernet/sing-quic v0.5.2-0.20250909083218-00a55617c0fb // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
@@ -277,7 +284,7 @@ require (
 	golang.org/x/mod v0.29.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/sys v0.38.0
+	golang.org/x/sys v0.40.0
 	golang.org/x/time v0.9.0 // indirect
 	golang.org/x/tools v0.38.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect

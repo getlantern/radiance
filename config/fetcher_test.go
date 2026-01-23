@@ -17,9 +17,10 @@ import (
 
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
-	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
-	"github.com/getlantern/radiance/fronted"
+	"github.com/getlantern/radiance/common/settings"
+	rkindling "github.com/getlantern/radiance/kindling"
+	"github.com/getlantern/radiance/kindling/fronted"
 )
 
 func TestDomainFrontingFetchConfig(t *testing.T) {
@@ -32,9 +33,8 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 		"radiance-df-test",
 		kindling.WithDomainFronting(f),
 	)
-	httpClient := k.NewHTTPClient()
-	mockUser := &mockUser{}
-	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+	rkindling.SetKindling(k)
+	fetcher := newFetcher("en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
@@ -52,9 +52,8 @@ func TestProxylessFetchConfig(t *testing.T) {
 		"radiance-df-test",
 		kindling.WithProxyless("df.iantem.io"),
 	)
-	httpClient := k.NewHTTPClient()
-	mockUser := &mockUser{}
-	fetcher := newFetcher(httpClient, mockUser, "en-US", &api.APIClient{})
+	rkindling.SetKindling(k)
+	fetcher := newFetcher("en-US", &api.APIClient{})
 
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
@@ -77,25 +76,12 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return m.resp, m.err
 }
 
-type mockUser struct {
-	rcommon.UserInfo
-}
-
-func (m *mockUser) DeviceID() string {
-	return "mock-device-id"
-}
-func (m *mockUser) LegacyID() int64 {
-	return 1234567890
-}
-func (m *mockUser) AuthToken() string {
-	return "mock-auth-token"
-}
-func (m *mockUser) LegacyToken() string {
-	return "mock-legacy-token"
-}
-
 func TestFetchConfig(t *testing.T) {
-	mockUser := &mockUser{}
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "mock-device-id")
+	settings.Set(settings.UserIDKey, 1234567890)
+	settings.Set(settings.TokenKey, "mock-legacy-token")
+
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
 
@@ -142,15 +128,20 @@ func TestFetchConfig(t *testing.T) {
 		},
 	}
 
+	apiClient := &api.APIClient{}
+	defer apiClient.Reset()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockRT := &mockRoundTripper{
 				resp: tt.mockResponse,
 				err:  tt.mockError,
 			}
-			fetcher := newFetcher(&http.Client{
-				Transport: mockRT,
-			}, mockUser, "en-US", &api.APIClient{})
+			rkindling.SetKindling(&mockKindling{
+				&http.Client{
+					Transport: mockRT,
+				},
+			})
+			fetcher := newFetcher("en-US", &api.APIClient{})
 
 			gotConfig, err := fetcher.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
 
@@ -176,7 +167,7 @@ func TestFetchConfig(t *testing.T) {
 
 				assert.Equal(t, common.Platform, confReq.Platform)
 				assert.Equal(t, common.Name, confReq.AppName)
-				assert.Equal(t, mockUser.DeviceID(), confReq.DeviceID)
+				assert.Equal(t, settings.GetString(settings.DeviceIDKey), confReq.DeviceID)
 				assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
 				if tt.preferredServerLoc != nil {
 					assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
@@ -184,4 +175,18 @@ func TestFetchConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+type mockKindling struct {
+	c *http.Client
+}
+
+// NewHTTPClient returns a new HTTP client that is configured to use kindling.
+func (m *mockKindling) NewHTTPClient() *http.Client {
+	return m.c
+}
+
+// ReplaceTransport replaces an existing transport RoundTripper generator with the provided one.
+func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
+	panic("not implemented") // TODO: Implement
 }
