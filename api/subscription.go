@@ -16,7 +16,7 @@ import (
 )
 
 const proServerURL = "https://api.getiantem.org"
-const stageProServerURL = "https://api.staging.lantr.net"
+const stageProServerURL = "https://api.staging.iantem.io"
 
 type (
 	SubscriptionService string
