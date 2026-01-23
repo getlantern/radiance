@@ -11,7 +11,9 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/clashapi"
+	"github.com/sagernet/sing/service"
 
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -51,6 +53,9 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 			writer = f
 		}
 		logger = slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{AddSource: true, Level: internal.LevelTrace}))
+		runtime.AddCleanup(logger, func(file *os.File) {
+			file.Close()
+		}, f)
 	}
 	return &TunnelService{
 		platformIfce: platformIfce,
@@ -149,6 +154,8 @@ func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
 	if err := s.platformIfce.RestartService(); err != nil {
 		return fmt.Errorf("PlatformInterface.RestartService: %w", err)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.tunnel == nil {
 		return errors.New("tunnel nil after PlatformInterface.RestartService")
 	}
@@ -156,7 +163,12 @@ func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
 		return fmt.Errorf("tunnel not running: status %v", status)
 	}
 	s.tunnel.clashServer.SetMode(group)
-	// TODO: select outbound
+	outboundMgr := service.FromContext[adapter.OutboundManager](s.tunnel.ctx)
+	outbound, loaded := outboundMgr.Outbound(tag)
+	if !loaded {
+		return fmt.Errorf("selector not found: %s", tag)
+	}
+	outbound.(ipc.Selector).SelectOutbound(tag)
 	return nil
 }
 

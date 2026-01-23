@@ -118,10 +118,10 @@ func (s *Server) Start(basePath string) error {
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("IPC server", "error", err)
 		}
+		s.closed.Store(true)
 		if s.service.Status() != StatusClosed {
 			slog.Warn("IPC server stopped unexpectedly, closing service")
 			s.service.Close()
-			s.closed.Store(true)
 			s.setVPNStatus(ErrorStatus, errors.New("IPC server stopped unexpectedly"))
 		}
 	}()
@@ -134,7 +134,8 @@ func (s *Server) Close() error {
 	if s.closed.Swap(true) {
 		return nil
 	}
-	s.service.Close()
+	defer s.service.Close()
+
 	slog.Info("Closing IPC server")
 	return s.svr.Close()
 }
