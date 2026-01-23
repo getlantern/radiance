@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -40,8 +41,9 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 	case *slog.TextHandler, *slog.JSONHandler:
 	default:
 		os.MkdirAll(dataPath, 0o755)
+		path := filepath.Join(dataPath, "radiance_vpn.log")
 		var writer io.Writer
-		f, err := os.OpenFile("radiance_vpn.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			slog.Error("Failed to open log file", "error", err)
 			writer = os.Stdout
@@ -145,7 +147,7 @@ func (s *TunnelService) restart(group, tag string) error {
 
 func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
 	if err := s.platformIfce.RestartService(); err != nil {
-		return nil
+		return fmt.Errorf("PlatformInterface.RestartService: %w", err)
 	}
 	if s.tunnel == nil {
 		return errors.New("tunnel nil after PlatformInterface.RestartService")
