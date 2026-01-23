@@ -4,69 +4,63 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/vpn/rvpn"
 )
 
 var (
-	platIfceProvider func() libbox.PlatformInterface
-
 	ipcServer *ipc.Server
 	ipcMu     sync.Mutex
 )
 
-// InitIPC starts the long-lived IPC server and hooks it up to establishConnection
-func InitIPC(dataPath, logPath, logLevel string, provider func() libbox.PlatformInterface) (*ipc.Server, error) {
+// InitIPC initializes and starts the IPC server. If the server is already running, it returns the
+// existing instance.
+func InitIPC(dataPath, logPath, logLevel string, platformIfce rvpn.PlatformInterface) (*ipc.Server, error) {
+	ctx, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"initIPC",
+		trace.WithAttributes(attribute.String("dataPath", dataPath)),
+	)
+	defer span.End()
+
 	ipcMu.Lock()
 	defer ipcMu.Unlock()
-	if ipcServer != nil {
+	if ipcServer != nil && !ipcServer.IsClosed() {
 		// already started
+		slog.Log(nil, internal.LevelTrace, "IPC server already started")
 		return ipcServer, nil
 	}
 
+	span.AddEvent("initializing IPC server")
+
 	if err := common.InitReadOnly(dataPath, logPath, logLevel); err != nil {
-		return nil, fmt.Errorf("initialize common package: %w", err)
+		return nil, traces.RecordError(ctx, fmt.Errorf("init common ro: %w", err))
 	}
-	if dataPath == "" {
-		dataPath = settings.GetString(settings.DataPathKey)
+	if path := settings.GetString(settings.DataPathKey); path != "" && path != dataPath {
+		dataPath = path
 	}
 
-	platIfceProvider = provider
-	ipcServer = ipc.NewServer()
-	return ipcServer, ipcServer.Start(dataPath, func(ctx context.Context, group, tag string) (ipc.Service, error) {
-		ctx, span := otel.Tracer(tracerName).Start(
-			context.Background(),
-			"ipcServer.Start",
-			trace.WithAttributes(
-				attribute.String("group", group),
-				attribute.String("tag", tag),
-			))
-		defer span.End()
-
-		slog.Info("Starting VPN tunnel via IPC", "group", group, "tag", tag, "path", dataPath)
-		_ = newSplitTunnel(dataPath)
-		opts, err := buildOptions(group, dataPath)
-		if err != nil {
-			return nil, traces.RecordError(ctx, fmt.Errorf("build options: %w", err))
-		}
-
-		var pi libbox.PlatformInterface
-		if platIfceProvider != nil {
-			pi = platIfceProvider()
-		}
-
-		if err := establishConnection(group, tag, opts, dataPath, pi); err != nil {
-			return nil, traces.RecordError(ctx, err)
-		}
-		return tInstance, nil
-	})
+	server := ipc.NewServer(NewTunnelService(dataPath, slog.Default().With("service", "ipc"), platformIfce))
+	slog.Debug("starting IPC server")
+	if err := server.Start(dataPath); err != nil {
+		slog.Error("failed to start IPC server", "error", err)
+		return nil, traces.RecordError(ctx, fmt.Errorf("start IPC server: %w", err))
+	}
+	ipcServer = server
+	// Set the socket path in case client and server are in the same process.
+	if runtime.GOOS != "windows" {
+		ipc.SetSocketPath(dataPath)
+	}
+	return server, nil
 }

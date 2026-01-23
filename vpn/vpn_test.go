@@ -85,18 +85,12 @@ func TestSelectedServer(t *testing.T) {
 	require.NoError(t, cacheFile.StoreSelected(wantGroup, wantTag))
 	_ = cacheFile.Close()
 
-	t.Run("with tunnel closed", func(t *testing.T) {
-		group, tag, err := selectedServer(context.Background())
-		require.NoError(t, err, "should not error when getting selected server")
-		assert.Equal(t, wantGroup, group, "group should match")
-		assert.Equal(t, wantTag, tag, "tag should match")
-	})
 	t.Run("with tunnel open", func(t *testing.T) {
 		mservice := setupVpnTest(t)
 		outboundMgr := service.FromContext[adapter.OutboundManager](mservice.Ctx())
 		require.NoError(t, outboundMgr.Start(adapter.StartStateStart), "failed to start outbound manager")
 
-		group, tag, err := selectedServer(context.Background())
+		group, tag, err := ipc.GetSelected(context.Background())
 		require.NoError(t, err, "should not error when getting selected server")
 		assert.Equal(t, wantGroup, group, "group should match")
 		assert.Equal(t, wantTag, tag, "tag should match")
@@ -139,9 +133,8 @@ func TestAutoServerSelections(t *testing.T) {
 		ctx:    ctx,
 		status: ipc.StatusRunning,
 	}
-	ipcServer = ipc.NewServer()
-	require.NoError(t, ipcServer.Start(settings.GetString(settings.DataPathKey), func(ctx context.Context, group, tag string) (ipc.Service, error) { return m, nil }))
-	ipcServer.SetService(m)
+	ipcServer = ipc.NewServer(m)
+	require.NoError(t, ipcServer.Start(settings.GetString(settings.DataPathKey)))
 
 	got, err := AutoServerSelections()
 	require.NoError(t, err, "should not error when getting auto server selections")
@@ -184,6 +177,8 @@ type mockOutboundGroup struct {
 func (o *mockOutboundGroup) Now() string   { return o.now }
 func (o *mockOutboundGroup) All() []string { return o.all }
 
+var _ ipc.Service = (*mockService)(nil)
+
 type mockService struct {
 	ctx    context.Context
 	status string
@@ -194,6 +189,8 @@ func (m *mockService) Ctx() context.Context          { return m.ctx }
 func (m *mockService) Status() string                { return m.status }
 func (m *mockService) ClashServer() *clashapi.Server { return m.clash }
 func (m *mockService) Close() error                  { return nil }
+func (m *mockService) Start(group, tag string) error { return nil }
+func (m *mockService) Restart() error                { return nil }
 
 func setupVpnTest(t *testing.T) *mockService {
 	path := settings.GetString(settings.DataPathKey)
@@ -219,19 +216,14 @@ func setupVpnTest(t *testing.T) *mockService {
 		status: ipc.StatusRunning,
 		clash:  clashServer.(*clashapi.Server),
 	}
-	ipcServer = ipc.NewServer()
+	ipcServer = ipc.NewServer(m)
 	t.Cleanup(func() {
 		lb.Close()
 		ipcServer.Close()
 		cacheFile.Close()
 		clashServer.Close()
 	})
-	require.NoError(t, ipcServer.Start(path,
-		func(ctx context.Context, group, tag string) (ipc.Service, error) {
-			return m, nil
-		},
-	))
-	ipcServer.SetService(m)
+	require.NoError(t, ipcServer.Start(path))
 
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))

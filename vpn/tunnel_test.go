@@ -25,9 +25,8 @@ func TestEstablishConnection(t *testing.T) {
 	tOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
-	testEstablishConnection(t, *tOpts)
-	tun := tInstance
-	assert.NoError(t, tun.Close(), "failed to close lbService")
+	tun := testEstablishConnection(t, *tOpts)
+	assert.NoError(t, tun.close(), "failed to close lbService")
 	assert.Equal(t, ipc.StatusClosed, tun.Status(), "tun should be closed")
 }
 
@@ -61,10 +60,9 @@ func TestUpdateServers(t *testing.T) {
 	}
 
 	testOpts.Outbounds = outs
-	testEstablishConnection(t, *testOpts)
-	tun := tInstance
+	tun := testEstablishConnection(t, *testOpts)
 	defer func() {
-		tun.Close()
+		tun.close()
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -74,7 +72,7 @@ func TestUpdateServers(t *testing.T) {
 			allOutbounds["http1-out"], allOutbounds["socks2-out"],
 		},
 	}
-	err = tInstance.updateGroup(servers.SGLantern, newOpts)
+	err = tun.updateGroup(servers.SGLantern, newOpts)
 	require.NoError(t, err, "failed to update servers for lantern")
 
 	time.Sleep(250 * time.Millisecond)
@@ -119,7 +117,7 @@ func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
 	return iGroups
 }
 
-func testEstablishConnection(t *testing.T, opts sbO.Options) {
+func testEstablishConnection(t *testing.T, opts sbO.Options) *tunnel {
 	tmp := settings.GetString(settings.DataPathKey)
 
 	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
@@ -127,14 +125,16 @@ func testEstablishConnection(t *testing.T, opts sbO.Options) {
 	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
 	newSplitTunnel(tmp)
 
-	err := establishConnection("", "", opts, tmp, nil)
+	tun := &tunnel{
+		dataPath: tmp,
+	}
+
+	err := tun.start("", "", opts, nil)
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
-		if tInstance != nil {
-			tInstance.Close()
-		}
+		tun.close()
 	})
 
-	assert.NotNil(t, tInstance, "tInstance should not be nil")
-	assert.Equal(t, ipc.StatusRunning, tInstance.Status(), "tunnel should be running")
+	assert.Equal(t, ipc.StatusRunning, tun.Status(), "tunnel should be running")
+	return tun
 }
