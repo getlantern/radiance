@@ -24,6 +24,8 @@ const (
 	PrintCurl     Key = "RADIANCE_PRINT_CURL"
 	DisableStdout Key = "RADIANCE_DISABLE_STDOUT_LOG"
 	ENV           Key = "RADIANCE_ENV"
+	UseSocks      Key = "RADIANCE_USE_SOCKS_PROXY"
+	SocksAddress  Key = "RADIANCE_SOCKS_ADDRESS"
 
 	Testing Key = "RADIANCE_TESTING"
 )
