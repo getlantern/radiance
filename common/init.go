@@ -98,7 +98,24 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 
 	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	createCrashReporter()
+	logModuleInfo()
 	return nil
+}
+
+func logModuleInfo() {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		slog.Debug("Build Information:", "goversion", bi.GoVersion, "main module", bi.Main.Path+" @ "+bi.Main.Version)
+		if len(bi.Deps) > 0 {
+			slog.Debug("Dependencies:")
+			for _, dep := range bi.Deps {
+				slog.Debug("dep", "path", dep.Path, "version", dep.Version)
+			}
+		} else {
+			slog.Debug("No dependencies found.\n")
+		}
+	} else {
+		slog.Info("No build information available.")
+	}
 }
 
 func createCrashReporter() {
