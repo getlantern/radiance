@@ -39,7 +39,7 @@ func NewAPIClient(dataDir string) *APIClient {
 
 func (a *APIClient) proWebClient() *webClient {
 	httpClient := kindling.HTTPClient()
-	proWC := newWebClient(httpClient, proServerURL)
+	proWC := newWebClient(httpClient, stageProServerURL)
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
 		req.Header.Set(backend.DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
 		if settings.GetString(settings.TokenKey) != "" {
@@ -54,5 +54,5 @@ func (a *APIClient) proWebClient() *webClient {
 }
 
 func authWebClient() *webClient {
-	return newWebClient(kindling.HTTPClient(), baseURL)
+	return newWebClient(kindling.HTTPClient(), stageBaseURL)
 }
