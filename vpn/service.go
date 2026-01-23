@@ -11,24 +11,19 @@ import (
 	"sync"
 
 	"github.com/sagernet/sing-box/experimental/clashapi"
-	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/vpn/rvpn"
 )
 
 var _ ipc.Service = (*TunnelService)(nil)
-
-type PlatformInterface interface {
-	libbox.PlatformInterface
-	PostServiceClose()
-}
 
 // TunnelService manages the lifecycle of the VPN tunnel.
 type TunnelService struct {
 	tunnel *tunnel
 
-	platformIfce PlatformInterface
+	platformIfce rvpn.PlatformInterface
 	dataPath     string
 	logger       *slog.Logger
 
@@ -37,7 +32,7 @@ type TunnelService struct {
 
 // NewTunnelService creates a new TunnelService instance with the provided configuration paths, log
 // level, and platform interface.
-func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce PlatformInterface) *TunnelService {
+func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.PlatformInterface) *TunnelService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -117,28 +112,50 @@ func (s *TunnelService) Close() error {
 // is not running or restart fails.
 func (s *TunnelService) Restart() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.tunnel == nil {
+		s.mu.Unlock()
 		return errors.New("tunnel not started")
 	}
 	if s.tunnel.Status() != ipc.StatusRunning {
+		s.mu.Unlock()
 		return errors.New("tunnel not running")
 	}
-	t := s.tunnel
-	s.tunnel = nil
-	group := t.clashServer.Mode()
-	tag := t.cacheFile.LoadSelected(group)
 
 	s.logger.Info("Restarting tunnel")
+	group := s.tunnel.clashServer.Mode()
+	tag := s.tunnel.cacheFile.LoadSelected(group)
+
+	if s.platformIfce == nil {
+		defer s.mu.Unlock()
+		return s.restart(group, tag)
+	}
+	s.mu.Unlock()
+	return s.restartViaPlatformIface(group, tag)
+
+}
+
+func (s *TunnelService) restart(group, tag string) error {
+	t := s.tunnel
+	s.tunnel = nil
 	if err := t.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	if s.platformIfce != nil {
-		s.platformIfce.PostServiceClose()
-	}
-	runtime.GC()
-
 	return s.start(group, tag)
+}
+
+func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
+	if err := s.platformIfce.RestartService(); err != nil {
+		return nil
+	}
+	if s.tunnel == nil {
+		return errors.New("tunnel nil after PlatformInterface.RestartService")
+	}
+	if status := s.tunnel.Status(); status != ipc.StatusRunning {
+		return fmt.Errorf("tunnel not running: status %v", status)
+	}
+	s.tunnel.clashServer.SetMode(group)
+	// TODO: select outbound
+	return nil
 }
 
 // Status returns the current status of the tunnel (e.g., running, closed).

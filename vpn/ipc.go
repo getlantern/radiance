@@ -10,6 +10,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/vpn/rvpn"
 )
 
 var (
@@ -19,7 +20,7 @@ var (
 
 // InitIPC initializes and starts the IPC server. If the server is already running, it returns the
 // existing instance.
-func InitIPC(dataPath, logPath, logLevel string, platformIfce PlatformInterface) (*ipc.Server, error) {
+func InitIPC(dataPath, logPath, logLevel string, platformIfce rvpn.PlatformInterface) (*ipc.Server, error) {
 	ipcMu.Lock()
 	defer ipcMu.Unlock()
 	if ipcServer != nil && !ipcServer.IsClosed() {
