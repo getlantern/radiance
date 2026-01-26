@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"time"
 
@@ -77,18 +76,17 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 	fmt.Println("Quick connect successful")
 
 	t2 := time.Now()
-	req, _ := http.NewRequest("GET", urlToHit, nil)
-	req.Header.Set("Connection", "close")
-	req.Close = true
-	res, err := http.DefaultClient.Do(req)
+
+	cmd := exec.Command("curl", "-v", "-x", "127.0.0.1:6666", "-s", urlToHit)
+
+	// Run the command and capture the output
+	outputB, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to hit target url after vpn connect: %w", err)
+		fmt.Println("Error executing command:", err)
+		return err
 	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
+
+	body := string(outputB)
 
 	t3 := time.Now()
 
