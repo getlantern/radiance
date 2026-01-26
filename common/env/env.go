@@ -38,6 +38,8 @@ var (
 		DisableFetch,
 		PrintCurl,
 		DisableStdout,
+		SocksAddress,
+		UseSocks,
 		ENV,
 	}
 	envVars = map[string]any{}
