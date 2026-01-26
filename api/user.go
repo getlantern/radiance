@@ -48,6 +48,7 @@ type Tier int
 const (
 	saltFileName = ".salt"
 	baseURL      = "https://df.iantem.io/api/v1"
+	stageBaseURL = "http://df.staging.iantem.io/api/v1"
 )
 
 // pro-server requests
@@ -539,7 +540,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) (
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
 func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
-	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", baseURL, "users/oauth2", provider))
+	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", stageBaseURL, "users/oauth2", provider))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
