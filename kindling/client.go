@@ -75,7 +75,7 @@ func NewKindling() kindling.Kindling {
 	defer span.End()
 
 	updaterCtx, cancel := context.WithCancel(ctx)
-	f, err := fronted.NewFronted(ctx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
+	f, err := fronted.NewFronted(updaterCtx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
 	if err != nil {
 		slog.Error("failed to create fronted client", slog.Any("error", err))
 		span.RecordError(err)
