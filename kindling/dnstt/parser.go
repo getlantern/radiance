@@ -254,7 +254,7 @@ func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 		} else {
 			select {
 			case <-m.stopChan:
-				slog.Debug("findWorkingFronts::Stopping parallel dialing")
+				slog.Debug("stopping parallel dialing dns tunnels")
 				return
 			case <-time.After(30 * time.Minute):
 				// Run again after a random time between 5 min
@@ -379,13 +379,13 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 		case <-m.stopChan:
 			return nil, errors.New("dnstt stopped")
 		case tun := <-m.tunChan:
-			// The front may have stopped succeeding since we last checked,
+			// The tun may have stopped succeeding since we last checked,
 			// so only return it if it's still succeeding.
 			if !tun.isSucceeding() {
 				continue
 			}
 
-			// Add the front back to the channel.
+			// Add the tun back to the channel.
 			m.tunChan <- tun
 			return &connectedRoundtripper{t: tun, ctx: ctx, addr: addr}, nil
 		}
