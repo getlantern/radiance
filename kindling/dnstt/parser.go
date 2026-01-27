@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,14 +20,11 @@ import (
 	"github.com/alitto/pond"
 	"github.com/getlantern/dnstt"
 	"github.com/getlantern/keepcurrent"
-	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling/smart"
 	"github.com/getlantern/radiance/traces"
 	"github.com/goccy/go-yaml"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type dnsttConfig struct {
@@ -49,7 +48,7 @@ const tracerName = "github.com/getlantern/radiance/kindling/dnstt"
 // it can be used as one of the transport options. If the local config filepath
 // is provided and exists, this config will be loaded and if successfully
 // parsed, will be returned instead of the embedded config.
-func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Writer) ([]kindling.Option, []func() error, error) {
+func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Writer) (dnstt.DNSTT, error) {
 	ctx, span := otel.Tracer(tracerName).Start(
 		ctx,
 		"DNSTTOptions",
@@ -58,7 +57,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 	// parsing embedded configs and loading options
 	options, err := parseDNSTTConfigs(embeddedConfig)
 	if err != nil {
-		return nil, nil, traces.RecordError(ctx, fmt.Errorf("failed to parse dnstt embedded config: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse dnstt embedded config: %w", err))
 	}
 
 	// if local config is set and exists, parse, load the dnstt config and close the embedded dns tunnels
@@ -79,8 +78,32 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
-	kindlingOptions, closeFuncs := selectDNSTTOptions(ctx, options)
-	span.AddEvent("selected dns tunnels", trace.WithAttributes(attribute.Int("options", len(kindlingOptions))))
+	tunnels := make([]dnstt.DNSTT, 0)
+	for _, opt := range options {
+		dnst, err := newDNSTT(opt)
+		if err != nil {
+			slog.Warn("failed to build dnstt", slog.Any("error", err))
+			continue
+		}
+
+		tunnels = append(tunnels, dnst)
+	}
+
+	m := &multipleDNSTTTransport{
+		tunChan:  make(chan *tun, 400),
+		stopChan: make(chan struct{}),
+		options:  tunnels,
+	}
+	m.crawlOnce.Do(func() {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("PANIC while searching for working dns tunnels", slog.Any("recover", r), slog.String("stack", string(debug.Stack())))
+				}
+			}()
+			m.findWorkingDNSTunnels()
+		}()
+	})
 
 	// starting config updater/fetcher
 	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
@@ -90,7 +113,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 	}
 
 	dnsttConfigUpdate(ctx, localConfigFilepath, client)
-	return kindlingOptions, closeFuncs, nil
+	return m, nil
 }
 
 func processYaml(gzippedYaml []byte) ([]dnsttConfig, error) {
@@ -221,51 +244,54 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnsttConfig, error) {
 	return cfgs, nil
 }
 
-const maxDNSTTOptions = 10
-
 var waitFor = 30 * time.Second
 
-func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.Option, []func() error) {
-	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(options)))
+func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
+	for {
+		if len(m.tunChan) < 2 {
+			m.tryAllDNSTunnels()
+			time.Sleep(60 * time.Second)
+		} else {
+			select {
+			case <-m.stopChan:
+				slog.Debug("findWorkingFronts::Stopping parallel dialing")
+				return
+			case <-time.After(30 * time.Minute):
+				// Run again after a random time between 5 min
+			}
+		}
+	}
+}
 
-	if len(options) == 0 {
-		return nil, nil
+func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
+	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(m.options)))
+
+	if len(m.options) == 0 {
+		slog.Debug("no dns tunnel options available")
+		return
 	}
 
-	pondCtx, cancel := context.WithTimeout(ctx, waitFor)
+	pondCtx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
-
-	var (
-		mu         sync.Mutex
-		selected   []dnstt.DNSTT
-		closeFuncs []func() error
-		foundCount atomic.Int32
-	)
 
 	// Limit concurrency to something reasonable
 	poolSize := 10
-	if len(options) < poolSize {
-		poolSize = len(options)
+	if len(m.options) < poolSize {
+		poolSize = len(m.options)
 	}
 
-	pool := pond.New(poolSize, len(options), pond.Context(pondCtx))
-	for _, opt := range options {
+	pool := pond.New(poolSize, 10, pond.Context(pondCtx))
+	for _, dnst := range m.options {
 		pool.Submit(func() {
-			// Stop early if we already have enough
-			if foundCount.Load() >= maxDNSTTOptions {
+			if m.closed.Load() {
+				slog.Debug("closed, stop testing")
+				go dnst.Close()
 				return
 			}
-
-			dnst, err := newDNSTT(opt)
-			if err != nil {
-				slog.Debug("couldn't build dns tunnel", slog.Any("error", err))
-				return
-			}
-
-			rt, err := dnst.NewRoundTripper(ctx, "")
+			rt, err := dnst.NewRoundTripper(pondCtx, "")
 			if err != nil {
 				slog.Debug("failed to create round tripper", slog.Any("error", err))
-				dnst.Close()
+				go dnst.Close()
 				return
 			}
 
@@ -274,63 +300,134 @@ func selectDNSTTOptions(ctx context.Context, options []dnsttConfig) ([]kindling.
 				Timeout:   15 * time.Second,
 			}
 
-			reqCtx, cancelReq := context.WithTimeout(pondCtx, 15*time.Second)
-			defer cancelReq()
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
+			req, err := http.NewRequestWithContext(pondCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 			if err != nil {
-				dnst.Close()
+				slog.Debug("failed to create request", slog.Any("error", err))
+				go dnst.Close()
 				return
 			}
 
 			resp, err := client.Do(req)
 			if err != nil {
 				slog.Debug("dnstt test request failed", slog.Any("error", err))
-				dnst.Close()
+				go dnst.Close()
 				return
 			}
-			resp.Body.Close()
+			defer resp.Body.Close()
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				slog.Debug("dnstt test returned non-2xx", slog.Int("status", resp.StatusCode))
-				dnst.Close()
+				go dnst.Close()
 				return
 			}
 
-			mu.Lock()
-			defer mu.Unlock()
-			// Successful tunnel
-			if foundCount.Add(1) <= maxDNSTTOptions {
-				if opt.DoHResolver != nil {
-					slog.Debug("selected DOH", slog.String("resolver", *opt.DoHResolver))
-				}
-				if opt.DoTResolver != nil {
-					slog.Debug("selected DOT", slog.String("resolver", *opt.DoTResolver))
-				}
-				selected = append(selected, dnst)
-				closeFuncs = append(closeFuncs, dnst.Close)
-
-				// Cancel remaining work once we have enough
-				if foundCount.Load() >= maxDNSTTOptions {
-					cancel()
-				}
-			} else {
-				// Extra tunnel found after limit
-				dnst.Close()
+			if m.closed.Load() {
+				slog.Debug("closed, stop testing")
+				go dnst.Close()
+				return
 			}
+
+			// Successful tunnel
+			slog.Debug("adding successful tun to channel")
+			m.tunChan <- &tun{DNSTT: dnst, lastSucceeded: time.Now()}
 		})
 	}
 	pool.StopAndWaitFor(waitFor)
+}
 
-	kindlingOptions := make([]kindling.Option, 0, len(selected))
-	for _, opt := range selected {
-		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(opt))
+type multipleDNSTTTransport struct {
+	crawlOnce sync.Once
+	tunChan   chan *tun
+	stopChan  chan struct{}
+	closed    atomic.Bool
+	options   []dnstt.DNSTT
+}
+
+type tun struct {
+	dnstt.DNSTT
+	// lastSucceeded: the most recent time at which this Masquerade succeeded
+	lastSucceeded time.Time
+	mx            sync.RWMutex
+}
+
+func (t *tun) markSucceeded() {
+	t.mx.Lock()
+	defer t.mx.Unlock()
+	t.lastSucceeded = time.Now()
+}
+
+func (t *tun) markFailed() {
+	t.mx.Lock()
+	defer t.mx.Unlock()
+	t.lastSucceeded = time.Time{}
+}
+
+func (t *tun) isSucceeding() bool {
+	t.mx.RLock()
+	defer t.mx.RUnlock()
+	return t.lastSucceeded.After(time.Time{})
+}
+
+// NewRoundTripper creates a new HTTP round tripper for the given address.
+// It manages session creation and reuse.
+func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr string) (http.RoundTripper, error) {
+	for range 6 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		// Add a case for the stop channel being called
+		case <-m.stopChan:
+			return nil, errors.New("dnstt stopped")
+		case tun := <-m.tunChan:
+			// The front may have stopped succeeding since we last checked,
+			// so only return it if it's still succeeding.
+			if !tun.isSucceeding() {
+				continue
+			}
+
+			// Add the front back to the channel.
+			m.tunChan <- tun
+			return &connectedRoundtripper{t: tun, ctx: ctx, addr: addr}, nil
+		}
+	}
+	return nil, fmt.Errorf("could not connect to any dns tunnel")
+}
+
+type connectedRoundtripper struct {
+	t    *tun
+	ctx  context.Context
+	addr string
+}
+
+func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt, err := c.t.NewRoundTripper(c.ctx, c.addr)
+	if err != nil {
+		slog.DebugContext(c.ctx, "failed to create dnstt round tripper", slog.Any("error", err))
+		c.t.markFailed()
+		return nil, err
 	}
 
-	slog.Debug(
-		"dnstt selection complete",
-		slog.Int("selected", len(kindlingOptions)),
-		slog.Int("available", len(options)),
-	)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		slog.WarnContext(c.ctx, "dnstt roundtripper failed", slog.Any("error", err))
+		c.t.markFailed()
+		return nil, err
+	}
 
-	return kindlingOptions, closeFuncs
+	c.t.markSucceeded()
+	return resp, nil
+}
+
+// Close releases resources and closes active sessions.
+func (m *multipleDNSTTTransport) Close() error {
+	m.closed.Store(true)
+	close(m.stopChan)
+	for _, dnst := range m.options {
+		go func() {
+			if err := dnst.Close(); err != nil {
+				slog.Error("failed to close dns tunnel", slog.Any("error", err))
+			}
+		}()
+	}
+	return nil
 }

@@ -131,15 +131,13 @@ func TestDNSTTOptions(t *testing.T) {
 	})))
 	waitFor = 15 * time.Second
 	t.Run("embedded config only", func(t *testing.T) {
-		opts, closers, err := DNSTTOptions(context.Background(), "", logger)
+		dnst, err := DNSTTOptions(context.Background(), "", logger)
 		assert.NoError(t, err)
 
-		assert.GreaterOrEqual(t, len(opts), 1)
-		assert.Equal(t, len(opts), len(closers))
-
-		for _, closeFn := range closers {
-			assert.NoError(t, closeFn())
-		}
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.NoError(t, dnst.Close())
 	})
 
 	t.Run("local config overrides embedded config", func(t *testing.T) {
@@ -148,14 +146,13 @@ func TestDNSTTOptions(t *testing.T) {
 		defer tmp.Close()
 		_, err = tmp.Write(gzipYAML([]byte(validDNSTTYAML)))
 		require.NoError(t, err)
-		opts, closers, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
-		assert.NoError(t, err)
-		assert.Len(t, opts, 1)
-		assert.Len(t, closers, 1)
+		dnst, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
+		require.NoError(t, err)
 
-		for _, closeFn := range closers {
-			assert.NoError(t, closeFn())
-		}
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.Len(t, tr.options, 1)
+		assert.NoError(t, dnst.Close())
 	})
 
 	t.Run("invalid local config falls back to embedded", func(t *testing.T) {
@@ -166,22 +163,23 @@ func TestDNSTTOptions(t *testing.T) {
 
 		_, err = tmp.Write(gzipYAML([]byte(invalidDNSTTYAML)))
 		require.NoError(t, err)
-		opts, closers, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
-		assert.NoError(t, err)
-		assert.GreaterOrEqual(t, len(opts), 1)
-		assert.Equal(t, len(opts), len(closers))
-		for _, closeFn := range closers {
-			assert.NoError(t, closeFn())
-		}
+		dnst, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
+		require.NoError(t, err)
+
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.NoError(t, dnst.Close())
 	})
 
 	t.Run("context cancellation does not block", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, closers, err := DNSTTOptions(ctx, "", logger)
+		dnst, err := DNSTTOptions(ctx, "", logger)
 		assert.NoError(t, err)
-		for _, closeFn := range closers {
-			assert.NoError(t, closeFn())
-		}
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.NoError(t, dnst.Close())
 	})
 }
