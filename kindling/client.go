@@ -23,7 +23,7 @@ var (
 	k               kindling.Kindling
 	kindlingMutex   sync.Mutex
 	stopUpdater     func()
-	closeDNSTunnels []func() error
+	closeTransports []func() error
 )
 
 // HTTPClient returns a http client with kindling transport
@@ -42,7 +42,7 @@ func Close(_ context.Context) error {
 	if stopUpdater != nil {
 		stopUpdater()
 	}
-	for _, c := range closeDNSTunnels {
+	for _, c := range closeTransports {
 		if c != nil {
 			if err := c(); err != nil {
 				slog.Error("failed to close DNS tunnel", slog.Any("error", err))
@@ -87,15 +87,21 @@ func NewKindling() kindling.Kindling {
 		span.RecordError(err)
 	}
 
-	dnsttOptions, closeTunnels, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
+	dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 	if err != nil {
 		slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
 		span.RecordError(err)
 	}
 
 	stopUpdater = cancel
-	closeDNSTunnels = closeTunnels
-	kindlingOpts := []kindling.Option{
+	closeTransports = []func() error{
+		func() error {
+			f.Close()
+			return nil
+		},
+		dnsttOptions.Close,
+	}
+	return kindling.NewKindling("radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
 		// Most endpoints use df.iantem.io, but for some historical reasons
@@ -104,9 +110,8 @@ func NewKindling() kindling.Kindling {
 		kindling.WithDomainFronting(f),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
-	}
-	kindlingOpts = append(kindlingOpts, dnsttOptions...)
-	return kindling.NewKindling("radiance", kindlingOpts...)
+		kindling.WithDNSTunnel(dnsttOptions),
+	)
 }
 
 type slogWriter struct {
