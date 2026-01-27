@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,6 +16,7 @@ func TestNewClient(t *testing.T) {
 		AddSource: true,
 		Level:     slog.LevelDebug,
 	})))
+	settings.Set(settings.DataPathKey, t.TempDir())
 	k = NewKindling()
 	SetKindling(k)
 	defer Close(context.Background())
