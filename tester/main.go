@@ -77,7 +77,11 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 
 	t2 := time.Now()
 
-	cmd := exec.Command("curl", "-v", "-x", "127.0.0.1:6666", "-s", urlToHit)
+	proxyAddr := os.Getenv("RADIANCE_SOCKS_ADDRESS")
+	if proxyAddr == "" {
+	  proxyAddr = "127.0.0.1:6666"
+	}
+	cmd := exec.Command("curl", "-v", "-x", proxyAddr, "-s", urlToHit)
 
 	// Run the command and capture the output
 	outputB, err := cmd.Output()
