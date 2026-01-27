@@ -345,7 +345,7 @@ type multipleDNSTTTransport struct {
 
 type tun struct {
 	dnstt.DNSTT
-	// lastSucceeded: the most recent time at which this Masquerade succeeded
+	// lastSucceeded: the most recent time at which this DNS tunnel succeeded
 	lastSucceeded time.Time
 	mx            sync.RWMutex
 }
