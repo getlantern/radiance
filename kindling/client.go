@@ -96,10 +96,17 @@ func NewKindling() kindling.Kindling {
 	stopUpdater = cancel
 	closeTransports = []func() error{
 		func() error {
-			f.Close()
+			if f != nil {
+				f.Close()
+			}
 			return nil
 		},
-		dnsttOptions.Close,
+		func() error {
+			if dnsttOptions != nil {
+				dnsttOptions.Close()
+			}
+			return nil
+		},
 	}
 	return kindling.NewKindling("radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
