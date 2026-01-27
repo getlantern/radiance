@@ -15,7 +15,8 @@ RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go bu
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
-
+ENV RADIANCE_USE_SOCKS_PROXY=true
+ENV RADIANCE_SOCKS_ADDRESS=127.0.0.1:6666
 COPY --from=builder /tester /tester
 
 ENV TRACE=true
