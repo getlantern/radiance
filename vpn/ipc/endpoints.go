@@ -5,7 +5,6 @@ const (
 	metricsEndpoint          = "/metrics"
 	startServiceEndpoint     = "/service/start"
 	stopServiceEndpoint      = "/service/stop"
-	closeServiceEndpoint     = "/service/close"
 	restartServiceEndpoint   = "/service/restart"
 	groupsEndpoint           = "/groups"
 	selectEndpoint           = "/outbound/select"

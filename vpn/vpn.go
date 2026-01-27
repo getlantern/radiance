@@ -19,7 +19,6 @@ import (
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
-	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/service"
@@ -91,21 +90,14 @@ func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
 	if tag == "" {
 		return traces.RecordError(ctx, errors.New("tag must be specified"))
 	}
-	if isOpen(ctx) {
-		return traces.RecordError(ctx, selectServer(ctx, group, tag))
-	}
 	return traces.RecordError(ctx, connect(group, tag))
 }
 
 func connect(group, tag string) error {
-	ipcMu.Lock()
-	if ipcServer == nil {
-		ipcMu.Unlock()
-		return fmt.Errorf("IPC server not initialized")
+	if isOpen(context.Background()) {
+		return selectServer(context.Background(), group, tag)
 	}
-	ipcSvr := ipcServer
-	ipcMu.Unlock()
-	return ipcSvr.StartService(context.Background(), group, tag)
+	return ipc.StartService(context.Background(), group, tag)
 }
 
 // Reconnect attempts to reconnect to the last connected server.
@@ -162,22 +154,24 @@ func GetStatus() (Status, error) {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
 	defer span.End()
 	slog.Debug("Retrieving tunnel status")
-	group, selected, err := selectedServer(ctx)
-	if err != nil {
-		return Status{}, traces.RecordError(ctx, fmt.Errorf("failed to get selected server: %w", err))
-	}
-	if group == autoAllTag {
-		selected = autoAllTag
-	}
 	s := Status{
-		TunnelOpen:     isOpen(ctx),
-		SelectedServer: selected,
+		TunnelOpen: isOpen(ctx),
 	}
 	if !s.TunnelOpen {
 		return s, nil
 	}
 
-	slog.Log(nil, internal.LevelTrace, "Tunnel is open, retrieving active server")
+	slog.Log(nil, internal.LevelTrace, "Tunnel is open, retrieving selected and active servers")
+	group, tag, err := ipc.GetSelected(ctx)
+	if err != nil {
+		return s, fmt.Errorf("failed to get selected server: %w", err)
+	}
+	if group == autoAllTag {
+		s.SelectedServer = autoAllTag
+	} else {
+		s.SelectedServer = tag
+	}
+
 	_, active, err := ipc.GetActiveOutbound(ctx)
 	if err != nil {
 		return s, fmt.Errorf("failed to get active server: %w", err)
@@ -185,31 +179,6 @@ func GetStatus() (Status, error) {
 	s.ActiveServer = active
 	slog.Log(nil, internal.LevelTrace, "retrieved tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
 	return s, nil
-}
-
-func selectedServer(ctx context.Context) (string, string, error) {
-	slog.Log(nil, internal.LevelTrace, "Retrieving selected server")
-	if group, tag, err := ipc.GetSelected(ctx); err == nil {
-		if group == autoAllTag {
-			return autoAllTag, autoAllTag, nil
-		}
-		return group, tag, nil
-	}
-	slog.Log(nil, internal.LevelTrace, "Tunnel not running, reading from cache file")
-	opts := baseOpts(settings.GetString(settings.DataPathKey)).Experimental.CacheFile
-	opts.Path = filepath.Join(settings.GetString(settings.DataPathKey), cacheFileName)
-	cacheFile := cachefile.New(context.Background(), *opts)
-	if err := cacheFile.Start(adapter.StartStateInitialize); err != nil {
-		return "", "", fmt.Errorf("failed to start cache file: %w", err)
-	}
-	group := cacheFile.LoadMode()
-	tag := cacheFile.LoadSelected(group)
-	// we need to ensure the cache file is closed after use or sing-box will error on start.
-	cacheFile.Close()
-	if group == autoAllTag {
-		return "all", "auto", nil
-	}
-	return group, tag, nil
 }
 
 func ActiveServer(ctx context.Context) (group, tag string, err error) {

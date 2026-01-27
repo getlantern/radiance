@@ -1,9 +1,9 @@
 [![Go](https://github.com/getlantern/radiance/actions/workflows/go.yml/badge.svg)](https://github.com/getlantern/radiance/actions/workflows/go.yml)
 
 # Radiance
-Radiance is the backend core of the [Lantern client](https://github.com/getlantern/lantern-outline) that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the [Outline SDK ](https://github.com/Jigsaw-Code/outline-sdk)in addition to Lantern's own protocols and techniques. This is still under development and is not ready or even functional for production use.
+Radiance is the backend core of the [Lantern client](https://github.com/getlantern/lantern) that integrates [sing-box](https://github.com/SagerNet/sing-box/) and the [Outline SDK ](https://github.com/Jigsaw-Code/outline-sdk)in addition to Lantern's own protocols and techniques.
 
-See [Lantern client](https://github.com/getlantern/lantern-outline) for build instructions.
+See [Lantern client](https://github.com/getlantern/lantern) for build instructions.
 
 What's the "core" idea behind a lantern? _Light_, or synonymously, _radiance_.
 
@@ -27,6 +27,9 @@ Available variables:
 *   `RADIANCE_DISABLE_FETCH_CONFIG`: If set to `true`, disables fetching the remote config.
 *   `RADIANCE_DISABLE_STDOUT_LOG`: Disable printing `radiance` logs to STDOUT. Logs will still be written to the log file.
 *.  `RADIANCE_COUNTRY`: Simulate running from another country, specifically fetching a config as if running from X country. For example, `RADIANCE_COUNTRY=cn`
+*   `RADIANCE_USE_SOCKS_PROXY`: If set to `true`, replace the TUN with a SOCKS proxy for inbound connections.
+*   `RADIANCE_SOCKS_ADDRESS`: Specifies the address (`host:port`) for the SOCKS proxy to use for inbound connections.
+
 
 ## Packages
 

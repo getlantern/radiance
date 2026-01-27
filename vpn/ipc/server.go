@@ -10,15 +10,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi"
+	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/internal"
 )
 
 var (
@@ -30,11 +30,11 @@ var (
 type Service interface {
 	Ctx() context.Context
 	Status() string
+	Start(group, tag string) error
+	Restart() error
 	ClashServer() *clashapi.Server
 	Close() error
 }
-
-type StartFn func(ctx context.Context, group, tag string) (Service, error)
 
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
@@ -42,9 +42,8 @@ type Server struct {
 	svr       *http.Server
 	service   Service
 	router    chi.Router
-	startFn   StartFn
-	mutex     sync.RWMutex
 	vpnStatus atomic.Value // string
+	closed    atomic.Bool
 }
 
 // StatusUpdateEvent is emitted when the VPN status changes.
@@ -70,9 +69,9 @@ func (vpn *VPNStatus) String() string {
 }
 
 // NewServer creates a new Server instance with the provided Service.
-func NewServer() *Server {
+func NewServer(service Service) *Server {
 	s := &Server{
-		service: &closedService{},
+		service: service,
 		router:  chi.NewMux(),
 	}
 	s.vpnStatus.Store(Disconnected)
@@ -91,7 +90,6 @@ func NewServer() *Server {
 	s.router.Post(clashModeEndpoint, s.clashModeHandler)
 	s.router.Post(startServiceEndpoint, s.startServiceHandler)
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
-	s.router.Post(closeServiceEndpoint, s.closeServiceHandler)
 	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
 	return s
@@ -99,15 +97,15 @@ func NewServer() *Server {
 
 // Start starts the IPC server. The socket file will be created in the "basePath" directory.
 // On Windows, the "basePath" is ignored and a default named pipe path is used.
-func (s *Server) Start(basePath string, fn StartFn) error {
-	if fn == nil {
-		return errors.New("start function is required")
+func (s *Server) Start(basePath string) error {
+	if s.closed.Load() {
+		return errors.New("IPC server is closed")
 	}
-	s.startFn = fn
 	l, err := listen(basePath)
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
 	}
+	slog.Log(nil, internal.LevelTrace, "IPC listening", "address", l.Addr().String())
 	svr := &http.Server{
 		Handler:      s.router,
 		ReadTimeout:  time.Second * 5,
@@ -120,6 +118,12 @@ func (s *Server) Start(basePath string, fn StartFn) error {
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("IPC server", "error", err)
 		}
+		s.closed.Store(true)
+		if s.service.Status() != StatusClosed {
+			slog.Warn("IPC server stopped unexpectedly, closing service")
+			s.service.Close()
+			s.setVPNStatus(ErrorStatus, errors.New("IPC server stopped unexpectedly"))
+		}
 	}()
 
 	return nil
@@ -127,14 +131,17 @@ func (s *Server) Start(basePath string, fn StartFn) error {
 
 // Close shuts down the IPC server.
 func (s *Server) Close() error {
+	if s.closed.Swap(true) {
+		return nil
+	}
+	defer s.service.Close()
+
 	slog.Info("Closing IPC server")
 	return s.svr.Close()
 }
 
-// CloseService sends a request to shutdown the service
-func CloseService(ctx context.Context) error {
-	_, err := sendRequest[empty](ctx, "POST", closeServiceEndpoint, nil)
-	return err
+func (s *Server) IsClosed() bool {
+	return s.closed.Load()
 }
 
 // StartService sends a request to start the service
@@ -149,23 +156,11 @@ func StopService(ctx context.Context) error {
 	return err
 }
 
-// SetService updates the service attached to the server and returns the old service, if any.
-// Typically called when starting or replacing the VPN tunnel.
-func (s *Server) SetService(svc Service) Service {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	old := s.service
-	s.service = svc
-	return old
-}
-
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
-	if s.startFn == nil {
-		http.Error(w, "start not supported", http.StatusNotImplemented)
-		return
-	}
+	_, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
+	defer span.End()
 	// check if service is already running
-	if s.GetStatus() == StatusRunning {
+	if s.service.Status() != StatusClosed {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -175,68 +170,23 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.StartService(r.Context(), p.GroupTag, p.OutboundTag); err != nil {
+	if err := s.service.Start(p.GroupTag, p.OutboundTag); err != nil {
+		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) StartService(ctx context.Context, group, tag string) error {
-	if s.GetStatus() != StatusClosed {
-		return errors.New("service is already running")
-	}
-	svc, err := s.startFn(ctx, group, tag)
-	if err != nil {
-		s.setVPNStatus(ErrorStatus, err)
-		return fmt.Errorf("error starting service: %w", err)
-	}
 	s.setVPNStatus(Connected, nil)
-	s.SetService(svc)
-	return nil
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
-	if err := s.StopService(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (s *Server) StopService(ctx context.Context) error {
+	slog.Debug("Received request to stop service via IPC")
 	defer s.setVPNStatus(Disconnected, nil)
-	svc := s.SetService(&closedService{})
-	if svc != nil {
-		if err := svc.Close(); err != nil {
-			return fmt.Errorf("error stopping service: %w", err)
-		}
-	}
-	return nil
-}
-
-func (s *Server) closeServiceHandler(w http.ResponseWriter, r *http.Request) {
-	slog.Info("Received request to close service via IPC")
-	svc := s.SetService(&closedService{})
-	if err := svc.Close(); err != nil {
+	if err := s.service.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.svr.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			traces.RecordError(context.Background(), err)
-		}
-	}()
 }
 
 func RestartService(ctx context.Context) error {
@@ -244,41 +194,17 @@ func RestartService(ctx context.Context) error {
 	return err
 }
 
-func (s *Server) RestartService(ctx context.Context) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	svc := s.service
-	s.service = &closedService{}
-	if svc.Status() != StatusRunning {
-		return ErrServiceIsNotReady
-	}
-
-	mode := svc.ClashServer().Mode()
-	groupOutbound, err := getGroupOutbound(svc.Ctx(), mode)
-	if err != nil {
-		return fmt.Errorf("error getting current outbound group: %w", err)
-	}
-	selected := groupOutbound.Now()
-
-	if err := svc.Close(); err != nil {
-		return fmt.Errorf("stopping service: %w", err)
+func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if s.service.Status() != StatusRunning {
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusInternalServerError)
+		return
 	}
 	s.vpnStatus.Store(Disconnected)
-
-	if svc, err = s.startFn(ctx, mode, selected); err != nil {
-		s.setVPNStatus(ErrorStatus, err)
-		return fmt.Errorf("error starting service: %w", err)
-	}
-	s.setVPNStatus(Connected, nil)
-	s.service = svc
-	return nil
-}
-
-func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
-	if err := s.RestartService(r.Context()); err != nil {
+	if err := s.service.Restart(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.setVPNStatus(Connected, nil)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -286,13 +212,3 @@ func (s *Server) setVPNStatus(status VPNStatus, err error) {
 	s.vpnStatus.Store(status)
 	events.Emit(StatusUpdateEvent{Status: status, Error: err})
 }
-
-// closedService is a stub service that always returns "closed" status. It's used to replace the
-// actual service when it's being closed, to prevent any new requests from being processed after
-// the close request.
-type closedService struct {
-	Service
-}
-
-func (s *closedService) Status() string { return StatusClosed }
-func (s *closedService) Close() error   { return nil }
