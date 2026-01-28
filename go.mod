@@ -23,6 +23,7 @@ replace github.com/tetratelabs/wazero => github.com/refraction-networking/wazero
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f

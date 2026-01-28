@@ -11,14 +11,19 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
-	k             kindling.Kindling
-	kindlingMutex sync.Mutex
-	stopUpdater   func()
+	k               kindling.Kindling
+	kindlingMutex   sync.Mutex
+	stopUpdater     func()
+	closeTransports []func() error
 )
 
 // HTTPClient returns a http client with kindling transport
@@ -37,6 +42,13 @@ func Close(_ context.Context) error {
 	if stopUpdater != nil {
 		stopUpdater()
 	}
+	for _, c := range closeTransports {
+		if c != nil {
+			if err := c(); err != nil {
+				slog.Error("failed to close kindling transport", slog.Any("error", err))
+			}
+		}
+	}
 	return nil
 }
 
@@ -48,23 +60,54 @@ func SetKindling(a kindling.Kindling) {
 	k = a
 }
 
+const tracerName = "github.com/getlantern/radiance/kindling"
+
 // NewKindling build a kindling client and bootstrap this package
 func NewKindling() kindling.Kindling {
 	dataDir := settings.GetString(settings.DataPathKey)
 	logger := &slogWriter{Logger: slog.Default()}
-	updaterCtx, cancel := context.WithCancel(context.Background())
 
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
+	ctx, span := otel.Tracer(tracerName).Start(
+		context.Background(),
+		"NewKindling",
+		trace.WithAttributes(attribute.String("data_path", dataDir)),
+	)
+	defer span.End()
+
+	updaterCtx, cancel := context.WithCancel(ctx)
+	f, err := fronted.NewFronted(updaterCtx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
 	if err != nil {
 		slog.Error("failed to create fronted client", slog.Any("error", err))
+		span.RecordError(err)
 	}
 
 	ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 	if err != nil {
 		slog.Error("failed to create amp client", slog.Any("error", err))
+		span.RecordError(err)
+	}
+
+	dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
+	if err != nil {
+		slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
+		span.RecordError(err)
 	}
 
 	stopUpdater = cancel
+	closeTransports = []func() error{
+		func() error {
+			if f != nil {
+				f.Close()
+			}
+			return nil
+		},
+		func() error {
+			if dnsttOptions != nil {
+				dnsttOptions.Close()
+			}
+			return nil
+		},
+	}
 	return kindling.NewKindling("radiance",
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
@@ -74,6 +117,7 @@ func NewKindling() kindling.Kindling {
 		kindling.WithDomainFronting(f),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
+		kindling.WithDNSTunnel(dnsttOptions),
 	)
 }
 
