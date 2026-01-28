@@ -257,7 +257,7 @@ func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 				slog.Debug("stopping parallel dialing dns tunnels")
 				return
 			case <-time.After(30 * time.Minute):
-				// Run again after a random time between 5 min
+				// Run again after 30 min
 			}
 		}
 	}
