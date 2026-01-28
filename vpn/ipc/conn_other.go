@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/getlantern/radiance/internal"
 )
@@ -36,6 +37,7 @@ func dialContext(_ context.Context, _, _ string) (net.Conn, error) {
 type sockListener struct {
 	net.Listener
 	path string
+	done chan struct{}
 }
 
 // listen creates a Unix domain socket listener in the specified directory.
@@ -54,13 +56,35 @@ func listen(path string) (net.Listener, error) {
 		listener.Close()
 		return nil, fmt.Errorf("chown %s: %w", path, err)
 	}
-	return &sockListener{
+	socket := &sockListener{
 		Listener: listener,
 		path:     path,
-	}, nil
+		done:     make(chan struct{}),
+	}
+	go socket.watchSocketFile()
+	return socket, nil
+}
+
+// watchSocketFile monitors the socket file for deletion and closes the listener if the file is removed.
+func (s *sockListener) watchSocketFile() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if _, err := os.Stat(s.path); os.IsNotExist(err) {
+				slog.Warn("Socket file removed, closing listener", "path", s.path)
+				s.Listener.Close()
+			}
+		case <-s.done:
+			slog.Debug("Socket file watcher exiting")
+			return
+		}
+	}
 }
 
 func (l *sockListener) Close() error {
+	close(l.done)
 	err := l.Listener.Close()
 	os.Remove(l.path)
 	return err

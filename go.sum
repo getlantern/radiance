@@ -185,14 +185,12 @@ github.com/gaukas/wazerofs v0.1.0 h1:wIkW1bAxSnpaaVkQ5LOb1tm1BXdVap3eKjJpVWIqt2E
 github.com/gaukas/wazerofs v0.1.0/go.mod h1:+JECB9Fwt0taPqSgHckG9lmT3tcoVK+9VJozTsq9UlI=
 github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 h1:w2/RqYPw7PbTYfUMS2aToD5DMKLBnQed+fkTEYTKAqQ=
 github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52/go.mod h1:PrNR8tMXO26YNs8K9653XCUH7u2Kv4OdfFC3Ke1GsX0=
-github.com/getlantern/amp v0.0.0-20251211213807-4cbc22624b9f h1:EaMXfKXz+zPM6Jb1EiINBy/jH7qtLd/MKc5e6pnzVts=
-github.com/getlantern/amp v0.0.0-20251211213807-4cbc22624b9f/go.mod h1:qnMv9szb8JK3kA9W4N2FlYUMj1GkA0x7QEUEPD7tk4o=
 github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f h1:NLGftemDrbGf7WceZTHWVYQmaczVKxmqiwOXAgQOU/4=
 github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f/go.mod h1:qnMv9szb8JK3kA9W4N2FlYUMj1GkA0x7QEUEPD7tk4o=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01 h1:Mmeh4/DA1OKN9tVWRAvTL5efFx4c7v9/55hoK17NclA=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01/go.mod h1:3vR6+jQdWfWojZ77w+htCqEF5MO/Y2twJOpAvFuM9po=
-github.com/getlantern/common v1.2.1-0.20260113231444-c651c79beddf h1:V9WBvzGjScaGSe7yu4/dX+R3jQOK9xD64v8lSONbS/c=
-github.com/getlantern/common v1.2.1-0.20260113231444-c651c79beddf/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
+github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f h1:EqRKCaOBuvVkFsIjeWUYluE4s4TZtVQSClfIWFqcSks=
+github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
 github.com/getlantern/context v0.0.0-20190109183933-c447772a6520/go.mod h1:L+mq6/vvYHKjCX2oez0CgEAJmbq1fbb/oNJIWQkBybY=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
@@ -203,8 +201,8 @@ github.com/getlantern/errors v1.0.4 h1:i2iR1M9GKj4WuingpNqJ+XQEw6i6dnAgKAmLj6ZB3
 github.com/getlantern/errors v1.0.4/go.mod h1:/Foq8jtSDGP8GOXzAjeslsC4Ar/3kB+UiQH+WyV4pzY=
 github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731 h1:v+vJ3LgV4nW4xRPZo+xkADDflXLpRbG+Lv69XKWFjTQ=
 github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731/go.mod h1:XZwE+iIlAgr64OFbXKFNCllBwV4wEipPx8Hlo2gZdbM=
-github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f h1:DO5SrV7sZ8DYCXk1PxC4OGXEvtPILzSBJ3lfyeQqshM=
-github.com/getlantern/fronted v0.0.0-20260105215156-9ae1d001d54f/go.mod h1:1a+iv1xzGxZWj/vCHzr8Z3dF9H1sNTuMSPHUqRsgbl0=
+github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2 h1:5YisMrA/e05uevx8mUnsgkM+sepFi82/Fp44GiQl2j0=
+github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2/go.mod h1:1a+iv1xzGxZWj/vCHzr8Z3dF9H1sNTuMSPHUqRsgbl0=
 github.com/getlantern/geo v0.0.0-20241129152027-2fc88c10f91e h1:vpikNz6IzvEoqVYmiK5Uq+lE4TCzvMDqbZdxFbtGK1g=
 github.com/getlantern/geo v0.0.0-20241129152027-2fc88c10f91e/go.mod h1:RjQ0krF8NTCc5xo2Q1995/vZBnYg33h8svn15do7dLg=
 github.com/getlantern/golog v0.0.0-20210606115803-bce9f9fe5a5f/go.mod h1:ZyIjgH/1wTCl+B+7yH1DqrWp6MPJqESmwmEQ89ZfhvA=
@@ -621,6 +619,8 @@ github.com/sagernet/nftables v0.3.0-beta.4 h1:kbULlAwAC3jvdGAC1P5Fa3GSxVwQJibNen
 github.com/sagernet/nftables v0.3.0-beta.4/go.mod h1:OQXAjvjNGGFxaTgVCSTRIhYB5/llyVDeapVoENYBDS8=
 github.com/sagernet/quic-go v0.52.0-sing-box-mod.3 h1:ySqffGm82rPqI1TUPqmtHIYd12pfEGScygnOxjTL56w=
 github.com/sagernet/quic-go v0.52.0-sing-box-mod.3/go.mod h1:OV+V5kEBb8kJS7k29MzDu6oj9GyMc7HA07sE1tedxz4=
+github.com/sagernet/sing-dns v0.4.6 h1:mjZC0o6d5sQ1sraoOBbK3G3apCbuL8wWYwu2RNu5rbM=
+github.com/sagernet/sing-dns v0.4.6/go.mod h1:dweQs54ng2YGzoJfz+F9dGuDNdP5pJ3PLeggnK5VWc8=
 github.com/sagernet/sing-mux v0.3.3 h1:YFgt9plMWzH994BMZLmyKL37PdIVaIilwP0Jg+EcLfw=
 github.com/sagernet/sing-mux v0.3.3/go.mod h1:pht8iFY4c9Xltj7rhVd208npkNaeCxzyXCgulDPLUDA=
 github.com/sagernet/sing-quic v0.5.2-0.20250909083218-00a55617c0fb h1:5Wx3XeTiKrrrcrAky7Hc1bO3CGxrvho2Vu5b/adlEIM=

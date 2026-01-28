@@ -1,0 +1,23 @@
+FROM golang:1.25.1 AS builder
+
+RUN apt-get update && apt-get install -y git git-lfs bsdmainutils
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /src
+
+COPY . .
+
+ENV GOCACHE=/root/.cache/go-build
+RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api" -o /tester ./tester/...
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+ENV RADIANCE_USE_SOCKS_PROXY=true
+ENV RADIANCE_SOCKS_ADDRESS=127.0.0.1:6666
+COPY --from=builder /tester /tester
+
+ENV TRACE=true
+ENTRYPOINT ["/tester"]

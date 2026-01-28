@@ -12,6 +12,8 @@ import (
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing/common/memory"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -94,16 +96,12 @@ func tryDial(ctx context.Context) (bool, error) {
 }
 
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
+	span := trace.SpanFromContext(r.Context())
+	status := s.service.Status()
+	span.SetAttributes(attribute.String("status", status))
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(state{s.service.Status()}); err != nil {
+	if err := json.NewEncoder(w).Encode(state{status}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-func (s *Server) GetStatus() string {
-	if s.service == nil {
-		return StatusClosed
-	}
-	return s.service.Status()
 }

@@ -40,12 +40,11 @@ import (
 )
 
 type tunnel struct {
-	ctx          context.Context
-	platformIfce libbox.PlatformInterface
-	lbService    *libbox.BoxService
-	cacheFile    adapter.CacheFile
-	clashServer  *clashapi.Server
-	logFactory   sblog.ObservableFactory
+	ctx         context.Context
+	lbService   *libbox.BoxService
+	cacheFile   adapter.CacheFile
+	clashServer *clashapi.Server
+	logFactory  sblog.ObservableFactory
 
 	dataPath string
 
@@ -73,7 +72,7 @@ func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.Pl
 		}
 	}()
 
-	if err := t.init(opts); err != nil {
+	if err := t.init(opts, platformIfce); err != nil {
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
@@ -101,7 +100,7 @@ func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.Pl
 	return nil
 }
 
-func (t *tunnel) init(opts O.Options) error {
+func (t *tunnel) init(opts O.Options, platformIfce libbox.PlatformInterface) error {
 	slog.Log(nil, internal.LevelTrace, "Initializing tunnel")
 
 	cfg, err := json.MarshalContext(t.ctx, opts)
@@ -139,7 +138,7 @@ func (t *tunnel) init(opts O.Options) error {
 	t.cacheFile = cacheFile
 
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
-	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), t.platformIfce)
+	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
