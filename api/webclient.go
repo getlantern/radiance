@@ -1,13 +1,10 @@
 package api
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -148,68 +145,4 @@ func sanitizeResponseBody(data []byte) []byte {
 		out.WriteRune(ch)
 	}
 	return out.Bytes()
-}
-
-// parseSSEStream parses an io.ReadCloser SSE stream and calls onEvent for each complete event.
-// onEvent receives (id, eventType, data). It returns when ctx is canceled or the reader is closed.
-// Note: caller is responsible for closing rc (we do not close it here — caller should).
-func parseSSEStream(ctx context.Context, rc io.Reader, onEvent func(data string)) error {
-	scanner := bufio.NewScanner(rc)
-	scanner.Buffer(make([]byte, 0, 64*1024), 5*1024*1024)
-
-	var (
-		eventType string
-		data      []string
-	)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		line := scanner.Text()
-		// Empty line = end of event
-		if line == "" {
-			if len(data) > 0 {
-				// Check for cap_exhausted event - stop streaming
-				if eventType == "cap_exhausted" {
-					deviceId := strings.Join(data, "\n")
-					slog.Debug("⚠️ Datacap exhausted for device: %s - stopping stream", deviceId)
-					return fmt.Errorf("datacap exhausted")
-				}
-
-				// Only process datacap events
-				if eventType == "datacap" {
-					onEvent(strings.Join(data, "\n"))
-				}
-
-				eventType = ""
-				data = data[:0]
-			}
-			continue
-		}
-
-		// Skip comments (heartbeat)
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		// Parse event type and data
-		if strings.HasPrefix(line, "event:") {
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
-			val := strings.TrimPrefix(line, "data:")
-			val = strings.TrimPrefix(val, " ")
-			data = append(data, val)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		// If context was canceled, this is expected
-		if ctx.Err() != nil {
-			return nil
-		}
-		return fmt.Errorf("stream read error: %w", err)
-	}
-	return nil
 }
