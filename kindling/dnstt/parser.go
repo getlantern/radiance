@@ -78,7 +78,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
-	tunnels := make([]dnstt.DNSTT, 0)
+	tunnels := make([]*dnsTunnel, 0)
 	for _, opt := range options {
 		dnst, err := newDNSTT(opt)
 		if err != nil {
@@ -86,11 +86,11 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 			continue
 		}
 
-		tunnels = append(tunnels, dnst)
+		tunnels = append(tunnels, &dnsTunnel{DNSTT: dnst})
 	}
 
 	m := &multipleDNSTTTransport{
-		tunChan:  make(chan *tun, 400),
+		tunChan:  make(chan *dnsTunnel, 400),
 		stopChan: make(chan struct{}),
 		options:  tunnels,
 	}
@@ -285,12 +285,14 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 		pool.Submit(func() {
 			if m.closed.Load() {
 				slog.Debug("closed, stop testing")
+				dnst.markFailed()
 				go dnst.Close()
 				return
 			}
 			rt, err := dnst.NewRoundTripper(pondCtx, "")
 			if err != nil {
 				slog.Debug("failed to create round tripper", slog.Any("error", err))
+				dnst.markFailed()
 				go dnst.Close()
 				return
 			}
@@ -303,6 +305,7 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 			req, err := http.NewRequestWithContext(pondCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 			if err != nil {
 				slog.Debug("failed to create request", slog.Any("error", err))
+				dnst.markFailed()
 				go dnst.Close()
 				return
 			}
@@ -310,6 +313,7 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 			resp, err := client.Do(req)
 			if err != nil {
 				slog.Debug("dnstt test request failed", slog.Any("error", err))
+				dnst.markFailed()
 				go dnst.Close()
 				return
 			}
@@ -317,19 +321,22 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				slog.Debug("dnstt test returned non-2xx", slog.Int("status", resp.StatusCode))
+				dnst.markFailed()
 				go dnst.Close()
 				return
 			}
 
 			if m.closed.Load() {
 				slog.Debug("closed, stop testing")
+				dnst.markFailed()
 				go dnst.Close()
 				return
 			}
 
 			// Successful tunnel
 			slog.Debug("adding successful tun to channel")
-			m.tunChan <- &tun{DNSTT: dnst, lastSucceeded: time.Now()}
+			dnst.markSucceeded()
+			m.tunChan <- dnst
 		})
 	}
 	pool.StopAndWaitFor(waitFor)
@@ -337,32 +344,32 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 
 type multipleDNSTTTransport struct {
 	crawlOnce sync.Once
-	tunChan   chan *tun
+	tunChan   chan *dnsTunnel
 	stopChan  chan struct{}
 	closed    atomic.Bool
-	options   []dnstt.DNSTT
+	options   []*dnsTunnel
 }
 
-type tun struct {
+type dnsTunnel struct {
 	dnstt.DNSTT
 	// lastSucceeded: the most recent time at which this DNS tunnel succeeded
 	lastSucceeded time.Time
 	mx            sync.RWMutex
 }
 
-func (t *tun) markSucceeded() {
+func (t *dnsTunnel) markSucceeded() {
 	t.mx.Lock()
 	defer t.mx.Unlock()
 	t.lastSucceeded = time.Now()
 }
 
-func (t *tun) markFailed() {
+func (t *dnsTunnel) markFailed() {
 	t.mx.Lock()
 	defer t.mx.Unlock()
 	t.lastSucceeded = time.Time{}
 }
 
-func (t *tun) isSucceeding() bool {
+func (t *dnsTunnel) isSucceeding() bool {
 	t.mx.RLock()
 	defer t.mx.RUnlock()
 	return t.lastSucceeded.After(time.Time{})
@@ -394,7 +401,7 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 }
 
 type connectedRoundtripper struct {
-	t    *tun
+	t    *dnsTunnel
 	ctx  context.Context
 	addr string
 }
