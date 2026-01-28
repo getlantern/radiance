@@ -65,7 +65,6 @@ func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
 			}
 			return nil
 		}
-
 		return traces.RecordError(ctx, connect(autoAllTag, ""))
 	default:
 		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
