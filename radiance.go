@@ -91,14 +91,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		}
 	}
 
-	var platformDeviceID string
-	switch common.Platform {
-	case "ios", "android":
-		platformDeviceID = opts.DeviceID
-	default:
-		platformDeviceID = deviceid.Get()
-	}
-
 	shutdownFuncs := []func(context.Context) error{}
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
@@ -107,7 +99,15 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	dataDir := settings.GetString(settings.DataPathKey)
 	kindling.SetKindling(kindling.NewKindling())
-	setUserConfig(platformDeviceID, dataDir, opts.Locale)
+
+	var platformDeviceID string
+	switch common.Platform {
+	case "ios", "android":
+		platformDeviceID = opts.DeviceID
+	default:
+		platformDeviceID = deviceid.Get()
+	}
+	setUserConfig(platformDeviceID, opts.Locale)
 	apiHandler := api.NewAPIClient(dataDir)
 	issueReporter := issue.NewIssueReporter()
 
@@ -311,12 +311,9 @@ func (w *slogWriter) Write(p []byte) (n int, err error) {
 }
 
 // setUserConfig creates a new UserInfo object
-func setUserConfig(deviceID, dataDir, locale string) {
+func setUserConfig(deviceID, locale string) {
 	if err := settings.Set(settings.DeviceIDKey, deviceID); err != nil {
 		slog.Error("failed to set device ID in settings", "error", err)
-	}
-	if err := settings.Set(settings.DataPathKey, dataDir); err != nil {
-		slog.Error("failed to set data path in settings", "error", err)
 	}
 	if err := settings.Set(settings.LocaleKey, locale); err != nil {
 		slog.Error("failed to set locale in settings", "error", err)
