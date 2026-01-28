@@ -27,5 +27,9 @@ func newDeviceID() string {
 		slog.Error("Error generating new deviceID, defaulting to old-style device ID", "error", err)
 		return OldStyleDeviceID()
 	}
-	return newID.String()
+	idStr := newID.String()
+	if err := settings.Set(settings.DeviceIDKey, idStr); err != nil {
+		slog.Error("Error persisting new deviceID", "error", err)
+	}
+	return idStr
 }
