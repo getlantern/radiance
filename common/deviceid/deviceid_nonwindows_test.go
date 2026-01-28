@@ -12,41 +12,43 @@ import (
 )
 
 func TestGet(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	// Save original setting and restore after test
+	originalID := settings.GetString(settings.DeviceIDKey)
+	defer func() {
+		if originalID != "" {
+			settings.Set(settings.DeviceIDKey, originalID)
+		} else {
+			settings.Set(settings.DeviceIDKey, "")
+		}
+	}()
+
 	t.Run("returns existing device ID when present", func(t *testing.T) {
-		// Setup
 		existingID := "existing-device-id-123"
-		settings.Set(settings.DeviceIDKey, existingID)
-		defer settings.Set(settings.DeviceIDKey, "")
+		err := settings.Set(settings.DeviceIDKey, existingID)
+		require.NoError(t, err)
 
-		// Execute
 		result := Get()
-
-		// Assert
 		assert.Equal(t, existingID, result)
 	})
 
 	t.Run("generates new device ID when not present", func(t *testing.T) {
-		// Setup
 		settings.Set(settings.DeviceIDKey, "")
 
-		// Execute
 		result := Get()
-
-		// Assert
 		assert.NotEmpty(t, result)
-		// Verify it's a valid UUID format (36 characters with hyphens)
+		// Verify it's a valid UUID format (36 characters with dashes)
 		assert.Len(t, result, 36)
 		assert.Contains(t, result, "-")
 	})
 
-	t.Run("returns empty string for empty existing ID", func(t *testing.T) {
-		// Setup
+	t.Run("persists new device ID", func(t *testing.T) {
 		settings.Set(settings.DeviceIDKey, "")
 
-		// Execute
-		result := Get()
+		firstCall := Get()
+		secondCall := Get()
 
-		// Assert
-		require.NotEmpty(t, result, "should generate a new ID when existing ID is empty")
+		// Second call should return the same ID that was persisted
+		assert.Equal(t, firstCall, secondCall)
 	})
 }

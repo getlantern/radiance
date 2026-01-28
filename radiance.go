@@ -95,10 +95,6 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
-	settings.Set(settings.LocaleKey, opts.Locale)
-
-	dataDir := settings.GetString(settings.DataPathKey)
-	kindling.SetKindling(kindling.NewKindling())
 
 	var platformDeviceID string
 	switch common.Platform {
@@ -108,6 +104,10 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		platformDeviceID = deviceid.Get()
 	}
 	setUserConfig(platformDeviceID, opts.Locale)
+
+	kindling.SetKindling(kindling.NewKindling())
+
+	dataDir := settings.GetString(settings.DataPathKey)
 	apiHandler := api.NewAPIClient(dataDir)
 	issueReporter := issue.NewIssueReporter()
 
