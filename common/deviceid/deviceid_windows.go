@@ -6,7 +6,6 @@ package deviceid
 import (
 	"log/slog"
 
-	"github.com/google/uuid"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -31,12 +30,7 @@ func Get() string {
 			return OldStyleDeviceID()
 		}
 		slog.Debug("Storing new deviceID")
-		_deviceID, err := uuid.NewRandom()
-		if err != nil {
-			slog.Error("Error generating new deviceID, defaulting to old-style device ID:", "error", err)
-			return OldStyleDeviceID()
-		}
-		deviceID := _deviceID.String()
+		deviceID := newDeviceID()
 		err = key.SetStringValue("deviceid", deviceID)
 		if err != nil {
 			slog.Error("Error storing new deviceID, defaulting to old-style device IDL", "error", err)
