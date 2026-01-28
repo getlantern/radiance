@@ -18,7 +18,11 @@ func Get() string {
 	if existingID != "" {
 		return existingID
 	}
-	return newDeviceID()
+	newID := newDeviceID()
+	if err := settings.SetString(settings.DeviceIDKey, newID); err != nil {
+		slog.Error("Error storing new deviceID in settings", "error", err)
+	}
+	return newID
 }
 
 func newDeviceID() string {
