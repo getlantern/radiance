@@ -45,7 +45,7 @@ func Close(_ context.Context) error {
 	for _, c := range closeTransports {
 		if c != nil {
 			if err := c(); err != nil {
-				slog.Error("failed to close DNS tunnel", slog.Any("error", err))
+				slog.Error("failed to close kindling transport", slog.Any("error", err))
 			}
 		}
 	}
