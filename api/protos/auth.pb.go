@@ -1250,7 +1250,8 @@ type LoginResponse_UserData struct {
 	SubscriptionData *LoginResponse_UserData_SubscriptionData `protobuf:"bytes,20,opt,name=subscriptionData,proto3" json:"subscriptionData,omitempty"`
 	DeviceID         string                                   `protobuf:"bytes,21,opt,name=deviceID,proto3" json:"deviceID,omitempty"`
 	// informs us whether the legacy id and token are username-password flow registered
-	UnpassRegistered bool `protobuf:"varint,22,opt,name=unpassRegistered,proto3" json:"unpassRegistered,omitempty"`
+	UnpassRegistered bool  `protobuf:"varint,22,opt,name=unpassRegistered,proto3" json:"unpassRegistered,omitempty"`
+	LastExpiredOn    int64 `protobuf:"varint,23,opt,name=lastExpiredOn,proto3" json:"lastExpiredOn,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1433,6 +1434,13 @@ func (x *LoginResponse_UserData) GetUnpassRegistered() bool {
 	return false
 }
 
+func (x *LoginResponse_UserData) GetLastExpiredOn() int64 {
+	if x != nil {
+		return x.LastExpiredOn
+	}
+	return 0
+}
+
 type LoginResponse_UserData_SubscriptionData struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	SubscriptionID     string                 `protobuf:"bytes,1,opt,name=subscriptionID,proto3" json:"subscriptionID,omitempty"`
@@ -1586,7 +1594,7 @@ const file_api_protos_auth_proto_rawDesc = "" +
 	"\fLoginRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x14\n" +
 	"\x05proof\x18\x02 \x01(\fR\x05proof\x12\x1a\n" +
-	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\x9c\v\n" +
+	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\xc2\v\n" +
 	"\rLoginResponse\x12\x1a\n" +
 	"\blegacyID\x18\x01 \x01(\x03R\blegacyID\x12 \n" +
 	"\vlegacyToken\x18\x02 \x01(\tR\vlegacyToken\x12\x0e\n" +
@@ -1599,7 +1607,7 @@ const file_api_protos_auth_proto_rawDesc = "" +
 	"\x06Device\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\xaa\b\n" +
+	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\xd0\b\n" +
 	"\bUserData\x12\x16\n" +
 	"\x06userId\x18\x01 \x01(\x03R\x06userId\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x14\n" +
@@ -1626,7 +1634,8 @@ const file_api_protos_auth_proto_rawDesc = "" +
 	"\fyinbiEnabled\x18\x13 \x01(\bR\fyinbiEnabled\x12T\n" +
 	"\x10subscriptionData\x18\x14 \x01(\v2(.LoginResponse.UserData.SubscriptionDataR\x10subscriptionData\x12\x1a\n" +
 	"\bdeviceID\x18\x15 \x01(\tR\bdeviceID\x12*\n" +
-	"\x10unpassRegistered\x18\x16 \x01(\bR\x10unpassRegistered\x1a\xf0\x02\n" +
+	"\x10unpassRegistered\x18\x16 \x01(\bR\x10unpassRegistered\x12$\n" +
+	"\rlastExpiredOn\x18\x17 \x01(\x03R\rlastExpiredOn\x1a\xf0\x02\n" +
 	"\x10SubscriptionData\x12&\n" +
 	"\x0esubscriptionID\x18\x01 \x01(\tR\x0esubscriptionID\x12\x16\n" +
 	"\x06planID\x18\x02 \x01(\tR\x06planID\x12*\n" +
