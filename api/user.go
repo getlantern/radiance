@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/1Password/srp"
+
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 
@@ -64,7 +65,11 @@ func (ac *APIClient) NewUser(ctx context.Context) (*protos.LoginResponse, error)
 	defer span.End()
 
 	var resp UserDataResponse
-	err := ac.proWebClient().Post(ctx, "/user-create", nil, &resp)
+	header := map[string]string{
+		backend.ContentTypeHeader: "application/json",
+	}
+	req := ac.proWebClient().NewRequest(nil, header, nil)
+	err := ac.proWebClient().Post(ctx, "/user-create", req, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
