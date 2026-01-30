@@ -180,8 +180,6 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		switch eventType {
 		case "datacap":
 			var datacap DataCapUsageResponse
-
-			slog.Debug("received datacap event", "data", data)
 			err := json.Unmarshal([]byte(data), &datacap)
 			if err != nil {
 				slog.Error("datacap stream unmarshal error", "error", err)
