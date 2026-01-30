@@ -134,10 +134,10 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	headers := map[string]string{
 		backend.ContentTypeHeader: "application/json",
 	}
-	getUrl := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
+	getURL := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
 	newReq := authWc.NewRequest(nil, headers, nil)
-	err := authWc.Get(ctx, getUrl, newReq, &datacap)
+	err := authWc.Get(ctx, getURL, newReq, &datacap)
 	return withMarshalJsonString(datacap, err)
 }
 
@@ -153,9 +153,9 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
 	defer span.End()
 
-	getUrl := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
+	getURL := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
-	fullURL := baseURL + getUrl
+	fullURL := baseURL + getURL
 	sseClient := sse.NewClient(fullURL)
 	sseClient.Headers = map[string]string{
 		backend.ContentTypeHeader: "application/json",
@@ -180,7 +180,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		switch eventType {
 		case "datacap":
 			var datacap DataCapUsageResponse
-			err := json.Unmarshal([]byte(data), &datacap)
+			err := json.Unmarshal(data, &datacap)
 			if err != nil {
 				slog.Error("datacap stream unmarshal error", "error", err)
 				return
