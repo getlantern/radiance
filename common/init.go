@@ -87,9 +87,6 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 		slog.Error("Error initializing logger", "error", err)
 		return fmt.Errorf("initialize log: %w", err)
 	}
-	if !IsWindows() {
-		ipc.SetSocketPath(data)
-	}
 
 	if readonly {
 		settings.SetReadOnly(true)
@@ -97,6 +94,9 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 			return fmt.Errorf("start watching settings file: %w", err)
 		}
 	} else {
+		if !IsWindows() {
+			ipc.SetSocketPath(data)
+		}
 		settings.Set(settings.DataPathKey, data)
 		settings.Set(settings.LogPathKey, logs)
 		settings.Set(settings.LogLevelKey, logLevel)

@@ -22,6 +22,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
@@ -248,14 +249,35 @@ func buildOptions(group, path string) (O.Options, error) {
 		"clashAPIDefaultMode", opts.Experimental.ClashAPI.DefaultMode,
 	)
 
-	// platform-specific overrides
-	switch common.Platform {
-	case "android":
-		opts.Route.OverrideAndroidVPN = true
-		slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
-	case "linux":
-		opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
-		slog.Debug("Linux platform detected, AutoRedirect set to true")
+	if _, useSocks := env.Get[bool](env.UseSocks); useSocks {
+		socksAddr, _ := env.Get[string](env.SocksAddress)
+		slog.Info("Using SOCKS proxy for inbound as per environment variable", "socksAddr", socksAddr)
+		addrPort, err := netip.ParseAddrPort(socksAddr)
+		if err != nil {
+			return O.Options{}, fmt.Errorf("invalid SOCKS address: %w", err)
+		}
+		addr := badoption.Addr(addrPort.Addr())
+		socksIn := O.Inbound{
+			Type: C.TypeMixed,
+			Tag:  "http-socks-in",
+			Options: &O.HTTPMixedInboundOptions{
+				ListenOptions: O.ListenOptions{
+					Listen:     &addr,
+					ListenPort: addrPort.Port(),
+				},
+			},
+		}
+		opts.Inbounds = []O.Inbound{socksIn}
+	} else {
+		// platform-specific overrides
+		switch common.Platform {
+		case "android":
+			opts.Route.OverrideAndroidVPN = true
+			slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
+		case "linux":
+			opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
+			slog.Debug("Linux platform detected, AutoRedirect set to true")
+		}
 	}
 
 	// Load config file
