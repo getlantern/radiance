@@ -147,12 +147,12 @@ type DataCapChangeEvent struct {
 }
 
 // DataCapStream connects to the datacap SSE endpoint and continuously reads events.
-// It send events whenever there is an update in datacap usage with DataCapChangeEvent.
-// to receive those events use emits.Subscribe(&DataCapChangeEvent{}, func(e events.Event) { ... })
+// It sends events whenever there is an update in datacap usage with DataCapChangeEvent.
+// To receive those events use events.Subscribe(&DataCapChangeEvent{}, func(evt DataCapChangeEvent) { ... })
 func (a *APIClient) DataCapStream(ctx context.Context) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
 	defer span.End()
-	datacap := &DataCapUsageResponse{}
+
 	getUrl := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
 	fullURL := baseURL + getUrl
@@ -179,13 +179,15 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		data := msg.Data
 		switch eventType {
 		case "datacap":
+			var datacap DataCapUsageResponse
+
 			slog.Debug("received datacap event", "data", data)
 			err := json.Unmarshal([]byte(data), &datacap)
 			if err != nil {
 				slog.Error("datacap stream unmarshal error", "error", err)
 				return
 			}
-			events.Emit(DataCapChangeEvent{DataCapUsageResponse: datacap})
+			events.Emit(DataCapChangeEvent{DataCapUsageResponse: &datacap})
 		case "cap_exhausted":
 			slog.Debug("⚠️  Datacap exhausted ")
 			return

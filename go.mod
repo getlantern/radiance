@@ -40,6 +40,7 @@ require (
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
+	github.com/r3labs/sse/v2 v2.10.0
 	github.com/sagernet/sing v0.7.13
 	github.com/sagernet/sing-box v1.12.13
 	github.com/stretchr/testify v1.11.1
@@ -161,7 +162,6 @@ require (
 	github.com/pion/webrtc/v3 v3.1.42 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
-	github.com/r3labs/sse/v2 v2.10.0 // indirect
 	github.com/refraction-networking/utls v1.7.1 // indirect
 	github.com/refraction-networking/water v0.7.1-alpha // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
