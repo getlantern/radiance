@@ -29,6 +29,7 @@ Available variables:
 *.  `RADIANCE_COUNTRY`: Simulate running from another country, specifically fetching a config as if running from X country. For example, `RADIANCE_COUNTRY=cn`
 *   `RADIANCE_USE_SOCKS_PROXY`: If set to `true`, replace the TUN with a SOCKS proxy for inbound connections.
 *   `RADIANCE_SOCKS_ADDRESS`: Specifies the address (`host:port`) for the SOCKS proxy to use for inbound connections.
+*.  `RADIANCE_ENV`: Sets whether we're running in production or development mode. Set to `dev` for additional debugging output, such as the sing-box config actually in use. `prod` is the default.
 
 
 ## Packages
