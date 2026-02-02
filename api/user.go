@@ -49,7 +49,7 @@ type Tier int
 const (
 	saltFileName = ".salt"
 	baseURL      = "https://df.iantem.io/api/v1"
-	stageBaseURL = "http://df.staging.iantem.io/api/v1"
+	stageBaseURL = "https://api.staging.iantem.io/v1"
 )
 
 // pro-server requests
