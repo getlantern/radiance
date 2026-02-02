@@ -7,8 +7,8 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/testutil"
 	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -41,7 +41,7 @@ func TestSelectServer(t *testing.T) {
 		},
 	}
 
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	mservice := setupVpnTest(t)
 
 	ctx := mservice.Ctx()
@@ -75,7 +75,7 @@ func TestSelectedServer(t *testing.T) {
 	wantGroup := "socks"
 	wantTag := "socks2-out"
 
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	opts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to load test box options")
 	cacheFile := cachefile.New(context.Background(), *opts.Experimental.CacheFile)
@@ -98,7 +98,7 @@ func TestSelectedServer(t *testing.T) {
 }
 
 func TestAutoServerSelections(t *testing.T) {
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	mgr := &mockOutMgr{
 		outbounds: []adapter.Outbound{
 			&mockOutbound{tag: "socks1-out"},
@@ -133,7 +133,7 @@ func TestAutoServerSelections(t *testing.T) {
 		ctx:    ctx,
 		status: ipc.StatusRunning,
 	}
-	ipcServer = ipc.NewServer(m)
+	ipcServer := ipc.NewServer(m)
 	require.NoError(t, ipcServer.Start(settings.GetString(settings.DataPathKey)))
 
 	got, err := AutoServerSelections()
@@ -216,15 +216,15 @@ func setupVpnTest(t *testing.T) *mockService {
 		status: ipc.StatusRunning,
 		clash:  clashServer.(*clashapi.Server),
 	}
-	ipcServer = ipc.NewServer(m)
+	ipcServer := ipc.NewServer(m)
+	require.NoError(t, ipcServer.Start(path))
+
 	t.Cleanup(func() {
 		lb.Close()
 		ipcServer.Close()
 		cacheFile.Close()
 		clashServer.Close()
 	})
-	require.NoError(t, ipcServer.Start(path))
-
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))
 	return m

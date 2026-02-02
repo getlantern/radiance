@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -18,8 +19,8 @@ import (
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"go.opentelemetry.io/otel"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/internal"
 )
 
 var (
@@ -40,12 +41,13 @@ type Service interface {
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr       *http.Server
-	service   Service
-	router    chi.Router
-	mutex     sync.RWMutex
-	vpnStatus atomic.Value // string
-	closed    atomic.Bool
+	svr        *http.Server
+	service    Service
+	router     chi.Router
+	mutex      sync.RWMutex
+	vpnStatus  atomic.Value // string
+	closed     atomic.Bool
+	allowedUsr usr
 }
 
 // StatusUpdateEvent is emitted when the VPN status changes.
@@ -78,6 +80,10 @@ func NewServer(service Service) *Server {
 	}
 	s.vpnStatus.Store(Disconnected)
 	s.router.Use(log, tracer)
+	if !common.IsMobile() && !_testing {
+		s.router.Use(authPeer)
+	}
+
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -94,6 +100,23 @@ func NewServer(service Service) *Server {
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
+
+	svr := &http.Server{
+		Handler:      s.router,
+		ReadTimeout:  time.Second * 5,
+		WriteTimeout: time.Second * 5,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			peer, err := getConnPeer(c)
+			if err != nil {
+				slog.Error("Failed to get peer credentials", "error", err)
+			}
+			return contextWithUsr(ctx, peer)
+		},
+	}
+	if _testing {
+		svr.ConnContext = nil
+	}
+	s.svr = svr
 	return s
 }
 
@@ -103,20 +126,13 @@ func (s *Server) Start(basePath string) error {
 	if s.closed.Load() {
 		return errors.New("IPC server is closed")
 	}
-	l, err := listen(basePath)
+	l, err := listen()
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
 	}
-	slog.Log(nil, internal.LevelTrace, "IPC listening", "address", l.Addr().String())
-	svr := &http.Server{
-		Handler:      s.router,
-		ReadTimeout:  time.Second * 5,
-		WriteTimeout: time.Second * 5,
-	}
-	s.svr = svr
 	go func() {
 		slog.Info("IPC server started", "address", l.Addr().String())
-		err := svr.Serve(l)
+		err := s.svr.Serve(l)
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("IPC server", "error", err)
 		}

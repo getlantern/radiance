@@ -21,7 +21,6 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 var (
@@ -88,9 +87,6 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 			return fmt.Errorf("start watching settings file: %w", err)
 		}
 	} else {
-		if !IsWindows() {
-			ipc.SetSocketPath(data)
-		}
 		settings.Set(settings.DataPathKey, data)
 		settings.Set(settings.LogPathKey, logs)
 		settings.Set(settings.LogLevelKey, logLevel)
@@ -98,7 +94,9 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 
 	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	createCrashReporter()
-	logModuleInfo()
+	if Dev() {
+		logModuleInfo()
+	}
 	return nil
 }
 

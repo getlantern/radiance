@@ -14,14 +14,14 @@ import (
 
 	"github.com/getlantern/lantern-box/adapter"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/testutil"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func TestEstablishConnection(t *testing.T) {
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	tOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
@@ -31,7 +31,7 @@ func TestEstablishConnection(t *testing.T) {
 }
 
 func TestUpdateServers(t *testing.T) {
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 

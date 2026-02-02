@@ -9,15 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
-
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn"
 )
 
 var (
-	dataPath = flag.String("data-path", "$HOME/.radiance", "Path to store data")
-	logPath  = flag.String("log-path", "$HOME/.radiance", "Path to store logs")
+	dataPath = flag.String("data-path", "$HOME/.lantern", "Path to store data")
+	logPath  = flag.String("log-path", "$HOME/.lantern", "Path to store logs")
 	logLevel = flag.String("log-level", "info", "Logging level (trace, debug, info, warn, error)")
 )
 
@@ -27,10 +25,9 @@ func main() {
 	dataPath := os.ExpandEnv(*dataPath)
 	logPath := os.ExpandEnv(*logPath)
 
-	slog.Info("Starting radianced", "version", common.Version, "dataPath", dataPath)
+	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
 
-	platIfceProvider := func() libbox.PlatformInterface { return nil }
-	ipcServer, err := vpn.InitIPC(dataPath, logPath, *logLevel, platIfceProvider)
+	ipcServer, err := vpn.InitIPC(dataPath, logPath, *logLevel, nil)
 	if err != nil {
 		log.Fatalf("Failed to initialize IPC: %v\n", err)
 	}

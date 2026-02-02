@@ -15,18 +15,16 @@ import (
 )
 
 const (
-	pipePath = `\\.\pipe\Lantern\radiance`
+	pipePath = `\\.\pipe\Lantern\lantern`
+	// pipePath = `\\.\pipe\ProtectedPrefix\Administrators\`
 
 	apiURL         = "http://pipe"
 	connectTimeout = 10 * time.Second
 
-	sddl = `D:P(A;;GA;;;SY)(A;;GRGW;;;IU)(A;;GRGW;;;BA)`
+	//     `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;S-1-5-21-...)`
+	//     `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`,
+	sddl = `D:P(A;;GA;;;SY)(A;;GRGW;;;BA)(A;;GRGW;;;IU)`
 )
-
-// SetSocketPath not supported on Windows.
-func SetSocketPath(path string) {
-	panic("SetSocketPath is not supported on Windows")
-}
 
 func dialContext(ctx context.Context, _, _ string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -35,7 +33,7 @@ func dialContext(ctx context.Context, _, _ string) (net.Conn, error) {
 }
 
 // listen creates a named pipe listener at a predefined path.
-func listen(_ string) (net.Listener, error) {
+func listen() (net.Listener, error) {
 	ln, err := winio.ListenPipe(
 		pipePath,
 		&winio.PipeConfig{
@@ -61,6 +59,16 @@ type winioListener struct {
 	net.Listener
 }
 
+type winconn struct {
+	winioConn
+	token windows.Token
+}
+
+func (c *winconn) Close() error {
+	c.token.Close()
+	return c.winioConn.Close()
+}
+
 // Accept waits for and returns the next connection to the listener, verifying the client identity.
 func (l *winioListener) Accept() (conn net.Conn, err error) {
 	c, err := l.Listener.Accept()
@@ -78,41 +86,45 @@ func (l *winioListener) Accept() (conn net.Conn, err error) {
 	if !ok {
 		return nil, fmt.Errorf("expected winio.Conn, got %T", c)
 	}
-	pipeToken, err := getPipeClientToken(wc)
+	token, err := getPipeClientToken(wc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pipe client token: %w", err)
 	}
-	defer pipeToken.Close()
-
-	procToken, err := getProcessToken(wc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get process token: %w", err)
-	}
-	defer procToken.Close()
-
-	// if the tokens are not the same user, reject the connection.
-	sameUser, err := verifySameUser(pipeToken, procToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to verify same user: %w", err)
-	}
-	if !sameUser {
-		return nil, fmt.Errorf("pipe client and process are not the same user")
-	}
-	return wc, nil
+	return &winconn{
+		winioConn: wc,
+		token:     token,
+	}, nil
 }
 
-// verifySameUser checks if two tokens belong to the same user.
-func verifySameUser(t1, t2 windows.Token) (bool, error) {
-	u1, err := t1.GetTokenUser()
-	if err != nil {
-		return false, fmt.Errorf("failed to get token user: %w", err)
-	}
-	u2, err := t2.GetTokenUser()
-	if err != nil {
-		return false, fmt.Errorf("failed to get token user: %w", err)
-	}
-	return u1.User.Sid.Equals(u2.User.Sid), nil
-}
+// // withConnHandle runs the function with the connection’s handle pinned by the runtime
+// func withConnHandle(c winioConn, fn func(h windows.Handle) error) error {
+// 	rc, err := c.SyscallConn()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	var callErr error
+// 	if err := rc.Control(func(fd uintptr) { callErr = fn(windows.Handle(fd)) }); err != nil {
+// 		return err
+// 	}
+// 	return callErr
+// }
+//
+// // getPipeClientToken retrieves the impersonation token for the pipe client.
+// func getPipeClientToken(conn winioConn) (windows.Token, error) {
+// 	var token windows.Token
+// 	if err := withConnHandle(conn, func(h windows.Handle) error {
+// 		err := impersonateNamedPipeClient(h)
+// 		if err != nil {
+// 			return fmt.Errorf("failed to impersonate client: %w", err)
+// 		}
+// 		defer windows.RevertToSelf()
+//
+// 		return windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY, true, &token)
+// 	}); err != nil {
+// 		return 0, err
+// 	}
+// 	return token, nil
+// }
 
 // getPipeClientToken retrieves the impersonation token for the pipe client.
 func getPipeClientToken(conn winioConn) (windows.Token, error) {
@@ -165,4 +177,12 @@ func getPipeClientPID(pc winioConn) (uint32, error) {
 		return 0, fmt.Errorf("failed to get client process id: %w", err)
 	}
 	return pid, nil
+}
+
+func getConnPeer(conn net.Conn) (p usr, err error) {
+	wc, ok := conn.(*winconn)
+	if !ok {
+		return p, fmt.Errorf("expected *winconn, got %T", conn)
+	}
+	return usrFromToken(wc.token)
 }
