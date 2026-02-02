@@ -345,11 +345,12 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 }
 
 type multipleDNSTTTransport struct {
-	crawlOnce sync.Once
-	tunChan   chan *dnsTunnel
-	stopChan  chan struct{}
-	closed    atomic.Bool
-	options   []*dnsTunnel
+	crawlOnce    sync.Once
+	tunChan      chan *dnsTunnel
+	stopChan     chan struct{}
+	stopChanOnce sync.Once
+	closed       atomic.Bool
+	options      []*dnsTunnel
 }
 
 type dnsTunnel struct {
@@ -430,7 +431,9 @@ func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, er
 // Close releases resources and closes active sessions.
 func (m *multipleDNSTTTransport) Close() error {
 	m.closed.Store(true)
-	close(m.stopChan)
+	m.stopChanOnce.Do(func() {
+		close(m.stopChan)
+	})
 	for _, dnst := range m.options {
 		go func() {
 			if err := dnst.Close(); err != nil {
