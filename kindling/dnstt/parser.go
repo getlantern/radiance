@@ -336,7 +336,9 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 			// Successful tunnel
 			slog.Debug("adding successful tun to channel")
 			dnst.markSucceeded()
-			m.tunChan <- dnst
+			if !m.closed.Load() {
+				m.tunChan <- dnst
+			}
 		})
 	}
 	pool.StopAndWaitFor(waitFor)
