@@ -174,7 +174,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		slog.Debug("Disconnected from datacap stream")
 	})
 	// Start listening to events
-	return sseClient.SubscribeWithContext(ctx, "", func(msg *sse.Event) {
+	return sseClient.SubscribeRawWithContext(ctx, func(msg *sse.Event) {
 		eventType := string(msg.Event)
 		data := msg.Data
 		switch eventType {
@@ -187,7 +187,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 			}
 			events.Emit(DataCapChangeEvent{DataCapUsageResponse: &datacap})
 		case "cap_exhausted":
-			slog.Debug("⚠️  Datacap exhausted ")
+			slog.Warn("Datacap exhausted ")
 			return
 
 		default:
