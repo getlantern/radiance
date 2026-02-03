@@ -248,17 +248,12 @@ var waitFor = 30 * time.Second
 
 func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 	for {
-		if len(m.tunChan) < 2 {
+		select {
+		case <-m.stopChan:
+			slog.Debug("stopping parallel dialing dns tunnels")
+			return
+		case <-time.After(30 * time.Minute):
 			m.tryAllDNSTunnels()
-			time.Sleep(60 * time.Second)
-		} else {
-			select {
-			case <-m.stopChan:
-				slog.Debug("stopping parallel dialing dns tunnels")
-				return
-			case <-time.After(30 * time.Minute):
-				// Run again after 30 min
-			}
 		}
 	}
 }
