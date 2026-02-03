@@ -41,6 +41,7 @@ require (
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
+	github.com/r3labs/sse/v2 v2.10.0
 	github.com/sagernet/sing v0.7.18
 	github.com/sagernet/sing-box v1.12.13
 	github.com/sagernet/sing-dns v0.4.6
@@ -198,6 +199,7 @@ require (
 	golang.org/x/text v0.31.0 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251124214823-79d6a2a48846 // indirect
+	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
 	modernc.org/libc v1.22.3 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect
