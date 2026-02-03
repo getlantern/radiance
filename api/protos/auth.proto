@@ -82,6 +82,7 @@ message LoginResponse {
     repeated string invitees = 17;
     repeated Device devices = 18;
     bool yinbiEnabled = 19;
+    
     message SubscriptionData {
       string subscriptionID = 1;
       string planID = 2;
@@ -100,6 +101,8 @@ message LoginResponse {
   string deviceID = 21;
   	// informs us whether the legacy id and token are username-password flow registered
   bool unpassRegistered = 22;
+  int64 lastExpiredOn = 23;
+  
 }
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login

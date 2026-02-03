@@ -21,6 +21,7 @@ import (
 	"time"
 
 	box "github.com/getlantern/lantern-box"
+	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
@@ -103,20 +104,7 @@ func NewManager(dataPath string) (*Manager, error) {
 		// Note that we use a regular http.Client here because it is only used to access private
 		// servers the user has created.
 		// Use the same configuration as http.DefaultClient.
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: (&net.Dialer{
-					Timeout:   30 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
-				ForceAttemptHTTP2:      true,
-				MaxIdleConns:           100,
-				IdleConnTimeout:        90 * time.Second,
-				TLSHandshakeTimeout:    10 * time.Second,
-				ExpectContinueTimeout:  1 * time.Second,
-			},
-		},
+		httpClient: retryableHTTPClient().StandardClient(),
 	}
 
 	slog.Debug("Loading servers", "file", mgr.serversFile)
@@ -126,6 +114,31 @@ func NewManager(dataPath string) (*Manager, error) {
 	}
 	slog.Log(nil, internal.LevelTrace, "Loaded servers", "servers", mgr.servers)
 	return mgr, nil
+}
+
+func retryableHTTPClient() *retryablehttp.Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	client := retryablehttp.NewClient()
+	client.HTTPClient = &http.Client{
+		Transport: transport,
+	}
+
+	client.RetryMax = 10
+	client.RetryWaitMin = 500 * time.Millisecond
+	client.RetryWaitMax = 5 * time.Second
+	return client
 }
 
 // Servers returns the current server configurations for both groups ([SGLantern] and [SGUser]).

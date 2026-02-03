@@ -30,13 +30,14 @@ require (
 	github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
 	github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461
-	github.com/getlantern/lantern-box v0.0.6-0.20260109195635-79fc82eae39d
+	github.com/getlantern/lantern-box v0.0.6-0.20260202181048-0fd2996c31cb
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
@@ -47,8 +48,8 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.37.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.37.0
-	go.opentelemetry.io/otel/sdk v1.38.0
-	go.opentelemetry.io/otel/sdk/metric v1.38.0
+	go.opentelemetry.io/otel/sdk v1.39.0
+	go.opentelemetry.io/otel/sdk/metric v1.39.0
 	go.uber.org/mock v0.5.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/protobuf v1.36.10
@@ -90,6 +91,7 @@ require (
 	github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8 // indirect
 	github.com/caddyserver/zerossl v0.1.3 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.13 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
@@ -104,9 +106,8 @@ require (
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
 	github.com/getlantern/errors v1.0.4 // indirect
-	github.com/getlantern/geo v0.0.0-20241129152027-2fc88c10f91e // indirect
 	github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 // indirect
-	github.com/getlantern/lantern-water v0.0.0-20250331153903-07abebe611e8 // indirect
+	github.com/getlantern/lantern-water v0.0.0-20260130212632-d5ea08838250 // indirect
 	github.com/getlantern/tlsdialer/v3 v3.0.6-0.20260105215053-2a1cd54af4d5 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
@@ -121,6 +122,7 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
+	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
 	github.com/illarion/gonotify/v2 v2.0.3 // indirect
@@ -140,8 +142,6 @@ require (
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/nwaples/rardecode v1.1.2 // indirect
-	github.com/oschwald/geoip2-golang v1.9.0 // indirect
-	github.com/oschwald/maxminddb-golang v1.13.1 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v2 v2.2.7 // indirect
 	github.com/pion/ice/v2 v2.2.6 // indirect
@@ -190,7 +190,7 @@ require (
 	github.com/xtaci/smux v1.5.34 // indirect
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2 v2.11.0 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
-	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
@@ -274,10 +274,10 @@ require (
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
-	go.opentelemetry.io/otel v1.38.0
+	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.37.0
-	go.opentelemetry.io/otel/metric v1.38.0
-	go.opentelemetry.io/otel/trace v1.38.0
+	go.opentelemetry.io/otel/metric v1.39.0
+	go.opentelemetry.io/otel/trace v1.39.0
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
