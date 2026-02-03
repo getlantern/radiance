@@ -19,7 +19,12 @@ func TestNewClient(t *testing.T) {
 	settings.Set(settings.DataPathKey, t.TempDir())
 	k = NewKindling()
 	SetKindling(k)
-	defer Close(context.Background())
+
+	t.Cleanup(func() {
+		Close(context.Background())
+		k = nil
+	})
+
 	cli := HTTPClient()
 	assert.NotNil(t, cli)
 
