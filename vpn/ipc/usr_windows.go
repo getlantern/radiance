@@ -19,6 +19,7 @@ func usrFromToken(t windows.Token) (p usr, err error) {
 	isAdm, err := isAdmin(t)
 	if err != nil {
 		slog.Warn("failed to check admin status", "error", err)
+		isAdm = false
 	}
 	return usr{
 		uid:     u.User.Sid.String(),
