@@ -11,9 +11,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-	"github.com/sagernet/sing/service"
 
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -132,13 +130,20 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 	group := s.tunnel.clashServer.Mode()
 	tag := s.tunnel.cacheFile.LoadSelected(group)
 
+	var err error
 	if s.platformIfce == nil {
-		defer s.mu.Unlock()
-		return s.restart(ctx, group, tag)
+		err = s.restart(ctx, group, tag)
+		s.mu.Unlock()
+	} else {
+		s.mu.Unlock()
+		err = s.restartViaPlatformIface(group, tag)
 	}
-	s.mu.Unlock()
-	return s.restartViaPlatformIface(group, tag)
-
+	if err != nil {
+		s.logger.Error("Failed to restart tunnel", "error", err, "group", group, "tag", tag)
+		return fmt.Errorf("failed to restart tunnel: %w", err)
+	}
+	s.logger.Info("Tunnel restarted successfully")
+	return nil
 }
 
 func (s *TunnelService) restart(ctx context.Context, group, tag string) error {
@@ -152,7 +157,7 @@ func (s *TunnelService) restart(ctx context.Context, group, tag string) error {
 
 func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
 	if err := s.platformIfce.RestartService(); err != nil {
-		return fmt.Errorf("PlatformInterface.RestartService: %w", err)
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,14 +167,7 @@ func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
 	if status := s.tunnel.Status(); status != ipc.StatusRunning {
 		return fmt.Errorf("tunnel not running: status %v", status)
 	}
-	s.tunnel.clashServer.SetMode(group)
-	outboundMgr := service.FromContext[adapter.OutboundManager](s.tunnel.ctx)
-	outbound, loaded := outboundMgr.Outbound(tag)
-	if !loaded {
-		return fmt.Errorf("selector not found: %s", tag)
-	}
-	outbound.(ipc.Selector).SelectOutbound(tag)
-	return nil
+	return s.tunnel.selectOutbound(group, tag)
 }
 
 // Status returns the current status of the tunnel (e.g., running, closed).
