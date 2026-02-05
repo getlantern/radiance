@@ -83,6 +83,7 @@ func initialize(fileDir string) error {
 		if err := setDefaults(filePath); err != nil {
 			return fmt.Errorf("setting default settings: %w", err)
 		}
+		return save()
 	case err != nil:
 		return fmt.Errorf("loading settings: %w", err)
 	}

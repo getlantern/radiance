@@ -58,5 +58,5 @@ func (s *Server) setSettingsPathHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 }
 
-//go:linkname reloadSettings settings.loadSettings
+//go:linkname reloadSettings github.com/getlantern/radiance/common/settings.loadSettings
 func reloadSettings(path string) error

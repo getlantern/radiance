@@ -98,5 +98,5 @@ func initIPC(dataPath, logPath, logLevel string) (*ipc.Server, error) {
 	return server, nil
 }
 
-//go:linkname reloadSettings settings.loadSettings
+//go:linkname reloadSettings github.com/getlantern/radiance/common/settings.loadSettings
 func reloadSettings(path string) error
