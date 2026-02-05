@@ -185,12 +185,12 @@ type mockService struct {
 	clash  *clashapi.Server
 }
 
-func (m *mockService) Ctx() context.Context          { return m.ctx }
-func (m *mockService) Status() string                { return m.status }
-func (m *mockService) ClashServer() *clashapi.Server { return m.clash }
-func (m *mockService) Close() error                  { return nil }
-func (m *mockService) Start(group, tag string) error { return nil }
-func (m *mockService) Restart() error                { return nil }
+func (m *mockService) Ctx() context.Context                               { return m.ctx }
+func (m *mockService) Status() string                                     { return m.status }
+func (m *mockService) ClashServer() *clashapi.Server                      { return m.clash }
+func (m *mockService) Close() error                                       { return nil }
+func (m *mockService) Start(ctx context.Context, group, tag string) error { return nil }
+func (m *mockService) Restart(ctx context.Context) error                  { return nil }
 
 func setupVpnTest(t *testing.T) *mockService {
 	path := settings.GetString(settings.DataPathKey)
