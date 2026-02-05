@@ -153,6 +153,7 @@ func StopWatching() {
 	defer k.mu.Unlock()
 	if k.watcher != nil {
 		k.watcher.Close()
+		k.watcher = nil
 	}
 }
 
@@ -227,6 +228,10 @@ func Reset() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if !k.readOnly.Load() {
+		if k.watcher != nil {
+			k.watcher.Close()
+			k.watcher = nil
+		}
 		k.k = koanf.New(".")
 		k.initialized = false
 	}

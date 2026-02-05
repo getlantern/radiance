@@ -12,4 +12,5 @@ const (
 	clashModeEndpoint        = "/clash/mode"
 	connectionsEndpoint      = "/connections"
 	closeConnectionsEndpoint = "/connections/close"
+	setSettingsPathEndpoint  = "/set"
 )

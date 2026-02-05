@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
@@ -185,6 +186,9 @@ func initLogger(logPath, level string) error {
 	} else {
 		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
+	runtime.AddCleanup(&logWriter, func(f *os.File) {
+		f.Close()
+	}, f)
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     lvl,

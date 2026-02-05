@@ -100,6 +100,7 @@ func NewServer(service Service) *Server {
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
+	s.router.Post(setSettingsPathEndpoint, s.setSettingsPathHandler)
 
 	svr := &http.Server{
 		Handler:      s.router,
