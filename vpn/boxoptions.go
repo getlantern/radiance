@@ -366,7 +366,7 @@ const debugLanternBoxOptionsFilename = "debug-lantern-box-options.json"
 func writeBoxOptions(path string, opts O.Options) []byte {
 	buf, err := json.MarshalContext(box.BaseContext(), opts)
 	if err != nil {
-		slog.Warn("failed to unmarshal options while writing debug box options", slog.Any("error", err))
+		slog.Warn("failed to marshal options while writing debug box options", slog.Any("error", err))
 		return nil
 	}
 
