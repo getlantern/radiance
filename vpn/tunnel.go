@@ -266,7 +266,7 @@ func (t *tunnel) selectOutbound(group, tag string) error {
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
 	outbound, loaded := outboundMgr.Outbound(group)
 	if !loaded {
-		return fmt.Errorf("selector not found: %s", tag)
+		return fmt.Errorf("selector group not found: %s", group)
 	}
 	outbound.(ipc.Selector).SelectOutbound(tag)
 	return nil

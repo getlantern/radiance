@@ -157,7 +157,7 @@ func (s *TunnelService) restart(ctx context.Context, group, tag string) error {
 
 func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
 	if err := s.platformIfce.RestartService(); err != nil {
-		return err
+		return fmt.Errorf("platform interface restart failed: %w", err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
