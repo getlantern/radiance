@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,7 +92,7 @@ func TestBuildOptions(t *testing.T) {
 			if len(tt.userTags) > 0 {
 				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
 			}
-			opts, err := buildOptions(autoAllTag, path)
+			opts, err := buildOptions(context.Background(), autoAllTag, path)
 			if tt.shouldError {
 				require.Error(t, err, "expected error but got none")
 				return
@@ -110,6 +111,8 @@ func TestBuildOptions(t *testing.T) {
 			hasGroupWithTags(t, gotOutbounds, autoLanternTag, tt.lanternTags)
 			hasGroupWithTags(t, gotOutbounds, autoUserTag, tt.userTags)
 			hasGroupWithTags(t, gotOutbounds, autoAllTag, []string{autoLanternTag, autoUserTag})
+
+			assert.FileExists(t, filepath.Join(path, debugLanternBoxOptionsFilename), "debug option file must be written")
 		})
 	}
 }
@@ -193,7 +196,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		t.Cleanup(settings.Reset)
 
 		settings.Set(settings.SmartRoutingKey, true)
-		options, err := buildOptions(autoAllTag, tmp)
+		options, err := buildOptions(context.Background(), autoAllTag, tmp)
 		require.NoError(t, err)
 		// check rules, rulesets, and outbounds are correctly built into options
 		assert.True(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
@@ -208,7 +211,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		t.Cleanup(settings.Reset)
 
 		settings.Set(settings.AdBlockKey, true)
-		options, err := buildOptions(autoAllTag, tmp)
+		options, err := buildOptions(context.Background(), autoAllTag, tmp)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
 		for _, rs := range wantAdBlockOpts.Route.RuleSet {
