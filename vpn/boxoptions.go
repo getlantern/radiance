@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"bytes"
+	"context"
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"time"
 
 	lcommon "github.com/getlantern/common"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
@@ -233,7 +237,10 @@ func baseRoutingRules() []O.Rule {
 }
 
 // buildOptions builds the box options using the config options and user servers.
-func buildOptions(group, path string) (O.Options, error) {
+func buildOptions(ctx context.Context, group, path string) (O.Options, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "buildOptions")
+	defer span.End()
+
 	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
 
 	opts := baseOpts(path)
@@ -343,18 +350,36 @@ func buildOptions(group, path string) (O.Options, error) {
 
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
+	slog.Debug("Finished building options", slog.String("env", common.Env()))
 
-	slog.Debug("Finished building options")
-
-	if common.Dev() {
-		// write box options
-		// we can ignore the errors here since the tunnel will error out anyway if something is wrong
-		buf, _ := json.MarshalContext(box.BaseContext(), opts)
-		var b bytes.Buffer
-		stdjson.Indent(&b, buf, "", "  ")
-		os.WriteFile(filepath.Join(path, "debug-lantern-box-options.json"), b.Bytes(), 0644)
-	}
+	span.AddEvent("finished building options", trace.WithAttributes(
+		attribute.String("options", string(writeBoxOptions(path, opts))),
+		attribute.String("env", common.Env()),
+	))
 	return opts, nil
+}
+
+const debugLanternBoxOptionsFilename = "debug-lantern-box-options.json"
+
+// writeBoxOptions marshals the options as JSON and stores them in a file so we can debug them
+// we can ignore the errors here since the tunnel will error out anyway if something is wrong
+func writeBoxOptions(path string, opts O.Options) []byte {
+	buf, err := json.MarshalContext(box.BaseContext(), opts)
+	if err != nil {
+		slog.Warn("failed to marshal options while writing debug box options", slog.Any("error", err))
+		return nil
+	}
+
+	var b bytes.Buffer
+	if err := stdjson.Indent(&b, buf, "", "  "); err != nil {
+		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
+		return buf
+	}
+	if err := os.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
+		slog.Warn("failed to write options file", slog.Any("error", err))
+		return buf
+	}
+	return b.Bytes()
 }
 
 ///////////////////////

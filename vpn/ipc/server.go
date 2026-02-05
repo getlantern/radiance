@@ -32,8 +32,8 @@ var (
 type Service interface {
 	Ctx() context.Context
 	Status() string
-	Start(group, tag string) error
-	Restart() error
+	Start(ctx context.Context, group, tag string) error
+	Restart(ctx context.Context) error
 	ClashServer() *clashapi.Server
 	Close() error
 }
@@ -176,7 +176,7 @@ func StopService(ctx context.Context) error {
 }
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
+	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
 	defer span.End()
 	// check if service is already running
 	if s.service.Status() != StatusClosed {
@@ -189,7 +189,7 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.service.Start(p.GroupTag, p.OutboundTag); err != nil {
+	if err := s.service.Start(ctx, p.GroupTag, p.OutboundTag); err != nil {
 		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -214,12 +214,15 @@ func RestartService(ctx context.Context) error {
 }
 
 func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.restartServiceHandler")
+	defer span.End()
+
 	if s.service.Status() != StatusRunning {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.vpnStatus.Store(Disconnected)
-	if err := s.service.Restart(); err != nil {
+	if err := s.service.Restart(ctx); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

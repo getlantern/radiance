@@ -28,6 +28,12 @@ var (
 	initialized atomic.Bool
 )
 
+func Env() string {
+	e, _ := env.Get[string](env.ENV)
+	e = strings.ToLower(e)
+	return e
+}
+
 // Prod returns true if the application is running in production environment.
 // Treating ENV == "" as production is intentional: if RADIANCE_ENV is unset,
 // we default to production mode to ensure the application runs with safe, non-debug settings.
