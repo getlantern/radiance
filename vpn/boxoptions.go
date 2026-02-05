@@ -361,7 +361,7 @@ func buildOptions(ctx context.Context, group, path string) (O.Options, error) {
 
 const debugLanternBoxOptionsFilename = "debug-lantern-box-options.json"
 
-// writeBoxOptions store marshal the options as a JSON and store it in a file so we can debug it
+// writeBoxOptions marshals the options as JSON and stores them in a file so we can debug them
 // we can ignore the errors here since the tunnel will error out anyway if something is wrong
 func writeBoxOptions(path string, opts O.Options) []byte {
 	buf, err := json.MarshalContext(box.BaseContext(), opts)
