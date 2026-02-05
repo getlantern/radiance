@@ -136,8 +136,8 @@ func retryableHTTPClient() *retryablehttp.Client {
 	}
 
 	client.RetryMax = 10
-	client.RetryWaitMin = 500 * time.Millisecond
-	client.RetryWaitMax = 5 * time.Second
+	client.RetryWaitMin = 1 * time.Second
+	client.RetryWaitMax = 10 * time.Second
 	return client
 }
 
