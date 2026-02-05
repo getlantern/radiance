@@ -30,7 +30,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
-	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -76,14 +75,6 @@ func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.Pl
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	// we need to set the selected server before starting libbox
-	slog.Log(nil, internal.LevelTrace, "Starting cachefile")
-	if err := t.cacheFile.Start(adapter.StartStateInitialize); err != nil {
-		slog.Error("Failed to start cache file", "error", err)
-		return fmt.Errorf("start cache file: %w", err)
-	}
-	t.closers = append(t.closers, t.cacheFile)
-
 	if err = t.connect(); err != nil {
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
@@ -128,19 +119,16 @@ func (t *tunnel) init(opts O.Options, platformIfce libbox.PlatformInterface) err
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
-	// create the cache file service
 	if opts.Experimental.CacheFile == nil {
 		return fmt.Errorf("cache file options are required")
 	}
-	cacheFile := cachefile.New(t.ctx, *opts.Experimental.CacheFile)
-	service.MustRegister[adapter.CacheFile](t.ctx, cacheFile)
-	t.cacheFile = cacheFile
 
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
+	t.cacheFile = service.FromContext[adapter.CacheFile](t.ctx)
 
 	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
@@ -276,7 +264,7 @@ func (t *tunnel) selectOutbound(group, tag string) error {
 		return nil
 	}
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	outbound, loaded := outboundMgr.Outbound(tag)
+	outbound, loaded := outboundMgr.Outbound(group)
 	if !loaded {
 		return fmt.Errorf("selector not found: %s", tag)
 	}
