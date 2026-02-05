@@ -343,18 +343,28 @@ func buildOptions(group, path string) (O.Options, error) {
 
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
-
-	slog.Debug("Finished building options")
-
-	if common.Dev() {
-		// write box options
-		// we can ignore the errors here since the tunnel will error out anyway if something is wrong
-		buf, _ := json.MarshalContext(box.BaseContext(), opts)
-		var b bytes.Buffer
-		stdjson.Indent(&b, buf, "", "  ")
-		os.WriteFile(filepath.Join(path, "debug-lantern-box-options.json"), b.Bytes(), 0644)
-	}
+	slog.Debug("Finished building options", slog.String("env", common.Env()))
+	writeBoxOptions(path, opts)
 	return opts, nil
+}
+
+const debugLanternBoxOptionsFilename = "debug-lantern-box-options.json"
+
+// writeBoxOptions store marshal the options as a JSON and store it in a file so we can debug it
+// we can ignore the errors here since the tunnel will error out anyway if something is wrong
+func writeBoxOptions(path string, opts O.Options) {
+	buf, err := json.MarshalContext(box.BaseContext(), opts)
+	if err != nil {
+		slog.Warn("failed to unmarshal options while writing debug box options", slog.Any("error", err))
+	}
+
+	var b bytes.Buffer
+	if err := stdjson.Indent(&b, buf, "", "  "); err != nil {
+		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
+	}
+	if err := os.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
+		slog.Warn("failed to write options file", slog.Any("error", err))
+	}
 }
 
 ///////////////////////

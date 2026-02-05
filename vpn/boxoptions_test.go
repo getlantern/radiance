@@ -110,6 +110,8 @@ func TestBuildOptions(t *testing.T) {
 			hasGroupWithTags(t, gotOutbounds, autoLanternTag, tt.lanternTags)
 			hasGroupWithTags(t, gotOutbounds, autoUserTag, tt.userTags)
 			hasGroupWithTags(t, gotOutbounds, autoAllTag, []string{autoLanternTag, autoUserTag})
+
+			assert.FileExists(t, filepath.Join(path, debugLanternBoxOptionsFilename), "debug option file must be written")
 		})
 	}
 }
