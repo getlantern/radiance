@@ -127,47 +127,30 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 	}
 
 	s.logger.Info("Restarting tunnel")
+	if s.platformIfce != nil {
+		s.mu.Unlock()
+		if err := s.platformIfce.RestartService(); err != nil {
+			s.logger.Error("Failed to restart tunnel via platform interface", "error", err)
+			return fmt.Errorf("platform interface restart failed: %w", err)
+		}
+		return nil
+	}
+
+	defer s.mu.Unlock()
 	group := s.tunnel.clashServer.Mode()
 	tag := s.tunnel.cacheFile.LoadSelected(group)
 
-	var err error
-	if s.platformIfce == nil {
-		err = s.restart(ctx, group, tag)
-		s.mu.Unlock()
-	} else {
-		s.mu.Unlock()
-		err = s.restartViaPlatformIface(group, tag)
-	}
-	if err != nil {
-		s.logger.Error("Failed to restart tunnel", "error", err, "group", group, "tag", tag)
-		return fmt.Errorf("failed to restart tunnel: %w", err)
-	}
-	s.logger.Info("Tunnel restarted successfully")
-	return nil
-}
-
-func (s *TunnelService) restart(ctx context.Context, group, tag string) error {
 	t := s.tunnel
 	s.tunnel = nil
 	if err := t.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	return s.start(ctx, group, tag)
-}
-
-func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
-	if err := s.platformIfce.RestartService(); err != nil {
-		return fmt.Errorf("platform interface restart failed: %w", err)
+	if err := s.start(ctx, group, tag); err != nil {
+		s.logger.Error("Failed to restart tunnel", "error", err, "group", group, "tag", tag)
+		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.tunnel == nil {
-		return errors.New("tunnel nil after PlatformInterface.RestartService")
-	}
-	if status := s.tunnel.Status(); status != ipc.StatusRunning {
-		return fmt.Errorf("tunnel not running: status %v", status)
-	}
-	return s.tunnel.selectOutbound(group, tag)
+	s.logger.Info("Tunnel restarted successfully")
+	return nil
 }
 
 // Status returns the current status of the tunnel (e.g., running, closed).
