@@ -79,7 +79,11 @@ func NewServer(service Service) *Server {
 	}
 	s.vpnStatus.Store(Disconnected)
 	s.router.Use(log, tracer)
-	if !common.IsMobile() && !_testing {
+
+	// Only add auth middleware if not running on mobile, since mobile platforms have their own
+	// sandboxing and permission models.
+	addAuth := !common.IsMobile() && !_testing
+	if addAuth {
 		s.router.Use(authPeer)
 	}
 
@@ -105,16 +109,15 @@ func NewServer(service Service) *Server {
 		Handler:      s.router,
 		ReadTimeout:  time.Second * 5,
 		WriteTimeout: time.Second * 5,
-		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+	}
+	if addAuth {
+		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
 			peer, err := getConnPeer(c)
 			if err != nil {
 				slog.Error("Failed to get peer credentials", "error", err)
 			}
 			return contextWithUsr(ctx, peer)
-		},
-	}
-	if _testing {
-		svr.ConnContext = nil
+		}
 	}
 	s.svr = svr
 	return s

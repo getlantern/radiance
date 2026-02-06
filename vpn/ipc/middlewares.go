@@ -48,6 +48,10 @@ func tracer(next http.Handler) http.Handler {
 func authPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer := usrFromContext(r.Context())
+		if peer.uid == "" {
+			http.Error(w, "could not get credentials", http.StatusUnauthorized)
+			return
+		}
 		if !peerCanAccess(peer) {
 			http.Error(w, "permission denied", http.StatusForbidden)
 			return
@@ -57,5 +61,5 @@ func authPeer(next http.Handler) http.Handler {
 }
 
 func peerCanAccess(peer usr) bool {
-	return peer.uid != "" && peer.isAdmin
+	return peer.isAdmin
 }
