@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -53,9 +54,9 @@ func main() {
 	// settings file so we know if/where to reload from next time.
 	// This is temporary and will be removed once we move ownership and interaction of all files to
 	// one process. maybe daemon?
-	settingsPath := settings.GetString("file_path")
+	settingsPath := filepath.Dir(settings.GetString("file_path"))
 	path := settings.GetString(settings.DataPathKey)
-	if path != settingsPath {
+	if path != "" && path != settingsPath {
 		slog.Info("Reloading settings", "path", path)
 		if err := reloadSettings(path); err != nil {
 			log.Fatalf("Failed to reload settings from %s: %v\n", path, err)

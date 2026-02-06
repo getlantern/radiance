@@ -61,6 +61,7 @@ func (s *Server) setSettingsPathHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	slog.Debug("Updated data path", "new", path)
 	settings.SetReadOnly(true)
 	w.WriteHeader(http.StatusOK)
 }
