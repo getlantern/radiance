@@ -79,6 +79,7 @@ func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.Pl
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
+	t.status.Store(ipc.StatusRunning)
 	if group != "" {
 		if err := t.selectOutbound(group, tag); err != nil {
 			slog.Error("Failed to select outbound", "group", group, "tag", tag, "error", err)
@@ -86,7 +87,6 @@ func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.Pl
 		}
 	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
-	t.status.Store(ipc.StatusRunning)
 	return nil
 }
 
