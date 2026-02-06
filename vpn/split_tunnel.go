@@ -40,7 +40,7 @@ const (
 // processes, or packages should bypass the VPN tunnel.
 type SplitTunnel struct {
 	rule         O.LogicalHeadlessRule
-	activeFilter *O.DefaultHeadlessRule
+	activeFilter *O.LogicalHeadlessRule
 	ruleFile     string
 
 	enabled *atomic.Bool
@@ -60,7 +60,7 @@ func newSplitTunnel(path string) *SplitTunnel {
 	s := &SplitTunnel{
 		rule:         rule,
 		ruleFile:     filepath.Join(path, splitTunnelFile),
-		activeFilter: &(rule.Rules[1].DefaultOptions),
+		activeFilter: &(rule.Rules[1].LogicalOptions),
 		enabled:      &atomic.Bool{},
 	}
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
@@ -104,16 +104,18 @@ func (s *SplitTunnel) IsEnabled() bool {
 func (s *SplitTunnel) Filters() Filter {
 	s.access.Lock()
 	defer s.access.Unlock()
-	return Filter{
-		Domain:           slices.Clone(s.activeFilter.Domain),
-		DomainSuffix:     slices.Clone(s.activeFilter.DomainSuffix),
-		DomainKeyword:    slices.Clone(s.activeFilter.DomainKeyword),
-		DomainRegex:      slices.Clone(s.activeFilter.DomainRegex),
-		ProcessName:      slices.Clone(s.activeFilter.ProcessName),
-		ProcessPath:      slices.Clone(s.activeFilter.ProcessPath),
-		ProcessPathRegex: slices.Clone(s.activeFilter.ProcessPathRegex),
-		PackageName:      slices.Clone(s.activeFilter.PackageName),
+	f := Filter{}
+	for _, rule := range s.activeFilter.Rules {
+		f.Domain = append(f.Domain, slices.Clone(rule.DefaultOptions.Domain)...)
+		f.DomainSuffix = append(f.DomainSuffix, slices.Clone(rule.DefaultOptions.DomainSuffix)...)
+		f.DomainKeyword = append(f.DomainKeyword, slices.Clone(rule.DefaultOptions.DomainKeyword)...)
+		f.DomainRegex = append(f.DomainRegex, slices.Clone(rule.DefaultOptions.DomainRegex)...)
+		f.ProcessName = append(f.ProcessName, slices.Clone(rule.DefaultOptions.ProcessName)...)
+		f.ProcessPath = append(f.ProcessPath, slices.Clone(rule.DefaultOptions.ProcessPath)...)
+		f.ProcessPathRegex = append(f.ProcessPathRegex, slices.Clone(rule.DefaultOptions.ProcessPathRegex)...)
+		f.PackageName = append(f.PackageName, slices.Clone(rule.DefaultOptions.PackageName)...)
 	}
+	return f
 }
 
 // AddItem adds a new item to the filter of the given type.
@@ -196,28 +198,67 @@ func (f Filter) String() string {
 
 type actionFn func(slice []string, items []string) []string
 
+func findRuleBasedOnFilterType(filterType string, rules []O.HeadlessRule) *O.DefaultHeadlessRule {
+	for _, rule := range rules {
+		switch filterType {
+		case TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex:
+			if len(rule.DefaultOptions.Domain) > 0 ||
+				len(rule.DefaultOptions.DomainSuffix) > 0 ||
+				len(rule.DefaultOptions.DomainKeyword) > 0 ||
+				len(rule.DefaultOptions.DomainRegex) > 0 {
+				return &rule.DefaultOptions
+			}
+		case TypePackageName:
+			if len(rule.DefaultOptions.PackageName) > 0 {
+				return &rule.DefaultOptions
+			}
+		case TypeProcessName:
+			if len(rule.DefaultOptions.ProcessName) > 0 {
+				return &rule.DefaultOptions
+			}
+		case TypeProcessPath:
+			if len(rule.DefaultOptions.ProcessPath) > 0 {
+				return &rule.DefaultOptions
+			}
+		case TypeProcessPathRegex:
+			if len(rule.DefaultOptions.ProcessPathRegex) > 0 {
+				return &rule.DefaultOptions
+			}
+		}
+	}
+
+	// if it couldn't find a rule, create one and append to the rules slice
+	newRule := new(O.DefaultHeadlessRule)
+	rules = append(rules, O.HeadlessRule{
+		Type:           C.RuleTypeDefault,
+		DefaultOptions: *newRule,
+	})
+	return newRule
+}
+
 func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) error {
 	s.access.Lock()
 	defer s.access.Unlock()
 
+	rule := findRuleBasedOnFilterType(filterType, s.activeFilter.Rules)
 	items := []string{item}
 	switch filterType {
 	case TypeDomain:
-		s.activeFilter.Domain = fn(s.activeFilter.Domain, items)
+		rule.Domain = fn(rule.Domain, items)
 	case TypeDomainSuffix:
-		s.activeFilter.DomainSuffix = fn(s.activeFilter.DomainSuffix, items)
+		rule.DomainSuffix = fn(rule.DomainSuffix, items)
 	case TypeDomainKeyword:
-		s.activeFilter.DomainKeyword = fn(s.activeFilter.DomainKeyword, items)
+		rule.DomainKeyword = fn(rule.DomainKeyword, items)
 	case TypeDomainRegex:
-		s.activeFilter.DomainRegex = fn(s.activeFilter.DomainRegex, items)
+		rule.DomainRegex = fn(rule.DomainRegex, items)
 	case TypeProcessName:
-		s.activeFilter.ProcessName = fn(s.activeFilter.ProcessName, items)
+		rule.ProcessName = fn(rule.ProcessName, items)
 	case TypeProcessPath:
-		s.activeFilter.ProcessPath = fn(s.activeFilter.ProcessPath, items)
+		rule.ProcessPath = fn(rule.ProcessPath, items)
 	case TypeProcessPathRegex:
-		s.activeFilter.ProcessPathRegex = fn(s.activeFilter.ProcessPathRegex, items)
+		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, items)
 	case TypePackageName:
-		s.activeFilter.PackageName = fn(s.activeFilter.PackageName, items)
+		rule.PackageName = fn(rule.PackageName, items)
 	default:
 		return fmt.Errorf("unsupported filter type: %s", filterType)
 	}
@@ -227,29 +268,31 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
-	if len(diff.Domain) > 0 {
-		s.activeFilter.Domain = fn(s.activeFilter.Domain, diff.Domain)
-	}
-	if len(diff.DomainSuffix) > 0 {
-		s.activeFilter.DomainSuffix = fn(s.activeFilter.DomainSuffix, diff.DomainSuffix)
-	}
-	if len(diff.DomainKeyword) > 0 {
-		s.activeFilter.DomainKeyword = fn(s.activeFilter.DomainKeyword, diff.DomainKeyword)
-	}
-	if len(diff.DomainRegex) > 0 {
-		s.activeFilter.DomainRegex = fn(s.activeFilter.DomainRegex, diff.DomainRegex)
-	}
-	if len(diff.ProcessName) > 0 {
-		s.activeFilter.ProcessName = fn(s.activeFilter.ProcessName, diff.ProcessName)
-	}
-	if len(diff.ProcessPath) > 0 {
-		s.activeFilter.ProcessPath = fn(s.activeFilter.ProcessPath, diff.ProcessPath)
-	}
-	if len(diff.ProcessPathRegex) > 0 {
-		s.activeFilter.ProcessPathRegex = fn(s.activeFilter.ProcessPathRegex, diff.ProcessPathRegex)
-	}
-	if len(diff.PackageName) > 0 {
-		s.activeFilter.PackageName = fn(s.activeFilter.PackageName, diff.PackageName)
+	for _, rule := range s.activeFilter.Rules {
+		if len(diff.Domain) > 0 && len(rule.DefaultOptions.Domain) > 0 {
+			rule.DefaultOptions.Domain = fn(rule.DefaultOptions.Domain, diff.Domain)
+		}
+		if len(diff.DomainSuffix) > 0 && len(rule.DefaultOptions.DomainSuffix) > 0 {
+			rule.DefaultOptions.DomainSuffix = fn(rule.DefaultOptions.DomainSuffix, diff.DomainSuffix)
+		}
+		if len(diff.DomainKeyword) > 0 && len(rule.DefaultOptions.DomainKeyword) > 0 {
+			rule.DefaultOptions.DomainKeyword = fn(rule.DefaultOptions.DomainKeyword, diff.DomainKeyword)
+		}
+		if len(diff.DomainRegex) > 0 && len(rule.DefaultOptions.DomainRegex) > 0 {
+			rule.DefaultOptions.DomainRegex = fn(rule.DefaultOptions.DomainRegex, diff.DomainRegex)
+		}
+		if len(diff.ProcessName) > 0 && len(rule.DefaultOptions.ProcessName) > 0 {
+			rule.DefaultOptions.ProcessName = fn(rule.DefaultOptions.ProcessName, diff.ProcessName)
+		}
+		if len(diff.ProcessPath) > 0 && len(rule.DefaultOptions.ProcessPath) > 0 {
+			rule.DefaultOptions.ProcessPath = fn(rule.DefaultOptions.ProcessPath, diff.ProcessPath)
+		}
+		if len(diff.ProcessPathRegex) > 0 && len(rule.DefaultOptions.ProcessPathRegex) > 0 {
+			rule.DefaultOptions.ProcessPathRegex = fn(rule.DefaultOptions.ProcessPathRegex, diff.ProcessPathRegex)
+		}
+		if len(diff.PackageName) > 0 && len(rule.DefaultOptions.PackageName) > 0 {
+			rule.DefaultOptions.PackageName = fn(rule.DefaultOptions.PackageName, diff.PackageName)
+		}
 	}
 }
 
@@ -278,7 +321,11 @@ func remove(s []string, items []string) []string {
 
 func (s *SplitTunnel) saveToFile() error {
 	rule := s.rule
-	if isEmptyRule(rule.Rules[1].DefaultOptions) {
+	rule.Rules[1].LogicalOptions.Rules = slices.DeleteFunc(rule.Rules[1].LogicalOptions.Rules, func(r O.HeadlessRule) bool {
+		return isEmptyRule(r.DefaultOptions)
+	})
+
+	if len(rule.Rules[1].LogicalOptions.Rules) == 0 {
 		rule.Rules = rule.Rules[:1] // remove the default rule if it's empty
 	}
 	rs := O.PlainRuleSetCompat{
@@ -328,11 +375,14 @@ func (s *SplitTunnel) loadRule() error {
 	s.rule = rules[0].LogicalOptions
 	if len(s.rule.Rules) == 1 {
 		s.rule.Rules = append(s.rule.Rules, O.HeadlessRule{
-			Type:           C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{},
+			Type: C.RuleTypeLogical,
+			LogicalOptions: O.LogicalHeadlessRule{
+				Mode:  C.LogicalTypeOr,
+				Rules: []O.HeadlessRule{},
+			},
 		})
 	}
-	s.activeFilter = &(s.rule.Rules[1].DefaultOptions)
+	s.activeFilter = &(s.rule.Rules[1].LogicalOptions)
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 
 	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
@@ -366,8 +416,11 @@ func defaultRule() O.LogicalHeadlessRule {
 				},
 			},
 			{
-				Type:           C.RuleTypeDefault,
-				DefaultOptions: O.DefaultHeadlessRule{},
+				Type: C.RuleTypeLogical,
+				LogicalOptions: O.LogicalHeadlessRule{
+					Mode:  C.LogicalTypeOr,
+					Rules: []O.HeadlessRule{},
+				},
 			},
 		},
 	}
