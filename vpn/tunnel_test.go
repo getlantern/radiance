@@ -20,12 +20,30 @@ import (
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
-func TestEstablishConnection(t *testing.T) {
+func TestConnection(t *testing.T) {
 	testutil.SetPathsForTesting(t)
-	tOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	opts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
-	tun := testEstablishConnection(t, *tOpts)
+	tmp := settings.GetString(settings.DataPathKey)
+
+	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
+	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
+	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
+	newSplitTunnel(tmp)
+
+	tun := &tunnel{
+		dataPath: tmp,
+	}
+
+	require.NoError(t, tun.start("", "", *opts, nil), "failed to establish connection")
+	t.Cleanup(func() {
+		tun.close()
+	})
+
+	require.Equal(t, ipc.StatusRunning, tun.Status(), "tunnel should be running")
+
+	assert.NoError(t, tun.selectOutbound("http", "http1-out"), "failed to select http outbound")
 	assert.NoError(t, tun.close(), "failed to close lbService")
 	assert.Equal(t, ipc.StatusClosed, tun.Status(), "tun should be closed")
 }
@@ -60,7 +78,7 @@ func TestUpdateServers(t *testing.T) {
 	}
 
 	testOpts.Outbounds = outs
-	tun := testEstablishConnection(t, *testOpts)
+	tun := testConnection(t, *testOpts)
 	defer func() {
 		tun.close()
 	}()
@@ -117,7 +135,7 @@ func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
 	return iGroups
 }
 
-func testEstablishConnection(t *testing.T, opts sbO.Options) *tunnel {
+func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 	tmp := settings.GetString(settings.DataPathKey)
 
 	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet

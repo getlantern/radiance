@@ -11,9 +11,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-	"github.com/sagernet/sing/service"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -131,46 +129,29 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 	}
 
 	s.logger.Info("Restarting tunnel")
+	if s.platformIfce != nil {
+		s.mu.Unlock()
+		if err := s.platformIfce.RestartService(); err != nil {
+			s.logger.Error("Failed to restart tunnel via platform interface", "error", err)
+			return fmt.Errorf("platform interface restart failed: %w", err)
+		}
+		return nil
+	}
+
+	defer s.mu.Unlock()
 	group := s.tunnel.clashServer.Mode()
 	tag := s.tunnel.cacheFile.LoadSelected(group)
 
-	if s.platformIfce == nil {
-		defer s.mu.Unlock()
-		return s.restart(ctx, group, tag)
-	}
-	s.mu.Unlock()
-	return s.restartViaPlatformIface(group, tag)
-
-}
-
-func (s *TunnelService) restart(ctx context.Context, group, tag string) error {
 	t := s.tunnel
 	s.tunnel = nil
 	if err := t.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	return s.start(ctx, group, tag)
-}
-
-func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
-	if err := s.platformIfce.RestartService(); err != nil {
-		return fmt.Errorf("PlatformInterface.RestartService: %w", err)
+	if err := s.start(ctx, group, tag); err != nil {
+		s.logger.Error("Failed to restart tunnel", "error", err, "group", group, "tag", tag)
+		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.tunnel == nil {
-		return errors.New("tunnel nil after PlatformInterface.RestartService")
-	}
-	if status := s.tunnel.Status(); status != ipc.StatusRunning {
-		return fmt.Errorf("tunnel not running: status %v", status)
-	}
-	s.tunnel.clashServer.SetMode(group)
-	outboundMgr := service.FromContext[adapter.OutboundManager](s.tunnel.ctx)
-	outbound, loaded := outboundMgr.Outbound(tag)
-	if !loaded {
-		return fmt.Errorf("selector not found: %s", tag)
-	}
-	outbound.(ipc.Selector).SelectOutbound(tag)
+	s.logger.Info("Tunnel restarted successfully")
 	return nil
 }
 
