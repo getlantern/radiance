@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -30,9 +29,6 @@ type sockListener struct {
 
 func listen() (net.Listener, error) {
 	path := socketPath()
-	if runningUnderLaunchd() {
-		return nil, fmt.Errorf("%s already in use. lantern is running under launchd", path)
-	}
 	os.Remove(path)
 
 	dir := filepath.Dir(path)
@@ -63,14 +59,6 @@ func (l *sockListener) Close() error {
 	err := l.Listener.Close()
 	os.Remove(l.path)
 	return err
-}
-
-func runningUnderLaunchd() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	_, err := exec.Command("launchctl", "list", "com.radiance.radianced").Output()
-	return err == nil
 }
 
 func getConnPeer(conn net.Conn) (p usr, err error) {
