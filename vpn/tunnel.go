@@ -30,7 +30,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
-	"github.com/sagernet/sing-box/experimental/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -76,23 +75,15 @@ func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.Pl
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	// we need to set the selected server before starting libbox
-	slog.Log(nil, internal.LevelTrace, "Starting cachefile")
-	if err := t.cacheFile.Start(adapter.StartStateInitialize); err != nil {
-		slog.Error("Failed to start cache file", "error", err)
-		return fmt.Errorf("start cache file: %w", err)
-	}
-	t.closers = append(t.closers, t.cacheFile)
-
-	if group == "" { // group is empty, connect to last selected server
-		slog.Debug("Connecting to last selected server")
-		err = t.connect()
-	} else {
-		err = t.connectTo(group, tag)
-	}
-	if err != nil {
+	if err = t.connect(); err != nil {
 		slog.Error("Failed to connect tunnel", "error", err)
-		return err
+		return fmt.Errorf("connecting tunnel: %w", err)
+	}
+	if group != "" {
+		if err := t.selectOutbound(group, tag); err != nil {
+			slog.Error("Failed to select outbound", "group", group, "tag", tag, "error", err)
+			return fmt.Errorf("selecting outbound: %w", err)
+		}
 	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
 	t.status.Store(ipc.StatusRunning)
@@ -128,19 +119,16 @@ func (t *tunnel) init(opts O.Options, platformIfce libbox.PlatformInterface) err
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
-	// create the cache file service
 	if opts.Experimental.CacheFile == nil {
 		return fmt.Errorf("cache file options are required")
 	}
-	cacheFile := cachefile.New(t.ctx, *opts.Experimental.CacheFile)
-	service.MustRegister[adapter.CacheFile](t.ctx, cacheFile)
-	t.cacheFile = cacheFile
 
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, string(cfg), platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
+	t.cacheFile = service.FromContext[adapter.CacheFile](t.ctx)
 
 	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
@@ -264,17 +252,24 @@ func (t *tunnel) connect() (err error) {
 	return nil
 }
 
-func (t *tunnel) connectTo(group, tag string) error {
-	err := t.cacheFile.StoreMode(group)
-	if err == nil {
-		err = t.cacheFile.StoreSelected(group, tag)
+func (t *tunnel) selectOutbound(group, tag string) error {
+	t.reloadAccess.Lock()
+	defer t.reloadAccess.Unlock()
+	if status := t.Status(); status != ipc.StatusRunning {
+		return fmt.Errorf("tunnel not running: status %v", status)
 	}
-	if err != nil {
-		slog.Error("failed to set selected server", "group", group, "tag", tag, "error", err)
-		return fmt.Errorf("set selected server %s.%s: %w", group, tag, err)
+
+	t.clashServer.SetMode(group)
+	if tag == "" {
+		return nil
 	}
-	slog.Debug("set selected server", "group", group, "tag", tag)
-	return t.connect()
+	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
+	outbound, loaded := outboundMgr.Outbound(group)
+	if !loaded {
+		return fmt.Errorf("selector group not found: %s", group)
+	}
+	outbound.(ipc.Selector).SelectOutbound(tag)
+	return nil
 }
 
 func (t *tunnel) close() error {
