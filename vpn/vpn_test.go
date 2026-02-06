@@ -134,7 +134,7 @@ func TestAutoServerSelections(t *testing.T) {
 		status: ipc.StatusRunning,
 	}
 	ipcServer := ipc.NewServer(m)
-	require.NoError(t, ipcServer.Start(settings.GetString(settings.DataPathKey)))
+	require.NoError(t, ipcServer.Start())
 
 	got, err := AutoServerSelections()
 	require.NoError(t, err, "should not error when getting auto server selections")
@@ -217,7 +217,7 @@ func setupVpnTest(t *testing.T) *mockService {
 		clash:  clashServer.(*clashapi.Server),
 	}
 	ipcServer := ipc.NewServer(m)
-	require.NoError(t, ipcServer.Start(path))
+	require.NoError(t, ipcServer.Start())
 
 	t.Cleanup(func() {
 		lb.Close()

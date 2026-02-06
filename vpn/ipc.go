@@ -39,7 +39,7 @@ func InitIPC(dataPath, logPath, logLevel string, platformIfce rvpn.PlatformInter
 
 	server := ipc.NewServer(NewTunnelService(dataPath, slog.Default().With("service", "ipc"), platformIfce))
 	slog.Debug("starting IPC server")
-	if err := server.Start(dataPath); err != nil {
+	if err := server.Start(); err != nil {
 		slog.Error("failed to start IPC server", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("start IPC server: %w", err))
 	}

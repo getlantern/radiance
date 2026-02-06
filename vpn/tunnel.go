@@ -59,7 +59,6 @@ type tunnel struct {
 	status  atomic.Value
 	cancel  context.CancelFunc
 	closers []io.Closer
-	mu      sync.Mutex
 }
 
 func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.PlatformInterface) (err error) {

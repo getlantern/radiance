@@ -60,7 +60,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize IPC: %v\n", err)
 	}
-	defer ipcServer.Close()
 
 	// Wait for a signal to gracefully shut down.
 	sigCh := make(chan os.Signal, 1)
@@ -71,10 +70,7 @@ func main() {
 	time.AfterFunc(15*time.Second, func() {
 		log.Fatal("Failed to shut down in time, forcing exit.")
 	})
-	status, _ := vpn.GetStatus()
-	if status.TunnelOpen {
-		vpn.Disconnect()
-	}
+	ipcServer.Close()
 }
 
 const tracerName = "github.com/getlantern/radiance/cmd/lanternd"
@@ -91,7 +87,7 @@ func initIPC(dataPath, logPath, logLevel string) (*ipc.Server, error) {
 
 	server := ipc.NewServer(vpn.NewTunnelService(dataPath, slog.Default().With("service", "ipc"), nil))
 	slog.Debug("starting IPC server")
-	if err := server.Start(dataPath); err != nil {
+	if err := server.Start(); err != nil {
 		slog.Error("failed to start IPC server", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("start IPC server: %w", err))
 	}

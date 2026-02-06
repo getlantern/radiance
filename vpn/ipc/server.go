@@ -41,13 +41,12 @@ type Service interface {
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr        *http.Server
-	service    Service
-	router     chi.Router
-	mutex      sync.RWMutex
-	vpnStatus  atomic.Value // string
-	closed     atomic.Bool
-	allowedUsr usr
+	svr       *http.Server
+	service   Service
+	router    chi.Router
+	mutex     sync.RWMutex
+	vpnStatus atomic.Value // string
+	closed    atomic.Bool
 }
 
 // StatusUpdateEvent is emitted when the VPN status changes.
@@ -121,9 +120,8 @@ func NewServer(service Service) *Server {
 	return s
 }
 
-// Start starts the IPC server. The socket file will be created in the "basePath" directory.
-// On Windows, the "basePath" is ignored and a default named pipe path is used.
-func (s *Server) Start(basePath string) error {
+// Start begins listening for incoming IPC requests.
+func (s *Server) Start() error {
 	if s.closed.Load() {
 		return errors.New("IPC server is closed")
 	}
@@ -228,20 +226,6 @@ func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setVPNStatus(Connected, nil)
 	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) RestartService(ctx context.Context) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	if s.service.Status() != StatusRunning {
-		return ErrServiceIsNotReady
-	}
-	s.vpnStatus.Store(Disconnected)
-	if err := s.service.Restart(); err != nil {
-		return fmt.Errorf("error restarting service: %w", err)
-	}
-	s.setVPNStatus(Connected, nil)
-	return nil
 }
 
 func (s *Server) setVPNStatus(status VPNStatus, err error) {

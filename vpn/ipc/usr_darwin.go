@@ -19,7 +19,7 @@ func getUid(rConn syscall.RawConn) (uid uint32, err error) {
 		return 0, fmt.Errorf("control: %w", cerr)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("getsockopt ucred: %w", err)
+		return 0, err
 	}
 	return cred.Uid, nil
 }

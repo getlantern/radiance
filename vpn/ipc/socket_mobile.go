@@ -77,5 +77,3 @@ func getNonRootOwner(path string) (uid, gid int) {
 	}
 	return uid, gid
 }
-
-var sockPath string

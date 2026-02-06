@@ -26,6 +26,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
@@ -375,7 +376,7 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
 		return buf
 	}
-	if err := os.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
+	if err := atomicfile.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
 		slog.Warn("failed to write options file", slog.Any("error", err))
 		return buf
 	}
