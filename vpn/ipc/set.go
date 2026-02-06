@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"runtime"
 
 	_ "unsafe" // for go:linkname
@@ -45,12 +46,18 @@ func (s *Server) setSettingsPathHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	old := settings.GetString(settings.DataPathKey)
 	slog.Debug("Received request to update data path", "new", opt.SettingsPath, "old", old)
-	if err := settings.Set(settings.DataPathKey, opt.SettingsPath); err != nil {
+
+	path := opt.SettingsPath
+	name := filepath.Base(settings.GetString("file_path"))
+	if filepath.Base(path) != name {
+		path = filepath.Join(path, name)
+	}
+	if err := settings.Set(settings.DataPathKey, path); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if err := reloadSettings(opt.SettingsPath); err != nil {
+	if err := reloadSettings(path); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

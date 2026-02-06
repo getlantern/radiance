@@ -39,6 +39,12 @@ func main() {
 
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
 
+	if err := settings.InitSettings(dataPath); err != nil {
+		log.Fatalf("Failed to initialize settings: %v\n", err)
+	}
+	// temporarily set settings to read-only to prevent changes until we reload if needed.
+	settings.SetReadOnly(true)
+
 	if err := common.Init(dataPath, logPath, logLevel); err != nil {
 		log.Fatalf("Failed to initialize common: %v\n", err)
 	}
@@ -48,12 +54,15 @@ func main() {
 	// This is temporary and will be removed once we move ownership and interaction of all files to
 	// one process. maybe daemon?
 	settingsPath := settings.GetString("file_path")
-	if path := settings.GetString(settings.DataPathKey); path != "" && path != settingsPath {
+	path := settings.GetString(settings.DataPathKey)
+	if path != settingsPath {
 		slog.Info("Reloading settings", "path", path)
 		if err := reloadSettings(path); err != nil {
 			log.Fatalf("Failed to reload settings from %s: %v\n", path, err)
 		}
 		settings.SetReadOnly(true)
+	} else {
+		settings.SetReadOnly(false)
 	}
 
 	ipcServer, err := initIPC(dataPath, logPath, logLevel)

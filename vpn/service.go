@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing/service"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
 	"github.com/getlantern/radiance/vpn/rvpn"
@@ -79,12 +80,13 @@ func (s *TunnelService) Start(ctx context.Context, group string, tag string) err
 }
 
 func (s *TunnelService) start(ctx context.Context, group string, tag string) error {
-	opts, err := buildOptions(ctx, group, s.dataPath)
+	path := settings.GetString(settings.DataPathKey)
+	opts, err := buildOptions(ctx, group, path)
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
 	t := tunnel{
-		dataPath: s.dataPath,
+		dataPath: path,
 	}
 	if err := t.start(group, tag, opts, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
