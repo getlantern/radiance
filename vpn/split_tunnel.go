@@ -237,9 +237,15 @@ func findRuleBasedOnFilterType(filterType string, activeRule *O.LogicalHeadlessR
 	return &activeRule.Rules[len(activeRule.Rules)-1].DefaultOptions
 }
 
+var validFilterTypes = []string{TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex, TypePackageName, TypeProcessName, TypeProcessPath, TypeProcessPathRegex}
+
 func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) error {
 	s.access.Lock()
 	defer s.access.Unlock()
+
+	if !slices.Contains(validFilterTypes, filterType) {
+		return fmt.Errorf("unsupported filter type: %s", filterType)
+	}
 
 	rule := findRuleBasedOnFilterType(filterType, s.activeFilter)
 	items := []string{item}
@@ -260,8 +266,6 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, items)
 	case TypePackageName:
 		rule.PackageName = fn(rule.PackageName, items)
-	default:
-		return fmt.Errorf("unsupported filter type: %s", filterType)
 	}
 	return nil
 }
