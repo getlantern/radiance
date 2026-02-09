@@ -92,7 +92,7 @@ func TestBuildOptions(t *testing.T) {
 			if len(tt.userTags) > 0 {
 				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
 			}
-			opts, err := buildOptions(context.Background(), autoAllTag, path)
+			opts, err := buildOptions(context.Background(), path)
 			if tt.shouldError {
 				require.Error(t, err, "expected error but got none")
 				return
@@ -196,7 +196,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		t.Cleanup(settings.Reset)
 
 		settings.Set(settings.SmartRoutingKey, true)
-		options, err := buildOptions(context.Background(), autoAllTag, tmp)
+		options, err := buildOptions(context.Background(), tmp)
 		require.NoError(t, err)
 		// check rules, rulesets, and outbounds are correctly built into options
 		assert.True(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
@@ -211,7 +211,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		t.Cleanup(settings.Reset)
 
 		settings.Set(settings.AdBlockKey, true)
-		options, err := buildOptions(context.Background(), autoAllTag, tmp)
+		options, err := buildOptions(context.Background(), tmp)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
 		for _, rs := range wantAdBlockOpts.Route.RuleSet {

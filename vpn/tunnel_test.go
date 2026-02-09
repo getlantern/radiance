@@ -36,7 +36,7 @@ func TestConnection(t *testing.T) {
 		dataPath: tmp,
 	}
 
-	require.NoError(t, tun.start("", "", *opts, nil), "failed to establish connection")
+	require.NoError(t, tun.start(*opts, nil), "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()
 	})
@@ -147,7 +147,7 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 		dataPath: tmp,
 	}
 
-	err := tun.start("", "", opts, nil)
+	err := tun.start(opts, nil)
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()
