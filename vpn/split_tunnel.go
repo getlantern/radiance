@@ -269,17 +269,15 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
-	if len(s.activeFilter.Rules) == 0 {
-		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-			Type:           C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{},
-		})
-	}
 
 	// Track which filter types were applied
-	appliedDomain := false
-	appliedProcess := false
-	appliedPackage := false
+	var (
+		appliedDomain           bool
+		appliedPackage          bool
+		appliedProcessName      bool
+		appliedProcessPath      bool
+		appliedProcessPathRegex bool
+	)
 
 	for i := range s.activeFilter.Rules {
 		rule := &s.activeFilter.Rules[i].DefaultOptions
@@ -302,22 +300,21 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 			}
 		}
 
-		// Handle process-related filters
-		if (len(diff.ProcessName) > 0 || len(diff.ProcessPath) > 0 || len(diff.ProcessPathRegex) > 0) &&
-			(len(rule.ProcessName) > 0 || len(rule.ProcessPath) > 0 || len(rule.ProcessPathRegex) > 0) {
-			appliedProcess = true
-			if len(diff.ProcessName) > 0 {
-				rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
-			}
-			if len(diff.ProcessPath) > 0 {
-				rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
-			}
-			if len(diff.ProcessPathRegex) > 0 {
-				rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
-			}
+		if len(diff.ProcessName) > 0 && len(rule.ProcessName) > 0 {
+			appliedProcessName = true
+			rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
 		}
 
-		// Handle package filters
+		if len(diff.ProcessPath) > 0 && len(rule.ProcessPath) > 0 {
+			appliedProcessPath = true
+			rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
+		}
+
+		if len(diff.ProcessPathRegex) > 0 && len(rule.ProcessPathRegex) > 0 {
+			appliedProcessPathRegex = true
+			rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
+		}
+
 		if len(diff.PackageName) > 0 && len(rule.PackageName) > 0 {
 			appliedPackage = true
 			rule.PackageName = fn(rule.PackageName, diff.PackageName)
@@ -337,12 +334,26 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 		})
 	}
 
-	if !appliedProcess && (len(diff.ProcessName) > 0 || len(diff.ProcessPath) > 0 || len(diff.ProcessPathRegex) > 0) {
+	if !appliedProcessName && len(diff.ProcessName) > 0 {
 		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultHeadlessRule{
-				ProcessName:      diff.ProcessName,
-				ProcessPath:      diff.ProcessPath,
+				ProcessName: diff.ProcessName,
+			},
+		})
+	}
+	if !appliedProcessPath && len(diff.ProcessPath) > 0 {
+		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{
+				ProcessPath: diff.ProcessPath,
+			},
+		})
+	}
+	if !appliedProcessPathRegex && len(diff.ProcessPathRegex) > 0 {
+		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{
 				ProcessPathRegex: diff.ProcessPathRegex,
 			},
 		})
