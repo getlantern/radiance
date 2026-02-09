@@ -38,15 +38,43 @@ func TestEnableDisableIsEnabled(t *testing.T) {
 func TestAddRemoveItem(t *testing.T) {
 	st := setupTestSplitTunnel(t)
 
-	err := st.AddItem(TypeDomain, "example.com")
-	require.NoError(t, err)
-	f := st.Filters()
-	assert.Equal(t, []string{"example.com"}, f.Domain)
+	domain := "example.com"
+	domain2 := "example2.com"
+	packageName := "com.example"
 
-	err = st.RemoveItem(TypeDomain, "example.com")
-	require.NoError(t, err)
-	f = st.Filters()
+	t.Run("adding domain item must update domain filter", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypeDomain, domain))
+		f := st.Filters()
+		assert.Equal(t, []string{domain}, f.Domain)
+	})
+
+	t.Run("adding second domain must update the filter and contain both domains", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypeDomain, domain2))
+		f := st.Filters()
+		assert.Equal(t, []string{domain, domain2}, f.Domain)
+	})
+
+	t.Run("adding package domain must update package filter", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypePackageName, packageName))
+		f := st.Filters()
+		assert.Equal(t, []string{packageName}, f.PackageName)
+	})
+
+	t.Run("removing domain must update domain filter", func(t *testing.T) {
+		require.NoError(t, st.RemoveItem(TypeDomain, domain))
+		f := st.Filters()
+		assert.NotContains(t, f.Domain, domain)
+		assert.NotEmpty(t, f.PackageName)
+	})
+}
+
+func TestRemoveItems(t *testing.T) {
+	st := setupTestSplitTunnel(t)
+
+	require.NoError(t, st.RemoveItems(Filter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}}))
+	f := st.Filters()
 	assert.Empty(t, f.Domain)
+	assert.Empty(t, f.ProcessName)
 }
 
 func TestAddRemoveItems(t *testing.T) {
