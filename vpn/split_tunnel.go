@@ -470,6 +470,63 @@ func (s *SplitTunnel) loadRule() error {
 				Rules: []O.HeadlessRule{},
 			},
 		})
+	} else if len(s.rule.Rules) > 1 && s.rule.Rules[1].Type == C.RuleTypeDefault {
+		// Migrate legacy format: wrap DefaultOptions into LogicalOptions
+		slog.Debug("Migrating legacy split tunnel rule format")
+		legacyRule := s.rule.Rules[1].DefaultOptions
+		s.rule.Rules[1] = O.HeadlessRule{
+			Type: C.RuleTypeLogical,
+			LogicalOptions: O.LogicalHeadlessRule{
+				Mode:  C.LogicalTypeOr,
+				Rules: []O.HeadlessRule{},
+			},
+		}
+		if len(legacyRule.Domain) > 0 ||
+			len(legacyRule.DomainSuffix) > 0 ||
+			len(legacyRule.DomainKeyword) > 0 ||
+			len(legacyRule.DomainRegex) > 0 {
+			s.rule.Rules[1].LogicalOptions.Rules = append(s.rule.Rules[1].LogicalOptions.Rules, O.HeadlessRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{
+					Domain:        legacyRule.Domain,
+					DomainSuffix:  legacyRule.DomainSuffix,
+					DomainKeyword: legacyRule.DomainKeyword,
+					DomainRegex:   legacyRule.DomainRegex,
+				},
+			})
+		}
+		if len(legacyRule.PackageName) > 0 {
+			s.rule.Rules[1].LogicalOptions.Rules = append(s.rule.Rules[1].LogicalOptions.Rules, O.HeadlessRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{
+					PackageName: legacyRule.PackageName,
+				},
+			})
+		}
+		if len(legacyRule.ProcessName) > 0 {
+			s.rule.Rules[1].LogicalOptions.Rules = append(s.rule.Rules[1].LogicalOptions.Rules, O.HeadlessRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{
+					ProcessName: legacyRule.ProcessName,
+				},
+			})
+		}
+		if len(legacyRule.ProcessPath) > 0 {
+			s.rule.Rules[1].LogicalOptions.Rules = append(s.rule.Rules[1].LogicalOptions.Rules, O.HeadlessRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{
+					ProcessPath: legacyRule.ProcessPath,
+				},
+			})
+		}
+		if len(legacyRule.ProcessPathRegex) > 0 {
+			s.rule.Rules[1].LogicalOptions.Rules = append(s.rule.Rules[1].LogicalOptions.Rules, O.HeadlessRule{
+				Type: C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{
+					ProcessPathRegex: legacyRule.ProcessPathRegex,
+				},
+			})
+		}
 	}
 	s.activeFilter = &(s.rule.Rules[1].LogicalOptions)
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
