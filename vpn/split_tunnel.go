@@ -321,6 +321,10 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 		}
 	}
 
+	// if this isn't a merge action, we skip the flow for adding a not applied rule
+	if !isMergeAction(fn) {
+		return
+	}
 	// Create new rules for filter types that weren't applied
 	if !appliedDomain && (len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 || len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0) {
 		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
@@ -367,6 +371,14 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 			},
 		})
 	}
+}
+
+func isMergeAction(fn actionFn) bool {
+	// Test the function behavior with a known input
+	test := fn([]string{"a"}, []string{"b"})
+	// merge will append, resulting in length 2
+	// remove will not append if item doesn't exist, resulting in length 1
+	return len(test) == 2
 }
 
 func merge(slice []string, items []string) []string {
