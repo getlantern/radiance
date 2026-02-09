@@ -105,15 +105,16 @@ func (s *SplitTunnel) Filters() Filter {
 	s.access.Lock()
 	defer s.access.Unlock()
 	f := Filter{}
-	for _, rule := range s.activeFilter.Rules {
-		f.Domain = append(f.Domain, slices.Clone(rule.DefaultOptions.Domain)...)
-		f.DomainSuffix = append(f.DomainSuffix, slices.Clone(rule.DefaultOptions.DomainSuffix)...)
-		f.DomainKeyword = append(f.DomainKeyword, slices.Clone(rule.DefaultOptions.DomainKeyword)...)
-		f.DomainRegex = append(f.DomainRegex, slices.Clone(rule.DefaultOptions.DomainRegex)...)
-		f.ProcessName = append(f.ProcessName, slices.Clone(rule.DefaultOptions.ProcessName)...)
-		f.ProcessPath = append(f.ProcessPath, slices.Clone(rule.DefaultOptions.ProcessPath)...)
-		f.ProcessPathRegex = append(f.ProcessPathRegex, slices.Clone(rule.DefaultOptions.ProcessPathRegex)...)
-		f.PackageName = append(f.PackageName, slices.Clone(rule.DefaultOptions.PackageName)...)
+	for i := range s.activeFilter.Rules {
+		rule := &s.activeFilter.Rules[i].DefaultOptions
+		f.Domain = append(f.Domain, slices.Clone(rule.Domain)...)
+		f.DomainSuffix = append(f.DomainSuffix, slices.Clone(rule.DomainSuffix)...)
+		f.DomainKeyword = append(f.DomainKeyword, slices.Clone(rule.DomainKeyword)...)
+		f.DomainRegex = append(f.DomainRegex, slices.Clone(rule.DomainRegex)...)
+		f.ProcessName = append(f.ProcessName, slices.Clone(rule.ProcessName)...)
+		f.ProcessPath = append(f.ProcessPath, slices.Clone(rule.ProcessPath)...)
+		f.ProcessPathRegex = append(f.ProcessPathRegex, slices.Clone(rule.ProcessPathRegex)...)
+		f.PackageName = append(f.PackageName, slices.Clone(rule.PackageName)...)
 	}
 	return f
 }
@@ -198,49 +199,49 @@ func (f Filter) String() string {
 
 type actionFn func(slice []string, items []string) []string
 
-func findRuleBasedOnFilterType(filterType string, rules []O.HeadlessRule) *O.DefaultHeadlessRule {
-	for _, rule := range rules {
+func findRuleBasedOnFilterType(filterType string, activeRule *O.LogicalHeadlessRule) *O.DefaultHeadlessRule {
+	for i := range activeRule.Rules {
+		rule := &activeRule.Rules[i].DefaultOptions
 		switch filterType {
 		case TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex:
-			if len(rule.DefaultOptions.Domain) > 0 ||
-				len(rule.DefaultOptions.DomainSuffix) > 0 ||
-				len(rule.DefaultOptions.DomainKeyword) > 0 ||
-				len(rule.DefaultOptions.DomainRegex) > 0 {
-				return &rule.DefaultOptions
+			if len(rule.Domain) > 0 ||
+				len(rule.DomainSuffix) > 0 ||
+				len(rule.DomainKeyword) > 0 ||
+				len(rule.DomainRegex) > 0 {
+				return rule
 			}
 		case TypePackageName:
-			if len(rule.DefaultOptions.PackageName) > 0 {
-				return &rule.DefaultOptions
+			if len(rule.PackageName) > 0 {
+				return rule
 			}
 		case TypeProcessName:
-			if len(rule.DefaultOptions.ProcessName) > 0 {
-				return &rule.DefaultOptions
+			if len(rule.ProcessName) > 0 {
+				return rule
 			}
 		case TypeProcessPath:
-			if len(rule.DefaultOptions.ProcessPath) > 0 {
-				return &rule.DefaultOptions
+			if len(rule.ProcessPath) > 0 {
+				return rule
 			}
 		case TypeProcessPathRegex:
-			if len(rule.DefaultOptions.ProcessPathRegex) > 0 {
-				return &rule.DefaultOptions
+			if len(rule.ProcessPathRegex) > 0 {
+				return rule
 			}
 		}
 	}
 
 	// if it couldn't find a rule, create one and append to the rules slice
-	newRule := new(O.DefaultHeadlessRule)
-	rules = append(rules, O.HeadlessRule{
+	activeRule.Rules = append(activeRule.Rules, O.HeadlessRule{
 		Type:           C.RuleTypeDefault,
-		DefaultOptions: *newRule,
+		DefaultOptions: O.DefaultHeadlessRule{},
 	})
-	return newRule
+	return &activeRule.Rules[len(activeRule.Rules)-1].DefaultOptions
 }
 
 func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) error {
 	s.access.Lock()
 	defer s.access.Unlock()
 
-	rule := findRuleBasedOnFilterType(filterType, s.activeFilter.Rules)
+	rule := findRuleBasedOnFilterType(filterType, s.activeFilter)
 	items := []string{item}
 	switch filterType {
 	case TypeDomain:
@@ -268,31 +269,92 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
-	for _, rule := range s.activeFilter.Rules {
-		if len(diff.Domain) > 0 && len(rule.DefaultOptions.Domain) > 0 {
-			rule.DefaultOptions.Domain = fn(rule.DefaultOptions.Domain, diff.Domain)
+	if len(s.activeFilter.Rules) == 0 {
+		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+			Type:           C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{},
+		})
+	}
+
+	// Track which filter types were applied
+	appliedDomain := false
+	appliedProcess := false
+	appliedPackage := false
+
+	for i := range s.activeFilter.Rules {
+		rule := &s.activeFilter.Rules[i].DefaultOptions
+
+		// Handle domain-related filters
+		if (len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 || len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0) &&
+			(len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 || len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0) {
+			appliedDomain = true
+			if len(diff.Domain) > 0 {
+				rule.Domain = fn(rule.Domain, diff.Domain)
+			}
+			if len(diff.DomainSuffix) > 0 {
+				rule.DomainSuffix = fn(rule.DomainSuffix, diff.DomainSuffix)
+			}
+			if len(diff.DomainKeyword) > 0 {
+				rule.DomainKeyword = fn(rule.DomainKeyword, diff.DomainKeyword)
+			}
+			if len(diff.DomainRegex) > 0 {
+				rule.DomainRegex = fn(rule.DomainRegex, diff.DomainRegex)
+			}
 		}
-		if len(diff.DomainSuffix) > 0 && len(rule.DefaultOptions.DomainSuffix) > 0 {
-			rule.DefaultOptions.DomainSuffix = fn(rule.DefaultOptions.DomainSuffix, diff.DomainSuffix)
+
+		// Handle process-related filters
+		if (len(diff.ProcessName) > 0 || len(diff.ProcessPath) > 0 || len(diff.ProcessPathRegex) > 0) &&
+			(len(rule.ProcessName) > 0 || len(rule.ProcessPath) > 0 || len(rule.ProcessPathRegex) > 0) {
+			appliedProcess = true
+			if len(diff.ProcessName) > 0 {
+				rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
+			}
+			if len(diff.ProcessPath) > 0 {
+				rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
+			}
+			if len(diff.ProcessPathRegex) > 0 {
+				rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
+			}
 		}
-		if len(diff.DomainKeyword) > 0 && len(rule.DefaultOptions.DomainKeyword) > 0 {
-			rule.DefaultOptions.DomainKeyword = fn(rule.DefaultOptions.DomainKeyword, diff.DomainKeyword)
+
+		// Handle package filters
+		if len(diff.PackageName) > 0 && len(rule.PackageName) > 0 {
+			appliedPackage = true
+			rule.PackageName = fn(rule.PackageName, diff.PackageName)
 		}
-		if len(diff.DomainRegex) > 0 && len(rule.DefaultOptions.DomainRegex) > 0 {
-			rule.DefaultOptions.DomainRegex = fn(rule.DefaultOptions.DomainRegex, diff.DomainRegex)
-		}
-		if len(diff.ProcessName) > 0 && len(rule.DefaultOptions.ProcessName) > 0 {
-			rule.DefaultOptions.ProcessName = fn(rule.DefaultOptions.ProcessName, diff.ProcessName)
-		}
-		if len(diff.ProcessPath) > 0 && len(rule.DefaultOptions.ProcessPath) > 0 {
-			rule.DefaultOptions.ProcessPath = fn(rule.DefaultOptions.ProcessPath, diff.ProcessPath)
-		}
-		if len(diff.ProcessPathRegex) > 0 && len(rule.DefaultOptions.ProcessPathRegex) > 0 {
-			rule.DefaultOptions.ProcessPathRegex = fn(rule.DefaultOptions.ProcessPathRegex, diff.ProcessPathRegex)
-		}
-		if len(diff.PackageName) > 0 && len(rule.DefaultOptions.PackageName) > 0 {
-			rule.DefaultOptions.PackageName = fn(rule.DefaultOptions.PackageName, diff.PackageName)
-		}
+	}
+
+	// Create new rules for filter types that weren't applied
+	if !appliedDomain && (len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 || len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0) {
+		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{
+				Domain:        diff.Domain,
+				DomainSuffix:  diff.DomainSuffix,
+				DomainKeyword: diff.DomainKeyword,
+				DomainRegex:   diff.DomainRegex,
+			},
+		})
+	}
+
+	if !appliedProcess && (len(diff.ProcessName) > 0 || len(diff.ProcessPath) > 0 || len(diff.ProcessPathRegex) > 0) {
+		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{
+				ProcessName:      diff.ProcessName,
+				ProcessPath:      diff.ProcessPath,
+				ProcessPathRegex: diff.ProcessPathRegex,
+			},
+		})
+	}
+
+	if !appliedPackage && len(diff.PackageName) > 0 {
+		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultHeadlessRule{
+				PackageName: diff.PackageName,
+			},
+		})
 	}
 }
 
