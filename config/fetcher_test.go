@@ -27,7 +27,7 @@ func TestDomainFrontingFetchConfig(t *testing.T) {
 	// Disable this test for now since it depends on external service.
 	t.Skip("Skipping TestDomainFrontingFetchConfig since it depends on external service.")
 	dataDir := t.TempDir()
-	f, err := fronted.NewFronted(reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), io.Discard)
+	f, err := fronted.NewFronted(context.Background(), reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), io.Discard)
 	require.NoError(t, err)
 	k := kindling.NewKindling(
 		"radiance-df-test",
