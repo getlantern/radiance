@@ -12,7 +12,6 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
-	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -75,17 +74,17 @@ func NewKindling() kindling.Kindling {
 	defer span.End()
 
 	updaterCtx, cancel := context.WithCancel(ctx)
-	f, err := fronted.NewFronted(updaterCtx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
-	if err != nil {
-		slog.Error("failed to create fronted client", slog.Any("error", err))
-		span.RecordError(err)
-	}
+	// f, err := fronted.NewFronted(updaterCtx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
+	// if err != nil {
+	// 	slog.Error("failed to create fronted client", slog.Any("error", err))
+	// 	span.RecordError(err)
+	// }
 
-	ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
-	if err != nil {
-		slog.Error("failed to create amp client", slog.Any("error", err))
-		span.RecordError(err)
-	}
+	// ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
+	// if err != nil {
+	// 	slog.Error("failed to create amp client", slog.Any("error", err))
+	// 	span.RecordError(err)
+	// }
 
 	dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 	if err != nil {
@@ -95,12 +94,12 @@ func NewKindling() kindling.Kindling {
 
 	stopUpdater = cancel
 	closeTransports = []func() error{
-		func() error {
-			if f != nil {
-				f.Close()
-			}
-			return nil
-		},
+		// func() error {
+		// 	if f != nil {
+		// 		f.Close()
+		// 	}
+		// 	return nil
+		// },
 		func() error {
 			if dnsttOptions != nil {
 				dnsttOptions.Close()
@@ -114,9 +113,9 @@ func NewKindling() kindling.Kindling {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
 		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-		kindling.WithDomainFronting(f),
+		// kindling.WithDomainFronting(f),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindling.WithAMPCache(ampClient),
+		// kindling.WithAMPCache(ampClient),
 		kindling.WithDNSTunnel(dnsttOptions),
 	)
 }
