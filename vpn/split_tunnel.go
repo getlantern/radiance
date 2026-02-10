@@ -42,9 +42,9 @@ type SplitTunnel struct {
 	rule         O.LogicalHeadlessRule
 	activeFilter *O.LogicalHeadlessRule
 	ruleFile     string
-
-	enabled *atomic.Bool
-	access  sync.Mutex
+	ruleMap      map[string]*O.DefaultHeadlessRule
+	enabled      *atomic.Bool
+	access       sync.Mutex
 }
 
 func NewSplitTunnelHandler() (*SplitTunnel, error) {
@@ -61,8 +61,10 @@ func newSplitTunnel(path string) *SplitTunnel {
 		rule:         rule,
 		ruleFile:     filepath.Join(path, splitTunnelFile),
 		activeFilter: &(rule.Rules[1].LogicalOptions),
+		ruleMap:      make(map[string]*O.DefaultHeadlessRule),
 		enabled:      &atomic.Bool{},
 	}
+	s.initRuleMap()
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
 		slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
 		s.saveToFile()
@@ -105,16 +107,23 @@ func (s *SplitTunnel) Filters() Filter {
 	s.access.Lock()
 	defer s.access.Unlock()
 	f := Filter{}
-	for i := range s.activeFilter.Rules {
-		rule := &s.activeFilter.Rules[i].DefaultOptions
-		f.Domain = append(f.Domain, slices.Clone(rule.Domain)...)
-		f.DomainSuffix = append(f.DomainSuffix, slices.Clone(rule.DomainSuffix)...)
-		f.DomainKeyword = append(f.DomainKeyword, slices.Clone(rule.DomainKeyword)...)
-		f.DomainRegex = append(f.DomainRegex, slices.Clone(rule.DomainRegex)...)
-		f.ProcessName = append(f.ProcessName, slices.Clone(rule.ProcessName)...)
-		f.ProcessPath = append(f.ProcessPath, slices.Clone(rule.ProcessPath)...)
-		f.ProcessPathRegex = append(f.ProcessPathRegex, slices.Clone(rule.ProcessPathRegex)...)
-		f.PackageName = append(f.PackageName, slices.Clone(rule.PackageName)...)
+	if rule, ok := s.ruleMap["domain"]; ok {
+		f.Domain = slices.Clone(rule.Domain)
+		f.DomainSuffix = slices.Clone(rule.DomainSuffix)
+		f.DomainKeyword = slices.Clone(rule.DomainKeyword)
+		f.DomainRegex = slices.Clone(rule.DomainRegex)
+	}
+	if rule, ok := s.ruleMap["processName"]; ok {
+		f.ProcessName = slices.Clone(rule.ProcessName)
+	}
+	if rule, ok := s.ruleMap["processPath"]; ok {
+		f.ProcessPath = slices.Clone(rule.ProcessPath)
+	}
+	if rule, ok := s.ruleMap["processPathRegex"]; ok {
+		f.ProcessPathRegex = slices.Clone(rule.ProcessPathRegex)
+	}
+	if rule, ok := s.ruleMap["packageName"]; ok {
+		f.PackageName = slices.Clone(rule.PackageName)
 	}
 	return f
 }
@@ -199,44 +208,6 @@ func (f Filter) String() string {
 
 type actionFn func(slice []string, items []string) []string
 
-func findRuleBasedOnFilterType(filterType string, activeRule *O.LogicalHeadlessRule) *O.DefaultHeadlessRule {
-	for i := range activeRule.Rules {
-		rule := &activeRule.Rules[i].DefaultOptions
-		switch filterType {
-		case TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex:
-			if len(rule.Domain) > 0 ||
-				len(rule.DomainSuffix) > 0 ||
-				len(rule.DomainKeyword) > 0 ||
-				len(rule.DomainRegex) > 0 {
-				return rule
-			}
-		case TypePackageName:
-			if len(rule.PackageName) > 0 {
-				return rule
-			}
-		case TypeProcessName:
-			if len(rule.ProcessName) > 0 {
-				return rule
-			}
-		case TypeProcessPath:
-			if len(rule.ProcessPath) > 0 {
-				return rule
-			}
-		case TypeProcessPathRegex:
-			if len(rule.ProcessPathRegex) > 0 {
-				return rule
-			}
-		}
-	}
-
-	// if it couldn't find a rule, create one and append to the rules slice
-	activeRule.Rules = append(activeRule.Rules, O.HeadlessRule{
-		Type:           C.RuleTypeDefault,
-		DefaultOptions: O.DefaultHeadlessRule{},
-	})
-	return &activeRule.Rules[len(activeRule.Rules)-1].DefaultOptions
-}
-
 var validFilterTypes = []string{TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex, TypePackageName, TypeProcessName, TypeProcessPath, TypeProcessPathRegex}
 
 func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) error {
@@ -247,7 +218,8 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 		return fmt.Errorf("unsupported filter type: %s", filterType)
 	}
 
-	rule := findRuleBasedOnFilterType(filterType, s.activeFilter)
+	category := s.getRuleCategory(filterType)
+	rule := s.ensureRuleExists(category)
 	items := []string{item}
 	switch filterType {
 	case TypeDomain:
@@ -267,6 +239,7 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 	case TypePackageName:
 		rule.PackageName = fn(rule.PackageName, items)
 	}
+	s.syncRuleMapToActiveFilter()
 	return nil
 }
 
@@ -274,115 +247,49 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
 
-	// Track which filter types were applied
-	var (
-		appliedDomain           bool
-		appliedPackage          bool
-		appliedProcessName      bool
-		appliedProcessPath      bool
-		appliedProcessPathRegex bool
-	)
-
-	for i := range s.activeFilter.Rules {
-		rule := &s.activeFilter.Rules[i].DefaultOptions
-
-		// Handle domain-related filters
-		if (len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 || len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0) &&
-			(len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 || len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0) {
-			appliedDomain = true
-			if len(diff.Domain) > 0 {
-				rule.Domain = fn(rule.Domain, diff.Domain)
-			}
-			if len(diff.DomainSuffix) > 0 {
-				rule.DomainSuffix = fn(rule.DomainSuffix, diff.DomainSuffix)
-			}
-			if len(diff.DomainKeyword) > 0 {
-				rule.DomainKeyword = fn(rule.DomainKeyword, diff.DomainKeyword)
-			}
-			if len(diff.DomainRegex) > 0 {
-				rule.DomainRegex = fn(rule.DomainRegex, diff.DomainRegex)
-			}
+	// Update domain rule
+	if len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 ||
+		len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0 {
+		rule := s.ensureRuleExists("domain")
+		if len(diff.Domain) > 0 {
+			rule.Domain = fn(rule.Domain, diff.Domain)
 		}
-
-		if len(diff.ProcessName) > 0 && len(rule.ProcessName) > 0 {
-			appliedProcessName = true
-			rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
+		if len(diff.DomainSuffix) > 0 {
+			rule.DomainSuffix = fn(rule.DomainSuffix, diff.DomainSuffix)
 		}
-
-		if len(diff.ProcessPath) > 0 && len(rule.ProcessPath) > 0 {
-			appliedProcessPath = true
-			rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
+		if len(diff.DomainKeyword) > 0 {
+			rule.DomainKeyword = fn(rule.DomainKeyword, diff.DomainKeyword)
 		}
-
-		if len(diff.ProcessPathRegex) > 0 && len(rule.ProcessPathRegex) > 0 {
-			appliedProcessPathRegex = true
-			rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
-		}
-
-		if len(diff.PackageName) > 0 && len(rule.PackageName) > 0 {
-			appliedPackage = true
-			rule.PackageName = fn(rule.PackageName, diff.PackageName)
+		if len(diff.DomainRegex) > 0 {
+			rule.DomainRegex = fn(rule.DomainRegex, diff.DomainRegex)
 		}
 	}
 
-	// if this isn't a merge action, we skip the flow for adding a not applied rule
-	if !isMergeAction(fn) {
-		return
-	}
-	// Create new rules for filter types that weren't applied
-	if !appliedDomain && (len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 || len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0) {
-		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{
-				Domain:        diff.Domain,
-				DomainSuffix:  diff.DomainSuffix,
-				DomainKeyword: diff.DomainKeyword,
-				DomainRegex:   diff.DomainRegex,
-			},
-		})
+	// Update processName rule
+	if len(diff.ProcessName) > 0 {
+		rule := s.ensureRuleExists("processName")
+		rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
 	}
 
-	if !appliedProcessName && len(diff.ProcessName) > 0 {
-		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{
-				ProcessName: diff.ProcessName,
-			},
-		})
-	}
-	if !appliedProcessPath && len(diff.ProcessPath) > 0 {
-		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{
-				ProcessPath: diff.ProcessPath,
-			},
-		})
-	}
-	if !appliedProcessPathRegex && len(diff.ProcessPathRegex) > 0 {
-		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{
-				ProcessPathRegex: diff.ProcessPathRegex,
-			},
-		})
+	// Update processPath rule
+	if len(diff.ProcessPath) > 0 {
+		rule := s.ensureRuleExists("processPath")
+		rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
 	}
 
-	if !appliedPackage && len(diff.PackageName) > 0 {
-		s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultHeadlessRule{
-				PackageName: diff.PackageName,
-			},
-		})
+	// Update processPathRegex rule
+	if len(diff.ProcessPathRegex) > 0 {
+		rule := s.ensureRuleExists("processPathRegex")
+		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
 	}
-}
 
-func isMergeAction(fn actionFn) bool {
-	// Test the function behavior with a known input
-	test := fn([]string{"a"}, []string{"b"})
-	// merge will append, resulting in length 2
-	// remove will not append if item doesn't exist, resulting in length 1
-	return len(test) == 2
+	// Update packageName rule
+	if len(diff.PackageName) > 0 {
+		rule := s.ensureRuleExists("packageName")
+		rule.PackageName = fn(rule.PackageName, diff.PackageName)
+	}
+
+	s.syncRuleMapToActiveFilter()
 }
 
 func merge(slice []string, items []string) []string {
@@ -529,6 +436,7 @@ func (s *SplitTunnel) loadRule() error {
 		}
 	}
 	s.activeFilter = &(s.rule.Rules[1].LogicalOptions)
+	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 
 	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
@@ -570,4 +478,78 @@ func defaultRule() O.LogicalHeadlessRule {
 			},
 		},
 	}
+}
+
+func (s *SplitTunnel) syncRuleMapToActiveFilter() {
+	// Clear existing rules
+	s.activeFilter.Rules = []O.HeadlessRule{}
+
+	// Add rules from map in consistent order
+	categories := []string{"domain", "processName", "processPath", "processPathRegex", "packageName"}
+	for _, category := range categories {
+		if rule, ok := s.ruleMap[category]; ok && !isEmptyRule(*rule) {
+			s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+				Type:           C.RuleTypeDefault,
+				DefaultOptions: *rule,
+			})
+		}
+	}
+}
+
+func (s *SplitTunnel) initRuleMap() {
+	s.ruleMap = make(map[string]*O.DefaultHeadlessRule)
+
+	for i := range s.activeFilter.Rules {
+		rule := &s.activeFilter.Rules[i].DefaultOptions
+
+		// Categorize the rule based on its contents
+		if len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
+			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0 {
+			s.ruleMap["domain"] = rule
+		}
+		if len(rule.ProcessName) > 0 {
+			s.ruleMap["processName"] = rule
+		}
+		if len(rule.ProcessPath) > 0 {
+			s.ruleMap["processPath"] = rule
+		}
+		if len(rule.ProcessPathRegex) > 0 {
+			s.ruleMap["processPathRegex"] = rule
+		}
+		if len(rule.PackageName) > 0 {
+			s.ruleMap["packageName"] = rule
+		}
+	}
+}
+
+func (s *SplitTunnel) getRuleCategory(filterType string) string {
+	switch filterType {
+	case TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex:
+		return "domain"
+	case TypePackageName:
+		return "packageName"
+	case TypeProcessName:
+		return "processName"
+	case TypeProcessPath:
+		return "processPath"
+	case TypeProcessPathRegex:
+		return "processPathRegex"
+	default:
+		return ""
+	}
+}
+
+func (s *SplitTunnel) ensureRuleExists(category string) *O.DefaultHeadlessRule {
+	if rule, ok := s.ruleMap[category]; ok {
+		return rule
+	}
+
+	// Create new rule and add it to activeFilter
+	newRule := &O.DefaultHeadlessRule{}
+	s.ruleMap[category] = newRule
+	s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+		Type:           C.RuleTypeDefault,
+		DefaultOptions: *newRule,
+	})
+	return newRule
 }
