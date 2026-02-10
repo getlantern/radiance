@@ -247,6 +247,8 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnsttConfig, error) {
 var waitFor = 30 * time.Second
 
 func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
+	// trying all dns tunnels available
+	go m.tryAllDNSTunnels()
 	for {
 		select {
 		case <-m.stopChan:
