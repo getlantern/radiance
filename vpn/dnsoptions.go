@@ -34,13 +34,11 @@ func buildDNSServers() []option.DNSServerOptions {
 		},
 	}
 	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
-	ipv6Prefix := badoption.Prefix(netip.MustParsePrefix("fc00::/18"))
 	fakeIP := option.DNSServerOptions{
 		Tag:  "dns_fakeip",
 		Type: constant.DNSTypeFakeIP,
 		Options: &option.FakeIPDNSServerOptions{
 			Inet4Range: &ipv4Prefix,
-			Inet6Range: &ipv6Prefix,
 		},
 	}
 

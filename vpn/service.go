@@ -11,9 +11,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/clashapi"
-	"github.com/sagernet/sing/service"
 
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -66,7 +64,7 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 
 // Start initializes and starts the tunnel with the specified group and tag. Returns an error if the
 // tunnel is already running or initialization fails.
-func (s *TunnelService) Start(group string, tag string) error {
+func (s *TunnelService) Start(ctx context.Context, group string, tag string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tunnel != nil && s.tunnel.Status() != ipc.StatusClosed {
@@ -75,11 +73,11 @@ func (s *TunnelService) Start(group string, tag string) error {
 	}
 	s.logger.Debug("Starting tunnel", "group", group, "tag", tag)
 	_ = newSplitTunnel(s.dataPath)
-	return s.start(group, tag)
+	return s.start(ctx, group, tag)
 }
 
-func (s *TunnelService) start(group string, tag string) error {
-	opts, err := buildOptions(group, s.dataPath)
+func (s *TunnelService) start(ctx context.Context, group string, tag string) error {
+	opts, err := buildOptions(ctx, group, s.dataPath)
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
@@ -117,7 +115,7 @@ func (s *TunnelService) Close() error {
 
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
-func (s *TunnelService) Restart() error {
+func (s *TunnelService) Restart(ctx context.Context) error {
 	s.mu.Lock()
 	if s.tunnel == nil {
 		s.mu.Unlock()
@@ -129,46 +127,29 @@ func (s *TunnelService) Restart() error {
 	}
 
 	s.logger.Info("Restarting tunnel")
+	if s.platformIfce != nil {
+		s.mu.Unlock()
+		if err := s.platformIfce.RestartService(); err != nil {
+			s.logger.Error("Failed to restart tunnel via platform interface", "error", err)
+			return fmt.Errorf("platform interface restart failed: %w", err)
+		}
+		return nil
+	}
+
+	defer s.mu.Unlock()
 	group := s.tunnel.clashServer.Mode()
 	tag := s.tunnel.cacheFile.LoadSelected(group)
 
-	if s.platformIfce == nil {
-		defer s.mu.Unlock()
-		return s.restart(group, tag)
-	}
-	s.mu.Unlock()
-	return s.restartViaPlatformIface(group, tag)
-
-}
-
-func (s *TunnelService) restart(group, tag string) error {
 	t := s.tunnel
 	s.tunnel = nil
 	if err := t.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	return s.start(group, tag)
-}
-
-func (s *TunnelService) restartViaPlatformIface(group, tag string) error {
-	if err := s.platformIfce.RestartService(); err != nil {
-		return fmt.Errorf("PlatformInterface.RestartService: %w", err)
+	if err := s.start(ctx, group, tag); err != nil {
+		s.logger.Error("Failed to restart tunnel", "error", err, "group", group, "tag", tag)
+		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.tunnel == nil {
-		return errors.New("tunnel nil after PlatformInterface.RestartService")
-	}
-	if status := s.tunnel.Status(); status != ipc.StatusRunning {
-		return fmt.Errorf("tunnel not running: status %v", status)
-	}
-	s.tunnel.clashServer.SetMode(group)
-	outboundMgr := service.FromContext[adapter.OutboundManager](s.tunnel.ctx)
-	outbound, loaded := outboundMgr.Outbound(tag)
-	if !loaded {
-		return fmt.Errorf("selector not found: %s", tag)
-	}
-	outbound.(ipc.Selector).SelectOutbound(tag)
+	s.logger.Info("Tunnel restarted successfully")
 	return nil
 }
 
