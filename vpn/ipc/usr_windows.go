@@ -3,6 +3,7 @@ package ipc
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"golang.org/x/sys/windows"
 )
@@ -33,5 +34,11 @@ func isAdmin(t windows.Token) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to create admin sid: %w", err)
 	}
-	return t.IsMember(adminSid)
+	tokenGroups, err := t.GetTokenGroups()
+	if err != nil {
+		return false, fmt.Errorf("failed to get token groups: %w", err)
+	}
+	return slices.ContainsFunc(tokenGroups.AllGroups(), func(g windows.SIDAndAttributes) bool {
+		return windows.EqualSid(g.Sid, adminSid)
+	}), nil
 }
