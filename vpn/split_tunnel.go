@@ -379,6 +379,7 @@ func (s *SplitTunnel) loadRule() error {
 		})
 	} else if len(s.rule.Rules) > 1 && s.rule.Rules[1].Type == C.RuleTypeDefault {
 		// Migrate legacy format: wrap DefaultOptions into LogicalOptions
+		// TODO(2/10): remove in future commit
 		slog.Debug("Migrating legacy split tunnel rule format")
 		legacyRule := s.rule.Rules[1].DefaultOptions
 		s.rule.Rules[1] = O.HeadlessRule{
