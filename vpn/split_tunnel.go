@@ -239,7 +239,6 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 	case TypePackageName:
 		rule.PackageName = fn(rule.PackageName, items)
 	}
-	s.syncRuleMapToActiveFilter()
 	return nil
 }
 
@@ -288,8 +287,6 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 		rule := s.ensureRuleExists("packageName")
 		rule.PackageName = fn(rule.PackageName, diff.PackageName)
 	}
-
-	s.syncRuleMapToActiveFilter()
 }
 
 func merge(slice []string, items []string) []string {
@@ -481,22 +478,6 @@ func defaultRule() O.LogicalHeadlessRule {
 	}
 }
 
-func (s *SplitTunnel) syncRuleMapToActiveFilter() {
-	// Clear existing rules
-	s.activeFilter.Rules = []O.HeadlessRule{}
-
-	// Add rules from map in consistent order
-	categories := []string{"domain", "processName", "processPath", "processPathRegex", "packageName"}
-	for _, category := range categories {
-		if rule, ok := s.ruleMap[category]; ok && !isEmptyRule(*rule) {
-			s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-				Type:           C.RuleTypeDefault,
-				DefaultOptions: *rule,
-			})
-		}
-	}
-}
-
 func (s *SplitTunnel) initRuleMap() {
 	s.ruleMap = make(map[string]*O.DefaultHeadlessRule)
 
@@ -546,11 +527,10 @@ func (s *SplitTunnel) ensureRuleExists(category string) *O.DefaultHeadlessRule {
 	}
 
 	// Create new rule and add it to activeFilter
-	newRule := &O.DefaultHeadlessRule{}
-	s.ruleMap[category] = newRule
 	s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
 		Type:           C.RuleTypeDefault,
-		DefaultOptions: *newRule,
+		DefaultOptions: O.DefaultHeadlessRule{},
 	})
-	return newRule
+	s.ruleMap[category] = &s.activeFilter.Rules[len(s.activeFilter.Rules)-1].DefaultOptions
+	return s.ruleMap[category]
 }
