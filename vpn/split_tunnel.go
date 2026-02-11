@@ -218,7 +218,7 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 		return fmt.Errorf("unsupported filter type: %s", filterType)
 	}
 
-	rule := s.ensureRuleExists(filterType)
+	rule := s.ruleMap[filterType]
 	items := []string{item}
 	switch filterType {
 	case TypeDomain:
@@ -248,7 +248,7 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	// Update domain rule
 	if len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 ||
 		len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0 {
-		rule := s.ensureRuleExists(TypeDomain)
+		rule := s.ruleMap[TypeDomain]
 		if len(diff.Domain) > 0 {
 			rule.Domain = fn(rule.Domain, diff.Domain)
 		}
@@ -265,25 +265,25 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 
 	// Update processName rule
 	if len(diff.ProcessName) > 0 {
-		rule := s.ensureRuleExists(TypeProcessName)
+		rule := s.ruleMap[TypeProcessName]
 		rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
 	}
 
 	// Update processPath rule
 	if len(diff.ProcessPath) > 0 {
-		rule := s.ensureRuleExists(TypeProcessPath)
+		rule := s.ruleMap[TypeProcessPath]
 		rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
 	}
 
 	// Update processPathRegex rule
 	if len(diff.ProcessPathRegex) > 0 {
-		rule := s.ensureRuleExists(TypeProcessPathRegex)
+		rule := s.ruleMap[TypeProcessPathRegex]
 		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
 	}
 
 	// Update packageName rule
 	if len(diff.PackageName) > 0 {
-		rule := s.ensureRuleExists(TypePackageName)
+		rule := s.ruleMap[TypePackageName]
 		rule.PackageName = fn(rule.PackageName, diff.PackageName)
 	}
 }
@@ -338,6 +338,7 @@ func (s *SplitTunnel) saveToFile() error {
 	if err := atomicfile.WriteFile(s.ruleFile, buf, 0644); err != nil {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
+	s.initRuleMap()
 	return nil
 }
 
@@ -500,6 +501,10 @@ func (s *SplitTunnel) initRuleMap() {
 		if len(rule.PackageName) > 0 {
 			s.ruleMap[TypePackageName] = rule
 		}
+	}
+
+	for _, v := range []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName} {
+		s.ensureRuleExists(v)
 	}
 }
 
