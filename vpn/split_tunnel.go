@@ -218,8 +218,7 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 		return fmt.Errorf("unsupported filter type: %s", filterType)
 	}
 
-	category := s.getRuleCategory(filterType)
-	rule := s.ensureRuleExists(category)
+	rule := s.ensureRuleExists(filterType)
 	items := []string{item}
 	switch filterType {
 	case TypeDomain:
@@ -504,24 +503,11 @@ func (s *SplitTunnel) initRuleMap() {
 	}
 }
 
-func (s *SplitTunnel) getRuleCategory(filterType string) string {
-	switch filterType {
-	case TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex:
-		return "domain"
-	case TypePackageName:
-		return "packageName"
-	case TypeProcessName:
-		return "processName"
-	case TypeProcessPath:
-		return "processPath"
-	case TypeProcessPathRegex:
-		return "processPathRegex"
-	default:
-		return ""
-	}
-}
-
 func (s *SplitTunnel) ensureRuleExists(category string) *O.DefaultHeadlessRule {
+	switch category {
+	case TypeDomainKeyword, TypeDomainRegex, TypeDomainSuffix:
+		category = TypeDomain
+	}
 	if rule, ok := s.ruleMap[category]; ok {
 		return rule
 	}
