@@ -503,16 +503,16 @@ func (s *SplitTunnel) initRuleMap() {
 		}
 	}
 
-	for _, v := range []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName} {
-		s.ensureRuleExists(v)
+	for _, ruleType := range []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName} {
+		s.ensureRuleExists(ruleType)
+	}
+
+	for _, ruleType := range []string{TypeDomainKeyword, TypeDomainRegex, TypeDomainSuffix} {
+		s.ruleMap[ruleType] = s.ruleMap[TypeDomain]
 	}
 }
 
 func (s *SplitTunnel) ensureRuleExists(category string) *O.DefaultHeadlessRule {
-	switch category {
-	case TypeDomainKeyword, TypeDomainRegex, TypeDomainSuffix:
-		category = TypeDomain
-	}
 	if rule, ok := s.ruleMap[category]; ok {
 		return rule
 	}

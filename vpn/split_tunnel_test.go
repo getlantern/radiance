@@ -303,12 +303,15 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, []string{"/opt/.*"}, filters.ProcessPathRegex, "process path regexes should be migrated")
 
 	// Verify rule map is properly initialized
-	assert.Len(t, st.ruleMap, 5, "should have 5 rule categories in map")
-	assert.Contains(t, st.ruleMap, "domain", "should have domain rule")
-	assert.Contains(t, st.ruleMap, "packageName", "should have packageName rule")
-	assert.Contains(t, st.ruleMap, "processName", "should have processName rule")
-	assert.Contains(t, st.ruleMap, "processPath", "should have processPath rule")
-	assert.Contains(t, st.ruleMap, "processPathRegex", "should have processPathRegex rule")
+	assert.Len(t, st.ruleMap, 8, "should have 5 rule categories in map")
+	assert.Contains(t, st.ruleMap, TypeDomain, "should have domain rule")
+	assert.Contains(t, st.ruleMap, TypeDomainKeyword, "should have domain rule")
+	assert.Contains(t, st.ruleMap, TypeDomainRegex, "should have domain rule")
+	assert.Contains(t, st.ruleMap, TypeDomainSuffix, "should have domain rule")
+	assert.Contains(t, st.ruleMap, TypePackageName, "should have packageName rule")
+	assert.Contains(t, st.ruleMap, TypeProcessName, "should have processName rule")
+	assert.Contains(t, st.ruleMap, TypeProcessPath, "should have processPath rule")
+	assert.Contains(t, st.ruleMap, TypeProcessPathRegex, "should have processPathRegex rule")
 
 	// Verify the migrated format persists correctly
 	err = st.saveToFile()
