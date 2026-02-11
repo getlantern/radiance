@@ -107,22 +107,22 @@ func (s *SplitTunnel) Filters() Filter {
 	s.access.Lock()
 	defer s.access.Unlock()
 	f := Filter{}
-	if rule, ok := s.ruleMap["domain"]; ok {
+	if rule, ok := s.ruleMap[TypeDomain]; ok {
 		f.Domain = slices.Clone(rule.Domain)
 		f.DomainSuffix = slices.Clone(rule.DomainSuffix)
 		f.DomainKeyword = slices.Clone(rule.DomainKeyword)
 		f.DomainRegex = slices.Clone(rule.DomainRegex)
 	}
-	if rule, ok := s.ruleMap["processName"]; ok {
+	if rule, ok := s.ruleMap[TypeProcessName]; ok {
 		f.ProcessName = slices.Clone(rule.ProcessName)
 	}
-	if rule, ok := s.ruleMap["processPath"]; ok {
+	if rule, ok := s.ruleMap[TypeProcessPath]; ok {
 		f.ProcessPath = slices.Clone(rule.ProcessPath)
 	}
-	if rule, ok := s.ruleMap["processPathRegex"]; ok {
+	if rule, ok := s.ruleMap[TypeProcessPathRegex]; ok {
 		f.ProcessPathRegex = slices.Clone(rule.ProcessPathRegex)
 	}
-	if rule, ok := s.ruleMap["packageName"]; ok {
+	if rule, ok := s.ruleMap[TypePackageName]; ok {
 		f.PackageName = slices.Clone(rule.PackageName)
 	}
 	return f
@@ -248,7 +248,7 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	// Update domain rule
 	if len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 ||
 		len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0 {
-		rule := s.ensureRuleExists("domain")
+		rule := s.ensureRuleExists(TypeDomain)
 		if len(diff.Domain) > 0 {
 			rule.Domain = fn(rule.Domain, diff.Domain)
 		}
@@ -265,25 +265,25 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 
 	// Update processName rule
 	if len(diff.ProcessName) > 0 {
-		rule := s.ensureRuleExists("processName")
+		rule := s.ensureRuleExists(TypeProcessName)
 		rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
 	}
 
 	// Update processPath rule
 	if len(diff.ProcessPath) > 0 {
-		rule := s.ensureRuleExists("processPath")
+		rule := s.ensureRuleExists(TypeProcessPath)
 		rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
 	}
 
 	// Update processPathRegex rule
 	if len(diff.ProcessPathRegex) > 0 {
-		rule := s.ensureRuleExists("processPathRegex")
+		rule := s.ensureRuleExists(TypeProcessPathRegex)
 		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
 	}
 
 	// Update packageName rule
 	if len(diff.PackageName) > 0 {
-		rule := s.ensureRuleExists("packageName")
+		rule := s.ensureRuleExists(TypePackageName)
 		rule.PackageName = fn(rule.PackageName, diff.PackageName)
 	}
 }
@@ -486,19 +486,19 @@ func (s *SplitTunnel) initRuleMap() {
 		// Categorize the rule based on its contents
 		if len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
 			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0 {
-			s.ruleMap["domain"] = rule
+			s.ruleMap[TypeDomain] = rule
 		}
 		if len(rule.ProcessName) > 0 {
-			s.ruleMap["processName"] = rule
+			s.ruleMap[TypeProcessName] = rule
 		}
 		if len(rule.ProcessPath) > 0 {
-			s.ruleMap["processPath"] = rule
+			s.ruleMap[TypeProcessPath] = rule
 		}
 		if len(rule.ProcessPathRegex) > 0 {
-			s.ruleMap["processPathRegex"] = rule
+			s.ruleMap[TypeProcessPathRegex] = rule
 		}
 		if len(rule.PackageName) > 0 {
-			s.ruleMap["packageName"] = rule
+			s.ruleMap[TypePackageName] = rule
 		}
 	}
 }
