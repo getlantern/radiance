@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,7 +43,6 @@ type Server struct {
 	svr       *http.Server
 	service   Service
 	router    chi.Router
-	mutex     sync.RWMutex
 	vpnStatus atomic.Value // string
 	closed    atomic.Bool
 }
