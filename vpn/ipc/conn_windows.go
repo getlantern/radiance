@@ -126,3 +126,6 @@ func getConnPeer(conn net.Conn) (p usr, err error) {
 	}
 	return usr, nil
 }
+
+// this is a no-op on windows
+func setSocketPathForTesting(path string) {}

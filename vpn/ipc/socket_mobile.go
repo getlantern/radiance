@@ -8,26 +8,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"syscall"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 )
 
-var sharedDir atomic.Value // string
-
-func init() {
-	sharedDir.Store("") // ensure value is of type string
-}
-
+// this is a no-op on mobile
 func setSocketPathForTesting(path string) {}
 
-func SetSharedDir(dir string) {
-	sharedDir.Store(dir)
-}
-
 func socketPath() string {
-	return sharedDir.Load().(string) + "/lantern.sock"
+	return settings.GetString(settings.DataPathKey) + "/lantern.sock"
 }
 
 func setPermissions() error {

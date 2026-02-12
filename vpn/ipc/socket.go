@@ -18,17 +18,11 @@ func setSocketPathForTesting(path string) {
 	_socketPath = path
 }
 
-// SetSharedDir is a no-op on non-mobile platforms.
-func SetSharedDir(dir string) { return }
-
 func socketPath() string {
 	return _socketPath
 }
 
 func setPermissions() error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
 	path := socketPath()
 	if runtime.GOOS == "linux" {
 		// we'll check if user is sudoer to restrict access

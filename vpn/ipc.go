@@ -33,9 +33,6 @@ func InitIPC(dataPath, logPath, logLevel string, platformIfce rvpn.PlatformInter
 	if path := settings.GetString(settings.DataPathKey); path != "" && path != dataPath {
 		dataPath = path
 	}
-	if common.IsMobile() {
-		ipc.SetSharedDir(dataPath)
-	}
 
 	server := ipc.NewServer(NewTunnelService(dataPath, slog.Default().With("service", "ipc"), platformIfce))
 	slog.Debug("starting IPC server")
