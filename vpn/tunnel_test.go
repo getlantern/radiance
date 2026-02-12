@@ -14,14 +14,14 @@ import (
 
 	"github.com/getlantern/lantern-box/adapter"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/testutil"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func TestConnection(t *testing.T) {
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	opts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
@@ -36,7 +36,7 @@ func TestConnection(t *testing.T) {
 		dataPath: tmp,
 	}
 
-	require.NoError(t, tun.start("", "", *opts, nil), "failed to establish connection")
+	require.NoError(t, tun.start(*opts, nil), "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()
 	})
@@ -49,7 +49,7 @@ func TestConnection(t *testing.T) {
 }
 
 func TestUpdateServers(t *testing.T) {
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
@@ -147,7 +147,7 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 		dataPath: tmp,
 	}
 
-	err := tun.start("", "", opts, nil)
+	err := tun.start(opts, nil)
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()

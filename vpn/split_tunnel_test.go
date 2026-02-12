@@ -15,13 +15,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/testutil"
 )
 
 func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
-	common.SetPathsForTesting(t)
+	testutil.SetPathsForTesting(t)
 	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
 	return s
 }

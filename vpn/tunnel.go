@@ -60,32 +60,22 @@ type tunnel struct {
 	closers []io.Closer
 }
 
-func (t *tunnel) start(group, tag string, opts O.Options, platformIfce libbox.PlatformInterface) (err error) {
+func (t *tunnel) start(opts O.Options, platformIfce libbox.PlatformInterface) error {
 	t.status.Store(ipc.StatusInitializing)
-
 	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
-	defer func() {
-		if err != nil {
-			t.close()
-		}
-	}()
 
 	if err := t.init(opts, platformIfce); err != nil {
+		t.close()
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	if err = t.connect(); err != nil {
+	if err := t.connect(); err != nil {
+		t.close()
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
 	t.status.Store(ipc.StatusRunning)
-	if group != "" {
-		if err := t.selectOutbound(group, tag); err != nil {
-			slog.Error("Failed to select outbound", "group", group, "tag", tag, "error", err)
-			return fmt.Errorf("selecting outbound: %w", err)
-		}
-	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
 	return nil
 }
