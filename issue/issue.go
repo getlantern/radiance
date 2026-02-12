@@ -25,7 +25,7 @@ import (
 
 const (
 	requestURL             = "https://df.iantem.io/api/v1/issue"
-	maxUncompressedLogSize = 50 * 1024 * 1024 // 50 MB
+	maxUncompressedLogSize = 40 * 1024 * 1024 // 40 MB
 	tracerName             = "github.com/getlantern/radiance/issue"
 )
 
