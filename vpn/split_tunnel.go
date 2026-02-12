@@ -497,9 +497,9 @@ func (s *SplitTunnel) initRuleMap() {
 		s.ensureRuleExists(ruleType)
 	}
 
-	for _, ruleType := range []string{TypeDomainKeyword, TypeDomainRegex, TypeDomainSuffix} {
-		s.ruleMap[ruleType] = s.ruleMap[TypeDomain]
-	}
+	s.ruleMap[TypeDomainKeyword] = s.ruleMap[TypeDomain]
+	s.ruleMap[TypeDomainRegex] = s.ruleMap[TypeDomain]
+	s.ruleMap[TypeDomainSuffix] = s.ruleMap[TypeDomain]
 }
 
 func (s *SplitTunnel) ensureRuleExists(category string) *O.DefaultHeadlessRule {
