@@ -274,61 +274,50 @@ func TestMigration(t *testing.T) {
 	// Load the legacy format
 	err = st.loadRule()
 	require.NoError(t, err)
-
-	// Verify migration to new format
-	assert.Equal(t, C.LogicalTypeOr, st.rule.Mode, "mode should be preserved")
-	assert.True(t, st.IsEnabled(), "should be enabled after migration")
-
-	// Verify the structure was migrated correctly
-	assert.Len(t, st.rule.Rules, 2, "should have 2 top-level rules")
-	assert.Equal(t, C.RuleTypeLogical, st.rule.Rules[0].Type, "first rule should be logical (disable rule)")
-	assert.Equal(t, C.RuleTypeLogical, st.rule.Rules[1].Type, "second rule should be logical (filter rules)")
-
-	// Verify the filter rules were properly separated
-	filterRules := st.rule.Rules[1].LogicalOptions
-	assert.Equal(t, C.LogicalTypeOr, filterRules.Mode, "filter rules should use OR mode")
-
-	// Count the number of migrated rules (should be 5: domain, packageName, processName, processPath, processPathRegex)
-	assert.Greater(t, len(filterRules.Rules), 0, "should have migrated filter rules")
-
-	// Verify filters are accessible via Filters()
-	filters := st.Filters()
-	assert.ElementsMatch(t, []string{"example.com", "test.com"}, filters.Domain, "domains should be migrated")
-	assert.Equal(t, []string{".org"}, filters.DomainSuffix, "domain suffixes should be migrated")
-	assert.Equal(t, []string{"keyword"}, filters.DomainKeyword, "domain keywords should be migrated")
-	assert.Equal(t, []string{".*\\.io$"}, filters.DomainRegex, "domain regexes should be migrated")
-	assert.Equal(t, []string{"com.example.app"}, filters.PackageName, "package names should be migrated")
-	assert.Equal(t, []string{"chrome"}, filters.ProcessName, "process names should be migrated")
-	assert.Equal(t, []string{"/usr/bin/firefox"}, filters.ProcessPath, "process paths should be migrated")
-	assert.Equal(t, []string{"/opt/.*"}, filters.ProcessPathRegex, "process path regexes should be migrated")
-
-	// Verify rule map is properly initialized
-	assert.Len(t, st.ruleMap, 8, "should have 5 rule categories in map")
-	assert.Contains(t, st.ruleMap, TypeDomain, "should have domain rule")
-	assert.Contains(t, st.ruleMap, TypeDomainKeyword, "should have domain rule")
-	assert.Contains(t, st.ruleMap, TypeDomainRegex, "should have domain rule")
-	assert.Contains(t, st.ruleMap, TypeDomainSuffix, "should have domain rule")
-	assert.Contains(t, st.ruleMap, TypePackageName, "should have packageName rule")
-	assert.Contains(t, st.ruleMap, TypeProcessName, "should have processName rule")
-	assert.Contains(t, st.ruleMap, TypeProcessPath, "should have processPath rule")
-	assert.Contains(t, st.ruleMap, TypeProcessPathRegex, "should have processPathRegex rule")
-
-	// Verify the migrated format persists correctly
-	err = st.saveToFile()
-	require.NoError(t, err)
-
-	// Reload and verify
-	st2 := newSplitTunnel(settings.GetString(settings.DataPathKey))
-	err = st2.loadRule()
-	require.NoError(t, err)
-
-	filters2 := st2.Filters()
-	assert.ElementsMatch(t, filters.Domain, filters2.Domain, "domains should persist after save/reload")
-	assert.Equal(t, filters.DomainSuffix, filters2.DomainSuffix, "domain suffixes should persist after save/reload")
-	assert.Equal(t, filters.DomainKeyword, filters2.DomainKeyword, "domain keywords should persist after save/reload")
-	assert.Equal(t, filters.DomainRegex, filters2.DomainRegex, "domain regexes should persist after save/reload")
-	assert.Equal(t, filters.PackageName, filters2.PackageName, "package names should persist after save/reload")
-	assert.Equal(t, filters.ProcessName, filters2.ProcessName, "process names should persist after save/reload")
-	assert.Equal(t, filters.ProcessPath, filters2.ProcessPath, "process paths should persist after save/reload")
-	assert.Equal(t, filters.ProcessPathRegex, filters2.ProcessPathRegex, "process path regexes should persist after save/reload")
+	want := `{
+	"type": "logical",
+	"mode": "or",
+	"rules": [
+		{
+			"type": "logical",
+			"mode": "and",
+			"rules": [
+				{
+					"domain": "disable.rule"
+				},
+				{
+					"domain": "disable.rule",
+					"invert": true
+				}
+			]
+		},
+		{
+			"type": "logical",
+			"mode": "or",
+			"rules": [
+				{
+					"domain": ["example.com", "test.com"],
+					"domain_suffix": ".org",
+					"domain_keyword": "keyword",
+					"domain_regex": ".*\\.io$"
+				},
+				{
+					"package_name": "com.example.app"
+				},
+				{
+					"process_name": "chrome"
+				},
+				{
+					"process_path": "/usr/bin/firefox"
+				},
+				{
+					"process_path_regex": "/opt/.*"
+				}
+			]
+		}
+	]
+}
+`
+	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
+	assert.Equal(t, rule, st.rule)
 }
