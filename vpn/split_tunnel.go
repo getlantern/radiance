@@ -106,26 +106,16 @@ func (s *SplitTunnel) IsEnabled() bool {
 func (s *SplitTunnel) Filters() Filter {
 	s.access.Lock()
 	defer s.access.Unlock()
-	f := Filter{}
-	if rule, ok := s.ruleMap[TypeDomain]; ok {
-		f.Domain = slices.Clone(rule.Domain)
-		f.DomainSuffix = slices.Clone(rule.DomainSuffix)
-		f.DomainKeyword = slices.Clone(rule.DomainKeyword)
-		f.DomainRegex = slices.Clone(rule.DomainRegex)
+	return Filter{
+		Domain:           slices.Clone(s.ruleMap[TypeDomain].Domain),
+		DomainSuffix:     slices.Clone(s.ruleMap[TypeDomainSuffix].DomainSuffix),
+		DomainKeyword:    slices.Clone(s.ruleMap[TypeDomainKeyword].DomainKeyword),
+		DomainRegex:      slices.Clone(s.ruleMap[TypeDomainRegex].DomainRegex),
+		ProcessName:      slices.Clone(s.ruleMap[TypeProcessName].ProcessName),
+		ProcessPath:      slices.Clone(s.ruleMap[TypeProcessPath].ProcessPath),
+		ProcessPathRegex: slices.Clone(s.ruleMap[TypeProcessPathRegex].ProcessPathRegex),
+		PackageName:      slices.Clone(s.ruleMap[TypePackageName].PackageName),
 	}
-	if rule, ok := s.ruleMap[TypeProcessName]; ok {
-		f.ProcessName = slices.Clone(rule.ProcessName)
-	}
-	if rule, ok := s.ruleMap[TypeProcessPath]; ok {
-		f.ProcessPath = slices.Clone(rule.ProcessPath)
-	}
-	if rule, ok := s.ruleMap[TypeProcessPathRegex]; ok {
-		f.ProcessPathRegex = slices.Clone(rule.ProcessPathRegex)
-	}
-	if rule, ok := s.ruleMap[TypePackageName]; ok {
-		f.PackageName = slices.Clone(rule.PackageName)
-	}
-	return f
 }
 
 // AddItem adds a new item to the filter of the given type.
