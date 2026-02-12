@@ -28,17 +28,25 @@ var (
 	initialized atomic.Bool
 )
 
+func Env() string {
+	e, _ := env.Get[string](env.ENV)
+	e = strings.ToLower(e)
+	return e
+}
+
 // Prod returns true if the application is running in production environment.
 // Treating ENV == "" as production is intentional: if RADIANCE_ENV is unset,
 // we default to production mode to ensure the application runs with safe, non-debug settings.
 func Prod() bool {
 	e, _ := env.Get[string](env.ENV)
+	e = strings.ToLower(e)
 	return e == "production" || e == "prod" || e == ""
 }
 
 // Dev returns true if the application is running in development environment.
 func Dev() bool {
 	e, _ := env.Get[string](env.ENV)
+	e = strings.ToLower(e)
 	return e == "development" || e == "dev"
 }
 

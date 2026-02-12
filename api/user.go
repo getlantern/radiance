@@ -14,11 +14,13 @@ import (
 
 	"github.com/1Password/srp"
 
+	"github.com/r3labs/sse/v2"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
@@ -27,25 +29,6 @@ import (
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
 // functionality.
 
-// DataCapUsageResponse represents the data cap usage response
-type DataCapUsageResponse struct {
-	// Whether data cap is enabled for this device/user
-	Enabled bool `json:"enabled"`
-	// Data cap usage details (only populated if enabled is true)
-	Usage *DataCapUsageDetails `json:"usage,omitempty"`
-}
-
-// DataCapUsageDetails contains details of the data cap usage
-type DataCapUsageDetails struct {
-	BytesAllotted      string `json:"bytesAllotted"`
-	BytesUsed          string `json:"bytesUsed"`
-	AllotmentStartTime string `json:"allotmentStartTime"`
-	AllotmentEndTime   string `json:"allotmentEndTime"`
-}
-
-// Tier is the level of subscription a user is currently at.
-type Tier int
-
 const (
 	saltFileName = ".salt"
 	baseURL      = "https://df.iantem.io/api/v1"
@@ -53,7 +36,6 @@ const (
 )
 
 // pro-server requests
-
 type UserDataResponse struct {
 	*protos.BaseResponse           `json:",inline"`
 	*protos.LoginResponse_UserData `json:",inline"`
@@ -134,6 +116,22 @@ func (a *APIClient) Devices() ([]settings.Device, error) {
 	return settings.Devices()
 }
 
+// DataCapUsageResponse represents the data cap usage response
+type DataCapUsageResponse struct {
+	// Whether data cap is enabled for this device/user
+	Enabled bool `json:"enabled"`
+	// Data cap usage details (only populated if enabled is true)
+	Usage *DataCapUsageDetails `json:"usage,omitempty"`
+}
+
+// DataCapUsageDetails contains details of the data cap usage
+type DataCapUsageDetails struct {
+	BytesAllotted      string `json:"bytesAllotted"`
+	BytesUsed          string `json:"bytesUsed"`
+	AllotmentStartTime string `json:"allotmentStartTime"`
+	AllotmentEndTime   string `json:"allotmentEndTime"`
+}
+
 // DataCapInfo returns information about this user's data cap
 func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
@@ -142,11 +140,66 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	headers := map[string]string{
 		backend.ContentTypeHeader: "application/json",
 	}
-	getUrl := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
+	getURL := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
 	newReq := authWc.NewRequest(nil, headers, nil)
-	err := authWc.Get(ctx, getUrl, newReq, &datacap)
+	err := authWc.Get(ctx, getURL, newReq, &datacap)
 	return withMarshalJsonString(datacap, err)
+}
+
+type DataCapChangeEvent struct {
+	events.Event
+	*DataCapUsageResponse
+}
+
+// DataCapStream connects to the datacap SSE endpoint and continuously reads events.
+// It sends events whenever there is an update in datacap usage with DataCapChangeEvent.
+// To receive those events use events.Subscribe(&DataCapChangeEvent{}, func(evt DataCapChangeEvent) { ... })
+func (a *APIClient) DataCapStream(ctx context.Context) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
+	defer span.End()
+
+	getURL := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
+	authWc := authWebClient()
+	fullURL := baseURL + getURL
+	sseClient := sse.NewClient(fullURL)
+	sseClient.Headers = map[string]string{
+		backend.ContentTypeHeader: "application/json",
+		backend.AcceptHeader:      "text/event-stream",
+		backend.AppNameHeader:     common.Name,
+		backend.VersionHeader:     common.Version,
+		backend.PlatformHeader:    common.Platform,
+	}
+	sseClient.Connection.Transport = authWc.client.GetClient().Transport
+	// Connection callbacks
+	sseClient.OnConnect(func(c *sse.Client) {
+		slog.Debug("Connected to datacap stream")
+	})
+
+	sseClient.OnDisconnect(func(c *sse.Client) {
+		slog.Debug("Disconnected from datacap stream")
+	})
+	// Start listening to events
+	return sseClient.SubscribeRawWithContext(ctx, func(msg *sse.Event) {
+		eventType := string(msg.Event)
+		data := msg.Data
+		switch eventType {
+		case "datacap":
+			var datacap DataCapUsageResponse
+			err := json.Unmarshal(data, &datacap)
+			if err != nil {
+				slog.Error("datacap stream unmarshal error", "error", err)
+				return
+			}
+			events.Emit(DataCapChangeEvent{DataCapUsageResponse: &datacap})
+		case "cap_exhausted":
+			slog.Warn("Datacap exhausted ")
+			return
+
+		default:
+			// Heartbeat or unknown event - silently ignore
+		}
+	})
 }
 
 // SignUp signs the user up for an account.

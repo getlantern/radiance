@@ -365,3 +365,12 @@ func TestServers(t *testing.T) {
 		assert.Len(t, servers[SGUser].Endpoints, 0)
 	})
 }
+
+func TestRetryableHTTPClient(t *testing.T) {
+	cli := retryableHTTPClient().StandardClient()
+	request, err := http.NewRequest(http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
+	require.NoError(t, err)
+	resp, err := cli.Do(request)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
