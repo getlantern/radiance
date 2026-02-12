@@ -198,17 +198,14 @@ func (f Filter) String() string {
 
 type actionFn func(slice []string, items []string) []string
 
-var validFilterTypes = []string{TypeDomain, TypeDomainSuffix, TypeDomainKeyword, TypeDomainRegex, TypePackageName, TypeProcessName, TypeProcessPath, TypeProcessPathRegex}
-
 func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) error {
 	s.access.Lock()
 	defer s.access.Unlock()
-
-	if !slices.Contains(validFilterTypes, filterType) {
+	rule, exist := s.ruleMap[filterType]
+	if !exist {
 		return fmt.Errorf("unsupported filter type: %s", filterType)
 	}
 
-	rule := s.ruleMap[filterType]
 	items := []string{item}
 	switch filterType {
 	case TypeDomain:
