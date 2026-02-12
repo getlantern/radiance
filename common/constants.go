@@ -15,7 +15,7 @@ const (
 	LogFileName        = "lantern.log"
 	ConfigFileName     = "config.json"
 	ServersFileName    = "servers.json"
-	DefaultHTTPTimeout = (60 * time.Second)
+	DefaultHTTPTimeout = (10 * time.Minute)
 )
 
 var AppVersion = Version
