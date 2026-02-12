@@ -235,47 +235,14 @@ func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
 
-	// Update domain rule
-	if len(diff.Domain) > 0 || len(diff.DomainSuffix) > 0 ||
-		len(diff.DomainKeyword) > 0 || len(diff.DomainRegex) > 0 {
-		rule := s.ruleMap[TypeDomain]
-		if len(diff.Domain) > 0 {
-			rule.Domain = fn(rule.Domain, diff.Domain)
-		}
-		if len(diff.DomainSuffix) > 0 {
-			rule.DomainSuffix = fn(rule.DomainSuffix, diff.DomainSuffix)
-		}
-		if len(diff.DomainKeyword) > 0 {
-			rule.DomainKeyword = fn(rule.DomainKeyword, diff.DomainKeyword)
-		}
-		if len(diff.DomainRegex) > 0 {
-			rule.DomainRegex = fn(rule.DomainRegex, diff.DomainRegex)
-		}
-	}
-
-	// Update processName rule
-	if len(diff.ProcessName) > 0 {
-		rule := s.ruleMap[TypeProcessName]
-		rule.ProcessName = fn(rule.ProcessName, diff.ProcessName)
-	}
-
-	// Update processPath rule
-	if len(diff.ProcessPath) > 0 {
-		rule := s.ruleMap[TypeProcessPath]
-		rule.ProcessPath = fn(rule.ProcessPath, diff.ProcessPath)
-	}
-
-	// Update processPathRegex rule
-	if len(diff.ProcessPathRegex) > 0 {
-		rule := s.ruleMap[TypeProcessPathRegex]
-		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, diff.ProcessPathRegex)
-	}
-
-	// Update packageName rule
-	if len(diff.PackageName) > 0 {
-		rule := s.ruleMap[TypePackageName]
-		rule.PackageName = fn(rule.PackageName, diff.PackageName)
-	}
+	s.ruleMap[TypeDomain].Domain = fn(s.ruleMap[TypeDomain].Domain, diff.Domain)
+	s.ruleMap[TypeDomainSuffix].DomainSuffix = fn(s.ruleMap[TypeDomainSuffix].DomainSuffix, diff.DomainSuffix)
+	s.ruleMap[TypeDomainKeyword].DomainKeyword = fn(s.ruleMap[TypeDomainKeyword].DomainKeyword, diff.DomainKeyword)
+	s.ruleMap[TypeDomainRegex].DomainRegex = fn(s.ruleMap[TypeDomainRegex].DomainRegex, diff.DomainRegex)
+	s.ruleMap[TypeProcessName].ProcessName = fn(s.ruleMap[TypeProcessName].ProcessName, diff.ProcessName)
+	s.ruleMap[TypeProcessPath].ProcessPath = fn(s.ruleMap[TypeProcessPath].ProcessPath, diff.ProcessPath)
+	s.ruleMap[TypeProcessPathRegex].ProcessPathRegex = fn(s.ruleMap[TypeProcessPathRegex].ProcessPathRegex, diff.ProcessPathRegex)
+	s.ruleMap[TypePackageName].PackageName = fn(s.ruleMap[TypePackageName].PackageName, diff.PackageName)
 }
 
 func merge(slice []string, items []string) []string {
