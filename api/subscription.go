@@ -10,13 +10,12 @@ import (
 
 	"github.com/getlantern/radiance/api/protos"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
 )
 
-const proServerURL = "https://api.getiantem.org"
-const stageProServerURL = "https://api.staging.iantem.io/pro-server"
 
 type (
 	SubscriptionService string
@@ -135,7 +134,7 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 func (ac *APIClient) StripeBillingPortalUrl(ctx context.Context) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "stripe_billing_portal_url")
 	defer span.End()
-	portalURL, err := url.Parse(fmt.Sprintf("%s/%s", stageProServerURL, "stripe-billing-portal"))
+	portalURL, err := url.Parse(fmt.Sprintf("%s/%s", common.GetProServerURL(), "stripe-billing-portal"))
 	if err != nil {
 		slog.Error("parsing portal URL", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("parsing portal URL: %w", err))

@@ -44,7 +44,6 @@ require (
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/sagernet/sing v0.7.18
 	github.com/sagernet/sing-box v1.12.13
-	github.com/sagernet/sing-dns v0.4.6
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.37.0
