@@ -53,6 +53,7 @@ func Dev() bool {
 // Stage returns true if the application is running in staging environment.
 func Stage() bool {
 	e, _ := env.Get[string](env.ENV)
+	e = strings.ToLower(e)
 	return e == "stage" || e == "staging"
 }
 
