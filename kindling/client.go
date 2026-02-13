@@ -117,9 +117,6 @@ func NewKindling() kindling.Kindling {
 			// Most endpoints use df.iantem.io, but for some historical reasons
 			// "pro-server" calls still go to api.getiantem.org.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
-			// kindling.WithDomainFronting(f),
-			// Kindling will skip amp transports if the request has a payload larger than 6kb
-			kindling.WithAMPCache(ampClient),
 		)
 	}
 	return kindling.NewKindling("radiance",
@@ -129,7 +126,6 @@ func NewKindling() kindling.Kindling {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
 		kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
-		// kindling.WithDomainFronting(f),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
 		kindling.WithDNSTunnel(dnsttOptions),
