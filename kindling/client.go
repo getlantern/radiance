@@ -11,7 +11,6 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
@@ -87,12 +86,6 @@ func NewKindling() kindling.Kindling {
 		span.RecordError(err)
 	}
 
-	dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
-	if err != nil {
-		slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
-		span.RecordError(err)
-	}
-
 	stopUpdater = cancel
 	closeTransports = []func() error{
 		func() error {
@@ -102,9 +95,6 @@ func NewKindling() kindling.Kindling {
 			return nil
 		},
 		func() error {
-			if dnsttOptions != nil {
-				dnsttOptions.Close()
-			}
 			return nil
 		},
 	}
@@ -117,7 +107,6 @@ func NewKindling() kindling.Kindling {
 		kindling.WithDomainFronting(f),
 		// Kindling will skip amp transports if the request has a payload larger than 6kb
 		kindling.WithAMPCache(ampClient),
-		kindling.WithDNSTunnel(dnsttOptions),
 	)
 }
 
