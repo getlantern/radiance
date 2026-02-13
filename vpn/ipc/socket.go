@@ -1,0 +1,48 @@
+//go:build !android && !ios && !windows
+
+package ipc
+
+import (
+	"fmt"
+	"os"
+	"os/user"
+	"runtime"
+	"strconv"
+)
+
+// use a var so it can be overridden in tests
+var _socketPath = "/var/run/lantern/lantern.sock"
+
+// setSocketPathForTesting is only used for testing.
+func setSocketPathForTesting(path string) {
+	_socketPath = path
+}
+
+func socketPath() string {
+	return _socketPath
+}
+
+func setPermissions() error {
+	path := socketPath()
+	if runtime.GOOS == "linux" {
+		// we'll check if user is sudoer to restrict access
+		return os.Chmod(socketPath(), 0666)
+	}
+
+	// chown admin group and let the OS restrict access
+	group, err := user.LookupGroup("admin")
+	if err != nil {
+		return fmt.Errorf("lookup admin group: %w", err)
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return fmt.Errorf("convert admin gid %s: %w", group.Gid, err)
+	}
+	if err := os.Chown(path, 0, gid); err != nil {
+		return fmt.Errorf("chown %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0660); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	return nil
+}

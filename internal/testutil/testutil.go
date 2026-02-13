@@ -1,11 +1,10 @@
-package common
+package testutil
 
 import (
-	"runtime"
 	"testing"
+	_ "unsafe" // for go:linkname
 
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func SetPathsForTesting(t *testing.T) {
@@ -16,7 +15,8 @@ func SetPathsForTesting(t *testing.T) {
 	tmp := t.TempDir()
 	settings.Set(settings.DataPathKey, tmp)
 	settings.Set(settings.LogPathKey, tmp)
-	if runtime.GOOS != "windows" {
-		ipc.SetSocketPath(settings.GetString(settings.DataPathKey))
-	}
+	ipc_serverTestSetup(tmp + "/lantern.sock")
 }
+
+//go:linkname ipc_serverTestSetup
+func ipc_serverTestSetup(path string)

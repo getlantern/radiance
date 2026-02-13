@@ -13,6 +13,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/clashapi"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/vpn/ipc"
 	"github.com/getlantern/radiance/vpn/rvpn"
@@ -25,7 +26,6 @@ type TunnelService struct {
 	tunnel *tunnel
 
 	platformIfce rvpn.PlatformInterface
-	dataPath     string
 	logger       *slog.Logger
 
 	mu sync.Mutex
@@ -57,7 +57,6 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 	}
 	return &TunnelService{
 		platformIfce: platformIfce,
-		dataPath:     dataPath,
 		logger:       logger,
 	}
 }
@@ -67,24 +66,34 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 func (s *TunnelService) Start(ctx context.Context, group string, tag string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.tunnel != nil && s.tunnel.Status() != ipc.StatusClosed {
+	if s.tunnel != nil {
 		s.logger.Warn("tunnel already started")
 		return errors.New("tunnel already started")
 	}
 	s.logger.Debug("Starting tunnel", "group", group, "tag", tag)
-	_ = newSplitTunnel(s.dataPath)
-	return s.start(ctx, group, tag)
+	if err := s.start(ctx); err != nil {
+		return err
+	}
+	if group != "" {
+		if err := s.tunnel.selectOutbound(group, tag); err != nil {
+			slog.Error("Failed to select outbound", "group", group, "tag", tag, "error", err)
+			return fmt.Errorf("selecting outbound: %w", err)
+		}
+	}
+	return nil
 }
 
-func (s *TunnelService) start(ctx context.Context, group string, tag string) error {
-	opts, err := buildOptions(ctx, group, s.dataPath)
+func (s *TunnelService) start(ctx context.Context) error {
+	path := settings.GetString(settings.DataPathKey)
+	_ = newSplitTunnel(path)
+	opts, err := buildOptions(ctx, path)
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
 	t := tunnel{
-		dataPath: s.dataPath,
+		dataPath: path,
 	}
-	if err := t.start(group, tag, opts, s.platformIfce); err != nil {
+	if err := t.start(opts, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
 	s.tunnel = &t
@@ -98,18 +107,25 @@ func (s *TunnelService) Close() error {
 	if s.tunnel == nil {
 		return nil
 	}
-	t := s.tunnel
-	s.tunnel = nil
-	defer runtime.GC()
-
-	s.logger.Info("Closing tunnel")
-	if err := t.close(); err != nil {
+	if err := s.close(); err != nil {
 		return err
 	}
 	if s.platformIfce != nil {
 		s.platformIfce.PostServiceClose()
 	}
+	return nil
+}
+
+func (s *TunnelService) close() error {
+	t := s.tunnel
+	s.tunnel = nil
+
+	s.logger.Info("Closing tunnel")
+	if err := t.close(); err != nil {
+		return err
+	}
 	s.logger.Debug("Tunnel closed")
+	runtime.GC()
 	return nil
 }
 
@@ -137,17 +153,12 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 	}
 
 	defer s.mu.Unlock()
-	group := s.tunnel.clashServer.Mode()
-	tag := s.tunnel.cacheFile.LoadSelected(group)
-
-	t := s.tunnel
-	s.tunnel = nil
-	if err := t.close(); err != nil {
+	if err := s.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	if err := s.start(ctx, group, tag); err != nil {
-		s.logger.Error("Failed to restart tunnel", "error", err, "group", group, "tag", tag)
-		return fmt.Errorf("failed to restart tunnel: %w", err)
+	if err := s.start(ctx); err != nil {
+		s.logger.Error("starting tunnel", "error", err)
+		return fmt.Errorf("starting tunnel: %w", err)
 	}
 	s.logger.Info("Tunnel restarted successfully")
 	return nil

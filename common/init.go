@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
@@ -21,7 +22,6 @@ import (
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 var (
@@ -102,9 +102,6 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 			return fmt.Errorf("start watching settings file: %w", err)
 		}
 	} else {
-		if !IsWindows() {
-			ipc.SetSocketPath(data)
-		}
 		settings.Set(settings.DataPathKey, data)
 		settings.Set(settings.LogPathKey, logs)
 		settings.Set(settings.LogLevelKey, logLevel)
@@ -112,7 +109,9 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 
 	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	createCrashReporter()
-	logModuleInfo()
+	if Dev() {
+		logModuleInfo()
+	}
 	return nil
 }
 
@@ -199,6 +198,9 @@ func initLogger(logPath, level string) error {
 	} else {
 		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
+	runtime.AddCleanup(&logWriter, func(f *os.File) {
+		f.Close()
+	}, f)
 	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     lvl,

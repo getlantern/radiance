@@ -2,18 +2,24 @@ package common
 
 import "runtime"
 
+const Platform = runtime.GOOS
+
 func IsAndroid() bool {
-	return runtime.GOOS == "android"
+	return Platform == "android"
 }
 
 func IsIOS() bool {
-	return runtime.GOOS == "ios"
+	return Platform == "ios"
 }
 
 func IsMacOS() bool {
-	return runtime.GOOS == "darwin"
+	return Platform == "darwin"
 }
 
 func IsWindows() bool {
-	return runtime.GOOS == "windows"
+	return Platform == "windows"
+}
+
+func IsMobile() bool {
+	return IsAndroid() || IsIOS()
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -17,8 +18,8 @@ import (
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"go.opentelemetry.io/otel"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/internal"
 )
 
 var (
@@ -76,6 +77,14 @@ func NewServer(service Service) *Server {
 	}
 	s.vpnStatus.Store(Disconnected)
 	s.router.Use(log, tracer)
+
+	// Only add auth middleware if not running on mobile, since mobile platforms have their own
+	// sandboxing and permission models.
+	addAuth := !common.IsMobile() && !_testing
+	if addAuth {
+		s.router.Use(authPeer)
+	}
+
 	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -92,29 +101,38 @@ func NewServer(service Service) *Server {
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
-	return s
-}
+	s.router.Post(setSettingsPathEndpoint, s.setSettingsPathHandler)
 
-// Start starts the IPC server. The socket file will be created in the "basePath" directory.
-// On Windows, the "basePath" is ignored and a default named pipe path is used.
-func (s *Server) Start(basePath string) error {
-	if s.closed.Load() {
-		return errors.New("IPC server is closed")
-	}
-	l, err := listen(basePath)
-	if err != nil {
-		return fmt.Errorf("IPC server: listen: %w", err)
-	}
-	slog.Log(nil, internal.LevelTrace, "IPC listening", "address", l.Addr().String())
 	svr := &http.Server{
 		Handler:      s.router,
 		ReadTimeout:  time.Second * 5,
 		WriteTimeout: time.Second * 5,
 	}
+	if addAuth {
+		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+			peer, err := getConnPeer(c)
+			if err != nil {
+				slog.Error("Failed to get peer credentials", "error", err)
+			}
+			return contextWithUsr(ctx, peer)
+		}
+	}
 	s.svr = svr
+	return s
+}
+
+// Start begins listening for incoming IPC requests.
+func (s *Server) Start() error {
+	if s.closed.Load() {
+		return errors.New("IPC server is closed")
+	}
+	l, err := listen()
+	if err != nil {
+		return fmt.Errorf("IPC server: listen: %w", err)
+	}
 	go func() {
 		slog.Info("IPC server started", "address", l.Addr().String())
-		err := svr.Serve(l)
+		err := s.svr.Serve(l)
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("IPC server", "error", err)
 		}

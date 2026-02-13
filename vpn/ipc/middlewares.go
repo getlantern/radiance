@@ -6,13 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/traces"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/traces"
 )
 
 func log(h http.Handler) http.Handler {
@@ -42,4 +43,23 @@ func tracer(next http.Handler) http.Handler {
 			traces.RecordError(ctx, fmt.Errorf("status %d: %s", ww.Status(), buf.String()))
 		}
 	})
+}
+
+func authPeer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		peer := usrFromContext(r.Context())
+		if peer.uid == "" {
+			http.Error(w, "could not get credentials", http.StatusUnauthorized)
+			return
+		}
+		if !peerCanAccess(peer) {
+			http.Error(w, "permission denied", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func peerCanAccess(peer usr) bool {
+	return peer.isAdmin
 }

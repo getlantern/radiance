@@ -5,13 +5,16 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/getlantern/radiance/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -71,7 +74,6 @@ dnsttConfigs:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			updated := make(chan struct{})
-			defer close(updated)
 			if tt.expectUpdate {
 				events.Subscribe(func(e DNSTTUpdateEvent) {
 					assert.NotEmpty(t, e.YML)
@@ -106,4 +108,78 @@ dnsttConfigs:
 			}
 		})
 	}
+}
+
+const validDNSTTYAML = `
+dnsttConfigs:
+  - domain: t.iantem.io
+    publicKey: 405eb9e22d806e3a0a8e667c6665a321c8a6a35fa680ed814716a66d7ad84977
+    dohResolver: https://cloudflare-dns.com/dns-query
+`
+
+const invalidDNSTTYAML = `
+dnsttConfigs:
+  - domain: t.example.com
+    publicKey:
+`
+
+func TestDNSTTOptions(t *testing.T) {
+	logger := bytes.NewBuffer(nil)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelDebug,
+	})))
+	waitFor = 15 * time.Second
+	t.Run("embedded config only", func(t *testing.T) {
+		dnst, err := DNSTTOptions(context.Background(), "", logger)
+		assert.NoError(t, err)
+
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.NoError(t, dnst.Close())
+	})
+
+	t.Run("local config overrides embedded config", func(t *testing.T) {
+		tmp, err := os.CreateTemp(t.TempDir(), "dnstt-*.yml.gz")
+		require.NoError(t, err)
+		defer tmp.Close()
+		_, err = tmp.Write(gzipYAML([]byte(validDNSTTYAML)))
+		require.NoError(t, err)
+		dnst, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
+		require.NoError(t, err)
+
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.Len(t, tr.options, 1)
+		assert.NoError(t, dnst.Close())
+	})
+
+	t.Run("invalid local config falls back to embedded", func(t *testing.T) {
+		dir := t.TempDir()
+		tmp, err := os.CreateTemp(dir, "dnstt-invalid-*.yml.gz")
+		require.NoError(t, err)
+		defer tmp.Close()
+
+		_, err = tmp.Write(gzipYAML([]byte(invalidDNSTTYAML)))
+		require.NoError(t, err)
+		dnst, err := DNSTTOptions(context.Background(), tmp.Name(), logger)
+		require.NoError(t, err)
+
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.NoError(t, dnst.Close())
+	})
+
+	t.Run("context cancellation does not block", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		dnst, err := DNSTTOptions(ctx, "", logger)
+		assert.NoError(t, err)
+		tr, ok := dnst.(*multipleDNSTTTransport)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.NoError(t, dnst.Close())
+	})
 }

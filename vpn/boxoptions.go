@@ -26,6 +26,7 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
@@ -128,7 +129,7 @@ func baseOpts(basePath string) O.Options {
 		},
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
-				DefaultMode:        servers.SGLantern,
+				DefaultMode:        autoAllTag,
 				ModeList:           []string{servers.SGLantern, servers.SGUser, autoAllTag},
 				ExternalController: "", // intentionally left empty
 			},
@@ -237,18 +238,17 @@ func baseRoutingRules() []O.Rule {
 }
 
 // buildOptions builds the box options using the config options and user servers.
-func buildOptions(ctx context.Context, group, path string) (O.Options, error) {
+func buildOptions(ctx context.Context, path string) (O.Options, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "buildOptions")
 	defer span.End()
 
-	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "group", group, "path", path)
+	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "path", path)
 
 	opts := baseOpts(path)
 	slog.Debug("Base options initialized")
 
 	// update default options and paths
 	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
-	opts.Experimental.ClashAPI.DefaultMode = group
 
 	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
 		"cacheFilePath", opts.Experimental.CacheFile.Path,
@@ -375,7 +375,7 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
 		return buf
 	}
-	if err := os.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
+	if err := atomicfile.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
 		slog.Warn("failed to write options file", slog.Any("error", err))
 		return buf
 	}
