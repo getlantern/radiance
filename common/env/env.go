@@ -91,13 +91,16 @@ func Get[T any](key Key) (T, bool) {
 	return zero, false
 }
 
-// Set updates the env variable in the in-memory map so that subsequent Get calls
-// return the new value. This is needed because init() only runs once at startup,
-// so os.Setenv alone won't be picked up by Get.
-func Set(key Key, value string) {
-	parseAndSet(key, value)
-	// Also set in the OS environment for consistency
-	os.Setenv(key, value)
+// SetStagingEnv sets the RADIANCE_ENV variable to "staging" if enable is true,
+// or removes/unsets it if enable is false. No other values are modified.
+func SetStagingEnv(enable bool) {
+	if enable {
+		envVars[ENV] = "stage"
+		os.Setenv(ENV, "stage")
+	} else {
+		delete(envVars, ENV)
+		os.Unsetenv(ENV)
+	}
 }
 
 func parseAndSet(key, value string) {
