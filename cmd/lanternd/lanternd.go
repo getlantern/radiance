@@ -20,6 +20,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -60,6 +61,10 @@ func main() {
 		slog.Info("Reloading settings", "path", path)
 		if err := reloadSettings(path); err != nil {
 			log.Fatalf("Failed to reload settings from %s: %v\n", path, err)
+		}
+		dataPath = settings.GetString(settings.DataPathKey)
+		if err := reinitLogger(); err != nil {
+			log.Fatalf("Failed to reinitialize logger: %v\n", err)
 		}
 		settings.SetReadOnly(true)
 	} else {
@@ -102,6 +107,17 @@ func initIPC(dataPath, logPath, logLevel string) (*ipc.Server, error) {
 		return nil, traces.RecordError(ctx, fmt.Errorf("start IPC server: %w", err))
 	}
 	return server, nil
+}
+
+func reinitLogger() error {
+	path := filepath.Join(settings.GetString(settings.LogPathKey), common.LogFileName)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+	lvl, _ := internal.ParseLogLevel(settings.GetString(settings.LogLevelKey))
+	slog.SetDefault(internal.NewLogger(f, lvl))
+	return nil
 }
 
 //go:linkname reloadSettings github.com/getlantern/radiance/common/settings.loadSettings

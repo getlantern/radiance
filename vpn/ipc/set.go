@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 
 	_ "unsafe" // for go:linkname
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal"
 )
 
 // this endpoint is used exclusively to set the data path on Linux since we're running under systemd
@@ -61,9 +65,24 @@ func (s *Server) setSettingsPathHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := reinitLogger(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	slog.Debug("Updated data path", "new", path)
 	settings.SetReadOnly(true)
 	w.WriteHeader(http.StatusOK)
+}
+
+func reinitLogger() error {
+	path := filepath.Join(settings.GetString(settings.LogPathKey), common.LogFileName)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+	lvl, _ := internal.ParseLogLevel(settings.GetString(settings.LogLevelKey))
+	slog.SetDefault(internal.NewLogger(f, lvl))
+	return nil
 }
 
 //go:linkname reloadSettings github.com/getlantern/radiance/common/settings.loadSettings
