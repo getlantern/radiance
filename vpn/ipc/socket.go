@@ -27,7 +27,7 @@ func socketPath() string {
 func setPermissions() error {
 	path := socketPath()
 	if runtime.GOOS == "linux" {
-		// Linux daemon access is scoped to the dedicated lantern control group.
+		// On Linux, restrict socket access to root:lantern.
 		group, err := user.LookupGroup(controlGroup)
 		if err != nil {
 			return fmt.Errorf("lookup %s group: %w", controlGroup, err)
