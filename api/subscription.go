@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-
 type (
 	SubscriptionService string
 	SubscriptionType    string
@@ -96,11 +95,18 @@ func (ac *APIClient) NewStripeSubscription(ctx context.Context, email, planID st
 	return withMarshalJsonString(resp, err)
 }
 
+type VerifySubscriptionResponse struct {
+	Status          string `json:"status"`
+	SubscriptionId  string `json:"subscriptionId"`
+	ActualUserId    int64  `json:"actualUserId" json:",omitempty"`
+	ActualUserToken string `json:"actualUserToken" json:",omitempty"`
+}
+
 // VerifySubscription verifies a subscription for a given service (Google or Apple). data
 // should contain the information required by service to verify the subscription, such as the
 // purchase token for Google Play or the receipt for Apple. The status and subscription ID are returned
 // along with any error that occurred during the verification process.
-func (ac *APIClient) VerifySubscription(ctx context.Context, service SubscriptionService, data map[string]string) (status, subID string, err error) {
+func (ac *APIClient) VerifySubscription(ctx context.Context, service SubscriptionService, data map[string]string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "verify_subscription")
 	defer span.End()
 
@@ -112,22 +118,19 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 	case AppleService:
 		path = "/purchase-apple-subscription"
 	default:
-		return "", "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
+		return "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}
 
 	proWC := ac.proWebClient()
 	req := proWC.NewRequest(nil, nil, data)
-	type response struct {
-		Status         string
-		SubscriptionId string
-	}
-	var resp response
-	err = proWC.Post(ctx, path, req, &resp)
+	var resp VerifySubscriptionResponse
+	err := proWC.Post(ctx, path, req, &resp)
 	if err != nil {
 		slog.Error("verifying subscription", "error", err)
-		return "", "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
+		return "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
 	}
-	return resp.Status, resp.SubscriptionId, nil
+	return withMarshalJsonString(resp, nil)
+
 }
 
 // StripeBillingPortalUrl generates the Stripe billing portal URL for the given user ID.
