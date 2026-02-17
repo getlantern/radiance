@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -195,59 +194,7 @@ func initLogger(logPath, level string) error {
 	runtime.AddCleanup(&logWriter, func(f *os.File) {
 		f.Close()
 	}, f)
-	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     lvl,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			switch a.Key {
-			case slog.TimeKey:
-				if t, ok := a.Value.Any().(time.Time); ok {
-					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
-				}
-				return a
-			case slog.SourceKey:
-				source, ok := a.Value.Any().(*slog.Source)
-				if !ok {
-					return a
-				}
-				// remove github.com/<username> to get pkg name
-				var service, fn string
-				fields := strings.SplitN(source.Function, "/", 4)
-				switch len(fields) {
-				case 0, 1, 2:
-					file := filepath.Base(source.File)
-					a.Value = slog.StringValue(fmt.Sprintf("%s:%d", file, source.Line))
-					return a
-				case 3:
-					pf := strings.SplitN(fields[2], ".", 2)
-					service, fn = pf[0], pf[1]
-				default:
-					service = fields[2]
-					fn = strings.SplitN(fields[3], ".", 2)[1]
-				}
-
-				_, file, fnd := strings.Cut(source.File, service+"/")
-				if !fnd {
-					file = filepath.Base(source.File)
-				}
-				src := slog.GroupValue(
-					slog.String("func", fn),
-					slog.String("file", fmt.Sprintf("%s:%d", file, source.Line)),
-				)
-				a.Value = slog.GroupValue(
-					slog.String("service", service),
-					slog.Any("source", src),
-				)
-				a.Key = ""
-			case slog.LevelKey:
-				// format the log level to account for the custom levels defined in internal/util.go, i.e. trace
-				// otherwise, slog will print as "DEBUG-4" (trace) or similar
-				level := a.Value.Any().(slog.Level)
-				a.Value = slog.StringValue(internal.FormatLogLevel(level))
-			}
-			return a
-		},
-	}))
+	logger := internal.NewLogger(logWriter, lvl)
 	if !loggingToStdOut {
 		if IsWindows() {
 			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", logPath, internal.FormatLogLevel(lvl))
