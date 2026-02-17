@@ -88,9 +88,39 @@ func getConnPeer(conn net.Conn) (p usr, err error) {
 	if err != nil {
 		return p, fmt.Errorf("lookup user id %v: %w", uid, err)
 	}
+
+	if runtime.GOOS == "linux" {
+		inControlGroup, err := userInGroup(u, controlGroup)
+		if err != nil {
+			return p, err
+		}
+		return usr{
+			uid:            uidStr,
+			uname:          u.Username,
+			inControlGroup: inControlGroup,
+		}, nil
+	}
+
 	return usr{
 		uid:     uidStr,
 		uname:   u.Username,
 		isAdmin: canSudo(u.Username),
 	}, nil
+}
+
+func userInGroup(u *user.User, groupName string) (bool, error) {
+	group, err := user.LookupGroup(groupName)
+	if err != nil {
+		return false, fmt.Errorf("lookup %s group: %w", groupName, err)
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return false, fmt.Errorf("lookup groups for %s: %w", u.Username, err)
+	}
+	for _, gid := range gids {
+		if gid == group.Gid {
+			return true, nil
+		}
+	}
+	return false, nil
 }

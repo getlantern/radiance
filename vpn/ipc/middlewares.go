@@ -61,5 +61,5 @@ func authPeer(next http.Handler) http.Handler {
 }
 
 func peerCanAccess(peer usr) bool {
-	return peer.isAdmin
+	return peer.isAdmin || peer.inControlGroup
 }
