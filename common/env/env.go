@@ -91,21 +91,18 @@ func Get[T any](key Key) (T, bool) {
 	return zero, false
 }
 
-// SetStagingEnv sets the RADIANCE_ENV variable to "staging" if enable is true,
-// or removes/unsets it if enable is false. No other values are modified.
+// SetStagingEnv sets the environment to staging if it has not already been set. This is used for tests that need to interact with staging services,
+// but should not override an environment that has already been set.
 func SetStagingEnv(enable bool) {
-	if enable {
-		envVars[ENV] = "stage"
-		os.Setenv(ENV, "stage")
-	} else {
-		delete(envVars, ENV)
-		os.Unsetenv(ENV)
+	if _, exists := envVars[ENV]; exists {
+		return
 	}
+	slog.Info("setting environment to staging for testing")
+	envVars[ENV] = "staging"
 }
 
 func parseAndSet(key, value string) {
 	// Attempt to parse as a boolean
-	slog.Debug("Parsing env variable", "key", key, "value", value)
 	if b, err := strconv.ParseBool(value); err == nil {
 		envVars[key] = b
 		return
