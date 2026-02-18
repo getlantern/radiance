@@ -91,12 +91,9 @@ func Get[T any](key Key) (T, bool) {
 	return zero, false
 }
 
-// SetStagingEnv sets the environment to staging if it has not already been set. This is used for tests that need to interact with staging services,
-// but should not override an environment that has already been set.
-func SetStagingEnv(enable bool) {
-	// if _, exists := envVars[ENV]; exists {
-	// 	return
-	// }
+// SetStagingEnv sets the environment to staging if it has not already been set.
+// This is used for testing that need to interact with staging services,
+func SetStagingEnv() {
 	slog.Info("setting environment to staging for testing")
 	envVars[ENV] = "staging"
 	envVars[PrintCurl] = true
