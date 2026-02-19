@@ -11,6 +11,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
@@ -23,6 +24,13 @@ var (
 	kindlingMutex   sync.Mutex
 	stopUpdater     func()
 	closeTransports []func() error
+	// EnabledTransports is used for testing purposes for enabling/disabling kindling transports
+	EnabledTransports = map[string]bool{
+		"dnstt":     false,
+		"amp":       true,
+		"proxyless": true,
+		"fronted":   true,
+	}
 )
 
 // HTTPClient returns a http client with kindling transport
@@ -73,41 +81,59 @@ func NewKindling() kindling.Kindling {
 	)
 	defer span.End()
 
+	closeTransports = []func() error{}
+	kindlingOptions := []kindling.Option{
+		kindling.WithPanicListener(reporting.PanicListener),
+		kindling.WithLogWriter(logger),
+	}
+
 	updaterCtx, cancel := context.WithCancel(ctx)
-	f, err := fronted.NewFronted(updaterCtx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
-	if err != nil {
-		slog.Error("failed to create fronted client", slog.Any("error", err))
-		span.RecordError(err)
-	}
-
-	ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
-	if err != nil {
-		slog.Error("failed to create amp client", slog.Any("error", err))
-		span.RecordError(err)
-	}
-
-	stopUpdater = cancel
-	closeTransports = []func() error{
-		func() error {
+	if enabled := EnabledTransports["fronted"]; enabled {
+		f, err := fronted.NewFronted(updaterCtx, reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), logger)
+		if err != nil {
+			slog.Error("failed to create fronted client", slog.Any("error", err))
+			span.RecordError(err)
+		}
+		closeTransports = append(closeTransports, func() error {
 			if f != nil {
 				f.Close()
 			}
 			return nil
-		},
-		func() error {
-			return nil
-		},
+		})
+		kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
 	}
-	return kindling.NewKindling("radiance",
-		kindling.WithPanicListener(reporting.PanicListener),
-		kindling.WithLogWriter(logger),
+
+	if enabled := EnabledTransports["amp"]; enabled {
+		ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
+		if err != nil {
+			slog.Error("failed to create amp client", slog.Any("error", err))
+			span.RecordError(err)
+		}
+		// Kindling will skip amp transports if the request has a payload larger than 6kb
+		kindlingOptions = append(kindlingOptions, kindling.WithAMPCache(ampClient))
+	}
+
+	if enabled := EnabledTransports["dnstt"]; enabled {
+		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
+		if err != nil {
+			slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
+			span.RecordError(err)
+		}
+		if dnsttOptions != nil {
+			dnsttOptions.Close()
+		}
+		closeTransports = append(closeTransports, dnsttOptions.Close)
+		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
+	}
+
+	if enabled := EnabledTransports["proxyless"]; enabled {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
-		kindling.WithProxyless("df.iantem.io", "api.getiantem.org"),
-		kindling.WithDomainFronting(f),
-		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindling.WithAMPCache(ampClient),
-	)
+		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
+	}
+
+	stopUpdater = cancel
+	return kindling.NewKindling("radiance", kindlingOptions...)
 }
 
 type slogWriter struct {
