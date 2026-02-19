@@ -27,10 +27,10 @@ require (
 	github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f
-	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
-	github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2
+	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
+	github.com/getlantern/fronted v0.0.0-20260219001615-7eabaa834efe
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
-	github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461
+	github.com/getlantern/kindling v0.0.0-20260219202502-df15c15dc5fb
 	github.com/getlantern/lantern-box v0.0.6-0.20260203175211-21a1481c709c
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
@@ -45,7 +45,6 @@ require (
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/sagernet/sing v0.7.18
 	github.com/sagernet/sing-box v1.12.13
-	github.com/sagernet/sing-dns v0.4.6
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.62.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.37.0
