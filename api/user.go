@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/1Password/srp"
+
 	"github.com/r3labs/sse/v2"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
@@ -28,10 +29,7 @@ import (
 // The main output of this file is Radiance.GetUser, which provides a hook into all user account
 // functionality.
 
-const (
-	saltFileName = ".salt"
-	baseURL      = "https://df.iantem.io/api/v1"
-)
+const saltFileName = ".salt"
 
 // pro-server requests
 type UserDataResponse struct {
@@ -45,7 +43,11 @@ func (ac *APIClient) NewUser(ctx context.Context) (*protos.LoginResponse, error)
 	defer span.End()
 
 	var resp UserDataResponse
-	err := ac.proWebClient().Post(ctx, "/user-create", nil, &resp)
+	header := map[string]string{
+		backend.ContentTypeHeader: "application/json",
+	}
+	req := ac.proWebClient().NewRequest(nil, header, nil)
+	err := ac.proWebClient().Post(ctx, "/user-create", req, &resp)
 	if err != nil {
 		slog.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
@@ -155,7 +157,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 
 	getURL := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
-	fullURL := baseURL + getURL
+	fullURL := common.GetBaseURL() + getURL
 	sseClient := sse.NewClient(fullURL)
 	sseClient.Headers = map[string]string{
 		backend.ContentTypeHeader: "application/json",
@@ -592,7 +594,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) (
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
 func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
-	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", baseURL, "users/oauth2", provider))
+	loginURL, err := url.Parse(fmt.Sprintf("%s/%s/%s", common.GetBaseURL(), "users/oauth2", provider))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}

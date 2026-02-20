@@ -9,6 +9,7 @@ import (
 	"github.com/go-resty/resty/v2"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling"
 )
@@ -39,7 +40,7 @@ func NewAPIClient(dataDir string) *APIClient {
 
 func (a *APIClient) proWebClient() *webClient {
 	httpClient := kindling.HTTPClient()
-	proWC := newWebClient(httpClient, proServerURL)
+	proWC := newWebClient(httpClient, common.GetProServerURL())
 	proWC.client.OnBeforeRequest(func(client *resty.Client, req *resty.Request) error {
 		req.Header.Set(backend.DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
 		if settings.GetString(settings.TokenKey) != "" {
@@ -54,5 +55,5 @@ func (a *APIClient) proWebClient() *webClient {
 }
 
 func authWebClient() *webClient {
-	return newWebClient(kindling.HTTPClient(), baseURL)
+	return newWebClient(kindling.HTTPClient(), common.GetBaseURL())
 }

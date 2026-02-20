@@ -24,8 +24,7 @@ import (
 )
 
 const (
-	requestURL             = "https://df.iantem.io/api/v1/issue"
-	maxUncompressedLogSize = 40 * 1024 * 1024 // 40 MB
+	maxUncompressedLogSize = 50 * 1024 * 1024 // 50 MB
 	tracerName             = "github.com/getlantern/radiance/issue"
 )
 
@@ -148,10 +147,11 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		return fmt.Errorf("error marshaling proto: %w", err)
 	}
 
+	issueURL := common.GetBaseURL() + "/issue"
 	req, err := backend.NewIssueRequest(
 		ctx,
 		http.MethodPost,
-		requestURL,
+		issueURL,
 		bytes.NewReader(out),
 	)
 	if err != nil {
@@ -161,7 +161,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 
 	resp, err := kindling.HTTPClient().Do(req)
 	if err != nil {
-		slog.Error("failed to send issue report", "error", err, "requestURL", requestURL)
+		slog.Error("failed to send issue report", "error", err, "requestURL", issueURL)
 		return traces.RecordError(ctx, err)
 	}
 
