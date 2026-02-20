@@ -1,0 +1,26 @@
+FROM golang:1.25.1 AS builder
+
+RUN apt-get update && apt-get install -y git git-lfs bsdmainutils
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /src
+
+COPY . .
+
+ENV GOCACHE=/root/.cache/go-build
+RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /kindling-tester ./cmd/kindling-tester/...
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /kindling-tester /kindling-tester
+
+# TRANSPORT is set at build time (e.g. --build-arg TRANSPORT=proxyless).
+# The entrypoint exports it as the transport-specific env var expected by the binary.
+ARG TRANSPORT
+ENV TRANSPORT=${TRANSPORT}
+
+ENTRYPOINT ["sh", "-c", "/kindling-tester"]
