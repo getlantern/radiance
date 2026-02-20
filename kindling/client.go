@@ -81,6 +81,17 @@ func NewKindling() kindling.Kindling {
 	)
 	defer span.End()
 
+	if common.Stage() {
+		// Disable domain fronting for stage environment to avoid hitting staging server issues due to fronted client failures.
+		return kindling.NewKindling("radiance",
+			kindling.WithPanicListener(reporting.PanicListener),
+			kindling.WithLogWriter(logger),
+			// Most endpoints use df.iantem.io, but for some historical reasons
+			// "pro-server" calls still go to api.getiantem.org.
+			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
+		)
+	}
+
 	closeTransports = []func() error{}
 	kindlingOptions := []kindling.Option{
 		kindling.WithPanicListener(reporting.PanicListener),
