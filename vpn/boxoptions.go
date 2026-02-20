@@ -318,7 +318,7 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 	lanternTags = mergeAndCollectTags(&opts, &configOpts)
 	slog.Debug("Merged config options", "tags", lanternTags)
 
-	appendGroupOutbounds(&opts, servers.SGLantern, autoLanternTag, lanternTags)
+	appendGroupOutbounds(&opts, servers.SGLantern, autoLanternTag, lanternTags, cfg.BanditURLOverrides)
 
 	// Load user servers
 	slog.Debug("Loading user servers")
@@ -334,14 +334,14 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 		userTags = mergeAndCollectTags(&opts, &userOpts)
 		slog.Debug("Merged user server options", "tags", userTags)
 	}
-	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags)
+	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags, nil)
 
 	if len(lanternTags) == 0 && len(userTags) == 0 {
 		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
 	}
 
 	// Add auto all outbound
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}))
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}, nil))
 
 	// Add routing rules for the groups
 	opts.Route.Rules = append(opts.Route.Rules, groupRule(autoAllTag))
@@ -439,8 +439,8 @@ func useIfNotZero[T comparable](newVal, oldVal T) T {
 	return oldVal
 }
 
-func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string) {
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags))
+func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags, urlOverrides))
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
 	slog.Log(
 		nil, internal.LevelTrace, "Added group outbounds",
@@ -463,15 +463,16 @@ func groupAutoTag(group string) string {
 	}
 }
 
-func urlTestOutbound(tag string, outbounds []string) O.Outbound {
+func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {
 	return O.Outbound{
 		Type: lbC.TypeMutableURLTest,
 		Tag:  tag,
 		Options: &lbO.MutableURLTestOutboundOptions{
-			Outbounds:   outbounds,
-			URL:         "https://google.com/generate_204",
-			Interval:    badoption.Duration(urlTestInterval),
-			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
+			Outbounds:    outbounds,
+			URL:          "https://google.com/generate_204",
+			URLOverrides: urlOverrides,
+			Interval:     badoption.Duration(urlTestInterval),
+			IdleTimeout:  badoption.Duration(urlTestIdleTimeout),
 		},
 	}
 }
