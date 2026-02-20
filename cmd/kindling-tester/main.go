@@ -97,6 +97,11 @@ func main() {
 
 	ctx := context.Background()
 
+	// disabling all other transports before enabling the selected
+	for transport := range kindling.EnabledTransports {
+		kindling.EnabledTransports[transport] = false
+	}
+
 	kindling.EnabledTransports[transport] = true
 	slog.Debug("enabled transports", slog.Any("enabled_transports", kindling.EnabledTransports))
 	if err := performKindlingPing(ctx, targetURL, runID, deviceID, uid, token, data); err != nil {
