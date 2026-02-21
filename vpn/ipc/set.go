@@ -45,6 +45,10 @@ func (s *Server) setSettingsPathHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	old := settings.GetString(settings.DataPathKey)
+	if old == opt.SettingsPath {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	slog.Debug("Received request to update data path", "new", opt.SettingsPath, "old", old)
 
 	path := opt.SettingsPath
