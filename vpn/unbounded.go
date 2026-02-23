@@ -27,8 +27,9 @@ type UnboundedConnectionEvent struct {
 var unbounded = &unboundedManager{}
 
 type unboundedManager struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	lastCfg *C.UnboundedConfig // most recent config from server
 }
 
 func UnboundedEnabled() bool {
@@ -44,7 +45,14 @@ func SetUnbounded(enable bool) error {
 	}
 	slog.Info("Updated Unbounded widget proxy", "enabled", enable)
 	if enable {
-		unbounded.start(nil)
+		unbounded.mu.Lock()
+		cfg := unbounded.lastCfg
+		unbounded.mu.Unlock()
+		if cfg != nil {
+			unbounded.start(cfg)
+		} else {
+			slog.Info("Unbounded: enabled locally, will start when server config arrives")
+		}
 	} else {
 		unbounded.stop()
 	}
@@ -62,11 +70,14 @@ func InitUnboundedSubscription() {
 			return
 		}
 		cfg := evt.New.ConfigResponse
-		shouldRun := shouldRunUnbounded(cfg)
+
+		// Always store the latest unbounded config for use by SetUnbounded
 		unbounded.mu.Lock()
+		unbounded.lastCfg = cfg.Unbounded
 		running := unbounded.cancel != nil
 		unbounded.mu.Unlock()
 
+		shouldRun := shouldRunUnbounded(cfg)
 		if shouldRun && !running {
 			unbounded.start(cfg.Unbounded)
 		} else if !shouldRun && running {
@@ -79,10 +90,12 @@ func shouldRunUnbounded(cfg C.ConfigResponse) bool {
 	if !settings.GetBool(settings.UnboundedKey) {
 		return false
 	}
-	// When server-side config is available, also check:
-	//   cfg.Features[C.UNBOUNDED] && cfg.Unbounded != nil
-	// For now, only require the local setting so we can test without
-	// lantern-cloud sending the config.
+	if !cfg.Features[C.UNBOUNDED] {
+		return false
+	}
+	if cfg.Unbounded == nil {
+		return false
+	}
 	return true
 }
 
