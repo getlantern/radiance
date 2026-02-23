@@ -83,9 +83,11 @@ func InitUnboundedSubscription() {
 
 		shouldRun := shouldRunUnbounded(cfg)
 		if shouldRun && !running {
+			// start() is internally guarded against being called when already running.
 			unbounded.start(cfg.Unbounded)
 		} else if !shouldRun && running {
-			// stop() is internally guarded and idempotent
+			// stop() is internally guarded and idempotent; safe to call even
+			// if another goroutine changed the running state since we read it.
 			unbounded.stop()
 		}
 	})
@@ -162,6 +164,8 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 			}
 		}
 
+		// BroflakeConn is for clients routing traffic through the mesh;
+		// a widget proxy only donates bandwidth, so the conn is unused.
 		_, ui, err := clientcore.NewBroflake(bfOpt, rtcOpt, egOpt)
 		if err != nil {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
