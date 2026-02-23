@@ -98,8 +98,8 @@ func main() {
 	ctx := context.Background()
 
 	// disabling all other transports before enabling the selected
-	for transport := range kindling.EnabledTransports {
-		kindling.EnabledTransports[transport] = false
+	for name := range kindling.EnabledTransports {
+		kindling.EnabledTransports[name] = false
 	}
 
 	kindling.EnabledTransports[transport] = true
