@@ -14,8 +14,6 @@ replace github.com/enobufs/go-nats => github.com/noahlevenson/go-nats v0.0.0-202
 
 replace github.com/quic-go/quic-go => github.com/getlantern/quic-go-unbounded-fork v0.51.3-unbounded
 
-replace github.com/getlantern/broflake => ../unbounded
-
 // replace github.com/sagernet/sing => ../sing
 
 // replace github.com/sagernet/sing-box => ../sing-box-minimal
@@ -24,7 +22,7 @@ replace github.com/getlantern/broflake => ../unbounded
 
 // replace github.com/getlantern/lantern-box => ../lantern-box
 
-require github.com/getlantern/broflake v0.0.0-20260221195823-510790b48bbe
+require github.com/getlantern/broflake v0.0.0-20260223195036-4065257e0911
 
 require (
 	github.com/1Password/srp v0.2.0
