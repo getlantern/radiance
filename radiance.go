@@ -146,7 +146,9 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		}
 	})
 	registerPreStartTest(dataDir)
+	vpn.InitUnboundedSubscription()
 	r.confHandler = config.NewConfigHandler(cOpts)
+	r.addShutdownFunc(vpn.StopUnbounded)
 	r.addShutdownFunc(telemetry.Close, kindling.Close)
 	return r, nil
 }
