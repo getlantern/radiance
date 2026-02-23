@@ -131,9 +131,8 @@ func NewKindling() kindling.Kindling {
 			span.RecordError(err)
 		}
 		if dnsttOptions != nil {
-			dnsttOptions.Close()
+			closeTransports = append(closeTransports, dnsttOptions.Close)
 		}
-		closeTransports = append(closeTransports, dnsttOptions.Close)
 		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 	}
 
