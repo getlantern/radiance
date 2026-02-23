@@ -10,6 +10,8 @@ import (
 	"strconv"
 )
 
+const controlGroup = "lantern"
+
 // use a var so it can be overridden in tests
 var _socketPath = "/var/run/lantern/lanternd.sock"
 
@@ -25,8 +27,18 @@ func socketPath() string {
 func setPermissions() error {
 	path := socketPath()
 	if runtime.GOOS == "linux" {
-		// we'll check if user is sudoer to restrict access
-		return os.Chmod(socketPath(), 0666)
+		group, err := user.LookupGroup(controlGroup)
+		if err != nil {
+			return fmt.Errorf("lookup %s group: %w", controlGroup, err)
+		}
+		gid, err := strconv.Atoi(group.Gid)
+		if err != nil {
+			return fmt.Errorf("convert %s gid %s: %w", controlGroup, group.Gid, err)
+		}
+		if err := os.Chown(path, 0, gid); err != nil {
+			return fmt.Errorf("chown %s: %w", path, err)
+		}
+		return os.Chmod(path, 0660)
 	}
 
 	// chown admin group and let the OS restrict access
