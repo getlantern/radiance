@@ -32,10 +32,14 @@ type unboundedManager struct {
 	lastCfg *C.UnboundedConfig // most recent config from server
 }
 
+// UnboundedEnabled reports whether the Unbounded widget proxy is enabled in local settings.
 func UnboundedEnabled() bool {
 	return settings.GetBool(settings.UnboundedKey)
 }
 
+// SetUnbounded enables or disables the Unbounded widget proxy. When enabling,
+// the proxy starts immediately if server config is already available; otherwise
+// it will start on the next config event. When disabling, the proxy stops.
 func SetUnbounded(enable bool) error {
 	if UnboundedEnabled() == enable {
 		return nil
@@ -81,6 +85,7 @@ func InitUnboundedSubscription() {
 		if shouldRun && !running {
 			unbounded.start(cfg.Unbounded)
 		} else if !shouldRun && running {
+			// stop() is internally guarded and idempotent
 			unbounded.stop()
 		}
 	})
@@ -170,6 +175,9 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 		<-ctx.Done()
 		slog.Info("Unbounded: stopping broflake widget proxy")
 		ui.Stop()
+		m.mu.Lock()
+		m.cancel = nil
+		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy stopped")
 	}()
 }
@@ -183,6 +191,7 @@ func (m *unboundedManager) stop() {
 	}
 }
 
+// StopUnbounded stops the Unbounded widget proxy. Used as a shutdown hook.
 func StopUnbounded(_ context.Context) error {
 	unbounded.stop()
 	return nil
