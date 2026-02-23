@@ -14,8 +14,6 @@ replace github.com/enobufs/go-nats => github.com/noahlevenson/go-nats v0.0.0-202
 
 replace github.com/quic-go/quic-go => github.com/getlantern/quic-go-unbounded-fork v0.51.3-unbounded
 
-replace github.com/getlantern/common => ../common
-
 replace github.com/getlantern/broflake => ../unbounded
 
 // replace github.com/sagernet/sing => ../sing
@@ -34,7 +32,7 @@ require (
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f
+	github.com/getlantern/common v1.2.1-0.20260223192400-cc00002ef6c7
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/fronted v0.0.0-20260219001615-7eabaa834efe
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
