@@ -1,7 +1,6 @@
 package vpn
 
 import (
-	"os"
 	"testing"
 
 	C "github.com/getlantern/common"
@@ -10,23 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testTmpDir string
-
-func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "unbounded-test-*")
-	if err != nil {
-		panic(err)
-	}
-	testTmpDir = tmp
-	if err := settings.InitSettings(tmp); err != nil {
-		panic(err)
-	}
-	code := m.Run()
-	os.RemoveAll(tmp)
-	os.Exit(code)
+func initTestSettings(t *testing.T) {
+	t.Helper()
+	tmp := t.TempDir()
+	require.NoError(t, settings.InitSettings(tmp))
+	t.Cleanup(settings.Reset)
 }
 
 func TestShouldRunUnbounded(t *testing.T) {
+	initTestSettings(t)
 	settings.Set(settings.UnboundedKey, false)
 
 	cfg := C.ConfigResponse{
@@ -47,11 +38,10 @@ func TestShouldRunUnbounded(t *testing.T) {
 	// Missing config
 	cfg.Unbounded = nil
 	assert.False(t, shouldRunUnbounded(cfg), "should be false when config is nil")
-
-	settings.Set(settings.UnboundedKey, false)
 }
 
 func TestSetUnboundedToggle(t *testing.T) {
+	initTestSettings(t)
 	settings.Set(settings.UnboundedKey, false)
 
 	require.NoError(t, SetUnbounded(true))
