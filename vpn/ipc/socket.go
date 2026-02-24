@@ -27,6 +27,13 @@ func socketPath() string {
 func setPermissions() error {
 	path := socketPath()
 	if runtime.GOOS == "linux" {
+		if _testing || os.Geteuid() != 0 {
+			if err := os.Chmod(path, 0600); err != nil {
+				return fmt.Errorf("chmod %s: %w", path, err)
+			}
+			return nil
+		}
+
 		gid, err := controlGroupGIDInt()
 		if err != nil {
 			return err
@@ -34,7 +41,10 @@ func setPermissions() error {
 		if err := os.Chown(path, 0, gid); err != nil {
 			return fmt.Errorf("chown %s: %w", path, err)
 		}
-		return os.Chmod(path, 0660)
+		if err := os.Chmod(path, 0660); err != nil {
+			return fmt.Errorf("chmod %s: %w", path, err)
+		}
+		return nil
 	}
 
 	// chown admin group and let the OS restrict access
