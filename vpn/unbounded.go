@@ -169,6 +169,7 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 		_, ui, err := clientcore.NewBroflake(bfOpt, rtcOpt, egOpt)
 		if err != nil {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
+			cancel() // cancel the context to avoid a leak
 			m.mu.Lock()
 			m.cancel = nil
 			m.mu.Unlock()

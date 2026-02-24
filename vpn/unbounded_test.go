@@ -57,21 +57,35 @@ func TestSetUnboundedToggle(t *testing.T) {
 
 func TestStopWhenNotRunning(t *testing.T) {
 	unbounded.stop()
+	unbounded.mu.Lock()
 	assert.Nil(t, unbounded.cancel)
+	unbounded.mu.Unlock()
 }
 
 func TestStartStopLifecycle(t *testing.T) {
+	// Ensure we start from a stopped state.
 	unbounded.mu.Lock()
 	unbounded.cancel = nil
-	unbounded.mu.Unlock()
-
-	unbounded.mu.Lock()
-	assert.Nil(t, unbounded.cancel)
 	unbounded.mu.Unlock()
 
 	// stop is safe when already stopped
 	unbounded.stop()
 	unbounded.mu.Lock()
-	assert.Nil(t, unbounded.cancel)
+	assert.Nil(t, unbounded.cancel, "cancel should remain nil when stopping an already stopped unbounded")
+	unbounded.mu.Unlock()
+
+	// Simulate a running state by setting a non-nil cancel function.
+	unbounded.mu.Lock()
+	unbounded.cancel = func() {}
+	unbounded.mu.Unlock()
+
+	unbounded.mu.Lock()
+	assert.NotNil(t, unbounded.cancel, "cancel should be non-nil in simulated running state")
+	unbounded.mu.Unlock()
+
+	// Now stopping should clear the cancel function.
+	unbounded.stop()
+	unbounded.mu.Lock()
+	assert.Nil(t, unbounded.cancel, "cancel should be nil after stopping from a running state")
 	unbounded.mu.Unlock()
 }
