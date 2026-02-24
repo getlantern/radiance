@@ -20,6 +20,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/servers"
 )
 
 var (
@@ -30,11 +31,14 @@ var (
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
 type Service interface {
 	Ctx() context.Context
-	Status() string
-	Start(ctx context.Context, group, tag string) error
-	Restart(ctx context.Context) error
-	ClashServer() *clashapi.Server
+	Status() VPNStatus
+	Start(ctx context.Context, options string) error
+	Restart(ctx context.Context, options string) error
 	Close() error
+	ClashServer() *clashapi.Server
+	UpdateOutbounds(options servers.Servers) error
+	AddOutbounds(group string, options servers.Options) error
+	RemoveOutbounds(group string, tags []string) error
 }
 
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
@@ -100,8 +104,10 @@ func NewServer(service Service) *Server {
 	s.router.Post(startServiceEndpoint, s.startServiceHandler)
 	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
 	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
+	s.router.Post(updateOutboundsEndpoint, s.updateOutboundsHandler)
+	s.router.Post(addOutboundsEndpoint, s.addOutboundsHandler)
+	s.router.Post(removeOutboundsEndpoint, s.removeOutboundsHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
-	s.router.Post(setSettingsPathEndpoint, s.setSettingsPathHandler)
 
 	svr := &http.Server{
 		Handler:      s.router,
@@ -137,7 +143,7 @@ func (s *Server) Start() error {
 			slog.Error("IPC server", "error", err)
 		}
 		s.closed.Store(true)
-		if s.service.Status() != StatusClosed {
+		if s.service.Status() != Disconnected {
 			slog.Warn("IPC server stopped unexpectedly, closing service")
 			s.service.Close()
 			s.setVPNStatus(ErrorStatus, errors.New("IPC server stopped unexpectedly"))
@@ -162,33 +168,40 @@ func (s *Server) IsClosed() bool {
 	return s.closed.Load()
 }
 
-// StartService sends a request to start the service
-func StartService(ctx context.Context, group, tag string) error {
-	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, selection{GroupTag: group, OutboundTag: tag})
-	return err
+type opts struct {
+	Options string `json:"options"`
 }
 
-// StopService sends a request to stop the service (IPC server stays up)
-func StopService(ctx context.Context) error {
-	_, err := sendRequest[empty](ctx, "POST", stopServiceEndpoint, nil)
+// StartService sends a request to start the service
+func StartService(ctx context.Context, options string) error {
+	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, opts{Options: options})
 	return err
 }
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
 	defer span.End()
-	// check if service is already running
-	if s.service.Status() != StatusClosed {
+	switch s.service.Status() {
+	case Disconnected:
+		// proceed to start
+	case Connected:
 		w.WriteHeader(http.StatusOK)
 		return
+	case Disconnecting:
+		http.Error(w, "service is disconnecting, please wait", http.StatusConflict)
+		return
+	default:
+		http.Error(w, "service is already starting", http.StatusConflict)
+		return
 	}
-	var p selection
+	var p opts
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := s.service.Start(ctx, p.GroupTag, p.OutboundTag); err != nil {
+	s.setVPNStatus(Connecting, nil)
+	if err := s.service.Start(ctx, p.Options); err != nil {
 		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -197,18 +210,26 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// StopService sends a request to stop the service (IPC server stays up)
+func StopService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", stopServiceEndpoint, nil)
+	return err
+}
+
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("Received request to stop service via IPC")
-	defer s.setVPNStatus(Disconnected, nil)
+	s.setVPNStatus(Disconnecting, nil)
 	if err := s.service.Close(); err != nil {
+		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.setVPNStatus(Disconnected, nil)
 	w.WriteHeader(http.StatusOK)
 }
 
-func RestartService(ctx context.Context) error {
-	_, err := sendRequest[empty](ctx, "POST", restartServiceEndpoint, nil)
+func RestartService(ctx context.Context, options string) error {
+	_, err := sendRequest[empty](ctx, "POST", restartServiceEndpoint, opts{Options: options})
 	return err
 }
 
@@ -216,12 +237,19 @@ func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.restartServiceHandler")
 	defer span.End()
 
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusInternalServerError)
 		return
 	}
+	var p opts
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	s.vpnStatus.Store(Disconnected)
-	if err := s.service.Restart(ctx); err != nil {
+	if err := s.service.Restart(ctx, p.Options); err != nil {
+		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

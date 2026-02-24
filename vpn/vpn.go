@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
+	sbjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
@@ -43,10 +44,49 @@ const (
 	tracerName = "github.com/getlantern/radiance/vpn"
 )
 
-// QuickConnect automatically connects to the best available server in the specified group. Valid
-// groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
-// the empty string will connect to the best available server across all groups.
+func init() {
+	forwardToTunnel := func(action func(ctx context.Context) error, desc string) {
+		ctx := context.Background()
+		status, err := ipc.GetStatus(ctx)
+		if err != nil {
+			slog.Warn("Event received but failed to get tunnel status", "event", desc, "error", err)
+			return
+		}
+		if status != ipc.Connected {
+			return
+		}
+		if err := action(ctx); err != nil {
+			slog.Error("Failed to forward event to tunnel", "event", desc, "error", err)
+		}
+	}
+
+	events.Subscribe(func(e servers.ServersUpdatedEvent) {
+		forwardToTunnel(func(ctx context.Context) error {
+			svrs := map[string]servers.Options{e.Group: *e.Options}
+			return ipc.UpdateOutbounds(ctx, svrs)
+		}, "servers-updated")
+	})
+	events.Subscribe(func(e servers.ServersAddedEvent) {
+		forwardToTunnel(func(ctx context.Context) error {
+			return ipc.AddOutbounds(ctx, e.Group, *e.Options)
+		}, "servers-added")
+	})
+	events.Subscribe(func(e servers.ServersRemovedEvent) {
+		forwardToTunnel(func(ctx context.Context) error {
+			return ipc.RemoveOutbounds(ctx, e.Group, []string{e.Tag})
+		}, "servers-removed")
+	})
+}
+
+// Deprecated: Use AutoConnect instead with the desired group.
 func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
+	return AutoConnect(group)
+}
+
+// AutoConnect automatically connects to the best available server in the specified group. Valid
+// groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string.
+// Using "all" or the empty string will connect to the best available server across all groups.
+func AutoConnect(group string) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"quick_connect",
@@ -71,9 +111,14 @@ func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
 	}
 }
 
-// ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
-// [servers.SGLantern] and [servers.SGUser].
+// Deprecated: Use Connect instead with the desired group and tag.
 func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
+	return Connect(group, tag)
+}
+
+// Connect connects to a specific server identified by the group and tag. Valid groups are
+// [servers.SGLantern] and [servers.SGUser].
+func Connect(group, tag string) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"connect_to_server",
@@ -94,21 +139,45 @@ func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
 }
 
 func connect(group, tag string) error {
-	if isOpen(context.Background()) {
-		return selectServer(context.Background(), group, tag)
+	ctx := context.Background()
+	if isOpen(ctx) {
+		return SelectServer(ctx, group, tag)
 	}
-	return ipc.StartService(context.Background(), group, tag)
+	dataPath := settings.GetString(settings.DataPathKey)
+	_ = newSplitTunnel(dataPath)
+	options, err := getOptions()
+	if err != nil {
+		return err
+	}
+	if err := ipc.StartService(ctx, options); err != nil {
+		return err
+	}
+	return SelectServer(ctx, group, tag)
 }
 
-// Reconnect attempts to reconnect to the last connected server.
-func Reconnect() error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
+// Restart restarts the tunnel by reconnecting to the currently selected server.
+func Restart() error {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
 	defer span.End()
 
-	if isOpen(ctx) {
-		return traces.RecordError(ctx, fmt.Errorf("tunnel is already open"))
+	options, err := getOptions()
+	if err != nil {
+		return err
 	}
-	return traces.RecordError(ctx, connect("", ""))
+	return traces.RecordError(ctx, ipc.RestartService(ctx, options))
+}
+
+func getOptions() (string, error) {
+	dataPath := settings.GetString(settings.DataPathKey)
+	options, err := buildOptions(context.Background(), dataPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to build options: %w", err)
+	}
+	opts, err := sbjson.Marshal(options)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal options: %w", err)
+	}
+	return string(opts), nil
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -118,7 +187,7 @@ func isOpen(ctx context.Context) bool {
 	if err != nil {
 		slog.Error("Failed to get tunnel state", "error", err)
 	}
-	return state == ipc.StatusRunning
+	return state == ipc.Connected
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -129,8 +198,19 @@ func Disconnect() error {
 	return traces.RecordError(ctx, ipc.StopService(ctx))
 }
 
-// selectServer selects the specified server for the tunnel. The tunnel must already be open.
-func selectServer(ctx context.Context, group, tag string) error {
+// SelectServer selects the specified server for the tunnel. The tunnel must already be open.
+func SelectServer(ctx context.Context, group, tag string) error {
+	if !isOpen(ctx) {
+		return errors.New("tunnel is not open")
+	}
+	if group == autoAllTag {
+		slog.Info("Switching to auto mode", "group", group)
+		if err := ipc.SetClashMode(ctx, group); err != nil {
+			slog.Error("Failed to set auto mode", "group", group, "error", err)
+			return fmt.Errorf("failed to set auto mode: %w", err)
+		}
+		return nil
+	}
 	slog.Info("Selecting server", "group", group, "tag", tag)
 	if err := ipc.SelectOutbound(ctx, group, tag); err != nil {
 		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
@@ -478,7 +558,11 @@ func restartTunnel() error {
 		return nil
 	}
 	slog.Info("Restarting tunnel")
-	if err := ipc.RestartService(ctx); err != nil {
+	options, err := getOptions()
+	if err != nil {
+		return err
+	}
+	if err := ipc.RestartService(ctx, options); err != nil {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 	return nil
