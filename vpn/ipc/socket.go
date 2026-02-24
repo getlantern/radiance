@@ -11,7 +11,7 @@ import (
 )
 
 // use a var so it can be overridden in tests
-var _socketPath = "/var/run/lantern/lantern.sock"
+var _socketPath = "/var/run/lantern/lanternd.sock"
 
 // setSocketPathForTesting is only used for testing.
 func setSocketPathForTesting(path string) {
