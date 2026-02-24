@@ -237,8 +237,15 @@ func baseRoutingRules() []O.Rule {
 	return rules
 }
 
+// buildOptionsResult bundles the outputs of buildOptions so callers can
+// access both the sing-box options and bandit metadata.
+type buildOptionsResult struct {
+	Options             O.Options
+	BanditThroughputURL string
+}
+
 // buildOptions builds the box options using the config options and user servers.
-func buildOptions(ctx context.Context, path string) (O.Options, error) {
+func buildOptions(ctx context.Context, path string) (buildOptionsResult, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "buildOptions")
 	defer span.End()
 
@@ -260,7 +267,7 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 		slog.Info("Using SOCKS proxy for inbound as per environment variable", "socksAddr", socksAddr)
 		addrPort, err := netip.ParseAddrPort(socksAddr)
 		if err != nil {
-			return O.Options{}, fmt.Errorf("invalid SOCKS address: %w", err)
+			return buildOptionsResult{}, fmt.Errorf("invalid SOCKS address: %w", err)
 		}
 		addr := badoption.Addr(addrPort.Addr())
 		socksIn := O.Inbound{
@@ -292,7 +299,7 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 	cfg, err := loadConfig(confPath)
 	if err != nil {
 		slog.Error("Failed to load config options", "error", err)
-		return O.Options{}, err
+		return buildOptionsResult{}, err
 	}
 
 	// add smart routing and ad block rules
@@ -325,7 +332,7 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 	userOpts, err := loadUserOptions(path)
 	if err != nil {
 		slog.Error("Failed to load user servers", "error", err)
-		return O.Options{}, err
+		return buildOptionsResult{}, err
 	}
 	var userTags []string
 	if len(userOpts.Outbounds) == 0 && len(userOpts.Endpoints) == 0 {
@@ -337,7 +344,7 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags, nil)
 
 	if len(lanternTags) == 0 && len(userTags) == 0 {
-		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+		return buildOptionsResult{}, errors.New("no outbounds or endpoints found in config or user servers")
 	}
 
 	// Add auto all outbound
@@ -356,7 +363,10 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 		attribute.String("options", string(writeBoxOptions(path, opts))),
 		attribute.String("env", common.Env()),
 	))
-	return opts, nil
+	return buildOptionsResult{
+		Options:             opts,
+		BanditThroughputURL: cfg.BanditThroughputURL,
+	}, nil
 }
 
 const debugLanternBoxOptionsFilename = "debug-lantern-box-options.json"
