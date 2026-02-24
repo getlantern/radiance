@@ -92,16 +92,16 @@ func getConnPeer(conn net.Conn) (p usr, err error) {
 }
 
 func linuxUserInControlGroup(u *user.User) (bool, error) {
-	group, err := user.LookupGroup(controlGroup)
+	controlGroupGID, err := controlGroupGID()
 	if err != nil {
-		return false, fmt.Errorf("lookup %s group: %w", controlGroup, err)
+		return false, err
 	}
 	gids, err := u.GroupIds()
 	if err != nil {
 		return false, fmt.Errorf("lookup groups for %s: %w", u.Username, err)
 	}
 	for _, gid := range gids {
-		if gid == group.Gid {
+		if gid == controlGroupGID {
 			return true, nil
 		}
 	}
