@@ -86,23 +86,17 @@ func (s *TunnelService) Start(ctx context.Context, group string, tag string) err
 func (s *TunnelService) start(ctx context.Context) error {
 	path := settings.GetString(settings.DataPathKey)
 	_ = newSplitTunnel(path)
-	result, err := buildOptions(ctx, path)
+	opts, err := buildOptions(ctx, path)
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
 	t := tunnel{
 		dataPath: path,
 	}
-	if err := t.start(result.Options, s.platformIfce); err != nil {
+	if err := t.start(opts, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
 	s.tunnel = &t
-
-	if result.BanditThroughputURL != "" {
-		reporter := NewThroughputReporter(result.BanditThroughputURL)
-		go reporter.Run(t.ctx)
-	}
-
 	return nil
 }
 

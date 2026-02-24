@@ -92,14 +92,14 @@ func TestBuildOptions(t *testing.T) {
 			if len(tt.userTags) > 0 {
 				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
 			}
-			result, err := buildOptions(context.Background(), path)
+			opts, err := buildOptions(context.Background(), path)
 			if tt.shouldError {
 				require.Error(t, err, "expected error but got none")
 				return
 			}
 			require.NoError(t, err)
 
-			gotOutbounds := result.Options.Outbounds
+			gotOutbounds := opts.Outbounds
 			require.NotEmpty(t, gotOutbounds, "no outbounds in built options")
 
 			assert.NotNil(t, findOutbound(gotOutbounds, constant.TypeDirect), "direct outbound not found")
@@ -196,9 +196,8 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		t.Cleanup(settings.Reset)
 
 		settings.Set(settings.SmartRoutingKey, true)
-		result, err := buildOptions(context.Background(), tmp)
+		options, err := buildOptions(context.Background(), tmp)
 		require.NoError(t, err)
-		options := result.Options
 		// check rules, rulesets, and outbounds are correctly built into options
 		assert.True(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
 		assert.True(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
@@ -212,9 +211,8 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		t.Cleanup(settings.Reset)
 
 		settings.Set(settings.AdBlockKey, true)
-		result, err := buildOptions(context.Background(), tmp)
+		options, err := buildOptions(context.Background(), tmp)
 		require.NoError(t, err)
-		options := result.Options
 		// check reject rule and rulesets are correctly built into options
 		for _, rs := range wantAdBlockOpts.Route.RuleSet {
 			assert.True(t, contains(t, options.Route.RuleSet, rs), "missing ad block ruleset")
@@ -244,10 +242,10 @@ func TestBuildOptions_BanditURLOverrides(t *testing.T) {
 	path := t.TempDir()
 	testOptsToFile(t, cfg, filepath.Join(path, common.ConfigFileName))
 
-	result, err := buildOptions(context.Background(), path)
+	opts, err := buildOptions(context.Background(), path)
 	require.NoError(t, err)
 
-	out := findOutbound(result.Options.Outbounds, autoLanternTag)
+	out := findOutbound(opts.Outbounds, autoLanternTag)
 	require.NotNil(t, out, "auto-lantern outbound not found")
 
 	mutOpts, ok := out.Options.(*lbO.MutableURLTestOutboundOptions)
