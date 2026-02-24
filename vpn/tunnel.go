@@ -13,6 +13,7 @@ import (
 	"time"
 
 	lcommon "github.com/getlantern/common"
+	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
@@ -46,7 +47,7 @@ type tunnel struct {
 
 	// optsMap is a map of current outbound/endpoint options JSON, used to deduplicate when adding
 	// outbounds/endpoints
-	optsMap   map[string][]byte
+	optsMap   *lsync.TypedMap[string, []byte]
 	mutGrpMgr *groups.MutableGroupManager
 
 	clientContextTracker *clientcontext.ClientContextInjector
@@ -258,7 +259,7 @@ func (t *tunnel) Status() ipc.VPNStatus {
 
 var errLibboxClosed = errors.New("libbox closed")
 
-func (t *tunnel) addOutbounds(group string, options servers.Options) error {
+func (t *tunnel) addOutbounds(group string, options servers.Options) (err error) {
 	if len(options.Outbounds) == 0 && len(options.Endpoints) == 0 {
 		slog.Debug("No outbounds or endpoints to add", "group", group)
 		return nil
@@ -282,9 +283,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) error {
 			t.clientContextTracker.SetBounds(matchBounds)
 		}
 		defer func() {
-			if len(errs) > 0 {
-				// if there were errors adding the servers, we may have added some but not all of the
-				// new tags to the clientContextInjector match bounds.
+			if !errors.Is(err, errLibboxClosed) {
 				t.updateClientContextTracker()
 			}
 		}()
@@ -311,7 +310,8 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) error {
 		if err != nil {
 			errs = append(errs, err)
 		} else {
-			t.optsMap[outbound.Tag], _ = json.MarshalContext(ctx, outbound)
+			b, _ := json.MarshalContext(ctx, outbound)
+			t.optsMap.Store(outbound.Tag, b)
 			added++
 		}
 	}
@@ -335,7 +335,8 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) error {
 		if err != nil {
 			errs = append(errs, err)
 		} else {
-			t.optsMap[endpoint.Tag], _ = json.MarshalContext(ctx, endpoint)
+			b, _ := json.MarshalContext(ctx, endpoint)
+			t.optsMap.Store(endpoint.Tag, b)
 			added++
 		}
 	}
@@ -367,7 +368,7 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 		if err != nil {
 			errs = append(errs, err)
 		} else {
-			delete(t.optsMap, tag)
+			t.optsMap.Delete(tag)
 			removed++
 		}
 	}
@@ -447,7 +448,7 @@ func (t *tunnel) updateOutbounds(new servers.Servers) error {
 	return errors.Join(errs...)
 }
 
-func removeDuplicates(ctx context.Context, curr map[string][]byte, new servers.Options, group string) servers.Options {
+func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], new servers.Options, group string) servers.Options {
 	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
 	deduped := servers.Options{
 		Outbounds: []O.Outbound{},
@@ -456,7 +457,7 @@ func removeDuplicates(ctx context.Context, curr map[string][]byte, new servers.O
 	}
 	var dropped []string
 	for _, out := range new.Outbounds {
-		if currOpts, exists := curr[out.Tag]; exists {
+		if currOpts, exists := curr.Load(out.Tag); exists {
 			if outBytes, _ := json.MarshalContext(ctx, out); bytes.Equal(currOpts, outBytes) {
 				dropped = append(dropped, out.Tag)
 				continue
@@ -466,7 +467,7 @@ func removeDuplicates(ctx context.Context, curr map[string][]byte, new servers.O
 		deduped.Locations[out.Tag] = new.Locations[out.Tag]
 	}
 	for _, ep := range new.Endpoints {
-		if currOpts, exists := curr[ep.Tag]; exists {
+		if currOpts, exists := curr.Load(ep.Tag); exists {
 			if epBytes, _ := json.MarshalContext(ctx, ep); bytes.Equal(currOpts, epBytes) {
 				dropped = append(dropped, ep.Tag)
 				continue
@@ -481,18 +482,20 @@ func removeDuplicates(ctx context.Context, curr map[string][]byte, new servers.O
 	return deduped
 }
 
-func makeOutboundOptsMap(ctx context.Context, options string) map[string][]byte {
+func makeOutboundOptsMap(ctx context.Context, options string) *lsync.TypedMap[string, []byte] {
 	// we can ignore the error here because we would have already failed if we couldn't parse the
 	// options JSON in the first place
 	opts, _ := json.UnmarshalExtendedContext[O.Options](ctx, []byte(options))
-	optsMap := make(map[string][]byte)
+	var optsMap lsync.TypedMap[string, []byte]
 	for _, out := range opts.Outbounds {
-		optsMap[out.Tag], _ = json.MarshalContext(ctx, out)
+		b, _ := json.MarshalContext(ctx, out)
+		optsMap.Store(out.Tag, b)
 	}
 	for _, ep := range opts.Endpoints {
-		optsMap[ep.Tag], _ = json.MarshalContext(ctx, ep)
+		b, _ := json.MarshalContext(ctx, ep)
+		optsMap.Store(ep.Tag, b)
 	}
-	return optsMap
+	return &optsMap
 }
 
 func contextDone(ctx context.Context) bool {

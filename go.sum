@@ -195,8 +195,8 @@ github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f h1:NLGftemDrbGf7Wce
 github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f/go.mod h1:qnMv9szb8JK3kA9W4N2FlYUMj1GkA0x7QEUEPD7tk4o=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01 h1:Mmeh4/DA1OKN9tVWRAvTL5efFx4c7v9/55hoK17NclA=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01/go.mod h1:3vR6+jQdWfWojZ77w+htCqEF5MO/Y2twJOpAvFuM9po=
-github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f h1:EqRKCaOBuvVkFsIjeWUYluE4s4TZtVQSClfIWFqcSks=
-github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
+github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85 h1:jj2Qv6drsceI4v3krNHXSn805QDRqy7w4XMqW359Z18=
+github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
 github.com/getlantern/context v0.0.0-20190109183933-c447772a6520/go.mod h1:L+mq6/vvYHKjCX2oez0CgEAJmbq1fbb/oNJIWQkBybY=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
@@ -629,8 +629,6 @@ github.com/sagernet/nftables v0.3.0-beta.4 h1:kbULlAwAC3jvdGAC1P5Fa3GSxVwQJibNen
 github.com/sagernet/nftables v0.3.0-beta.4/go.mod h1:OQXAjvjNGGFxaTgVCSTRIhYB5/llyVDeapVoENYBDS8=
 github.com/sagernet/quic-go v0.52.0-sing-box-mod.3 h1:ySqffGm82rPqI1TUPqmtHIYd12pfEGScygnOxjTL56w=
 github.com/sagernet/quic-go v0.52.0-sing-box-mod.3/go.mod h1:OV+V5kEBb8kJS7k29MzDu6oj9GyMc7HA07sE1tedxz4=
-github.com/sagernet/sing-dns v0.4.6 h1:mjZC0o6d5sQ1sraoOBbK3G3apCbuL8wWYwu2RNu5rbM=
-github.com/sagernet/sing-dns v0.4.6/go.mod h1:dweQs54ng2YGzoJfz+F9dGuDNdP5pJ3PLeggnK5VWc8=
 github.com/sagernet/sing-mux v0.3.4 h1:ZQplKl8MNXutjzbMVtWvWG31fohhgOfCuUZR4dVQ8+s=
 github.com/sagernet/sing-mux v0.3.4/go.mod h1:QvlKMyNBNrQoyX4x+gq028uPbLM2XeRpWtDsWBJbFSk=
 github.com/sagernet/sing-quic v0.5.2 h1:I3vlfRImhr0uLwRS3b3ib70RMG9FcXtOKKUDz3eKRWc=

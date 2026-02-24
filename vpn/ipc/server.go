@@ -247,7 +247,7 @@ func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.vpnStatus.Store(Disconnected)
+	s.setVPNStatus(Disconnected, nil)
 	if err := s.service.Restart(ctx, p.Options); err != nil {
 		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

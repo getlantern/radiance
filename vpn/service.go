@@ -62,7 +62,7 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 	}
 }
 
-// Start initializes and starts the tunnel with the specified group and tag. Returns an error if the
+// Start initializes and starts the tunnel with the specified options. Returns an error if the
 // tunnel is already running or initialization fails.
 func (s *TunnelService) Start(ctx context.Context, options string) error {
 	s.mu.Lock()
