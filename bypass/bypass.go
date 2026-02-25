@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,14 +31,15 @@ const (
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	proxyConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", ProxyAddr)
 	if err != nil {
-		// Proxy not running → VPN not active → dial directly
+		slog.Debug("bypass proxy not reachable, falling back to direct dial", "addr", addr, "error", err)
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
-	if err := httpConnect(ctx, proxyConn, addr); err != nil {
+	tunnelConn, err := httpConnect(ctx, proxyConn, addr)
+	if err != nil {
 		proxyConn.Close()
 		return nil, err
 	}
-	return proxyConn, nil
+	return tunnelConn, nil
 }
 
 // Dial is a convenience wrapper without context, suitable for use with
@@ -46,16 +48,29 @@ func Dial(network, addr string) (net.Conn, error) {
 	return DialContext(context.Background(), network, addr)
 }
 
+// bufferedConn wraps a net.Conn with a bufio.Reader so that any bytes
+// buffered during the HTTP CONNECT response read are not lost.
+type bufferedConn struct {
+	net.Conn
+	br *bufio.Reader
+}
+
+func (c *bufferedConn) Read(b []byte) (int, error) {
+	return c.br.Read(b)
+}
+
 // httpConnect performs an HTTP CONNECT handshake over an already-established
-// connection to the proxy. It respects the context deadline; if none is set,
-// a default timeout is applied for the handshake and cleared afterward.
-func httpConnect(ctx context.Context, conn net.Conn, addr string) error {
+// connection to the proxy. It returns a wrapped connection that preserves any
+// bytes buffered during the response read. It respects the context deadline;
+// if none is set, a default timeout is applied for the handshake and cleared
+// afterward.
+func httpConnect(ctx context.Context, conn net.Conn, addr string) (net.Conn, error) {
 	deadline, hasDeadline := ctx.Deadline()
 	if !hasDeadline {
 		deadline = time.Now().Add(connectTimeout)
 	}
 	if err := conn.SetDeadline(deadline); err != nil {
-		return fmt.Errorf("bypass: failed to set deadline: %w", err)
+		return nil, fmt.Errorf("bypass: failed to set deadline: %w", err)
 	}
 
 	req := &http.Request{
@@ -65,22 +80,23 @@ func httpConnect(ctx context.Context, conn net.Conn, addr string) error {
 		Header: make(http.Header),
 	}
 	if err := req.Write(conn); err != nil {
-		return fmt.Errorf("bypass: failed to write CONNECT request: %w", err)
+		return nil, fmt.Errorf("bypass: failed to write CONNECT request: %w", err)
 	}
 
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		return fmt.Errorf("bypass: failed to read CONNECT response: %w", err)
+		return nil, fmt.Errorf("bypass: failed to read CONNECT response: %w", err)
 	}
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bypass: CONNECT returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("bypass: CONNECT returned status %d", resp.StatusCode)
 	}
 
 	// Clear deadline so subsequent I/O on the tunneled connection isn't constrained.
 	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return fmt.Errorf("bypass: failed to clear deadline: %w", err)
+		return nil, fmt.Errorf("bypass: failed to clear deadline: %w", err)
 	}
-	return nil
+	return &bufferedConn{Conn: conn, br: br}, nil
 }

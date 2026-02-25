@@ -1,187 +1,68 @@
 package bypass
 
 import (
-	"bufio"
 	"context"
-	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// startMockProxy starts a local TCP listener that accepts HTTP CONNECT
-// requests and tunnels data to the target. Returns the listener address
-// and a cleanup function.
-func startMockProxy(t *testing.T) (string, func()) {
+// newConnectProxy returns an httptest.Server that handles HTTP CONNECT
+// requests by hijacking the connection and tunneling data to the target.
+func newConnectProxy(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "only CONNECT supported", http.StatusMethodNotAllowed)
+			return
+		}
+
+		target, err := net.DialTimeout("tcp", r.Host, 5*time.Second)
+		if err != nil {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		}
+		defer target.Close()
+
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+			return
+		}
+
+		clientConn, _, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		defer clientConn.Close()
+
+		clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+
+		done := make(chan struct{}, 2)
+		cp := func(dst, src net.Conn) {
+			io.Copy(dst, src)
+			done <- struct{}{}
+		}
+		go cp(target, clientConn)
+		go cp(clientConn, target)
+		<-done
+		<-done
+	}))
+}
+
+// newEchoServer starts a TCP listener that accepts one connection,
+// reads data, and echoes it back. The listener is cleaned up via t.Cleanup.
+func newEchoServer(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to start mock proxy: %v", err)
-	}
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go handleMockConnect(conn)
-		}
-	}()
-	return ln.Addr().String(), func() { ln.Close() }
-}
-
-func handleMockConnect(conn net.Conn) {
-	defer conn.Close()
-	br := bufio.NewReader(conn)
-	req, err := http.ReadRequest(br)
-	if err != nil {
-		return
-	}
-	if req.Method != http.MethodConnect {
-		fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\n\r\n")
-		return
-	}
-
-	// Connect to the target
-	target, err := net.DialTimeout("tcp", req.Host, 5*time.Second)
-	if err != nil {
-		fmt.Fprintf(conn, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
-		return
-	}
-	defer target.Close()
-
-	fmt.Fprintf(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
-
-	// Bidirectional copy
-	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		buf := make([]byte, 4096)
-		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				dst.Write(buf[:n])
-			}
-			if err != nil {
-				break
-			}
-		}
-		done <- struct{}{}
-	}
-	go cp(target, conn)
-	go cp(conn, target)
-	<-done
-}
-
-func TestDialContext_ProxyAvailable(t *testing.T) {
-	// Start a mock proxy and a mock target server.
-	proxyAddr, cleanup := startMockProxy(t)
-	defer cleanup()
-
-	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to start target: %v", err)
-	}
-	defer targetLn.Close()
-
-	go func() {
-		conn, err := targetLn.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		buf := make([]byte, 64)
-		n, _ := conn.Read(buf)
-		conn.Write(buf[:n])
-	}()
-
-	// Override ProxyAddr for the test by dialing the mock proxy directly.
-	// We can't override the const, so test httpConnect directly.
-	proxyConn, err := net.Dial("tcp", proxyAddr)
-	if err != nil {
-		t.Fatalf("failed to connect to mock proxy: %v", err)
-	}
-	defer proxyConn.Close()
-
-	ctx := context.Background()
-	if err := httpConnect(ctx, proxyConn, targetLn.Addr().String()); err != nil {
-		t.Fatalf("httpConnect failed: %v", err)
-	}
-
-	// Send data through the tunnel and verify echo.
-	msg := []byte("hello bypass")
-	if _, err := proxyConn.Write(msg); err != nil {
-		t.Fatalf("failed to write through tunnel: %v", err)
-	}
-	buf := make([]byte, 64)
-	n, err := proxyConn.Read(buf)
-	if err != nil {
-		t.Fatalf("failed to read through tunnel: %v", err)
-	}
-	if string(buf[:n]) != string(msg) {
-		t.Fatalf("expected %q, got %q", msg, buf[:n])
-	}
-}
-
-func TestDialContext_FallbackWhenProxyDown(t *testing.T) {
-	// Start a target server that echoes data.
-	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to start target: %v", err)
-	}
-	defer targetLn.Close()
-
-	go func() {
-		conn, err := targetLn.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		buf := make([]byte, 64)
-		n, _ := conn.Read(buf)
-		conn.Write(buf[:n])
-	}()
-
-	// DialContext with no proxy running should fall back to direct dial.
-	ctx := context.Background()
-	conn, err := DialContext(ctx, "tcp", targetLn.Addr().String())
-	if err != nil {
-		t.Fatalf("DialContext should fall back to direct dial, got error: %v", err)
-	}
-	defer conn.Close()
-
-	msg := []byte("direct fallback")
-	if _, err := conn.Write(msg); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-	buf := make([]byte, 64)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-	if string(buf[:n]) != string(msg) {
-		t.Fatalf("expected %q, got %q", msg, buf[:n])
-	}
-}
-
-func TestDialContext_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
-
-	// With a cancelled context, both proxy and direct dial should fail.
-	_, err := DialContext(ctx, "tcp", "127.0.0.1:1")
-	if err == nil {
-		t.Fatal("expected error with cancelled context, got nil")
-	}
-}
-
-func TestHttpConnect_BadStatus(t *testing.T) {
-	// Start a server that returns 403 for CONNECT.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to start listener: %v", err)
-	}
-	defer ln.Close()
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
 
 	go func() {
 		conn, err := ln.Accept()
@@ -189,19 +70,73 @@ func TestHttpConnect_BadStatus(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		br := bufio.NewReader(conn)
-		http.ReadRequest(br)
-		fmt.Fprintf(conn, "HTTP/1.1 403 Forbidden\r\n\r\n")
+		buf := make([]byte, 64)
+		n, _ := conn.Read(buf)
+		conn.Write(buf[:n])
 	}()
 
-	conn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
+	return ln.Addr().String()
+}
+
+func TestDialContext_ProxyAvailable(t *testing.T) {
+	proxy := newConnectProxy(t)
+	defer proxy.Close()
+
+	echoAddr := newEchoServer(t)
+
+	proxyConn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+	require.NoError(t, err)
+	defer proxyConn.Close()
+
+	tunnelConn, err := httpConnect(context.Background(), proxyConn, echoAddr)
+	require.NoError(t, err)
+
+	msg := []byte("hello bypass")
+	_, err = tunnelConn.Write(msg)
+	require.NoError(t, err)
+
+	buf := make([]byte, 64)
+	n, err := tunnelConn.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, string(msg), string(buf[:n]))
+}
+
+func TestDialContext_FallbackWhenProxyDown(t *testing.T) {
+	echoAddr := newEchoServer(t)
+
+	conn, err := DialContext(context.Background(), "tcp", echoAddr)
+	require.NoError(t, err, "DialContext should fall back to direct dial")
 	defer conn.Close()
 
-	err = httpConnect(context.Background(), conn, "example.com:443")
-	if err == nil {
-		t.Fatal("expected error for 403 response, got nil")
-	}
+	msg := []byte("direct fallback")
+	_, err = conn.Write(msg)
+	require.NoError(t, err)
+
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, string(msg), string(buf[:n]))
+}
+
+func TestDialContext_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := DialContext(ctx, "tcp", "127.0.0.1:1")
+	require.Error(t, err, "expected error with cancelled context")
+}
+
+func TestHttpConnect_BadStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = httpConnect(context.Background(), conn, "example.com:443")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
 }
