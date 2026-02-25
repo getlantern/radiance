@@ -25,6 +25,7 @@ import (
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/env"
@@ -63,6 +64,7 @@ func baseOpts(basePath string) O.Options {
 		slog.Info("Wrote inline direct rule set to file", "path", directPath)
 	}
 
+	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -90,6 +92,16 @@ func baseOpts(basePath string) O.Options {
 					AutoRoute:   true,
 					StrictRoute: true,
 					MTU:         1500,
+				},
+			},
+			{
+				Type: C.TypeMixed,
+				Tag:  bypass.BypassInboundTag,
+				Options: &O.HTTPMixedInboundOptions{
+					ListenOptions: O.ListenOptions{
+						Listen:     &loopbackAddr,
+						ListenPort: 14985,
+					},
 				},
 			},
 		},
@@ -146,15 +158,16 @@ func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
 	// The rules MUST be in this order to ensure proper functionality:
-	// 1.   Enable traffic sniffing
-	// 2.   Hijack DNS to allow sing-box to handle DNS requests
-	// 3.   Route private IPs to direct outbound
-	// 4.   Split tunnel rule
-	// 5.   Bypass Lantern process traffic (not on mobile)
-	// 6.   rules from config file (added in buildOptions)
-	// 7-9. Group rules for auto, lantern, and user (added in buildOptions)
-	// 10.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
-	//      by previous rules does not automatically bypass the VPN.
+	// 1.    Enable traffic sniffing
+	// 2.    Hijack DNS to allow sing-box to handle DNS requests
+	// 3.    Route bypass proxy traffic directly (for kindling connections)
+	// 4.    Route private IPs to direct outbound
+	// 5.    Split tunnel rule
+	// 6.    Bypass Lantern process traffic (not on mobile)
+	// 7.    rules from config file (added in buildOptions)
+	// 8-10. Group rules for auto, lantern, and user (added in buildOptions)
+	// 11.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
 	//   rules or their order can break certain functionalities like DNS resolution, smart connect,
@@ -186,6 +199,20 @@ func baseRoutingRules() []O.Rule {
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeHijackDNS,
+				},
+			},
+		},
+		{ // Route bypass proxy traffic directly (for kindling connections)
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					Inbound: []string{bypass.BypassInboundTag},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "direct",
+					},
 				},
 			},
 		},
