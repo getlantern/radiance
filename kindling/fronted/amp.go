@@ -64,17 +64,19 @@ func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) 
 		}),
 		amp.WithConfigStoragePath(storagePath),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
-			serverName, _, hasSemicolon := strings.Cut(address, ":")
+			serverName, _, hasPort := strings.Cut(address, ":")
 			addrWithPort := address
-			if !hasSemicolon {
+			if !hasPort {
 				addrWithPort = fmt.Sprintf("%s:443", serverName)
 			}
-			conn, err := bypass.Dial("tcp", addrWithPort)
+			conn, err := bypass.Dial(network, addrWithPort)
 			if err != nil {
 				return nil, err
 			}
 			tlsConn := tls.Client(conn, &tls.Config{ServerName: serverName})
-			if err := tlsConn.HandshakeContext(context.Background()); err != nil {
+			handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 				conn.Close()
 				return nil, err
 			}

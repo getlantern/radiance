@@ -100,7 +100,7 @@ func baseOpts(basePath string) O.Options {
 				Options: &O.HTTPMixedInboundOptions{
 					ListenOptions: O.ListenOptions{
 						Listen:     &loopbackAddr,
-						ListenPort: 14985,
+						ListenPort: bypass.ProxyPort,
 					},
 				},
 			},
