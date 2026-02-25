@@ -2,10 +2,22 @@ package ipc
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"runtime"
 	"time"
 )
+
+var executable string
+
+func init() {
+	exe, err := os.Executable()
+	if err != nil {
+		// if by chance we can't get out executable path, default to 'ls'
+		executable = "ls"
+	}
+	executable = exe
+}
 
 type usrKey struct{}
 
@@ -33,7 +45,7 @@ func canSudo(usr string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "sudo", "-n", "--other-user="+usr, "--list").Run(); err != nil {
+	if err := exec.CommandContext(ctx, "sudo", "--other-user="+usr, "--list", executable).Run(); err != nil {
 		return false
 	}
 	return true
