@@ -26,6 +26,7 @@ import (
 
 	C "github.com/getlantern/common"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/internal"
@@ -101,9 +102,8 @@ func NewManager(dataPath string) (*Manager, error) {
 		serversFile: filepath.Join(dataPath, common.ServersFileName),
 		access:      sync.RWMutex{},
 
-		// Note that we use a regular http.Client here because it is only used to access private
-		// servers the user has created.
-		// Use the same configuration as http.DefaultClient.
+		// Use the bypass proxy dialer to route requests outside the VPN tunnel.
+		// This client is only used to access private servers the user has created.
 		httpClient: retryableHTTPClient().StandardClient(),
 	}
 
@@ -118,11 +118,8 @@ func NewManager(dataPath string) (*Manager, error) {
 
 func retryableHTTPClient() *retryablehttp.Client {
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           bypass.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
