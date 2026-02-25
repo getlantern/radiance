@@ -24,15 +24,25 @@ const (
 	// connectTimeout is the default timeout for the HTTP CONNECT handshake
 	// when the caller's context has no deadline.
 	connectTimeout = 10 * time.Second
+
+	// dialTimeout is the timeout for establishing the initial TCP connection.
+	dialTimeout = 30 * time.Second
+
+	// dialKeepAlive is the interval for TCP keep-alive probes.
+	dialKeepAlive = 30 * time.Second
 )
 
 // DialContext tries to connect through the local bypass proxy. If the proxy is
 // not reachable (VPN not running), it falls back to a direct dial.
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	proxyConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", ProxyAddr)
+	dialer := &net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: dialKeepAlive,
+	}
+	proxyConn, err := dialer.DialContext(ctx, "tcp", ProxyAddr)
 	if err != nil {
 		slog.Debug("bypass proxy not reachable, falling back to direct dial", "addr", addr, "error", err)
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
+		return dialer.DialContext(ctx, network, addr)
 	}
 	tunnelConn, err := httpConnect(ctx, proxyConn, addr)
 	if err != nil {
