@@ -13,10 +13,11 @@ var executable string
 func init() {
 	exe, err := os.Executable()
 	if err != nil {
-		// if by chance we can't get out executable path, default to 'ls'
+		// if by chance we can't get our executable path, default to 'ls'
 		executable = "ls"
+	} else {
+		executable = exe
 	}
-	executable = exe
 }
 
 type usrKey struct{}
