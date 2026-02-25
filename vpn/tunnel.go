@@ -481,6 +481,10 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 		}
 	}
 
+	if err := t.mutGrpMgr.SetURLOverrides(autoTag, newOpts.URLOverrides); err != nil {
+		slog.Warn("Failed to set URL overrides", "group", autoTag, "error", err)
+	}
+
 	slog.Debug("Updated servers in group", "group", group, "added", added, "removed", removed)
 	return errors.Join(errs...)
 }

@@ -50,9 +50,10 @@ const (
 )
 
 type Options struct {
-	Outbounds []option.Outbound           `json:"outbounds,omitempty"`
-	Endpoints []option.Endpoint           `json:"endpoints,omitempty"`
-	Locations map[string]C.ServerLocation `json:"locations,omitempty"`
+	Outbounds    []option.Outbound           `json:"outbounds,omitempty"`
+	Endpoints    []option.Endpoint           `json:"endpoints,omitempty"`
+	Locations    map[string]C.ServerLocation `json:"locations,omitempty"`
+	URLOverrides map[string]string           `json:"url_overrides,omitempty"`
 }
 
 // AllTags returns a slice of all tags from both endpoints and outbounds in the Options.
