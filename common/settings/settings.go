@@ -37,6 +37,7 @@ const (
 	LoginResponseKey = "login_response"
 	SmartRoutingKey  = "smart_routing"
 	AdBlockKey       = "ad_block"
+	UnboundedKey     = "unbounded"
 	filePathKey      = "file_path"
 
 	settingsFileName = "local.json"
