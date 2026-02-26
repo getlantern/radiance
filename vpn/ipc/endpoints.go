@@ -13,4 +13,5 @@ const (
 	connectionsEndpoint      = "/connections"
 	closeConnectionsEndpoint = "/connections/close"
 	setSettingsPathEndpoint  = "/set"
+	statusEventsEndpoint     = "/status/events"
 )

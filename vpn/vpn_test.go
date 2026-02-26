@@ -63,7 +63,7 @@ func TestSelectServer(t *testing.T) {
 			selector := outbound.(_selector)
 			require.NoError(t, selector.Start(), "failed to start selector")
 
-			mservice.status = ipc.StatusRunning
+			mservice.status = ipc.Connected
 			require.NoError(t, selectServer(context.Background(), tt.wantGroup, tt.wantTag))
 			assert.Equal(t, tt.wantTag, selector.Now(), tt.wantTag+" should be selected")
 			assert.Equal(t, tt.wantGroup, clashServer.Mode(), "clash mode should be "+tt.wantGroup)
@@ -131,7 +131,7 @@ func TestAutoServerSelections(t *testing.T) {
 	service.MustRegister[adapter.OutboundManager](ctx, mgr)
 	m := &mockService{
 		ctx:    ctx,
-		status: ipc.StatusRunning,
+		status: ipc.Connected,
 	}
 	ipcServer := ipc.NewServer(m)
 	require.NoError(t, ipcServer.Start())
@@ -181,12 +181,12 @@ var _ ipc.Service = (*mockService)(nil)
 
 type mockService struct {
 	ctx    context.Context
-	status string
+	status ipc.VPNStatus
 	clash  *clashapi.Server
 }
 
 func (m *mockService) Ctx() context.Context                               { return m.ctx }
-func (m *mockService) Status() string                                     { return m.status }
+func (m *mockService) Status() ipc.VPNStatus                              { return m.status }
 func (m *mockService) ClashServer() *clashapi.Server                      { return m.clash }
 func (m *mockService) Close() error                                       { return nil }
 func (m *mockService) Start(ctx context.Context, group, tag string) error { return nil }
@@ -213,7 +213,7 @@ func setupVpnTest(t *testing.T) *mockService {
 
 	m := &mockService{
 		ctx:    ctx,
-		status: ipc.StatusRunning,
+		status: ipc.Connected,
 		clash:  clashServer.(*clashapi.Server),
 	}
 	ipcServer := ipc.NewServer(m)

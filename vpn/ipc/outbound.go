@@ -29,7 +29,7 @@ func SelectOutbound(ctx context.Context, groupTag, outboundTag string) error {
 }
 
 func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -89,7 +89,7 @@ func GetSelected(ctx context.Context) (group, tag string, err error) {
 }
 
 func (s *Server) selectedHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -122,7 +122,7 @@ func GetActiveOutbound(ctx context.Context) (group, tag string, err error) {
 }
 
 func (s *Server) activeOutboundHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}

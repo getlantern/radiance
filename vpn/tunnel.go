@@ -24,6 +24,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
@@ -55,14 +56,21 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
-	status  atomic.Value
+	status  atomic.Value // ipc.VPNStatus
 	cancel  context.CancelFunc
 	closers []io.Closer
 }
 
-func (t *tunnel) start(opts O.Options, platformIfce libbox.PlatformInterface) error {
-	t.status.Store(ipc.StatusInitializing)
+func (t *tunnel) start(opts O.Options, platformIfce libbox.PlatformInterface) (err error) {
+	if t.status.Load() != ipc.Restarting {
+		t.setStatus(ipc.Connecting, nil)
+	}
 	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
+	defer func() {
+		if err != nil {
+			t.setStatus(ipc.ErrorStatus, err)
+		}
+	}()
 
 	if err := t.init(opts, platformIfce); err != nil {
 		t.close()
@@ -75,7 +83,7 @@ func (t *tunnel) start(opts O.Options, platformIfce libbox.PlatformInterface) er
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
-	t.status.Store(ipc.StatusRunning)
+	t.setStatus(ipc.Connected, nil)
 	t.optsMap = makeOutboundOptsMap(t.ctx, opts.Outbounds, opts.Endpoints)
 	return nil
 }
@@ -245,7 +253,7 @@ func (t *tunnel) connect() (err error) {
 func (t *tunnel) selectOutbound(group, tag string) error {
 	t.reloadAccess.Lock()
 	defer t.reloadAccess.Unlock()
-	if status := t.Status(); status != ipc.StatusRunning {
+	if status := t.Status(); status != ipc.Connected {
 		return fmt.Errorf("tunnel not running: status %v", status)
 	}
 
@@ -263,6 +271,9 @@ func (t *tunnel) selectOutbound(group, tag string) error {
 }
 
 func (t *tunnel) close() error {
+	if t.status.Load() != ipc.Restarting {
+		t.setStatus(ipc.Disconnecting, nil)
+	}
 	if t.cancel != nil {
 		t.cancel()
 	}
@@ -285,12 +296,23 @@ func (t *tunnel) close() error {
 
 	t.closers = nil
 	t.lbService = nil
-	t.status.Store(ipc.StatusClosed)
+	if t.status.Load() != ipc.Restarting {
+		t.setStatus(ipc.Disconnected, nil)
+	}
 	return err
 }
 
-func (t *tunnel) Status() string {
-	return t.status.Load().(string)
+func (t *tunnel) Status() ipc.VPNStatus {
+	return t.status.Load().(ipc.VPNStatus)
+}
+
+func (t *tunnel) setStatus(status ipc.VPNStatus, err error) {
+	t.status.Store(status)
+	evt := ipc.StatusUpdateEvent{Status: status}
+	if err != nil {
+		evt.Error = err.Error()
+	}
+	events.Emit(evt)
 }
 
 var errLibboxClosed = errors.New("libbox closed")

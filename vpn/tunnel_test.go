@@ -41,11 +41,11 @@ func TestConnection(t *testing.T) {
 		tun.close()
 	})
 
-	require.Equal(t, ipc.StatusRunning, tun.Status(), "tunnel should be running")
+	require.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
 
 	assert.NoError(t, tun.selectOutbound("http", "http1-out"), "failed to select http outbound")
 	assert.NoError(t, tun.close(), "failed to close lbService")
-	assert.Equal(t, ipc.StatusClosed, tun.Status(), "tun should be closed")
+	assert.Equal(t, ipc.Disconnected, tun.Status(), "tun should be closed")
 }
 
 func TestUpdateServers(t *testing.T) {
@@ -153,6 +153,6 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 		tun.close()
 	})
 
-	assert.Equal(t, ipc.StatusRunning, tun.Status(), "tunnel should be running")
+	assert.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
 	return tun
 }

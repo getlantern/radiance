@@ -118,7 +118,7 @@ func isOpen(ctx context.Context) bool {
 	if err != nil {
 		slog.Error("Failed to get tunnel state", "error", err)
 	}
-	return state == ipc.StatusRunning
+	return state == ipc.Connected
 }
 
 // Disconnect closes the tunnel and all active connections.

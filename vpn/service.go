@@ -137,12 +137,13 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 		s.mu.Unlock()
 		return errors.New("tunnel not started")
 	}
-	if s.tunnel.Status() != ipc.StatusRunning {
+	if s.tunnel.Status() != ipc.Connected {
 		s.mu.Unlock()
 		return errors.New("tunnel not running")
 	}
 
 	s.logger.Info("Restarting tunnel")
+	s.tunnel.setStatus(ipc.Restarting, nil)
 	if s.platformIfce != nil {
 		s.mu.Unlock()
 		if err := s.platformIfce.RestartService(); err != nil {
@@ -165,13 +166,13 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 }
 
 // Status returns the current status of the tunnel (e.g., running, closed).
-func (s *TunnelService) Status() string {
+func (s *TunnelService) Status() ipc.VPNStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tunnel == nil {
-		return ipc.StatusClosed
+		return ipc.Disconnected
 	}
-	return s.tunnel.Status()
+	return ipc.VPNStatus(s.tunnel.Status())
 }
 
 // Ctx returns the context associated with the tunnel, or nil if no tunnel is running.

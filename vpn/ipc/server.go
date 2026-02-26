@@ -1,4 +1,5 @@
 // Package ipc implements the IPC server for communicating between the client and the VPN service.
+
 // It provides HTTP endpoints for retrieving statistics, managing groups, selecting outbounds,
 // changing modes, and closing connections.
 package ipc
@@ -19,7 +20,6 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/events"
 )
 
 var (
@@ -30,7 +30,7 @@ var (
 // Service defines the interface that the IPC server uses to interact with the underlying VPN service.
 type Service interface {
 	Ctx() context.Context
-	Status() string
+	Status() VPNStatus
 	Start(ctx context.Context, group, tag string) error
 	Restart(ctx context.Context) error
 	ClashServer() *clashapi.Server
@@ -40,28 +40,21 @@ type Service interface {
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr       *http.Server
-	service   Service
-	router    chi.Router
-	vpnStatus atomic.Value // string
-	closed    atomic.Bool
-}
-
-// StatusUpdateEvent is emitted when the VPN status changes.
-type StatusUpdateEvent struct {
-	events.Event
-	Status VPNStatus
-	Error  error
+	svr     *http.Server
+	service Service
+	router  chi.Router
+	closed  atomic.Bool
 }
 
 type VPNStatus string
 
 // Possible VPN statuses
 const (
-	Connected     VPNStatus = "connected"
-	Disconnected  VPNStatus = "disconnected"
 	Connecting    VPNStatus = "connecting"
+	Connected     VPNStatus = "connected"
 	Disconnecting VPNStatus = "disconnecting"
+	Disconnected  VPNStatus = "disconnected"
+	Restarting    VPNStatus = "restarting"
 	ErrorStatus   VPNStatus = "error"
 )
 
@@ -75,8 +68,7 @@ func NewServer(service Service) *Server {
 		service: service,
 		router:  chi.NewMux(),
 	}
-	s.vpnStatus.Store(Disconnected)
-	s.router.Use(log, tracer)
+	s.router.Use(log)
 
 	// Only add auth middleware if not running on mobile, since mobile platforms have their own
 	// sandboxing and permission models.
@@ -85,28 +77,38 @@ func NewServer(service Service) *Server {
 		s.router.Use(authPeer)
 	}
 
-	s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+	// Standard routes use the tracer middleware which buffers response bodies for error recording.
+	s.router.Group(func(r chi.Router) {
+		r.Use(tracer)
+		r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		r.Get(statusEndpoint, s.statusHandler)
+		r.Get(metricsEndpoint, s.metricsHandler)
+		r.Get(groupsEndpoint, s.groupHandler)
+		r.Get(connectionsEndpoint, s.connectionsHandler)
+		r.Get(selectEndpoint, s.selectedHandler)
+		r.Get(activeEndpoint, s.activeOutboundHandler)
+		r.Post(selectEndpoint, s.selectHandler)
+		r.Get(clashModeEndpoint, s.clashModeHandler)
+		r.Post(clashModeEndpoint, s.clashModeHandler)
+		r.Post(startServiceEndpoint, s.startServiceHandler)
+		r.Post(stopServiceEndpoint, s.stopServiceHandler)
+		r.Post(restartServiceEndpoint, s.restartServiceHandler)
+		r.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
+		r.Post(setSettingsPathEndpoint, s.setSettingsPathHandler)
 	})
-	s.router.Get(statusEndpoint, s.statusHandler)
-	s.router.Get(metricsEndpoint, s.metricsHandler)
-	s.router.Get(groupsEndpoint, s.groupHandler)
-	s.router.Get(connectionsEndpoint, s.connectionsHandler)
-	s.router.Get(selectEndpoint, s.selectedHandler)
-	s.router.Get(activeEndpoint, s.activeOutboundHandler)
-	s.router.Post(selectEndpoint, s.selectHandler)
-	s.router.Get(clashModeEndpoint, s.clashModeHandler)
-	s.router.Post(clashModeEndpoint, s.clashModeHandler)
-	s.router.Post(startServiceEndpoint, s.startServiceHandler)
-	s.router.Post(stopServiceEndpoint, s.stopServiceHandler)
-	s.router.Post(restartServiceEndpoint, s.restartServiceHandler)
-	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
-	s.router.Post(setSettingsPathEndpoint, s.setSettingsPathHandler)
+
+	// SSE routes skip the tracer middleware since it buffers the entire response body
+	// and holds the span open for the lifetime of the connection.
+	s.router.Get(statusEventsEndpoint, s.statusEventsHandler)
 
 	svr := &http.Server{
-		Handler:      s.router,
-		ReadTimeout:  time.Second * 5,
-		WriteTimeout: time.Second * 5,
+		Handler:     s.router,
+		ReadTimeout: time.Second * 5,
+		// WriteTimeout is 0 (unlimited) to support long-lived SSE connections.
+		// Non-streaming handlers return quickly so this is safe.
+		Protocols: protocols,
 	}
 	if addAuth {
 		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
@@ -137,10 +139,9 @@ func (s *Server) Start() error {
 			slog.Error("IPC server", "error", err)
 		}
 		s.closed.Store(true)
-		if s.service.Status() != StatusClosed {
+		if s.service.Status() != Disconnected {
 			slog.Warn("IPC server stopped unexpectedly, closing service")
 			s.service.Close()
-			s.setVPNStatus(ErrorStatus, errors.New("IPC server stopped unexpectedly"))
 		}
 	}()
 
@@ -178,7 +179,7 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
 	defer span.End()
 	// check if service is already running
-	if s.service.Status() != StatusClosed {
+	if s.service.Status() != Disconnected {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -189,17 +190,14 @@ func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.service.Start(ctx, p.GroupTag, p.OutboundTag); err != nil {
-		s.setVPNStatus(ErrorStatus, err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	s.setVPNStatus(Connected, nil)
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("Received request to stop service via IPC")
-	defer s.setVPNStatus(Disconnected, nil)
 	if err := s.service.Close(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -216,20 +214,13 @@ func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.restartServiceHandler")
 	defer span.End()
 
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.vpnStatus.Store(Disconnected)
 	if err := s.service.Restart(ctx); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.setVPNStatus(Connected, nil)
 	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) setVPNStatus(status VPNStatus, err error) {
-	s.vpnStatus.Store(status)
-	events.Emit(StatusUpdateEvent{Status: status, Error: err})
 }
