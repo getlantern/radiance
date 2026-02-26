@@ -434,6 +434,8 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 	}
 
 	// remove duplicates from newOpts before adding to avoid unnecessary reloads
+	// Stash URLOverrides before dedup since removeDuplicates rebuilds the Options struct
+	urlOverrides := newOpts.URLOverrides
 	newOpts = removeDuplicates(t.optsMap, newOpts, group)
 
 	// for each outbound/endpoint in new add to group
@@ -481,7 +483,7 @@ func (t *tunnel) updateGroup(group string, newOpts servers.Options) error {
 		}
 	}
 
-	if err := t.mutGrpMgr.SetURLOverrides(autoTag, newOpts.URLOverrides); err != nil {
+	if err := t.mutGrpMgr.SetURLOverrides(autoTag, urlOverrides); err != nil {
 		slog.Warn("Failed to set URL overrides", "group", autoTag, "error", err)
 	}
 

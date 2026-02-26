@@ -150,9 +150,10 @@ func (m *Manager) Servers() Servers {
 	result := make(Servers, len(m.servers))
 	for group, opts := range m.servers {
 		result[group] = Options{
-			Outbounds: append([]option.Outbound{}, opts.Outbounds...),
-			Endpoints: append([]option.Endpoint{}, opts.Endpoints...),
-			Locations: maps.Clone(opts.Locations),
+			Outbounds:    append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints:    append([]option.Endpoint{}, opts.Endpoints...),
+			Locations:    maps.Clone(opts.Locations),
+			URLOverrides: maps.Clone(opts.URLOverrides),
 		}
 	}
 	return result
@@ -223,9 +224,10 @@ func (m *Manager) setServers(group ServerGroup, options Options) error {
 
 	slog.Log(nil, internal.LevelTrace, "Setting servers", "group", group, "options", options)
 	opts := Options{
-		Outbounds: append([]option.Outbound{}, options.Outbounds...),
-		Endpoints: append([]option.Endpoint{}, options.Endpoints...),
-		Locations: make(map[string]C.ServerLocation, len(options.Locations)),
+		Outbounds:    append([]option.Outbound{}, options.Outbounds...),
+		Endpoints:    append([]option.Endpoint{}, options.Endpoints...),
+		Locations:    make(map[string]C.ServerLocation, len(options.Locations)),
+		URLOverrides: maps.Clone(options.URLOverrides),
 	}
 	if len(options.Locations) > 0 {
 		maps.Copy(opts.Locations, options.Locations)
