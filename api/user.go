@@ -318,7 +318,6 @@ func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 		LegacyToken:  settings.GetString(settings.TokenKey),
 		Token:        settings.GetString(settings.JwtTokenKey),
 	}
-	slog.Debug("Logging out user", "logout_request", logout)
 	if err := a.authClient.SignOut(ctx, logout); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
@@ -627,7 +626,11 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 	if err != nil {
 		return nil, fmt.Errorf("error getting user data: %w", err)
 	}
-	settings.Set(settings.JwtTokenKey, oAuthToken)
+
+	if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
+		slog.Error("Failed to persist JWT token", "error", err)
+		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
+	}
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
 	a.setData(user)
