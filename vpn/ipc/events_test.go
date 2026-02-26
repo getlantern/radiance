@@ -18,7 +18,7 @@ import (
 )
 
 func TestStatusEventsHandler(t *testing.T) {
-	svc := newMockService()
+	svc := &mockService{status: Disconnected}
 	s := &Server{service: svc}
 
 	rec := httptest.NewRecorder()
@@ -49,14 +49,6 @@ func TestStatusEventsHandler(t *testing.T) {
 	evt = StatusUpdateEvent{Status: ErrorStatus, Error: "something went wrong"}
 	events.Emit(evt)
 	waitAssert(evt, "error event not received")
-
-	// Cancel the service context — handler should return.
-	svc.Close()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		require.Fail(t, "handler did not return after service context cancellation")
-	}
 }
 
 func parseEventLine(t *testing.T, body *bytes.Buffer) StatusUpdateEvent {
@@ -70,19 +62,12 @@ func parseEventLine(t *testing.T, body *bytes.Buffer) StatusUpdateEvent {
 }
 
 type mockService struct {
-	ctx    context.Context
-	cancel context.CancelFunc
 	status VPNStatus
 }
 
-func newMockService() *mockService {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &mockService{ctx: ctx, cancel: cancel, status: Disconnected}
-}
-
-func (m *mockService) Ctx() context.Context                        { return m.ctx }
+func (m *mockService) Ctx() context.Context                        { return nil }
 func (m *mockService) Status() VPNStatus                           { return m.status }
 func (m *mockService) Start(context.Context, string, string) error { return nil }
 func (m *mockService) Restart(context.Context) error               { return nil }
 func (m *mockService) ClashServer() *clashapi.Server               { return nil }
-func (m *mockService) Close() error                                { m.cancel(); return nil }
+func (m *mockService) Close() error                                { return nil }

@@ -92,7 +92,7 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	status := s.service.Status()
 	span.SetAttributes(attribute.String("status", status.String()))
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(status); err != nil {
+	if err := json.NewEncoder(w).Encode(vpnStatus{Status: status}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
