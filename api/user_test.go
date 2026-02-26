@@ -17,6 +17,7 @@ import (
 )
 
 func TestSignUp(t *testing.T) {
+	settings.InitSettings(t.TempDir())
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
