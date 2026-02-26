@@ -70,7 +70,7 @@ func GetStatus(ctx context.Context) (VPNStatus, error) {
 		return Disconnected, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("error getting status: %w", err)
+		return ErrorStatus, fmt.Errorf("error getting status: %w", err)
 	}
 	return res.Status, nil
 }

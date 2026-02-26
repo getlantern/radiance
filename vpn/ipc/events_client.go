@@ -16,8 +16,8 @@ import (
 // [StatusUpdateEvent] events until the context is cancelled. If waitForConnect is true, it
 // polls in a background goroutine until the server is reachable. When the stream is lost
 // (server restart, network error, clean EOF), a [StatusUpdateEvent] with [Disconnected] status
-// is emitted. The retry loop continues until the context is cancelled or a non-recoverable error
-// occurs (e.g. connection refused, invalid response).
+// is emitted. The retry loop continues until a connection is established, the context is cancelled,
+// or a non-recoverable error occurs (e.g. connection refused, invalid response).
 func StartStatusStream(ctx context.Context, waitForConnect bool) error {
 	if !waitForConnect {
 		return startStream(ctx)

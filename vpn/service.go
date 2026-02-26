@@ -172,7 +172,7 @@ func (s *TunnelService) Status() ipc.VPNStatus {
 	if s.tunnel == nil {
 		return ipc.Disconnected
 	}
-	return ipc.VPNStatus(s.tunnel.Status())
+	return s.tunnel.Status()
 }
 
 // Ctx returns the context associated with the tunnel, or nil if no tunnel is running.
