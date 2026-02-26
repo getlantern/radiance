@@ -199,16 +199,30 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 }
 
 // SignUp signs the user up for an account.
-func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
+func (a *APIClient) SignUp(ctx context.Context, email, password string) ([]byte, *protos.SignupResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up")
 	defer span.End()
 
-	salt, err := a.authClient.SignUp(ctx, email, password)
-	if err == nil {
-		a.salt = salt
-		return traces.RecordError(ctx, writeSalt(salt, a.saltPath))
+	salt, signupResponse, err := a.authClient.SignUp(ctx, email, password)
+	if err != nil {
+		return nil, nil, traces.RecordError(ctx, err)
 	}
-	return traces.RecordError(ctx, err)
+	a.salt = salt
+
+	idErr := settings.Set(settings.UserIDKey, signupResponse.LegacyID)
+	if idErr != nil {
+		return nil, nil, fmt.Errorf("could not save user id: %w", idErr)
+	}
+	proTokenErr := settings.Set(settings.TokenKey, signupResponse.ProToken)
+	if proTokenErr != nil {
+		return nil, nil, fmt.Errorf("could not save token: %w", proTokenErr)
+	}
+	jwtTokenErr := settings.Set(settings.JwtTokenKey, signupResponse.Token)
+	if jwtTokenErr != nil {
+		return nil, nil, fmt.Errorf("could not save JWT token: %w", jwtTokenErr)
+	}
+
+	return salt, signupResponse, nil
 }
 
 var ErrNoSalt = errors.New("not salt available, call GetSalt/Signup first")

@@ -51,20 +51,19 @@ func generateSalt() ([]byte, error) {
 	return salt, nil
 }
 
-func (c *authClient) SignUp(ctx context.Context, email string, password string) ([]byte, error) {
+func (c *authClient) SignUp(ctx context.Context, email string, password string) ([]byte, *protos.SignupResponse, error) {
 	lowerCaseEmail := strings.ToLower(email)
 	salt, err := generateSalt()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
 	srpClient, err := newSRPClient(lowerCaseEmail, password, salt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	verifierKey, err := srpClient.Verifier()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	signUpRequestBody := &protos.SignupRequest{
 		Email:                 lowerCaseEmail,
@@ -76,10 +75,11 @@ func (c *authClient) SignUp(ctx context.Context, email string, password string) 
 		Temp: true,
 	}
 
-	if err := c.signUp(ctx, signUpRequestBody); err != nil {
-		return nil, err
+	body, err := c.signUp(ctx, signUpRequestBody)
+	if err != nil {
+		return salt, nil, err
 	}
-	return salt, nil
+	return salt, body, nil
 }
 
 // Todo find way to optimize this method
