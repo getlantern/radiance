@@ -1,5 +1,4 @@
 // Package ipc implements the IPC server for communicating between the client and the VPN service.
-
 // It provides HTTP endpoints for retrieving statistics, managing groups, selecting outbounds,
 // changing modes, and closing connections.
 package ipc
@@ -20,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/servers"
 )
 
 var (
@@ -31,10 +31,13 @@ var (
 type Service interface {
 	Ctx() context.Context
 	Status() VPNStatus
-	Start(ctx context.Context, group, tag string) error
-	Restart(ctx context.Context) error
-	ClashServer() *clashapi.Server
+	Start(ctx context.Context, options string) error
+	Restart(ctx context.Context, options string) error
 	Close() error
+	ClashServer() *clashapi.Server
+	UpdateOutbounds(options servers.Servers) error
+	AddOutbounds(group string, options servers.Options) error
+	RemoveOutbounds(group string, tags []string) error
 }
 
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
@@ -96,7 +99,6 @@ func NewServer(service Service) *Server {
 		r.Post(stopServiceEndpoint, s.stopServiceHandler)
 		r.Post(restartServiceEndpoint, s.restartServiceHandler)
 		r.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
-		r.Post(setSettingsPathEndpoint, s.setSettingsPathHandler)
 	})
 
 	// SSE routes skip the tracer middleware since it buffers the entire response body
@@ -163,37 +165,49 @@ func (s *Server) IsClosed() bool {
 	return s.closed.Load()
 }
 
-// StartService sends a request to start the service
-func StartService(ctx context.Context, group, tag string) error {
-	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, selection{GroupTag: group, OutboundTag: tag})
-	return err
+type opts struct {
+	Options string `json:"options"`
 }
 
-// StopService sends a request to stop the service (IPC server stays up)
-func StopService(ctx context.Context) error {
-	_, err := sendRequest[empty](ctx, "POST", stopServiceEndpoint, nil)
+// StartService sends a request to start the service
+func StartService(ctx context.Context, options string) error {
+	_, err := sendRequest[empty](ctx, "POST", startServiceEndpoint, opts{Options: options})
 	return err
 }
 
 func (s *Server) startServiceHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer(tracerName).Start(r.Context(), "ipc.Server.StartService")
 	defer span.End()
-	// check if service is already running
-	if s.service.Status() != Disconnected {
+	switch s.service.Status() {
+	case Disconnected:
+		// proceed to start
+	case Connected:
 		w.WriteHeader(http.StatusOK)
 		return
+	case Disconnecting:
+		http.Error(w, "service is disconnecting, please wait", http.StatusConflict)
+		return
+	default:
+		http.Error(w, "service is already starting", http.StatusConflict)
+		return
 	}
-	var p selection
+	var p opts
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := s.service.Start(ctx, p.GroupTag, p.OutboundTag); err != nil {
+	if err := s.service.Start(ctx, p.Options); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// StopService sends a request to stop the service (IPC server stays up)
+func StopService(ctx context.Context) error {
+	_, err := sendRequest[empty](ctx, "POST", stopServiceEndpoint, nil)
+	return err
 }
 
 func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -205,8 +219,8 @@ func (s *Server) stopServiceHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func RestartService(ctx context.Context) error {
-	_, err := sendRequest[empty](ctx, "POST", restartServiceEndpoint, nil)
+func RestartService(ctx context.Context, options string) error {
+	_, err := sendRequest[empty](ctx, "POST", restartServiceEndpoint, opts{Options: options})
 	return err
 }
 
@@ -218,7 +232,13 @@ func (s *Server) restartServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := s.service.Restart(ctx); err != nil {
+	var p opts
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := s.service.Restart(ctx, p.Options); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

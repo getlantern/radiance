@@ -26,8 +26,10 @@ import (
 
 	C "github.com/getlantern/common"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 
@@ -101,9 +103,8 @@ func NewManager(dataPath string) (*Manager, error) {
 		serversFile: filepath.Join(dataPath, common.ServersFileName),
 		access:      sync.RWMutex{},
 
-		// Note that we use a regular http.Client here because it is only used to access private
-		// servers the user has created.
-		// Use the same configuration as http.DefaultClient.
+		// Use the bypass proxy dialer to route requests outside the VPN tunnel.
+		// This client is only used to access private servers the user has created.
 		httpClient: retryableHTTPClient().StandardClient(),
 	}
 
@@ -118,11 +119,8 @@ func NewManager(dataPath string) (*Manager, error) {
 
 func retryableHTTPClient() *retryablehttp.Client {
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           bypass.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
@@ -194,6 +192,24 @@ func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	return s, true
 }
 
+type ServersUpdatedEvent struct {
+	events.Event
+	Group   ServerGroup
+	Options *Options
+}
+
+type ServersAddedEvent struct {
+	events.Event
+	Group   ServerGroup
+	Options *Options
+}
+
+type ServersRemovedEvent struct {
+	events.Event
+	Group ServerGroup
+	Tag   string
+}
+
 // SetServers sets the server options for a specific group.
 // Important: this will overwrite any existing servers for that group. To add new servers without
 // overwriting existing ones, use [AddServers] instead.
@@ -207,6 +223,10 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
+	events.Emit(ServersUpdatedEvent{
+		Group:   group,
+		Options: &options,
+	})
 	return nil
 }
 
@@ -267,6 +287,10 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 		return fmt.Errorf("some servers were not added because they already exist: %v", existingTags)
 	}
 	slog.Debug("Server configs added", "group", group, "newCount", len(opts.AllTags()))
+	events.Emit(ServersAddedEvent{
+		Group:   group,
+		Options: &opts,
+	})
 	return nil
 }
 
@@ -331,6 +355,10 @@ func (m *Manager) RemoveServer(tag string) error {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
 	}
 	slog.Debug("Server config removed", "group", group, "tag", tag)
+	events.Emit(ServersRemovedEvent{
+		Group: group,
+		Tag:   tag,
+	})
 	return nil
 }
 

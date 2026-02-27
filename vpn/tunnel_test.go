@@ -8,6 +8,7 @@ import (
 	sbA "github.com/sagernet/sing-box/adapter"
 	sbC "github.com/sagernet/sing-box/constant"
 	sbO "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ import (
 
 func TestConnection(t *testing.T) {
 	testutil.SetPathsForTesting(t)
-	opts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	opts, optsStr, err := testBoxOptions(settings.GetString(settings.DataPathKey))
 	require.NoError(t, err, "failed to get test box options")
 
 	tmp := settings.GetString(settings.DataPathKey)
@@ -36,7 +37,7 @@ func TestConnection(t *testing.T) {
 		dataPath: tmp,
 	}
 
-	require.NoError(t, tun.start(*opts, nil), "failed to establish connection")
+	require.NoError(t, tun.start(optsStr, nil), "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()
 	})
@@ -85,12 +86,15 @@ func TestUpdateServers(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
+	err = tun.removeOutbounds(servers.SGLantern, []string{"http2-out", "socks1-out"})
+	require.NoError(t, err, "failed to remove servers from lantern")
+
 	newOpts := servers.Options{
 		Outbounds: []sbO.Outbound{
 			allOutbounds["http1-out"], allOutbounds["socks2-out"],
 		},
 	}
-	err = tun.updateGroup(servers.SGLantern, newOpts)
+	err = tun.addOutbounds(servers.SGLantern, newOpts)
 	require.NoError(t, err, "failed to update servers for lantern")
 
 	time.Sleep(250 * time.Millisecond)
@@ -147,7 +151,8 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 		dataPath: tmp,
 	}
 
-	err := tun.start(opts, nil)
+	options, _ := json.Marshal(opts)
+	err := tun.start(string(options), nil)
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()

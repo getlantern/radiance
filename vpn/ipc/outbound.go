@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing/service"
 
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/servers"
 )
 
 type selection struct {
@@ -172,4 +173,82 @@ func getGroupOutbound(ctx context.Context, tag string) (adapter.OutboundGroup, e
 		return nil, fmt.Errorf("outbound is not a group: %s", tag)
 	}
 	return group, nil
+}
+
+func UpdateOutbounds(ctx context.Context, servers servers.Servers) error {
+	_, err := sendRequest[empty](ctx, "POST", updateOutboundsEndpoint, servers)
+	return err
+}
+
+func (s *Server) updateOutboundsHandler(w http.ResponseWriter, r *http.Request) {
+	if s.service.Status() != Connected {
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	var data servers.Servers
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	slog.Debug("Updating outbounds")
+	if err := s.service.UpdateOutbounds(data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+type newOutbounds struct {
+	Group   string          `json:"group"`
+	Servers servers.Options `json:"servers"`
+}
+
+func AddOutbounds(ctx context.Context, group string, servers servers.Options) error {
+	_, err := sendRequest[empty](ctx, "POST", addOutboundsEndpoint, newOutbounds{Group: group, Servers: servers})
+	return err
+}
+
+func (s *Server) addOutboundsHandler(w http.ResponseWriter, r *http.Request) {
+	if s.service.Status() != Connected {
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	var data newOutbounds
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	slog.Debug("Adding outbounds", "group", data.Group)
+	if err := s.service.AddOutbounds(data.Group, data.Servers); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+type outboundsToRemove struct {
+	Group string   `json:"group"`
+	Tags  []string `json:"tags"`
+}
+
+func RemoveOutbounds(ctx context.Context, group string, tags []string) error {
+	_, err := sendRequest[empty](ctx, "POST", removeOutboundsEndpoint, outboundsToRemove{Group: group, Tags: tags})
+	return err
+}
+
+func (s *Server) removeOutboundsHandler(w http.ResponseWriter, r *http.Request) {
+	if s.service.Status() != Connected {
+		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	var data outboundsToRemove
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.service.RemoveOutbounds(data.Group, data.Tags); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }

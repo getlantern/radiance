@@ -12,7 +12,7 @@ import (
 
 type AuthClient interface {
 	// Sign up methods
-	SignUp(ctx context.Context, email string, password string) ([]byte, error)
+	SignUp(ctx context.Context, email string, password string) ([]byte, *protos.SignupResponse, error)
 	SignupEmailResendCode(ctx context.Context, data *protos.SignupEmailResendRequest) error
 	SignupEmailConfirmation(ctx context.Context, data *protos.ConfirmSignupRequest) error
 	// Login methods
@@ -55,8 +55,8 @@ func (c *authClient) GetSalt(ctx context.Context, email string) (*protos.GetSalt
 
 // Sign up API
 // SignUp is used to sign up a new user with the SignupRequest
-func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupRequest) error {
-	var resp protos.EmptyResponse
+func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupRequest) (*protos.SignupResponse, error) {
+	var resp protos.SignupResponse
 	header := map[string]string{
 		backend.DeviceIDHeader: settings.GetString(settings.DeviceIDKey),
 		backend.UserIDHeader:   strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
@@ -64,7 +64,10 @@ func (c *authClient) signUp(ctx context.Context, signupData *protos.SignupReques
 	}
 	wc := authWebClient()
 	req := wc.NewRequest(nil, header, signupData)
-	return wc.Post(ctx, "/users/signup", req, &resp)
+	if err := wc.Post(ctx, "/users/signup", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // SignupEmailResendCode is used to resend the email confirmation code

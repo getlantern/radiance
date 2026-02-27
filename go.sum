@@ -192,8 +192,8 @@ github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f h1:NLGftemDrbGf7Wce
 github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f/go.mod h1:qnMv9szb8JK3kA9W4N2FlYUMj1GkA0x7QEUEPD7tk4o=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01 h1:Mmeh4/DA1OKN9tVWRAvTL5efFx4c7v9/55hoK17NclA=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01/go.mod h1:3vR6+jQdWfWojZ77w+htCqEF5MO/Y2twJOpAvFuM9po=
-github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f h1:EqRKCaOBuvVkFsIjeWUYluE4s4TZtVQSClfIWFqcSks=
-github.com/getlantern/common v1.2.1-0.20260121160752-d8ee5791108f/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
+github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85 h1:jj2Qv6drsceI4v3krNHXSn805QDRqy7w4XMqW359Z18=
+github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
 github.com/getlantern/context v0.0.0-20190109183933-c447772a6520/go.mod h1:L+mq6/vvYHKjCX2oez0CgEAJmbq1fbb/oNJIWQkBybY=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
@@ -206,6 +206,8 @@ github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731 h1:v+vJ3LgV4nW4
 github.com/getlantern/fdcount v0.0.0-20210503151800-5decd65b3731/go.mod h1:XZwE+iIlAgr64OFbXKFNCllBwV4wEipPx8Hlo2gZdbM=
 github.com/getlantern/fronted v0.0.0-20260219001615-7eabaa834efe h1:Q4fwCDDqgw21GGitBPXol68wbAJGBNBolNsa8MS5wXk=
 github.com/getlantern/fronted v0.0.0-20260219001615-7eabaa834efe/go.mod h1:1a+iv1xzGxZWj/vCHzr8Z3dF9H1sNTuMSPHUqRsgbl0=
+github.com/getlantern/fronted v0.0.0-20260225205111-41c9e534027a h1:mZVn1e2boHzKk4JgKwQ4Eqhn+omowFWzPduxGHCmYRs=
+github.com/getlantern/fronted v0.0.0-20260225205111-41c9e534027a/go.mod h1:1a+iv1xzGxZWj/vCHzr8Z3dF9H1sNTuMSPHUqRsgbl0=
 github.com/getlantern/golog v0.0.0-20210606115803-bce9f9fe5a5f/go.mod h1:ZyIjgH/1wTCl+B+7yH1DqrWp6MPJqESmwmEQ89ZfhvA=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 h1:NlQedYmPI3pRAXJb+hLVVDGqfvvXGRPV8vp7XOjKAZ0=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65/go.mod h1:+ZU1h+iOVqWReBpky6d5Y2WL0sF2Llxu+QcxJFs2+OU=
