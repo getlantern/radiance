@@ -1,8 +1,11 @@
 package kindling
 
 import (
-	"io"
+	"bufio"
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 )
 
 const (
@@ -19,34 +22,47 @@ func NewKindlingProxy(addr string) *KindlingProxy {
 		server: &http.Server{
 			Addr: addr,
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Scheme == "" {
-					r.URL.Scheme = "https"
-				}
-				if r.URL.Host == "" {
-					r.URL.Host = r.Host
-				}
-
-				outReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadGateway)
+				if r.Method != http.MethodConnect {
+					http.Error(w, "only CONNECT method is supported", http.StatusMethodNotAllowed)
 					return
 				}
-				outReq.Header = r.Header.Clone()
-
-				resp, err := HTTPClient().Do(outReq)
+				hijacker, ok := w.(http.Hijacker)
+				if !ok {
+					http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+					return
+				}
+				clientConn, _, err := hijacker.Hijack()
 				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadGateway)
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				defer clientConn.Close()
+
+				// Send 200 OK to client
+				_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+				if err != nil {
+					return
+				}
+				req, err := http.ReadRequest(bufio.NewReader(clientConn))
+				if err != nil {
+					writeErrorToConn(clientConn, http.StatusBadRequest, err.Error())
+					return
+				}
+				req.URL = &url.URL{
+					Scheme:   "http",
+					Host:     r.Host,
+					Path:     req.URL.Path,
+					RawQuery: req.URL.RawQuery,
+				}
+				req.RequestURI = ""
+				resp, err := HTTPClient().Do(req)
+				if err != nil {
+					writeErrorToConn(clientConn, http.StatusBadGateway, err.Error())
 					return
 				}
 				defer resp.Body.Close()
 
-				for key, values := range resp.Header {
-					for _, value := range values {
-						w.Header().Add(key, value)
-					}
-				}
-				w.WriteHeader(resp.StatusCode)
-				io.Copy(w, resp.Body)
+				resp.Write(clientConn)
 			}),
 		},
 	}
@@ -63,4 +79,8 @@ func (p *KindlingProxy) Close() error {
 
 func (p *KindlingProxy) Addr() string {
 	return p.server.Addr
+}
+
+func writeErrorToConn(conn net.Conn, statusCode int, msg string) {
+	fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\n\r\n%s", statusCode, http.StatusText(statusCode), msg)
 }
