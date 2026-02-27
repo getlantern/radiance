@@ -54,8 +54,8 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type state struct {
-	State VPNStatus `json:"state"`
+type vpnStatus struct {
+	Status VPNStatus `json:"status"`
 }
 
 // GetStatus retrieves the current status of the service.
@@ -65,14 +65,14 @@ func GetStatus(ctx context.Context) (VPNStatus, error) {
 		return Disconnected, err
 	}
 
-	res, err := sendRequest[state](ctx, "GET", statusEndpoint, nil)
+	res, err := sendRequest[vpnStatus](ctx, "GET", statusEndpoint, nil)
 	if errors.Is(err, ErrIPCNotRunning) || errors.Is(err, ErrServiceIsNotReady) {
 		return Disconnected, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("error getting status: %w", err)
+		return ErrorStatus, fmt.Errorf("error getting status: %w", err)
 	}
-	return res.State, nil
+	return res.Status, nil
 }
 
 func tryDial(ctx context.Context) (bool, error) {
@@ -90,9 +90,9 @@ func tryDial(ctx context.Context) (bool, error) {
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	span := trace.SpanFromContext(r.Context())
 	status := s.service.Status()
-	span.SetAttributes(attribute.String("status", string(status)))
+	span.SetAttributes(attribute.String("status", status.String()))
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(state{status}); err != nil {
+	if err := json.NewEncoder(w).Encode(vpnStatus{Status: status}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

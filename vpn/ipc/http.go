@@ -19,6 +19,12 @@ import (
 
 const tracerName = "github.com/getlantern/radiance/vpn/ipc"
 
+var protocols = func() *http.Protocols {
+	p := &http.Protocols{}
+	p.SetUnencryptedHTTP2(true)
+	return p
+}()
+
 // empty is a placeholder type for requests that do not expect a response body.
 type empty struct{}
 
@@ -40,7 +46,9 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 	}
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext: dialContext,
+			DialContext:       dialContext,
+			Protocols:         protocols,
+			ForceAttemptHTTP2: true,
 		},
 	}
 	resp, err := client.Do(req)

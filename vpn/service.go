@@ -133,6 +133,7 @@ func (s *TunnelService) Restart(ctx context.Context, options string) error {
 	}
 
 	s.logger.Info("Restarting tunnel")
+	s.tunnel.setStatus(ipc.Restarting, nil)
 	if s.platformIfce != nil {
 		s.mu.Unlock()
 		if err := s.platformIfce.RestartService(); err != nil {
