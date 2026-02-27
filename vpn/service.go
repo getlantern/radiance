@@ -15,6 +15,7 @@ import (
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
 	"github.com/getlantern/radiance/vpn/rvpn"
 )
@@ -61,39 +62,28 @@ func NewTunnelService(dataPath string, logger *slog.Logger, platformIfce rvpn.Pl
 	}
 }
 
-// Start initializes and starts the tunnel with the specified group and tag. Returns an error if the
+// Start initializes and starts the tunnel with the specified options. Returns an error if the
 // tunnel is already running or initialization fails.
-func (s *TunnelService) Start(ctx context.Context, group string, tag string) error {
+func (s *TunnelService) Start(ctx context.Context, options string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tunnel != nil {
 		s.logger.Warn("tunnel already started")
 		return errors.New("tunnel already started")
 	}
-	s.logger.Debug("Starting tunnel", "group", group, "tag", tag)
-	if err := s.start(ctx); err != nil {
+	s.logger.Debug("Starting tunnel", "options", options)
+	if err := s.start(ctx, options); err != nil {
 		return err
-	}
-	if group != "" {
-		if err := s.tunnel.selectOutbound(group, tag); err != nil {
-			slog.Error("Failed to select outbound", "group", group, "tag", tag, "error", err)
-			return fmt.Errorf("selecting outbound: %w", err)
-		}
 	}
 	return nil
 }
 
-func (s *TunnelService) start(ctx context.Context) error {
+func (s *TunnelService) start(ctx context.Context, options string) error {
 	path := settings.GetString(settings.DataPathKey)
-	_ = newSplitTunnel(path)
-	opts, err := buildOptions(ctx, path)
-	if err != nil {
-		return fmt.Errorf("failed to build options: %w", err)
-	}
 	t := tunnel{
 		dataPath: path,
 	}
-	if err := t.start(opts, s.platformIfce); err != nil {
+	if err := t.start(options, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
 	s.tunnel = &t
@@ -131,13 +121,13 @@ func (s *TunnelService) close() error {
 
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
-func (s *TunnelService) Restart(ctx context.Context) error {
+func (s *TunnelService) Restart(ctx context.Context, options string) error {
 	s.mu.Lock()
 	if s.tunnel == nil {
 		s.mu.Unlock()
 		return errors.New("tunnel not started")
 	}
-	if s.tunnel.Status() != ipc.StatusRunning {
+	if s.tunnel.Status() != ipc.Connected {
 		s.mu.Unlock()
 		return errors.New("tunnel not running")
 	}
@@ -156,7 +146,7 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 	if err := s.close(); err != nil {
 		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	if err := s.start(ctx); err != nil {
+	if err := s.start(ctx, options); err != nil {
 		s.logger.Error("starting tunnel", "error", err)
 		return fmt.Errorf("starting tunnel: %w", err)
 	}
@@ -165,11 +155,11 @@ func (s *TunnelService) Restart(ctx context.Context) error {
 }
 
 // Status returns the current status of the tunnel (e.g., running, closed).
-func (s *TunnelService) Status() string {
+func (s *TunnelService) Status() ipc.VPNStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tunnel == nil {
-		return ipc.StatusClosed
+		return ipc.Disconnected
 	}
 	return s.tunnel.Status()
 }
@@ -193,4 +183,41 @@ func (s *TunnelService) ClashServer() *clashapi.Server {
 		return nil
 	}
 	return s.tunnel.clashServer
+}
+
+var errTunnelNotStarted = errors.New("tunnel not started")
+
+// activeTunnel returns the running tunnel or errTunnelNotStarted.
+func (s *TunnelService) activeTunnel() (*tunnel, error) {
+	s.mu.Lock()
+	t := s.tunnel
+	s.mu.Unlock()
+	if t == nil {
+		return nil, errTunnelNotStarted
+	}
+	return t, nil
+}
+
+func (s *TunnelService) UpdateOutbounds(newOpts servers.Servers) error {
+	t, err := s.activeTunnel()
+	if err != nil {
+		return err
+	}
+	return t.updateOutbounds(newOpts)
+}
+
+func (s *TunnelService) AddOutbounds(group string, options servers.Options) error {
+	t, err := s.activeTunnel()
+	if err != nil {
+		return err
+	}
+	return t.addOutbounds(group, options)
+}
+
+func (s *TunnelService) RemoveOutbounds(group string, tags []string) error {
+	t, err := s.activeTunnel()
+	if err != nil {
+		return err
+	}
+	return t.removeOutbounds(group, tags)
 }

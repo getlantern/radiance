@@ -31,6 +31,7 @@ const (
 	EmailKey         = "email"
 	UserLevelKey     = "user_level"
 	TokenKey         = "token"
+	JwtTokenKey      = "jwt_token"
 	UserIDKey        = "user_id"
 	DevicesKey       = "devices"
 	LogLevelKey      = "log_level"

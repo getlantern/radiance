@@ -199,16 +199,30 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 }
 
 // SignUp signs the user up for an account.
-func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
+func (a *APIClient) SignUp(ctx context.Context, email, password string) ([]byte, *protos.SignupResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up")
 	defer span.End()
 
-	salt, err := a.authClient.SignUp(ctx, email, password)
-	if err == nil {
-		a.salt = salt
-		return traces.RecordError(ctx, writeSalt(salt, a.saltPath))
+	salt, signupResponse, err := a.authClient.SignUp(ctx, email, password)
+	if err != nil {
+		return nil, nil, traces.RecordError(ctx, err)
 	}
-	return traces.RecordError(ctx, err)
+	a.salt = salt
+
+	idErr := settings.Set(settings.UserIDKey, signupResponse.LegacyID)
+	if idErr != nil {
+		return nil, nil, fmt.Errorf("could not save user id: %w", idErr)
+	}
+	proTokenErr := settings.Set(settings.TokenKey, signupResponse.ProToken)
+	if proTokenErr != nil {
+		return nil, nil, fmt.Errorf("could not save token: %w", proTokenErr)
+	}
+	jwtTokenErr := settings.Set(settings.JwtTokenKey, signupResponse.Token)
+	if jwtTokenErr != nil {
+		return nil, nil, fmt.Errorf("could not save JWT token: %w", jwtTokenErr)
+	}
+
+	return salt, signupResponse, nil
 }
 
 var ErrNoSalt = errors.New("not salt available, call GetSalt/Signup first")
@@ -311,12 +325,14 @@ func (a *APIClient) Login(ctx context.Context, email string, password string) ([
 func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
 	defer span.End()
-	if err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
+	logout := &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
 		LegacyUserID: settings.GetInt64(settings.UserIDKey),
 		LegacyToken:  settings.GetString(settings.TokenKey),
-	}); err != nil {
+		Token:        settings.GetString(settings.JwtTokenKey),
+	}
+	if err := a.authClient.SignOut(ctx, logout); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
 	a.Reset()
@@ -624,6 +640,11 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 	if err != nil {
 		return nil, fmt.Errorf("error getting user data: %w", err)
 	}
+
+	if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
+		slog.Error("Failed to persist JWT token", "error", err)
+		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
+	}
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
 	a.setData(user)
@@ -716,6 +737,13 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 		changed = changed && oldToken != data.LegacyToken
 		if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
 			slog.Error("failed to set token in settings", "error", err)
+		}
+	}
+	if data.Token != "" {
+		oldJwtToken := settings.GetString(settings.JwtTokenKey)
+		changed = changed && oldJwtToken != data.Token
+		if err := settings.Set(settings.JwtTokenKey, data.Token); err != nil {
+			slog.Error("failed to set JWT token in settings", "error", err)
 		}
 	}
 

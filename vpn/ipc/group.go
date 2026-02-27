@@ -16,7 +16,7 @@ func GetGroups(ctx context.Context) ([]OutboundGroup, error) {
 }
 
 func (s *Server) groupHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}

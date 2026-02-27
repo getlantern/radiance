@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/env"
@@ -45,24 +45,14 @@ const (
 
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
-
-	directTag  = "direct-domains"
-	directFile = directTag + ".json"
 )
 
 // this is the base options that is need for everything to work correctly. this should not be
 // changed unless you know what you're doing.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
-	directPath := filepath.Join(basePath, directFile)
 
-	// Write the domains to access directly to a file to disk.
-	if err := os.WriteFile(directPath, []byte(inlineDirectRuleSet), 0644); err != nil {
-		slog.Warn("Failed to write inline direct rule set to file", "path", directPath, "error", err)
-	} else {
-		slog.Info("Wrote inline direct rule set to file", "path", directPath)
-	}
-
+	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -92,6 +82,16 @@ func baseOpts(basePath string) O.Options {
 					MTU:         1500,
 				},
 			},
+			{
+				Type: C.TypeMixed,
+				Tag:  bypass.BypassInboundTag,
+				Options: &O.HTTPMixedInboundOptions{
+					ListenOptions: O.ListenOptions{
+						Listen:     &loopbackAddr,
+						ListenPort: bypass.ProxyPort,
+					},
+				},
+			},
 		},
 		Outbounds: []O.Outbound{
 			{
@@ -117,14 +117,6 @@ func baseOpts(basePath string) O.Options {
 					},
 					Format: C.RuleSetFormatSource,
 				},
-				{
-					Type: C.RuleSetTypeLocal,
-					Tag:  directTag,
-					LocalOptions: O.LocalRuleSet{
-						Path: directPath,
-					},
-					Format: C.RuleSetFormatSource,
-				},
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
@@ -146,15 +138,15 @@ func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
 	// The rules MUST be in this order to ensure proper functionality:
-	// 1.   Enable traffic sniffing
-	// 2.   Hijack DNS to allow sing-box to handle DNS requests
-	// 3.   Route private IPs to direct outbound
-	// 4.   Split tunnel rule
-	// 5.   Bypass Lantern process traffic (not on mobile)
-	// 6.   rules from config file (added in buildOptions)
-	// 7-9. Group rules for auto, lantern, and user (added in buildOptions)
-	// 10.  Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
-	//      by previous rules does not automatically bypass the VPN.
+	// 1.    Enable traffic sniffing
+	// 2.    Hijack DNS to allow sing-box to handle DNS requests
+	// 3.    Route bypass proxy traffic directly (for kindling connections)
+	// 4.    Route private IPs to direct outbound
+	// 5.    Split tunnel rule (user-configurable)
+	// 6.    Rules from config file (added in buildOptions)
+	// 7-9.  Group rules for auto, lantern, and user (added in buildOptions)
+	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
 	//   rules or their order can break certain functionalities like DNS resolution, smart connect,
@@ -189,6 +181,20 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
+		{ // Route bypass proxy traffic directly (for kindling connections)
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					Inbound: []string{bypass.BypassInboundTag},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{
+						Outbound: "direct",
+					},
+				},
+			},
+		},
 		{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
@@ -207,7 +213,7 @@ func baseRoutingRules() []O.Rule {
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{
-					RuleSet: []string{splitTunnelTag, directTag},
+					RuleSet: []string{splitTunnelTag},
 				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeRoute,
@@ -217,22 +223,6 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-	}
-	if !common.IsAndroid() && !common.IsIOS() {
-		rules = append(rules, O.Rule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{
-					ProcessPathRegex: lanternRegexForPlatform(),
-				},
-				RuleAction: O.RuleAction{
-					Action: C.RuleActionTypeRoute,
-					RouteOptions: O.RouteActionOptions{
-						Outbound: "direct",
-					},
-				},
-			},
-		})
 	}
 	return rules
 }
@@ -515,30 +505,6 @@ func catchAllBlockerRule() O.Rule {
 	}
 }
 
-// lanternRegexForPlatform returns the regex patterns to match Lantern process path for the current platform. We want this
-// to be as limited as possible to avoid cases where other applications can bypass the VPN.
-func lanternRegexForPlatform() []string {
-	switch common.Platform {
-	case "windows":
-		return []string{
-			`(?i)^C:\\Program Files\\Lantern\\lantern\.exe$`,
-			`(?i)^C:\\Program Files( \(x86\))?\\Lantern\\lantern\.exe$`,
-			`(?i)^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\Lantern\\lantern\.exe$`,
-			`(?i)^C:\\Users\\[^\\]+\\AppData\\Roaming\\Lantern\\lantern\.exe$`,
-		}
-	case "darwin":
-		return []string{`(?i)^/Lantern.app/Contents/MacOS/lantern$`}
-	case "linux":
-		return []string{
-			`(?i)^/opt/lantern/lantern$`,
-			`(?i)^/usr/bin/lantern$`,
-			`(?i)^/usr/local/bin/lantern$`,
-			`(?i)^/home/.+/(lantern/(bin/)?)?lantern$`,
-		}
-	default:
-		return []string{}
-	}
-}
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
 	var serverOpts any
@@ -579,21 +545,3 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 		Options: serverOpts,
 	}
 }
-
-// These are embedded domains that should always bypass the VPN.
-var inlineDirectRuleSet string = `
-{
-  "version": 3,
-  "rules": [
-    {
-      "domain_suffix": [
-        "iantem.io",
-        "api.getiantem.org",
-        "a248.e.akamai.net",
-        "cloudfront.net",
-        "raw.githubusercontent.com"
-      ]
-    }
-  ]
-}
-`

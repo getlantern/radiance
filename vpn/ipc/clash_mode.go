@@ -34,7 +34,7 @@ func SetClashMode(ctx context.Context, mode string) error {
 // clashModeHandler handles HTTP requests for getting or setting the Clash server mode.
 func (s *Server) clashModeHandler(w http.ResponseWriter, req *http.Request) {
 	span := trace.SpanFromContext(req.Context())
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}

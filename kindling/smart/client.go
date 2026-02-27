@@ -3,14 +3,17 @@
 package smart
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
 
 	"github.com/getlantern/kindling"
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,6 +35,7 @@ func NewHTTPClientWithSmartTransport(logWriter io.Writer, address string) (*http
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
 	}
+	wrapTransportWithBypass(trans)
 	lz := &lazyDialingRoundTripper{
 		smartTransportMu: sync.Mutex{},
 		logWriter:        logWriter,
@@ -67,14 +71,14 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 
 	if lz.smartTransport == nil {
 		slog.Info("Smart transport is nil")
-		var err error
-		lz.smartTransport, err = kindling.NewSmartHTTPTransport(lz.logWriter, lz.domain)
+		trans, err := kindling.NewSmartHTTPTransport(lz.logWriter, lz.domain)
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
-			// This typically just means we're offline
 			return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport -- offline? %v", err))
 		}
+		wrapTransportWithBypass(trans)
+		lz.smartTransport = trans
 	}
 
 	lz.smartTransportMu.Unlock()
@@ -83,4 +87,13 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 	}
 	return res, err
+}
+
+func wrapTransportWithBypass(trans *http.Transport) {
+	if trans == nil {
+		return
+	}
+	trans.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return bypass.DialContext(ctx, network, addr)
+	}
 }
