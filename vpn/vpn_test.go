@@ -9,6 +9,7 @@ import (
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal/testutil"
+	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -63,8 +64,8 @@ func TestSelectServer(t *testing.T) {
 			selector := outbound.(_selector)
 			require.NoError(t, selector.Start(), "failed to start selector")
 
-			mservice.status = ipc.StatusRunning
-			require.NoError(t, selectServer(context.Background(), tt.wantGroup, tt.wantTag))
+			mservice.status = ipc.Connected
+			require.NoError(t, SelectServer(context.Background(), tt.wantGroup, tt.wantTag))
 			assert.Equal(t, tt.wantTag, selector.Now(), tt.wantTag+" should be selected")
 			assert.Equal(t, tt.wantGroup, clashServer.Mode(), "clash mode should be "+tt.wantGroup)
 		})
@@ -131,7 +132,7 @@ func TestAutoServerSelections(t *testing.T) {
 	service.MustRegister[adapter.OutboundManager](ctx, mgr)
 	m := &mockService{
 		ctx:    ctx,
-		status: ipc.StatusRunning,
+		status: ipc.Connected,
 	}
 	ipcServer := ipc.NewServer(m)
 	require.NoError(t, ipcServer.Start())
@@ -181,16 +182,19 @@ var _ ipc.Service = (*mockService)(nil)
 
 type mockService struct {
 	ctx    context.Context
-	status string
+	status ipc.VPNStatus
 	clash  *clashapi.Server
 }
 
-func (m *mockService) Ctx() context.Context                               { return m.ctx }
-func (m *mockService) Status() string                                     { return m.status }
-func (m *mockService) ClashServer() *clashapi.Server                      { return m.clash }
-func (m *mockService) Close() error                                       { return nil }
-func (m *mockService) Start(ctx context.Context, group, tag string) error { return nil }
-func (m *mockService) Restart(ctx context.Context) error                  { return nil }
+func (m *mockService) Ctx() context.Context                                     { return m.ctx }
+func (m *mockService) Status() ipc.VPNStatus                                    { return m.status }
+func (m *mockService) ClashServer() *clashapi.Server                            { return m.clash }
+func (m *mockService) Close() error                                             { return nil }
+func (m *mockService) Start(context.Context, string) error                      { return nil }
+func (m *mockService) Restart(context.Context, string) error                    { return nil }
+func (m *mockService) UpdateOutbounds(options servers.Servers) error            { return nil }
+func (m *mockService) AddOutbounds(group string, options servers.Options) error { return nil }
+func (m *mockService) RemoveOutbounds(group string, tags []string) error        { return nil }
 
 func setupVpnTest(t *testing.T) *mockService {
 	path := settings.GetString(settings.DataPathKey)
@@ -213,7 +217,7 @@ func setupVpnTest(t *testing.T) *mockService {
 
 	m := &mockService{
 		ctx:    ctx,
-		status: ipc.StatusRunning,
+		status: ipc.Connected,
 		clash:  clashServer.(*clashapi.Server),
 	}
 	ipcServer := ipc.NewServer(m)
