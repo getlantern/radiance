@@ -5,8 +5,10 @@ package radiance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,7 +141,9 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	}
 	go func() {
 		if err := r.kindlingProxy.ListenAndServe(); err != nil {
-			slog.Error("Kindling proxy stopped with error", "error", err)
+			if !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("Kindling proxy stopped with error", "error", err)
+			}
 		}
 	}()
 	r.addShutdownFunc(func(ctx context.Context) error { return r.kindlingProxy.Close() })
