@@ -31,6 +31,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/servers"
 )
 
@@ -103,6 +104,16 @@ func baseOpts(basePath string) O.Options {
 				Type:    C.TypeBlock,
 				Tag:     "block",
 				Options: &O.StubOptions{},
+			},
+			{
+				Type: C.TypeHTTP,
+				Tag:  "kindling-proxy",
+				Options: &O.HTTPOutboundOptions{
+					ServerOptions: O.ServerOptions{
+						Server:     "127.0.0.1",
+						ServerPort: kindling.ProxyPort,
+					},
+				},
 			},
 		},
 		Route: &O.RouteOptions{
@@ -504,7 +515,6 @@ func catchAllBlockerRule() O.Rule {
 		},
 	}
 }
-
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
 	var serverOpts any

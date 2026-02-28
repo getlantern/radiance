@@ -5,8 +5,10 @@ package radiance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +62,7 @@ type Radiance struct {
 	issueReporter    issueReporter
 	apiHandler       *api.APIClient
 	srvManager       *servers.Manager
+	kindlingProxy    *kindling.KindlingProxy
 	shutdownFuncs    []func(context.Context) error
 	closeOnce        sync.Once
 	stopChan         chan struct{}
@@ -107,6 +110,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 
 	dataDir := settings.GetString(settings.DataPathKey)
 	kindling.SetKindling(kindling.NewKindling())
+
 	setUserConfig(platformDeviceID, dataDir, opts.Locale)
 	apiHandler := api.NewAPIClient(dataDir)
 	issueReporter := issue.NewIssueReporter()
@@ -130,10 +134,20 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		issueReporter: issueReporter,
 		apiHandler:    apiHandler,
 		srvManager:    svrMgr,
+		kindlingProxy: kindling.NewKindlingProxy(kindling.ProxyAddr),
 		shutdownFuncs: shutdownFuncs,
 		stopChan:      make(chan struct{}),
 		closeOnce:     sync.Once{},
 	}
+	go func() {
+		if err := r.kindlingProxy.ListenAndServe(); err != nil {
+			if !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("Kindling proxy stopped with error", "error", err)
+			}
+		}
+	}()
+	r.addShutdownFunc(func(ctx context.Context) error { return r.kindlingProxy.Close() })
+
 	r.telemetryConsent.Store(opts.TelemetryConsent)
 	events.Subscribe(func(evt config.NewConfigEvent) {
 		if r.telemetryConsent.Load() {
