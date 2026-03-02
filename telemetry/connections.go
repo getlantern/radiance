@@ -48,7 +48,7 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 				if err != nil {
 					slog.Warn("failed to get service status", "error", err)
 				}
-				if vpnStatus != ipc.StatusRunning {
+				if vpnStatus != ipc.Connected {
 					continue
 				}
 				conns, err := ipc.GetConnections(ctx)

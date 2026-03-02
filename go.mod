@@ -26,11 +26,11 @@ require (
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260113204224-600f8e8dfe5f
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20260220164942-f4c071c02fcb
-	github.com/getlantern/dnstt v0.0.0-20250530230749-4d64f4edcf0f
-	github.com/getlantern/fronted v0.0.0-20260121001528-92134131dcd2
+	github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85
+	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
+	github.com/getlantern/fronted v0.0.0-20260225205111-41c9e534027a
 	github.com/getlantern/keepcurrent v0.0.0-20240126172110-2e0264ca385d
-	github.com/getlantern/kindling v0.0.0-20260105215242-8df765e82461
+	github.com/getlantern/kindling v0.0.0-20260219202502-df15c15dc5fb
 	github.com/getlantern/lantern-box v0.0.6-0.20260302213426-7e099a46ec8e
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9

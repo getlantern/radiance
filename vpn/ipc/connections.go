@@ -19,7 +19,7 @@ func CloseConnections(ctx context.Context, connIDs []string) error {
 }
 
 func (s *Server) closeConnectionHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -54,7 +54,7 @@ func GetConnections(ctx context.Context) ([]Connection, error) {
 }
 
 func (s *Server) connectionsHandler(w http.ResponseWriter, r *http.Request) {
-	if s.service.Status() != StatusRunning {
+	if s.service.Status() != Connected {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}

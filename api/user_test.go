@@ -17,12 +17,15 @@ import (
 )
 
 func TestSignUp(t *testing.T) {
+	settings.InitSettings(t.TempDir())
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	err := ac.SignUp(context.Background(), "test@example.com", "password")
+	salt, signupResponse, err := ac.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
+	assert.NotNil(t, salt)
+	assert.NotNil(t, signupResponse)
 }
 
 func TestSignupEmailResendCode(t *testing.T) {
@@ -201,8 +204,8 @@ func mockAuthClientNew(t *testing.T, email, password string) *mockAuthClient {
 	return m
 }
 
-func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]byte, error) {
-	return []byte("salt"), nil
+func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]byte, *protos.SignupResponse, error) {
+	return []byte("salt"), &protos.SignupResponse{}, nil
 }
 
 func (m *mockAuthClient) SignupEmailResendCode(ctx context.Context, req *protos.SignupEmailResendRequest) error {

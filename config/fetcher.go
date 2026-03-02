@@ -32,7 +32,6 @@ import (
 	"github.com/getlantern/radiance/traces"
 )
 
-const configURL = "https://df.iantem.io/api/v1/config-new"
 const tracerName = "github.com/getlantern/radiance/config"
 
 type Fetcher interface {
@@ -143,7 +142,7 @@ func (f *fetcher) ensureUser(ctx context.Context) error {
 func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.send")
 	defer span.End()
-	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, configURL, body)
+	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, common.GetBaseURL()+"/config-new", body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -100,6 +101,10 @@ func getPipeClientToken(conn winioConn) (windows.Token, error) {
 	if ph == 0 {
 		return 0, fmt.Errorf("invalid pipe handle")
 	}
+
+	// Impersonation functions require the current thread to be locked to an OS thread.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	err := impersonateNamedPipeClient(ph)
 	if err != nil {

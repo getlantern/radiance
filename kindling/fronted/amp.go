@@ -13,6 +13,7 @@ import (
 	_ "embed"
 
 	"github.com/getlantern/amp"
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/kindling/smart"
 	"github.com/getlantern/radiance/traces"
 	"go.opentelemetry.io/otel"
@@ -63,15 +64,23 @@ func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) 
 		}),
 		amp.WithConfigStoragePath(storagePath),
 		amp.WithDialer(func(network, address string) (net.Conn, error) {
-			serverName, _, semicolonExists := strings.Cut(address, ":")
-			addressWithPort := address
-			// if address doesn't contain a port, by default use :443
-			if !semicolonExists {
-				addressWithPort = fmt.Sprintf("%s:443", serverName)
+			serverName, _, hasPort := strings.Cut(address, ":")
+			addrWithPort := address
+			if !hasPort {
+				addrWithPort = fmt.Sprintf("%s:443", serverName)
 			}
-			return tls.Dial("tcp", addressWithPort, &tls.Config{
-				ServerName: serverName,
-			})
+			conn, err := bypass.Dial(network, addrWithPort)
+			if err != nil {
+				return nil, err
+			}
+			tlsConn := tls.Client(conn, &tls.Config{ServerName: serverName})
+			handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+				conn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
 		}),
 	}
 	httpClient, err := smart.NewHTTPClientWithSmartTransport(logWriter, ampConfigURL)
