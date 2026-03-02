@@ -618,6 +618,7 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 	query.Set("deviceId", settings.GetString(settings.DeviceIDKey))
 	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 	query.Set("proToken", settings.GetString(settings.TokenKey))
+	query.Set("returnTo", "lantern://auth")
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
 }
