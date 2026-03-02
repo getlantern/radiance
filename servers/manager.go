@@ -300,6 +300,12 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 		servers.Outbounds = append(servers.Outbounds, out)
 		servers.Locations[out.Tag] = options.Locations[out.Tag]
 	}
+	for k, v := range options.URLOverrides {
+		if servers.URLOverrides == nil {
+			servers.URLOverrides = make(map[string]string)
+		}
+		servers.URLOverrides[k] = v
+	}
 	m.servers[group] = servers
 	return existingTags
 }
