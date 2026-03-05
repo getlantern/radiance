@@ -16,6 +16,8 @@ import (
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
 
+	"github.com/sagernet/sing-box/common/conntrack"
+
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
 	lblog "github.com/getlantern/lantern-box/log"
@@ -226,10 +228,22 @@ func (t *tunnel) selectOutbound(group, tag string) error {
 	return nil
 }
 
+// DrainTimeout is the maximum time to wait for active connections to drain before forcibly closing
+// the tunnel. Exported for testing.
+var DrainTimeout = 5 * time.Second
+
+// DrainPollInterval is how often to check for remaining connections during the drain phase.
+var DrainPollInterval = 50 * time.Millisecond
+
 func (t *tunnel) close() error {
 	if t.cancel != nil {
 		t.cancel()
 	}
+
+	// Drain phase: wait for active connections to finish before tearing down the tunnel.
+	// This gives in-flight requests (e.g. video streams) a chance to complete gracefully
+	// instead of being killed by the TUN interface teardown.
+	drainConnections()
 
 	done := make(chan error)
 	go func() {
@@ -251,6 +265,36 @@ func (t *tunnel) close() error {
 	t.lbService = nil
 	t.status.Store(ipc.Disconnected)
 	return err
+}
+
+// drainConnections waits for active connections to close gracefully up to DrainTimeout.
+// It polls conntrack.Count() and returns early if all connections have closed.
+func drainConnections() {
+	initial := conntrack.Count()
+	if initial == 0 {
+		return
+	}
+	slog.Info("Draining active connections before tunnel close", "count", initial, "timeout", DrainTimeout)
+
+	deadline := time.After(DrainTimeout)
+	ticker := time.NewTicker(DrainPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			remaining := conntrack.Count()
+			if remaining > 0 {
+				slog.Warn("Drain timeout reached, forcibly closing remaining connections", "remaining", remaining)
+			}
+			return
+		case <-ticker.C:
+			if conntrack.Count() == 0 {
+				slog.Info("All connections drained successfully")
+				return
+			}
+		}
+	}
 }
 
 func (t *tunnel) Status() ipc.VPNStatus {
