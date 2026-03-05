@@ -133,7 +133,7 @@ func TestDeleteAccount(t *testing.T) {
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
-	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password", false)
 	assert.NoError(t, err)
 }
 
