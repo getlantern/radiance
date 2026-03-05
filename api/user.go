@@ -128,10 +128,8 @@ type DataCapUsageDetails struct {
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
-// DataCapInfo returns information about this user's data cap
-func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
-	defer span.End()
+// fetchDataCap fetches the current datacap usage from the server.
+func (a *APIClient) fetchDataCap(ctx context.Context) (*DataCapUsageResponse, error) {
 	datacap := &DataCapUsageResponse{}
 	headers := map[string]string{
 		backend.ContentTypeHeader: "application/json",
@@ -139,7 +137,15 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	getURL := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
 	newReq := authWc.NewRequest(nil, headers, nil)
-	err := authWc.Get(ctx, getURL, newReq, &datacap)
+	err := authWc.Get(ctx, getURL, newReq, datacap)
+	return datacap, err
+}
+
+// DataCapInfo returns information about this user's data cap
+func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
+	defer span.End()
+	datacap, err := a.fetchDataCap(ctx)
 	return withMarshalJsonString(datacap, err)
 }
 
@@ -176,20 +182,15 @@ func (a *APIClient) pollDataCap(ctx context.Context, last *string) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_poll")
 	defer span.End()
 
-	datacap := &DataCapUsageResponse{}
-	headers := map[string]string{
-		backend.ContentTypeHeader: "application/json",
-	}
-	getURL := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
-	authWc := authWebClient()
-	newReq := authWc.NewRequest(nil, headers, nil)
-	if err := authWc.Get(ctx, getURL, newReq, datacap); err != nil {
+	datacap, err := a.fetchDataCap(ctx)
+	if err != nil {
 		slog.Debug("datacap poll error", "error", err)
 		return
 	}
 
 	jsonBytes, err := json.Marshal(datacap)
 	if err != nil {
+		slog.Debug("datacap poll marshal error", "error", err)
 		return
 	}
 	current := string(jsonBytes)
