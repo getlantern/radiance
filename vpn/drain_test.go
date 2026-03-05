@@ -93,9 +93,6 @@ func TestDrainConnectionsTimeout(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, DrainTimeout, "should have waited the full timeout")
 	assert.Less(t, elapsed, DrainTimeout+100*time.Millisecond, "should not overshoot timeout significantly")
 	assert.Equal(t, 1, conntrack.Count(), "connection should still be open after timeout")
-
-	// Clean up
-	tracked.Close()
 }
 
 func TestTunnelCloseCallsDrain(t *testing.T) {

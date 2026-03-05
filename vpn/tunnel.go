@@ -276,13 +276,19 @@ func drainConnections() {
 	}
 	slog.Info("Draining active connections before tunnel close", "count", initial, "timeout", DrainTimeout)
 
-	deadline := time.After(DrainTimeout)
-	ticker := time.NewTicker(DrainPollInterval)
+	pollInterval := DrainPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 50 * time.Millisecond
+	}
+
+	timer := time.NewTimer(DrainTimeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-deadline:
+		case <-timer.C:
 			remaining := conntrack.Count()
 			if remaining > 0 {
 				slog.Warn("Drain timeout reached, proceeding with tunnel teardown", "remaining", remaining)
