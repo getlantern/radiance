@@ -236,14 +236,14 @@ var DrainTimeout = 5 * time.Second
 var DrainPollInterval = 50 * time.Millisecond
 
 func (t *tunnel) close() error {
+	// Drain phase: wait for active connections to finish before cancelling context and
+	// tearing down the tunnel. This gives in-flight requests (e.g. video streams) a chance
+	// to complete gracefully instead of being killed by context cancellation or TUN teardown.
+	drainConnections()
+
 	if t.cancel != nil {
 		t.cancel()
 	}
-
-	// Drain phase: wait for active connections to finish before tearing down the tunnel.
-	// This gives in-flight requests (e.g. video streams) a chance to complete gracefully
-	// instead of being killed by the TUN interface teardown.
-	drainConnections()
 
 	done := make(chan error)
 	go func() {
@@ -285,7 +285,7 @@ func drainConnections() {
 		case <-deadline:
 			remaining := conntrack.Count()
 			if remaining > 0 {
-				slog.Warn("Drain timeout reached, forcibly closing remaining connections", "remaining", remaining)
+				slog.Warn("Drain timeout reached, proceeding with tunnel teardown", "remaining", remaining)
 			}
 			return
 		case <-ticker.C:
