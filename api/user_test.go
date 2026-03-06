@@ -152,6 +152,20 @@ func TestDeleteAccount_OAuthUser(t *testing.T) {
 	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password", true)
 	assert.NoError(t, err)
 }
+func TestDeleteAccount_OAuthUser_MissingJwtToken(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
+	email := "test@example.com"
+	authClient := mockAuthClientNew(t, email, "password")
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: authClient,
+		salt:       authClient.salt[email],
+	}
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password", true)
+	assert.Error(t, err)
+}
 
 func TestOAuthLoginUrl(t *testing.T) {
 	ac := &APIClient{
