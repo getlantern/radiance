@@ -537,13 +537,12 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 }
 
 // DeleteAccount deletes this user account.
-func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, oAuthProvider bool) ([]byte, error) {
+func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, isOAuthUser bool) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "delete_account")
 	defer span.End()
 	var deleteRequestBody *protos.DeleteUserRequest
 	lowerCaseEmail := strings.ToLower(email)
-	if !oAuthProvider {
-
+	if !isOAuthUser {
 		salt, err := a.getSalt(ctx, lowerCaseEmail)
 		if err != nil {
 			return nil, traces.RecordError(ctx, err)
@@ -581,9 +580,9 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, o
 			return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
 		}
 
-		// // check if the server proof is valid
+		// check if the server proof is valid
 		if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-			return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while checking server proof %w", err))
+			return nil, traces.RecordError(ctx, errors.New("user_not_found error while checking server proof"))
 		}
 
 		clientProof, err := client.ClientProof()
@@ -599,6 +598,9 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, o
 		}
 	} else {
 		jwtToken := settings.GetString(settings.JwtTokenKey)
+		if jwtToken == "" {
+			return nil, traces.RecordError(ctx, errors.New("jwt token is required for OAuth account deletion"))
+		}
 		deleteRequestBody = &protos.DeleteUserRequest{
 			Email:     lowerCaseEmail,
 			Permanent: true,
