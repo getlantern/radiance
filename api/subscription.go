@@ -116,7 +116,7 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 		path = "/purchase-googleplay-subscription"
 		data["idempotencyKey"] = strconv.FormatInt(time.Now().UnixNano(), 10)
 	case AppleService:
-		path = "/purchase-apple-subscription"
+		path = "/purchase-apple-subscription-v2"
 	default:
 		return "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}
@@ -130,7 +130,6 @@ func (ac *APIClient) VerifySubscription(ctx context.Context, service Subscriptio
 		return "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
 	}
 	return withMarshalJsonString(resp, nil)
-
 }
 
 // StripeBillingPortalUrl generates the Stripe billing portal URL for the given user ID.
