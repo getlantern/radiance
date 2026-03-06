@@ -647,6 +647,12 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 	login := &protos.LoginResponse{
 		LegacyID:    jwtUserInfo.LegacyUserID,
 		LegacyToken: jwtUserInfo.LegacyToken,
+		LegacyUserData: &protos.LoginResponse_UserData{
+			UserId:   jwtUserInfo.LegacyUserID,
+			Token:    jwtUserInfo.LegacyToken,
+			DeviceID: jwtUserInfo.DeviceId,
+			Email:    jwtUserInfo.Email,
+		},
 	}
 	a.setData(login)
 	// Get user data from api this will also save data in user config
