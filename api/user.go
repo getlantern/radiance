@@ -595,6 +595,7 @@ func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, o
 			Proof:     clientProof,
 			Permanent: true,
 			DeviceId:  settings.GetString(settings.DeviceIDKey),
+			Token:     settings.GetString(settings.JwtTokenKey),
 		}
 	} else {
 		jwtToken := settings.GetString(settings.JwtTokenKey)
