@@ -234,9 +234,10 @@ func (ch *ConfigHandler) fetchConfig() error {
 			locs[k] = *v
 		}
 		opts := servers.Options{
-			Outbounds: cfg.Options.Outbounds,
-			Endpoints: cfg.Options.Endpoints,
-			Locations: locs,
+			Outbounds:    cfg.Options.Outbounds,
+			Endpoints:    cfg.Options.Endpoints,
+			Locations:    locs,
+			URLOverrides: cfg.BanditURLOverrides,
 		}
 		if err := ch.svrManager.SetServers(servers.SGLantern, opts); err != nil {
 			slog.Error("setting servers in manager", "error", err)

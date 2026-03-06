@@ -31,7 +31,7 @@ require (
 	github.com/getlantern/fronted v0.0.0-20260225205111-41c9e534027a
 	github.com/getlantern/keepcurrent v0.0.0-20260304213122-017d542145ae
 	github.com/getlantern/kindling v0.0.0-20260305202005-ca73a10f13ac
-	github.com/getlantern/lantern-box v0.0.6-0.20260220213333-4b20583e43ff
+	github.com/getlantern/lantern-box v0.0.6-0.20260304185010-31f62b643c0e
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
