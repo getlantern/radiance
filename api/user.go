@@ -11,10 +11,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/1Password/srp"
 
-	"github.com/r3labs/sse/v2"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 
@@ -128,10 +128,8 @@ type DataCapUsageDetails struct {
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
-// DataCapInfo returns information about this user's data cap
-func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
-	defer span.End()
+// fetchDataCap fetches the current datacap usage from the server.
+func (a *APIClient) fetchDataCap(ctx context.Context) (*DataCapUsageResponse, error) {
 	datacap := &DataCapUsageResponse{}
 	headers := map[string]string{
 		backend.ContentTypeHeader: "application/json",
@@ -139,7 +137,15 @@ func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
 	getURL := fmt.Sprintf("/datacap/%s", settings.GetString(settings.DeviceIDKey))
 	authWc := authWebClient()
 	newReq := authWc.NewRequest(nil, headers, nil)
-	err := authWc.Get(ctx, getURL, newReq, &datacap)
+	err := authWc.Get(ctx, getURL, newReq, datacap)
+	return datacap, err
+}
+
+// DataCapInfo returns information about this user's data cap
+func (a *APIClient) DataCapInfo(ctx context.Context) (string, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
+	defer span.End()
+	datacap, err := a.fetchDataCap(ctx)
 	return withMarshalJsonString(datacap, err)
 }
 
@@ -148,54 +154,53 @@ type DataCapChangeEvent struct {
 	*DataCapUsageResponse
 }
 
-// DataCapStream connects to the datacap SSE endpoint and continuously reads events.
-// It sends events whenever there is an update in datacap usage with DataCapChangeEvent.
-// To receive those events use events.Subscribe(&DataCapChangeEvent{}, func(evt DataCapChangeEvent) { ... })
+// DataCapPollInterval controls how often the datacap polling loop fetches updated usage.
+// The server previously sent updates every 30s via SSE, so we match that cadence.
+var DataCapPollInterval = 30 * time.Second
+
+// DataCapStream polls the datacap endpoint periodically and emits DataCapChangeEvent
+// whenever the usage data changes. It blocks until ctx is cancelled.
+//
+// This replaces the previous SSE-based implementation which was incompatible with
+// domain-fronted connections (CDNs buffer SSE responses, causing 60s timeouts).
 func (a *APIClient) DataCapStream(ctx context.Context) error {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
+	ticker := time.NewTicker(DataCapPollInterval)
+	defer ticker.Stop()
+
+	var last string
+	for {
+		a.pollDataCap(ctx, &last)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *APIClient) pollDataCap(ctx context.Context, last *string) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_poll")
 	defer span.End()
 
-	getURL := fmt.Sprintf("/stream/datacap/%s", settings.GetString(settings.DeviceIDKey))
-	authWc := authWebClient()
-	fullURL := common.GetBaseURL() + getURL
-	sseClient := sse.NewClient(fullURL)
-	sseClient.Headers = map[string]string{
-		backend.ContentTypeHeader: "application/json",
-		backend.AcceptHeader:      "text/event-stream",
-		backend.AppNameHeader:     common.Name,
-		backend.VersionHeader:     common.Version,
-		backend.PlatformHeader:    common.Platform,
+	datacap, err := a.fetchDataCap(ctx)
+	if err != nil {
+		slog.Debug("datacap poll error", "error", err)
+		return
 	}
-	sseClient.Connection.Transport = authWc.client.GetClient().Transport
-	// Connection callbacks
-	sseClient.OnConnect(func(c *sse.Client) {
-		slog.Debug("Connected to datacap stream")
-	})
 
-	sseClient.OnDisconnect(func(c *sse.Client) {
-		slog.Debug("Disconnected from datacap stream")
-	})
-	// Start listening to events
-	return sseClient.SubscribeRawWithContext(ctx, func(msg *sse.Event) {
-		eventType := string(msg.Event)
-		data := msg.Data
-		switch eventType {
-		case "datacap":
-			var datacap DataCapUsageResponse
-			err := json.Unmarshal(data, &datacap)
-			if err != nil {
-				slog.Error("datacap stream unmarshal error", "error", err)
-				return
-			}
-			events.Emit(DataCapChangeEvent{DataCapUsageResponse: &datacap})
-		case "cap_exhausted":
-			slog.Warn("Datacap exhausted ")
-			return
-
-		default:
-			// Heartbeat or unknown event - silently ignore
+	jsonBytes, err := json.Marshal(datacap)
+	if err != nil {
+		slog.Debug("datacap poll marshal error", "error", err)
+		return
+	}
+	current := string(jsonBytes)
+	if current != *last {
+		*last = current
+		events.Emit(DataCapChangeEvent{DataCapUsageResponse: datacap})
+		if datacap.Usage != nil {
+			slog.Debug("datacap updated", "bytesUsed", datacap.Usage.BytesUsed)
 		}
-	})
+	}
 }
 
 // SignUp signs the user up for an account.
