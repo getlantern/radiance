@@ -51,12 +51,18 @@ const (
 	tracerName = "github.com/getlantern/radiance/servers"
 )
 
+// ServerCredentials holds the access token and invite status for a private server.
+type ServerCredentials struct {
+	AccessToken string `json:"access_token,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	IsJoined    bool   `json:"is_joined,omitempty"` // whether the user has joined the server (i.e. accepted the invite)
+}
+
 type Options struct {
-	Outbounds    []option.Outbound           `json:"outbounds,omitempty"`
-	Endpoints    []option.Endpoint           `json:"endpoints,omitempty"`
-	Locations    map[string]C.ServerLocation `json:"locations,omitempty"`
-	Invites      map[string]bool             `json:"invites,omitempty"`
-	AccessTokens map[string]string           `json:"access_tokens,omitempty"`
+	Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
+	Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
+	Locations   map[string]C.ServerLocation  `json:"locations,omitempty"`
+	Credentials map[string]ServerCredentials `json:"credentials,omitempty"`
 }
 
 // MarshalJSON encodes Options using the sing-box context so that type-specific outbound/endpoint
@@ -95,14 +101,16 @@ func NewManager(dataPath string) (*Manager, error) {
 	mgr := &Manager{
 		servers: Servers{
 			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 		},
 		optsMaps: map[ServerGroup]map[string]any{
@@ -156,11 +164,10 @@ func (m *Manager) Servers() Servers {
 	result := make(Servers, len(m.servers))
 	for group, opts := range m.servers {
 		result[group] = Options{
-			Outbounds:    append([]option.Outbound{}, opts.Outbounds...),
-			Endpoints:    append([]option.Endpoint{}, opts.Endpoints...),
-			Locations:    maps.Clone(opts.Locations),
-			Invites:      maps.Clone(opts.Invites),
-			AccessTokens: maps.Clone(opts.AccessTokens),
+			Outbounds:   append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints:   append([]option.Endpoint{}, opts.Endpoints...),
+			Locations:   maps.Clone(opts.Locations),
+			Credentials: maps.Clone(opts.Credentials),
 		}
 	}
 	return result
@@ -253,17 +260,13 @@ func (m *Manager) setServers(group ServerGroup, options Options) error {
 
 	slog.Log(nil, internal.LevelTrace, "Setting servers", "group", group, "options", options)
 	opts := Options{
-		Outbounds:    append([]option.Outbound{}, options.Outbounds...),
-		Endpoints:    append([]option.Endpoint{}, options.Endpoints...),
-		Locations:    make(map[string]C.ServerLocation, len(options.Locations)),
-		AccessTokens: make(map[string]string, len(options.AccessTokens)),
+		Outbounds:   append([]option.Outbound{}, options.Outbounds...),
+		Endpoints:   append([]option.Endpoint{}, options.Endpoints...),
+		Locations:   make(map[string]C.ServerLocation, len(options.Locations)),
+		Credentials: make(map[string]ServerCredentials, len(options.Credentials)),
 	}
-	if len(options.Locations) > 0 {
-		maps.Copy(opts.Locations, options.Locations)
-	}
-	if len(options.AccessTokens) > 0 {
-		maps.Copy(opts.AccessTokens, options.AccessTokens)
-	}
+	maps.Copy(opts.Locations, options.Locations)
+	maps.Copy(opts.Credentials, options.Credentials)
 
 	m.servers[group] = opts
 	oMap := make(map[string]any, len(options.Endpoints)+len(options.Outbounds))
@@ -318,12 +321,6 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 	var existingTags []string
 	opts := m.optsMaps[group]
 	servers := m.servers[group]
-	if servers.Invites == nil {
-		servers.Invites = make(map[string]bool)
-	}
-	if servers.AccessTokens == nil {
-		servers.AccessTokens = make(map[string]string)
-	}
 	for _, ep := range options.Endpoints {
 		if _, exists := opts[ep.Tag]; exists {
 			existingTags = append(existingTags, ep.Tag)
@@ -332,11 +329,8 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 		opts[ep.Tag] = ep
 		servers.Endpoints = append(servers.Endpoints, ep)
 		servers.Locations[ep.Tag] = options.Locations[ep.Tag]
-		if options.Invites[ep.Tag] {
-			servers.Invites[ep.Tag] = true
-		}
-		if token := options.AccessTokens[ep.Tag]; token != "" {
-			servers.AccessTokens[ep.Tag] = token
+		if creds, ok := options.Credentials[ep.Tag]; ok {
+			servers.Credentials[ep.Tag] = creds
 		}
 	}
 	for _, out := range options.Outbounds {
@@ -347,11 +341,8 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 		opts[out.Tag] = out
 		servers.Outbounds = append(servers.Outbounds, out)
 		servers.Locations[out.Tag] = options.Locations[out.Tag]
-		if options.Invites[out.Tag] {
-			servers.Invites[out.Tag] = true
-		}
-		if token := options.AccessTokens[out.Tag]; token != "" {
-			servers.AccessTokens[out.Tag] = token
+		if creds, ok := options.Credentials[out.Tag]; ok {
+			servers.Credentials[out.Tag] = creds
 		}
 	}
 	m.servers[group] = servers
@@ -383,7 +374,7 @@ func (m *Manager) RemoveServer(tag string) error {
 	}
 	delete(m.optsMaps[group], tag)
 	delete(servers.Locations, tag)
-	delete(servers.AccessTokens, tag)
+	delete(servers.Credentials, tag)
 	m.servers[group] = servers
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
@@ -435,7 +426,7 @@ func (m *Manager) loadServers() error {
 // Lantern Server Manager Integration
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
-func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, serverLocation *C.ServerLocation, invite bool) error {
+func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string, serverLocation *C.ServerLocation, isJoined bool) error {
 	u := &url.URL{
 		Scheme: "https",
 		Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
@@ -466,18 +457,18 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 		return fmt.Errorf("no endpoints or outbounds in response")
 	}
 
-	// TODO: update when we support endpoints
 	servers.Outbounds[0].Tag = tag
+	// If the server location is provided, set it for the server's tag.
 	if serverLocation != nil {
 		servers.Locations = map[string]C.ServerLocation{
 			tag: *serverLocation,
 		}
 	}
-	if invite {
-		servers.Invites = map[string]bool{tag: true}
+	// Store the credentials for the server's tag.
+	servers.Credentials = map[string]ServerCredentials{
+		tag: {AccessToken: accessToken, Port: port, IsJoined: isJoined},
 	}
-	servers.AccessTokens = map[string]string{tag: accessToken}
-	slog.Info("Adding private server from remote manager", "tag", tag, "ip", ip, "port", port, "location", serverLocation, "invite", invite)
+	slog.Info("Adding private server from remote manager", "tag", tag, "ip", ip, "port", port, "location", serverLocation, "is_joined", isJoined)
 	return m.AddServers(SGUser, servers)
 }
 
