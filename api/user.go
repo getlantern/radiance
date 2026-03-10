@@ -199,16 +199,30 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 }
 
 // SignUp signs the user up for an account.
-func (a *APIClient) SignUp(ctx context.Context, email, password string) error {
+func (a *APIClient) SignUp(ctx context.Context, email, password string) ([]byte, *protos.SignupResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "sign_up")
 	defer span.End()
 
-	salt, err := a.authClient.SignUp(ctx, email, password)
-	if err == nil {
-		a.salt = salt
-		return traces.RecordError(ctx, writeSalt(salt, a.saltPath))
+	salt, signupResponse, err := a.authClient.SignUp(ctx, email, password)
+	if err != nil {
+		return nil, nil, traces.RecordError(ctx, err)
 	}
-	return traces.RecordError(ctx, err)
+	a.salt = salt
+
+	idErr := settings.Set(settings.UserIDKey, signupResponse.LegacyID)
+	if idErr != nil {
+		return nil, nil, fmt.Errorf("could not save user id: %w", idErr)
+	}
+	proTokenErr := settings.Set(settings.TokenKey, signupResponse.ProToken)
+	if proTokenErr != nil {
+		return nil, nil, fmt.Errorf("could not save token: %w", proTokenErr)
+	}
+	jwtTokenErr := settings.Set(settings.JwtTokenKey, signupResponse.Token)
+	if jwtTokenErr != nil {
+		return nil, nil, fmt.Errorf("could not save JWT token: %w", jwtTokenErr)
+	}
+
+	return salt, signupResponse, nil
 }
 
 var ErrNoSalt = errors.New("not salt available, call GetSalt/Signup first")
@@ -311,12 +325,14 @@ func (a *APIClient) Login(ctx context.Context, email string, password string) ([
 func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
 	defer span.End()
-	if err := a.authClient.SignOut(ctx, &protos.LogoutRequest{
+	logout := &protos.LogoutRequest{
 		Email:        email,
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
 		LegacyUserID: settings.GetInt64(settings.UserIDKey),
 		LegacyToken:  settings.GetString(settings.TokenKey),
-	}); err != nil {
+		Token:        settings.GetString(settings.JwtTokenKey),
+	}
+	if err := a.authClient.SignOut(ctx, logout); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
 	a.Reset()
@@ -521,65 +537,78 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 }
 
 // DeleteAccount deletes this user account.
-func (a *APIClient) DeleteAccount(ctx context.Context, email, password string) ([]byte, error) {
+func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, isOAuthUser bool) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "delete_account")
 	defer span.End()
+	var deleteRequestBody *protos.DeleteUserRequest
 	lowerCaseEmail := strings.ToLower(email)
-	salt, err := a.getSalt(ctx, lowerCaseEmail)
-	if err != nil {
-		return nil, traces.RecordError(ctx, err)
+	if !isOAuthUser {
+		salt, err := a.getSalt(ctx, lowerCaseEmail)
+		if err != nil {
+			return nil, traces.RecordError(ctx, err)
+		}
+
+		// Prepare login request body
+		encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
+		if err != nil {
+			return nil, traces.RecordError(ctx, err)
+		}
+		client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
+
+		//Send this key to client
+		A := client.EphemeralPublic()
+
+		//Create body
+		prepareRequestBody := &protos.PrepareRequest{
+			Email: lowerCaseEmail,
+			A:     A.Bytes(),
+		}
+
+		srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
+		if err != nil {
+			return nil, traces.RecordError(ctx, err)
+		}
+
+		B := big.NewInt(0).SetBytes(srpB.B)
+
+		if err = client.SetOthersPublic(B); err != nil {
+			return nil, traces.RecordError(ctx, err)
+		}
+
+		clientKey, err := client.Key()
+		if err != nil || clientKey == nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
+		}
+
+		// check if the server proof is valid
+		if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
+			return nil, traces.RecordError(ctx, errors.New("user_not_found error while checking server proof"))
+		}
+
+		clientProof, err := client.ClientProof()
+		if err != nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
+		}
+		deleteRequestBody = &protos.DeleteUserRequest{
+			Email:     lowerCaseEmail,
+			Proof:     clientProof,
+			Permanent: true,
+			DeviceId:  settings.GetString(settings.DeviceIDKey),
+			Token:     settings.GetString(settings.JwtTokenKey),
+		}
+	} else {
+		jwtToken := settings.GetString(settings.JwtTokenKey)
+		if jwtToken == "" {
+			return nil, traces.RecordError(ctx, errors.New("jwt token is required for OAuth account deletion"))
+		}
+		deleteRequestBody = &protos.DeleteUserRequest{
+			Email:     lowerCaseEmail,
+			Permanent: true,
+			Token:     jwtToken,
+			DeviceId:  settings.GetString(settings.DeviceIDKey),
+		}
 	}
-
-	// Prepare login request body
-	encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
-	if err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
-	client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
-
-	//Send this key to client
-	A := client.EphemeralPublic()
-
-	//Create body
-	prepareRequestBody := &protos.PrepareRequest{
-		Email: lowerCaseEmail,
-		A:     A.Bytes(),
-	}
-
-	srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
-	if err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
-
-	B := big.NewInt(0).SetBytes(srpB.B)
-
-	if err = client.SetOthersPublic(B); err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
-
-	clientKey, err := client.Key()
-	if err != nil || clientKey == nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
-	}
-
-	// // check if the server proof is valid
-	if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-		return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while checking server proof %w", err))
-	}
-
-	clientProof, err := client.ClientProof()
-	if err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
-	}
-
-	changeEmailRequestBody := &protos.DeleteUserRequest{
-		Email:     lowerCaseEmail,
-		Proof:     clientProof,
-		Permanent: true,
-		DeviceId:  settings.GetString(settings.DeviceIDKey),
-	}
-
-	if err := a.authClient.DeleteAccount(ctx, changeEmailRequestBody); err != nil {
+	if err := a.authClient.DeleteAccount(ctx, deleteRequestBody); err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
 	// clean up local data
@@ -602,6 +631,7 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 	query.Set("deviceId", settings.GetString(settings.DeviceIDKey))
 	query.Set("userId", strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 	query.Set("proToken", settings.GetString(settings.TokenKey))
+	query.Set("returnTo", "lantern://auth")
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
 }
@@ -617,12 +647,23 @@ func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) (
 	login := &protos.LoginResponse{
 		LegacyID:    jwtUserInfo.LegacyUserID,
 		LegacyToken: jwtUserInfo.LegacyToken,
+		LegacyUserData: &protos.LoginResponse_UserData{
+			UserId:   jwtUserInfo.LegacyUserID,
+			Token:    jwtUserInfo.LegacyToken,
+			DeviceID: jwtUserInfo.DeviceId,
+			Email:    jwtUserInfo.Email,
+		},
 	}
 	a.setData(login)
 	// Get user data from api this will also save data in user config
 	user, err := a.fetchUserData(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("error getting user data: %w", err)
+	}
+
+	if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
+		slog.Error("Failed to persist JWT token", "error", err)
+		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
 	}
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
@@ -716,6 +757,13 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 		changed = changed && oldToken != data.LegacyToken
 		if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
 			slog.Error("failed to set token in settings", "error", err)
+		}
+	}
+	if data.Token != "" {
+		oldJwtToken := settings.GetString(settings.JwtTokenKey)
+		changed = changed && oldJwtToken != data.Token
+		if err := settings.Set(settings.JwtTokenKey, data.Token); err != nil {
+			slog.Error("failed to set JWT token in settings", "error", err)
 		}
 	}
 

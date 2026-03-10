@@ -17,12 +17,15 @@ import (
 )
 
 func TestSignUp(t *testing.T) {
+	settings.InitSettings(t.TempDir())
 	ac := &APIClient{
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 		authClient: &mockAuthClient{},
 	}
-	err := ac.SignUp(context.Background(), "test@example.com", "password")
+	salt, signupResponse, err := ac.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
+	assert.NotNil(t, salt)
+	assert.NotNil(t, signupResponse)
 }
 
 func TestSignupEmailResendCode(t *testing.T) {
@@ -130,8 +133,38 @@ func TestDeleteAccount(t *testing.T) {
 		authClient: authClient,
 		salt:       authClient.salt[email],
 	}
-	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password")
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password", false)
 	assert.NoError(t, err)
+}
+
+func TestDeleteAccount_OAuthUser(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	settings.Set(settings.JwtTokenKey, "jwt-token")
+	t.Cleanup(settings.Reset)
+	email := "test@example.com"
+	authClient := mockAuthClientNew(t, email, "password")
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: authClient,
+		salt:       authClient.salt[email],
+	}
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password", true)
+	assert.NoError(t, err)
+}
+func TestDeleteAccount_OAuthUser_MissingJwtToken(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	t.Cleanup(settings.Reset)
+	email := "test@example.com"
+	authClient := mockAuthClientNew(t, email, "password")
+	ac := &APIClient{
+		saltPath:   filepath.Join(t.TempDir(), saltFileName),
+		authClient: authClient,
+		salt:       authClient.salt[email],
+	}
+	_, err := ac.DeleteAccount(context.Background(), "test@example.com", "password", true)
+	assert.Error(t, err)
 }
 
 func TestOAuthLoginUrl(t *testing.T) {
@@ -201,8 +234,8 @@ func mockAuthClientNew(t *testing.T, email, password string) *mockAuthClient {
 	return m
 }
 
-func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]byte, error) {
-	return []byte("salt"), nil
+func (m *mockAuthClient) SignUp(ctx context.Context, email, password string) ([]byte, *protos.SignupResponse, error) {
+	return []byte("salt"), &protos.SignupResponse{}, nil
 }
 
 func (m *mockAuthClient) SignupEmailResendCode(ctx context.Context, req *protos.SignupEmailResendRequest) error {

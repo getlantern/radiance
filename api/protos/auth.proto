@@ -13,6 +13,14 @@ message SignupRequest {
   bool temp = 5;
 }
 
+
+message SignupResponse {
+  string id = 1;
+  string pro_token = 2;
+  int64 legacyID = 3;
+  string token = 4;
+}
+
 message EmptyResponse{}
 
 // POST /users/signup/resend/email

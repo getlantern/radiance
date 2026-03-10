@@ -49,6 +49,9 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	req.Header.Set(PlatformHeader, common.Platform)
 	req.Header.Set(AppNameHeader, common.Name)
 	req.Header.Set(DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
+	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
+		req.Header.Set(TimeZoneHeader, tz)
+	}
 	return req, nil
 }
 
@@ -63,11 +66,6 @@ func NewIssueRequest(ctx context.Context, method, url string, body io.Reader) (*
 
 	// data caps
 	req.Header.Set(SupportedDataCapsHeader, "monthly,weekly,daily")
-
-	// time zone
-	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
-		req.Header.Set(TimeZoneHeader, tz)
-	}
 
 	return req, nil
 }
