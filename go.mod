@@ -30,10 +30,10 @@ require (
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
-	github.com/getlantern/fronted v0.0.0-20260313001649-c4baa3f57e01
+	github.com/getlantern/fronted v0.0.0-20260316001628-14e5f21104b5
 	github.com/getlantern/keepcurrent v0.0.0-20260304213122-017d542145ae
 	github.com/getlantern/kindling v0.0.0-20260305202005-ca73a10f13ac
-	github.com/getlantern/lantern-box v0.0.32
+	github.com/getlantern/lantern-box v0.0.42
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
