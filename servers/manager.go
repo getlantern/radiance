@@ -214,31 +214,39 @@ func (m *Manager) getServerByTagLocked(tag string) (Server, bool) {
 	return s, true
 }
 
-// ServersJSON returns the current server configurations as pre-marshalled JSON. This is safe to
-// call from CGo callback stacks because the JSON marshalling of pointer-rich sing-box types
-// (option.Outbound, option.Endpoint) happens under the read lock and produces a plain []byte.
+// ServersJSON returns the current server configurations as pre-marshalled JSON.
+// Safe to call from CGo callback stacks: the work runs on a dedicated Go goroutine
+// (via [common.RunOffCgoStack]) so pointer-rich sing-box types never touch the C stack.
 func (m *Manager) ServersJSON() ([]byte, error) {
-	m.access.RLock()
-	defer m.access.RUnlock()
-	return json.MarshalContext(box.BaseContext(), m.servers)
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		m.access.RLock()
+		defer m.access.RUnlock()
+		return json.MarshalContext(box.BaseContext(), m.servers)
+	})
 }
 
 // GetServerByTagJSON returns the server configuration for a given tag as pre-marshalled JSON.
-// Like [ServersJSON], this is safe to call from CGo callback stacks. The lookup and marshal both
-// happen under the read lock using MarshalContext so that sing-box type-specific fields are included.
+// Like [ServersJSON], safe to call from CGo callback stacks.
 func (m *Manager) GetServerByTagJSON(tag string) ([]byte, bool, error) {
-	m.access.RLock()
-	defer m.access.RUnlock()
+	type result struct {
+		data []byte
+		ok   bool
+	}
+	r, err := common.RunOffCgoStack(func() (result, error) {
+		m.access.RLock()
+		defer m.access.RUnlock()
 
-	s, ok := m.getServerByTagLocked(tag)
-	if !ok {
-		return nil, false, nil
-	}
-	b, err := json.MarshalContext(box.BaseContext(), s)
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal server %q: %w", tag, err)
-	}
-	return b, true, nil
+		s, ok := m.getServerByTagLocked(tag)
+		if !ok {
+			return result{}, nil
+		}
+		b, err := json.MarshalContext(box.BaseContext(), s)
+		if err != nil {
+			return result{}, fmt.Errorf("marshal server %q: %w", tag, err)
+		}
+		return result{data: b, ok: true}, nil
+	})
+	return r.data, r.ok, err
 }
 
 type ServersUpdatedEvent struct {
