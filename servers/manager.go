@@ -182,7 +182,10 @@ type Server struct {
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
-// the server was found.
+// the server was found. The returned Server contains pointer-rich sing-box types in its Options
+// field, so callers on a CGo callback stack should use [GetServerByTagJSON] instead. This method
+// does not use [common.RunOffCgoStack] because its only callers run on regular Go goroutines
+// (event subscribers, private server flows), never on CGo callback stacks.
 func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()
