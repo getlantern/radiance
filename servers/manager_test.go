@@ -27,14 +27,16 @@ func TestPrivateServerIntegration(t *testing.T) {
 	manager := &Manager{
 		servers: Servers{
 			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 		},
 		optsMaps: map[ServerGroup]map[string]any{
@@ -57,7 +59,7 @@ func TestPrivateServerIntegration(t *testing.T) {
 	port, _ := strconv.Atoi(parsedURL.Port())
 
 	t.Run("convert a token into a custom server", func(t *testing.T) {
-		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken"))
+		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", nil, false))
 		require.Contains(t, manager.optsMaps[SGUser], "s1", "server should be added to the manager")
 	})
 
@@ -66,14 +68,14 @@ func TestPrivateServerIntegration(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, inviteToken)
 
-		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken))
+		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, nil, true))
 		require.Contains(t, manager.optsMaps[SGUser], "s2", "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
 			delete(manager.optsMaps[SGUser], "s1")
 			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
-			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken))
+			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, nil, true))
 			assert.NotContains(t, manager.optsMaps[SGUser], "s1", "server should not be added after revoking invite")
 		})
 	})
