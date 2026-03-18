@@ -192,6 +192,26 @@ func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	return s, true
 }
 
+// ServersJSON returns the current server configurations as pre-marshalled JSON. This is safe to
+// call from CGo callback stacks because the JSON marshalling of pointer-rich sing-box types
+// (option.Outbound, option.Endpoint) happens under the read lock and produces a plain []byte.
+func (m *Manager) ServersJSON() ([]byte, error) {
+	m.access.RLock()
+	defer m.access.RUnlock()
+	return json.Marshal(m.servers)
+}
+
+// GetServerByTagJSON returns the server configuration for a given tag as pre-marshalled JSON.
+// Like [ServersJSON], this is safe to call from CGo callback stacks.
+func (m *Manager) GetServerByTagJSON(tag string) ([]byte, bool, error) {
+	server, ok := m.GetServerByTag(tag)
+	if !ok {
+		return nil, false, nil
+	}
+	b, err := json.Marshal(server)
+	return b, true, err
+}
+
 type ServersUpdatedEvent struct {
 	events.Event
 	Group   ServerGroup
