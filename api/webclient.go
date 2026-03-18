@@ -36,7 +36,7 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 
 	client.SetHeaders(map[string]string{
 		backend.AppNameHeader:  common.Name,
-		backend.VersionHeader:  common.Version,
+		backend.VersionHeader:  common.AppVersion,
 		backend.PlatformHeader: common.Platform,
 	})
 

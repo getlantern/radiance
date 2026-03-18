@@ -44,7 +44,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	req.Header.Add(RandomNoiseHeader, randomizedString())
 
 	req.Header.Set(AppVersionHeader, common.AppVersion)
-	req.Header.Set(VersionHeader, common.Version)
+	req.Header.Set(VersionHeader, common.AppVersion)
 	req.Header.Set(UserIDHeader, strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10))
 	req.Header.Set(PlatformHeader, common.Platform)
 	req.Header.Set(AppNameHeader, common.Name)

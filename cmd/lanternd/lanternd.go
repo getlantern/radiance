@@ -36,7 +36,7 @@ func main() {
 	logPath := os.ExpandEnv(*logPath)
 	logLevel := *logLevel
 
-	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
+	slog.Info("Starting lanternd", "version", common.AppVersion, "dataPath", dataPath)
 	if err := common.Init(dataPath, logPath, logLevel); err != nil {
 		log.Fatalf("Failed to initialize common: %v\n", err)
 	}

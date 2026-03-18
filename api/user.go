@@ -163,7 +163,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		backend.ContentTypeHeader: "application/json",
 		backend.AcceptHeader:      "text/event-stream",
 		backend.AppNameHeader:     common.Name,
-		backend.VersionHeader:     common.Version,
+		backend.VersionHeader:     common.AppVersion,
 		backend.PlatformHeader:    common.Platform,
 	}
 	sseClient.Connection.Transport = authWc.client.GetClient().Transport

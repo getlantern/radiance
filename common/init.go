@@ -77,7 +77,7 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 		return nil
 	}
 
-	reporting.Init(Version)
+	reporting.Init(AppVersion)
 	data, logs, err := setupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)

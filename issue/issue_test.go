@@ -30,7 +30,7 @@ func TestSendReport(t *testing.T) {
 	want := &ReportIssueRequest{
 		Type:              ReportIssueRequest_NO_ACCESS,
 		CountryCode:       "US",
-		AppVersion:        common.Version,
+		AppVersion:        common.AppVersion,
 		SubscriptionLevel: "free",
 		Platform:          common.Platform,
 		Description:       "Description placeholder-test only",

@@ -143,7 +143,7 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			Platform:    common.Platform,
 			IsPro:       settings.IsPro(),
 			CountryCode: settings.GetString(settings.CountryCodeKey),
-			Version:     common.Version,
+			Version:     common.AppVersion,
 		}
 	}
 	matchBounds := clientcontext.MatchBounds{

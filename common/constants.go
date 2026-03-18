@@ -5,8 +5,7 @@ import (
 )
 
 const (
-	Name    = "lantern"
-	Version = "9.0.1"
+	Name = "lantern"
 
 	// filenames
 	LogFileName        = "lantern.log"
@@ -21,7 +20,10 @@ const (
 	StageBaseURL      = "https://api.staging.iantem.io/v1"
 )
 
-var AppVersion = Version
+// AppVersion is the application version, injected at build time via ldflags:
+//
+//	-X 'github.com/getlantern/radiance/common.AppVersion=x.y.z'
+var AppVersion = "unknown"
 
 // GetProServerURL returns the pro server URL based on the current environment.
 func GetProServerURL() string {

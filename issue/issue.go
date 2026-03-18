@@ -102,7 +102,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	r := &ReportIssueRequest{
 		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
 		CountryCode:       country,
-		AppVersion:        common.Version,
+		AppVersion:        common.AppVersion,
 		SubscriptionLevel: userStatus,
 		Platform:          common.Platform,
 		Description:       report.Description,
