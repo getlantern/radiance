@@ -166,14 +166,15 @@ var DataCapPollInterval = 30 * time.Second
 func (a *APIClient) DataCapStream(ctx context.Context) error {
 	ticker := time.NewTicker(DataCapPollInterval)
 	defer ticker.Stop()
-
 	var last string
+	// Perform an initial poll before entering the ticker loop.
+	a.pollDataCap(ctx, &last)
 	for {
-		a.pollDataCap(ctx, &last)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			a.pollDataCap(ctx, &last)
 		}
 	}
 }
@@ -185,12 +186,14 @@ func (a *APIClient) pollDataCap(ctx context.Context, last *string) {
 	datacap, err := a.fetchDataCap(ctx)
 	if err != nil {
 		slog.Debug("datacap poll error", "error", err)
+		traces.RecordError(ctx, err)
 		return
 	}
 
 	jsonBytes, err := json.Marshal(datacap)
 	if err != nil {
 		slog.Debug("datacap poll marshal error", "error", err)
+		traces.RecordError(ctx, err)
 		return
 	}
 	current := string(jsonBytes)
