@@ -220,14 +220,37 @@ func (m *Manager) ServersJSON() ([]byte, error) {
 }
 
 // GetServerByTagJSON returns the server configuration for a given tag as pre-marshalled JSON.
-// Like [ServersJSON], this is safe to call from CGo callback stacks.
+// Like [ServersJSON], this is safe to call from CGo callback stacks. The lookup and marshal both
+// happen under the read lock using MarshalContext so that sing-box type-specific fields are included.
 func (m *Manager) GetServerByTagJSON(tag string) ([]byte, bool, error) {
-	server, ok := m.GetServerByTag(tag)
+	m.access.RLock()
+	defer m.access.RUnlock()
+
+	group := SGLantern
+	opts, ok := m.optsMaps[SGLantern][tag]
 	if !ok {
-		return nil, false, nil
+		if opts, ok = m.optsMaps[SGUser][tag]; !ok {
+			return nil, false, nil
+		}
+		group = SGUser
 	}
-	b, err := json.Marshal(server)
-	return b, true, err
+	s := Server{
+		Group:    group,
+		Tag:      tag,
+		Options:  opts,
+		Location: m.servers[group].Locations[tag],
+	}
+	switch v := opts.(type) {
+	case option.Endpoint:
+		s.Type = v.Type
+	case option.Outbound:
+		s.Type = v.Type
+	}
+	b, err := json.MarshalContext(box.BaseContext(), s)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal server %q: %w", tag, err)
+	}
+	return b, true, nil
 }
 
 type ServersUpdatedEvent struct {

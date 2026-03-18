@@ -6,7 +6,8 @@ import (
 	"runtime/debug"
 )
 
-// RunOnGoStack executes fn on a dedicated goroutine and returns its result.
+// RunOnGoStack executes fn on a new goroutine and returns its result. A new
+// goroutine is spawned per call; there is no persistent worker.
 // This is needed when Go code is called from a CGo callback stack (e.g. via
 // gomobile): pointer-rich types such as sing-box option.Outbound trigger GC
 // write barrier panics because the GC heap bitmap does not cover the C stack.
