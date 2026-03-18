@@ -182,11 +182,18 @@ type Server struct {
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
-// the server was found.
+// the server was found. The returned Server contains pointer-rich sing-box types in its Options
+// field, so callers on a CGo callback stack should use [GetServerByTagJSON] instead. This method
+// does not use [common.RunOffCgoStack] because its only callers run on regular Go goroutines
+// (event subscribers, private server flows), never on CGo callback stacks.
 func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()
+	return m.getServerByTagLocked(tag)
+}
 
+// getServerByTagLocked performs the tag lookup. Caller must hold access.RLock.
+func (m *Manager) getServerByTagLocked(tag string) (Server, bool) {
 	group := SGLantern
 	opts, ok := m.optsMaps[SGLantern][tag]
 	if !ok {
@@ -208,6 +215,41 @@ func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 		s.Type = v.Type
 	}
 	return s, true
+}
+
+// ServersJSON returns the current server configurations as pre-marshalled JSON.
+// Safe to call from CGo callback stacks: the work runs on a dedicated Go goroutine
+// (via [common.RunOffCgoStack]) so pointer-rich sing-box types never touch the C stack.
+func (m *Manager) ServersJSON() ([]byte, error) {
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		m.access.RLock()
+		defer m.access.RUnlock()
+		return json.MarshalContext(box.BaseContext(), m.servers)
+	})
+}
+
+// GetServerByTagJSON returns the server configuration for a given tag as pre-marshalled JSON.
+// Like [ServersJSON], safe to call from CGo callback stacks.
+func (m *Manager) GetServerByTagJSON(tag string) ([]byte, bool, error) {
+	type result struct {
+		data []byte
+		ok   bool
+	}
+	r, err := common.RunOffCgoStack(func() (result, error) {
+		m.access.RLock()
+		defer m.access.RUnlock()
+
+		s, ok := m.getServerByTagLocked(tag)
+		if !ok {
+			return result{}, nil
+		}
+		b, err := json.MarshalContext(box.BaseContext(), s)
+		if err != nil {
+			return result{}, fmt.Errorf("marshal server %q: %w", tag, err)
+		}
+		return result{data: b, ok: true}, nil
+	})
+	return r.data, r.ok, err
 }
 
 type ServersUpdatedEvent struct {
