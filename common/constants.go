@@ -7,7 +7,7 @@ import (
 // Version is the application version, injected at build time via ldflags:
 //
 //	-X 'github.com/getlantern/radiance/common.Version=x.y.z'
-var Version = "unknown"
+var Version = "dev"
 
 const (
 	Name = "lantern"
