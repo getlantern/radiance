@@ -186,7 +186,11 @@ type Server struct {
 func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()
+	return m.getServerByTagLocked(tag)
+}
 
+// getServerByTagLocked performs the tag lookup. Caller must hold access.RLock.
+func (m *Manager) getServerByTagLocked(tag string) (Server, bool) {
 	group := SGLantern
 	opts, ok := m.optsMaps[SGLantern][tag]
 	if !ok {
@@ -216,7 +220,7 @@ func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 func (m *Manager) ServersJSON() ([]byte, error) {
 	m.access.RLock()
 	defer m.access.RUnlock()
-	return json.Marshal(m.servers)
+	return json.MarshalContext(box.BaseContext(), m.servers)
 }
 
 // GetServerByTagJSON returns the server configuration for a given tag as pre-marshalled JSON.
@@ -226,25 +230,9 @@ func (m *Manager) GetServerByTagJSON(tag string) ([]byte, bool, error) {
 	m.access.RLock()
 	defer m.access.RUnlock()
 
-	group := SGLantern
-	opts, ok := m.optsMaps[SGLantern][tag]
+	s, ok := m.getServerByTagLocked(tag)
 	if !ok {
-		if opts, ok = m.optsMaps[SGUser][tag]; !ok {
-			return nil, false, nil
-		}
-		group = SGUser
-	}
-	s := Server{
-		Group:    group,
-		Tag:      tag,
-		Options:  opts,
-		Location: m.servers[group].Locations[tag],
-	}
-	switch v := opts.(type) {
-	case option.Endpoint:
-		s.Type = v.Type
-	case option.Outbound:
-		s.Type = v.Type
+		return nil, false, nil
 	}
 	b, err := json.MarshalContext(box.BaseContext(), s)
 	if err != nil {
