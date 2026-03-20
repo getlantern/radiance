@@ -367,18 +367,24 @@ func AutoServerSelections() (AutoSelections, error) {
 	return auto, nil
 }
 
+const (
+	rapidPollInterval = 500 * time.Millisecond
+	rapidPollWindow   = 15 * time.Second
+	steadyPollInterval = 10 * time.Second
+)
+
 // AutoSelectionsChangeListener polls for auto-selection changes and emits an
 // AutoSelectionsEvent whenever the selection differs from the previous value.
-// It performs an initial rapid poll (every 500ms for up to 15s) to catch the
-// first selection soon after tunnel connect, then settles into a 10s interval.
+// It performs an initial rapid poll to catch the first selection soon after
+// tunnel connect, then settles into a slower steady-state interval.
 func AutoSelectionsChangeListener(ctx context.Context) {
 	go func() {
 		var prev AutoSelections
 
 		// Rapid initial poll to emit the first selection promptly after connect.
-		initialDeadline := time.NewTimer(15 * time.Second)
+		initialDeadline := time.NewTimer(rapidPollWindow)
 		defer initialDeadline.Stop()
-		tick := time.NewTimer(500 * time.Millisecond)
+		tick := time.NewTimer(rapidPollInterval)
 		defer tick.Stop()
 	initial:
 		for {
@@ -390,22 +396,32 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 			case <-tick.C:
 				curr, err := AutoServerSelections()
 				if err != nil {
-					tick.Reset(500 * time.Millisecond)
+					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
 					events.Emit(AutoSelectionsEvent{Selections: curr})
-					if curr.Lantern != SelectionUnavailable {
+					if curr.Lantern != SelectionUnavailable ||
+						curr.User != SelectionUnavailable ||
+						curr.AutoAll != SelectionUnavailable {
 						break initial
 					}
 				}
-				tick.Reset(500 * time.Millisecond)
+				tick.Reset(rapidPollInterval)
 			}
 		}
 
+		// Drain tick before reusing for steady-state.
+		if !tick.Stop() {
+			select {
+			case <-tick.C:
+			default:
+			}
+		}
+		tick.Reset(steadyPollInterval)
+
 		// Steady-state polling for ongoing changes.
-		tick.Reset(10 * time.Second)
 		for {
 			select {
 			case <-ctx.Done():
@@ -413,14 +429,14 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 			case <-tick.C:
 				curr, err := AutoServerSelections()
 				if err != nil {
-					tick.Reset(10 * time.Second)
+					tick.Reset(steadyPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
 					events.Emit(AutoSelectionsEvent{Selections: curr})
 				}
-				tick.Reset(10 * time.Second)
+				tick.Reset(steadyPollInterval)
 			}
 		}
 	}()
