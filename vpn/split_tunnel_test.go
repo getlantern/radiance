@@ -3,7 +3,6 @@ package vpn
 import (
 	"context"
 	stdjson "encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -324,6 +323,14 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, rule, st.rule)
 }
 
+// unmarshalItems is a test helper that unmarshals a JSON string into []string.
+func unmarshalItems(t *testing.T, jsonStr string) []string {
+	t.Helper()
+	var items []string
+	require.NoError(t, stdjson.Unmarshal([]byte(jsonStr), &items))
+	return items
+}
+
 func TestItemsJSON(t *testing.T) {
 	st := setupTestSplitTunnel(t)
 
@@ -333,14 +340,15 @@ func TestItemsJSON(t *testing.T) {
 
 		result, err := st.ItemsJSON(TypeDomain)
 		require.NoError(t, err)
-		assert.Equal(t, `["example.com","test.org"]`, result)
+		items := unmarshalItems(t, result)
+		assert.Equal(t, []string{"example.com", "test.org"}, items)
 	})
 
 	t.Run("returns empty array when no items", func(t *testing.T) {
 		result, err := st.ItemsJSON(TypeDomainKeyword)
 		require.NoError(t, err)
-		// json.Marshal(nil slice) returns "null"; both are valid empty representations
-		assert.True(t, result == `[]` || result == `null`, "expected empty JSON array, got: %s", result)
+		items := unmarshalItems(t, result)
+		assert.Empty(t, items)
 	})
 
 	t.Run("returns error for unsupported filter type", func(t *testing.T) {
@@ -353,7 +361,8 @@ func TestItemsJSON(t *testing.T) {
 		require.NoError(t, st.AddItem(TypePackageName, "com.example.app"))
 		result, err := st.ItemsJSON(TypePackageName)
 		require.NoError(t, err)
-		assert.Equal(t, `["com.example.app"]`, result)
+		items := unmarshalItems(t, result)
+		assert.Equal(t, []string{"com.example.app"}, items)
 	})
 }
 
@@ -363,7 +372,8 @@ func TestEnabledAppsJSON(t *testing.T) {
 	t.Run("returns empty array when no apps configured", func(t *testing.T) {
 		result, err := st.EnabledAppsJSON()
 		require.NoError(t, err)
-		assert.Equal(t, `[]`, result)
+		items := unmarshalItems(t, result)
+		assert.Empty(t, items)
 	})
 
 	t.Run("returns apps from current format", func(t *testing.T) {
@@ -372,21 +382,16 @@ func TestEnabledAppsJSON(t *testing.T) {
 
 		result, err := st.EnabledAppsJSON()
 		require.NoError(t, err)
-		assert.Contains(t, result, "com.example.app")
-		assert.Contains(t, result, "/usr/bin/firefox")
+		items := unmarshalItems(t, result)
+		assert.Contains(t, items, "com.example.app")
+		assert.Contains(t, items, "/usr/bin/firefox")
 	})
 
 	t.Run("picks up legacy camelCase keys from raw file", func(t *testing.T) {
-		// Create a fresh split tunnel, then overwrite the raw file with
-		// a JSON blob containing legacy camelCase keys alongside the
-		// normal rule-set content. EnabledAppsJSON reads the raw file
-		// for legacy keys independently of loadRule.
 		st2 := setupTestSplitTunnel(t)
-
-		// Add an app through the normal API so the current format has it
 		require.NoError(t, st2.AddItem(TypePackageName, "com.current.app"))
 
-		// Read the current file content, parse as generic map, add legacy keys
+		// Patch the file with legacy camelCase keys alongside current format
 		b, err := atomicfile.ReadFile(st2.ruleFile)
 		require.NoError(t, err)
 		var raw map[string]any
@@ -399,10 +404,17 @@ func TestEnabledAppsJSON(t *testing.T) {
 
 		result, err := st2.EnabledAppsJSON()
 		require.NoError(t, err)
-		assert.Contains(t, result, "com.current.app")
-		assert.Contains(t, result, "com.legacy.app")
-		assert.Contains(t, result, "/opt/legacy")
-		// Deduplication: com.current.app should appear only once
-		assert.Equal(t, 1, strings.Count(result, "com.current.app"))
+		items := unmarshalItems(t, result)
+		assert.Contains(t, items, "com.current.app")
+		assert.Contains(t, items, "com.legacy.app")
+		assert.Contains(t, items, "/opt/legacy")
+		// Deduplication: com.current.app should appear exactly once
+		count := 0
+		for _, app := range items {
+			if app == "com.current.app" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "com.current.app should appear exactly once")
 	})
 }

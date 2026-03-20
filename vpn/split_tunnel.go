@@ -128,6 +128,9 @@ func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if items == nil {
+			items = []string{}
+		}
 		b, err := json.Marshal(items)
 		if err != nil {
 			return "", err
@@ -152,13 +155,14 @@ func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 			if str == "" {
 				return
 			}
+			key := str
 			if isWindows {
-				str = strings.ToLower(str)
+				key = strings.ToLower(str)
 			}
-			if _, exists := seen[str]; exists {
+			if _, exists := seen[key]; exists {
 				return
 			}
-			seen[str] = struct{}{}
+			seen[key] = struct{}{}
 			out = append(out, str)
 		}
 
@@ -178,8 +182,8 @@ func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 		// Fall back to legacy camelCase top-level keys in the raw file.
 		b, err := atomicfile.ReadFile(s.ruleFile)
 		if err == nil && len(b) > 0 {
-			var m map[string]any
-			if json.Unmarshal(b, &m) == nil {
+			m, parseErr := singjson.UnmarshalExtended[map[string]any](b)
+			if parseErr == nil {
 				legacyKeys := []string{
 					"processPathRegex", "processPath", "packageName",
 					"bundleId", "bundleID", "enabledApps", "apps",
