@@ -2,12 +2,14 @@ package vpn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -15,8 +17,9 @@ import (
 
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/json"
+	singjson "github.com/sagernet/sing/common/json"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -116,6 +119,109 @@ func (s *SplitTunnel) Filters() Filter {
 		ProcessPathRegex: slices.Clone(s.ruleMap[TypeProcessPathRegex].ProcessPathRegex),
 		PackageName:      slices.Clone(s.ruleMap[TypePackageName].PackageName),
 	}
+}
+
+// ItemsJSON returns the items for the given filter type as a JSON-encoded []string.
+// It is safe to call from CGo callback stacks (uses RunOffCgoStack internally).
+func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
+	return common.RunOffCgoStack(func() (string, error) {
+		f := s.Filters()
+		var items []string
+		switch filterType {
+		case TypeDomain:
+			items = f.Domain
+		case TypeDomainSuffix:
+			items = f.DomainSuffix
+		case TypeDomainKeyword:
+			items = f.DomainKeyword
+		case TypeDomainRegex:
+			items = f.DomainRegex
+		case TypeProcessName:
+			items = f.ProcessName
+		case TypeProcessPath:
+			items = f.ProcessPath
+		case TypeProcessPathRegex:
+			items = f.ProcessPathRegex
+		case TypePackageName:
+			items = f.PackageName
+		default:
+			return "", fmt.Errorf("unsupported filter type: %s", filterType)
+		}
+		b, err := json.Marshal(items)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	})
+}
+
+// EnabledAppsJSON reads the split tunnel config file and returns all enabled
+// app identifiers (from various legacy and current key names) as a JSON-encoded
+// []string. It is safe to call from CGo callback stacks.
+func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
+	return common.RunOffCgoStack(func() (string, error) {
+		b, err := os.ReadFile(s.ruleFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "[]", nil
+			}
+			return "", err
+		}
+		if len(b) == 0 {
+			return "[]", nil
+		}
+
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			return "", err
+		}
+
+		candidateKeys := []string{
+			"processPathRegex",
+			"processPath",
+			"packageName",
+			"bundleId",
+			"bundleID",
+			"enabledApps",
+			"apps",
+		}
+
+		seen := map[string]struct{}{}
+		out := make([]string, 0, 16)
+		isWindows := runtime.GOOS == "windows"
+
+		for _, k := range candidateKeys {
+			v, ok := m[k]
+			if !ok {
+				continue
+			}
+			arr, ok := v.([]any)
+			if !ok {
+				continue
+			}
+			for _, it := range arr {
+				str, ok := it.(string)
+				if !ok {
+					continue
+				}
+				str = strings.TrimSpace(str)
+				if str == "" {
+					continue
+				}
+				if isWindows {
+					str = strings.ToLower(str)
+				}
+				if _, exists := seen[str]; exists {
+					continue
+				}
+				seen[str] = struct{}{}
+				out = append(out, str)
+			}
+		}
+
+		encoded, _ := json.Marshal(out)
+		return string(encoded), nil
+	})
 }
 
 // AddItem adds a new item to the filter of the given type.
@@ -285,7 +391,7 @@ func (s *SplitTunnel) saveToFile() error {
 			},
 		},
 	}
-	buf, err := json.Marshal(rs)
+	buf, err := singjson.Marshal(rs)
 	if err != nil {
 		return fmt.Errorf("marshalling rule set: %w", err)
 	}
@@ -309,7 +415,7 @@ func (s *SplitTunnel) loadRule() error {
 	if err != nil {
 		return fmt.Errorf("reading rule file %s: %w", s.ruleFile, err)
 	}
-	ruleSet, err := json.UnmarshalExtended[O.PlainRuleSetCompat](content)
+	ruleSet, err := singjson.UnmarshalExtended[O.PlainRuleSetCompat](content)
 	if err != nil {
 		return fmt.Errorf("unmarshalling rule file %s: %w", s.ruleFile, err)
 	}
