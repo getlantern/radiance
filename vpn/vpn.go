@@ -319,13 +319,17 @@ type AutoSelectionsEvent struct {
 	Selections AutoSelections
 }
 
+// SelectionUnavailable is the sentinel value returned for an auto-selection
+// group that has no active server (tunnel not running, group not found, etc.).
+const SelectionUnavailable = "Unavailable"
+
 // AutoServerSelections returns the currently active server for each auto server group. If the group
-// is not found or has no active server, "Unavailable" is returned for that group.
+// is not found or has no active server, SelectionUnavailable is returned for that group.
 func AutoServerSelections() (AutoSelections, error) {
 	as := AutoSelections{
-		Lantern: "Unavailable",
-		User:    "Unavailable",
-		AutoAll: "Unavailable",
+		Lantern: SelectionUnavailable,
+		User:    SelectionUnavailable,
+		AutoAll: SelectionUnavailable,
 	}
 	ctx := context.Background()
 	if !isOpen(ctx) {
@@ -343,7 +347,7 @@ func AutoServerSelections() (AutoSelections, error) {
 		})
 		if idx < 0 || groups[idx].Selected == "" {
 			slog.Log(ctx, internal.LevelTrace, "Group not found or has no selection", "tag", tag)
-			return "Unavailable"
+			return SelectionUnavailable
 		}
 		return groups[idx].Selected
 	}
@@ -363,26 +367,60 @@ func AutoServerSelections() (AutoSelections, error) {
 	return auto, nil
 }
 
-// AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
-// selection changes until the context is cancelled.
+// AutoSelectionsChangeListener polls for auto-selection changes and emits an
+// AutoSelectionsEvent whenever the selection differs from the previous value.
+// It performs an initial rapid poll (every 500ms for up to 15s) to catch the
+// first selection soon after tunnel connect, then settles into a 10s interval.
 func AutoSelectionsChangeListener(ctx context.Context) {
 	go func() {
 		var prev AutoSelections
+
+		// Rapid initial poll to emit the first selection promptly after connect.
+		initialDeadline := time.NewTimer(15 * time.Second)
+		defer initialDeadline.Stop()
+		tick := time.NewTimer(500 * time.Millisecond)
+		defer tick.Stop()
+	initial:
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(10 * time.Second):
+			case <-initialDeadline.C:
+				break initial
+			case <-tick.C:
 				curr, err := AutoServerSelections()
 				if err != nil {
+					tick.Reset(500 * time.Millisecond)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{
-						Selections: curr,
-					})
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+					if curr.Lantern != SelectionUnavailable {
+						break initial
+					}
 				}
+				tick.Reset(500 * time.Millisecond)
+			}
+		}
+
+		// Steady-state polling for ongoing changes.
+		tick.Reset(10 * time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				curr, err := AutoServerSelections()
+				if err != nil {
+					tick.Reset(10 * time.Second)
+					continue
+				}
+				if curr != prev {
+					prev = curr
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+				}
+				tick.Reset(10 * time.Second)
 			}
 		}
 	}()
