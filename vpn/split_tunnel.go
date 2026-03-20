@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,8 +16,9 @@ import (
 
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/json"
+	singjson "github.com/sagernet/sing/common/json"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -118,6 +120,96 @@ func (s *SplitTunnel) Filters() Filter {
 	}
 }
 
+// ItemsJSON returns the items for the given filter type as a JSON-encoded []string.
+// It is safe to call from CGo callback stacks (uses RunOffCgoStack internally).
+func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
+	return common.RunOffCgoStack(func() (string, error) {
+		items, err := s.Filters().Items(filterType)
+		if err != nil {
+			return "", err
+		}
+		if items == nil {
+			items = []string{}
+		}
+		b, err := json.Marshal(items)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	})
+}
+
+// EnabledAppsJSON returns all enabled app/process identifiers from the split
+// tunnel configuration as a JSON-encoded []string. It first extracts values
+// from the parsed rule set (current sing-box format with snake_case keys),
+// then falls back to scanning the raw file for legacy camelCase keys.
+// It is safe to call from CGo callback stacks.
+func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
+	return common.RunOffCgoStack(func() (string, error) {
+		seen := map[string]struct{}{}
+		out := make([]string, 0, 16)
+		isWindows := common.IsWindows()
+
+		addString := func(str string) {
+			str = strings.TrimSpace(str)
+			if str == "" {
+				return
+			}
+			key := str
+			if isWindows {
+				key = strings.ToLower(str)
+			}
+			if _, exists := seen[key]; exists {
+				return
+			}
+			seen[key] = struct{}{}
+			out = append(out, str)
+		}
+
+		addSlice := func(items []string) {
+			for _, str := range items {
+				addString(str)
+			}
+		}
+
+		// Extract from the parsed rule set (current format).
+		f := s.Filters()
+		addSlice(f.ProcessPath)
+		addSlice(f.ProcessPathRegex)
+		addSlice(f.ProcessName)
+		addSlice(f.PackageName)
+
+		// Fall back to legacy camelCase top-level keys in the raw file.
+		b, err := atomicfile.ReadFile(s.ruleFile)
+		if err == nil && len(b) > 0 {
+			m, parseErr := singjson.UnmarshalExtended[map[string]any](b)
+			if parseErr == nil {
+				legacyKeys := []string{
+					"processPathRegex", "processPath", "packageName",
+					"bundleId", "bundleID", "enabledApps", "apps",
+				}
+				for _, k := range legacyKeys {
+					arr, ok := m[k].([]any)
+					if !ok {
+						continue
+					}
+					for _, it := range arr {
+						if str, ok := it.(string); ok {
+							addString(str)
+						}
+					}
+				}
+			}
+		}
+
+		encoded, err := json.Marshal(out)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	})
+}
+
 // AddItem adds a new item to the filter of the given type.
 func (s *SplitTunnel) AddItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, merge); err != nil {
@@ -165,6 +257,30 @@ type Filter struct {
 	ProcessPath      []string
 	ProcessPathRegex []string
 	PackageName      []string
+}
+
+// Items returns the items for the given filter type.
+func (f Filter) Items(filterType string) ([]string, error) {
+	switch filterType {
+	case TypeDomain:
+		return f.Domain, nil
+	case TypeDomainSuffix:
+		return f.DomainSuffix, nil
+	case TypeDomainKeyword:
+		return f.DomainKeyword, nil
+	case TypeDomainRegex:
+		return f.DomainRegex, nil
+	case TypeProcessName:
+		return f.ProcessName, nil
+	case TypeProcessPath:
+		return f.ProcessPath, nil
+	case TypeProcessPathRegex:
+		return f.ProcessPathRegex, nil
+	case TypePackageName:
+		return f.PackageName, nil
+	default:
+		return nil, fmt.Errorf("unsupported filter type: %s", filterType)
+	}
 }
 
 func (f Filter) String() string {
@@ -285,7 +401,7 @@ func (s *SplitTunnel) saveToFile() error {
 			},
 		},
 	}
-	buf, err := json.Marshal(rs)
+	buf, err := singjson.Marshal(rs)
 	if err != nil {
 		return fmt.Errorf("marshalling rule set: %w", err)
 	}
@@ -309,7 +425,7 @@ func (s *SplitTunnel) loadRule() error {
 	if err != nil {
 		return fmt.Errorf("reading rule file %s: %w", s.ruleFile, err)
 	}
-	ruleSet, err := json.UnmarshalExtended[O.PlainRuleSetCompat](content)
+	ruleSet, err := singjson.UnmarshalExtended[O.PlainRuleSetCompat](content)
 	if err != nil {
 		return fmt.Errorf("unmarshalling rule file %s: %w", s.ruleFile, err)
 	}
