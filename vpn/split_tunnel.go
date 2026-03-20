@@ -121,6 +121,17 @@ func (s *SplitTunnel) Filters() Filter {
 	}
 }
 
+func marshalStringSliceJSON(items []string) (string, error) {
+	if items == nil {
+		items = []string{}
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 // ItemsJSON returns the items for the given filter type as a JSON-encoded []string.
 // It is safe to call from CGo callback stacks (uses RunOffCgoStack internally).
 func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
@@ -147,11 +158,7 @@ func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported filter type: %s", filterType)
 		}
-		b, err := json.Marshal(items)
-		if err != nil {
-			return "", err
-		}
-		return string(b), nil
+		return marshalStringSliceJSON(items)
 	})
 }
 
@@ -160,21 +167,36 @@ func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
 // []string. It is safe to call from CGo callback stacks.
 func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 	return common.RunOffCgoStack(func() (string, error) {
-		b, err := os.ReadFile(s.ruleFile)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "[]", nil
+		seen := map[string]struct{}{}
+		out := make([]string, 0, 16)
+		isWindows := runtime.GOOS == "windows"
+
+		addString := func(str string) {
+			str = strings.TrimSpace(str)
+			if str == "" {
+				return
 			}
-			return "", err
-		}
-		if len(b) == 0 {
-			return "[]", nil
+			key := str
+			if isWindows {
+				key = strings.ToLower(str)
+			}
+			if _, exists := seen[key]; exists {
+				return
+			}
+			seen[key] = struct{}{}
+			out = append(out, str)
 		}
 
-		var m map[string]any
-		if err := json.Unmarshal(b, &m); err != nil {
-			return "", err
+		addItems := func(items []string) {
+			for _, item := range items {
+				addString(item)
+			}
 		}
+
+		f := s.Filters()
+		addItems(f.PackageName)
+		addItems(f.ProcessPath)
+		addItems(f.ProcessPathRegex)
 
 		candidateKeys := []string{
 			"processPathRegex",
@@ -186,9 +208,21 @@ func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 			"apps",
 		}
 
-		seen := map[string]struct{}{}
-		out := make([]string, 0, 16)
-		isWindows := runtime.GOOS == "windows"
+		b, err := atomicfile.ReadFile(s.ruleFile)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return marshalStringSliceJSON(out)
+			}
+			return "", err
+		}
+		if len(b) == 0 {
+			return marshalStringSliceJSON(out)
+		}
+
+		m, err := singjson.UnmarshalExtended[map[string]any](b)
+		if err != nil {
+			return "", err
+		}
 
 		for _, k := range candidateKeys {
 			v, ok := m[k]
@@ -208,19 +242,11 @@ func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 				if str == "" {
 					continue
 				}
-				if isWindows {
-					str = strings.ToLower(str)
-				}
-				if _, exists := seen[str]; exists {
-					continue
-				}
-				seen[str] = struct{}{}
-				out = append(out, str)
+				addString(str)
 			}
 		}
 
-		encoded, _ := json.Marshal(out)
-		return string(encoded), nil
+		return marshalStringSliceJSON(out)
 	})
 }
 

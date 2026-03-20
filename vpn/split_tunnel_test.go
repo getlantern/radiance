@@ -2,6 +2,8 @@ package vpn
 
 import (
 	"context"
+	stdjson "encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -24,6 +26,14 @@ func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
 	testutil.SetPathsForTesting(t)
 	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
 	return s
+}
+
+func decodeStringSlice(t *testing.T, raw string) []string {
+	t.Helper()
+
+	var items []string
+	require.NoError(t, stdjson.Unmarshal([]byte(raw), &items))
+	return items
 }
 
 func TestEnableDisableIsEnabled(t *testing.T) {
@@ -320,4 +330,83 @@ func TestMigration(t *testing.T) {
 `
 	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
 	assert.Equal(t, rule, st.rule)
+}
+
+func TestItemsJSON(t *testing.T) {
+	st := setupTestSplitTunnel(t)
+
+	t.Run("returns items for a supported filter type", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+		require.NoError(t, st.AddItem(TypeDomain, "test.org"))
+
+		result, err := st.ItemsJSON(TypeDomain)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"example.com", "test.org"}, decodeStringSlice(t, result))
+	})
+
+	t.Run("returns empty array for an empty filter", func(t *testing.T) {
+		result, err := st.ItemsJSON(TypeDomainKeyword)
+		require.NoError(t, err)
+		assert.Equal(t, "[]", result)
+	})
+
+	t.Run("returns error for an unsupported filter type", func(t *testing.T) {
+		_, err := st.ItemsJSON("unsupported")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported filter type")
+	})
+}
+
+func TestEnabledAppsJSON(t *testing.T) {
+	t.Run("returns current split tunnel app filters", func(t *testing.T) {
+		st := setupTestSplitTunnel(t)
+		require.NoError(t, st.AddItem(TypePackageName, "com.example.app"))
+		require.NoError(t, st.AddItem(TypeProcessPath, "/usr/bin/firefox"))
+		require.NoError(t, st.AddItem(TypeProcessPathRegex, "/Applications/.*"))
+
+		result, err := st.EnabledAppsJSON()
+		require.NoError(t, err)
+		assert.ElementsMatch(
+			t,
+			[]string{"com.example.app", "/usr/bin/firefox", "/Applications/.*"},
+			decodeStringSlice(t, result),
+		)
+	})
+
+	t.Run("returns empty array when the rule file is missing", func(t *testing.T) {
+		st := setupTestSplitTunnel(t)
+		require.NoError(t, os.Remove(st.ruleFile))
+
+		result, err := st.EnabledAppsJSON()
+		require.NoError(t, err)
+		assert.Equal(t, "[]", result)
+	})
+
+	t.Run("falls back to legacy top level keys", func(t *testing.T) {
+		st := setupTestSplitTunnel(t)
+		raw, err := stdjson.Marshal(map[string]any{
+			"packageName":      []string{"com.legacy.app", "com.legacy.app"},
+			"processPath":      []string{"/opt/Legacy.app"},
+			"processPathRegex": []string{"/Applications/Legacy/.*"},
+			"bundleId":         []string{"com.bundle.legacy"},
+			"enabledApps":      []string{"  manual-entry  "},
+			"apps":             []string{"manual-entry"},
+		})
+		require.NoError(t, err)
+		require.NoError(t, atomicfile.WriteFile(st.ruleFile, raw, 0644))
+
+		result, err := st.EnabledAppsJSON()
+		require.NoError(t, err)
+		assert.ElementsMatch(
+			t,
+			[]string{
+				"com.legacy.app",
+				"/opt/Legacy.app",
+				"/Applications/Legacy/.*",
+				"com.bundle.legacy",
+				"manual-entry",
+			},
+			decodeStringSlice(t, result),
+		)
+	})
 }
