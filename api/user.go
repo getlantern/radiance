@@ -60,17 +60,21 @@ func (ac *APIClient) NewUser(ctx context.Context) (*protos.LoginResponse, error)
 }
 
 func (ac *APIClient) UserData() ([]byte, error) {
-	slog.Debug("Getting user data")
-	user := &protos.LoginResponse{}
-	err := settings.GetStruct(settings.LoginResponseKey, user)
-	return withMarshalProto(user, err)
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		slog.Debug("Getting user data")
+		user := &protos.LoginResponse{}
+		err := settings.GetStruct(settings.LoginResponseKey, user)
+		return withMarshalProto(user, err)
+	})
 }
 
 // FetchUserData fetches user data from the server.
 func (ac *APIClient) FetchUserData(ctx context.Context) ([]byte, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "fetch_user_data")
-	defer span.End()
-	return withMarshalProto(ac.fetchUserData(ctx))
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		ctx, span := otel.Tracer(tracerName).Start(ctx, "fetch_user_data")
+		defer span.End()
+		return withMarshalProto(ac.fetchUserData(ctx))
+	})
 }
 
 // fetchUserData calls the /user-data endpoint and stores the result via storeData.
@@ -297,58 +301,62 @@ func (a *APIClient) getSalt(ctx context.Context, email string) ([]byte, error) {
 
 // Login logs the user in.
 func (a *APIClient) Login(ctx context.Context, email string, password string) ([]byte, error) {
-	// clear any previous salt value
-	a.salt = nil
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
-	defer span.End()
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		// clear any previous salt value
+		a.salt = nil
+		ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
+		defer span.End()
 
-	salt, err := a.getSalt(ctx, email)
-	if err != nil {
-		return nil, err
-	}
+		salt, err := a.getSalt(ctx, email)
+		if err != nil {
+			return nil, err
+		}
 
-	deviceId := settings.GetString(settings.DeviceIDKey)
-	resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
-	if err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
+		deviceId := settings.GetString(settings.DeviceIDKey)
+		resp, err := a.authClient.Login(ctx, email, password, deviceId, salt)
+		if err != nil {
+			return nil, traces.RecordError(ctx, err)
+		}
 
-	//this can be nil if the user has reached the device limit
-	if resp.LegacyUserData != nil {
-		// Append device ID to user data
-		resp.LegacyUserData.DeviceID = deviceId
-	}
+		//this can be nil if the user has reached the device limit
+		if resp.LegacyUserData != nil {
+			// Append device ID to user data
+			resp.LegacyUserData.DeviceID = deviceId
+		}
 
-	// regardless of state we need to save login information
-	// We have device flow limit on login
-	a.setData(resp)
-	a.salt = salt
-	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
-		return nil, traces.RecordError(ctx, saltErr)
-	}
-	return withMarshalProto(resp, nil)
+		// regardless of state we need to save login information
+		// We have device flow limit on login
+		a.setData(resp)
+		a.salt = salt
+		if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
+			return nil, traces.RecordError(ctx, saltErr)
+		}
+		return withMarshalProto(resp, nil)
+	})
 }
 
 // Logout logs the user out. No-op if there is no user account logged in.
 func (a *APIClient) Logout(ctx context.Context, email string) ([]byte, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
-	defer span.End()
-	logout := &protos.LogoutRequest{
-		Email:        email,
-		DeviceId:     settings.GetString(settings.DeviceIDKey),
-		LegacyUserID: settings.GetInt64(settings.UserIDKey),
-		LegacyToken:  settings.GetString(settings.TokenKey),
-		Token:        settings.GetString(settings.JwtTokenKey),
-	}
-	if err := a.authClient.SignOut(ctx, logout); err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
-	}
-	a.Reset()
-	a.salt = nil
-	if err := writeSalt(nil, a.saltPath); err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
-	}
-	return withMarshalProto(a.NewUser(context.Background()))
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		ctx, span := otel.Tracer(tracerName).Start(ctx, "logout")
+		defer span.End()
+		logout := &protos.LogoutRequest{
+			Email:        email,
+			DeviceId:     settings.GetString(settings.DeviceIDKey),
+			LegacyUserID: settings.GetInt64(settings.UserIDKey),
+			LegacyToken:  settings.GetString(settings.TokenKey),
+			Token:        settings.GetString(settings.JwtTokenKey),
+		}
+		if err := a.authClient.SignOut(ctx, logout); err != nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
+		}
+		a.Reset()
+		a.salt = nil
+		if err := writeSalt(nil, a.saltPath); err != nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
+		}
+		return withMarshalProto(a.NewUser(context.Background()))
+	})
 }
 
 func withMarshalProto(resp *protos.LoginResponse, err error) ([]byte, error) {
@@ -546,87 +554,89 @@ func (a *APIClient) CompleteChangeEmail(ctx context.Context, newEmail, password,
 
 // DeleteAccount deletes this user account.
 func (a *APIClient) DeleteAccount(ctx context.Context, email, password string, isOAuthUser bool) ([]byte, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "delete_account")
-	defer span.End()
-	var deleteRequestBody *protos.DeleteUserRequest
-	lowerCaseEmail := strings.ToLower(email)
-	if !isOAuthUser {
-		salt, err := a.getSalt(ctx, lowerCaseEmail)
-		if err != nil {
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		ctx, span := otel.Tracer(tracerName).Start(ctx, "delete_account")
+		defer span.End()
+		var deleteRequestBody *protos.DeleteUserRequest
+		lowerCaseEmail := strings.ToLower(email)
+		if !isOAuthUser {
+			salt, err := a.getSalt(ctx, lowerCaseEmail)
+			if err != nil {
+				return nil, traces.RecordError(ctx, err)
+			}
+
+			// Prepare login request body
+			encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
+			if err != nil {
+				return nil, traces.RecordError(ctx, err)
+			}
+			client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
+
+			//Send this key to client
+			A := client.EphemeralPublic()
+
+			//Create body
+			prepareRequestBody := &protos.PrepareRequest{
+				Email: lowerCaseEmail,
+				A:     A.Bytes(),
+			}
+
+			srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
+			if err != nil {
+				return nil, traces.RecordError(ctx, err)
+			}
+
+			B := big.NewInt(0).SetBytes(srpB.B)
+
+			if err = client.SetOthersPublic(B); err != nil {
+				return nil, traces.RecordError(ctx, err)
+			}
+
+			clientKey, err := client.Key()
+			if err != nil || clientKey == nil {
+				return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
+			}
+
+			// check if the server proof is valid
+			if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
+				return nil, traces.RecordError(ctx, errors.New("user_not_found error while checking server proof"))
+			}
+
+			clientProof, err := client.ClientProof()
+			if err != nil {
+				return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
+			}
+			deleteRequestBody = &protos.DeleteUserRequest{
+				Email:     lowerCaseEmail,
+				Proof:     clientProof,
+				Permanent: true,
+				DeviceId:  settings.GetString(settings.DeviceIDKey),
+				Token:     settings.GetString(settings.JwtTokenKey),
+			}
+		} else {
+			jwtToken := settings.GetString(settings.JwtTokenKey)
+			if jwtToken == "" {
+				return nil, traces.RecordError(ctx, errors.New("jwt token is required for OAuth account deletion"))
+			}
+			deleteRequestBody = &protos.DeleteUserRequest{
+				Email:     lowerCaseEmail,
+				Permanent: true,
+				Token:     jwtToken,
+				DeviceId:  settings.GetString(settings.DeviceIDKey),
+			}
+		}
+		if err := a.authClient.DeleteAccount(ctx, deleteRequestBody); err != nil {
 			return nil, traces.RecordError(ctx, err)
 		}
-
-		// Prepare login request body
-		encKey, err := generateEncryptedKey(password, lowerCaseEmail, salt)
-		if err != nil {
-			return nil, traces.RecordError(ctx, err)
-		}
-		client := srp.NewSRPClient(srp.KnownGroups[group], encKey, nil)
-
-		//Send this key to client
-		A := client.EphemeralPublic()
-
-		//Create body
-		prepareRequestBody := &protos.PrepareRequest{
-			Email: lowerCaseEmail,
-			A:     A.Bytes(),
+		// clean up local data
+		a.Reset()
+		a.salt = nil
+		if err := writeSalt(nil, a.saltPath); err != nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 		}
 
-		srpB, err := a.authClient.LoginPrepare(ctx, prepareRequestBody)
-		if err != nil {
-			return nil, traces.RecordError(ctx, err)
-		}
-
-		B := big.NewInt(0).SetBytes(srpB.B)
-
-		if err = client.SetOthersPublic(B); err != nil {
-			return nil, traces.RecordError(ctx, err)
-		}
-
-		clientKey, err := client.Key()
-		if err != nil || clientKey == nil {
-			return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating Client key %w", err))
-		}
-
-		// check if the server proof is valid
-		if !client.GoodServerProof(salt, lowerCaseEmail, srpB.Proof) {
-			return nil, traces.RecordError(ctx, errors.New("user_not_found error while checking server proof"))
-		}
-
-		clientProof, err := client.ClientProof()
-		if err != nil {
-			return nil, traces.RecordError(ctx, fmt.Errorf("user_not_found error while generating client proof %w", err))
-		}
-		deleteRequestBody = &protos.DeleteUserRequest{
-			Email:     lowerCaseEmail,
-			Proof:     clientProof,
-			Permanent: true,
-			DeviceId:  settings.GetString(settings.DeviceIDKey),
-			Token:     settings.GetString(settings.JwtTokenKey),
-		}
-	} else {
-		jwtToken := settings.GetString(settings.JwtTokenKey)
-		if jwtToken == "" {
-			return nil, traces.RecordError(ctx, errors.New("jwt token is required for OAuth account deletion"))
-		}
-		deleteRequestBody = &protos.DeleteUserRequest{
-			Email:     lowerCaseEmail,
-			Permanent: true,
-			Token:     jwtToken,
-			DeviceId:  settings.GetString(settings.DeviceIDKey),
-		}
-	}
-	if err := a.authClient.DeleteAccount(ctx, deleteRequestBody); err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
-	// clean up local data
-	a.Reset()
-	a.salt = nil
-	if err := writeSalt(nil, a.saltPath); err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
-	}
-
-	return withMarshalProto(a.NewUser(context.Background()))
+		return withMarshalProto(a.NewUser(context.Background()))
+	})
 }
 
 // OAuthLoginUrl initiates the OAuth login process for the specified provider.
@@ -645,38 +655,40 @@ func (a *APIClient) OAuthLoginUrl(ctx context.Context, provider string) (string,
 }
 
 func (a *APIClient) OAuthLoginCallback(ctx context.Context, oAuthToken string) ([]byte, error) {
-	slog.Debug("Getting OAuth login callback")
-	jwtUserInfo, err := decodeJWT(oAuthToken)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding JWT: %w", err)
-	}
+	return common.RunOffCgoStack(func() ([]byte, error) {
+		slog.Debug("Getting OAuth login callback")
+		jwtUserInfo, err := decodeJWT(oAuthToken)
+		if err != nil {
+			return nil, fmt.Errorf("error decoding JWT: %w", err)
+		}
 
-	// Temporary  set user data to so api can read it
-	login := &protos.LoginResponse{
-		LegacyID:    jwtUserInfo.LegacyUserID,
-		LegacyToken: jwtUserInfo.LegacyToken,
-		LegacyUserData: &protos.LoginResponse_UserData{
-			UserId:   jwtUserInfo.LegacyUserID,
-			Token:    jwtUserInfo.LegacyToken,
-			DeviceID: jwtUserInfo.DeviceId,
-			Email:    jwtUserInfo.Email,
-		},
-	}
-	a.setData(login)
-	// Get user data from api this will also save data in user config
-	user, err := a.fetchUserData(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("error getting user data: %w", err)
-	}
+		// Temporary  set user data to so api can read it
+		login := &protos.LoginResponse{
+			LegacyID:    jwtUserInfo.LegacyUserID,
+			LegacyToken: jwtUserInfo.LegacyToken,
+			LegacyUserData: &protos.LoginResponse_UserData{
+				UserId:   jwtUserInfo.LegacyUserID,
+				Token:    jwtUserInfo.LegacyToken,
+				DeviceID: jwtUserInfo.DeviceId,
+				Email:    jwtUserInfo.Email,
+			},
+		}
+		a.setData(login)
+		// Get user data from api this will also save data in user config
+		user, err := a.fetchUserData(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("error getting user data: %w", err)
+		}
 
-	if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
-		slog.Error("Failed to persist JWT token", "error", err)
-		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
-	}
-	user.Id = jwtUserInfo.Email
-	user.EmailConfirmed = true
-	a.setData(user)
-	return withMarshalProto(user, nil)
+		if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
+			slog.Error("Failed to persist JWT token", "error", err)
+			return nil, fmt.Errorf("failed to persist JWT token: %w", err)
+		}
+		user.Id = jwtUserInfo.Email
+		user.EmailConfirmed = true
+		a.setData(user)
+		return withMarshalProto(user, nil)
+	})
 }
 
 type LinkResponse struct {
