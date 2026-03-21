@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 )
@@ -137,9 +138,14 @@ func Close(ctx context.Context) error {
 }
 
 func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
+	e, _ := env.Get[string](env.ENV)
+	if e == "" {
+		e = "unknown"
+	}
 	return []attribute.KeyValue{
 		semconv.ServiceNameKey.String(serviceName),
 		semconv.ServiceVersionKey.String(a.AppVersion),
+		semconv.DeploymentEnvironmentKey.String(e),
 		attribute.String("device.id", a.DeviceID),
 		attribute.String("geo.country", a.GeoCountry),
 		attribute.String("library.language", "go"),
