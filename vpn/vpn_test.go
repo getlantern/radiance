@@ -2,15 +2,14 @@ package vpn
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"testing"
+	"testing/synctest"
 
 	box "github.com/getlantern/lantern-box"
 
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal/testutil"
-	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/log"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/cachefile"
@@ -42,10 +41,10 @@ func TestSelectServer(t *testing.T) {
 		},
 	}
 
-	testutil.SetPathsForTesting(t)
-	mservice := setupVpnTest(t)
+	tmpDir := t.TempDir()
+	client := setupVpnTest(t, tmpDir)
 
-	ctx := mservice.Ctx()
+	ctx := client.tunnel.ctx
 	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
 	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
 
@@ -64,8 +63,7 @@ func TestSelectServer(t *testing.T) {
 			selector := outbound.(_selector)
 			require.NoError(t, selector.Start(), "failed to start selector")
 
-			mservice.status = ipc.Connected
-			require.NoError(t, SelectServer(context.Background(), tt.wantGroup, tt.wantTag))
+			require.NoError(t, client.SelectServer(tt.wantGroup, tt.wantTag))
 			assert.Equal(t, tt.wantTag, selector.Now(), tt.wantTag+" should be selected")
 			assert.Equal(t, tt.wantGroup, clashServer.Mode(), "clash mode should be "+tt.wantGroup)
 		})
@@ -76,8 +74,8 @@ func TestSelectedServer(t *testing.T) {
 	wantGroup := "socks"
 	wantTag := "socks2-out"
 
-	testutil.SetPathsForTesting(t)
-	opts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	tmpDir := t.TempDir()
+	opts, _, err := testBoxOptions(tmpDir)
 	require.NoError(t, err, "failed to load test box options")
 	cacheFile := cachefile.New(context.Background(), *opts.Experimental.CacheFile)
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
@@ -86,20 +84,17 @@ func TestSelectedServer(t *testing.T) {
 	require.NoError(t, cacheFile.StoreSelected(wantGroup, wantTag))
 	_ = cacheFile.Close()
 
-	t.Run("with tunnel open", func(t *testing.T) {
-		mservice := setupVpnTest(t)
-		outboundMgr := service.FromContext[adapter.OutboundManager](mservice.Ctx())
-		require.NoError(t, outboundMgr.Start(adapter.StartStateStart), "failed to start outbound manager")
+	client := setupVpnTest(t, tmpDir)
+	outboundMgr := service.FromContext[adapter.OutboundManager](client.tunnel.ctx)
+	require.NoError(t, outboundMgr.Start(adapter.StartStateStart), "failed to start outbound manager")
 
-		group, tag, err := ipc.GetSelected(context.Background())
-		require.NoError(t, err, "should not error when getting selected server")
-		assert.Equal(t, wantGroup, group, "group should match")
-		assert.Equal(t, wantTag, tag, "tag should match")
-	})
+	group, tag, err := client.GetSelected()
+	require.NoError(t, err, "should not error when getting selected server")
+	assert.Equal(t, wantGroup, group, "group should match")
+	assert.Equal(t, wantTag, tag, "tag should match")
 }
 
 func TestAutoServerSelections(t *testing.T) {
-	testutil.SetPathsForTesting(t)
 	mgr := &mockOutMgr{
 		outbounds: []adapter.Outbound{
 			&mockOutbound{tag: "socks1-out"},
@@ -107,19 +102,19 @@ func TestAutoServerSelections(t *testing.T) {
 			&mockOutbound{tag: "http1-out"},
 			&mockOutbound{tag: "http2-out"},
 			&mockOutboundGroup{
-				mockOutbound: mockOutbound{tag: autoLanternTag},
+				mockOutbound: mockOutbound{tag: AutoLanternTag},
 				now:          "socks1-out",
 				all:          []string{"socks1-out", "socks2-out"},
 			},
 			&mockOutboundGroup{
-				mockOutbound: mockOutbound{tag: autoUserTag},
+				mockOutbound: mockOutbound{tag: AutoUserTag},
 				now:          "http2-out",
 				all:          []string{"http1-out", "http2-out"},
 			},
 			&mockOutboundGroup{
-				mockOutbound: mockOutbound{tag: autoAllTag},
-				now:          autoLanternTag,
-				all:          []string{autoLanternTag, autoUserTag},
+				mockOutbound: mockOutbound{tag: AutoSelectTag},
+				now:          AutoLanternTag,
+				all:          []string{AutoLanternTag, AutoUserTag},
 			},
 		},
 	}
@@ -130,16 +125,139 @@ func TestAutoServerSelections(t *testing.T) {
 	}
 	ctx := box.BaseContext()
 	service.MustRegister[adapter.OutboundManager](ctx, mgr)
-	m := &mockService{
-		ctx:    ctx,
-		status: ipc.Connected,
-	}
-	ipcServer := ipc.NewServer(m)
-	require.NoError(t, ipcServer.Start())
 
-	got, err := AutoServerSelections()
+	client := &VPNClient{
+		tunnel: &tunnel{
+			ctx: ctx,
+		},
+		logger: slog.Default(),
+	}
+	client.tunnel.status.Store(Connected)
+
+	got, err := client.AutoServerSelections()
 	require.NoError(t, err, "should not error when getting auto server selections")
 	require.Equal(t, want, got, "selections should match")
+}
+
+func TestConnectWaitsForPreStartTests(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, client := newIdleClient(true)
+		go func() {
+			<-ctx.Done()
+			close(client.preTestDone)
+		}()
+
+		// Connect should block until pre-start tests complete (done channel closed).
+		_ = client.Connect(BoxOptions{})
+		<-client.preTestDone
+	})
+}
+
+func TestConnectProceedsWithoutPreTests(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		_, client := newIdleClient(false)
+		_ = client.Connect(BoxOptions{})
+	})
+}
+
+func TestStatusNotBlockedDuringPreTestWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		_, client := newIdleClient(true)
+		go func() {
+			_ = client.Connect(BoxOptions{})
+		}()
+
+		// Wait until the Connect goroutine is blocked on <-testDone (lock released).
+		synctest.Wait()
+
+		// Status should succeed because Connect released the write lock.
+		assert.Equal(t, Disconnected, client.Status())
+		close(client.preTestDone)
+	})
+}
+
+// func TestConcurrentPreStartTestsRejected(t *testing.T) {
+// 	_, client := newIdleClient(true)
+// 	err := client.PreStartTests("", nil)
+// 	require.Error(t, err)
+// 	assert.Contains(t, err.Error(), "pre-start tests already running")
+// }
+//
+// func TestPreStartTestsRejectedWhenConnected(t *testing.T) {
+// 	_, client := newIdleClient(false)
+// 	client.tunnel = &tunnel{}
+//
+// 	err := client.PreStartTests("", nil)
+// 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
+// }
+
+func TestDisconnectedOperations(t *testing.T) {
+	_, client := newIdleClient(false)
+
+	assert.Equal(t, Disconnected, client.Status())
+	assert.False(t, client.isOpen())
+	assert.ErrorIs(t, client.SelectServer("g", "t"), ErrTunnelNotConnected)
+
+	_, _, err := client.GetSelected()
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+
+	_, _, err = client.ActiveServer()
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+
+	_, err = client.Connections()
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+
+	assert.NoError(t, client.Close(), "Close on disconnected client should be no-op")
+	assert.NoError(t, client.Disconnect(), "Disconnect on disconnected client should be no-op")
+}
+
+// Run with -race
+func TestConcurrentReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		_, client := newIdleClient(false)
+		for range 10 {
+			go func() {
+				for range 100 {
+					assert.Equal(t, Disconnected, client.Status())
+				}
+			}()
+		}
+	})
+}
+
+// Run with -race
+func TestConcurrentConnectAndReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		_, client := newIdleClient(false)
+		go func() {
+			for range 10 {
+				_ = client.Connect(BoxOptions{})
+			}
+		}()
+		for range 5 {
+			go func() {
+				for range 50 {
+					_ = client.Status()
+				}
+			}()
+		}
+	})
+}
+
+func newIdleClient(withPretests bool) (context.Context, *VPNClient) {
+	done := make(chan struct{})
+	ctx := context.Background()
+	cancel := func() {}
+	if withPretests {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		close(done)
+	}
+	return ctx, &VPNClient{
+		logger:        log.NoOpLogger(),
+		preTestCancel: cancel,
+		preTestDone:   done,
+	}
 }
 
 type mockOutMgr struct {
@@ -178,26 +296,7 @@ type mockOutboundGroup struct {
 func (o *mockOutboundGroup) Now() string   { return o.now }
 func (o *mockOutboundGroup) All() []string { return o.all }
 
-var _ ipc.Service = (*mockService)(nil)
-
-type mockService struct {
-	ctx    context.Context
-	status ipc.VPNStatus
-	clash  *clashapi.Server
-}
-
-func (m *mockService) Ctx() context.Context                                     { return m.ctx }
-func (m *mockService) Status() ipc.VPNStatus                                    { return m.status }
-func (m *mockService) ClashServer() *clashapi.Server                            { return m.clash }
-func (m *mockService) Close() error                                             { return nil }
-func (m *mockService) Start(context.Context, string) error                      { return nil }
-func (m *mockService) Restart(context.Context, string) error                    { return nil }
-func (m *mockService) UpdateOutbounds(options servers.Servers) error            { return nil }
-func (m *mockService) AddOutbounds(group string, options servers.Options) error { return nil }
-func (m *mockService) RemoveOutbounds(group string, tags []string) error        { return nil }
-
-func setupVpnTest(t *testing.T) *mockService {
-	path := settings.GetString(settings.DataPathKey)
+func setupVpnTest(t *testing.T, path string) *VPNClient {
 	setupOpts := libbox.SetupOptions{
 		BasePath:    path,
 		WorkingPath: path,
@@ -215,21 +314,22 @@ func setupVpnTest(t *testing.T) *mockService {
 	clashServer := service.FromContext[adapter.ClashServer](ctx)
 	cacheFile := service.FromContext[adapter.CacheFile](ctx)
 
-	m := &mockService{
-		ctx:    ctx,
-		status: ipc.Connected,
-		clash:  clashServer.(*clashapi.Server),
+	client := &VPNClient{
+		tunnel: &tunnel{
+			ctx:         ctx,
+			clashServer: clashServer.(*clashapi.Server),
+			dataPath:    path,
+		},
+		logger: slog.Default(),
 	}
-	ipcServer := ipc.NewServer(m)
-	require.NoError(t, ipcServer.Start())
+	client.tunnel.status.Store(Connected)
 
 	t.Cleanup(func() {
 		lb.Close()
-		ipcServer.Close()
 		cacheFile.Close()
 		clashServer.Close()
 	})
 	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
 	require.NoError(t, clashServer.Start(adapter.StartStateStart))
-	return m
+	return client
 }

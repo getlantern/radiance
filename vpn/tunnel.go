@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	runtimeDebug "runtime/debug"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -24,12 +25,11 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/internal"
+	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/vpn/ipc"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/common/urltest"
+	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -53,19 +53,19 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
-	status  atomic.Value // ipc.VPNStatus
+	status  atomic.Value // VPNStatus
 	cancel  context.CancelFunc
 	closers []io.Closer
 }
 
 func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (err error) {
-	if t.status.Load() != ipc.Restarting {
-		t.setStatus(ipc.Connecting, nil)
+	if t.status.Load() != Restarting {
+		t.setStatus(Connecting, nil)
 	}
 	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
 	defer func() {
 		if err != nil {
-			t.setStatus(ipc.ErrorStatus, err)
+			t.setStatus(ErrorStatus, err)
 		}
 	}()
 
@@ -80,13 +80,13 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
-	t.setStatus(ipc.Connected, nil)
+	t.setStatus(Connected, nil)
 	t.optsMap = makeOutboundOptsMap(t.ctx, options)
 	return nil
 }
 
 func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) error {
-	slog.Log(nil, internal.LevelTrace, "Initializing tunnel")
+	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
 	// setup libbox service
 	dataPath := t.dataPath
@@ -101,7 +101,7 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 		setupOpts.FixAndroidStack = true
 	}
 
-	slog.Log(nil, internal.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
+	slog.Log(nil, rlog.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
 	if err := libbox.Setup(setupOpts); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
@@ -109,7 +109,7 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
-	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
+	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, options, platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
@@ -126,10 +126,10 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
-	if err := loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName)); err != nil {
-		return fmt.Errorf("load urltest history: %w", err)
-	}
+	// history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
+	// if err := loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName)); err != nil {
+	// 	return fmt.Errorf("load urltest history: %w", err)
+	// }
 
 	// set memory limit for Android and iOS
 	switch common.Platform {
@@ -188,7 +188,7 @@ func newMutableGroupManager(
 }
 
 func (t *tunnel) connect() (err error) {
-	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
+	slog.Log(nil, rlog.LevelTrace, "Starting libbox service")
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -217,11 +217,18 @@ func (t *tunnel) connect() (err error) {
 }
 
 func (t *tunnel) selectOutbound(group, tag string) error {
-	if status := t.Status(); status != ipc.Connected {
+	if status := t.Status(); status != Connected {
 		return fmt.Errorf("tunnel not running: status %v", status)
 	}
 
-	t.clashServer.SetMode(group)
+	if mode := t.clashServer.Mode(); mode != group {
+		t.clashServer.SetMode(group)
+		conntrack.Close()
+		go func() {
+			time.Sleep(time.Second)
+			runtimeDebug.FreeOSMemory()
+		}()
+	}
 	if tag == "" {
 		return nil
 	}
@@ -230,13 +237,13 @@ func (t *tunnel) selectOutbound(group, tag string) error {
 	if !loaded {
 		return fmt.Errorf("selector group not found: %s", group)
 	}
-	outbound.(ipc.Selector).SelectOutbound(tag)
+	outbound.(Selector).SelectOutbound(tag)
 	return nil
 }
 
 func (t *tunnel) close() error {
-	if t.status.Load() != ipc.Restarting {
-		t.setStatus(ipc.Disconnecting, nil)
+	if t.status.Load() != Restarting {
+		t.setStatus(Disconnecting, nil)
 	}
 	if t.cancel != nil {
 		t.cancel()
@@ -246,7 +253,7 @@ func (t *tunnel) close() error {
 	go func() {
 		var errs []error
 		for _, closer := range t.closers {
-			slog.Log(nil, internal.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
+			slog.Log(nil, rlog.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
 			errs = append(errs, closer.Close())
 		}
 		done <- errors.Join(errs...)
@@ -260,19 +267,19 @@ func (t *tunnel) close() error {
 
 	t.closers = nil
 	t.lbService = nil
-	if t.status.Load() != ipc.Restarting {
-		t.setStatus(ipc.Disconnected, nil)
+	if t.status.Load() != Restarting {
+		t.setStatus(Disconnected, nil)
 	}
 	return err
 }
 
-func (t *tunnel) Status() ipc.VPNStatus {
-	return t.status.Load().(ipc.VPNStatus)
+func (t *tunnel) Status() VPNStatus {
+	return t.status.Load().(VPNStatus)
 }
 
-func (t *tunnel) setStatus(status ipc.VPNStatus, err error) {
+func (t *tunnel) setStatus(status VPNStatus, err error) {
 	t.status.Store(status)
-	evt := ipc.StatusUpdateEvent{Status: status}
+	evt := StatusUpdateEvent{Status: status}
 	if err != nil {
 		evt.Error = err.Error()
 	}
@@ -299,7 +306,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		// preemptively merge the new lantern tags into the clientContextInjector match bounds to
 		// capture any new connections before finished adding the servers.
 		if tags := options.AllTags(); len(tags) > 0 {
-			slog.Log(nil, internal.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
+			slog.Log(nil, rlog.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
 			matchBounds := t.clientContextTracker.MatchBounds()
 			matchBounds.Outbound = append(matchBounds.Outbound, tags...)
 			t.clientContextTracker.SetBounds(matchBounds)
@@ -415,63 +422,59 @@ func (t *tunnel) updateClientContextTracker() {
 	})
 }
 
-func (t *tunnel) updateOutbounds(new servers.Servers) error {
+func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	var errs []error
-	for _, group := range []string{servers.SGLantern, servers.SGUser} {
-		newOpts := new[group]
-		if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
-			slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
-			continue
-		}
-		slog.Log(nil, internal.LevelTrace, "Updating servers", "group", group)
+	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
+		slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
+		return nil
+	}
+	slog.Log(nil, rlog.LevelTrace, "Updating servers", "group", group)
 
-		autoTag := groupAutoTag(group)
-		selector, selectorExists := t.mutGrpMgr.OutboundGroup(group)
-		_, urltestExists := t.mutGrpMgr.OutboundGroup(autoTag)
-		if !selectorExists || !urltestExists {
-			// Yes, panic. And, yes, it's intentional. Both selector and URLtest should always exist
-			// if the tunnel is running, so this is a "world no longer makes sense" situation. This
-			// should be caught during testing and will not panic in release builds.
-			slog.Log(
-				nil, internal.LevelPanic, "selector or urltest group missing", "group", group,
-				"selector_exists", selectorExists, "urltest_exists", urltestExists,
-			)
-			panic(fmt.Errorf(
-				"selector or urltest group missing for %q. selector_exists=%v, urltest_exists=%v",
-				group, selectorExists, urltestExists,
-			))
-		}
+	autoTag := groupAutoTag(group)
+	selector, selectorExists := t.mutGrpMgr.OutboundGroup(group)
+	_, urltestExists := t.mutGrpMgr.OutboundGroup(autoTag)
+	if !selectorExists || !urltestExists {
+		// Yes, panic. And, yes, it's intentional. Both selector and URLtest should always exist
+		// if the tunnel is running, so this is a "world no longer makes sense" situation. This
+		// should be caught during testing and will not panic in release builds.
+		slog.Log(
+			nil, rlog.LevelPanic, "selector or urltest group missing", "group", group,
+			"selector_exists", selectorExists, "urltest_exists", urltestExists,
+		)
+		panic(fmt.Errorf(
+			"selector or urltest group missing for %q. selector_exists=%v, urltest_exists=%v",
+			group, selectorExists, urltestExists,
+		))
+	}
 
-		if contextDone(t.ctx) {
-			return t.ctx.Err()
-		}
+	if contextDone(t.ctx) {
+		return t.ctx.Err()
+	}
 
-		// collect tags present in the current group but absent from the new config
-		newTags := newOpts.AllTags()
-		var toRemove []string
-		for _, tag := range selector.All() {
-			if !slices.Contains(newTags, tag) {
-				toRemove = append(toRemove, tag)
-			}
-		}
-
-		if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
-			return err
-		} else if err != nil {
-			errs = append(errs, err)
-		}
-		if err := t.addOutbounds(group, newOpts); errors.Is(err, errLibboxClosed) {
-			return err
-		} else if err != nil {
-			errs = append(errs, err)
+	// collect tags present in the current group but absent from the new config
+	newTags := newOpts.AllTags()
+	var toRemove []string
+	for _, tag := range selector.All() {
+		if !slices.Contains(newTags, tag) {
+			toRemove = append(toRemove, tag)
 		}
 	}
 
+	if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
+		return err
+	} else if err != nil {
+		errs = append(errs, err)
+	}
+	if err := t.addOutbounds(group, newOpts); errors.Is(err, errLibboxClosed) {
+		return err
+	} else if err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
 func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], new servers.Options, group string) servers.Options {
-	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
+	slog.Log(nil, rlog.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
 	deduped := servers.Options{
 		Outbounds: []O.Outbound{},
 		Endpoints: []O.Endpoint{},
@@ -499,7 +502,7 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		deduped.Locations[ep.Tag] = new.Locations[ep.Tag]
 	}
 	if len(dropped) > 0 {
-		slog.Log(nil, internal.LevelDebug, "Dropped duplicate outbounds/endpoints", "group", group, "tags", dropped)
+		slog.Debug("Dropped duplicate outbounds/endpoints", "group", group, "tags", dropped)
 	}
 	return deduped
 }

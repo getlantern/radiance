@@ -18,13 +18,13 @@ import (
 	"github.com/sagernet/sing/common/json"
 
 	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/log"
 )
 
 const (
 	splitTunnelTag  = "split-tunnel"
-	splitTunnelFile = splitTunnelTag + ".json"
+	splitTunnelFile = internal.SplitTunnelFileName
 
 	TypeDomain           = "domain"
 	TypeDomainSuffix     = "domainSuffix"
@@ -45,17 +45,18 @@ type SplitTunnel struct {
 	ruleMap      map[string]*O.DefaultHeadlessRule
 	enabled      *atomic.Bool
 	access       sync.Mutex
+	logger       *slog.Logger
 }
 
-func NewSplitTunnelHandler() (*SplitTunnel, error) {
-	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
+func NewSplitTunnelHandler(dataPath string, logger *slog.Logger) (*SplitTunnel, error) {
+	s := newSplitTunnel(dataPath, logger)
 	if err := s.loadRule(); err != nil {
 		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", s.ruleFile, err)
 	}
 	return s, nil
 }
 
-func newSplitTunnel(path string) *SplitTunnel {
+func newSplitTunnel(path string, logger *slog.Logger) *SplitTunnel {
 	rule := defaultRule()
 	s := &SplitTunnel{
 		rule:         rule,
@@ -63,24 +64,17 @@ func newSplitTunnel(path string) *SplitTunnel {
 		activeFilter: &(rule.Rules[1].LogicalOptions),
 		ruleMap:      make(map[string]*O.DefaultHeadlessRule),
 		enabled:      &atomic.Bool{},
+		logger:       logger,
 	}
 	s.initRuleMap()
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
-		slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
+		logger.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
 		s.saveToFile()
 	}
 	return s
 }
 
-func (s *SplitTunnel) Enable() error {
-	return s.setEnabled(true)
-}
-
-func (s *SplitTunnel) Disable() error {
-	return s.setEnabled(false)
-}
-
-func (s *SplitTunnel) setEnabled(enabled bool) error {
+func (s *SplitTunnel) SetEnabled(enabled bool) error {
 	if s.enabled.Load() == enabled {
 		return nil
 	}
@@ -95,7 +89,7 @@ func (s *SplitTunnel) setEnabled(enabled bool) error {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
 	s.enabled.Store(enabled)
-	slog.Log(context.Background(), internal.LevelTrace, "Updated split-tunneling", "enabled", enabled)
+	s.logger.Log(context.Background(), log.LevelTrace, "Updated split-tunneling", "enabled", enabled)
 	return nil
 }
 
@@ -103,10 +97,10 @@ func (s *SplitTunnel) IsEnabled() bool {
 	return s.enabled.Load()
 }
 
-func (s *SplitTunnel) Filters() Filter {
+func (s *SplitTunnel) Filters() SplitTunnelFilter {
 	s.access.Lock()
 	defer s.access.Unlock()
-	return Filter{
+	return SplitTunnelFilter{
 		Domain:           slices.Clone(s.ruleMap[TypeDomain].Domain),
 		DomainSuffix:     slices.Clone(s.ruleMap[TypeDomainSuffix].DomainSuffix),
 		DomainKeyword:    slices.Clone(s.ruleMap[TypeDomainKeyword].DomainKeyword),
@@ -123,7 +117,7 @@ func (s *SplitTunnel) AddItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, merge); err != nil {
 		return err
 	}
-	slog.Debug("added item to filter", "filterType", filterType, "item", item)
+	s.logger.Debug("added item to filter", "filterType", filterType, "item", item)
 	if err := s.saveToFile(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -135,7 +129,7 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, remove); err != nil {
 		return err
 	}
-	slog.Debug("removed item from filter", "filterType", filterType, "item", item)
+	s.logger.Debug("removed item from filter", "filterType", filterType, "item", item)
 	if err := s.saveToFile(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -143,20 +137,20 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 }
 
 // AddItems adds multiple items to the filter.
-func (s *SplitTunnel) AddItems(items Filter) error {
+func (s *SplitTunnel) AddItems(items SplitTunnelFilter) error {
 	s.updateFilters(items, merge)
-	slog.Debug("added items to filter", "items", items.String())
+	s.logger.Debug("added items to filter", "items", items.String())
 	return s.saveToFile()
 }
 
 // RemoveItems removes multiple items from the filter.
-func (s *SplitTunnel) RemoveItems(items Filter) error {
+func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
 	s.updateFilters(items, remove)
-	slog.Debug("removed items from filter", "items", items.String())
+	s.logger.Debug("removed items from filter", "items", items.String())
 	return s.saveToFile()
 }
 
-type Filter struct {
+type SplitTunnelFilter struct {
 	Domain           []string
 	DomainSuffix     []string
 	DomainKeyword    []string
@@ -167,7 +161,7 @@ type Filter struct {
 	PackageName      []string
 }
 
-func (f Filter) String() string {
+func (f SplitTunnelFilter) String() string {
 	var str []string
 	if len(f.Domain) > 0 {
 		str = append(str, fmt.Sprintf("domain: %v", f.Domain))
@@ -228,7 +222,7 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 	return nil
 }
 
-func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
+func (s *SplitTunnel) updateFilters(diff SplitTunnelFilter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
 
@@ -315,7 +309,7 @@ func (s *SplitTunnel) loadRule() error {
 	}
 	rules := ruleSet.Options.Rules
 	if len(rules) == 0 {
-		slog.Warn("split tunnel rule file format is invalid, using empty rule")
+		s.logger.Warn("split tunnel rule file format is invalid, using empty rule")
 		return nil
 	}
 
@@ -331,7 +325,7 @@ func (s *SplitTunnel) loadRule() error {
 	} else if len(s.rule.Rules) > 1 && s.rule.Rules[1].Type == C.RuleTypeDefault {
 		// Migrate legacy format: wrap DefaultOptions into LogicalOptions
 		// TODO(2/10): remove in future commit
-		slog.Debug("Migrating legacy split tunnel rule format")
+		s.logger.Debug("Migrating legacy split tunnel rule format")
 		legacyRule := s.rule.Rules[1].DefaultOptions
 		s.rule.Rules[1] = O.HeadlessRule{
 			Type: C.RuleTypeLogical,
@@ -391,7 +385,7 @@ func (s *SplitTunnel) loadRule() error {
 	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 
-	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
+	s.logger.Log(context.Background(), log.LevelTrace, "loaded split tunnel rules",
 		"file", s.ruleFile, "filters", s.Filters().String(), "enabled", s.IsEnabled(),
 	)
 	return nil

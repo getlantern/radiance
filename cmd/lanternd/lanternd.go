@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -11,17 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/traces"
-	"github.com/getlantern/radiance/vpn"
-	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/ipc"
 )
-
-const tracerName = "github.com/getlantern/radiance/cmd/lanternd"
 
 var (
 	dataPath = flag.String("data-path", "$HOME/.lantern", "Path to store data")
@@ -36,14 +28,32 @@ func main() {
 	logPath := os.ExpandEnv(*logPath)
 	logLevel := *logLevel
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
-	if err := common.Init(dataPath, logPath, logLevel); err != nil {
-		log.Fatalf("Failed to initialize common: %v\n", err)
+	be, err := backend.NewLocalBackend(ctx, backend.Options{
+		DataDir:  dataPath,
+		LogDir:   logPath,
+		LogLevel: logLevel,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create backend: %v\n", err)
+	}
+	user, err := be.UserData()
+	if err != nil {
+		log.Fatalf("Failed to get current data: %v\n", err)
+	}
+	if user == nil {
+		if _, err := be.NewUser(ctx); err != nil {
+			log.Fatalf("Failed to create new user: %v\n", err)
+		}
 	}
 
-	ipcServer, err := initIPC(dataPath, logPath, logLevel)
-	if err != nil {
-		log.Fatalf("Failed to initialize IPC: %v\n", err)
+	be.Start()
+	server := ipc.NewServer(be, !common.IsMobile())
+	if err := server.Start(); err != nil {
+		log.Fatalf("Failed to start IPC server: %v\n", err)
 	}
 
 	// Wait for a signal to gracefully shut down.
@@ -52,27 +62,24 @@ func main() {
 	<-sigCh
 
 	slog.Info("Shutting down...")
+	// Allow a second signal to force an immediate exit.
+	signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		slog.Error("Received second signal, forcing exit")
+		os.Exit(1)
+	}()
+
 	time.AfterFunc(15*time.Second, func() {
-		log.Fatal("Failed to shut down in time, forcing exit.")
+		slog.Error("Failed to shut down in time, forcing exit")
+		os.Exit(1)
 	})
-	ipcServer.Close()
-}
 
-func initIPC(dataPath, logPath, logLevel string) (*ipc.Server, error) {
-	ctx, span := otel.Tracer(tracerName).Start(
-		context.Background(),
-		"initIPC",
-		trace.WithAttributes(attribute.String("dataPath", dataPath)),
-	)
-	defer span.End()
-
-	span.AddEvent("initializing IPC server")
-
-	server := ipc.NewServer(vpn.NewTunnelService(dataPath, slog.Default().With("service", "ipc"), nil))
-	slog.Debug("starting IPC server")
-	if err := server.Start(); err != nil {
-		slog.Error("failed to start IPC server", "error", err)
-		return nil, traces.RecordError(ctx, fmt.Errorf("start IPC server: %w", err))
+	cancel()
+	be.Close()
+	if err := server.Close(); err != nil {
+		slog.Error("Error closing IPC server", "error", err)
 	}
-	return server, nil
+	slog.Info("Shutdown complete")
+	os.Exit(0)
 }

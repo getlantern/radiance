@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getlantern/radiance/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/events"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

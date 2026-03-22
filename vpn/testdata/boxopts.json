@@ -78,7 +78,7 @@
 		},
 		{
 			"type": "mutableurltest",
-			"tag": "auto-all",
+			"tag": "auto",
 			"outbounds": [
 				"auto-http",
 				"auto-socks"
@@ -107,7 +107,7 @@
 			"cache_id": "test_cache"
 		},
 		"clash_api": {
-			"default_mode": "Rule"
+			"default_mode": "auto"
 		}
 	}
 }

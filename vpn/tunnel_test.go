@@ -15,23 +15,20 @@ import (
 
 	"github.com/getlantern/lantern-box/adapter"
 
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal/testutil"
+	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 func TestConnection(t *testing.T) {
-	testutil.SetPathsForTesting(t)
-	opts, optsStr, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	tmp := t.TempDir()
+	opts, optsStr, err := testBoxOptions(tmp)
 	require.NoError(t, err, "failed to get test box options")
 
-	tmp := settings.GetString(settings.DataPathKey)
-
-	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
+	baseOptions := baseOpts(tmp)
+	opts.Route.RuleSet = baseOptions.Route.RuleSet
 	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
-	newSplitTunnel(tmp)
+	opts.Route.Rules = append([]sbO.Rule{baseOptions.Route.Rules[2]}, opts.Route.Rules...)
+	newSplitTunnel(tmp, log.NoOpLogger())
 
 	tun := &tunnel{
 		dataPath: tmp,
@@ -42,19 +39,20 @@ func TestConnection(t *testing.T) {
 		tun.close()
 	})
 
-	require.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
+	require.Equal(t, Connected, tun.Status(), "tunnel should be running")
 
 	assert.NoError(t, tun.selectOutbound("http", "http1-out"), "failed to select http outbound")
 	assert.NoError(t, tun.close(), "failed to close lbService")
-	assert.Equal(t, ipc.Disconnected, tun.Status(), "tun should be closed")
+	assert.Equal(t, Disconnected, tun.Status(), "tun should be closed")
 }
 
 func TestUpdateServers(t *testing.T) {
-	testutil.SetPathsForTesting(t)
-	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	tmp := t.TempDir()
+	testOpts, _, err := testBoxOptions(tmp)
 	require.NoError(t, err, "failed to get test box options")
 
-	baseOuts := baseOpts(settings.GetString(settings.DataPathKey)).Outbounds
+	baseOptions := baseOpts(tmp)
+	baseOuts := baseOptions.Outbounds
 	allOutbounds := map[string]sbO.Outbound{
 		"direct": baseOuts[0],
 		"block":  baseOuts[1],
@@ -72,14 +70,29 @@ func TestUpdateServers(t *testing.T) {
 	outs := []sbO.Outbound{
 		allOutbounds["direct"], allOutbounds["block"],
 		allOutbounds["http1-out"], allOutbounds["http2-out"], allOutbounds["socks1-out"],
-		urlTestOutbound(autoLanternTag, lanternTags), urlTestOutbound(autoUserTag, userTags),
-		selectorOutbound(servers.SGLantern, append(lanternTags, autoLanternTag)),
-		selectorOutbound(servers.SGUser, append(userTags, autoUserTag)),
-		urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}),
+		urlTestOutbound(AutoLanternTag, lanternTags), urlTestOutbound(AutoUserTag, userTags),
+		selectorOutbound(servers.SGLantern, append(lanternTags, AutoLanternTag)),
+		selectorOutbound(servers.SGUser, append(userTags, AutoUserTag)),
+		urlTestOutbound(AutoSelectTag, []string{AutoLanternTag, AutoUserTag}),
 	}
 
 	testOpts.Outbounds = outs
-	tun := testConnection(t, *testOpts)
+	testOpts.Route.RuleSet = baseOptions.Route.RuleSet
+	testOpts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
+	testOpts.Route.Rules = append([]sbO.Rule{baseOptions.Route.Rules[2]}, testOpts.Route.Rules...)
+	newSplitTunnel(tmp, log.NoOpLogger())
+
+	tun := &tunnel{
+		dataPath: tmp,
+	}
+	options, _ := json.Marshal(testOpts)
+	err = tun.start(string(options), nil)
+	require.NoError(t, err, "failed to establish connection")
+	t.Cleanup(func() {
+		tun.close()
+	})
+
+	assert.Equal(t, Connected, tun.Status(), "tunnel should be running")
 	defer func() {
 		tun.close()
 	}()
@@ -105,14 +118,14 @@ func TestUpdateServers(t *testing.T) {
 	groups := tun.mutGrpMgr.OutboundGroups()
 
 	want := map[string][]string{
-		autoAllTag:        {autoLanternTag, autoUserTag},
-		servers.SGLantern: {autoLanternTag, "http1-out", "socks2-out"},
-		autoLanternTag:    {"http1-out", "socks2-out"},
-		servers.SGUser:    {autoUserTag},
-		autoUserTag:       {},
+		AutoSelectTag:     {AutoLanternTag, AutoUserTag},
+		servers.SGLantern: {AutoLanternTag, "http1-out", "socks2-out"},
+		AutoLanternTag:    {"http1-out", "socks2-out"},
+		servers.SGUser:    {AutoUserTag},
+		AutoUserTag:       {},
 	}
 	got := make(map[string][]string)
-	allTags := []string{"direct", "block", autoAllTag, autoLanternTag, autoUserTag, servers.SGLantern, servers.SGUser}
+	allTags := []string{"direct", "block", AutoSelectTag, AutoLanternTag, AutoUserTag, servers.SGLantern, servers.SGUser}
 	for _, g := range groups {
 		tags := g.All()
 		got[g.Tag()] = tags
@@ -137,27 +150,4 @@ func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
 		}
 	}
 	return iGroups
-}
-
-func testConnection(t *testing.T, opts sbO.Options) *tunnel {
-	tmp := settings.GetString(settings.DataPathKey)
-
-	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
-	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
-	newSplitTunnel(tmp)
-
-	tun := &tunnel{
-		dataPath: tmp,
-	}
-
-	options, _ := json.Marshal(opts)
-	err := tun.start(string(options), nil)
-	require.NoError(t, err, "failed to establish connection")
-	t.Cleanup(func() {
-		tun.close()
-	})
-
-	assert.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
-	return tun
 }

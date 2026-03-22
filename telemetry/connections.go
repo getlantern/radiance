@@ -9,13 +9,21 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/vpn"
 )
 
-// harvestConnectionMetrics periodically polls the number of active connections and their total
+// ConnectionSource provides access to the current VPN connections for metrics collection.
+type ConnectionSource interface {
+	Connections() ([]vpn.Connection, error)
+}
+
+// StartConnectionMetrics periodically polls the number of active connections and their total
 // upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
 // that can be called to stop the polling.
-func harvestConnectionMetrics(pollInterval time.Duration) func() {
+//
+// The caller is responsible for only calling this when the VPN is connected and telemetry is
+// enabled, and for calling the returned stop function when either condition changes.
+func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInterval time.Duration) func() {
 	ticker := time.NewTicker(pollInterval)
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
 	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
@@ -34,7 +42,7 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 	if err != nil {
 		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		seenConnections := make(map[string]bool)
 		for {
@@ -44,16 +52,9 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 				return
 			case <-ticker.C:
 				slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
-				vpnStatus, err := ipc.GetStatus(ctx)
+				conns, err := src.Connections()
 				if err != nil {
-					slog.Warn("failed to get service status", "error", err)
-				}
-				if vpnStatus != ipc.Connected {
-					continue
-				}
-				conns, err := ipc.GetConnections(ctx)
-				if err != nil {
-					slog.Warn("failed to retrieve connections", slog.Any("error", err))
+					slog.Debug("failed to retrieve connections for metrics", slog.Any("error", err))
 					continue
 				}
 
