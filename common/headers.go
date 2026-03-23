@@ -6,6 +6,9 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"time"
+
+	"github.com/getlantern/timezone"
 
 	"github.com/getlantern/radiance/common/settings"
 )
@@ -38,12 +41,15 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	// based on consistent packet lengths.
 	req.Header.Add(RandomNoiseHeader, randomizedString())
 
-	req.Header.Set(AppVersionHeader, AppVersion)
+	req.Header.Set(AppVersionHeader, Version)
 	req.Header.Set(VersionHeader, Version)
 	req.Header.Set(UserIDHeader, settings.GetString(settings.UserIDKey))
 	req.Header.Set(PlatformHeader, Platform)
 	req.Header.Set(AppNameHeader, Name)
 	req.Header.Set(DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
+	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
+		req.Header.Set(TimeZoneHeader, tz)
+	}
 	return req, nil
 }
 

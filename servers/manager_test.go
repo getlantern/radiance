@@ -39,8 +39,8 @@ func TestPrivateServerIntegration(t *testing.T) {
 	parsedURL, _ := url.Parse(srv.URL)
 	port, _ := strconv.Atoi(parsedURL.Port())
 
-	t.Run("add private server", func(t *testing.T) {
-		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken"))
+	t.Run("convert a token into a custom server", func(t *testing.T) {
+		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", C.ServerLocation{}, false))
 		require.Contains(t, manager.optsMap, "s1", "server should be added to the manager")
 	})
 
@@ -49,14 +49,14 @@ func TestPrivateServerIntegration(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, inviteToken)
 
-		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken))
+		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, C.ServerLocation{}, true))
 		require.Contains(t, manager.optsMap, "s2", "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
 			delete(manager.optsMap, "s1")
 			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
-			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken))
+			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, C.ServerLocation{}, true))
 			assert.NotContains(t, manager.optsMap, "s1", "server should not be added after revoking invite")
 		})
 	})

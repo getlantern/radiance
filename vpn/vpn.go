@@ -388,13 +388,17 @@ type AutoSelectionsEvent struct {
 	Selections AutoSelections `json:"selections"`
 }
 
+// SelectionUnavailable is the sentinel value returned for an auto-selection
+// group that has no active server (tunnel not running, group not found, etc.).
+const SelectionUnavailable = "Unavailable"
+
 // AutoServerSelections returns the currently active server for each auto server group. If the group
 // is not found or has no active server, "Unavailable" is returned for that group.
 func (c *VPNClient) AutoServerSelections() (AutoSelections, error) {
 	as := AutoSelections{
-		Lantern: "Unavailable",
-		User:    "Unavailable",
-		AutoAll: "Unavailable",
+		Lantern: SelectionUnavailable,
+		User:    SelectionUnavailable,
+		AutoAll: SelectionUnavailable,
 	}
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")
@@ -411,7 +415,7 @@ func (c *VPNClient) AutoServerSelections() (AutoSelections, error) {
 		})
 		if idx < 0 || groups[idx].Selected == "" {
 			c.logger.Log(nil, log.LevelTrace, "Group not found or has no selection", "tag", tag)
-			return "Unavailable"
+			return SelectionUnavailable
 		}
 		return groups[idx].Selected
 	}
@@ -470,24 +474,76 @@ func (c *VPNClient) getGroups() ([]OutboundGroup, error) {
 
 // AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
 // selection changes until the context is cancelled.
+const (
+	rapidPollInterval  = 500 * time.Millisecond
+	rapidPollWindow    = 15 * time.Second
+	steadyPollInterval = 10 * time.Second
+)
+
+// AutoSelectionsChangeListener polls for auto-selection changes and emits an
+// AutoSelectionsEvent whenever the selection differs from the previous value.
+// It performs an initial rapid poll to catch the first selection soon after
+// tunnel connect, then settles into a slower steady-state interval.
 func (c *VPNClient) AutoSelectionsChangeListener(ctx context.Context) {
 	go func() {
 		var prev AutoSelections
+
+		// Rapid initial poll to emit the first selection promptly after connect.
+		initialDeadline := time.NewTimer(rapidPollWindow)
+		defer initialDeadline.Stop()
+		tick := time.NewTimer(rapidPollInterval)
+		defer tick.Stop()
+	initial:
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(10 * time.Second):
+			case <-initialDeadline.C:
+				break initial
+			case <-tick.C:
 				curr, err := c.AutoServerSelections()
 				if err != nil {
+					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{
-						Selections: curr,
-					})
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+					if curr.Lantern != SelectionUnavailable ||
+						curr.User != SelectionUnavailable ||
+						curr.AutoAll != SelectionUnavailable {
+						break initial
+					}
 				}
+				tick.Reset(rapidPollInterval)
+			}
+		}
+
+		// Drain tick before reusing for steady-state.
+		if !tick.Stop() {
+			select {
+			case <-tick.C:
+			default:
+			}
+		}
+		tick.Reset(steadyPollInterval)
+
+		// Steady-state polling for ongoing changes.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				curr, err := c.AutoServerSelections()
+				if err != nil {
+					tick.Reset(steadyPollInterval)
+					continue
+				}
+				if curr != prev {
+					prev = curr
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+				}
+				tick.Reset(steadyPollInterval)
 			}
 		}
 	}()

@@ -10,9 +10,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/r3labs/sse/v2"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/r3labs/sse/v2"
 
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
@@ -333,6 +334,7 @@ func (a *Client) Login(ctx context.Context, email, password string) (*UserData, 
 	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
 		return nil, traces.RecordError(ctx, saltErr)
 	}
+	settings.Set(settings.OAuthLoginKey, false)
 	return &loginResp, nil
 }
 
@@ -500,22 +502,29 @@ func (a *Client) DeleteAccount(ctx context.Context, email, password string) (*Us
 	defer span.End()
 
 	lowerCaseEmail := strings.ToLower(email)
-	salt, err := a.getSalt(ctx, lowerCaseEmail)
-	if err != nil {
-		return nil, traces.RecordError(ctx, err)
-	}
-	proof, err := a.clientProof(ctx, lowerCaseEmail, password, salt)
-	if err != nil {
-		return nil, err
-	}
-
 	data := &protos.DeleteUserRequest{
 		Email:     lowerCaseEmail,
-		Proof:     proof,
 		Permanent: true,
 		DeviceId:  settings.GetString(settings.DeviceIDKey),
+		Token:     settings.GetString(settings.JwtTokenKey),
 	}
-	_, err = a.sendRequest(ctx, "POST", "/users/delete", nil, nil, data)
+	if !settings.GetBool(settings.OAuthLoginKey) {
+		salt, err := a.getSalt(ctx, lowerCaseEmail)
+		if err != nil {
+			return nil, traces.RecordError(ctx, err)
+		}
+		proof, err := a.clientProof(ctx, lowerCaseEmail, password, salt)
+		if err != nil {
+			return nil, err
+		}
+		data.Proof = proof
+	} else {
+		if data.Token == "" {
+			return nil, traces.RecordError(ctx, errors.New("jwt token is required for OAuth account deletion"))
+		}
+	}
+
+	_, err := a.sendRequest(ctx, "POST", "/users/delete", nil, nil, data)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
@@ -529,7 +538,7 @@ func (a *Client) DeleteAccount(ctx context.Context, email, password string) (*Us
 	return a.NewUser(ctx)
 }
 
-// OAuthLoginUrl initiates the OAuth login process for the specified provider.
+// OAuthLoginURL initiates the OAuth login process for the specified provider.
 func (a *Client) OAuthLoginURL(ctx context.Context, provider string) (string, error) {
 	authURL := a.authURL
 	if authURL == "" {
@@ -543,6 +552,7 @@ func (a *Client) OAuthLoginURL(ctx context.Context, provider string) (string, er
 	query.Set("deviceId", settings.GetString(settings.DeviceIDKey))
 	query.Set("userId", settings.GetString(settings.UserIDKey))
 	query.Set("proToken", settings.GetString(settings.TokenKey))
+	query.Set("returnTo", "lantern://auth")
 	loginURL.RawQuery = query.Encode()
 	return loginURL.String(), nil
 }
@@ -558,6 +568,12 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 	login := &UserData{
 		LegacyID:    jwtUserInfo.LegacyUserID,
 		LegacyToken: jwtUserInfo.LegacyToken,
+		LegacyUserData: &protos.LoginResponse_UserData{
+			UserId:   jwtUserInfo.LegacyUserID,
+			Token:    jwtUserInfo.LegacyToken,
+			DeviceID: jwtUserInfo.DeviceID,
+			Email:    jwtUserInfo.Email,
+		},
 	}
 	a.setData(login)
 	// Get user data from api this will also save data in user config
@@ -570,6 +586,7 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 		slog.Error("Failed to persist JWT token", "error", err)
 		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
 	}
+	settings.Set(settings.OAuthLoginKey, true)
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
 	a.setData(user)

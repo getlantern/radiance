@@ -473,8 +473,8 @@ func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool)
 	return r.srvManager.AddServersByURL(context.Background(), urls, skipCertVerification)
 }
 
-func (r *LocalBackend) AddPrivateServer(tag string, ip string, port int, accessToken string) error {
-	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken)
+func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
+	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined)
 }
 
 func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {

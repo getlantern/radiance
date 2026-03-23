@@ -1,6 +1,8 @@
 package ipc
 
 import (
+	"github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/servers"
@@ -53,10 +55,12 @@ type URLsRequest struct {
 }
 
 type PrivateServerRequest struct {
-	Tag         string `json:"tag"`
-	IP          string `json:"ip"`
-	Port        int    `json:"port"`
-	AccessToken string `json:"accessToken"`
+	Tag         string                `json:"tag"`
+	IP          string                `json:"ip"`
+	Port        int                   `json:"port"`
+	AccessToken string                `json:"accessToken"`
+	Location    common.ServerLocation `json:"location"`
+	Joined      bool                  `json:"joined"`
 }
 
 type PrivateServerInviteRequest struct {

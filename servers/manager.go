@@ -51,10 +51,25 @@ const (
 	tracerName = "github.com/getlantern/radiance/servers"
 )
 
+// ServerCredentials holds the access token and invite status for a private server.
+type ServerCredentials struct {
+	AccessToken string `json:"access_token,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	IsJoined    bool   `json:"is_joined,omitempty"` // whether the user has joined the server (i.e. accepted the invite)
+}
+
 type Options struct {
-	Outbounds []option.Outbound           `json:"outbounds,omitempty"`
-	Endpoints []option.Endpoint           `json:"endpoints,omitempty"`
-	Locations map[string]C.ServerLocation `json:"locations,omitempty"`
+	Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
+	Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
+	Locations   map[string]C.ServerLocation  `json:"locations,omitempty"`
+	Credentials map[string]ServerCredentials `json:"credentials,omitempty"`
+}
+
+// MarshalJSON encodes Options using the sing-box context so that type-specific outbound/endpoint
+// options (server, port, password, etc.) are included in the output.
+func (o Options) MarshalJSON() ([]byte, error) {
+	type Alias Options
+	return json.MarshalContext(box.BaseContext(), Alias(o))
 }
 
 // AllTags returns a slice of all tags from both endpoints and outbounds in the Options.
@@ -104,14 +119,16 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 	mgr := &Manager{
 		servers: Servers{
 			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 		},
 		optsMap:     map[string]Server{},
@@ -162,16 +179,20 @@ func (m *Manager) Servers() Servers {
 	result := make(Servers, len(m.servers))
 	for group, opts := range m.servers {
 		result[group] = Options{
-			Outbounds: append([]option.Outbound{}, opts.Outbounds...),
-			Endpoints: append([]option.Endpoint{}, opts.Endpoints...),
-			Locations: maps.Clone(opts.Locations),
+			Outbounds:   append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints:   append([]option.Endpoint{}, opts.Endpoints...),
+			Locations:   maps.Clone(opts.Locations),
+			Credentials: maps.Clone(opts.Credentials),
 		}
 	}
 	return result
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
-// the server was found.
+// the server was found. The returned Server contains pointer-rich sing-box types in its Options
+// field, so callers on a CGo callback stack should use [GetServerByTagJSON] instead. This method
+// does not use [common.RunOffCgoStack] because its only callers run on regular Go goroutines
+// (event subscribers, private server flows), never on CGo callback stacks.
 func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()
@@ -208,11 +229,13 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 func (m *Manager) setServers(group ServerGroup, options Options) error {
 	m.logger.Log(nil, log.LevelTrace, "Setting servers", "group", group, "options", options)
 	opts := Options{
-		Outbounds: append([]option.Outbound{}, options.Outbounds...),
-		Endpoints: append([]option.Endpoint{}, options.Endpoints...),
-		Locations: make(map[string]C.ServerLocation, len(options.Locations)),
+		Outbounds:   append([]option.Outbound{}, options.Outbounds...),
+		Endpoints:   append([]option.Endpoint{}, options.Endpoints...),
+		Locations:   make(map[string]C.ServerLocation, len(options.Locations)),
+		Credentials: make(map[string]ServerCredentials, len(options.Credentials)),
 	}
 	maps.Copy(opts.Locations, options.Locations)
+	maps.Copy(opts.Credentials, options.Credentials)
 	for _, ep := range opts.Endpoints {
 		m.optsMap.add(group, ep.Tag, ep.Type, ep, options.Locations[ep.Tag])
 	}
@@ -260,6 +283,9 @@ func (m *Manager) merge(group ServerGroup, options Options, force bool) []Server
 		servers.Locations[ep.Tag] = options.Locations[ep.Tag]
 		m.optsMap.add(group, ep.Tag, ep.Type, ep, options.Locations[ep.Tag])
 		added = append(added, m.optsMap[ep.Tag])
+		if creds, ok := options.Credentials[ep.Tag]; ok {
+			servers.Credentials[ep.Tag] = creds
+		}
 	}
 	for _, out := range options.Outbounds {
 		if !force {
@@ -271,6 +297,9 @@ func (m *Manager) merge(group ServerGroup, options Options, force bool) []Server
 		servers.Locations[out.Tag] = options.Locations[out.Tag]
 		m.optsMap.add(group, out.Tag, out.Type, out, options.Locations[out.Tag])
 		added = append(added, m.optsMap[out.Tag])
+		if creds, ok := options.Credentials[out.Tag]; ok {
+			servers.Credentials[out.Tag] = creds
+		}
 	}
 	if force {
 		servers.Endpoints = slices.CompactFunc(servers.Endpoints, func(ep1, ep2 option.Endpoint) bool {
@@ -368,7 +397,7 @@ func (m *Manager) loadServers() error {
 // Lantern Server Manager Integration
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
-func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken string) error {
+func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
 	u := &url.URL{
 		Scheme: "https",
 		Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
@@ -400,7 +429,18 @@ func (m *Manager) AddPrivateServer(tag string, ip string, port int, accessToken 
 	}
 
 	// TODO: update when we support endpoints
-	servers.Outbounds[0].Tag = tag // use the provided tag
+	servers.Outbounds[0].Tag = tag
+	// If the server location is provided, set it for the server's tag.
+	if loc != (C.ServerLocation{}) {
+		servers.Locations = map[string]C.ServerLocation{
+			tag: loc,
+		}
+	}
+	// Store the credentials for the server's tag.
+	servers.Credentials = map[string]ServerCredentials{
+		tag: {AccessToken: accessToken, Port: port, IsJoined: joined},
+	}
+	slog.Info("Adding private server from remote manager", "tag", tag, "ip", ip, "port", port, "location", loc, "is_joined", joined)
 	return m.AddServers(SGUser, servers, true)
 }
 

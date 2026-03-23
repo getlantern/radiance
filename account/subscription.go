@@ -49,8 +49,8 @@ type SubscriptionPlans struct {
 
 // SubscriptionResponse contains information about a created subscription.
 type SubscriptionResponse struct {
-	CustomerId     string `json:"customerId"`
-	SubscriptionId string `json:"subscriptionId"`
+	CustomerID     string `json:"customerId"`
+	SubscriptionID string `json:"subscriptionId"`
 	ClientSecret   string `json:"clientSecret"`
 	PublishableKey string `json:"publishableKey"`
 }
@@ -99,8 +99,8 @@ func (a *Client) NewStripeSubscription(ctx context.Context, email, planID string
 
 type VerifySubscriptionResponse struct {
 	Status          string `json:"status"`
-	SubscriptionId  string `json:"subscriptionId"`
-	ActualUserId    int64  `json:"actualUserId,omitempty"`
+	SubscriptionID  string `json:"subscriptionId"`
+	ActualUserID    int64  `json:"actualUserId,omitempty"`
 	ActualUserToken string `json:"actualUserToken,omitempty"`
 }
 
@@ -118,7 +118,7 @@ func (a *Client) VerifySubscription(ctx context.Context, service SubscriptionSer
 		path = "/purchase-googleplay-subscription"
 		data["idempotencyKey"] = strconv.FormatInt(time.Now().UnixNano(), 10)
 	case AppleService:
-		path = "/purchase-apple-subscription"
+		path = "/purchase-apple-subscription-v2"
 	default:
 		return "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}

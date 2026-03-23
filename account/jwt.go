@@ -10,7 +10,7 @@ import (
 type JWTUserInfo struct {
 	UserID       string `json:"user_id"`
 	Email        string `json:"email"`
-	DeviceId     string `json:"device_id"`
+	DeviceID     string `json:"device_id"`
 	LegacyUserID int64  `json:"legacy_user_id"`
 	LegacyToken  string `json:"legacy_token"`
 }
