@@ -351,6 +351,17 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		slog.Warn("Failed to set URL overrides", "group", autoTag, "error", err)
 	}
 
+	// Trigger an immediate URL test cycle when we have bandit overrides so
+	// callback probes are hit within seconds of config receipt rather than
+	// waiting for the next scheduled interval (3 min).
+	if len(options.URLOverrides) > 0 {
+		if err := t.mutGrpMgr.CheckOutbounds(autoTag); err != nil {
+			slog.Warn("Failed to trigger immediate URL test after bandit overrides", "group", autoTag, "error", err)
+		} else {
+			slog.Info("Triggered immediate URL test for bandit callbacks", "group", autoTag)
+		}
+	}
+
 	slog.Debug("Added servers to group", "group", group, "added", added)
 	return errors.Join(errs...)
 }

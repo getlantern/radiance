@@ -40,8 +40,8 @@ const (
 	autoLanternTag = "auto-lantern"
 	autoUserTag    = "auto-user"
 
-	urlTestInterval    = 15 * time.Second // must be less than urlTestIdleTimeout; kept short so bandit callbacks arrive within the 20s probe expiry window
-	urlTestIdleTimeout = 5 * time.Minute
+	urlTestInterval    = 3 * time.Minute // must be less than urlTestIdleTimeout
+	urlTestIdleTimeout = 15 * time.Minute
 
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
