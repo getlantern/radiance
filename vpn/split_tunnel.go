@@ -186,7 +186,6 @@ func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 			if parseErr == nil {
 				legacyKeys := []string{
 					"processPathRegex", "processPath", "packageName",
-					"bundleId", "bundleID", "enabledApps", "apps",
 				}
 				for _, k := range legacyKeys {
 					arr, ok := m[k].([]any)
