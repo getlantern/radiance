@@ -178,9 +178,10 @@ func (r *LocalBackend) Start() {
 			}
 		}
 		opts := servers.Options{
-			Outbounds: cfg.Options.Outbounds,
-			Endpoints: cfg.Options.Endpoints,
-			Locations: locs,
+			Outbounds:    cfg.Options.Outbounds,
+			Endpoints:    cfg.Options.Endpoints,
+			Locations:    locs,
+			URLOverrides: cfg.BanditURLOverrides,
 		}
 		if err := r.setServers(servers.SGLantern, opts); err != nil {
 			slog.Error("setting servers in manager", "error", err)

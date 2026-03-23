@@ -70,10 +70,10 @@ func TestUpdateServers(t *testing.T) {
 	outs := []sbO.Outbound{
 		allOutbounds["direct"], allOutbounds["block"],
 		allOutbounds["http1-out"], allOutbounds["http2-out"], allOutbounds["socks1-out"],
-		urlTestOutbound(AutoLanternTag, lanternTags), urlTestOutbound(AutoUserTag, userTags),
+		urlTestOutbound(AutoLanternTag, lanternTags, nil), urlTestOutbound(AutoUserTag, userTags, nil),
 		selectorOutbound(servers.SGLantern, append(lanternTags, AutoLanternTag)),
 		selectorOutbound(servers.SGUser, append(userTags, AutoUserTag)),
-		urlTestOutbound(AutoSelectTag, []string{AutoLanternTag, AutoUserTag}),
+		urlTestOutbound(AutoSelectTag, []string{AutoLanternTag, AutoUserTag}, nil),
 	}
 
 	testOpts.Outbounds = outs

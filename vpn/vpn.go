@@ -579,7 +579,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("preTest", tags))
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,

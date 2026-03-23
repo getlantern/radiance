@@ -410,21 +410,3 @@ func emit(old, new *Config) {
 		events.Emit(NewConfigEvent{Old: old, New: new})
 	}
 }
-
-// modifyConfig saves the config to the disk with the given config. It creates the config file
-// if it doesn't exist.
-func (ch *ConfigHandler) modifyConfig(fn func(cfg *Config)) {
-	ch.configMu.Lock()
-	cfg, err := ch.GetConfig()
-	if err != nil {
-		// This could happen if we haven't successfully fetched the config yet.
-		ch.logger.Error("getting config", "error", err)
-		ch.configMu.Unlock()
-		return
-	}
-	// Call the function with the config
-	// and save the config to the disk.
-	fn(cfg)
-	ch.configMu.Unlock()
-	ch.setConfig(cfg)
-}

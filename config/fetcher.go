@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 
 	"fmt"
 	"io"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
@@ -154,9 +154,13 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 
-	if val, exists := os.LookupEnv("RADIANCE_COUNTRY"); exists {
+	if val := env.GetString(env.Country); val != "" {
 		slog.Info("Setting x-lantern-client-country header", "country", val)
 		req.Header.Set("x-lantern-client-country", val)
+	}
+	if val := env.GetString(env.FeatureOverrides); val != "" {
+		slog.Info("Setting X-Lantern-Feature-Override header", "features", val)
+		req.Header.Set("X-Lantern-Feature-Override", val)
 	}
 
 	// Add If-Modified-Since header to the request

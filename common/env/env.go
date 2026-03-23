@@ -15,15 +15,17 @@ import (
 type _key string
 
 var (
-	LogLevel      _key = "RADIANCE_LOG_LEVEL"
-	LogPath       _key = "RADIANCE_LOG_PATH"
-	DataPath      _key = "RADIANCE_DATA_PATH"
-	DisableFetch  _key = "RADIANCE_DISABLE_FETCH_CONFIG"
-	PrintCurl     _key = "RADIANCE_PRINT_CURL"
-	DisableStdout _key = "RADIANCE_DISABLE_STDOUT_LOG"
-	ENV           _key = "RADIANCE_ENV"
-	UseSocks      _key = "RADIANCE_USE_SOCKS_PROXY"
-	SocksAddress  _key = "RADIANCE_SOCKS_ADDRESS"
+	LogLevel         _key = "RADIANCE_LOG_LEVEL"
+	LogPath          _key = "RADIANCE_LOG_PATH"
+	DataPath         _key = "RADIANCE_DATA_PATH"
+	DisableFetch     _key = "RADIANCE_DISABLE_FETCH_CONFIG"
+	PrintCurl        _key = "RADIANCE_PRINT_CURL"
+	DisableStdout    _key = "RADIANCE_DISABLE_STDOUT_LOG"
+	ENV              _key = "RADIANCE_ENV"
+	UseSocks         _key = "RADIANCE_USE_SOCKS_PROXY"
+	SocksAddress     _key = "RADIANCE_SOCKS_ADDRESS"
+	Country          _key = "RADIANCE_COUNTRY"
+	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 
 	Testing _key = "RADIANCE_TESTING"
 
