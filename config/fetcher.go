@@ -153,6 +153,10 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 		slog.Info("Setting x-lantern-client-country header", "country", val)
 		req.Header.Set("x-lantern-client-country", val)
 	}
+	if val, exists := os.LookupEnv("RADIANCE_FEATURE_OVERRIDE"); exists && val != "" {
+		slog.Info("Setting X-Lantern-Feature-Override header", "features", val)
+		req.Header.Set("X-Lantern-Feature-Override", val)
+	}
 
 	// Add If-Modified-Since header to the request
 	// Note that on the first run, lastModified is zero, so the server will return the latest config.
