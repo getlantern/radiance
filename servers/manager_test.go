@@ -22,19 +22,116 @@ import (
 	"github.com/getlantern/radiance/common"
 )
 
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	dataPath := t.TempDir()
+	mgr := &Manager{
+		servers: Servers{
+			SGLantern: Options{
+				Outbounds: []option.Outbound{
+					{Tag: "ss-denver", Type: "shadowsocks", Options: &option.ShadowsocksOutboundOptions{
+						ServerOptions: option.ServerOptions{
+							Server:     "1.2.3.4",
+							ServerPort: 1080,
+						},
+						Method:   "chacha20-ietf-poly1305",
+						Password: "testpass",
+					}},
+				},
+				Endpoints: make([]option.Endpoint, 0),
+				Locations: map[string]C.ServerLocation{
+					"ss-denver": {Country: "US", City: "Denver", CountryCode: "US"},
+				},
+				Credentials: make(map[string]ServerCredentials),
+			},
+			SGUser: Options{
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
+			},
+		},
+		optsMaps: map[ServerGroup]map[string]any{
+			SGLantern: {"ss-denver": option.Outbound{Tag: "ss-denver", Type: "shadowsocks", Options: &option.ShadowsocksOutboundOptions{
+				ServerOptions: option.ServerOptions{Server: "1.2.3.4", ServerPort: 1080},
+				Method:        "chacha20-ietf-poly1305",
+				Password:      "testpass",
+			}}},
+			SGUser: make(map[string]any),
+		},
+		serversFile: filepath.Join(dataPath, common.ServersFileName),
+	}
+	return mgr
+}
+
+func TestServersJSON(t *testing.T) {
+	mgr := newTestManager(t)
+
+	b, err := mgr.ServersJSON()
+	require.NoError(t, err)
+	require.NotEmpty(t, b)
+
+	// Must be valid JSON
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(b, &raw), "ServersJSON must return valid JSON")
+	assert.Contains(t, raw, "lantern")
+	assert.Contains(t, raw, "user")
+
+	// Lantern group must include the sing-box type-specific fields
+	lanternJSON := string(raw["lantern"])
+	assert.Contains(t, lanternJSON, "shadowsocks", "should contain outbound type")
+	assert.Contains(t, lanternJSON, "1.2.3.4", "should contain server address")
+	assert.Contains(t, lanternJSON, "1080", "should contain server port")
+	assert.Contains(t, lanternJSON, "chacha20-ietf-poly1305", "should contain method")
+}
+
+func TestGetServerByTagJSON(t *testing.T) {
+	mgr := newTestManager(t)
+
+	t.Run("existing tag", func(t *testing.T) {
+		b, ok, err := mgr.GetServerByTagJSON("ss-denver")
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.NotEmpty(t, b)
+
+		// Must be valid JSON
+		var raw map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(b, &raw), "GetServerByTagJSON must return valid JSON")
+		assert.Contains(t, raw, "Tag")
+		assert.Contains(t, raw, "Type")
+		assert.Contains(t, raw, "Options")
+		assert.Contains(t, raw, "Location")
+
+		// Verify the correct tag and type
+		fullJSON := string(b)
+		assert.Contains(t, fullJSON, "ss-denver")
+		assert.Contains(t, fullJSON, "shadowsocks")
+		assert.Contains(t, fullJSON, "Denver")
+	})
+
+	t.Run("missing tag", func(t *testing.T) {
+		b, ok, err := mgr.GetServerByTagJSON("nonexistent")
+		assert.NoError(t, err)
+		assert.False(t, ok)
+		assert.Nil(t, b)
+	})
+}
+
 func TestPrivateServerIntegration(t *testing.T) {
 	dataPath := t.TempDir()
 	manager := &Manager{
 		servers: Servers{
 			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 		},
 		optsMaps: map[ServerGroup]map[string]any{
@@ -57,7 +154,7 @@ func TestPrivateServerIntegration(t *testing.T) {
 	port, _ := strconv.Atoi(parsedURL.Port())
 
 	t.Run("convert a token into a custom server", func(t *testing.T) {
-		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken"))
+		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", nil, false))
 		require.Contains(t, manager.optsMaps[SGUser], "s1", "server should be added to the manager")
 	})
 
@@ -66,14 +163,14 @@ func TestPrivateServerIntegration(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, inviteToken)
 
-		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken))
+		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, nil, true))
 		require.Contains(t, manager.optsMaps[SGUser], "s2", "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
 			delete(manager.optsMaps[SGUser], "s1")
 			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
-			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken))
+			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, nil, true))
 			assert.NotContains(t, manager.optsMaps[SGUser], "s1", "server should not be added after revoking invite")
 		})
 	})
