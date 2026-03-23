@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -126,10 +125,6 @@ dnsttConfigs:
 
 func TestDNSTTOptions(t *testing.T) {
 	logger := bytes.NewBuffer(nil)
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     slog.LevelDebug,
-	})))
 	waitFor = 15 * time.Second
 	t.Run("embedded config only", func(t *testing.T) {
 		dnst, err := DNSTTOptions(context.Background(), "", logger)
