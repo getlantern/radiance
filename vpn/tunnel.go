@@ -341,6 +341,12 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		}
 	}
 
+	if len(options.URLOverrides) > 0 {
+		slog.Info("Applying bandit URL overrides to URL test group",
+			"group", autoTag,
+			"override_count", len(options.URLOverrides),
+		)
+	}
 	if err := t.mutGrpMgr.SetURLOverrides(autoTag, options.URLOverrides); err != nil {
 		slog.Warn("Failed to set URL overrides", "group", autoTag, "error", err)
 	}

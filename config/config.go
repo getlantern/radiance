@@ -239,6 +239,13 @@ func (ch *ConfigHandler) fetchConfig() error {
 			Locations:    locs,
 			URLOverrides: cfg.BanditURLOverrides,
 		}
+		if len(cfg.BanditURLOverrides) > 0 {
+			slog.Info("Config includes bandit URL overrides",
+				"override_count", len(cfg.BanditURLOverrides),
+				"outbound_count", len(cfg.Options.Outbounds),
+				"endpoint_count", len(cfg.Options.Endpoints),
+			)
+		}
 		if err := ch.svrManager.SetServers(servers.SGLantern, opts); err != nil {
 			slog.Error("setting servers in manager", "error", err)
 		}
