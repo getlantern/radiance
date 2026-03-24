@@ -444,23 +444,26 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 
 const urlTestHistoryFileName = "url_test_history.json"
 
-var preTestMu sync.Mutex
+var urlTestMu sync.Mutex
 
-// RunURLTests performs URL tests for all outbounds defined in configs. This runs on every config
-// fetch to provide continuous bandit callback data even when the VPN tunnel is not active.
-// When the tunnel IS active, its own CheckOutbounds handles URL testing, so this is skipped.
+// RunURLTests performs URL tests for all outbounds defined in configs. It is intended to run in
+// response to configuration updates to provide continuous bandit callback data even when the VPN
+// tunnel is not active. When the tunnel IS active, its own CheckOutbounds handles URL testing, so
+// this is skipped.
 func RunURLTests(path string) {
 	// Skip if the tunnel is handling URL tests
-	if isOpen(context.Background()) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if isOpen(ctx) {
 		slog.Debug("Tunnel is active, skipping standalone URL tests")
 		return
 	}
 
 	// Prevent overlapping runs
-	if !preTestMu.TryLock() {
+	if !urlTestMu.TryLock() {
 		return
 	}
-	defer preTestMu.Unlock()
+	defer urlTestMu.Unlock()
 
 	results, err := preTest(path)
 	if err != nil {
@@ -468,11 +471,11 @@ func RunURLTests(path string) {
 		return
 	}
 
-	var fmttedResults []string
+	var formattedResults []string
 	for tag, delay := range results {
-		fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+		formattedResults = append(formattedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
 	}
-	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(fmttedResults, "; "))
+	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
 }
 
 func preTest(path string) (map[string]uint16, error) {
