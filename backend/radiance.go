@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Xuanwo/go-locale"
-	"github.com/sagernet/sing-box/option"
 	"go.opentelemetry.io/otel"
 
 	C "github.com/getlantern/common"
@@ -528,10 +527,8 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		}
 	}
 	if userServers, ok := r.srvManager.Servers()[servers.SGUser]; ok {
-		bOptions.UserServers = option.Options{
-			Outbounds: userServers.Outbounds,
-			Endpoints: userServers.Endpoints,
-		}
+		bOptions.Options.Outbounds = append(bOptions.Options.Outbounds, userServers.Outbounds...)
+		bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, userServers.Endpoints...)
 	}
 	return bOptions
 }
@@ -550,29 +547,33 @@ func (r *LocalBackend) SelectServer(tag string) error {
 }
 
 func (r *LocalBackend) selectServer(tag string) error {
-	var server servers.Server
-	switch tag {
-	case vpn.AutoSelectTag:
-		server = servers.Server{Group: vpn.AutoSelectTag, Tag: vpn.AutoSelectTag}
-	case vpn.AutoLanternTag:
-		server = servers.Server{Group: servers.SGLantern, Tag: vpn.AutoLanternTag}
-	case vpn.AutoUserTag:
-		server = servers.Server{Group: servers.SGUser, Tag: vpn.AutoUserTag}
-	default:
-		var found bool
-		if server, found = r.srvManager.GetServerByTag(tag); !found {
-			return fmt.Errorf("no server found with tag %s", tag)
-		}
-	}
-	if err := r.vpnClient.SelectServer(server.Group, tag); err != nil {
+	if err := r.vpnClient.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
+	if tag == vpn.AutoSelectTag {
+		err := settings.Patch(settings.Settings{
+			settings.AutoConnectKey:    true,
+			settings.SelectedServerKey: nil,
+		})
+		if err != nil {
+			slog.Warn("failed to update settings", "error", err)
+		}
+		return nil
+	}
 
+	server, found := r.srvManager.GetServerByTag(tag)
+	if !found { // sanity check, the vpn should have errored if this were the case
+		return fmt.Errorf("no server found with tag %s", tag)
+	}
 	server.Options = nil
-	if err := settings.Set(settings.SelectedServerKey, server); err != nil {
+	err := settings.Patch(settings.Settings{
+		settings.AutoConnectKey:    false,
+		settings.SelectedServerKey: server,
+	})
+	if err != nil {
 		slog.Warn("Failed to save selected server in settings", "error", err)
 	}
-	slog.Info("Selected server", "tag", tag, "group", server.Group, "type", server.Type)
+	slog.Info("Selected server", "tag", tag, "type", server.Type)
 	return nil
 }
 
@@ -597,27 +598,21 @@ func (r *LocalBackend) ActiveVPNConnections() ([]vpn.Connection, error) {
 	return connections, nil
 }
 
+// TODO: handle case where selected server is no longer available (e.g. removed from manager) more
+// gracefully, currently we just return that the server is no longer available but maybe we should
+// also clear the selected server from settings and select a new server in the VPN client.
+// should we not remove a lantern server if it's currently selected in the VPN client and instead
+// mark it as unavailable in the manager until it's no longer selected in the VPN client?
+
 // SelectedServer returns the currently selected server and whether the server is still available.
 // The server may no longer be available if it was removed from the manager since it was selected.
 func (r *LocalBackend) SelectedServer() (servers.Server, bool, error) {
-	var selected servers.Server
-	if settings.Exists(settings.SelectedServerKey) {
-		settings.GetStruct(settings.SelectedServerKey, &selected)
+	if !settings.Exists(settings.SelectedServerKey) {
+		return servers.Server{}, false, fmt.Errorf("no selected server")
 	}
-	if selected == (servers.Server{}) {
-		// the selected server hasn't been stored yet, or it wasn't stored as a Server, so fall back
-		// to asking the VPN client for the selected server
-		_, tag, err := r.vpnClient.GetSelected()
-		if err != nil {
-			return servers.Server{}, false, fmt.Errorf("failed to get selected server from VPN client: %w", err)
-		}
-		server, found := r.srvManager.GetServerByTag(tag)
-		if !found {
-			// this should never happen since the options are only generated from servers in the manager,
-			// but log just in case
-			slog.Warn("Selected server from VPN client not found in ServerManager", "tag", tag)
-		}
-		return server, found, nil
+	var selected servers.Server
+	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
+		return servers.Server{}, false, fmt.Errorf("failed to get selected server from settings: %w", err)
 	}
 	server, found := r.srvManager.GetServerByTag(selected.Tag)
 	stillExists := found &&
@@ -627,19 +622,15 @@ func (r *LocalBackend) SelectedServer() (servers.Server, bool, error) {
 	return selected, stillExists, nil
 }
 
-func (r *LocalBackend) ActiveServer() (servers.Server, error) {
-	group, tag, err := r.vpnClient.ActiveServer()
-	if err != nil {
-		return servers.Server{}, fmt.Errorf("failed to get active server from VPN client: %w", err)
-	}
-	server, found := r.srvManager.GetServerByTag(tag)
-	if !found {
-		return servers.Server{
-			Group: group,
-			Tag:   tag,
-		}, fmt.Errorf("active server from VPN client not found in ServerManager: %s", tag)
-	}
-	return server, nil
+// CurrentAutoSelectedServer returns the tag of the server that is currently auto-selected by the
+// VPN client.
+func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
+	return r.vpnClient.CurrentAutoSelectedServer()
+}
+
+// StartAutoSelectionsListener starts polling for auto-selection changes and emitting events.
+func (r *LocalBackend) StartAutoSelectedListener() {
+	r.vpnClient.AutoSelectedChangeListener(r.ctx)
 }
 
 func (r *LocalBackend) RunOfflineURLTests() error {
@@ -650,17 +641,8 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	return r.vpnClient.RunOfflineURLTests(
 		settings.GetString(settings.DataPathKey),
 		cfg.Options.Outbounds,
+		cfg.BanditURLOverrides,
 	)
-}
-
-// AutoServerSelections returns the currently active server for each auto server group.
-func (r *LocalBackend) AutoServerSelections() (vpn.AutoSelections, error) {
-	return r.vpnClient.AutoServerSelections()
-}
-
-// StartAutoSelectionsListener starts polling for auto-selection changes and emitting events.
-func (r *LocalBackend) StartAutoSelectionsListener() {
-	r.vpnClient.AutoSelectionsChangeListener(r.ctx)
 }
 
 //////////////////

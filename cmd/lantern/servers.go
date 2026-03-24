@@ -125,30 +125,18 @@ func serversSelected(ctx context.Context, c *ipc.Client) error {
 	return printJSON(svr)
 }
 
-func serversActive(ctx context.Context, c *ipc.Client) error {
-	svr, err := c.ActiveServer(ctx)
-	if err != nil {
-		return err
-	}
-	if svr.Tag == "" {
-		fmt.Println("No active server")
-		return nil
-	}
-	return printJSON(svr)
-}
-
 func serversAutoSelections(ctx context.Context, c *ipc.Client, watch bool) error {
 	if watch {
-		return c.AutoSelectionsEvents(ctx, func(ev vpn.AutoSelectionsEvent) {
-			s := ev.Selections
-			fmt.Printf("lantern=%s user=%s all=%s\n", s.Lantern, s.User, s.AutoAll)
+		return c.AutoSelectedEvents(ctx, func(ev vpn.AutoSelectedEvent) {
+			s := ev.Selected
+			fmt.Printf("Selected: %s\n", s)
 		})
 	}
-	sel, err := c.AutoServerSelections(ctx)
+	sel, err := c.AutoSelected(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("lantern: %s\nuser:    %s\nall:     %s\n", sel.Lantern, sel.User, sel.AutoAll)
+	fmt.Printf("Selected: %s\n", sel)
 	return nil
 }
 

@@ -104,7 +104,7 @@ func (lb *publisher) publish(entry LogEntry) {
 }
 
 func (lb *publisher) subscribe() (chan LogEntry, func()) {
-	ch := make(chan LogEntry, 64)
+	ch := make(chan LogEntry, lb.ringSize)
 	lb.mu.Lock()
 	start := max(0, lb.ringIdx-lb.ringSize)
 	for i := start; i < lb.ringIdx; i++ {

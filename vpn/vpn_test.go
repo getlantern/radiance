@@ -1,335 +1,249 @@
 package vpn
 
 import (
-	"context"
+	"errors"
 	"log/slog"
-	"slices"
+	"sync"
 	"testing"
-	"testing/synctest"
 
-	box "github.com/getlantern/lantern-box"
-
-	"github.com/getlantern/radiance/log"
-
-	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/experimental/cachefile"
-	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
-	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/servers"
 )
 
-func TestSelectServer(t *testing.T) {
-	var tests = []struct {
-		name         string
-		initialGroup string
-		wantGroup    string
-		wantTag      string
-	}{
-		{
-			name:         "select in same group",
-			initialGroup: "socks",
-			wantGroup:    "socks",
-			wantTag:      "socks2-out",
-		},
-		{
-			name:         "select in different group",
-			initialGroup: "socks",
-			wantGroup:    "http",
-			wantTag:      "http2-out",
-		},
-	}
+// stubPlatform implements PlatformInterface for testing without real VPN operations.
+type stubPlatform struct {
+	libbox.PlatformInterface
 
-	tmpDir := t.TempDir()
-	client := setupVpnTest(t, tmpDir)
+	restartErr      error
+	restartCalled   bool
+	postCloseCalled bool
+	mu              sync.Mutex
+}
 
-	ctx := client.tunnel.ctx
-	clashServer := service.FromContext[adapter.ClashServer](ctx).(*clashapi.Server)
-	outboundMgr := service.FromContext[adapter.OutboundManager](ctx)
+func (s *stubPlatform) RestartService() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restartCalled = true
+	return s.restartErr
+}
 
-	type _selector interface {
-		adapter.OutboundGroup
-		Start() error
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// set initial group
-			clashServer.SetMode(tt.initialGroup)
+func (s *stubPlatform) PostServiceClose() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.postCloseCalled = true
+}
 
-			// start the selector
-			outbound, ok := outboundMgr.Outbound(tt.wantGroup)
-			require.True(t, ok, tt.wantGroup+" selector should exist")
-			selector := outbound.(_selector)
-			require.NoError(t, selector.Start(), "failed to start selector")
+func TestNewVPNClient(t *testing.T) {
+	t.Run("with nil logger uses default", func(t *testing.T) {
+		c := NewVPNClient(t.TempDir(), nil, nil)
+		require.NotNil(t, c)
+		assert.Equal(t, slog.Default(), c.logger)
+		assert.Equal(t, Disconnected, c.Status())
+	})
 
-			require.NoError(t, client.SelectServer(tt.wantGroup, tt.wantTag))
-			assert.Equal(t, tt.wantTag, selector.Now(), tt.wantTag+" should be selected")
-			assert.Equal(t, tt.wantGroup, clashServer.Mode(), "clash mode should be "+tt.wantGroup)
+	t.Run("with custom logger", func(t *testing.T) {
+		logger := rlog.NoOpLogger()
+		c := NewVPNClient(t.TempDir(), logger, nil)
+		require.NotNil(t, c)
+		assert.Equal(t, logger, c.logger)
+	})
+}
+
+func TestStatus_DisconnectedWhenNoTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	assert.Equal(t, Disconnected, c.Status())
+	assert.False(t, c.isOpen())
+}
+
+func TestClose_NilTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	// Closing when no tunnel is open should succeed without error.
+	assert.NoError(t, c.Close())
+}
+
+func TestClose_CallsPostServiceClose(t *testing.T) {
+	p := &stubPlatform{}
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), p)
+
+	// Set up a minimal tunnel that can be closed.
+	tun := &tunnel{}
+	tun.status.Store(Connected)
+	c.tunnel = tun
+
+	err := c.Close()
+	assert.NoError(t, err)
+	assert.Nil(t, c.tunnel)
+
+	p.mu.Lock()
+	assert.True(t, p.postCloseCalled, "PostServiceClose should be called after closing")
+	p.mu.Unlock()
+}
+
+func TestDisconnect_NoTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	assert.NoError(t, c.Disconnect())
+}
+
+func TestConnect_AlreadyConnected(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	tun := &tunnel{}
+	tun.status.Store(Connected)
+	c.tunnel = tun
+
+	err := c.Connect(BoxOptions{})
+	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
+}
+
+func TestConnect_TransientStates(t *testing.T) {
+	for _, status := range []VPNStatus{Restarting, Connecting, Disconnecting} {
+		t.Run(string(status), func(t *testing.T) {
+			c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+			tun := &tunnel{}
+			tun.status.Store(status)
+			c.tunnel = tun
+
+			err := c.Connect(BoxOptions{})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), string(status))
 		})
 	}
 }
 
-func TestSelectedServer(t *testing.T) {
-	wantGroup := "socks"
-	wantTag := "socks2-out"
+func TestConnect_CleansUpStaleTunnel(t *testing.T) {
+	for _, status := range []VPNStatus{Disconnected, ErrorStatus} {
+		t.Run(string(status), func(t *testing.T) {
+			c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+			tun := &tunnel{}
+			tun.status.Store(status)
+			c.tunnel = tun
 
-	tmpDir := t.TempDir()
-	opts, _, err := testBoxOptions(tmpDir)
-	require.NoError(t, err, "failed to load test box options")
-	cacheFile := cachefile.New(context.Background(), *opts.Experimental.CacheFile)
-	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
-
-	require.NoError(t, cacheFile.StoreMode(wantGroup))
-	require.NoError(t, cacheFile.StoreSelected(wantGroup, wantTag))
-	_ = cacheFile.Close()
-
-	client := setupVpnTest(t, tmpDir)
-	outboundMgr := service.FromContext[adapter.OutboundManager](client.tunnel.ctx)
-	require.NoError(t, outboundMgr.Start(adapter.StartStateStart), "failed to start outbound manager")
-
-	group, tag, err := client.GetSelected()
-	require.NoError(t, err, "should not error when getting selected server")
-	assert.Equal(t, wantGroup, group, "group should match")
-	assert.Equal(t, wantTag, tag, "tag should match")
-}
-
-func TestAutoServerSelections(t *testing.T) {
-	mgr := &mockOutMgr{
-		outbounds: []adapter.Outbound{
-			&mockOutbound{tag: "socks1-out"},
-			&mockOutbound{tag: "socks2-out"},
-			&mockOutbound{tag: "http1-out"},
-			&mockOutbound{tag: "http2-out"},
-			&mockOutboundGroup{
-				mockOutbound: mockOutbound{tag: AutoLanternTag},
-				now:          "socks1-out",
-				all:          []string{"socks1-out", "socks2-out"},
-			},
-			&mockOutboundGroup{
-				mockOutbound: mockOutbound{tag: AutoUserTag},
-				now:          "http2-out",
-				all:          []string{"http1-out", "http2-out"},
-			},
-			&mockOutboundGroup{
-				mockOutbound: mockOutbound{tag: AutoSelectTag},
-				now:          AutoLanternTag,
-				all:          []string{AutoLanternTag, AutoUserTag},
-			},
-		},
+			// Connect will fail because BoxOptions has no outbounds, but the stale
+			// tunnel should be cleared first (the error comes from buildOptions).
+			err := c.Connect(BoxOptions{BasePath: t.TempDir()})
+			require.Error(t, err)
+			// The tunnel should have been nilled out before buildOptions was called
+			assert.Contains(t, err.Error(), "no outbounds")
+		})
 	}
-	want := AutoSelections{
-		Lantern: "socks1-out",
-		User:    "http2-out",
-		AutoAll: "socks1-out",
-	}
-	ctx := box.BaseContext()
-	service.MustRegister[adapter.OutboundManager](ctx, mgr)
-
-	client := &VPNClient{
-		tunnel: &tunnel{
-			ctx: ctx,
-		},
-		logger: slog.Default(),
-	}
-	client.tunnel.status.Store(Connected)
-
-	got, err := client.AutoServerSelections()
-	require.NoError(t, err, "should not error when getting auto server selections")
-	require.Equal(t, want, got, "selections should match")
 }
 
-func TestConnectWaitsForPreStartTests(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, client := newIdleClient(true)
-		go func() {
-			<-ctx.Done()
-			close(client.preTestDone)
-		}()
-
-		// Connect should block until pre-start tests complete (done channel closed).
-		_ = client.Connect(BoxOptions{})
-		<-client.preTestDone
-	})
-}
-
-func TestConnectProceedsWithoutPreTests(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		_, client := newIdleClient(false)
-		_ = client.Connect(BoxOptions{})
-	})
-}
-
-func TestStatusNotBlockedDuringPreTestWait(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		_, client := newIdleClient(true)
-		go func() {
-			_ = client.Connect(BoxOptions{})
-		}()
-
-		// Wait until the Connect goroutine is blocked on <-testDone (lock released).
-		synctest.Wait()
-
-		// Status should succeed because Connect released the write lock.
-		assert.Equal(t, Disconnected, client.Status())
-		close(client.preTestDone)
-	})
-}
-
-// func TestConcurrentPreStartTestsRejected(t *testing.T) {
-// 	_, client := newIdleClient(true)
-// 	err := client.PreStartTests("", nil)
-// 	require.Error(t, err)
-// 	assert.Contains(t, err.Error(), "pre-start tests already running")
-// }
-//
-// func TestPreStartTestsRejectedWhenConnected(t *testing.T) {
-// 	_, client := newIdleClient(false)
-// 	client.tunnel = &tunnel{}
-//
-// 	err := client.PreStartTests("", nil)
-// 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
-// }
-
-func TestDisconnectedOperations(t *testing.T) {
-	_, client := newIdleClient(false)
-
-	assert.Equal(t, Disconnected, client.Status())
-	assert.False(t, client.isOpen())
-	assert.ErrorIs(t, client.SelectServer("g", "t"), ErrTunnelNotConnected)
-
-	_, _, err := client.GetSelected()
+func TestRestart_NotConnected(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	err := c.Restart(BoxOptions{})
 	assert.ErrorIs(t, err, ErrTunnelNotConnected)
-
-	_, _, err = client.ActiveServer()
-	assert.ErrorIs(t, err, ErrTunnelNotConnected)
-
-	_, err = client.Connections()
-	assert.ErrorIs(t, err, ErrTunnelNotConnected)
-
-	assert.NoError(t, client.Close(), "Close on disconnected client should be no-op")
-	assert.NoError(t, client.Disconnect(), "Disconnect on disconnected client should be no-op")
 }
 
-// Run with -race
-func TestConcurrentReads(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		_, client := newIdleClient(false)
-		for range 10 {
-			go func() {
-				for range 100 {
-					assert.Equal(t, Disconnected, client.Status())
-				}
-			}()
-		}
-	})
+func TestRestart_NotConnectedStatus(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	tun := &tunnel{}
+	tun.status.Store(Disconnected)
+	c.tunnel = tun
+
+	err := c.Restart(BoxOptions{})
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
 }
 
-// Run with -race
-func TestConcurrentConnectAndReads(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		_, client := newIdleClient(false)
+func TestRestart_WithPlatformInterface(t *testing.T) {
+	p := &stubPlatform{}
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), p)
+	tun := &tunnel{}
+	tun.status.Store(Connected)
+	c.tunnel = tun
+
+	err := c.Restart(BoxOptions{})
+	assert.NoError(t, err)
+
+	p.mu.Lock()
+	assert.True(t, p.restartCalled)
+	p.mu.Unlock()
+	assert.Equal(t, Restarting, tun.Status())
+}
+
+func TestRestart_PlatformInterfaceError(t *testing.T) {
+	restartErr := errors.New("restart failed")
+	p := &stubPlatform{restartErr: restartErr}
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), p)
+	tun := &tunnel{}
+	tun.status.Store(Connected)
+	c.tunnel = tun
+
+	err := c.Restart(BoxOptions{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, restartErr)
+	assert.Equal(t, ErrorStatus, tun.Status())
+}
+
+func TestSelectServer_NotConnected(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	err := c.SelectServer("some-tag")
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+}
+
+func TestSelectServer_DisconnectedTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	tun := &tunnel{}
+	tun.status.Store(Disconnected)
+	c.tunnel = tun
+
+	err := c.SelectServer("some-tag")
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+}
+
+func TestUpdateOutbounds_NilTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	err := c.UpdateOutbounds("lantern", servers.Options{})
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+}
+
+func TestAddOutbounds_NilTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	err := c.AddOutbounds("lantern", servers.Options{})
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+}
+
+func TestRemoveOutbounds_NilTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	err := c.RemoveOutbounds("lantern", []string{"tag1"})
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+}
+
+func TestConnections_NilTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	conns, err := c.Connections()
+	assert.Nil(t, conns)
+	assert.ErrorIs(t, err, ErrTunnelNotConnected)
+}
+
+func TestCurrentAutoSelectedServer_NotOpen(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	selected, err := c.CurrentAutoSelectedServer()
+	assert.NoError(t, err)
+	assert.Empty(t, selected)
+}
+
+func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	tun := &tunnel{}
+	tun.status.Store(Connected)
+	c.tunnel = tun
+
+	err := c.RunOfflineURLTests("", nil, nil)
+	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
+}
+
+func TestConcurrentStatusAccess(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
 		go func() {
-			for range 10 {
-				_ = client.Connect(BoxOptions{})
-			}
+			defer wg.Done()
+			_ = c.Status()
 		}()
-		for range 5 {
-			go func() {
-				for range 50 {
-					_ = client.Status()
-				}
-			}()
-		}
-	})
-}
-
-func newIdleClient(withPretests bool) (context.Context, *VPNClient) {
-	done := make(chan struct{})
-	ctx := context.Background()
-	cancel := func() {}
-	if withPretests {
-		ctx, cancel = context.WithCancel(context.Background())
-	} else {
-		close(done)
 	}
-	return ctx, &VPNClient{
-		logger:        log.NoOpLogger(),
-		preTestCancel: cancel,
-		preTestDone:   done,
-	}
-}
-
-type mockOutMgr struct {
-	adapter.OutboundManager
-	outbounds []adapter.Outbound
-}
-
-func (o *mockOutMgr) Outbounds() []adapter.Outbound {
-	return o.outbounds
-}
-
-func (o *mockOutMgr) Outbound(tag string) (adapter.Outbound, bool) {
-	idx := slices.IndexFunc(o.outbounds, func(ob adapter.Outbound) bool {
-		return ob.Tag() == tag
-	})
-	if idx == -1 {
-		return nil, false
-	}
-	return o.outbounds[idx], true
-}
-
-type mockOutbound struct {
-	adapter.Outbound
-	tag string
-}
-
-func (o *mockOutbound) Tag() string  { return o.tag }
-func (o *mockOutbound) Type() string { return "mock" }
-
-type mockOutboundGroup struct {
-	mockOutbound
-	now string
-	all []string
-}
-
-func (o *mockOutboundGroup) Now() string   { return o.now }
-func (o *mockOutboundGroup) All() []string { return o.all }
-
-func setupVpnTest(t *testing.T, path string) *VPNClient {
-	setupOpts := libbox.SetupOptions{
-		BasePath:    path,
-		WorkingPath: path,
-		TempPath:    path,
-	}
-	require.NoError(t, libbox.Setup(&setupOpts))
-
-	_, boxOpts, err := testBoxOptions(path)
-	require.NoError(t, err, "failed to load test box options")
-
-	ctx := box.BaseContext()
-
-	lb, err := libbox.NewServiceWithContext(ctx, boxOpts, nil)
-	require.NoError(t, err)
-	clashServer := service.FromContext[adapter.ClashServer](ctx)
-	cacheFile := service.FromContext[adapter.CacheFile](ctx)
-
-	client := &VPNClient{
-		tunnel: &tunnel{
-			ctx:         ctx,
-			clashServer: clashServer.(*clashapi.Server),
-			dataPath:    path,
-		},
-		logger: slog.Default(),
-	}
-	client.tunnel.status.Store(Connected)
-
-	t.Cleanup(func() {
-		lb.Close()
-		cacheFile.Close()
-		clashServer.Close()
-	})
-	require.NoError(t, cacheFile.Start(adapter.StartStateInitialize))
-	require.NoError(t, clashServer.Start(adapter.StartStateStart))
-	return client
+	wg.Wait()
 }

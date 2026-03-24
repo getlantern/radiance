@@ -154,15 +154,11 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			Version:     common.Version,
 		}
 	}
+	// Outbound match bounds start empty and are populated when lantern servers are added via
+	// addOutbounds. Only lantern servers support client context tracking.
 	matchBounds := clientcontext.MatchBounds{
 		Inbound:  []string{"any"},
 		Outbound: []string{},
-	}
-	if outbound, exists := outboundMgr.Outbound(servers.SGLantern); exists {
-		// Note: this should only contain lantern outbounds with servers that support client context
-		// tracking. otherwise, the connections will fail.
-		tags := outbound.(adapter.OutboundGroup).All()
-		matchBounds.Outbound = append(tags, servers.SGLantern, groupAutoTag(servers.SGLantern))
 	}
 	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
 }
@@ -216,26 +212,31 @@ func (t *tunnel) connect() (err error) {
 	return nil
 }
 
-func (t *tunnel) selectOutbound(group, tag string) error {
+func (t *tunnel) selectMode(mode string) error {
 	if status := t.Status(); status != Connected {
 		return fmt.Errorf("tunnel not running: status %v", status)
 	}
 
-	if mode := t.clashServer.Mode(); mode != group {
-		t.clashServer.SetMode(group)
+	if t.clashServer.Mode() != mode {
+		t.clashServer.SetMode(mode)
 		conntrack.Close()
 		go func() {
 			time.Sleep(time.Second)
 			runtimeDebug.FreeOSMemory()
 		}()
 	}
-	if tag == "" {
-		return nil
+	return nil
+}
+
+func (t *tunnel) selectOutbound(tag string) error {
+	if err := t.selectMode(ManualSelectTag); err != nil {
+		return err
 	}
+
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	outbound, loaded := outboundMgr.Outbound(group)
+	outbound, loaded := outboundMgr.Outbound(ManualSelectTag)
 	if !loaded {
-		return fmt.Errorf("selector group not found: %s", group)
+		return fmt.Errorf("manual select group not found")
 	}
 	outbound.(Selector).SelectOutbound(tag)
 	return nil
@@ -290,13 +291,13 @@ var errLibboxClosed = errors.New("libbox closed")
 
 func (t *tunnel) addOutbounds(group string, options servers.Options) (err error) {
 	if len(options.Outbounds) == 0 && len(options.Endpoints) == 0 {
-		slog.Debug("No outbounds or endpoints to add", "group", group)
+		slog.Debug("No outbounds or endpoints to add")
 		return nil
 	}
 
-	slog.Info("Adding servers to group", "group", group, "tags", options.AllTags())
+	slog.Info("Adding servers to group", "tags", options.AllTags())
 	// remove duplicates from newOpts before adding to avoid unnecessary reloads
-	newOptions := removeDuplicates(t.ctx, t.optsMap, options, group)
+	newOptions := removeDuplicates(t.ctx, t.optsMap, options)
 
 	ctx := t.ctx
 	router := service.FromContext[adapter.Router](ctx)
@@ -313,25 +314,30 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		}
 		defer func() {
 			if !errors.Is(err, errLibboxClosed) {
-				t.updateClientContextTracker()
+				// Rebuild bounds from the full set of lantern tags currently in the
+				// ManualSelectTag group, rather than just the tags from this call.
+				mb := t.clientContextTracker.MatchBounds()
+				mb.Outbound = append(mb.Outbound, options.AllTags()...)
+				// Deduplicate: the preemptive merge above may have already added these tags.
+				slices.Sort(mb.Outbound)
+				mb.Outbound = slices.Compact(mb.Outbound)
+				t.clientContextTracker.SetBounds(mb)
 			}
 		}()
 	}
 
 	var (
 		mutGrpMgr = t.mutGrpMgr
-		autoTag   = groupAutoTag(group)
 		added     = 0
 	)
-	// for each outbound/endpoint in new add to group
 	for _, outbound := range newOptions.Outbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
 		err := mutGrpMgr.CreateOutboundForGroup(
-			ctx, router, logger, group, outbound.Tag, outbound.Type, outbound.Options,
+			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
 		if err == nil {
-			// add to urltest
-			err = mutGrpMgr.AddToGroup(autoTag, outbound.Tag)
+			// add to autoselect
+			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
@@ -352,11 +358,11 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 	for _, endpoint := range newOptions.Endpoints {
 		logger := t.logFactory.NewLogger("endpoint/" + endpoint.Tag + "[" + endpoint.Type + "]")
 		err := mutGrpMgr.CreateEndpointForGroup(
-			ctx, router, logger, group, endpoint.Tag, endpoint.Type, endpoint.Options,
+			ctx, router, logger, ManualSelectTag, endpoint.Tag, endpoint.Type, endpoint.Options,
 		)
 		if err == nil {
-			// add to urltest
-			err = mutGrpMgr.AddToGroup(autoTag, endpoint.Tag)
+			// add to autoselect
+			err = mutGrpMgr.AddToGroup(AutoSelectTag, endpoint.Tag)
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
@@ -372,32 +378,30 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 
 	if len(options.URLOverrides) > 0 {
 		slog.Info("Applying bandit URL overrides to URL test group",
-			"group", autoTag,
 			"override_count", len(options.URLOverrides),
 		)
 	}
-	if err := t.mutGrpMgr.SetURLOverrides(autoTag, options.URLOverrides); err != nil {
-		slog.Warn("Failed to set URL overrides", "group", autoTag, "error", err)
+	if err := t.mutGrpMgr.SetURLOverrides(AutoSelectTag, options.URLOverrides); err != nil {
+		slog.Warn("Failed to set URL overrides", "error", err)
 	} else if len(options.URLOverrides) > 0 {
 		// Trigger an immediate URL test cycle when we have bandit overrides so
 		// callback probes are hit within seconds of config receipt rather than
 		// waiting for the next scheduled interval (3 min).
-		if err := t.mutGrpMgr.CheckOutbounds(autoTag); err != nil {
-			slog.Warn("Failed to trigger immediate URL test after bandit overrides", "group", autoTag, "error", err)
+		if err := t.mutGrpMgr.CheckOutbounds(AutoSelectTag); err != nil {
+			slog.Warn("Failed to trigger immediate URL test after bandit overrides", "error", err)
 		} else {
-			slog.Info("Triggered immediate URL test for bandit callbacks", "group", autoTag)
+			slog.Info("Triggered immediate URL test for bandit callbacks")
 		}
 	}
 
-	slog.Debug("Added servers to group", "group", group, "added", added)
+	slog.Debug("Added servers", "added", added)
 	return errors.Join(errs...)
 }
 
 func (t *tunnel) removeOutbounds(group string, tags []string) error {
 	var (
 		mutGrpMgr = t.mutGrpMgr
-		autoTag   = groupAutoTag(group)
-		removed   = 0
+		removed   []string
 		errs      []error
 	)
 	for _, tag := range tags {
@@ -406,10 +410,10 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 				continue // skip nested urltests
 			}
 		}
-		err := mutGrpMgr.RemoveFromGroup(group, tag)
+		err := mutGrpMgr.RemoveFromGroup(ManualSelectTag, tag)
 		if err == nil {
 			// remove from urltest
-			err = mutGrpMgr.RemoveFromGroup(autoTag, tag)
+			err = mutGrpMgr.RemoveFromGroup(AutoSelectTag, tag)
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
@@ -418,60 +422,43 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 			errs = append(errs, err)
 		} else {
 			t.optsMap.Delete(tag)
-			removed++
+			removed = append(removed, tag)
 		}
 	}
-	if t.clientContextTracker != nil {
-		t.updateClientContextTracker()
+	if t.clientContextTracker != nil && group == servers.SGLantern {
+		mb := t.clientContextTracker.MatchBounds()
+		mb.Outbound = slices.DeleteFunc(mb.Outbound, func(s string) bool {
+			return slices.Contains(removed, s)
+		})
+		t.clientContextTracker.SetBounds(clientcontext.MatchBounds{
+			Inbound:  []string{"any"},
+			Outbound: mb.Outbound,
+		})
 	}
-	slog.Debug("Removed servers from group", "group", group, "removed", removed)
+	slog.Debug("Removed servers", "removed", len(removed))
 	return errors.Join(errs...)
-}
-
-func (t *tunnel) updateClientContextTracker() {
-	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	outbound, exists := outboundMgr.Outbound(servers.SGLantern)
-	if !exists {
-		return
-	}
-	outGroup := outbound.(adapter.OutboundGroup)
-	slog.Debug("Setting updated lantern tags into ClientContextInjector")
-	t.clientContextTracker.SetBounds(clientcontext.MatchBounds{
-		Inbound:  []string{"any"},
-		Outbound: append(outGroup.All(), servers.SGLantern, groupAutoTag(servers.SGLantern)),
-	})
 }
 
 func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	var errs []error
 	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
-		slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
+		slog.Debug("No outbounds or endpoints to update, skipping")
 		return nil
 	}
-	slog.Log(nil, rlog.LevelTrace, "Updating servers", "group", group)
+	slog.Log(nil, rlog.LevelTrace, "Updating servers")
 
-	autoTag := groupAutoTag(group)
-	selector, selectorExists := t.mutGrpMgr.OutboundGroup(group)
-	_, urltestExists := t.mutGrpMgr.OutboundGroup(autoTag)
+	selector, selectorExists := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
+	_, urltestExists := t.mutGrpMgr.OutboundGroup(AutoSelectTag)
 	if !selectorExists || !urltestExists {
-		// Yes, panic. And, yes, it's intentional. Both selector and URLtest should always exist
-		// if the tunnel is running, so this is a "world no longer makes sense" situation. This
-		// should be caught during testing and will not panic in release builds.
-		slog.Log(
-			nil, rlog.LevelPanic, "selector or urltest group missing", "group", group,
-			"selector_exists", selectorExists, "urltest_exists", urltestExists,
-		)
-		panic(fmt.Errorf(
-			"selector or urltest group missing for %q. selector_exists=%v, urltest_exists=%v",
-			group, selectorExists, urltestExists,
-		))
+		slog.Error("Selector or URL test group not found when updating outbounds")
+		return errors.New("selector or url test group not found")
 	}
 
 	if contextDone(t.ctx) {
 		return t.ctx.Err()
 	}
 
-	// collect tags present in the current group but absent from the new config
+	// collect current tags that are not in the new options
 	newTags := newOpts.AllTags()
 	var toRemove []string
 	for _, tag := range selector.All() {
@@ -493,8 +480,8 @@ func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	return errors.Join(errs...)
 }
 
-func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], new servers.Options, group string) servers.Options {
-	slog.Log(nil, rlog.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
+func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], new servers.Options) servers.Options {
+	slog.Log(nil, rlog.LevelTrace, "Removing duplicate outbounds/endpoints")
 	deduped := servers.Options{
 		Outbounds:    []O.Outbound{},
 		Endpoints:    []O.Endpoint{},
@@ -524,7 +511,7 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		deduped.Locations[ep.Tag] = new.Locations[ep.Tag]
 	}
 	if len(dropped) > 0 {
-		slog.Debug("Dropped duplicate outbounds/endpoints", "group", group, "tags", dropped)
+		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", dropped)
 	}
 	return deduped
 }

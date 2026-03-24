@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -245,25 +244,23 @@ func (c *VPNClient) Disconnect() error {
 	return traces.RecordError(ctx, c.Close())
 }
 
-// SelectServer selects the specified server for the tunnel. The tunnel must already be open.
-func (c *VPNClient) SelectServer(group, tag string) error {
+// SelectServer changes the currently selected server to the one specified by tag. If tag is AutoSelectTag,
+// the tunnel will switch to auto-select mode and automatically choose the best server.
+func (c *VPNClient) SelectServer(tag string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil || c.tunnel.Status() != Connected {
 		return ErrTunnelNotConnected
 	}
-	return c.selectServer(c.tunnel, group, tag)
-}
-
-func (c *VPNClient) selectServer(t *tunnel, group, tag string) error {
-	if group == AutoSelectTag {
-		c.logger.Info("Switching to auto mode", "group", group)
-		return t.selectOutbound(AutoSelectTag, "")
+	t := c.tunnel
+	if tag == AutoSelectTag {
+		return c.tunnel.selectMode(AutoSelectTag)
 	}
-	c.logger.Info("Selecting server", "group", group, "tag", tag)
-	if err := t.selectOutbound(group, tag); err != nil {
-		c.logger.Error("Failed to select server", "group", group, "tag", tag, "error", err)
-		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
+
+	c.logger.Info("Selecting server", "tag", tag)
+	if err := t.selectOutbound(tag); err != nil {
+		c.logger.Error("Failed to select server", "tag", tag, "error", err)
+		return fmt.Errorf("failed to select server %s: %w", tag, err)
 	}
 	return nil
 }
@@ -295,62 +292,6 @@ func (c *VPNClient) RemoveOutbounds(group string, tags []string) error {
 	return c.tunnel.removeOutbounds(group, tags)
 }
 
-// GetSelected returns the currently selected group and outbound tag.
-func (c *VPNClient) GetSelected() (group, tag string, err error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.tunnel == nil {
-		return "", "", ErrTunnelNotConnected
-	}
-	outboundMgr := service.FromContext[adapter.OutboundManager](c.tunnel.ctx)
-	if outboundMgr == nil {
-		return "", "", errors.New("outbound manager not found")
-	}
-	mode := c.tunnel.clashServer.Mode()
-	outbound, loaded := outboundMgr.Outbound(mode)
-	if !loaded {
-		return "", "", fmt.Errorf("group not found: %s", mode)
-	}
-	og, isGroup := outbound.(adapter.OutboundGroup)
-	if !isGroup {
-		return "", "", fmt.Errorf("outbound is not a group: %s", mode)
-	}
-	return mode, og.Now(), nil
-}
-
-func (c *VPNClient) ActiveServer() (group, tag string, err error) {
-	_, span := otel.Tracer(tracerName).Start(context.Background(), "active_server")
-	defer span.End()
-	c.logger.Log(nil, log.LevelTrace, "Retrieving active server")
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.tunnel == nil {
-		return "", "", ErrTunnelNotConnected
-	}
-	outboundMgr := service.FromContext[adapter.OutboundManager](c.tunnel.ctx)
-	if outboundMgr == nil {
-		return "", "", errors.New("outbound manager not found")
-	}
-	group = c.tunnel.clashServer.Mode()
-	// resolve nested groups
-	tag = group
-	for {
-		outbound, loaded := outboundMgr.Outbound(tag)
-		if !loaded {
-			return group, "unavailable", fmt.Errorf("outbound not found: %s", tag)
-		}
-		og, isGroup := outbound.(adapter.OutboundGroup)
-		if !isGroup {
-			break
-		}
-		tag = og.Now()
-	}
-	if err != nil {
-		return "", "", fmt.Errorf("failed to get active server: %w", err)
-	}
-	return group, tag, nil
-}
-
 // Connections returns a list of all connections, both active and recently closed. A non-nil error
 // is only returned if there was an error retrieving the connections, or if the tunnel is closed.
 // If there are no connections and the tunnel is open, an empty slice is returned without an error.
@@ -375,118 +316,47 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	return connections, nil
 }
 
-// AutoSelections represents the currently active servers for each auto server group.
-type AutoSelections struct {
-	Lantern string `json:"lantern"`
-	User    string `json:"user"`
-	AutoAll string `json:"autoAll"`
-}
-
-// AutoSelectionsEvent is emitted when server location changes for any auto server group.
-type AutoSelectionsEvent struct {
+// AutoSelectedEvent is emitted when the auto-selected server changes.
+type AutoSelectedEvent struct {
 	events.Event
-	Selections AutoSelections `json:"selections"`
+	Selected string `json:"selected"`
 }
 
-// SelectionUnavailable is the sentinel value returned for an auto-selection
-// group that has no active server (tunnel not running, group not found, etc.).
-const SelectionUnavailable = "Unavailable"
-
-// AutoServerSelections returns the currently active server for each auto server group. If the group
-// is not found or has no active server, "Unavailable" is returned for that group.
-func (c *VPNClient) AutoServerSelections() (AutoSelections, error) {
-	as := AutoSelections{
-		Lantern: SelectionUnavailable,
-		User:    SelectionUnavailable,
-		AutoAll: SelectionUnavailable,
-	}
+// CurrentAutoSelectedServer returns the tag of the currently auto-selected server
+func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")
-		return as, nil
+		return "", nil
 	}
-	groups, err := c.getGroups()
-	if err != nil {
-		return as, fmt.Errorf("failed to get groups: %w", err)
-	}
-	c.logger.Log(nil, log.LevelTrace, "Retrieved groups", "groups", groups)
-	selected := func(tag string) string {
-		idx := slices.IndexFunc(groups, func(g OutboundGroup) bool {
-			return g.Tag == tag
-		})
-		if idx < 0 || groups[idx].Selected == "" {
-			c.logger.Log(nil, log.LevelTrace, "Group not found or has no selection", "tag", tag)
-			return SelectionUnavailable
-		}
-		return groups[idx].Selected
-	}
-	auto := AutoSelections{
-		Lantern: selected(AutoLanternTag),
-		User:    selected(AutoUserTag),
-	}
-
-	switch all := selected(AutoSelectTag); all {
-	case AutoLanternTag:
-		auto.AutoAll = auto.Lantern
-	case AutoUserTag:
-		auto.AutoAll = auto.User
-	default:
-		auto.AutoAll = all
-	}
-	return auto, nil
-}
-
-// getGroups returns all outbound groups from the outbound manager.
-func (c *VPNClient) getGroups() ([]OutboundGroup, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
-		return nil, ErrTunnelNotConnected
+		return "", ErrTunnelNotConnected
 	}
 	outboundMgr := service.FromContext[adapter.OutboundManager](c.tunnel.ctx)
 	if outboundMgr == nil {
-		return nil, errors.New("outbound manager not found")
+		return "", errors.New("outbound manager not found")
 	}
-	var groups []OutboundGroup
-	for _, it := range outboundMgr.Outbounds() {
-		og, isGroup := it.(adapter.OutboundGroup)
-		if !isGroup {
-			continue
-		}
-		group := OutboundGroup{
-			Tag:      og.Tag(),
-			Type:     og.Type(),
-			Selected: og.Now(),
-		}
-		for _, itemTag := range og.All() {
-			itemOutbound, isLoaded := outboundMgr.Outbound(itemTag)
-			if !isLoaded {
-				continue
-			}
-			group.Outbounds = append(group.Outbounds, Outbounds{
-				Tag:  itemTag,
-				Type: itemOutbound.Type(),
-			})
-		}
-		groups = append(groups, group)
+	outbound, loaded := outboundMgr.Outbound(AutoSelectTag)
+	if !loaded {
+		return "", fmt.Errorf("auto select group not found")
 	}
-	return groups, nil
+	return outbound.(adapter.OutboundGroup).Now(), nil
 }
 
-// AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
-// selection changes until the context is cancelled.
 const (
 	rapidPollInterval  = 500 * time.Millisecond
 	rapidPollWindow    = 15 * time.Second
 	steadyPollInterval = 10 * time.Second
 )
 
-// AutoSelectionsChangeListener polls for auto-selection changes and emits an
-// AutoSelectionsEvent whenever the selection differs from the previous value.
+// AutoSelectedChangeListener polls for auto-selection changes and emits an
+// AutoSelectedEvent whenever the selection differs from the previous value.
 // It performs an initial rapid poll to catch the first selection soon after
 // tunnel connect, then settles into a slower steady-state interval.
-func (c *VPNClient) AutoSelectionsChangeListener(ctx context.Context) {
+func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) {
 	go func() {
-		var prev AutoSelections
+		var prev string
 
 		// Rapid initial poll to emit the first selection promptly after connect.
 		initialDeadline := time.NewTimer(rapidPollWindow)
@@ -501,17 +371,15 @@ func (c *VPNClient) AutoSelectionsChangeListener(ctx context.Context) {
 			case <-initialDeadline.C:
 				break initial
 			case <-tick.C:
-				curr, err := c.AutoServerSelections()
+				curr, err := c.CurrentAutoSelectedServer()
 				if err != nil {
 					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{Selections: curr})
-					if curr.Lantern != SelectionUnavailable ||
-						curr.User != SelectionUnavailable ||
-						curr.AutoAll != SelectionUnavailable {
+					events.Emit(AutoSelectedEvent{Selected: curr})
+					if curr != "" {
 						break initial
 					}
 				}
@@ -534,14 +402,14 @@ func (c *VPNClient) AutoSelectionsChangeListener(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				curr, err := c.AutoServerSelections()
+				curr, err := c.CurrentAutoSelectedServer()
 				if err != nil {
 					tick.Reset(steadyPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{Selections: curr})
+					events.Emit(AutoSelectedEvent{Selected: curr})
 				}
 				tick.Reset(steadyPollInterval)
 			}
@@ -554,7 +422,7 @@ func (c *VPNClient) AutoSelectionsChangeListener(ctx context.Context) {
 //
 // If [VPNClient.Connect] is called while RunOfflineURLTests is running, the tests will be cancelled and
 // any results will be discarded.
-func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound) error {
+func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound, banditURLs map[string]string) error {
 	c.mu.Lock()
 	if c.tunnel != nil {
 		c.mu.Unlock()
@@ -579,7 +447,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags, banditURLs))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,

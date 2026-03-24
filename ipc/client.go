@@ -146,27 +146,18 @@ func (c *Client) SelectedServer(ctx context.Context) (servers.Server, bool, erro
 	return resp.Server, resp.Exists, err
 }
 
-// ActiveServer returns the currently active (connected) server.
-func (c *Client) ActiveServer(ctx context.Context) (servers.Server, error) {
-	data, err := c.do(ctx, http.MethodGet, serverActiveEndpoint, nil)
-	if err != nil {
-		return servers.Server{}, err
-	}
-	return sjson.UnmarshalExtendedContext[servers.Server](boxCtx, data)
+// AutoSelected returns the server that's currently auto-selected.
+func (c *Client) AutoSelected(ctx context.Context) (servers.Server, error) {
+	var selected servers.Server
+	err := c.doJSON(ctx, http.MethodGet, serverAutoSelectedEndpoint, nil, &selected)
+	return selected, err
 }
 
-// AutoServerSelections returns the currently active server for each auto server group.
-func (c *Client) AutoServerSelections(ctx context.Context) (vpn.AutoSelections, error) {
-	var selections vpn.AutoSelections
-	err := c.doJSON(ctx, http.MethodGet, serverAutoSelectionsEndpoint, nil, &selections)
-	return selections, err
-}
-
-// AutoSelectionsEvents connects to the auto-selections event stream. It calls handler for each
+// AutoSelectedEvents connects to the auto-selected event stream. It calls handler for each
 // event received until ctx is cancelled or the connection is closed.
-func (c *Client) AutoSelectionsEvents(ctx context.Context, handler func(vpn.AutoSelectionsEvent)) error {
-	return c.sseStream(ctx, serverAutoSelectionsEventsEndpoint, func(data []byte) {
-		var evt vpn.AutoSelectionsEvent
+func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSelectedEvent)) error {
+	return c.sseStream(ctx, serverAutoSelectedEventsEndpoint, func(data []byte) {
+		var evt vpn.AutoSelectedEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}

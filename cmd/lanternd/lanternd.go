@@ -62,13 +62,8 @@ func main() {
 	<-sigCh
 
 	slog.Info("Shutting down...")
-	// Allow a second signal to force an immediate exit.
-	signal.Stop(sigCh)
-	go func() {
-		<-sigCh
-		slog.Error("Received second signal, forcing exit")
-		os.Exit(1)
-	}()
+	// Restore default signal behavior so a second signal terminates immediately.
+	signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 
 	time.AfterFunc(15*time.Second, func() {
 		slog.Error("Failed to shut down in time, forcing exit")

@@ -47,9 +47,6 @@ func vpnStatus(ctx context.Context, c *ipc.Client) error {
 		if sel, exists, err := c.SelectedServer(ctx); err == nil && exists {
 			line += " server=" + sel.Tag
 		}
-		if act, err := c.ActiveServer(ctx); err == nil && act.Tag != "" {
-			line += " active=" + act.Tag
-		}
 	}
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
 	if ip, err := GetPublicIP(tctx); err == nil {

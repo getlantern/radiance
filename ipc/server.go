@@ -37,10 +37,9 @@ const (
 	vpnStatusEventsEndpoint = "/vpn/status/events"
 
 	// Server selection endpoints
-	serverSelectedEndpoint             = "/server/selected"
-	serverActiveEndpoint               = "/server/active"
-	serverAutoSelectionsEndpoint       = "/server/auto-selections"
-	serverAutoSelectionsEventsEndpoint = "/server/auto-selections/events"
+	serverSelectedEndpoint           = "/server/selected"
+	serverAutoSelectedEndpoint       = "/server/auto-selected"
+	serverAutoSelectedEventsEndpoint = "/server/auto-selected/events"
 
 	// Server management endpoints
 	serversEndpoint              = "/servers"
@@ -194,9 +193,8 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 
 	// Server selection
 	mux.HandleFunc(serverSelectedEndpoint, traced(s.serverSelectedHandler))
-	mux.HandleFunc("GET "+serverActiveEndpoint, traced(s.serverActiveHandler))
-	mux.HandleFunc("GET "+serverAutoSelectionsEndpoint, traced(s.serverAutoSelectionsHandler))
-	mux.HandleFunc("GET "+serverAutoSelectionsEventsEndpoint, s.serverAutoSelectionsEventsHandler)
+	mux.HandleFunc("GET "+serverAutoSelectedEndpoint, traced(s.serverAutoSelectedHandler))
+	mux.HandleFunc("GET "+serverAutoSelectedEventsEndpoint, s.serverAutoSelectedEventsHandler)
 
 	// Server management
 	mux.HandleFunc("GET "+serversEndpoint, traced(s.serversHandler))
@@ -427,31 +425,22 @@ func (s *localapi) serverSelectedHandler(w http.ResponseWriter, r *http.Request)
 	writeSingJSON(w, http.StatusOK, SelectedServerResponse{Server: server, Exists: exists})
 }
 
-func (s *localapi) serverActiveHandler(w http.ResponseWriter, r *http.Request) {
-	server, err := s.backend(r.Context()).ActiveServer()
+func (s *localapi) serverAutoSelectedHandler(w http.ResponseWriter, r *http.Request) {
+	selected, err := s.backend(r.Context()).CurrentAutoSelectedServer()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeSingJSON(w, http.StatusOK, server)
+	writeJSON(w, http.StatusOK, selected)
 }
 
-func (s *localapi) serverAutoSelectionsHandler(w http.ResponseWriter, r *http.Request) {
-	selections, err := s.backend(r.Context()).AutoServerSelections()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, selections)
-}
-
-func (s *localapi) serverAutoSelectionsEventsHandler(w http.ResponseWriter, r *http.Request) {
+func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *http.Request) {
 	flusher := sseWriter(w)
 	if flusher == nil {
 		return
 	}
 	ch := make(chan []byte, 16)
-	sub := events.Subscribe(func(evt vpn.AutoSelectionsEvent) {
+	sub := events.Subscribe(func(evt vpn.AutoSelectedEvent) {
 		data, err := json.Marshal(evt)
 		if err != nil {
 			return

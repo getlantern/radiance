@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -34,9 +35,8 @@ import (
 )
 
 const (
-	AutoSelectTag  = "auto"
-	AutoLanternTag = "auto-lantern"
-	AutoUserTag    = "auto-user"
+	AutoSelectTag   = "auto"
+	ManualSelectTag = "manual"
 
 	urlTestInterval    = 3 * time.Minute // must be less than urlTestIdleTimeout
 	urlTestIdleTimeout = 15 * time.Minute
@@ -45,18 +45,22 @@ const (
 	cacheFileName = "lantern.cache"
 )
 
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
+
+func ReservedTags() []string {
+	return slices.Clone(reservedTags)
+}
+
 type BoxOptions struct {
 	BasePath string `json:"base_path,omitempty"`
 	// Options contains the main options that are merged into the base options with the exception of
-	// DNS, which overrides the base DNS options entirely instead of being merged.
+	// DNS, which overrides the base DNS options entirely instead of being merged. Options should
+	// contain all servers (both lantern and user).
 	Options O.Options `json:"options,omitempty"`
 	// SmartRouting contains smart routing rules to merge into the final options.
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
-	// UserServers contains user-configurable servers that are not part of the main config file. Only
-	// the Outbounds and Endpoints fields are used, all other fields are ignored.
-	UserServers O.Options `json:"user_servers_options,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
 	// default MutableURLTest URL for each specific outbound, allowing the
@@ -246,13 +250,17 @@ func baseRoutingRules() []O.Rule {
 }
 
 // buildOptions builds the box options using the config options and user servers.
-func buildOptions(boxOptions BoxOptions) (O.Options, error) {
+func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
-	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", boxOptions.BasePath)
+	if len(bOptions.Options.Outbounds) == 0 && len(bOptions.Options.Endpoints) == 0 {
+		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+	}
 
-	opts := baseOpts(boxOptions.BasePath)
+	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", bOptions.BasePath)
+
+	opts := baseOpts(bOptions.BasePath)
 	slog.Debug("Base options initialized")
 
 	if env.GetBool(env.UseSocks) {
@@ -287,58 +295,34 @@ func buildOptions(boxOptions BoxOptions) (O.Options, error) {
 	}
 
 	// add smart routing and ad block rules
-	if len(boxOptions.SmartRouting) > 0 {
+	if len(bOptions.SmartRouting) > 0 {
 		slog.Debug("Adding smart-routing rules")
-		outbounds, rules, rulesets := boxOptions.SmartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
+		outbounds, rules, rulesets := bOptions.SmartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
-	if len(boxOptions.AdBlock) > 0 {
+	if len(bOptions.AdBlock) > 0 {
 		slog.Debug("Adding ad-block rules")
-		rule, rulesets := boxOptions.AdBlock.ToOptions()
+		rule, rulesets := bOptions.AdBlock.ToOptions()
 		opts.Route.Rules = append(opts.Route.Rules, rule)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
 	}
 
-	var lanternTags []string
-	configOpts := boxOptions.Options
-	if len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0 {
-		slog.Warn("No outbounds or endpoints found in config options")
-	}
-	lanternTags = mergeAndCollectTags(&opts, &configOpts)
-	slog.Debug("Merged config options", "tags", lanternTags)
+	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
-	appendGroupOutbounds(&opts, servers.SGLantern, AutoLanternTag, lanternTags, boxOptions.BanditURLOverrides)
-
-	var userTags []string
-	userOpts := boxOptions.UserServers
-	if len(userOpts.Outbounds) == 0 && len(userOpts.Endpoints) == 0 {
-		slog.Info("No user servers found")
-	} else {
-		userTags = mergeAndCollectTags(&opts, &userOpts)
-		slog.Debug("Merged user server options", "tags", userTags)
-	}
-	appendGroupOutbounds(&opts, servers.SGUser, AutoUserTag, userTags, nil)
-
-	if len(lanternTags) == 0 && len(userTags) == 0 {
-		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
-	}
-
-	// Add auto all outbound
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, []string{AutoLanternTag, AutoUserTag}, nil))
-
-	// Add routing rules for the groups
-	opts.Route.Rules = append(opts.Route.Rules, groupRule(AutoSelectTag))
-	opts.Route.Rules = append(opts.Route.Rules, groupRule(servers.SGLantern))
-	opts.Route.Rules = append(opts.Route.Rules, groupRule(servers.SGUser))
+	// add mode selector outbounds and rules
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
+	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, tags))
+	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
+	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
-	slog.Debug("Finished building options", slog.String("env", common.Env()))
+	slog.Debug("Finished building options", "env", common.Env())
 
 	span.AddEvent("finished building options", trace.WithAttributes(
-		attribute.String("options", string(writeBoxOptions(boxOptions.BasePath, opts))),
+		attribute.String("options", string(writeBoxOptions(bOptions.BasePath, opts))),
 	))
 	return opts, nil
 }
@@ -401,30 +385,6 @@ func useIfNotZero[T comparable](newVal, oldVal T) T {
 	return oldVal
 }
 
-func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags, urlOverrides))
-	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
-	slog.Log(
-		nil, log.LevelTrace, "Added group outbounds",
-		"serverGroup", serverGroup,
-		"tags", tags,
-		"outbounds", opts.Outbounds[len(opts.Outbounds)-2:],
-	)
-}
-
-func groupAutoTag(group string) string {
-	switch group {
-	case servers.SGLantern:
-		return AutoLanternTag
-	case servers.SGUser:
-		return AutoUserTag
-	case "all", "":
-		return AutoSelectTag
-	default:
-		return ""
-	}
-}
-
 func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {
 	return O.Outbound{
 		Type: lbC.TypeMutableURLTest,
@@ -439,27 +399,27 @@ func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]str
 	}
 }
 
-func selectorOutbound(group string, outbounds []string) O.Outbound {
+func selectorOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
 		Type: lbC.TypeMutableSelector,
-		Tag:  group,
+		Tag:  tag,
 		Options: &lbO.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
 		},
 	}
 }
 
-func groupRule(group string) O.Rule {
+func selectModeRule(mode string) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
 			RawDefaultRule: O.RawDefaultRule{
-				ClashMode: group,
+				ClashMode: mode,
 			},
 			RuleAction: O.RuleAction{
 				Action: C.RuleActionTypeRoute,
 				RouteOptions: O.RouteActionOptions{
-					Outbound: group,
+					Outbound: mode,
 				},
 			},
 		},

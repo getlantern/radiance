@@ -66,13 +66,6 @@ type Options struct {
 	Credentials  map[string]ServerCredentials `json:"credentials,omitempty"`
 }
 
-// MarshalJSON encodes Options using the sing-box context so that type-specific outbound/endpoint
-// options (server, port, password, etc.) are included in the output.
-func (o Options) MarshalJSON() ([]byte, error) {
-	type Alias Options
-	return json.MarshalContext(box.BaseContext(), Alias(o))
-}
-
 // AllTags returns a slice of all tags from both endpoints and outbounds in the Options.
 func (o Options) AllTags() []string {
 	tags := make([]string, 0, len(o.Outbounds)+len(o.Endpoints))
