@@ -1,0 +1,62 @@
+version: "2"
+issues:
+  max-same-issues: 100
+  max-issues-per-linter: 500
+run:
+  # don't touch go.mod or go.sum
+  modules-download-mode: readonly
+  # for files that cannot be linted due to some issues, we add this tag
+  build-tags:
+    - codeanalysis
+linters:
+  enable:
+    - bodyclose # ensure response bodies are closed
+    - copyloopvar # avoid using loop variables in goroutines
+    - errorlint # check for common mistakes when checking errors (error.Is, not using %w, etc)
+    - exptostd # check for usages of experimental APIs that have been promoted to standard library
+    - gochecksumtype # checks for sum type exhaustiveness in switch statements
+    - govet # go vet with extra checks
+    - iface # detect when a type is used as an interface but could be used as a concrete type
+    - nilnesserr # detect return an unrelated/nil-values error.
+    - unconvert # detect redundant type conversions
+    - usestdlibvars # detect when stdlib vars are used instead of local ones
+    - wrapcheck # check for proper error wrapping
+    - errname # checks that sentinel errors are prefixed with the Err and error types are suffixed with the Error.
+    - exhaustive # check for exhaustive switch statements
+    - inamedparam # check for consistent parameter names in function/method declarations that implement an interface
+    - mirror # reports wrong mirror patterns of bytes/strings usage.
+    - misspell # detect commonly misspelled words
+    - whitespace # check for whitespace issues
+  disable:
+    - errcheck # too noisy
+    - staticcheck # too noisy
+    - unused # too noisy
+  exclusions:
+    generated: strict # be strict about not touching generated code
+    paths: # don't lint generated files
+      - _test.go
+      - .pb.go
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    inamedparam:
+      skip-single-param: true
+    wrapcheck:
+      ignore-package-globs:
+        - github.com/getlantern/lantern-cloud/router
+        - github.com/getlantern/lantern-cloud/cmd/api/pro-server/util
+      extra-ignore-sigs:
+        - .ErrorIf
+        - .JobCancel
+
+formatters:
+  exclusions:
+    generated: strict
+  enable:
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule

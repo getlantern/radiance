@@ -145,18 +145,15 @@ func NewRadiance(opts Options) (*Radiance, error) {
 			slog.Info("Telemetry consent not given; skipping telemetry initialization")
 		}
 	})
-	r.confHandler = config.NewConfigHandler(cOpts)
-	// Register after NewConfigHandler so the initial disk-load event (stale
-	// bandit tokens) is already emitted. The SubscribeOnce will fire on the
-	// first network-fetched config, which has live probe tokens.
 	registerPreStartTest(dataDir)
+	r.confHandler = config.NewConfigHandler(cOpts)
 	r.addShutdownFunc(telemetry.Close, kindling.Close)
 	return r, nil
 }
 
 func registerPreStartTest(path string) {
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		if err := vpn.PreStartTests(path, evt.New); err != nil {
+		if err := vpn.PreStartTests(path); err != nil {
 			slog.Error("VPN pre-start tests failed", "error", err, "path", path)
 		}
 	})
