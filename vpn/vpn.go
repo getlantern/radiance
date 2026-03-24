@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
+	sbjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
@@ -43,10 +44,49 @@ const (
 	tracerName = "github.com/getlantern/radiance/vpn"
 )
 
-// QuickConnect automatically connects to the best available server in the specified group. Valid
-// groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string. Using "all" or
-// the empty string will connect to the best available server across all groups.
+func init() {
+	forwardToTunnel := func(action func(ctx context.Context) error, desc string) {
+		ctx := context.Background()
+		status, err := ipc.GetStatus(ctx)
+		if err != nil {
+			slog.Warn("Event received but failed to get tunnel status", "event", desc, "error", err)
+			return
+		}
+		if status != ipc.Connected {
+			return
+		}
+		if err := action(ctx); err != nil {
+			slog.Error("Failed to forward event to tunnel", "event", desc, "error", err)
+		}
+	}
+
+	events.Subscribe(func(e servers.ServersUpdatedEvent) {
+		forwardToTunnel(func(ctx context.Context) error {
+			svrs := map[string]servers.Options{e.Group: *e.Options}
+			return ipc.UpdateOutbounds(ctx, svrs)
+		}, "servers-updated")
+	})
+	events.Subscribe(func(e servers.ServersAddedEvent) {
+		forwardToTunnel(func(ctx context.Context) error {
+			return ipc.AddOutbounds(ctx, e.Group, *e.Options)
+		}, "servers-added")
+	})
+	events.Subscribe(func(e servers.ServersRemovedEvent) {
+		forwardToTunnel(func(ctx context.Context) error {
+			return ipc.RemoveOutbounds(ctx, e.Group, []string{e.Tag})
+		}, "servers-removed")
+	})
+}
+
+// Deprecated: Use AutoConnect instead with the desired group.
 func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
+	return AutoConnect(group)
+}
+
+// AutoConnect automatically connects to the best available server in the specified group. Valid
+// groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string.
+// Using "all" or the empty string will connect to the best available server across all groups.
+func AutoConnect(group string) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"quick_connect",
@@ -71,9 +111,14 @@ func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
 	}
 }
 
-// ConnectToServer connects to a specific server identified by the group and tag. Valid groups are
-// [servers.SGLantern] and [servers.SGUser].
+// Deprecated: Use Connect instead with the desired group and tag.
 func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
+	return Connect(group, tag)
+}
+
+// Connect connects to a specific server identified by the group and tag. Valid groups are
+// [servers.SGLantern] and [servers.SGUser].
+func Connect(group, tag string) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
 		"connect_to_server",
@@ -94,21 +139,45 @@ func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
 }
 
 func connect(group, tag string) error {
-	if isOpen(context.Background()) {
-		return selectServer(context.Background(), group, tag)
+	ctx := context.Background()
+	if isOpen(ctx) {
+		return SelectServer(ctx, group, tag)
 	}
-	return ipc.StartService(context.Background(), group, tag)
+	dataPath := settings.GetString(settings.DataPathKey)
+	_ = newSplitTunnel(dataPath)
+	options, err := getOptions()
+	if err != nil {
+		return err
+	}
+	if err := ipc.StartService(ctx, options); err != nil {
+		return err
+	}
+	return SelectServer(ctx, group, tag)
 }
 
-// Reconnect attempts to reconnect to the last connected server.
-func Reconnect() error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "reconnect")
+// Restart restarts the tunnel by reconnecting to the currently selected server.
+func Restart() error {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
 	defer span.End()
 
-	if isOpen(ctx) {
-		return traces.RecordError(ctx, fmt.Errorf("tunnel is already open"))
+	options, err := getOptions()
+	if err != nil {
+		return err
 	}
-	return traces.RecordError(ctx, connect("", ""))
+	return traces.RecordError(ctx, ipc.RestartService(ctx, options))
+}
+
+func getOptions() (string, error) {
+	dataPath := settings.GetString(settings.DataPathKey)
+	options, err := buildOptions(context.Background(), dataPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to build options: %w", err)
+	}
+	opts, err := sbjson.Marshal(options)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal options: %w", err)
+	}
+	return string(opts), nil
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -118,7 +187,7 @@ func isOpen(ctx context.Context) bool {
 	if err != nil {
 		slog.Error("Failed to get tunnel state", "error", err)
 	}
-	return state == ipc.StatusRunning
+	return state == ipc.Connected
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -129,8 +198,19 @@ func Disconnect() error {
 	return traces.RecordError(ctx, ipc.StopService(ctx))
 }
 
-// selectServer selects the specified server for the tunnel. The tunnel must already be open.
-func selectServer(ctx context.Context, group, tag string) error {
+// SelectServer selects the specified server for the tunnel. The tunnel must already be open.
+func SelectServer(ctx context.Context, group, tag string) error {
+	if !isOpen(ctx) {
+		return errors.New("tunnel is not open")
+	}
+	if group == autoAllTag {
+		slog.Info("Switching to auto mode", "group", group)
+		if err := ipc.SetClashMode(ctx, group); err != nil {
+			slog.Error("Failed to set auto mode", "group", group, "error", err)
+			return fmt.Errorf("failed to set auto mode: %w", err)
+		}
+		return nil
+	}
 	slog.Info("Selecting server", "group", group, "tag", tag)
 	if err := ipc.SelectOutbound(ctx, group, tag); err != nil {
 		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
@@ -239,13 +319,17 @@ type AutoSelectionsEvent struct {
 	Selections AutoSelections
 }
 
+// SelectionUnavailable is the sentinel value returned for an auto-selection
+// group that has no active server (tunnel not running, group not found, etc.).
+const SelectionUnavailable = "Unavailable"
+
 // AutoServerSelections returns the currently active server for each auto server group. If the group
-// is not found or has no active server, "Unavailable" is returned for that group.
+// is not found or has no active server, SelectionUnavailable is returned for that group.
 func AutoServerSelections() (AutoSelections, error) {
 	as := AutoSelections{
-		Lantern: "Unavailable",
-		User:    "Unavailable",
-		AutoAll: "Unavailable",
+		Lantern: SelectionUnavailable,
+		User:    SelectionUnavailable,
+		AutoAll: SelectionUnavailable,
 	}
 	ctx := context.Background()
 	if !isOpen(ctx) {
@@ -263,7 +347,7 @@ func AutoServerSelections() (AutoSelections, error) {
 		})
 		if idx < 0 || groups[idx].Selected == "" {
 			slog.Log(ctx, internal.LevelTrace, "Group not found or has no selection", "tag", tag)
-			return "Unavailable"
+			return SelectionUnavailable
 		}
 		return groups[idx].Selected
 	}
@@ -283,26 +367,76 @@ func AutoServerSelections() (AutoSelections, error) {
 	return auto, nil
 }
 
-// AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
-// selection changes until the context is cancelled.
+const (
+	rapidPollInterval = 500 * time.Millisecond
+	rapidPollWindow   = 15 * time.Second
+	steadyPollInterval = 10 * time.Second
+)
+
+// AutoSelectionsChangeListener polls for auto-selection changes and emits an
+// AutoSelectionsEvent whenever the selection differs from the previous value.
+// It performs an initial rapid poll to catch the first selection soon after
+// tunnel connect, then settles into a slower steady-state interval.
 func AutoSelectionsChangeListener(ctx context.Context) {
 	go func() {
 		var prev AutoSelections
+
+		// Rapid initial poll to emit the first selection promptly after connect.
+		initialDeadline := time.NewTimer(rapidPollWindow)
+		defer initialDeadline.Stop()
+		tick := time.NewTimer(rapidPollInterval)
+		defer tick.Stop()
+	initial:
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(10 * time.Second):
+			case <-initialDeadline.C:
+				break initial
+			case <-tick.C:
 				curr, err := AutoServerSelections()
 				if err != nil {
+					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{
-						Selections: curr,
-					})
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+					if curr.Lantern != SelectionUnavailable ||
+						curr.User != SelectionUnavailable ||
+						curr.AutoAll != SelectionUnavailable {
+						break initial
+					}
 				}
+				tick.Reset(rapidPollInterval)
+			}
+		}
+
+		// Drain tick before reusing for steady-state.
+		if !tick.Stop() {
+			select {
+			case <-tick.C:
+			default:
+			}
+		}
+		tick.Reset(steadyPollInterval)
+
+		// Steady-state polling for ongoing changes.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				curr, err := AutoServerSelections()
+				if err != nil {
+					tick.Reset(steadyPollInterval)
+					continue
+				}
+				if curr != prev {
+					prev = curr
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+				}
+				tick.Reset(steadyPollInterval)
 			}
 		}
 	}()
@@ -310,30 +444,38 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 
 const urlTestHistoryFileName = "url_test_history.json"
 
-var (
-	preStartOnce sync.Once
-	preStartErr  error
-)
+var urlTestMu sync.Mutex
 
-// PreStartTests performs pre-start URL tests for all outbounds defined in configs. This can improve
-// initial connection times by determining reachability and latency to servers before the tunnel is
-// started. PreStartTests is only performed once per application run; usually at application startup.
-func PreStartTests(path string) error {
-	preStartOnce.Do(func() {
-		results, err := preTest(path)
-		preStartErr = err
-		if err != nil {
-			slog.Error("Pre-start URL test failed", "error", err)
-			return
-		}
+// RunURLTests performs URL tests for all outbounds defined in configs. It is intended to run in
+// response to configuration updates to provide continuous bandit callback data even when the VPN
+// tunnel is not active. When the tunnel IS active, its own CheckOutbounds handles URL testing, so
+// this is skipped.
+func RunURLTests(path string) {
+	// Skip if the tunnel is handling URL tests
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if isOpen(ctx) {
+		slog.Debug("Tunnel is active, skipping standalone URL tests")
+		return
+	}
 
-		var fmttedResults []string
-		for tag, delay := range results {
-			fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
-		}
-		slog.Log(nil, internal.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
-	})
-	return preStartErr
+	// Prevent overlapping runs
+	if !urlTestMu.TryLock() {
+		return
+	}
+	defer urlTestMu.Unlock()
+
+	results, err := preTest(path)
+	if err != nil {
+		slog.Error("URL test failed", "error", err)
+		return
+	}
+
+	var formattedResults []string
+	for tag, delay := range results {
+		formattedResults = append(formattedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+	}
+	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
 }
 
 func preTest(path string) (map[string]uint16, error) {
@@ -361,7 +503,7 @@ func preTest(path string) (map[string]uint16, error) {
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("preTest", tags))
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,
@@ -375,7 +517,7 @@ func preTest(path string) (map[string]uint16, error) {
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second) // enough time for bandit callback tests through proxies
 	defer cancel()
 	instance, err := sbox.New(sbox.Options{
 		Context: ctx,
@@ -478,7 +620,11 @@ func restartTunnel() error {
 		return nil
 	}
 	slog.Info("Restarting tunnel")
-	if err := ipc.RestartService(ctx); err != nil {
+	options, err := getOptions()
+	if err != nil {
+		return err
+	}
+	if err := ipc.RestartService(ctx, options); err != nil {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 	return nil

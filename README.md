@@ -30,6 +30,7 @@ Available variables:
 *   `RADIANCE_USE_SOCKS_PROXY`: If set to `true`, replace the TUN with a SOCKS proxy for inbound connections.
 *   `RADIANCE_SOCKS_ADDRESS`: Specifies the address (`host:port`) for the SOCKS proxy to use for inbound connections.
 *   `RADIANCE_ENV`: Sets whether we're running in production or development mode. Set to `dev` for additional debugging output, such as the sing-box config actually in use. `prod` is the default.
+*   `RADIANCE_FEATURE_OVERRIDE`: Comma-separated list of feature flags to force-enable on the server side. If set, the value is sent as the `X-Lantern-Feature-Override` header on config requests in any environment, and it is recommended for testing/non-production use. For example, `RADIANCE_FEATURE_OVERRIDE=bandit_assignment` enables bandit-based proxy assignment during testing.
 
 
 ## Packages

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/getlantern/fronted"
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/kindling/smart"
 	"go.opentelemetry.io/otel"
 )
@@ -24,6 +25,7 @@ func NewFronted(ctx context.Context, panicListener func(string), cacheFile strin
 	frontedOptions := []fronted.Option{
 		fronted.WithPanicListener(panicListener),
 		fronted.WithCacheFile(cacheFile),
+		fronted.WithDialer(bypass.DialContext),
 	}
 	httpClient, err := smart.NewHTTPClientWithSmartTransport(logWriter, configURL)
 	if err != nil {
