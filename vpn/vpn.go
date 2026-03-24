@@ -444,30 +444,38 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 
 const urlTestHistoryFileName = "url_test_history.json"
 
-var (
-	preStartOnce sync.Once
-	preStartErr  error
-)
+var urlTestMu sync.Mutex
 
-// PreStartTests performs pre-start URL tests for all outbounds defined in configs. This can improve
-// initial connection times by determining reachability and latency to servers before the tunnel is
-// started. PreStartTests is only performed once per application run; usually at application startup.
-func PreStartTests(path string) error {
-	preStartOnce.Do(func() {
-		results, err := preTest(path)
-		preStartErr = err
-		if err != nil {
-			slog.Error("Pre-start URL test failed", "error", err)
-			return
-		}
+// RunURLTests performs URL tests for all outbounds defined in configs. It is intended to run in
+// response to configuration updates to provide continuous bandit callback data even when the VPN
+// tunnel is not active. When the tunnel IS active, its own CheckOutbounds handles URL testing, so
+// this is skipped.
+func RunURLTests(path string) {
+	// Skip if the tunnel is handling URL tests
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if isOpen(ctx) {
+		slog.Debug("Tunnel is active, skipping standalone URL tests")
+		return
+	}
 
-		var fmttedResults []string
-		for tag, delay := range results {
-			fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
-		}
-		slog.Log(nil, internal.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
-	})
-	return preStartErr
+	// Prevent overlapping runs
+	if !urlTestMu.TryLock() {
+		return
+	}
+	defer urlTestMu.Unlock()
+
+	results, err := preTest(path)
+	if err != nil {
+		slog.Error("URL test failed", "error", err)
+		return
+	}
+
+	var formattedResults []string
+	for tag, delay := range results {
+		formattedResults = append(formattedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+	}
+	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
 }
 
 func preTest(path string) (map[string]uint16, error) {
