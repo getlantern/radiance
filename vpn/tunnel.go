@@ -101,10 +101,21 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
+	// Register a lazy direct transport in the context so that outbounds like
+	// unbounded can retrieve it during construction. The transport is resolved
+	// after the service is created (once the direct outbound exists).
+	directTransport := &lazyDirectTransport{}
+	t.ctx = lbA.ContextWithDirectTransport(t.ctx, directTransport)
+
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, options, platformIfce)
 	if err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
+	}
+
+	// Now that the service exists, resolve the direct transport.
+	if err := directTransport.Resolve(t.ctx); err != nil {
+		slog.Warn("Failed to resolve direct transport for unbounded", "error", err)
 	}
 
 	// setup client info tracker
