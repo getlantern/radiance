@@ -147,18 +147,16 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	})
 	r.confHandler = config.NewConfigHandler(cOpts)
 	// Register AFTER NewConfigHandler so the disk-load event is already
-	// consumed. SubscribeOnce will fire on the first network-fetched config,
-	// which has live bandit probe tokens for the pre-test callbacks.
-	registerPreStartTest(dataDir)
+	// consumed. Runs on every config fetch to provide continuous bandit
+	// callback data even when the VPN tunnel is not active.
+	registerURLTests(dataDir)
 	r.addShutdownFunc(telemetry.Close, kindling.Close)
 	return r, nil
 }
 
-func registerPreStartTest(path string) {
-	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		if err := vpn.PreStartTests(path); err != nil {
-			slog.Error("VPN pre-start tests failed", "error", err, "path", path)
-		}
+func registerURLTests(path string) {
+	events.Subscribe(func(evt config.NewConfigEvent) {
+		go vpn.RunURLTests(path)
 	})
 }
 
