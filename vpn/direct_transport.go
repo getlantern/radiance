@@ -29,11 +29,14 @@ type lazyDirectTransport struct {
 
 func (t *lazyDirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.resolved || t.inner == nil {
+	inner := t.inner
+	resolved := t.resolved
+	t.mu.RUnlock()
+
+	if !resolved || inner == nil {
 		return nil, fmt.Errorf("direct transport not yet resolved")
 	}
-	return t.inner.RoundTrip(req)
+	return inner.RoundTrip(req)
 }
 
 // Resolve builds the underlying http.Transport using the direct outbound's
@@ -59,11 +62,15 @@ func (t *lazyDirectTransport) Resolve(ctx context.Context) error {
 		return fmt.Errorf("direct outbound does not implement N.Dialer")
 	}
 
-	t.inner = &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, M.ParseSocksaddr(addr))
-		},
+	baseTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return fmt.Errorf("default HTTP transport has unexpected type %T", http.DefaultTransport)
 	}
+	cloned := baseTransport.Clone()
+	cloned.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, M.ParseSocksaddr(addr))
+	}
+	t.inner = cloned
 	t.resolved = true
 	slog.Debug("Direct transport resolved using sing-box direct outbound")
 	return nil

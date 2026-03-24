@@ -115,7 +115,7 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 
 	// Now that the service exists, resolve the direct transport.
 	if err := directTransport.Resolve(t.ctx); err != nil {
-		slog.Warn("Failed to resolve direct transport for unbounded", "error", err)
+		return fmt.Errorf("resolve direct transport: %w", err)
 	}
 
 	// setup client info tracker
