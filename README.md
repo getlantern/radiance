@@ -37,7 +37,7 @@ Available variables:
 
 Radiance is structured around a `LocalBackend` pattern that ties together all core functionality: configuration, servers, VPN connection, account management, issue reporting, and telemetry. The `LocalBackend` is the central coordinator and should be the primary interface for interacting with Radiance programmatically.
 
-In addition to being the core of the [Lantern client](https://github.com/getlantern/lantern), radiance also provides a daemon and CLI:
+In addition to being the core of the [Lantern client](https://github.com/getlantern/lantern), radiance also provides a standalone daemon and CLI:
 
 - **`lanternd`** — the VPN daemon that runs the `LocalBackend` and exposes an IPC server. It can run in the foreground or be installed as a system service.
 - **`lantern`** — a CLI client that communicates with the daemon over IPC.
@@ -47,10 +47,14 @@ In addition to being the core of the [Lantern client](https://github.com/getlant
 From the `cmd/` directory:
 
 ```sh
-# Build the daemon (requires build tags for sing-box features)
+# Build the daemon
+just build-daemon
+# or
 make build-daemon
 
 # Build the CLI
+just build-cli
+# or
 make build-cli
 ```
 
