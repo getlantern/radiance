@@ -509,7 +509,7 @@ func preTest(path string) (map[string]uint16, error) {
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second) // enough time for bandit callback tests through proxies
 	defer cancel()
 	instance, err := sbox.New(sbox.Options{
 		Context: ctx,
