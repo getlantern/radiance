@@ -11,7 +11,12 @@ import (
 func controlGroupInfo() (*user.Group, error) {
 	group, err := user.LookupGroup(controlGroup)
 	if err != nil {
-		return nil, fmt.Errorf("lookup %s group: %w", controlGroup, err)
+		return nil, fmt.Errorf(
+			"lookup %s group: %w. Create the %s group on this system and add the users that should access IPC, or configure a different control group if supported",
+			controlGroup,
+			err,
+			controlGroup,
+		)
 	}
 	return group, nil
 }
@@ -35,4 +40,3 @@ func controlGroupGIDInt() (int, error) {
 	}
 	return parsed, nil
 }
-

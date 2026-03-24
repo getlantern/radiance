@@ -48,7 +48,7 @@ func listen() (net.Listener, error) {
 		Listener: listener,
 		path:     path,
 	}
-	// ensure listener is closed
+	// Close the listener when the socket wrapper is garbage-collected.
 	runtime.AddCleanup(socket, func(ll *net.UnixListener) {
 		ll.Close()
 	}, listener)
