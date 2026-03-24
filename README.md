@@ -33,50 +33,101 @@ Available variables:
 *   `RADIANCE_FEATURE_OVERRIDE`: Comma-separated list of feature flags to force-enable on the server side. If set, the value is sent as the `X-Lantern-Feature-Override` header on config requests in any environment, and it is recommended for testing/non-production use. For example, `RADIANCE_FEATURE_OVERRIDE=bandit_assignment` enables bandit-based proxy assignment during testing.
 
 
+## Architecture
+
+Radiance is structured around a `LocalBackend` pattern that ties together all core functionality: configuration, servers, VPN connection, account management, issue reporting, and telemetry. The `LocalBackend` is the central coordinator and should be the primary interface for interacting with Radiance programmatically.
+
+In addition to being the core of the [Lantern client](https://github.com/getlantern/lantern), radiance also provides a daemon and CLI:
+
+- **`lanternd`** — the VPN daemon that runs the `LocalBackend` and exposes an IPC server. It can run in the foreground or be installed as a system service.
+- **`lantern`** — a CLI client that communicates with the daemon over IPC.
+
+### Building CLI & Daemon
+
+From the `cmd/` directory:
+
+```sh
+# Build the daemon (requires build tags for sing-box features)
+make build-daemon
+
+# Build the CLI
+make build-cli
+```
+
+Both binaries are output to `bin/`. You can also run the daemon directly with `make run-daemon`.
+
+### Running
+
+```sh
+# Start the daemon
+lanternd run --data-path ~/data --log-path ~/logs
+
+# Install/uninstall as a system service
+lanternd install --data-path ~/data --log-path ~/logs
+lanternd uninstall
+
+# CLI commands (requires a running daemon)
+lantern connect [--tag <server-tag>]
+lantern disconnect
+lantern status
+lantern servers
+lantern account login
+lantern subscription
+lantern split-tunnel
+lantern logs
+lantern ip
+```
+
 ## Packages
 
-Use `common.Init` to setup directories and configure loggers. 
+Use `common.Init` to setup directories and configure loggers.
 > [!note]
-> This isn't necessary if `NewRadiance` was called as it will call `Init` for you.
+> This isn't necessary if `NewLocalBackend` was called as it will call `Init` for you.
+
+### `backend`
+
+The `backend` package provides `LocalBackend`, the main entry point for all Radiance functionality. Create one with `NewLocalBackend(ctx, opts)` and call `Start()` to begin fetching configuration and serving requests. `LocalBackend` owns and coordinates the `VPNClient`, `ServerManager`, `ConfigHandler`, `AccountClient`, `IssueReporter`, and telemetry.
 
 ### `vpn`
 
-The `vpn` package provides high-level functions for controlling the VPN tunnel. 
-
-To connect to the best available server, you can use the `QuickConnect` function. This function takes a server group (`servers.SGLantern`, `servers.SGUser`, or `"all"`) and a `PlatformInterface` as input. For example:
+The `vpn` package provides `VPNClient`, which manages the lifecycle of the VPN tunnel.
 
 ```go
-err := vpn.QuickConnect(servers.SGLantern, platIfce)
+client := vpn.NewVPNClient(dataPath, logger, platformIfce)
+err := client.Connect(boxOptions)
 ```
 
-will connect to the best Lantern server, while:
+`Connect` can be called without disconnecting first, allowing you to seamlessly switch between servers. Once connected, you can query status or view `Connections`. To stop the VPN, call `Disconnect`.
 
-```go
-err := vpn.QuickConnect("all", platIfce)
-```
+> [!note]
+> In most cases, you should use the `LocalBackend` methods (`ConnectVPN`, `DisconnectVPN`, `RestartVPN`, `VPNStatus`) rather than using `VPNClient` directly.
 
-will connect to the best overall.
-
-You can also connect to a specific server using `ConnectToServer`. This function requires a server group, a server tag, and a `PlatformInterface`. For example:
-
-```go
-err := vpn.ConnectToServer(servers.SGUser, "my-server", platIfce)
-```
-
-Both `QuickConnect` and `ConnectToServer` can be called without disconnecting first, allowing you to seamlessly switch between servers or connection modes.
-
-Once connected, you can check the `GetStatus` or view `ActiveConnections`. To stop the VPN, simply call `Disconnect`. The package also supports reconnecting to the last used server with `Reconnect`.
-
-This package also includes split tunneling capabilities, allowing you to include or exclude specific applications, domains, or IP addresses from the VPN tunnel. You can manage split tunneling by creating a `SplitTunnel` handler with `NewSplitTunnelHandler`. This handler allows you to `Enable` or `Disable` split tunneling, `AddItem` or `RemoveItem` from the filter, and view the current `Filters`.
+This package also includes split tunneling capabilities via the `SplitTunnel` type, allowing you to include or exclude specific applications, domains, or IP addresses from the VPN tunnel.
 
 ### `servers`
 
-The `servers` package is responsible for managing all VPN server configurations, separating them into two groups: `lantern` (official Lantern servers) and `user` (user-provided servers).
+The `servers` package manages all VPN server configurations, separating them into two groups: `lantern` (official Lantern servers fetched from the config) and `user` (user-provided servers).
 
-The `Manager` allows you to `AddServers` and `RemoveServer` configurations. You can retrieve the config for a specific server with `GetServerByTag` or use `Servers` to retrieve all configs.
+The `Manager` allows you to `AddServers` and `RemoveServers` configurations. You can retrieve the config for a specific server with `GetServerByTag` or use `Servers` to retrieve all configs.
 
 > [!caution]
-> While you can get a new `Manager` instance with `NewManager`, it is recommended to use `Radiance.ServerManager`. This will return the shared manager instance. `NewManager` can be useful for retrieving server information if you don't have access to the shared instance, but the new instance should not be kept as it won't stay in sync and adding server configs to it will overwrite existing configs if both manager instances are pointed to the same server file.
+> While you can get a new `Manager` instance with `NewManager`, it is recommended to use the `LocalBackend`'s server methods (`Servers`, `AddServers`, `RemoveServers`, `GetServerByTag`). These use the shared manager instance. `NewManager` can be useful for retrieving server information if you don't have access to the shared instance, but the new instance should not be kept as it won't stay in sync.
 
-A key feature of this package is the ability to add private servers from a server manager via an access token using `AddPrivateServer`. This process uses Trust-on-first-use (TOFU) to securely add the server. Once a private server is added, you can use the manager to invite other users to it with `InviteToPrivateServer` and revoke access with `RevokePrivateServerInvite`.
+A key feature of this package is the ability to add private servers from a server manager via an access token using `AddPrivateServer`. This process uses Trust-on-first-use (TOFU) to securely add the server. Once a private server is added, you can invite other users with `InviteToPrivateServer` and revoke access with `RevokePrivateServerInvite`.
+
+### `ipc`
+
+The `ipc` package provides the communication layer between the `lantern` CLI and the `lanternd` daemon. The `ipc.Server` exposes an HTTP API backed by the `LocalBackend`, and the `ipc.Client` provides a typed Go client for calling it. All communication happens over a local socket.
+
+### `account`
+
+The `account` package handles user authentication (email/password and OAuth), signup, email verification, account recovery, device management, and subscription operations. It communicates with the Lantern account server and caches authentication state locally.
+
+### `config`
+
+The `config` package fetches proxy configuration from the Lantern API on a polling interval and emits `NewConfigEvent` events when the configuration changes. The `LocalBackend` subscribes to these events to update server configurations automatically.
+
+### `events`
+
+A generic pub-sub event system used throughout Radiance for decoupled communication between components (config changes, VPN status updates, log entries, etc.).
 
