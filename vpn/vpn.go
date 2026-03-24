@@ -33,6 +33,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
@@ -452,9 +453,11 @@ var (
 // PreStartTests performs pre-start URL tests for all outbounds defined in configs. This can improve
 // initial connection times by determining reachability and latency to servers before the tunnel is
 // started. PreStartTests is only performed once per application run; usually at application startup.
-func PreStartTests(path string) error {
+// If freshCfg is non-nil, it is used instead of loading from disk — this ensures bandit probe tokens
+// are fresh (they expire in 20s on the server).
+func PreStartTests(path string, freshCfg *config.Config) error {
 	preStartOnce.Do(func() {
-		results, err := preTest(path)
+		results, err := preTest(path, freshCfg)
 		preStartErr = err
 		if err != nil {
 			slog.Error("Pre-start URL test failed", "error", err)
@@ -470,15 +473,26 @@ func PreStartTests(path string) error {
 	return preStartErr
 }
 
-func preTest(path string) (map[string]uint16, error) {
+func preTest(path string, freshCfg *config.Config) (map[string]uint16, error) {
 	slog.Info("Performing pre-start URL tests")
 
-	confPath := filepath.Join(path, common.ConfigFileName)
-	slog.Debug("Loading config file", "confPath", confPath)
-	cfg, err := loadConfig(confPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+	var freshConfig *config.Config
+	if freshCfg != nil {
+		freshConfig = freshCfg
+		slog.Info("Using fresh config for pre-start URL tests (bandit probes are live)")
+	} else {
+		confPath := filepath.Join(path, common.ConfigFileName)
+		slog.Debug("Loading config file", "confPath", confPath)
+		var err error
+		freshConfig, err = config.Load(confPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config: %w", err)
+		}
+		if freshConfig == nil {
+			return nil, fmt.Errorf("no config available")
+		}
 	}
+	cfg := freshConfig.ConfigResponse
 	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
@@ -509,7 +523,7 @@ func preTest(path string) (map[string]uint16, error) {
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second) // enough time for bandit callback tests through proxies
 	defer cancel()
 	instance, err := sbox.New(sbox.Options{
 		Context: ctx,
