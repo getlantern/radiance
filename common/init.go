@@ -78,15 +78,11 @@ func Init(dataDir, logDir, logLevel string) error {
 	settings.Set(settings.LogPathKey, logs)
 	settings.Set(settings.LogLevelKey, logLevel)
 
-	logger, err := log.NewLogger(log.Config{
+	logger := log.NewLogger(log.Config{
 		LogPath: filepath.Join(logs, internal.LogFileName),
 		Level:   logLevel,
 		Prod:    Prod(),
 	})
-	if err != nil {
-		slog.Error("Error initializing logger", "error", err)
-		return fmt.Errorf("initialize log: %w", err)
-	}
 	slog.SetDefault(logger)
 
 	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)

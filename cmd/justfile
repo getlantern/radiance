@@ -1,0 +1,11 @@
+tags := "lanternd,with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack"
+executable := if os() == "windows" { "lanternd.exe" } else { "lanternd" }
+
+build-daemon:
+    go build -tags "{{tags}}" -o ../bin/{{executable}} ./lanternd
+
+run-daemon *args:
+    go run -tags={{tags}} ./lanternd run {{args}}
+
+build-cli:
+    go build -o ../bin/lantern ./lantern

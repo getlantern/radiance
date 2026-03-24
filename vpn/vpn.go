@@ -17,6 +17,7 @@ import (
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	sbjson "github.com/sagernet/sing/common/json"
@@ -502,4 +503,41 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	}
 	c.logger.Log(nil, log.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
 	return nil
+}
+
+// ClearNetErrorState attempts to clear any error state left by a previous unclean shutdown, such
+// as from a crash. No errors are returned and this fails silently.
+func ClearNetErrorState() {
+	options := baseOpts("")
+	options = option.Options{
+		DNS:      options.DNS,
+		Inbounds: options.Inbounds,
+		Route: &option.RouteOptions{
+			AutoDetectInterface: true,
+			Rules: []option.Rule{
+				{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Protocol: []string{"dns"},
+						},
+						RuleAction: option.RuleAction{
+							Action: C.RuleActionTypeHijackDNS,
+						},
+					},
+				},
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(box.BaseContext())
+	defer cancel()
+	b, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: options,
+	})
+	if err != nil {
+		return
+	}
+	defer b.Close()
+	b.Start()
 }

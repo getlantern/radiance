@@ -36,12 +36,15 @@ type Config struct {
 	Level string
 	// Prod indicates whether the application is running in production mode.
 	Prod bool
+	// DisablePublisher indicates whether to disable the log publisher which is used for real-time
+	// log streaming.
+	DisablePublisher bool
 }
 
 // NewLogger creates and returns a configured *slog.Logger that writes to a rotating log file
 // and optionally to stdout.
 // Returns noop logger if log level is set to disable.
-func NewLogger(cfg Config) (*slog.Logger, error) {
+func NewLogger(cfg Config) *slog.Logger {
 	level := env.GetString(env.LogLevel)
 	if level == "" && cfg.Level != "" {
 		level = cfg.Level
@@ -52,7 +55,7 @@ func NewLogger(cfg Config) (*slog.Logger, error) {
 	}
 	slog.SetLogLoggerLevel(slevel)
 	if slevel == Disable {
-		return NoOpLogger(), nil
+		return NoOpLogger()
 	}
 
 	// lumberjack will create the log file if it does not exist with permissions 0600 otherwise it
@@ -95,7 +98,7 @@ func NewLogger(cfg Config) (*slog.Logger, error) {
 	runtime.AddCleanup(&logWriter, func(f *os.File) {
 		f.Close()
 	}, f)
-	handler := slog.NewTextHandler(logWriter, &slog.HandlerOptions{
+	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slevel,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
@@ -148,8 +151,12 @@ func NewLogger(cfg Config) (*slog.Logger, error) {
 			return a
 		},
 	})
-	pub := newPublisher(200)
-	logger := slog.New(&PublishHandler{inner: handler, publisher: pub})
+	handler = &Handler{Handler: handler, w: logWriter}
+	if !cfg.DisablePublisher {
+		pub := newPublisher(200)
+		handler = &PublishHandler{inner: handler, publisher: pub}
+	}
+	logger := slog.New(handler)
 	if !loggingToStdOut {
 		if isWindows {
 			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", cfg.LogPath, FormatLogLevel(slevel))
@@ -159,7 +166,16 @@ func NewLogger(cfg Config) (*slog.Logger, error) {
 	} else {
 		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", cfg.LogPath, FormatLogLevel(slevel))
 	}
-	return logger, nil
+	return logger
+}
+
+type Handler struct {
+	slog.Handler
+	w io.Writer
+}
+
+func (h *Handler) Writer() io.Writer {
+	return h.w
 }
 
 // ParseLogLevel parses a string representation of a log level and returns the corresponding slog.Level.

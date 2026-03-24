@@ -34,6 +34,10 @@ type PublishHandler struct {
 	publisher *publisher
 }
 
+func (h *PublishHandler) Inner() slog.Handler {
+	return h.inner
+}
+
 func (h *PublishHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.inner.Enabled(ctx, level)
 }

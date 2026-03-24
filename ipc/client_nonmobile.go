@@ -1,4 +1,4 @@
-//go:build !android && !ios && !darwin
+//go:build (!android && !ios && !darwin) || (darwin && lanternd)
 
 package ipc
 
