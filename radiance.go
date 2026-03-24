@@ -145,8 +145,11 @@ func NewRadiance(opts Options) (*Radiance, error) {
 			slog.Info("Telemetry consent not given; skipping telemetry initialization")
 		}
 	})
-	registerPreStartTest(dataDir)
 	r.confHandler = config.NewConfigHandler(cOpts)
+	// Register AFTER NewConfigHandler so the disk-load event is already
+	// consumed. SubscribeOnce will fire on the first network-fetched config,
+	// which has live bandit probe tokens for the pre-test callbacks.
+	registerPreStartTest(dataDir)
 	r.addShutdownFunc(telemetry.Close, kindling.Close)
 	return r, nil
 }
