@@ -10,14 +10,14 @@ import (
 )
 
 type SubscriptionCmd struct {
-	Plans         *SubscriptionPlansCmd   `arg:"subcommand:plans" help:"list subscription plans for a channel"`
-	Activate      *ActivateCmd            `arg:"subcommand:activate" help:"activate with reseller code"`
-	StripeSub     *StripeSubCmd           `arg:"subcommand:stripe-sub" help:"create Stripe subscription"`
-	Redirect      *PaymentRedirectCmd     `arg:"subcommand:redirect" help:"get payment redirect URL"`
-	SubRedirect   *SubPaymentRedirectCmd  `arg:"subcommand:sub-redirect" help:"get subscription payment redirect URL"`
-	Referral      *ReferralCmd            `arg:"subcommand:referral" help:"attach referral code"`
-	StripeBilling *StripeBillingCmd       `arg:"subcommand:stripe-billing" help:"get Stripe billing portal URL"`
-	Verify        *VerifySubscriptionCmd  `arg:"subcommand:verify" help:"verify subscription"`
+	Plans         *SubscriptionPlansCmd  `arg:"subcommand:plans" help:"list subscription plans for a channel"`
+	Activate      *ActivateCmd           `arg:"subcommand:activate" help:"activate with reseller code"`
+	StripeSub     *StripeSubCmd          `arg:"subcommand:stripe-sub" help:"create Stripe subscription"`
+	Redirect      *PaymentRedirectCmd    `arg:"subcommand:redirect" help:"get payment redirect URL"`
+	SubRedirect   *SubPaymentRedirectCmd `arg:"subcommand:sub-redirect" help:"get subscription payment redirect URL"`
+	Referral      *ReferralCmd           `arg:"subcommand:referral" help:"attach referral code"`
+	StripeBilling *StripeBillingCmd      `arg:"subcommand:stripe-billing" help:"get Stripe billing portal URL"`
+	Verify        *VerifySubscriptionCmd `arg:"subcommand:verify" help:"verify subscription"`
 }
 
 type SubscriptionPlansCmd struct {
@@ -54,11 +54,7 @@ type ReferralCmd struct {
 	Code string `arg:"--code" help:"referral code"`
 }
 
-type StripeBillingCmd struct {
-	BaseURL  string `arg:"--base-url" help:"base URL"`
-	UserID   string `arg:"--user-id" help:"user ID"`
-	ProToken string `arg:"--token" help:"pro token"`
-}
+type StripeBillingCmd struct{}
 
 type VerifySubscriptionCmd struct {
 	Service    string `arg:"--service" help:"stripe, apple, or google"`
@@ -238,29 +234,7 @@ func subReferral(ctx context.Context, c *ipc.Client, cmd *ReferralCmd) error {
 }
 
 func subStripeBilling(ctx context.Context, c *ipc.Client, cmd *StripeBillingCmd) error {
-	baseURL := cmd.BaseURL
-	userID := cmd.UserID
-	proToken := cmd.ProToken
-	var err error
-	if baseURL == "" {
-		baseURL, err = prompt("Base URL: ")
-		if err != nil {
-			return err
-		}
-	}
-	if userID == "" {
-		userID, err = prompt("User ID: ")
-		if err != nil {
-			return err
-		}
-	}
-	if proToken == "" {
-		proToken, err = prompt("Pro token: ")
-		if err != nil {
-			return err
-		}
-	}
-	url, err := c.StripeBillingPortalURL(ctx, baseURL, userID, proToken)
+	url, err := c.StripeBillingPortalURL(ctx)
 	if err != nil {
 		return err
 	}

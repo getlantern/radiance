@@ -522,14 +522,9 @@ func (c *Client) ReferralAttach(ctx context.Context, code string) (bool, error) 
 }
 
 // StripeBillingPortalURL returns the Stripe billing portal URL.
-func (c *Client) StripeBillingPortalURL(ctx context.Context, baseURL, userID, proToken string) (string, error) {
+func (c *Client) StripeBillingPortalURL(ctx context.Context) (string, error) {
 	var resp URLResponse
-	q := url.Values{
-		"base_url":  {baseURL},
-		"user_id":   {userID},
-		"pro_token": {proToken},
-	}
-	err := c.doJSON(ctx, http.MethodGet, subscriptionBillingPortalEndpoint+"?"+q.Encode(), nil, &resp)
+	err := c.doJSON(ctx, http.MethodGet, subscriptionBillingPortalEndpoint, nil, &resp)
 	return resp.URL, err
 }
 

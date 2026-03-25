@@ -769,8 +769,10 @@ func (r *LocalBackend) ReferralAttach(ctx context.Context, code string) (bool, e
 	return r.accountClient.ReferralAttach(ctx, code)
 }
 
-func (r *LocalBackend) StripeBillingPortalURL(ctx context.Context, baseURL, userID, proToken string) (string, error) {
-	return r.accountClient.StripeBillingPortalURL(ctx, baseURL, userID, proToken)
+func (r *LocalBackend) StripeBillingPortalURL(ctx context.Context) (string, error) {
+	return r.accountClient.StripeBillingPortalURL(ctx,
+		common.GetProServerURL(), settings.GetString(settings.UserIDKey), settings.GetString(settings.TokenKey),
+	)
 }
 
 func (r *LocalBackend) SubscriptionPaymentRedirectURL(ctx context.Context, data account.PaymentRedirectData) (string, error) {
