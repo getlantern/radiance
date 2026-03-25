@@ -221,6 +221,7 @@ func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProces
 
 // RequestShutdown signals the child to shut down gracefully by closing its stdin pipe.
 func (c *childProcess) RequestShutdown() {
+	c.logger.Info("Requesting child process shutdown")
 	c.stdin.Close()
 }
 
@@ -258,6 +259,7 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	if err != nil {
 		return err
 	}
+	child.logger.Info("Monitoring daemon process")
 
 	// On termination signal, close the child's stdin pipe to trigger graceful shutdown.
 	sigCh := make(chan os.Signal, 1)

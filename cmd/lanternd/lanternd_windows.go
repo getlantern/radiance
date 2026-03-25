@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	serviceName     = "lantern"
+	serviceName     = "lanternd"
 	defaultDataPath = "$PROGRAMDATA\\lantern"
 	defaultLogPath  = "$PROGRAMDATA\\lantern"
 	binPath         = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
@@ -155,20 +155,23 @@ func startWindowsService() error {
 func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	status <- svc.Status{State: svc.StartPending}
 
-	// args[0] is the service name; the rest are from the service configuration.
-	svcArgs := args[1:]
-	dataPath, logPath, logLevel := parseServiceArgs(svcArgs)
+	// The Execute args from the SCM dispatcher only contain runtime start parameters
+	// (typically just [serviceName]). The actual configured arguments are baked into
+	// os.Args via the service ImagePath. Parse from os.Args to get the real values,
+	// falling back to defaults if not present.
+	dataPath, logPath, logLevel := parseServiceArgs(os.Args[1:])
 
 	// Run the daemon as a child process so we can clean up network state if it crashes,
 	// regardless of whether the SCM is configured to restart the service.
-	child, err := spawnChild(svcArgs, dataPath, logPath, logLevel)
+	childArgs := []string{"run", "--data-path", dataPath, "--log-path", logPath, "--log-level", logLevel}
+	child, err := spawnChild(childArgs, dataPath, logPath, logLevel)
 	if err != nil {
 		slog.Error("Failed to start daemon", "error", err)
 		return true, 1
 	}
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	slog.Info("Running as Windows service")
+	child.logger.Info("Running as Windows service")
 
 	for {
 		select {
@@ -181,7 +184,7 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 			switch change.Cmd {
 			case svc.Stop, svc.Shutdown:
 				status <- svc.Status{State: svc.StopPending}
-				slog.Info("Service stop requested")
+				child.logger.Info("Service stop requested")
 				child.RequestShutdown()
 				child.WaitOrKill(15 * time.Second)
 				return false, windows.NO_ERROR
