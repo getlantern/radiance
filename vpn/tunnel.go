@@ -428,8 +428,8 @@ func (t *tunnel) updateOutbounds(new servers.Servers) error {
 	var errs []error
 	for _, group := range []string{servers.SGLantern, servers.SGUser} {
 		newOpts := new[group]
-		if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
-			slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
+		if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 && len(newOpts.URLOverrides) == 0 {
+			slog.Debug("No outbounds, endpoints, or URL overrides to update, skipping", "group", group)
 			continue
 		}
 		slog.Log(nil, internal.LevelTrace, "Updating servers", "group", group)
