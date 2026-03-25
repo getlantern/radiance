@@ -941,8 +941,7 @@ func (s *localapi) subscriptionReferralHandler(w http.ResponseWriter, r *http.Re
 }
 
 func (s *localapi) subscriptionBillingPortalHandler(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	u, err := s.backend(r.Context()).StripeBillingPortalURL(r.Context(), q.Get("base_url"), q.Get("user_id"), q.Get("pro_token"))
+	u, err := s.backend(r.Context()).StripeBillingPortalURL(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
