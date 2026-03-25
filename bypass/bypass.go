@@ -1,3 +1,11 @@
+// Package bypass provides a local HTTP CONNECT proxy dialer that routes
+// kindling traffic outside the VPN tunnel via the daemon's sing-box instance.
+//
+// On desktop, this is the only mechanism for kindling to bypass the tunnel
+// because the main app runs in a separate process from the daemon. On mobile
+// (single process), this is redundant with the direct transport registered in
+// the sing-box context (see vpn/direct_transport.go), but is kept for
+// simplicity since kindling initializes before the tunnel starts.
 package bypass
 
 import (
