@@ -849,7 +849,7 @@ func (s *localapi) accountDataCapHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, InfoResponse{Info: info})
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *localapi) accountDataCapStreamHandler(w http.ResponseWriter, r *http.Request) {
@@ -857,23 +857,23 @@ func (s *localapi) accountDataCapStreamHandler(w http.ResponseWriter, r *http.Re
 	if flusher == nil {
 		return
 	}
-	ch := make(chan []byte, 16)
-	sub := events.Subscribe(func(evt account.DataCapChangeEvent) {
-		data, err := json.Marshal(evt)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	poll := func() {
+		info, err := s.backend(r.Context()).DataCapInfo(r.Context())
 		if err != nil {
+			slog.Error("datacap poll error", "error", err)
 			return
 		}
-		select {
-		case ch <- data:
-		default:
-		}
-	})
-	defer sub.Unsubscribe()
+		fmt.Fprintf(w, "data: %s\n\n", info)
+		flusher.Flush()
+	}
+	// Send initial data immediately
+	poll()
 	for {
 		select {
-		case data := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+		case <-ticker.C:
+			poll()
 		case <-r.Context().Done():
 			return
 		}

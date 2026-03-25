@@ -466,21 +466,21 @@ func (c *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*ac
 }
 
 // DataCapInfo returns the current data cap information as a JSON string.
-func (c *Client) DataCapInfo(ctx context.Context) (string, error) {
-	var resp InfoResponse
+func (c *Client) DataCapInfo(ctx context.Context) (*account.DataCapInfo, error) {
+	var resp account.DataCapInfo
 	err := c.doJSON(ctx, http.MethodGet, accountDataCapEndpoint, nil, &resp)
-	return resp.Info, err
+	return &resp, err
 }
 
 // DataCapStream connects to the data cap event stream. It calls handler for each event
 // received until ctx is cancelled or the connection is closed.
-func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCapChangeEvent)) error {
+func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCapInfo)) error {
 	return c.sseStream(ctx, accountDataCapStreamEndpoint, func(data []byte) {
-		var evt account.DataCapChangeEvent
-		if err := json.Unmarshal(data, &evt); err != nil {
+		var info account.DataCapInfo
+		if err := json.Unmarshal(data, &info); err != nil {
 			return
 		}
-		handler(evt)
+		handler(info)
 	})
 }
 

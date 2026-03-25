@@ -129,10 +129,6 @@ type CodeResponse struct {
 	Code string `json:"code"`
 }
 
-type InfoResponse struct {
-	Info string `json:"info"`
-}
-
 type ClientSecretResponse struct {
 	ClientSecret string `json:"clientSecret"`
 }

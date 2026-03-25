@@ -717,12 +717,8 @@ func (r *LocalBackend) ValidateEmailRecoveryCode(ctx context.Context, email, cod
 	return r.accountClient.ValidateEmailRecoveryCode(ctx, email, code)
 }
 
-func (r *LocalBackend) DataCapInfo(ctx context.Context) (string, error) {
+func (r *LocalBackend) DataCapInfo(ctx context.Context) (*account.DataCapInfo, error) {
 	return r.accountClient.DataCapInfo(ctx)
-}
-
-func (r *LocalBackend) DataCapStream(ctx context.Context) error {
-	return r.accountClient.DataCapStream(ctx)
 }
 
 func (r *LocalBackend) RemoveDevice(ctx context.Context, deviceID string) (*account.LinkResponse, error) {

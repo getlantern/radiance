@@ -13,8 +13,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/r3labs/sse/v2"
-
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
@@ -95,8 +93,8 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 	return login, nil
 }
 
-// DataCapUsageResponse represents the data cap usage response
-type DataCapUsageResponse struct {
+// DataCapInfo represents the data cap info
+type DataCapInfo struct {
 	// Whether data cap is enabled for this device/user
 	Enabled bool `json:"enabled"`
 	// Data cap usage details (only populated if enabled is true)
@@ -112,75 +110,20 @@ type DataCapUsageDetails struct {
 }
 
 // DataCapInfo returns information about this user's data cap
-func (a *Client) DataCapInfo(ctx context.Context) (string, error) {
+func (a *Client) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
 
 	getURL := "/datacap/" + settings.GetString(settings.DeviceIDKey)
 	resp, err := a.sendRequest(ctx, "GET", getURL, nil, nil, nil)
 	if err != nil {
-		return "", traces.RecordError(ctx, fmt.Errorf("getting datacap info: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("getting datacap info: %w", err))
 	}
-	var usage *DataCapUsageResponse
+	var usage *DataCapInfo
 	if err := json.Unmarshal(resp, &usage); err != nil {
-		return "", traces.RecordError(ctx, fmt.Errorf("error unmarshalling datacap info response: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling datacap info response: %w", err))
 	}
-	return string(resp), nil
-}
-
-type DataCapChangeEvent struct {
-	events.Event
-	*DataCapUsageResponse
-}
-
-// DataCapStream connects to the datacap SSE endpoint and continuously reads events.
-// It sends events whenever there is an update in datacap usage with DataCapChangeEvent.
-// To receive those events use events.Subscribe(&DataCapChangeEvent{}, func(evt DataCapChangeEvent) { ... })
-func (a *Client) DataCapStream(ctx context.Context) error {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info_stream")
-	defer span.End()
-
-	getURL := "/stream/datacap/" + settings.GetString(settings.DeviceIDKey)
-	fullURL := a.baseURL() + getURL
-	sseClient := sse.NewClient(fullURL)
-	sseClient.Headers = map[string]string{
-		common.ContentTypeHeader: "application/json",
-		common.AcceptHeader:      "text/event-stream",
-		common.AppNameHeader:     common.Name,
-		common.VersionHeader:     common.Version,
-		common.PlatformHeader:    common.Platform,
-	}
-	if a.httpClient != nil {
-		sseClient.Connection.Transport = a.httpClient.Transport
-	}
-	// Connection callbacks
-	sseClient.OnConnect(func(c *sse.Client) {
-		slog.Debug("Connected to datacap stream")
-	})
-
-	sseClient.OnDisconnect(func(c *sse.Client) {
-		slog.Debug("Disconnected from datacap stream")
-	})
-	// Start listening to events
-	return sseClient.SubscribeRawWithContext(ctx, func(msg *sse.Event) {
-		eventType := string(msg.Event)
-		data := msg.Data
-		switch eventType {
-		case "datacap":
-			var datacap DataCapUsageResponse
-			err := json.Unmarshal(data, &datacap)
-			if err != nil {
-				slog.Error("datacap stream unmarshal error", "error", err)
-				return
-			}
-			events.Emit(DataCapChangeEvent{DataCapUsageResponse: &datacap})
-		case "cap_exhausted":
-			slog.Warn("Datacap exhausted ")
-			return
-		default:
-			// Heartbeat or unknown event - silently ignore
-		}
-	})
+	return usage, nil
 }
 
 // SignUp signs the user up for an account.
