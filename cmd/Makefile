@@ -1,14 +1,16 @@
 TAGS=lanternd,with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack
 
 ifeq ($(OS),Windows_NT)
-    EXECUTABLE := lanternd.exe
+   LANTERND := lanternd.exe
+   LANTERN := lantern.exe
 else
-    EXECUTABLE := lanternd
+   LANTERND := lanternd
+   LANTERN := lantern
 endif
 
 .PHONY: build-daemon
 build-daemon:
-	go build -tags "$(TAGS)" -o ../bin/$(EXECUTABLE) ./lanternd
+	go build -tags "$(TAGS)" -o ../bin/$(LANTERND) ./lanternd
 
 .PHONY: run-daemon
 run-daemon:
@@ -19,4 +21,4 @@ run-daemon:
 
 .PHONY: build-cli
 build-cli:
-	go build -o ../bin/lantern ./lantern
+	go build -o ../bin/$(LANTERN) ./lantern
