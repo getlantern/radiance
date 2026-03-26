@@ -9,8 +9,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ExtractBanditTraceContext extracts the W3C traceparent from the first
+// ExtractBanditTraceContext extracts the W3C traceparent from any
 // bandit callback URL that carries one (as a "tp" query parameter).
+// Since overrides is a map, iteration order is nondeterministic;
+// in practice all override URLs carry the same traceparent.
 // Returns the context and true if a valid trace was found.
 func ExtractBanditTraceContext(overrides map[string]string) (context.Context, bool) {
 	for _, rawURL := range overrides {

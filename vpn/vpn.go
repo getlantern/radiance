@@ -465,15 +465,19 @@ func RunURLTests(path string) {
 	}
 	defer urlTestMu.Unlock()
 
-	results, traceCtx, err := preTest(path)
+	results, traceCtx, hasTrace, err := preTest(path)
 	if err != nil {
 		slog.Error("URL test failed", "error", err)
-		return
+		if len(results) == 0 {
+			return
+		}
+		// Tests ran but a non-critical step (e.g. saving history) failed.
+		// Continue to emit the span and log the results we do have.
 	}
 
 	// Record URL test results in a span linked to the bandit's trace.
-	if traceCtx != nil {
-		_, span := otel.Tracer(tracerName).Start(*traceCtx, "radiance.url_tests_complete",
+	if hasTrace {
+		_, span := otel.Tracer(tracerName).Start(traceCtx, "radiance.url_tests_complete",
 			trace.WithAttributes(
 				attribute.Int("bandit.test_count", len(results)),
 			),
@@ -487,7 +491,6 @@ func RunURLTests(path string) {
 		span.End()
 	}
 
-
 	var formattedResults []string
 	for tag, delay := range results {
 		formattedResults = append(formattedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
@@ -495,30 +498,25 @@ func RunURLTests(path string) {
 	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
 }
 
-func preTest(path string) (map[string]uint16, *context.Context, error) {
+func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	slog.Info("Performing pre-start URL tests")
 
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
 	cfg, err := loadConfig(confPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load config: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Extract bandit trace context for distributed tracing
-	var traceCtx *context.Context
-	if len(cfg.BanditURLOverrides) > 0 {
-		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
-			traceCtx = &ctx
-		}
-	}
+	traceCtx, hasTrace := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides)
 
 	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
 	userOpts, err := loadUserOptions(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load user options: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to load user options: %w", err)
 	}
 
 	// since we are only doing URL tests, we only need the outbounds from both configs; we skip
@@ -550,31 +548,31 @@ func preTest(path string) (map[string]uint16, *context.Context, error) {
 		Options: options,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create sing-box instance: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to create sing-box instance: %w", err)
 	}
 	defer instance.Close()
 	if err := instance.PreStart(); err != nil {
-		return nil, nil, fmt.Errorf("failed to start sing-box instance: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to start sing-box instance: %w", err)
 	}
 	outbound, ok := instance.Outbound().Outbound("preTest")
 	if !ok {
-		return nil, nil, errors.New("preTest outbound not found")
+		return nil, context.Background(), false, errors.New("preTest outbound not found")
 	}
 	tester, ok := outbound.(adapter.URLTestGroup)
 	if !ok {
-		return nil, nil, errors.New("preTest outbound is not a URLTestGroup")
+		return nil, context.Background(), false, errors.New("preTest outbound is not a URLTestGroup")
 	}
 	// run URL tests
 	results, err := tester.URLTest(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to perform URL tests: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to perform URL tests: %w", err)
 	}
 
 	historyPath := filepath.Join(path, urlTestHistoryFileName)
 	if err := saveURLTestResults(urlTestHistoryStorage, historyPath, results); err != nil {
-		return results, traceCtx, fmt.Errorf("failed to save URL test results: %w", err)
+		return results, traceCtx, hasTrace, fmt.Errorf("failed to save URL test results: %w", err)
 	}
-	return results, traceCtx, nil
+	return results, traceCtx, hasTrace, nil
 }
 
 
