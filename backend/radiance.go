@@ -215,6 +215,9 @@ func (r *LocalBackend) Start() {
 		if err := r.setServers(servers.SGLantern, opts); err != nil {
 			slog.Error("setting servers in manager", "error", err)
 		}
+		if err := r.RunOfflineURLTests(); err != nil {
+			slog.Error("Failed to run offline URL tests after config update", "error", err)
+		}
 	})
 	r.confHandler.Start()
 }

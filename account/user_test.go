@@ -195,7 +195,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		})
 	})
 
-	mux.HandleFunc("/purchase-apple-subscription", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/purchase-apple-subscription-v2", func(w http.ResponseWriter, r *http.Request) {
 		writeJSONResponse(w, VerifySubscriptionResponse{
 			Status:         "active",
 			SubscriptionID: "sub_1234567890",

@@ -208,14 +208,16 @@ func testManager(t *testing.T) *Manager {
 	return &Manager{
 		servers: Servers{
 			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
+				Outbounds:   make([]option.Outbound, 0),
+				Endpoints:   make([]option.Endpoint, 0),
+				Locations:   make(map[string]C.ServerLocation),
+				Credentials: make(map[string]ServerCredentials),
 			},
 		},
 		optsMap:     map[string]Server{},

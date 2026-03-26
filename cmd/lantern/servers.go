@@ -136,7 +136,7 @@ func serversAutoSelections(ctx context.Context, c *ipc.Client, watch bool) error
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Selected: %s\n", sel)
+	fmt.Printf("Selected: %s\n", sel.Tag)
 	return nil
 }
 

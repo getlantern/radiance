@@ -865,7 +865,11 @@ func (s *localapi) accountDataCapStreamHandler(w http.ResponseWriter, r *http.Re
 			slog.Error("datacap poll error", "error", err)
 			return
 		}
-		fmt.Fprintf(w, "data: %s\n\n", info)
+		data, err := json.Marshal(info)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
 	// Send initial data immediately
