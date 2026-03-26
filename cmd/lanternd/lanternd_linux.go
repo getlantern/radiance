@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	serviceName     = "lantern"
+	serviceName     = "lanternd"
 	defaultDataPath = "/var/lib/lantern"
 	defaultLogPath  = "/var/log/lantern"
 	binPath         = "/usr/bin/" + serviceName
