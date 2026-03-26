@@ -225,13 +225,25 @@ func (ch *ConfigHandler) fetchConfig() error {
 	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
 		cfg := ch.config.Load().ConfigResponse
-		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
+		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations)+len(cfg.Servers))
+		// Track which cities are already covered by active outbounds.
+		coveredCities := make(map[string]bool, len(cfg.OutboundLocations))
 		for k, v := range cfg.OutboundLocations {
 			if v == nil {
 				slog.Warn("Server location is nil, skipping", "tag", k)
 				continue
 			}
 			locs[k] = *v
+			coveredCities[v.City+"|"+v.CountryCode] = true
+		}
+		// Include available server locations not already covered by active
+		// outbounds so the client's location picker shows every location.
+		for _, sl := range cfg.Servers {
+			if coveredCities[sl.City+"|"+sl.CountryCode] {
+				continue
+			}
+			key := strings.ToLower(strings.ReplaceAll(sl.City, " ", "-") + "-" + sl.CountryCode)
+			locs[key] = sl
 		}
 		opts := servers.Options{
 			Outbounds:    cfg.Options.Outbounds,
