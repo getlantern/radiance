@@ -96,5 +96,8 @@ func uninstall() error {
 	}
 
 	slog.Info("Launchd service uninstalled")
+	if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove binary: %w", err)
+	}
 	return nil
 }

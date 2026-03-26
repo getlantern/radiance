@@ -129,6 +129,9 @@ func uninstall() error {
 		case <-time.After(100 * time.Millisecond):
 			if service, err = m.OpenService(serviceName); err != nil {
 				slog.Info("Windows service uninstalled successfully")
+				if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("failed to remove binary: %w", err)
+				}
 				return nil
 			}
 			service.Close()
