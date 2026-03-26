@@ -465,11 +465,28 @@ func RunURLTests(path string) {
 	}
 	defer urlTestMu.Unlock()
 
-	results, err := preTest(path)
+	results, traceCtx, err := preTest(path)
 	if err != nil {
 		slog.Error("URL test failed", "error", err)
 		return
 	}
+
+	// Record URL test results in a span linked to the bandit's trace.
+	if traceCtx != nil {
+		_, span := otel.Tracer(tracerName).Start(*traceCtx, "radiance.url_tests_complete",
+			trace.WithAttributes(
+				attribute.Int("bandit.test_count", len(results)),
+			),
+		)
+		for tag, delay := range results {
+			span.AddEvent("url_test_result", trace.WithAttributes(
+				attribute.String("outbound", tag),
+				attribute.Int("latency_ms", int(delay)),
+			))
+		}
+		span.End()
+	}
+
 
 	var formattedResults []string
 	for tag, delay := range results {
@@ -478,21 +495,30 @@ func RunURLTests(path string) {
 	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
 }
 
-func preTest(path string) (map[string]uint16, error) {
+func preTest(path string) (map[string]uint16, *context.Context, error) {
 	slog.Info("Performing pre-start URL tests")
 
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
 	cfg, err := loadConfig(confPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+		return nil, nil, fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// Extract bandit trace context for distributed tracing
+	var traceCtx *context.Context
+	if len(cfg.BanditURLOverrides) > 0 {
+		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
+			traceCtx = &ctx
+		}
+	}
+
 	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
 	userOpts, err := loadUserOptions(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load user options: %w", err)
+		return nil, nil, fmt.Errorf("failed to load user options: %w", err)
 	}
 
 	// since we are only doing URL tests, we only need the outbounds from both configs; we skip
@@ -524,32 +550,33 @@ func preTest(path string) (map[string]uint16, error) {
 		Options: options,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create sing-box instance: %w", err)
+		return nil, nil, fmt.Errorf("failed to create sing-box instance: %w", err)
 	}
 	defer instance.Close()
 	if err := instance.PreStart(); err != nil {
-		return nil, fmt.Errorf("failed to start sing-box instance: %w", err)
+		return nil, nil, fmt.Errorf("failed to start sing-box instance: %w", err)
 	}
 	outbound, ok := instance.Outbound().Outbound("preTest")
 	if !ok {
-		return nil, errors.New("preTest outbound not found")
+		return nil, nil, errors.New("preTest outbound not found")
 	}
 	tester, ok := outbound.(adapter.URLTestGroup)
 	if !ok {
-		return nil, errors.New("preTest outbound is not a URLTestGroup")
+		return nil, nil, errors.New("preTest outbound is not a URLTestGroup")
 	}
 	// run URL tests
 	results, err := tester.URLTest(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to perform URL tests: %w", err)
+		return nil, nil, fmt.Errorf("failed to perform URL tests: %w", err)
 	}
 
 	historyPath := filepath.Join(path, urlTestHistoryFileName)
 	if err := saveURLTestResults(urlTestHistoryStorage, historyPath, results); err != nil {
-		return results, fmt.Errorf("failed to save URL test results: %w", err)
+		return results, traceCtx, fmt.Errorf("failed to save URL test results: %w", err)
 	}
-	return results, nil
+	return results, traceCtx, nil
 }
+
 
 func saveURLTestResults(storage *urltest.HistoryStorage, path string, results map[string]uint16) error {
 	slog.Debug("Saving URL test history", "path", path)
