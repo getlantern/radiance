@@ -10,40 +10,29 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/getlantern/radiance/internal"
 )
 
-type Key = string
-
-const (
-	LogLevel      Key = "RADIANCE_LOG_LEVEL"
-	LogPath       Key = "RADIANCE_LOG_PATH"
-	DataPath      Key = "RADIANCE_DATA_PATH"
-	DisableFetch  Key = "RADIANCE_DISABLE_FETCH_CONFIG"
-	PrintCurl     Key = "RADIANCE_PRINT_CURL"
-	DisableStdout Key = "RADIANCE_DISABLE_STDOUT_LOG"
-	ENV           Key = "RADIANCE_ENV"
-	UseSocks      Key = "RADIANCE_USE_SOCKS_PROXY"
-	SocksAddress  Key = "RADIANCE_SOCKS_ADDRESS"
-
-	Testing Key = "RADIANCE_TESTING"
-)
+type _key string
 
 var (
-	keys = []Key{
-		LogLevel,
-		LogPath,
-		DataPath,
-		DisableFetch,
-		PrintCurl,
-		DisableStdout,
-		SocksAddress,
-		UseSocks,
-		ENV,
-	}
-	envVars = map[string]any{}
+	LogLevel         _key = "RADIANCE_LOG_LEVEL"
+	LogPath          _key = "RADIANCE_LOG_PATH"
+	DataPath         _key = "RADIANCE_DATA_PATH"
+	DisableFetch     _key = "RADIANCE_DISABLE_FETCH_CONFIG"
+	PrintCurl        _key = "RADIANCE_PRINT_CURL"
+	DisableStdout    _key = "RADIANCE_DISABLE_STDOUT_LOG"
+	ENV              _key = "RADIANCE_ENV"
+	UseSocks         _key = "RADIANCE_USE_SOCKS_PROXY"
+	SocksAddress     _key = "RADIANCE_SOCKS_ADDRESS"
+	Country          _key = "RADIANCE_COUNTRY"
+	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
+
+	Testing _key = "RADIANCE_TESTING"
+
+	dotenv = map[string]string{}
 )
+
+func (k _key) String() string { return string(k) }
 
 func init() {
 	buf, err := os.ReadFile(".env")
@@ -61,55 +50,51 @@ func init() {
 			if len(parts) == 2 {
 				key := strings.TrimSpace(parts[0])
 				value := strings.TrimSpace(parts[1])
-				parseAndSet(key, value)
+				dotenv[key] = value
 			}
 		}
 	}
-
-	// Check for environment variables and populate envVars, overriding any values from the .env file
-	for _, key := range keys {
-		if value, exists := os.LookupEnv(key); exists {
-			parseAndSet(key, value)
-		}
-	}
 	if testing.Testing() {
-		envVars[Testing] = true
-		envVars[LogLevel] = "DISABLE"
-		slog.SetLogLoggerLevel(internal.Disable)
+		dotenv[Testing.String()] = "true"
+		dotenv[LogLevel.String()] = "disable"
 	}
 }
 
-// Get retrieves the value associated with the given key and attempts to cast it to type T. If the
-// key does not exist or the type does not match, it returns the zero value of T and false.
-func Get[T any](key Key) (T, bool) {
-	if value, exists := envVars[key]; exists {
-		if v, ok := value.(T); ok {
-			return v, true
-		}
+func Get(key _key) (string, bool) {
+	if value, exists := dotenv[key.String()]; exists {
+		return value, true
 	}
-	var zero T
-	return zero, false
+	if value, exists := os.LookupEnv(key.String()); exists {
+		return value, true
+	}
+	return "", false
 }
 
-// SetStagingEnv sets the environment to staging if it has not already been set.
-// This is used for testing that need to interact with staging services,
+func GetString(key _key) string {
+	value, _ := Get(key)
+	return value
+}
+
+func GetBool(key _key) bool {
+	value, exists := Get(key)
+	if !exists {
+		return false
+	}
+	v, _ := strconv.ParseBool(value)
+	return v
+}
+
+func GetInt(key _key) int {
+	value, exists := Get(key)
+	if !exists {
+		return 0
+	}
+	v, _ := strconv.Atoi(value)
+	return v
+}
+
 func SetStagingEnv() {
 	slog.Info("setting environment to staging for testing")
-	envVars[ENV] = "staging"
-	envVars[PrintCurl] = true
-}
-
-func parseAndSet(key, value string) {
-	// Attempt to parse as a boolean
-	if b, err := strconv.ParseBool(value); err == nil {
-		envVars[key] = b
-		return
-	}
-	// Attempt to parse as an integer
-	if i, err := strconv.Atoi(value); err == nil {
-		envVars[key] = i
-		return
-	}
-	// Otherwise, store as a string
-	envVars[key] = value
+	dotenv[ENV.String()] = "staging"
+	dotenv[PrintCurl.String()] = "true"
 }

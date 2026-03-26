@@ -8,15 +8,16 @@ import (
 	"sync"
 
 	"github.com/getlantern/kindling"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -36,7 +37,7 @@ var (
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
 	if k == nil {
-		SetKindling(NewKindling())
+		SetKindling(NewKindling(settings.GetString(settings.DataPathKey)))
 	}
 	httpClient := k.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
@@ -45,7 +46,7 @@ func HTTPClient() *http.Client {
 }
 
 // Close stop all concurrent config fetches that can be happening in background
-func Close(_ context.Context) error {
+func Close() error {
 	if stopUpdater != nil {
 		stopUpdater()
 	}
@@ -70,8 +71,7 @@ func SetKindling(a kindling.Kindling) {
 const tracerName = "github.com/getlantern/radiance/kindling"
 
 // NewKindling build a kindling client and bootstrap this package
-func NewKindling() kindling.Kindling {
-	dataDir := settings.GetString(settings.DataPathKey)
+func NewKindling(dataDir string) kindling.Kindling {
 	logger := &slogWriter{Logger: slog.Default()}
 
 	ctx, span := otel.Tracer(tracerName).Start(

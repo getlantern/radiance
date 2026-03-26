@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 
 	"fmt"
 	"io"
@@ -23,12 +22,11 @@ import (
 
 	"github.com/getlantern/lantern-box/protocol"
 
-	"github.com/getlantern/radiance/api"
-	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/kindling"
+	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -40,7 +38,7 @@ type Fetcher interface {
 	// preferred is used to select the server location.
 	// If preferred is empty, the server will select the best location.
 	// The lastModified time is used to check if the configuration has changed since the last request.
-	fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error)
+	fetchConfig(ctx context.Context, preferred common.PreferredLocation, wgPublicKey string) ([]byte, error)
 }
 
 // fetcher is responsible for fetching the configuration from the server.
@@ -48,20 +46,27 @@ type fetcher struct {
 	lastModified time.Time
 	locale       string
 	etag         string
-	apiClient    *api.APIClient
+	baseURL      string
+	apiClient    *account.Client
+	httpClient   *http.Client
 }
 
 // newFetcher creates a new fetcher with the given http client.
-func newFetcher(locale string, apiClient *api.APIClient) Fetcher {
+func newFetcher(locale string, apiClient *account.Client, httpClient *http.Client) Fetcher {
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
 	return &fetcher{
 		lastModified: time.Time{},
 		locale:       locale,
+		baseURL:      common.GetBaseURL(),
 		apiClient:    apiClient,
+		httpClient:   httpClient,
 	}
 }
 
 // fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
-func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
+func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLocation, wgPublicKey string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.fetchConfig")
 	defer span.End()
 	// If we don't have a user ID or token, create a new user.
@@ -73,7 +78,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 		Platform:       common.Platform,
 		AppName:        common.Name,
 		DeviceID:       settings.GetString(settings.DeviceIDKey),
-		UserID:         fmt.Sprintf("%d", settings.GetInt64(settings.UserIDKey)),
+		UserID:         settings.GetString(settings.UserIDKey),
 		ProToken:       settings.GetString(settings.TokenKey),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
@@ -98,7 +103,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, w
 	if buf == nil { // no new config available
 		return nil, nil
 	}
-	slog.Log(nil, internal.LevelTrace, "received config", "config", string(buf))
+	slog.Log(nil, log.LevelTrace, "received config", "config", string(buf))
 
 	f.lastModified = time.Now()
 	return buf, nil
@@ -142,18 +147,18 @@ func (f *fetcher) ensureUser(ctx context.Context) error {
 func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "config_fetcher.send")
 	defer span.End()
-	req, err := backend.NewRequestWithHeaders(ctx, http.MethodPost, common.GetBaseURL()+"/config-new", body)
+	req, err := common.NewRequestWithHeaders(ctx, http.MethodPost, f.baseURL+"/config-new", body)
 	if err != nil {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 
-	if val, exists := os.LookupEnv("RADIANCE_COUNTRY"); exists {
+	if val := env.GetString(env.Country); val != "" {
 		slog.Info("Setting x-lantern-client-country header", "country", val)
 		req.Header.Set("x-lantern-client-country", val)
 	}
-	if val, exists := os.LookupEnv("RADIANCE_FEATURE_OVERRIDE"); exists && val != "" {
+	if val := env.GetString(env.FeatureOverrides); val != "" {
 		slog.Info("Setting X-Lantern-Feature-Override header", "features", val)
 		req.Header.Set("X-Lantern-Feature-Override", val)
 	}
@@ -165,7 +170,7 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 		req.Header.Set("If-None-Match", f.etag)
 	}
 
-	resp, err := kindling.HTTPClient().Do(req)
+	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not send request: %w", err))
 	}

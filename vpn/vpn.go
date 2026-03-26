@@ -5,13 +5,11 @@ package vpn
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"slices"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +17,7 @@ import (
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	sbjson "github.com/sagernet/sing/common/json"
@@ -30,356 +29,337 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
-	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 const (
 	tracerName = "github.com/getlantern/radiance/vpn"
 )
 
-func init() {
-	forwardToTunnel := func(action func(ctx context.Context) error, desc string) {
-		ctx := context.Background()
-		status, err := ipc.GetStatus(ctx)
-		if err != nil {
-			slog.Warn("Event received but failed to get tunnel status", "event", desc, "error", err)
-			return
-		}
-		if status != ipc.Connected {
-			return
-		}
-		if err := action(ctx); err != nil {
-			slog.Error("Failed to forward event to tunnel", "event", desc, "error", err)
-		}
+var (
+	ErrTunnelNotConnected     = errors.New("tunnel not connected")
+	ErrTunnelAlreadyConnected = errors.New("tunnel already connected")
+)
+
+type VPNStatus string
+
+// Possible VPN statuses
+const (
+	Connecting    VPNStatus = "connecting"
+	Connected     VPNStatus = "connected"
+	Disconnecting VPNStatus = "disconnecting"
+	Disconnected  VPNStatus = "disconnected"
+	Restarting    VPNStatus = "restarting"
+	ErrorStatus   VPNStatus = "error"
+)
+
+func (s *VPNStatus) String() string {
+	return string(*s)
+}
+
+// VPNClient manages the lifecycle of the VPN tunnel.
+type VPNClient struct {
+	tunnel *tunnel
+
+	platformIfce PlatformInterface
+	logger       *slog.Logger
+
+	preTestCancel context.CancelFunc
+	preTestDone   chan struct{}
+
+	mu sync.RWMutex
+}
+
+type PlatformInterface interface {
+	libbox.PlatformInterface
+	RestartService() error
+	PostServiceClose()
+}
+
+// NewVPNClient creates a new VPNClient instance with the provided configuration paths, log
+// level, and platform interface.
+func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInterface) *VPNClient {
+	if logger == nil {
+		logger = slog.Default()
 	}
-
-	events.Subscribe(func(e servers.ServersUpdatedEvent) {
-		forwardToTunnel(func(ctx context.Context) error {
-			svrs := map[string]servers.Options{e.Group: *e.Options}
-			return ipc.UpdateOutbounds(ctx, svrs)
-		}, "servers-updated")
-	})
-	events.Subscribe(func(e servers.ServersAddedEvent) {
-		forwardToTunnel(func(ctx context.Context) error {
-			return ipc.AddOutbounds(ctx, e.Group, *e.Options)
-		}, "servers-added")
-	})
-	events.Subscribe(func(e servers.ServersRemovedEvent) {
-		forwardToTunnel(func(ctx context.Context) error {
-			return ipc.RemoveOutbounds(ctx, e.Group, []string{e.Tag})
-		}, "servers-removed")
-	})
+	_ = newSplitTunnel(dataPath, logger)
+	done := make(chan struct{})
+	close(done)
+	return &VPNClient{
+		platformIfce:  platformIfce,
+		logger:        logger,
+		preTestCancel: func() {},
+		preTestDone:   done,
+	}
 }
 
-// Deprecated: Use AutoConnect instead with the desired group.
-func QuickConnect(group string, _ libbox.PlatformInterface) (err error) {
-	return AutoConnect(group)
-}
-
-// AutoConnect automatically connects to the best available server in the specified group. Valid
-// groups are [servers.ServerGroupLantern], [servers.ServerGroupUser], "all", or the empty string.
-// Using "all" or the empty string will connect to the best available server across all groups.
-func AutoConnect(group string) error {
+func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	ctx, span := otel.Tracer(tracerName).Start(
 		context.Background(),
-		"quick_connect",
-		trace.WithAttributes(attribute.String("group", group)))
+		"connect",
+	)
 	defer span.End()
 
-	switch group {
-	case servers.SGLantern:
-		return traces.RecordError(ctx, ConnectToServer(servers.SGLantern, autoLanternTag, nil))
-	case servers.SGUser:
-		return traces.RecordError(ctx, ConnectToServer(servers.SGUser, autoUserTag, nil))
-	case autoAllTag, "all", "":
-		if isOpen(ctx) {
-			if err := ipc.SetClashMode(ctx, autoAllTag); err != nil {
-				return fmt.Errorf("failed to set auto mode: %w", err)
-			}
-			return nil
+	c.mu.Lock()
+	// Cancel any running pre-start tests and wait for them to finish. If no tests are running,
+	// preTestCancel is a no-op and preTestDone is already closed (returns immediately).
+	c.preTestCancel()
+	done := c.preTestDone
+	c.mu.Unlock()
+	<-done
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tunnel != nil {
+		switch status := c.tunnel.Status(); status {
+		case Connected:
+			return ErrTunnelAlreadyConnected
+		case Restarting, Connecting, Disconnecting:
+			return fmt.Errorf("tunnel is currently %s", status)
+		case Disconnected, ErrorStatus:
+			// Clean up the stale tunnel so we can reconnect.
+			c.tunnel = nil
+		default:
+			return fmt.Errorf("tunnel is in unexpected state: %s", status)
 		}
-		return traces.RecordError(ctx, connect(autoAllTag, ""))
-	default:
-		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
 	}
-}
 
-// Deprecated: Use Connect instead with the desired group and tag.
-func ConnectToServer(group, tag string, _ libbox.PlatformInterface) error {
-	return Connect(group, tag)
-}
-
-// Connect connects to a specific server identified by the group and tag. Valid groups are
-// [servers.SGLantern] and [servers.SGUser].
-func Connect(group, tag string) error {
-	ctx, span := otel.Tracer(tracerName).Start(
-		context.Background(),
-		"connect_to_server",
-		trace.WithAttributes(
-			attribute.String("group", group),
-			attribute.String("tag", tag)))
-	defer span.End()
-
-	switch group {
-	case servers.SGLantern, servers.SGUser:
-	default:
-		return traces.RecordError(ctx, fmt.Errorf("invalid group: %s", group))
-	}
-	if tag == "" {
-		return traces.RecordError(ctx, errors.New("tag must be specified"))
-	}
-	return traces.RecordError(ctx, connect(group, tag))
-}
-
-func connect(group, tag string) error {
-	ctx := context.Background()
-	if isOpen(ctx) {
-		return SelectServer(ctx, group, tag)
-	}
-	dataPath := settings.GetString(settings.DataPathKey)
-	_ = newSplitTunnel(dataPath)
-	options, err := getOptions()
+	options, err := buildOptions(boxOptions)
 	if err != nil {
-		return err
-	}
-	if err := ipc.StartService(ctx, options); err != nil {
-		return err
-	}
-	return SelectServer(ctx, group, tag)
-}
-
-// Restart restarts the tunnel by reconnecting to the currently selected server.
-func Restart() error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
-	defer span.End()
-
-	options, err := getOptions()
-	if err != nil {
-		return err
-	}
-	return traces.RecordError(ctx, ipc.RestartService(ctx, options))
-}
-
-func getOptions() (string, error) {
-	dataPath := settings.GetString(settings.DataPathKey)
-	options, err := buildOptions(context.Background(), dataPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to build options: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
 	opts, err := sbjson.Marshal(options)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal options: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	return string(opts), nil
+	return traces.RecordError(ctx, c.start(boxOptions.BasePath, string(opts)))
 }
 
-// isOpen returns true if the tunnel is open, false otherwise.
-// Note, this does not check if the tunnel can connect to a server.
-func isOpen(ctx context.Context) bool {
-	state, err := ipc.GetStatus(ctx)
-	if err != nil {
-		slog.Error("Failed to get tunnel state", "error", err)
+func (c *VPNClient) start(path, options string) error {
+	c.logger.Debug("Starting tunnel", "options", options)
+	t := tunnel{
+		dataPath: path,
 	}
-	return state == ipc.Connected
+	if err := t.start(options, c.platformIfce); err != nil {
+		return fmt.Errorf("failed to start tunnel: %w", err)
+	}
+	c.tunnel = &t
+	return nil
 }
 
-// Disconnect closes the tunnel and all active connections.
-func Disconnect() error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
-	defer span.End()
-	slog.Info("Disconnecting VPN")
-	return traces.RecordError(ctx, ipc.StopService(ctx))
-}
-
-// SelectServer selects the specified server for the tunnel. The tunnel must already be open.
-func SelectServer(ctx context.Context, group, tag string) error {
-	if !isOpen(ctx) {
-		return errors.New("tunnel is not open")
-	}
-	if group == autoAllTag {
-		slog.Info("Switching to auto mode", "group", group)
-		if err := ipc.SetClashMode(ctx, group); err != nil {
-			slog.Error("Failed to set auto mode", "group", group, "error", err)
-			return fmt.Errorf("failed to set auto mode: %w", err)
-		}
+// Close shuts down the currently running tunnel, if any. Returns an error if closing the tunnel fails.
+func (c *VPNClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tunnel == nil {
 		return nil
 	}
-	slog.Info("Selecting server", "group", group, "tag", tag)
-	if err := ipc.SelectOutbound(ctx, group, tag); err != nil {
-		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
-		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
+	if err := c.close(); err != nil {
+		return err
+	}
+	if c.platformIfce != nil {
+		c.platformIfce.PostServiceClose()
 	}
 	return nil
 }
 
-// Status represents the current status of the tunnel, including whether it is open, the selected
-// server, and the active server. Active is only set if the tunnel is open.
-type Status struct {
-	TunnelOpen bool
-	// SelectedServer is the server that is currently selected for the tunnel.
-	SelectedServer string
-	// ActiveServer is the server that is currently active for the tunnel. This will differ from
-	// SelectedServer if using auto-select mode.
-	ActiveServer string
+func (c *VPNClient) close() error {
+	t := c.tunnel
+	c.tunnel = nil
+
+	c.logger.Info("Closing tunnel")
+	if err := t.close(); err != nil {
+		return err
+	}
+	c.logger.Debug("Tunnel closed")
+	runtime.GC()
+	return nil
 }
 
-func GetStatus() (Status, error) {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "get_status")
-	defer span.End()
-	slog.Debug("Retrieving tunnel status")
-	s := Status{
-		TunnelOpen: isOpen(ctx),
-	}
-	if !s.TunnelOpen {
-		return s, nil
+// Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
+// is not running or restart fails.
+func (c *VPNClient) Restart(boxOptions BoxOptions) error {
+	c.mu.Lock()
+	if c.tunnel == nil || c.tunnel.Status() != Connected {
+		c.mu.Unlock()
+		return ErrTunnelNotConnected
 	}
 
-	slog.Log(nil, internal.LevelTrace, "Tunnel is open, retrieving selected and active servers")
-	group, tag, err := ipc.GetSelected(ctx)
-	if err != nil {
-		return s, fmt.Errorf("failed to get selected server: %w", err)
-	}
-	if group == autoAllTag {
-		s.SelectedServer = autoAllTag
-	} else {
-		s.SelectedServer = tag
+	t := c.tunnel
+	c.logger.Info("Restarting tunnel")
+	t.setStatus(Restarting, nil)
+	if c.platformIfce != nil {
+		c.mu.Unlock()
+		if err := c.platformIfce.RestartService(); err != nil {
+			c.logger.Error("Failed to restart tunnel via platform interface", "error", err)
+			err = fmt.Errorf("platform interface restart failed: %w", err)
+			t.setStatus(ErrorStatus, err)
+			return err
+		}
+		c.logger.Info("Tunnel restarted successfully")
+		return nil
 	}
 
-	_, active, err := ipc.GetActiveOutbound(ctx)
-	if err != nil {
-		return s, fmt.Errorf("failed to get active server: %w", err)
+	defer c.mu.Unlock()
+	if err := c.close(); err != nil {
+		return fmt.Errorf("closing tunnel: %w", err)
 	}
-	s.ActiveServer = active
-	slog.Log(nil, internal.LevelTrace, "retrieved tunnel status", "tunnelOpen", s.TunnelOpen, "selectedServer", s.SelectedServer, "activeServer", s.ActiveServer)
-	return s, nil
+	options, err := buildOptions(boxOptions)
+	if err != nil {
+		return fmt.Errorf("failed to build options: %w", err)
+	}
+	opts, err := sbjson.Marshal(options)
+	if err != nil {
+		return fmt.Errorf("failed to marshal options: %w", err)
+	}
+	if err := c.start(boxOptions.BasePath, string(opts)); err != nil {
+		c.logger.Error("starting tunnel", "error", err)
+		return fmt.Errorf("starting tunnel: %w", err)
+	}
+	c.logger.Info("Tunnel restarted successfully")
+	return nil
 }
 
-func ActiveServer(ctx context.Context) (group, tag string, err error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "active_server")
-	defer span.End()
-	slog.Log(nil, internal.LevelTrace, "Retrieving active server")
-	group, tag, err = ipc.GetActiveOutbound(ctx)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to get active server: %w", err)
+// Status returns the current status of the tunnel (e.g., running, closed).
+func (c *VPNClient) Status() VPNStatus {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return Disconnected
 	}
-	return group, tag, nil
+	return c.tunnel.Status()
 }
 
-// ActiveConnections returns a list of currently active connections, ordered from newest to oldest.
-// A non-nil error is only returned if there was an error retrieving the connections, or if the
-// tunnel is closed. If there are no active connections and the tunnel is open, an empty slice is
-// returned without an error.
-func ActiveConnections(ctx context.Context) ([]ipc.Connection, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "active_connections")
+// isOpen returns true if the tunnel is open, false otherwise.
+// Note, this does not check if the tunnel can connect to a server.
+func (c *VPNClient) isOpen() bool {
+	return c.Status() == Connected
+}
+
+// Disconnect closes the tunnel and all active connections.
+func (c *VPNClient) Disconnect() error {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
 	defer span.End()
-	connections, err := Connections(ctx)
-	if err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("failed to get active connections: %w", err))
+	c.logger.Info("Disconnecting VPN")
+	return traces.RecordError(ctx, c.Close())
+}
+
+// SelectServer changes the currently selected server to the one specified by tag. If tag is AutoSelectTag,
+// the tunnel will switch to auto-select mode and automatically choose the best server.
+func (c *VPNClient) SelectServer(tag string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil || c.tunnel.Status() != Connected {
+		return ErrTunnelNotConnected
+	}
+	t := c.tunnel
+	if tag == AutoSelectTag {
+		return c.tunnel.selectMode(AutoSelectTag)
 	}
 
-	connections = slices.DeleteFunc(connections, func(c ipc.Connection) bool {
-		return c.ClosedAt != 0
-	})
-	slices.SortFunc(connections, func(a, b ipc.Connection) int {
-		return int(b.CreatedAt - a.CreatedAt)
-	})
-	return connections, nil
+	c.logger.Info("Selecting server", "tag", tag)
+	if err := t.selectOutbound(tag); err != nil {
+		c.logger.Error("Failed to select server", "tag", tag, "error", err)
+		return fmt.Errorf("failed to select server %s: %w", tag, err)
+	}
+	return nil
+}
+
+func (c *VPNClient) UpdateOutbounds(group string, newOptions servers.Options) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.updateOutbounds(group, newOptions)
+}
+
+func (c *VPNClient) AddOutbounds(group string, options servers.Options) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.addOutbounds(group, options)
+}
+
+func (c *VPNClient) RemoveOutbounds(group string, tags []string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.removeOutbounds(group, tags)
 }
 
 // Connections returns a list of all connections, both active and recently closed. A non-nil error
 // is only returned if there was an error retrieving the connections, or if the tunnel is closed.
 // If there are no connections and the tunnel is open, an empty slice is returned without an error.
-func Connections(ctx context.Context) ([]ipc.Connection, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "connections")
+func (c *VPNClient) Connections() ([]Connection, error) {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "connections")
 	defer span.End()
-	connections, err := ipc.GetConnections(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get connections: %w", err)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil, fmt.Errorf("failed to get connections: %w", ErrTunnelNotConnected)
+	}
+	tm := c.tunnel.clashServer.TrafficManager()
+	activeConns := tm.Connections()
+	closedConns := tm.ClosedConnections()
+	connections := make([]Connection, 0, len(activeConns)+len(closedConns))
+	for _, conn := range activeConns {
+		connections = append(connections, newConnection(conn))
+	}
+	for _, conn := range closedConns {
+		connections = append(connections, newConnection(conn))
 	}
 	return connections, nil
 }
 
-// AutoSelections represents the currently active servers for each auto server group.
-type AutoSelections struct {
-	Lantern string
-	User    string
-	AutoAll string
-}
-
-// AutoSelectionsEvent is emitted when server location changes for any auto server group.
-type AutoSelectionsEvent struct {
+// AutoSelectedEvent is emitted when the auto-selected server changes.
+type AutoSelectedEvent struct {
 	events.Event
-	Selections AutoSelections
+	Selected string `json:"selected"`
 }
 
-// SelectionUnavailable is the sentinel value returned for an auto-selection
-// group that has no active server (tunnel not running, group not found, etc.).
-const SelectionUnavailable = "Unavailable"
-
-// AutoServerSelections returns the currently active server for each auto server group. If the group
-// is not found or has no active server, SelectionUnavailable is returned for that group.
-func AutoServerSelections() (AutoSelections, error) {
-	as := AutoSelections{
-		Lantern: SelectionUnavailable,
-		User:    SelectionUnavailable,
-		AutoAll: SelectionUnavailable,
+// CurrentAutoSelectedServer returns the tag of the currently auto-selected server
+func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
+	if !c.isOpen() {
+		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")
+		return "", nil
 	}
-	ctx := context.Background()
-	if !isOpen(ctx) {
-		slog.Log(ctx, internal.LevelTrace, "Tunnel not running, cannot get auto selections")
-		return as, nil
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return "", ErrTunnelNotConnected
 	}
-	groups, err := ipc.GetGroups(ctx)
-	if err != nil {
-		return as, fmt.Errorf("failed to get groups: %w", err)
+	outboundMgr := service.FromContext[adapter.OutboundManager](c.tunnel.ctx)
+	if outboundMgr == nil {
+		return "", errors.New("outbound manager not found")
 	}
-	slog.Log(ctx, internal.LevelTrace, "Retrieved groups", "groups", groups)
-	selected := func(tag string) string {
-		idx := slices.IndexFunc(groups, func(g ipc.OutboundGroup) bool {
-			return g.Tag == tag
-		})
-		if idx < 0 || groups[idx].Selected == "" {
-			slog.Log(ctx, internal.LevelTrace, "Group not found or has no selection", "tag", tag)
-			return SelectionUnavailable
-		}
-		return groups[idx].Selected
+	outbound, loaded := outboundMgr.Outbound(AutoSelectTag)
+	if !loaded {
+		return "", fmt.Errorf("auto select group not found")
 	}
-	auto := AutoSelections{
-		Lantern: selected(autoLanternTag),
-		User:    selected(autoUserTag),
-	}
-
-	switch all := selected(autoAllTag); all {
-	case autoLanternTag:
-		auto.AutoAll = auto.Lantern
-	case autoUserTag:
-		auto.AutoAll = auto.User
-	default:
-		auto.AutoAll = all
-	}
-	return auto, nil
+	return outbound.(adapter.OutboundGroup).Now(), nil
 }
 
 const (
-	rapidPollInterval = 500 * time.Millisecond
-	rapidPollWindow   = 15 * time.Second
+	rapidPollInterval  = 500 * time.Millisecond
+	rapidPollWindow    = 15 * time.Second
 	steadyPollInterval = 10 * time.Second
 )
 
-// AutoSelectionsChangeListener polls for auto-selection changes and emits an
-// AutoSelectionsEvent whenever the selection differs from the previous value.
+// AutoSelectedChangeListener polls for auto-selection changes and emits an
+// AutoSelectedEvent whenever the selection differs from the previous value.
 // It performs an initial rapid poll to catch the first selection soon after
 // tunnel connect, then settles into a slower steady-state interval.
-func AutoSelectionsChangeListener(ctx context.Context) {
+func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) {
 	go func() {
-		var prev AutoSelections
+		var prev string
 
 		// Rapid initial poll to emit the first selection promptly after connect.
 		initialDeadline := time.NewTimer(rapidPollWindow)
@@ -394,17 +374,15 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 			case <-initialDeadline.C:
 				break initial
 			case <-tick.C:
-				curr, err := AutoServerSelections()
+				curr, err := c.CurrentAutoSelectedServer()
 				if err != nil {
 					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{Selections: curr})
-					if curr.Lantern != SelectionUnavailable ||
-						curr.User != SelectionUnavailable ||
-						curr.AutoAll != SelectionUnavailable {
+					events.Emit(AutoSelectedEvent{Selected: curr})
+					if curr != "" {
 						break initial
 					}
 				}
@@ -427,14 +405,14 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				curr, err := AutoServerSelections()
+				curr, err := c.CurrentAutoSelectedServer()
 				if err != nil {
 					tick.Reset(steadyPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{Selections: curr})
+					events.Emit(AutoSelectedEvent{Selected: curr})
 				}
 				tick.Reset(steadyPollInterval)
 			}
@@ -442,37 +420,86 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 	}()
 }
 
-const urlTestHistoryFileName = "url_test_history.json"
+// RunOfflineURLTests will run URL tests for all outbounds if the tunnel is not currently connected.
+// This can improve initial connection times by pre-determining reachability and latency to servers.
+//
+// If [VPNClient.Connect] is called while RunOfflineURLTests is running, the tests will be cancelled and
+// any results will be discarded.
+func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound, banditURLs map[string]string) error {
+	c.mu.Lock()
+	if c.tunnel != nil {
+		c.mu.Unlock()
+		return ErrTunnelAlreadyConnected
+	}
+	select {
+	case <-c.preTestDone:
+		// no tests currently running, safe to start new tests
+	default:
+		c.mu.Unlock()
+		return errors.New("pre-start tests already running")
+	}
+	ctx, cancel := context.WithCancel(box.BaseContext())
+	c.preTestCancel = cancel
+	done := make(chan struct{})
+	c.preTestDone = done
+	c.mu.Unlock()
+	defer close(done)
 
-var urlTestMu sync.Mutex
+	// Extract bandit trace context for distributed tracing
+	traceCtx, hasTrace := traces.ExtractBanditTraceContext(banditURLs)
 
-// RunURLTests performs URL tests for all outbounds defined in configs. It is intended to run in
-// response to configuration updates to provide continuous bandit callback data even when the VPN
-// tunnel is not active. When the tunnel IS active, its own CheckOutbounds handles URL testing, so
-// this is skipped.
-func RunURLTests(path string) {
-	// Skip if the tunnel is handling URL tests
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	c.logger.Info("Performing pre-start URL tests")
+	tags := make([]string, 0, len(outbounds))
+	for _, ob := range outbounds {
+		tags = append(tags, ob.Tag)
+	}
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags, banditURLs))
+	options := option.Options{
+		Log:       &option.LogOptions{Disabled: true},
+		Outbounds: outbounds,
+		Experimental: &option.ExperimentalOptions{
+			CacheFile: &option.CacheFileOptions{
+				Enabled: true,
+				Path:    filepath.Join(basePath, cacheFileName),
+				CacheID: cacheID,
+			},
+		},
+	}
+
+	// create pre-started box instance. we just use the standard box since we don't need a
+	// platform interface for testing.
+	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
+	urlTestHistoryStorage := urltest.NewHistoryStorage()
+	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
+	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
+
+	ctx, cancel = context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
 	defer cancel()
-	if isOpen(ctx) {
-		slog.Debug("Tunnel is active, skipping standalone URL tests")
-		return
-	}
-
-	// Prevent overlapping runs
-	if !urlTestMu.TryLock() {
-		return
-	}
-	defer urlTestMu.Unlock()
-
-	results, traceCtx, hasTrace, err := preTest(path)
+	instance, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: options,
+	})
 	if err != nil {
-		slog.Error("URL test failed", "error", err)
-		if len(results) == 0 {
-			return
-		}
-		// Tests ran but a non-critical step (e.g. saving history) failed.
-		// Continue to emit the span and log the results we do have.
+		return fmt.Errorf("failed to create sing-box instance: %w", err)
+	}
+	defer instance.Close()
+	// connect may have been called while we were setting up, so check if we should abort before
+	// starting the instance.
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("pre-start tests cancelled: %w", ctx.Err())
+	default:
+	}
+	if err := instance.PreStart(); err != nil {
+		return fmt.Errorf("failed to start sing-box instance: %w", err)
+	}
+	outbound, _ := instance.Outbound().Outbound("preTest")
+	tester, _ := outbound.(adapter.URLTestGroup)
+	// run URL tests
+	results, err := tester.URLTest(ctx)
+	if err != nil {
+		c.logger.Error("Pre-start URL test failed", "error", err)
+		return fmt.Errorf("pre-start URL test failed: %w", err)
 	}
 
 	// Record URL test results in a span linked to the bandit's trace.
@@ -491,166 +518,47 @@ func RunURLTests(path string) {
 		span.End()
 	}
 
-	var formattedResults []string
+	var fmttedResults []string
 	for tag, delay := range results {
-		formattedResults = append(formattedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+		fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
 	}
-	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
+	c.logger.Log(nil, log.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
+	return nil
 }
 
-func preTest(path string) (map[string]uint16, context.Context, bool, error) {
-	slog.Info("Performing pre-start URL tests")
-
-	confPath := filepath.Join(path, common.ConfigFileName)
-	slog.Debug("Loading config file", "confPath", confPath)
-	cfg, err := loadConfig(confPath)
-	if err != nil {
-		return nil, context.Background(), false, fmt.Errorf("failed to load config: %w", err)
+// ClearNetErrorState attempts to clear any error state left by a previous unclean shutdown, such
+// as from a crash. No errors are returned and this fails silently.
+func ClearNetErrorState() {
+	options := baseOpts("")
+	options = option.Options{
+		DNS:      options.DNS,
+		Inbounds: options.Inbounds,
+		Route: &option.RouteOptions{
+			AutoDetectInterface: true,
+			Rules: []option.Rule{
+				{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Protocol: []string{"dns"},
+						},
+						RuleAction: option.RuleAction{
+							Action: C.RuleActionTypeHijackDNS,
+						},
+					},
+				},
+			},
+		},
 	}
-
-	// Extract bandit trace context for distributed tracing
-	traceCtx, hasTrace := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides)
-
-	cfgOpts := cfg.Options
-
-	slog.Debug("Loading user servers")
-	userOpts, err := loadUserOptions(path)
-	if err != nil {
-		return nil, context.Background(), false, fmt.Errorf("failed to load user options: %w", err)
-	}
-
-	// since we are only doing URL tests, we only need the outbounds from both configs; we skip
-	// endpoints as most/all require elevated privileges to use. just using outbounds is sufficient
-	// to improve initial connect times.
-	outbounds := append(cfgOpts.Outbounds, userOpts.Outbounds...)
-	tags := make([]string, 0, len(outbounds))
-	for _, ob := range outbounds {
-		tags = append(tags, ob.Tag)
-	}
-	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
-	options := option.Options{
-		Log:       &option.LogOptions{Disabled: true},
-		Outbounds: outbounds,
-	}
-
-	// create pre-started box instance. we just use the standard box since we don't need a
-	// platform interface for testing.
-	ctx := box.BaseContext()
-	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
-	urlTestHistoryStorage := urltest.NewHistoryStorage()
-	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
-	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
-
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second) // enough time for bandit callback tests through proxies
+	ctx, cancel := context.WithCancel(box.BaseContext())
 	defer cancel()
-	instance, err := sbox.New(sbox.Options{
+	b, err := sbox.New(sbox.Options{
 		Context: ctx,
 		Options: options,
 	})
 	if err != nil {
-		return nil, context.Background(), false, fmt.Errorf("failed to create sing-box instance: %w", err)
+		return
 	}
-	defer instance.Close()
-	if err := instance.PreStart(); err != nil {
-		return nil, context.Background(), false, fmt.Errorf("failed to start sing-box instance: %w", err)
-	}
-	outbound, ok := instance.Outbound().Outbound("preTest")
-	if !ok {
-		return nil, context.Background(), false, errors.New("preTest outbound not found")
-	}
-	tester, ok := outbound.(adapter.URLTestGroup)
-	if !ok {
-		return nil, context.Background(), false, errors.New("preTest outbound is not a URLTestGroup")
-	}
-	// run URL tests
-	results, err := tester.URLTest(ctx)
-	if err != nil {
-		return nil, context.Background(), false, fmt.Errorf("failed to perform URL tests: %w", err)
-	}
-
-	historyPath := filepath.Join(path, urlTestHistoryFileName)
-	if err := saveURLTestResults(urlTestHistoryStorage, historyPath, results); err != nil {
-		return results, traceCtx, hasTrace, fmt.Errorf("failed to save URL test results: %w", err)
-	}
-	return results, traceCtx, hasTrace, nil
-}
-
-
-func saveURLTestResults(storage *urltest.HistoryStorage, path string, results map[string]uint16) error {
-	slog.Debug("Saving URL test history", "path", path)
-	history := make(map[string]*adapter.URLTestHistory, len(results))
-	for tag := range results {
-		history[tag] = storage.LoadURLTestHistory(tag)
-	}
-	buf, err := json.Marshal(history)
-	if err != nil {
-		return fmt.Errorf("failed to marshal URL test history: %w", err)
-	}
-	return atomicfile.WriteFile(path, buf, 0o644)
-}
-
-func loadURLTestHistory(storage *urltest.HistoryStorage, path string) error {
-	slog.Debug("Loading URL test history", "path", path)
-	buf, err := atomicfile.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("failed to read URL test history file: %w", err)
-	}
-
-	history := make(map[string]*adapter.URLTestHistory)
-	if err := json.Unmarshal(buf, &history); err != nil {
-		return fmt.Errorf("failed to unmarshal URL test history: %w", err)
-	}
-	for tag, result := range history {
-		storage.StoreURLTestHistory(tag, result)
-	}
-	return nil
-}
-
-func SmartRoutingEnabled() bool {
-	return settings.GetBool(settings.SmartRoutingKey)
-}
-
-func SetSmartRouting(enable bool) error {
-	if SmartRoutingEnabled() == enable {
-		return nil
-	}
-	if err := settings.Set(settings.SmartRoutingKey, enable); err != nil {
-		return err
-	}
-	slog.Info("Updated Smart-Routing", "enabled", enable)
-	return restartTunnel()
-}
-
-func AdBlockEnabled() bool {
-	return settings.GetBool(settings.AdBlockKey)
-}
-
-func SetAdBlock(enable bool) error {
-	if AdBlockEnabled() == enable {
-		return nil
-	}
-	if err := settings.Set(settings.AdBlockKey, enable); err != nil {
-		return err
-	}
-	slog.Info("Updated Ad-Block", "enabled", enable)
-	return restartTunnel()
-}
-
-func restartTunnel() error {
-	ctx := context.Background()
-	if !isOpen(ctx) {
-		return nil
-	}
-	slog.Info("Restarting tunnel")
-	options, err := getOptions()
-	if err != nil {
-		return err
-	}
-	if err := ipc.RestartService(ctx, options); err != nil {
-		return fmt.Errorf("failed to restart tunnel: %w", err)
-	}
-	return nil
+	defer b.Close()
+	b.Start()
 }

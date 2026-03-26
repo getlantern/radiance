@@ -27,6 +27,7 @@
 package events
 
 import (
+	"reflect"
 	"sync"
 )
 
@@ -36,7 +37,7 @@ type Event interface {
 }
 
 var (
-	subscriptions   = make(map[any]map[*Subscription[Event]]func(any))
+	subscriptions   = make(map[reflect.Type]map[*Subscription[Event]]func(any))
 	subscriptionsMu sync.RWMutex
 )
 
@@ -50,12 +51,12 @@ type Subscription[T Event] struct {
 func Subscribe[T Event](callback func(evt T)) *Subscription[T] {
 	subscriptionsMu.Lock()
 	defer subscriptionsMu.Unlock()
-	var evt T
-	if subscriptions[evt] == nil {
-		subscriptions[evt] = make(map[*Subscription[Event]]func(any))
+	key := reflect.TypeFor[T]()
+	if subscriptions[key] == nil {
+		subscriptions[key] = make(map[*Subscription[Event]]func(any))
 	}
 	sub := &Subscription[T]{}
-	subscriptions[evt][(*Subscription[Event])(sub)] = func(e any) { callback(e.(T)) }
+	subscriptions[key][(*Subscription[Event])(sub)] = func(e any) { callback(e.(T)) }
 	return sub
 }
 
@@ -77,11 +78,11 @@ func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
 func Unsubscribe[T Event](sub *Subscription[T]) {
 	subscriptionsMu.Lock()
 	defer subscriptionsMu.Unlock()
-	var evt T
-	if subs, ok := subscriptions[evt]; ok {
+	key := reflect.TypeFor[T]()
+	if subs, ok := subscriptions[key]; ok {
 		delete(subs, (*Subscription[Event])(sub))
 		if len(subs) == 0 {
-			delete(subscriptions, evt)
+			delete(subscriptions, key)
 		}
 	}
 }
@@ -95,8 +96,7 @@ func (e *Subscription[T]) Unsubscribe() {
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()
-	var e T
-	if subs, ok := subscriptions[e]; ok {
+	if subs, ok := subscriptions[reflect.TypeFor[T]()]; ok {
 		for _, cb := range subs {
 			go cb(evt)
 		}

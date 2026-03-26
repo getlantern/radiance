@@ -2,7 +2,6 @@ package vpn
 
 import (
 	"context"
-	stdjson "encoding/json"
 	"testing"
 	"time"
 
@@ -17,29 +16,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal/testutil"
+	rlog "github.com/getlantern/radiance/log"
 )
 
-func setupTestSplitTunnel(t *testing.T) *SplitTunnel {
-	testutil.SetPathsForTesting(t)
-	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
-	return s
-}
-
 func TestEnableDisableIsEnabled(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
-	if assert.NoError(t, st.Disable()) {
+	if assert.NoError(t, st.SetEnabled(false)) {
 		assert.False(t, st.IsEnabled(), "split tunnel should be disabled")
 	}
-	if assert.NoError(t, st.Enable()) {
+	if assert.NoError(t, st.SetEnabled(true)) {
 		assert.True(t, st.IsEnabled(), "split tunnel should be enabled")
 	}
 }
 
 func TestAddRemoveItem(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
 	domain := "example.com"
 	domain2 := "example2.com"
@@ -72,18 +64,18 @@ func TestAddRemoveItem(t *testing.T) {
 }
 
 func TestRemoveItems(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
-	require.NoError(t, st.RemoveItems(Filter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}}))
+	require.NoError(t, st.RemoveItems(SplitTunnelFilter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}}))
 	f := st.Filters()
 	assert.Empty(t, f.Domain)
 	assert.Empty(t, f.ProcessName)
 }
 
 func TestAddRemoveItems(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
-	items := Filter{
+	items := SplitTunnelFilter{
 		Domain:       []string{"a.com", "b.com"},
 		DomainSuffix: []string{"suffix"},
 		ProcessName:  []string{"proc"},
@@ -97,7 +89,7 @@ func TestAddRemoveItems(t *testing.T) {
 	assert.Equal(t, []string{"proc"}, f.ProcessName)
 	assert.Equal(t, []string{"pkg"}, f.PackageName)
 
-	err = st.RemoveItems(Filter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}})
+	err = st.RemoveItems(SplitTunnelFilter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}})
 	require.NoError(t, err)
 	f = st.Filters()
 	assert.Equal(t, []string{"b.com"}, f.Domain)
@@ -105,20 +97,21 @@ func TestAddRemoveItems(t *testing.T) {
 }
 
 func TestFilterPersistence(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	tmpDir := t.TempDir()
+	st := newSplitTunnel(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, st.AddItem("domain", "example.com"))
 
 	f := st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain)
 
-	st = newSplitTunnel(settings.GetString(settings.DataPathKey))
+	st = newSplitTunnel(tmpDir, rlog.NoOpLogger())
 	assert.NoError(t, st.loadRule())
 	f = st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")
 }
 
 func TestUpdateFilterUnsupportedType(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 	err := st.AddItem("unsupported", "foo")
 	assert.Error(t, err)
 }
@@ -143,7 +136,7 @@ func TestRemoveEdgeCases(t *testing.T) {
 }
 
 func TestMatch(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 	require.NoError(t, st.AddItem("domain", "example.com"))
 
 	ruleOpts := O.Rule{
@@ -191,7 +184,7 @@ func TestMatch(t *testing.T) {
 	metadata := &adapter.InboundContext{Domain: "example.com"}
 
 	rsStr := ruleSet.String()
-	require.NoError(t, st.Enable())
+	require.NoError(t, st.SetEnabled(true))
 	require.Eventually(t, func() bool {
 		return ruleSet.String() != rsStr
 	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
@@ -199,7 +192,7 @@ func TestMatch(t *testing.T) {
 	assert.True(t, rule.Match(metadata), "rule should match when split tunnel is enabled")
 
 	rsStr = ruleSet.String()
-	require.NoError(t, st.Disable())
+	require.NoError(t, st.SetEnabled(false))
 	require.Eventually(t, func() bool {
 		return ruleSet.String() != rsStr
 	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
@@ -217,7 +210,7 @@ func (r *mockRouter) RuleSet(tag string) (adapter.RuleSet, bool) {
 }
 
 func TestMigration(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
 	// Create a legacy format rule file
 	legacyRule := O.LogicalHeadlessRule{
@@ -321,100 +314,4 @@ func TestMigration(t *testing.T) {
 `
 	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
 	assert.Equal(t, rule, st.rule)
-}
-
-// unmarshalItems is a test helper that unmarshals a JSON string into []string.
-func unmarshalItems(t *testing.T, jsonStr string) []string {
-	t.Helper()
-	var items []string
-	require.NoError(t, stdjson.Unmarshal([]byte(jsonStr), &items))
-	return items
-}
-
-func TestItemsJSON(t *testing.T) {
-	st := setupTestSplitTunnel(t)
-
-	t.Run("returns items for valid filter type", func(t *testing.T) {
-		require.NoError(t, st.AddItem(TypeDomain, "example.com"))
-		require.NoError(t, st.AddItem(TypeDomain, "test.org"))
-
-		result, err := st.ItemsJSON(TypeDomain)
-		require.NoError(t, err)
-		items := unmarshalItems(t, result)
-		assert.Equal(t, []string{"example.com", "test.org"}, items)
-	})
-
-	t.Run("returns empty array when no items", func(t *testing.T) {
-		result, err := st.ItemsJSON(TypeDomainKeyword)
-		require.NoError(t, err)
-		items := unmarshalItems(t, result)
-		assert.Empty(t, items)
-	})
-
-	t.Run("returns error for unsupported filter type", func(t *testing.T) {
-		_, err := st.ItemsJSON("unsupported")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported filter type")
-	})
-
-	t.Run("returns items for package names", func(t *testing.T) {
-		require.NoError(t, st.AddItem(TypePackageName, "com.example.app"))
-		result, err := st.ItemsJSON(TypePackageName)
-		require.NoError(t, err)
-		items := unmarshalItems(t, result)
-		assert.Equal(t, []string{"com.example.app"}, items)
-	})
-}
-
-func TestEnabledAppsJSON(t *testing.T) {
-	st := setupTestSplitTunnel(t)
-
-	t.Run("returns empty array when no apps configured", func(t *testing.T) {
-		result, err := st.EnabledAppsJSON()
-		require.NoError(t, err)
-		items := unmarshalItems(t, result)
-		assert.Empty(t, items)
-	})
-
-	t.Run("returns apps from current format", func(t *testing.T) {
-		require.NoError(t, st.AddItem(TypePackageName, "com.example.app"))
-		require.NoError(t, st.AddItem(TypeProcessPath, "/usr/bin/firefox"))
-
-		result, err := st.EnabledAppsJSON()
-		require.NoError(t, err)
-		items := unmarshalItems(t, result)
-		assert.Contains(t, items, "com.example.app")
-		assert.Contains(t, items, "/usr/bin/firefox")
-	})
-
-	t.Run("picks up legacy camelCase keys from raw file", func(t *testing.T) {
-		st2 := setupTestSplitTunnel(t)
-		require.NoError(t, st2.AddItem(TypePackageName, "com.current.app"))
-
-		// Patch the file with legacy camelCase keys alongside current format
-		b, err := atomicfile.ReadFile(st2.ruleFile)
-		require.NoError(t, err)
-		var raw map[string]any
-		require.NoError(t, stdjson.Unmarshal(b, &raw))
-		raw["packageName"] = []string{"com.legacy.app"}
-		raw["processPath"] = []string{"/opt/legacy"}
-		patched, err := stdjson.Marshal(raw)
-		require.NoError(t, err)
-		require.NoError(t, atomicfile.WriteFile(st2.ruleFile, patched, 0644))
-
-		result, err := st2.EnabledAppsJSON()
-		require.NoError(t, err)
-		items := unmarshalItems(t, result)
-		assert.Contains(t, items, "com.current.app")
-		assert.Contains(t, items, "com.legacy.app")
-		assert.Contains(t, items, "/opt/legacy")
-		// Deduplication: com.current.app should appear exactly once
-		count := 0
-		for _, app := range items {
-			if app == "com.current.app" {
-				count++
-			}
-		}
-		assert.Equal(t, 1, count, "com.current.app should appear exactly once")
-	})
 }

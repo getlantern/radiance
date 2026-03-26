@@ -1,27 +1,18 @@
 package kindling
 
 import (
-	"context"
-	"log/slog"
 	"net/http"
-	"os"
 	"testing"
 
-	"github.com/getlantern/radiance/common/settings"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewClient(t *testing.T) {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     slog.LevelDebug,
-	})))
-	settings.Set(settings.DataPathKey, t.TempDir())
-	k = NewKindling()
+	k = NewKindling(t.TempDir())
 	SetKindling(k)
 
 	t.Cleanup(func() {
-		Close(context.Background())
+		Close()
 		k = nil
 	})
 

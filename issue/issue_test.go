@@ -1,12 +1,15 @@
 package issue
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/getlantern/osversion"
@@ -16,7 +19,6 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/kindling"
 )
 
 func TestSendReport(t *testing.T) {
@@ -26,7 +28,13 @@ func TestSendReport(t *testing.T) {
 	osVer, err := osversion.GetHumanReadable()
 	require.NoError(t, err)
 
-	// Build expected report
+	// Create a temp file to use as an additional attachment
+	tmpDir := t.TempDir()
+	attachPath := filepath.Join(tmpDir, "Hello.txt")
+	err = os.WriteFile(attachPath, []byte("Hello World"), 0644)
+	require.NoError(t, err)
+
+	// Build expected report (without attachments — we verify those separately)
 	want := &ReportIssueRequest{
 		Type:              ReportIssueRequest_NO_ACCESS,
 		CountryCode:       "US",
@@ -36,53 +44,40 @@ func TestSendReport(t *testing.T) {
 		Description:       "Description placeholder-test only",
 		UserEmail:         "radiancetest@getlantern.org",
 		DeviceId:          settings.GetString(settings.DeviceIDKey),
-		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
+		UserId:            settings.GetString(settings.UserIDKey),
 		Device:            "Samsung Galaxy S10",
 		Model:             "SM-G973F",
 		OsVersion:         osVer,
 		Language:          settings.GetString(settings.LocaleKey),
-		Attachments: []*ReportIssueRequest_Attachment{
-			{
-				Type:    "application/zip",
-				Name:    "Hello.txt",
-				Content: []byte("Hello World"),
-			},
-		},
 	}
 
 	srv := newTestServer(t, want)
 	defer srv.Close()
 
-	reporter := &IssueReporter{}
-	kindling.SetKindling(&mockKindling{newTestClient(t, srv.URL)})
-	report := IssueReport{
-		Type:        "Cannot access blocked sites",
-		Description: "Description placeholder-test only",
-		Attachments: []*Attachment{
-			{
-				Name: "Hello.txt",
-				Data: []byte("Hello World"),
-			},
-		},
-		Device: "Samsung Galaxy S10",
-		Model:  "SM-G973F",
-	}
-
-	err = reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
-	require.NoError(t, err)
-}
-
-func newTestClient(t *testing.T, testURL string) *http.Client {
-	return &http.Client{
+	reporter := NewIssueReporter(&http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			parsedURL, err := url.Parse(testURL)
-			if err != nil {
-				t.Fatalf("failed to parse testURL: %v", err)
-			}
+			parsedURL, err := url.Parse(srv.URL)
+			require.NoError(t, err, "failed to parse test server URL")
 			req.URL = parsedURL
 			return http.DefaultTransport.RoundTrip(req)
 		}),
+	})
+	report := IssueReport{
+		Type:                  CannotAccessBlockedSites,
+		Description:           "Description placeholder-test only",
+		Email:                 "radiancetest@getlantern.org",
+		CountryCode:           "US",
+		SubscriptionLevel:     "free",
+		DeviceID:              settings.GetString(settings.DeviceIDKey),
+		UserID:                settings.GetString(settings.UserIDKey),
+		Locale:                settings.GetString(settings.LocaleKey),
+		Device:                "Samsung Galaxy S10",
+		Model:                 "SM-G973F",
+		AdditionalAttachments: []string{attachPath},
 	}
+
+	err = reporter.Report(context.Background(), report)
+	require.NoError(t, err)
 }
 
 // roundTripperFunc allows using a function as http.RoundTripper
@@ -109,18 +104,29 @@ func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
 		err = proto.Unmarshal(body, &got)
 		require.NoError(t, err, "should unmarshal protobuf request")
 
-		// Filter got.Attachments to only include the ones we're testing
-		// (exclude logs.zip and other dynamic attachments)
-		filteredAttachments := make([]*ReportIssueRequest_Attachment, 0)
-		for _, gotAtt := range got.Attachments {
-			for _, wantAtt := range ts.want.Attachments {
-				if gotAtt.Name == wantAtt.Name {
-					filteredAttachments = append(filteredAttachments, gotAtt)
-					break
+		// Verify logs.zip attachment contains the additional file
+		var foundHello bool
+		for _, att := range got.Attachments {
+			if att.Name == "logs.zip" {
+				zr, err := zip.NewReader(bytes.NewReader(att.Content), int64(len(att.Content)))
+				require.NoError(t, err, "should open logs.zip")
+				for _, f := range zr.File {
+					if f.Name == "attachments/Hello.txt" {
+						rc, err := f.Open()
+						require.NoError(t, err)
+						data, err := io.ReadAll(rc)
+						require.NoError(t, err)
+						rc.Close()
+						assert.Equal(t, "Hello World", string(data))
+						foundHello = true
+					}
 				}
 			}
 		}
-		got.Attachments = filteredAttachments
+		assert.True(t, foundHello, "logs.zip should contain attachments/Hello.txt")
+
+		// Clear attachments for field-level comparison
+		got.Attachments = nil
 
 		// Compare received report with expected report using proto.Equal
 		if assert.True(t, proto.Equal(ts.want, &got), "received report should match expected report") {
@@ -130,18 +136,4 @@ func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
 		}
 	}))
 	return ts
-}
-
-type mockKindling struct {
-	c *http.Client
-}
-
-// NewHTTPClient returns a new HTTP client that is configured to use kindling.
-func (m *mockKindling) NewHTTPClient() *http.Client {
-	return m.c
-}
-
-// ReplaceTransport replaces an existing transport RoundTripper generator with the provided one.
-func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
-	panic("not implemented") // TODO: Implement
 }

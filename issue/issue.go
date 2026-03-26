@@ -4,140 +4,131 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
-	"strconv"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/getlantern/osversion"
+	"github.com/getlantern/timezone"
 	"go.opentelemetry.io/otel"
 
-	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/kindling"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	maxUncompressedLogSize = 50 * 1024 * 1024 // 50 MB
-	tracerName             = "github.com/getlantern/radiance/issue"
+	maxCompressedSize = 20 * 1024 * 1024 // 20 MB
+	tracerName        = "github.com/getlantern/radiance/issue"
 )
 
-// IssueReporter is used to send issue reports to backend
-type IssueReporter struct{}
+// IssueReporter is used to send issue reports to backend.
+type IssueReporter struct {
+	httpClient *http.Client
+}
 
 // NewIssueReporter creates a new IssueReporter that can be used to send issue reports
 // to the backend.
-func NewIssueReporter() *IssueReporter {
-	return &IssueReporter{}
+func NewIssueReporter(httpClient *http.Client) *IssueReporter {
+	return &IssueReporter{httpClient: httpClient}
 }
 
-func randStr(n int) string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	var hexStr string
-	for i := 0; i < n; i++ {
-		hexStr += fmt.Sprintf("%x", r.Intn(16))
-	}
-	return hexStr
-}
+type IssueType int
 
-// Attachment is a file attachment
-type Attachment struct {
-	Name string
-	Data []byte
-}
+const (
+	CannotCompletePurchase IssueType = iota
+	CannotSignIn
+	SpinnerLoadsEndlessly
+	CannotAccessBlockedSites
+	Slow
+	CannotLinkDevice
+	ApplicationCrashes
+	Other IssueType = iota + 2
+	UpdateFails
+)
+
+// // issue text to type mapping
+// var issueTypeMap = map[string]IssueType{
+// 	"Cannot complete purchase":    CannotCompletePurchase,
+// 	"Cannot sign in":              CannotSignIn,
+// 	"Spinner loads endlessly":     SpinnerLoadsEndlessly,
+// 	"Cannot access blocked sites": CannotAccessBlockedSites,
+// 	"Slow":                        Slow,
+// 	"Cannot link device":          CannotLinkDevice,
+// 	"Application crashes":         ApplicationCrashes,
+// 	"Other":                       Other,
+// 	"Update fails":                UpdateFails,
+// }
 
 type IssueReport struct {
 	// Type is one of the predefined issue type strings
-	Type string
-	// Issue description
+	Type        IssueType
 	Description string
-	// Attachment is a list of issue attachments
-	Attachments []*Attachment
+	Email       string
+	CountryCode string
 	// device common name
-	Device string
+	Device            string
+	DeviceID          string
+	UserID            string
+	SubscriptionLevel string
+	Locale            string
 	// device alphanumeric name
 	Model string
-}
-
-// issue text to type mapping
-var issueTypeMap = map[string]int{
-	"Cannot complete purchase":    0,
-	"Cannot sign in":              1,
-	"Spinner loads endlessly":     2,
-	"Cannot access blocked sites": 3,
-	"Slow":                        4,
-	"Cannot link device":          5,
-	"Application crashes":         6,
-	"Other":                       9,
-	"Update fails":                10,
+	// AdditionalAttachments is a list of additional files to be attached. The log file will be
+	// automatically included.
+	AdditionalAttachments []string
 }
 
 // Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
-func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEmail, country string) error {
+func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Report")
 	defer span.End()
 	// set a random email if it's empty
-	if userEmail == "" {
-		userEmail = "support+" + randStr(8) + "@getlantern.org"
+	if report.Email == "" {
+		report.Email = "support+" + randStr(8) + "@getlantern.org"
 	}
 
-	userStatus := settings.GetString(settings.UserLevelKey)
+	// userStatus := settings.GetString(settings.UserLevelKey)
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)
+		osVersion = runtime.GOOS + " " + runtime.GOARCH
 	}
-	// get issue type as integer
-	iType, ok := issueTypeMap[report.Type]
-	if !ok {
-		slog.Error("Unknown issue type, setting to 'Other'", "type", report.Type)
-		iType = 9
-	}
-
 	r := &ReportIssueRequest{
-		Type:              ReportIssueRequest_ISSUE_TYPE(iType),
-		CountryCode:       country,
+		Type:              ReportIssueRequest_ISSUE_TYPE(report.Type),
 		AppVersion:        common.Version,
-		SubscriptionLevel: userStatus,
 		Platform:          common.Platform,
+		CountryCode:       report.CountryCode,
+		SubscriptionLevel: report.SubscriptionLevel,
 		Description:       report.Description,
-		UserEmail:         userEmail,
-		DeviceId:          settings.GetString(settings.DeviceIDKey),
-		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
+		UserEmail:         report.Email,
+		DeviceId:          report.DeviceID,
+		UserId:            report.UserID,
 		Device:            report.Device,
 		Model:             report.Model,
+		Language:          report.Locale,
 		OsVersion:         osVersion,
-		Language:          settings.GetString(settings.LocaleKey),
 	}
 
-	for _, attachment := range report.Attachments {
-		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
-			Type:    "application/zip",
-			Name:    attachment.Name,
-			Content: attachment.Data,
-		})
+	logPath := filepath.Join(settings.GetString(settings.LogPathKey), internal.LogFileName)
+	archive, err := buildIssueArchive(logPath, report.AdditionalAttachments, maxCompressedSize)
+	if err != nil {
+		slog.Error("failed to build issue archive", "error", err)
 	}
-
-	// Zip logs
-	slog.Debug("zipping log files for issue report")
-	buf := &bytes.Buffer{}
-	// zip * under folder common.LogDir
-	logDir := settings.GetString(settings.LogPathKey)
-	slog.Debug("zipping log files", "logDir", logDir, "maxSize", maxUncompressedLogSize)
-	if _, zipErr := zipLogFiles(buf, logDir, maxUncompressedLogSize, int64(maxUncompressedLogSize)); zipErr == nil {
-		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
+	if len(archive) > 0 {
+		r.Attachments = []*ReportIssueRequest_Attachment{{
 			Type:    "application/zip",
 			Name:    "logs.zip",
-			Content: buf.Bytes(),
-		})
-		slog.Debug("log files zipped for issue report", "size", len(buf.Bytes()))
-	} else {
-		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxUncompressedLogSize)
+			Content: archive,
+		}}
 	}
 
 	// send message to lantern-cloud
@@ -148,7 +139,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 	}
 
 	issueURL := common.GetBaseURL() + "/issue"
-	req, err := backend.NewIssueRequest(
+	req, err := newIssueRequest(
 		ctx,
 		http.MethodPost,
 		issueURL,
@@ -159,7 +150,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		return traces.RecordError(ctx, err)
 	}
 
-	resp, err := kindling.HTTPClient().Do(req)
+	resp, err := ir.httpClient.Do(req)
 	if err != nil {
 		slog.Error("failed to send issue report", "error", err, "requestURL", issueURL)
 		return traces.RecordError(ctx, err)
@@ -177,4 +168,29 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 
 	slog.Debug("issue report sent")
 	return nil
+}
+
+// newIssueRequest creates a new HTTP request with the required headers for issue reporting.
+func newIssueRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+	req, err := common.NewRequestWithHeaders(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("content-type", "application/x-protobuf")
+	req.Header.Set(common.SupportedDataCapsHeader, "monthly,weekly,daily")
+	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
+		req.Header.Set(common.TimeZoneHeader, tz)
+	}
+
+	return req, nil
+}
+
+func randStr(n int) string {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	var hexStr string
+	for range n {
+		hexStr += fmt.Sprintf("%x", r.Intn(16))
+	}
+	return hexStr
 }

@@ -21,6 +21,13 @@ jobs:
       with:
         go-version-file: "go.mod"
 
+    - name: Check for slog overwrite calls in tests
+      run: |
+        if grep -rn 'slog\.SetDefault\|slog\.SetLogLoggerLevel' --include='*_test.go' .; then
+          echo "::error::Test files should not upate the slog.Default logger or level. This pollutes the output."
+          exit 1
+        fi
+
     - name: Build
       run: go build -v -tags with_clash_api ./...
     - name: Test

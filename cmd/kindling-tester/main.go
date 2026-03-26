@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,7 +12,7 @@ import (
 	"github.com/getlantern/radiance/kindling"
 )
 
-func performKindlingPing(ctx context.Context, urlToHit string, runID string, deviceID string, userID int64, token string, dataDir string) error {
+func performKindlingPing(urlToHit string, runID string, deviceID string, userID int64, token string, dataDir string) error {
 	os.MkdirAll(dataDir, 0o755)
 	settings.Set(settings.DataPathKey, dataDir)
 	settings.Set(settings.UserIDKey, userID)
@@ -28,8 +27,8 @@ func performKindlingPing(ctx context.Context, urlToHit string, runID string, dev
 	})
 
 	t1 := time.Now()
-	kindling.SetKindling(kindling.NewKindling())
-	defer kindling.Close(ctx)
+	kindling.SetKindling(kindling.NewKindling(dataDir))
+	defer kindling.Close()
 	cli := kindling.HTTPClient()
 
 	t2 := time.Now()
@@ -55,7 +54,7 @@ func performKindlingPing(ctx context.Context, urlToHit string, runID string, dev
 	if err := os.WriteFile(dataDir+"/output.txt", responseBody, 0o644); err != nil {
 		slog.Error("failed to write output file", slog.Any("error", err), slog.String("path", dataDir+"/output.txt"))
 	}
-	return os.WriteFile(dataDir+"/timing.txt", []byte(fmt.Sprintf(`
+	return os.WriteFile(dataDir+"/timing.txt", fmt.Appendf([]byte{}, `
 	result: %v
 	run-id: %s
 	err: %v
@@ -63,7 +62,7 @@ func performKindlingPing(ctx context.Context, urlToHit string, runID string, dev
 	connected: %d
 	fetched: %d
 	url: %s`,
-		true, runID, nil, t1, int32(t2.Sub(t1).Milliseconds()), int32(t3.Sub(t1).Milliseconds()), urlToHit)), 0o644)
+		true, runID, nil, t1, int32(t2.Sub(t1).Milliseconds()), int32(t3.Sub(t1).Milliseconds()), urlToHit), 0o644)
 }
 
 func main() {
@@ -95,8 +94,6 @@ func main() {
 		}
 	}
 
-	ctx := context.Background()
-
 	// disabling all other transports before enabling the selected
 	for name := range kindling.EnabledTransports {
 		kindling.EnabledTransports[name] = false
@@ -104,7 +101,7 @@ func main() {
 
 	kindling.EnabledTransports[transport] = true
 	slog.Debug("enabled transports", slog.Any("enabled_transports", kindling.EnabledTransports))
-	if err := performKindlingPing(ctx, targetURL, runID, deviceID, uid, token, data); err != nil {
+	if err := performKindlingPing(targetURL, runID, deviceID, uid, token, data); err != nil {
 		slog.Error("failed to perform kindling ping", slog.Any("error", err))
 		os.Exit(1)
 	}
