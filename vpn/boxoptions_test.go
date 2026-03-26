@@ -203,6 +203,44 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		assert.True(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
 		assert.True(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
 	})
+	t.Run("with smart routing and missing outbounds", func(t *testing.T) {
+		tmp := t.TempDir()
+		cfg, err := json.UnmarshalExtendedContext[config.Config](box.BaseContext(), buf)
+		require.NoError(t, err, "parse test config")
+		require.NotEmpty(t, cfg.ConfigResponse.SmartRouting, "test config missing smart routing rules")
+
+		cfg.ConfigResponse.SmartRouting[0].Outbounds = nil
+		cfgBuf, err := json.Marshal(cfg)
+		require.NoError(t, err, "marshal modified test config")
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(tmp, common.ConfigFileName), cfgBuf, 0o644),
+			"write modified config to temp dir",
+		)
+
+		require.NoError(t, settings.InitSettings(tmp))
+		t.Cleanup(settings.Reset)
+
+		settings.Set(settings.SmartRoutingKey, true)
+		options, err := buildOptions(context.Background(), tmp)
+		require.NoError(t, err)
+
+		assert.Nil(
+			t,
+			findOutbound(options.Outbounds, "sr-openai"),
+			"should not create smart-routing outbound when rule outbounds are missing",
+		)
+
+		assert.False(
+			t,
+			contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]),
+			"should skip smart-routing ruleset when rule outbounds are missing",
+		)
+		hasSmartRoutingRule := slices.ContainsFunc(options.Route.Rules, func(rule O.Rule) bool {
+			return len(rule.DefaultOptions.RuleSet) == 1 && rule.DefaultOptions.RuleSet[0] == "openai"
+		})
+		assert.False(t, hasSmartRoutingRule, "should skip smart-routing rule when rule outbounds are missing")
+	})
 	t.Run("with ad block", func(t *testing.T) {
 		tmp := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
