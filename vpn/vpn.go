@@ -24,6 +24,8 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
 
@@ -443,6 +445,9 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	c.mu.Unlock()
 	defer close(done)
 
+	// Extract bandit trace context for distributed tracing
+	traceCtx, hasTrace := traces.ExtractBanditTraceContext(banditURLs)
+
 	c.logger.Info("Performing pre-start URL tests")
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
@@ -495,6 +500,22 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	if err != nil {
 		c.logger.Error("Pre-start URL test failed", "error", err)
 		return fmt.Errorf("pre-start URL test failed: %w", err)
+	}
+
+	// Record URL test results in a span linked to the bandit's trace.
+	if hasTrace {
+		_, span := otel.Tracer(tracerName).Start(traceCtx, "radiance.url_tests_complete",
+			trace.WithAttributes(
+				attribute.Int("bandit.test_count", len(results)),
+			),
+		)
+		for tag, delay := range results {
+			span.AddEvent("url_test_result", trace.WithAttributes(
+				attribute.String("outbound", tag),
+				attribute.Int("latency_ms", int(delay)),
+			))
+		}
+		span.End()
 	}
 
 	var fmttedResults []string

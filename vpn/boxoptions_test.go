@@ -72,7 +72,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			"rules": [
 				{
 					"rule_set": "openai",
-					"outbound": "openai"
+					"outbound": "sr-openai"
 				}
 			],
 			"rule_set": [

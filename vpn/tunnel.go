@@ -441,8 +441,8 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 
 func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	var errs []error
-	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
-		slog.Debug("No outbounds or endpoints to update, skipping")
+	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 && len(newOpts.URLOverrides) == 0 {
+		slog.Debug("No outbounds, endpoints, or bandit overrides to update, skipping")
 		return nil
 	}
 	slog.Log(nil, rlog.LevelTrace, "Updating servers")

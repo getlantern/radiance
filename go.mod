@@ -29,12 +29,12 @@ require (
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58
 	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
-	github.com/getlantern/common v1.2.1-0.20260224184656-5aefb9c21c85
+	github.com/getlantern/common v1.2.1-0.20260325181816-33f69c725899
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
-	github.com/getlantern/fronted v0.0.0-20260319225233-cf2160f85053
+	github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538
 	github.com/getlantern/keepcurrent v0.0.0-20260304213122-017d542145ae
 	github.com/getlantern/kindling v0.0.0-20260319225424-4736208dd171
-	github.com/getlantern/lantern-box v0.0.50-0.20260323160457-f763bd127d8c
+	github.com/getlantern/lantern-box v0.0.51
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/goccy/go-yaml v1.19.0
