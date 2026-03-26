@@ -494,6 +494,9 @@ func (r *LocalBackend) VPNStatus() vpn.VPNStatus {
 }
 
 func (r *LocalBackend) ConnectVPN(tag string) error {
+	if tag == "" {
+		tag = vpn.AutoSelectTag
+	}
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.srvManager.GetServerByTag(tag); !found {
 			return fmt.Errorf("no server found with tag %s", tag)
