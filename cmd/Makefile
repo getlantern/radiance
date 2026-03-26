@@ -1,4 +1,9 @@
-TAGS=lanternd,with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack
+TAGS=with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+   TAGS := standalone,$(TAGS)
+endif
 
 ifeq ($(OS),Windows_NT)
    LANTERND := lanternd.exe
@@ -21,4 +26,8 @@ run-daemon:
 
 .PHONY: build-cli
 build-cli:
+ifeq ($(UNAME_S),Darwin)
+	go build -tags "standalone" -o ../bin/$(LANTERN) ./lantern
+else
 	go build -o ../bin/$(LANTERN) ./lantern
+endif

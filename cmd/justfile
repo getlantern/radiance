@@ -1,4 +1,5 @@
-tags := "lanternd,with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack"
+base_tags := "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack"
+tags := if os() == "macos" { "standalone," + base_tags } else { base_tags }
 lanternd := if os() == "windows" { "lanternd.exe" } else { "lanternd" }
 lantern := if os() == "windows" { "lantern.exe" } else { "lantern" }
 
@@ -8,5 +9,7 @@ build-daemon:
 run-daemon *args:
     go run -tags={{tags}} ./lanternd run {{args}}
 
+cli_tags := if os() == "macos" { "standalone" } else { "" }
+
 build-cli:
-    go build -o ../bin/{{lantern}} ./lantern
+    go build {{ if cli_tags != "" { "-tags " + cli_tags } else { "" } }} -o ../bin/{{lantern}} ./lantern
