@@ -61,20 +61,28 @@ func authWebClient() *webClient {
 	return newWebClient(kindling.HTTPClient(), common.GetBaseURL())
 }
 
+var (
+	tunnelHTTPClientOnce     sync.Once
+	tunnelHTTPClientInstance *http.Client
+)
+
 // tunnelHTTPClient returns an HTTP client that routes through the local tunnel
 // proxy when the VPN is running. Unlike the bypass proxy (which routes to
 // direct), this routes through the active VPN proxy outbound. It has no
 // client-level timeout so it can be used for long-lived SSE streams. When the
 // VPN is not running, connections fail (no fallback to direct).
 func tunnelHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext:           bypass.TunnelDialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          10,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
-	}
+	tunnelHTTPClientOnce.Do(func() {
+		tunnelHTTPClientInstance = &http.Client{
+			Transport: &http.Transport{
+				DialContext:           bypass.TunnelDialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          10,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+		}
+	})
+	return tunnelHTTPClientInstance
 }

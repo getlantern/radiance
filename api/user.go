@@ -149,10 +149,11 @@ type DataCapChangeEvent struct {
 	*DataCapUsageResponse
 }
 
-// DataCapStream connects to the datacap SSE endpoint via the bypass proxy and
-// emits DataCapChangeEvent whenever the server pushes an update. Each update is
-// persisted to settings so the UI has data even when the VPN is off. The method
-// blocks until ctx is cancelled, reconnecting with backoff on stream errors.
+// DataCapStream connects to the datacap SSE endpoint via the tunnel proxy
+// and emits DataCapChangeEvent whenever the server pushes an update. Each
+// update is persisted to settings so the UI has data even when the VPN is off.
+// The method blocks until ctx is cancelled, reconnecting with backoff on
+// stream errors.
 func (a *APIClient) DataCapStream(ctx context.Context) error {
 	// Emit cached datacap immediately so the UI has data before connecting.
 	var cached DataCapUsageResponse
@@ -166,15 +167,18 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		start := time.Now()
 		err := a.connectSSE(ctx)
-		if err == nil {
-			// Successful connection that ended cleanly — reset backoff.
-			bo.Reset()
-		} else {
+		if err != nil {
 			slog.Debug("datacap SSE stream ended", "error", err)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// Reset backoff if the connection was up for a while before dropping,
+		// so we reconnect quickly after a transient disconnect.
+		if time.Since(start) > 30*time.Second {
+			bo.Reset()
 		}
 		bo.Wait(ctx)
 	}
@@ -204,7 +208,8 @@ func (a *APIClient) connectSSE(ctx context.Context) error {
 	}
 
 	slog.Debug("connected to datacap SSE stream")
-	for evt := range readSSE(ctx, resp.Body) {
+	eventCh, scanErr := readSSE(ctx, resp.Body)
+	for evt := range eventCh {
 		switch evt.Type {
 		case "datacap":
 			var datacap DataCapUsageResponse
@@ -225,7 +230,13 @@ func (a *APIClient) connectSSE(ctx context.Context) error {
 			// heartbeat or unknown event — ignore
 		}
 	}
-	return nil
+	if err := ctx.Err(); err != nil {
+		return traces.RecordError(ctx, err)
+	}
+	if err := scanErr(); err != nil {
+		return traces.RecordError(ctx, fmt.Errorf("datacap SSE scanner: %w", err))
+	}
+	return traces.RecordError(ctx, errors.New("datacap SSE stream ended unexpectedly"))
 }
 
 // SignUp signs the user up for an account.

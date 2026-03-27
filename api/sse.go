@@ -15,11 +15,15 @@ type sseEvent struct {
 // readSSE reads Server-Sent Events from body and sends parsed events on the
 // returned channel. The channel is closed when the body returns EOF, an error
 // occurs, or ctx is cancelled. The caller is responsible for closing body.
-func readSSE(ctx context.Context, body io.Reader) <-chan sseEvent {
+// After the channel is closed, call the returned function to retrieve any
+// scanner error (nil on clean EOF).
+func readSSE(ctx context.Context, body io.Reader) (<-chan sseEvent, func() error) {
 	ch := make(chan sseEvent, 1)
+	var scanErr error
 	go func() {
 		defer close(ch)
 		scanner := bufio.NewScanner(body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1 MB max token
 		var evt sseEvent
 		for scanner.Scan() {
 			if ctx.Err() != nil {
@@ -30,7 +34,12 @@ func readSSE(ctx context.Context, body io.Reader) <-chan sseEvent {
 			case strings.HasPrefix(line, "event:"):
 				evt.Type = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			case strings.HasPrefix(line, "data:"):
-				evt.Data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				dataLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if evt.Data == "" {
+					evt.Data = dataLine
+				} else {
+					evt.Data = evt.Data + "\n" + dataLine
+				}
 			case strings.HasPrefix(line, ":"):
 				// comment / heartbeat — ignore
 			case line == "":
@@ -45,6 +54,7 @@ func readSSE(ctx context.Context, body io.Reader) <-chan sseEvent {
 				}
 			}
 		}
+		scanErr = scanner.Err()
 	}()
-	return ch
+	return ch, func() error { return scanErr }
 }
