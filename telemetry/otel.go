@@ -22,10 +22,12 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"google.golang.org/grpc/credentials"
 
+	semconv "github.com/getlantern/semconv"
+
 	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 )
@@ -137,21 +139,26 @@ func Close(ctx context.Context) error {
 }
 
 func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
+	e := "prod"
+	if v, ok := env.Get[string](env.ENV); ok {
+		e = v
+	}
 	return []attribute.KeyValue{
 		semconv.ServiceNameKey.String(serviceName),
 		semconv.ServiceVersionKey.String(a.AppVersion),
-		attribute.String("device.id", a.DeviceID),
-		attribute.String("geo.country", a.GeoCountry),
+		semconv.DeploymentEnvironmentNameKey.String(e),
+		semconv.OSNameKey.String(a.OSName),
+		semconv.OSVersionKey.String(a.OSVersion),
+		semconv.HostArchKey.String(a.OSArch),
+		semconv.GeoCountryISOCodeKey.String(a.GeoCountry),
+		semconv.ClientDeviceIDKey.String(a.DeviceID),
+		semconv.ClientPlatformKey.String(a.Platform),
+		semconv.ClientIsProKey.Bool(a.Pro),
 		attribute.String("library.language", "go"),
 		attribute.String("library.language.version", a.GoVersion),
 		attribute.String("locale.language", a.LocaleLanguage),
 		attribute.String("locale.country", a.LocaleCountry),
-		attribute.String("platform", a.Platform),
-		attribute.String("os.name", a.OSName),
-		attribute.String("os.arch", a.OSArch),
-		attribute.String("os.version", a.OSVersion),
 		attribute.String("timezone", a.Timezone),
-		attribute.Bool("is_pro", a.Pro),
 	}
 }
 
