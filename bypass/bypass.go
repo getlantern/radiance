@@ -26,14 +26,16 @@ const (
 	// unlike bypass traffic which is routed directly.
 	TunnelProxyPort = 14986
 
-	// TunnelProxyAddr is the address of the local tunnel proxy listener.
-	TunnelProxyAddr = "127.0.0.1:14986"
-
 	// TunnelInboundTag is the sing-box inbound tag for the tunnel proxy.
 	// Unlike BypassInboundTag, this has no routing rule sending it to direct,
 	// so traffic falls through to the active proxy group.
 	TunnelInboundTag = "tunnel-in"
+)
 
+// TunnelProxyAddr is the address of the local tunnel proxy listener.
+var TunnelProxyAddr = net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", TunnelProxyPort))
+
+const (
 	// connectTimeout is the default timeout for the HTTP CONNECT handshake
 	// when the caller's context has no deadline.
 	connectTimeout = 10 * time.Second
