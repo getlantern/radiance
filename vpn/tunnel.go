@@ -473,7 +473,7 @@ func (t *tunnel) updateOutbounds(new servers.Servers) error {
 			}
 		}
 
-		if hasNewOutbound || addErr == nil {
+		if hasNewOutbound {
 			if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
 				return err
 			} else if err != nil {
@@ -481,7 +481,7 @@ func (t *tunnel) updateOutbounds(new servers.Servers) error {
 			}
 		} else {
 			slog.Warn("All new outbounds failed to load, keeping old outbounds",
-				"group", group, "failed_tags", newTags, "kept_tags", toRemove)
+				"group", group, "failed_tags", newTags, "would_remove_tags", toRemove)
 		}
 	}
 
