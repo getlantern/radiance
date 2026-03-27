@@ -92,6 +92,16 @@ func baseOpts(basePath string) O.Options {
 					},
 				},
 			},
+			{
+				Type: C.TypeMixed,
+				Tag:  bypass.TunnelInboundTag,
+				Options: &O.HTTPMixedInboundOptions{
+					ListenOptions: O.ListenOptions{
+						Listen:     &loopbackAddr,
+						ListenPort: bypass.TunnelProxyPort,
+					},
+				},
+			},
 		},
 		Outbounds: []O.Outbound{
 			{
