@@ -67,8 +67,8 @@ func authWebClient() *webClient {
 // long-lived. When the VPN is not running, connections fail (no fallback).
 var tunnelClient = &http.Client{
 	Transport: &http.Transport{
-		DialContext:           bypass.TunnelDialContext,
-		ForceAttemptHTTP2:     true,
+		DialContext:       bypass.TunnelDialContext,
+		ForceAttemptHTTP2: false,
 		MaxIdleConns:          10,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
