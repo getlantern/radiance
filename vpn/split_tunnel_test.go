@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"testing"
 	"time"
 
@@ -320,4 +321,100 @@ func TestMigration(t *testing.T) {
 `
 	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
 	assert.Equal(t, rule, st.rule)
+}
+
+// unmarshalItems is a test helper that unmarshals a JSON string into []string.
+func unmarshalItems(t *testing.T, jsonStr string) []string {
+	t.Helper()
+	var items []string
+	require.NoError(t, stdjson.Unmarshal([]byte(jsonStr), &items))
+	return items
+}
+
+func TestItemsJSON(t *testing.T) {
+	st := setupTestSplitTunnel(t)
+
+	t.Run("returns items for valid filter type", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+		require.NoError(t, st.AddItem(TypeDomain, "test.org"))
+
+		result, err := st.ItemsJSON(TypeDomain)
+		require.NoError(t, err)
+		items := unmarshalItems(t, result)
+		assert.Equal(t, []string{"example.com", "test.org"}, items)
+	})
+
+	t.Run("returns empty array when no items", func(t *testing.T) {
+		result, err := st.ItemsJSON(TypeDomainKeyword)
+		require.NoError(t, err)
+		items := unmarshalItems(t, result)
+		assert.Empty(t, items)
+	})
+
+	t.Run("returns error for unsupported filter type", func(t *testing.T) {
+		_, err := st.ItemsJSON("unsupported")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported filter type")
+	})
+
+	t.Run("returns items for package names", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypePackageName, "com.example.app"))
+		result, err := st.ItemsJSON(TypePackageName)
+		require.NoError(t, err)
+		items := unmarshalItems(t, result)
+		assert.Equal(t, []string{"com.example.app"}, items)
+	})
+}
+
+func TestEnabledAppsJSON(t *testing.T) {
+	st := setupTestSplitTunnel(t)
+
+	t.Run("returns empty array when no apps configured", func(t *testing.T) {
+		result, err := st.EnabledAppsJSON()
+		require.NoError(t, err)
+		items := unmarshalItems(t, result)
+		assert.Empty(t, items)
+	})
+
+	t.Run("returns apps from current format", func(t *testing.T) {
+		require.NoError(t, st.AddItem(TypePackageName, "com.example.app"))
+		require.NoError(t, st.AddItem(TypeProcessPath, "/usr/bin/firefox"))
+
+		result, err := st.EnabledAppsJSON()
+		require.NoError(t, err)
+		items := unmarshalItems(t, result)
+		assert.Contains(t, items, "com.example.app")
+		assert.Contains(t, items, "/usr/bin/firefox")
+	})
+
+	t.Run("picks up legacy camelCase keys from raw file", func(t *testing.T) {
+		st2 := setupTestSplitTunnel(t)
+		require.NoError(t, st2.AddItem(TypePackageName, "com.current.app"))
+
+		// Patch the file with legacy camelCase keys alongside current format
+		b, err := atomicfile.ReadFile(st2.ruleFile)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, stdjson.Unmarshal(b, &raw))
+		raw["packageName"] = []string{"com.legacy.app"}
+		raw["processPath"] = []string{"/opt/legacy"}
+		patched, err := stdjson.Marshal(raw)
+		require.NoError(t, err)
+		require.NoError(t, atomicfile.WriteFile(st2.ruleFile, patched, 0644))
+
+		result, err := st2.EnabledAppsJSON()
+		require.NoError(t, err)
+		items := unmarshalItems(t, result)
+		assert.Contains(t, items, "com.current.app")
+		assert.Contains(t, items, "com.legacy.app")
+		assert.Contains(t, items, "/opt/legacy")
+		// Deduplication: com.current.app should appear exactly once
+		count := 0
+		for _, app := range items {
+			if app == "com.current.app" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "com.current.app should appear exactly once")
+	})
 }

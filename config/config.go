@@ -27,12 +27,17 @@ import (
 	box "github.com/getlantern/lantern-box"
 	lbO "github.com/getlantern/lantern-box/option"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/traces"
 )
 
 const (
@@ -225,18 +230,49 @@ func (ch *ConfigHandler) fetchConfig() error {
 	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&Config{ConfigResponse: confResp}); err == nil {
 		cfg := ch.config.Load().ConfigResponse
-		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
+		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations)+len(cfg.Servers))
+		// Track which cities are already covered by active outbounds.
+		coveredCities := make(map[string]bool, len(cfg.OutboundLocations))
 		for k, v := range cfg.OutboundLocations {
 			if v == nil {
 				slog.Warn("Server location is nil, skipping", "tag", k)
 				continue
 			}
 			locs[k] = *v
+			coveredCities[v.City+"|"+v.CountryCode] = true
+		}
+		// Include available server locations not already covered by active
+		// outbounds so the client's location picker shows every location.
+		for _, sl := range cfg.Servers {
+			if coveredCities[sl.City+"|"+sl.CountryCode] {
+				continue
+			}
+			key := strings.ToLower(strings.ReplaceAll(sl.City, " ", "-") + "-" + sl.CountryCode)
+			locs[key] = sl
 		}
 		opts := servers.Options{
-			Outbounds: cfg.Options.Outbounds,
-			Endpoints: cfg.Options.Endpoints,
-			Locations: locs,
+			Outbounds:    cfg.Options.Outbounds,
+			Endpoints:    cfg.Options.Endpoints,
+			Locations:    locs,
+			URLOverrides: cfg.BanditURLOverrides,
+		}
+		if len(cfg.BanditURLOverrides) > 0 {
+			slog.Info("Config includes bandit URL overrides",
+				"override_count", len(cfg.BanditURLOverrides),
+				"outbound_count", len(cfg.Options.Outbounds),
+				"endpoint_count", len(cfg.Options.Endpoints),
+			)
+			// Create a marker span linked to the API's bandit trace so the
+			// config fetch appears in the same distributed trace as the callback.
+			if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
+				_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
+					trace.WithAttributes(
+						attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
+						attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
+					),
+				)
+				span.End() // point-in-time marker — config was received at this timestamp
+			}
 		}
 		if err := ch.svrManager.SetServers(servers.SGLantern, opts); err != nil {
 			slog.Error("setting servers in manager", "error", err)

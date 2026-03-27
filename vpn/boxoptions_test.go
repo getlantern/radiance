@@ -134,7 +134,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			"rules": [
 				{
 					"rule_set": "openai",
-					"outbound": "openai"
+					"outbound": "sr-openai"
 				}
 			],
 			"rule_set": [
@@ -221,6 +221,36 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		adRule := wantAdBlockOpts.Route.Rules[0]
 		assert.True(t, contains(t, options.Route.Rules, adRule), "missing ad block rule")
 	})
+}
+
+func TestBuildOptions_BanditURLOverrides(t *testing.T) {
+	testOpts, _, err := testBoxOptions("")
+	require.NoError(t, err)
+	lanternTags, lanternOuts := filterOutbounds(*testOpts, constant.TypeHTTP)
+	require.NotEmpty(t, lanternTags, "need at least one HTTP outbound for test")
+
+	overrides := map[string]string{
+		lanternTags[0]: "https://example.com/callback?token=abc",
+	}
+	cfg := config.Config{
+		ConfigResponse: LC.ConfigResponse{
+			Options:            O.Options{Outbounds: lanternOuts},
+			BanditURLOverrides: overrides,
+		},
+	}
+
+	path := t.TempDir()
+	testOptsToFile(t, cfg, filepath.Join(path, common.ConfigFileName))
+
+	opts, err := buildOptions(context.Background(), path)
+	require.NoError(t, err)
+
+	out := findOutbound(opts.Outbounds, autoLanternTag)
+	require.NotNil(t, out, "auto-lantern outbound not found")
+
+	mutOpts, ok := out.Options.(*lbO.MutableURLTestOutboundOptions)
+	require.True(t, ok, "auto-lantern outbound should be MutableURLTestOutboundOptions")
+	assert.Equal(t, overrides, mutOpts.URLOverrides, "URLOverrides should be wired from config")
 }
 
 func contains[S ~[]E, E any](t *testing.T, s S, e E) bool {

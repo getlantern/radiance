@@ -145,18 +145,18 @@ func NewRadiance(opts Options) (*Radiance, error) {
 			slog.Info("Telemetry consent not given; skipping telemetry initialization")
 		}
 	})
-	registerPreStartTest(dataDir)
 	r.confHandler = config.NewConfigHandler(cOpts)
-	r.addShutdownFunc(telemetry.Close, kindling.Close)
-	return r, nil
-}
-
-func registerPreStartTest(path string) {
-	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		if err := vpn.PreStartTests(path); err != nil {
-			slog.Error("VPN pre-start tests failed", "error", err, "path", path)
-		}
+	// Register AFTER NewConfigHandler so the disk-load event is already
+	// consumed. Runs whenever a new config is applied to provide continuous
+	// bandit callback data even when the VPN tunnel is not active.
+	sub := events.Subscribe(func(evt config.NewConfigEvent) {
+		vpn.RunURLTests(dataDir)
 	})
+	r.addShutdownFunc(telemetry.Close, kindling.Close, func(_ context.Context) error {
+		sub.Unsubscribe()
+		return nil
+	})
+	return r, nil
 }
 
 // addShutdownFunc adds a shutdown function(s) to the Radiance instance.

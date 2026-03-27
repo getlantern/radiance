@@ -319,13 +319,17 @@ type AutoSelectionsEvent struct {
 	Selections AutoSelections
 }
 
+// SelectionUnavailable is the sentinel value returned for an auto-selection
+// group that has no active server (tunnel not running, group not found, etc.).
+const SelectionUnavailable = "Unavailable"
+
 // AutoServerSelections returns the currently active server for each auto server group. If the group
-// is not found or has no active server, "Unavailable" is returned for that group.
+// is not found or has no active server, SelectionUnavailable is returned for that group.
 func AutoServerSelections() (AutoSelections, error) {
 	as := AutoSelections{
-		Lantern: "Unavailable",
-		User:    "Unavailable",
-		AutoAll: "Unavailable",
+		Lantern: SelectionUnavailable,
+		User:    SelectionUnavailable,
+		AutoAll: SelectionUnavailable,
 	}
 	ctx := context.Background()
 	if !isOpen(ctx) {
@@ -343,7 +347,7 @@ func AutoServerSelections() (AutoSelections, error) {
 		})
 		if idx < 0 || groups[idx].Selected == "" {
 			slog.Log(ctx, internal.LevelTrace, "Group not found or has no selection", "tag", tag)
-			return "Unavailable"
+			return SelectionUnavailable
 		}
 		return groups[idx].Selected
 	}
@@ -363,26 +367,76 @@ func AutoServerSelections() (AutoSelections, error) {
 	return auto, nil
 }
 
-// AutoSelectionsChangeListener returns a channel that receives a signal whenever any auto
-// selection changes until the context is cancelled.
+const (
+	rapidPollInterval = 500 * time.Millisecond
+	rapidPollWindow   = 15 * time.Second
+	steadyPollInterval = 10 * time.Second
+)
+
+// AutoSelectionsChangeListener polls for auto-selection changes and emits an
+// AutoSelectionsEvent whenever the selection differs from the previous value.
+// It performs an initial rapid poll to catch the first selection soon after
+// tunnel connect, then settles into a slower steady-state interval.
 func AutoSelectionsChangeListener(ctx context.Context) {
 	go func() {
 		var prev AutoSelections
+
+		// Rapid initial poll to emit the first selection promptly after connect.
+		initialDeadline := time.NewTimer(rapidPollWindow)
+		defer initialDeadline.Stop()
+		tick := time.NewTimer(rapidPollInterval)
+		defer tick.Stop()
+	initial:
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(10 * time.Second):
+			case <-initialDeadline.C:
+				break initial
+			case <-tick.C:
 				curr, err := AutoServerSelections()
 				if err != nil {
+					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectionsEvent{
-						Selections: curr,
-					})
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+					if curr.Lantern != SelectionUnavailable ||
+						curr.User != SelectionUnavailable ||
+						curr.AutoAll != SelectionUnavailable {
+						break initial
+					}
 				}
+				tick.Reset(rapidPollInterval)
+			}
+		}
+
+		// Drain tick before reusing for steady-state.
+		if !tick.Stop() {
+			select {
+			case <-tick.C:
+			default:
+			}
+		}
+		tick.Reset(steadyPollInterval)
+
+		// Steady-state polling for ongoing changes.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				curr, err := AutoServerSelections()
+				if err != nil {
+					tick.Reset(steadyPollInterval)
+					continue
+				}
+				if curr != prev {
+					prev = curr
+					events.Emit(AutoSelectionsEvent{Selections: curr})
+				}
+				tick.Reset(steadyPollInterval)
 			}
 		}
 	}()
@@ -390,47 +444,79 @@ func AutoSelectionsChangeListener(ctx context.Context) {
 
 const urlTestHistoryFileName = "url_test_history.json"
 
-var (
-	preStartOnce sync.Once
-	preStartErr  error
-)
+var urlTestMu sync.Mutex
 
-// PreStartTests performs pre-start URL tests for all outbounds defined in configs. This can improve
-// initial connection times by determining reachability and latency to servers before the tunnel is
-// started. PreStartTests is only performed once per application run; usually at application startup.
-func PreStartTests(path string) error {
-	preStartOnce.Do(func() {
-		results, err := preTest(path)
-		preStartErr = err
-		if err != nil {
-			slog.Error("Pre-start URL test failed", "error", err)
+// RunURLTests performs URL tests for all outbounds defined in configs. It is intended to run in
+// response to configuration updates to provide continuous bandit callback data even when the VPN
+// tunnel is not active. When the tunnel IS active, its own CheckOutbounds handles URL testing, so
+// this is skipped.
+func RunURLTests(path string) {
+	// Skip if the tunnel is handling URL tests
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if isOpen(ctx) {
+		slog.Debug("Tunnel is active, skipping standalone URL tests")
+		return
+	}
+
+	// Prevent overlapping runs
+	if !urlTestMu.TryLock() {
+		return
+	}
+	defer urlTestMu.Unlock()
+
+	results, traceCtx, hasTrace, err := preTest(path)
+	if err != nil {
+		slog.Error("URL test failed", "error", err)
+		if len(results) == 0 {
 			return
 		}
+		// Tests ran but a non-critical step (e.g. saving history) failed.
+		// Continue to emit the span and log the results we do have.
+	}
 
-		var fmttedResults []string
+	// Record URL test results in a span linked to the bandit's trace.
+	if hasTrace {
+		_, span := otel.Tracer(tracerName).Start(traceCtx, "radiance.url_tests_complete",
+			trace.WithAttributes(
+				attribute.Int("bandit.test_count", len(results)),
+			),
+		)
 		for tag, delay := range results {
-			fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+			span.AddEvent("url_test_result", trace.WithAttributes(
+				attribute.String("outbound", tag),
+				attribute.Int("latency_ms", int(delay)),
+			))
 		}
-		slog.Log(nil, internal.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
-	})
-	return preStartErr
+		span.End()
+	}
+
+	var formattedResults []string
+	for tag, delay := range results {
+		formattedResults = append(formattedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
+	}
+	slog.Log(nil, internal.LevelTrace, "URL test complete", "results", strings.Join(formattedResults, "; "))
 }
 
-func preTest(path string) (map[string]uint16, error) {
+func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	slog.Info("Performing pre-start URL tests")
 
 	confPath := filepath.Join(path, common.ConfigFileName)
 	slog.Debug("Loading config file", "confPath", confPath)
 	cfg, err := loadConfig(confPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// Extract bandit trace context for distributed tracing
+	traceCtx, hasTrace := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides)
+
 	cfgOpts := cfg.Options
 
 	slog.Debug("Loading user servers")
 	userOpts, err := loadUserOptions(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load user options: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to load user options: %w", err)
 	}
 
 	// since we are only doing URL tests, we only need the outbounds from both configs; we skip
@@ -441,7 +527,7 @@ func preTest(path string) (map[string]uint16, error) {
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("preTest", tags))
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,
@@ -455,39 +541,40 @@ func preTest(path string) (map[string]uint16, error) {
 	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
 	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second) // enough time for bandit callback tests through proxies
 	defer cancel()
 	instance, err := sbox.New(sbox.Options{
 		Context: ctx,
 		Options: options,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create sing-box instance: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to create sing-box instance: %w", err)
 	}
 	defer instance.Close()
 	if err := instance.PreStart(); err != nil {
-		return nil, fmt.Errorf("failed to start sing-box instance: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to start sing-box instance: %w", err)
 	}
 	outbound, ok := instance.Outbound().Outbound("preTest")
 	if !ok {
-		return nil, errors.New("preTest outbound not found")
+		return nil, context.Background(), false, errors.New("preTest outbound not found")
 	}
 	tester, ok := outbound.(adapter.URLTestGroup)
 	if !ok {
-		return nil, errors.New("preTest outbound is not a URLTestGroup")
+		return nil, context.Background(), false, errors.New("preTest outbound is not a URLTestGroup")
 	}
 	// run URL tests
 	results, err := tester.URLTest(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to perform URL tests: %w", err)
+		return nil, context.Background(), false, fmt.Errorf("failed to perform URL tests: %w", err)
 	}
 
 	historyPath := filepath.Join(path, urlTestHistoryFileName)
 	if err := saveURLTestResults(urlTestHistoryStorage, historyPath, results); err != nil {
-		return results, fmt.Errorf("failed to save URL test results: %w", err)
+		return results, traceCtx, hasTrace, fmt.Errorf("failed to save URL test results: %w", err)
 	}
-	return results, nil
+	return results, traceCtx, hasTrace, nil
 }
+
 
 func saveURLTestResults(storage *urltest.HistoryStorage, path string, results map[string]uint16) error {
 	slog.Debug("Saving URL test history", "path", path)

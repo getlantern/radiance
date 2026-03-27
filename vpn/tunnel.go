@@ -340,6 +340,26 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			added++
 		}
 	}
+
+	if len(options.URLOverrides) > 0 {
+		slog.Info("Applying bandit URL overrides to URL test group",
+			"group", autoTag,
+			"override_count", len(options.URLOverrides),
+		)
+	}
+	if err := t.mutGrpMgr.SetURLOverrides(autoTag, options.URLOverrides); err != nil {
+		slog.Warn("Failed to set URL overrides", "group", autoTag, "error", err)
+	} else if len(options.URLOverrides) > 0 {
+		// Trigger an immediate URL test cycle when we have bandit overrides so
+		// callback probes are hit within seconds of config receipt rather than
+		// waiting for the next scheduled interval (3 min).
+		if err := t.mutGrpMgr.CheckOutbounds(autoTag); err != nil {
+			slog.Warn("Failed to trigger immediate URL test after bandit overrides", "group", autoTag, "error", err)
+		} else {
+			slog.Info("Triggered immediate URL test for bandit callbacks", "group", autoTag)
+		}
+	}
+
 	slog.Debug("Added servers to group", "group", group, "added", added)
 	return errors.Join(errs...)
 }
@@ -397,8 +417,8 @@ func (t *tunnel) updateOutbounds(new servers.Servers) error {
 	var errs []error
 	for _, group := range []string{servers.SGLantern, servers.SGUser} {
 		newOpts := new[group]
-		if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 {
-			slog.Debug("No outbounds or endpoints to update, skipping", "group", group)
+		if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 && len(newOpts.URLOverrides) == 0 {
+			slog.Debug("No outbounds, endpoints, or URL overrides to update, skipping", "group", group)
 			continue
 		}
 		slog.Log(nil, internal.LevelTrace, "Updating servers", "group", group)
@@ -451,9 +471,11 @@ func (t *tunnel) updateOutbounds(new servers.Servers) error {
 func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], new servers.Options, group string) servers.Options {
 	slog.Log(nil, internal.LevelTrace, "Removing duplicate outbounds/endpoints", "group", group)
 	deduped := servers.Options{
-		Outbounds: []O.Outbound{},
-		Endpoints: []O.Endpoint{},
-		Locations: map[string]lcommon.ServerLocation{},
+		Outbounds:    []O.Outbound{},
+		Endpoints:    []O.Endpoint{},
+		Locations:    map[string]lcommon.ServerLocation{},
+		URLOverrides: new.URLOverrides,
+		Credentials:  new.Credentials,
 	}
 	var dropped []string
 	for _, out := range new.Outbounds {

@@ -59,10 +59,11 @@ type ServerCredentials struct {
 }
 
 type Options struct {
-	Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
-	Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
-	Locations   map[string]C.ServerLocation  `json:"locations,omitempty"`
-	Credentials map[string]ServerCredentials `json:"credentials,omitempty"`
+	Outbounds    []option.Outbound           `json:"outbounds,omitempty"`
+	Endpoints    []option.Endpoint           `json:"endpoints,omitempty"`
+	Locations    map[string]C.ServerLocation `json:"locations,omitempty"`
+	URLOverrides map[string]string           `json:"url_overrides,omitempty"`
+	Credentials  map[string]ServerCredentials `json:"credentials,omitempty"`
 }
 
 // MarshalJSON encodes Options using the sing-box context so that type-specific outbound/endpoint
@@ -164,10 +165,11 @@ func (m *Manager) Servers() Servers {
 	result := make(Servers, len(m.servers))
 	for group, opts := range m.servers {
 		result[group] = Options{
-			Outbounds:   append([]option.Outbound{}, opts.Outbounds...),
-			Endpoints:   append([]option.Endpoint{}, opts.Endpoints...),
-			Locations:   maps.Clone(opts.Locations),
-			Credentials: maps.Clone(opts.Credentials),
+			Outbounds:    append([]option.Outbound{}, opts.Outbounds...),
+			Endpoints:    append([]option.Endpoint{}, opts.Endpoints...),
+			Locations:    maps.Clone(opts.Locations),
+			URLOverrides: maps.Clone(opts.URLOverrides),
+			Credentials:  maps.Clone(opts.Credentials),
 		}
 	}
 	return result
@@ -302,10 +304,11 @@ func (m *Manager) setServers(group ServerGroup, options Options) error {
 
 	slog.Log(nil, internal.LevelTrace, "Setting servers", "group", group, "options", options)
 	opts := Options{
-		Outbounds:   append([]option.Outbound{}, options.Outbounds...),
-		Endpoints:   append([]option.Endpoint{}, options.Endpoints...),
-		Locations:   make(map[string]C.ServerLocation, len(options.Locations)),
-		Credentials: make(map[string]ServerCredentials, len(options.Credentials)),
+		Outbounds:    append([]option.Outbound{}, options.Outbounds...),
+		Endpoints:    append([]option.Endpoint{}, options.Endpoints...),
+		Locations:    make(map[string]C.ServerLocation, len(options.Locations)),
+		URLOverrides: maps.Clone(options.URLOverrides),
+		Credentials:  make(map[string]ServerCredentials, len(options.Credentials)),
 	}
 	maps.Copy(opts.Locations, options.Locations)
 	maps.Copy(opts.Credentials, options.Credentials)
@@ -386,6 +389,12 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 		if creds, ok := options.Credentials[out.Tag]; ok {
 			servers.Credentials[out.Tag] = creds
 		}
+	}
+	for k, v := range options.URLOverrides {
+		if servers.URLOverrides == nil {
+			servers.URLOverrides = make(map[string]string)
+		}
+		servers.URLOverrides[k] = v
 	}
 	m.servers[group] = servers
 	return existingTags
