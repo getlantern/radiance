@@ -197,7 +197,7 @@ func (a *APIClient) connectSSE(ctx context.Context) error {
 	}
 	req.Header.Set(backend.AcceptHeader, "text/event-stream")
 
-	resp, err := tunnelHTTPClient().Do(req)
+	resp, err := tunnelClient.Do(req)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("datacap SSE connect: %w", err))
 	}
