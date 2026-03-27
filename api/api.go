@@ -2,13 +2,16 @@ package api
 
 import (
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling"
@@ -56,4 +59,19 @@ func (a *APIClient) proWebClient() *webClient {
 
 func authWebClient() *webClient {
 	return newWebClient(kindling.HTTPClient(), common.GetBaseURL())
+}
+
+// tunnelClient routes through the local tunnel proxy when the VPN is running.
+// Unlike the bypass proxy (which routes to direct), this routes through the
+// active VPN proxy outbound. No client-level timeout — SSE streams are
+// long-lived. When the VPN is not running, connections fail (no fallback).
+var tunnelClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext:           bypass.TunnelDialContext,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
 }
