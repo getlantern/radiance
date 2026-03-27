@@ -35,7 +35,7 @@ require (
 	github.com/getlantern/kindling v0.0.0-20260319225424-4736208dd171
 	github.com/getlantern/lantern-box v0.0.42
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
-	github.com/getlantern/semconv v0.0.0-20260311010754-121098b82c93
+	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0

@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/internal"

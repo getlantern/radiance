@@ -22,10 +22,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"google.golang.org/grpc/credentials"
 
-	lanternsc "github.com/getlantern/semconv"
+	semconv "github.com/getlantern/semconv"
 
 	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/env"
@@ -152,9 +151,9 @@ func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 		semconv.OSVersionKey.String(a.OSVersion),
 		semconv.HostArchKey.String(a.OSArch),
 		semconv.GeoCountryISOCodeKey.String(a.GeoCountry),
-		lanternsc.ClientDeviceIDKey.String(a.DeviceID),
-		lanternsc.ClientPlatformKey.String(a.Platform),
-		lanternsc.ClientIsProKey.Bool(a.Pro),
+		semconv.ClientDeviceIDKey.String(a.DeviceID),
+		semconv.ClientPlatformKey.String(a.Platform),
+		semconv.ClientIsProKey.Bool(a.Pro),
 		attribute.String("library.language", "go"),
 		attribute.String("library.language.version", a.GoVersion),
 		attribute.String("locale.language", a.LocaleLanguage),
