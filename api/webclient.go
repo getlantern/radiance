@@ -40,6 +40,14 @@ func newWebClient(httpClient *http.Client, baseURL string) *webClient {
 		backend.PlatformHeader: common.Platform,
 	})
 
+	// Include detected public IP on every request
+	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
+		if ip := backend.GetClientIP(); ip != "" {
+			req.SetHeader(backend.ClientIPHeader, ip)
+		}
+		return nil
+	})
+
 	// Add a request middleware to marshal the request body to protobuf or JSON
 	client.OnBeforeRequest(func(c *resty.Client, req *resty.Request) error {
 		if req.Body == nil {

@@ -35,6 +35,7 @@ require (
 	github.com/getlantern/kindling v0.0.0-20260319225424-4736208dd171
 	github.com/getlantern/lantern-box v0.0.52
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
+	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/go-resty/resty/v2 v2.16.5
@@ -131,6 +132,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
+	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/illarion/gonotify/v2 v2.0.3 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect

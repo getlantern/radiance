@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/timezone"
@@ -14,6 +15,23 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
+
+// clientIP holds the detected public IP address, set once at startup.
+var clientIP atomic.Value // string
+
+// SetClientIP stores the detected public IP for inclusion in API requests.
+func SetClientIP(ip string) {
+	clientIP.Store(ip)
+}
+
+// GetClientIP returns the detected public IP, or empty string if not yet detected.
+func GetClientIP() string {
+	v := clientIP.Load()
+	if v == nil {
+		return ""
+	}
+	return v.(string)
+}
 
 const (
 	// Required common headers to send to the proxy server.
@@ -29,6 +47,7 @@ const (
 	ProTokenHeader          = "X-Lantern-Pro-Token"
 	RefererHeader           = "referer"
 	ClientCountryHeader     = "X-Lantern-Client-Country"
+	ClientIPHeader          = "X-Lantern-Config-Client-IP"
 	ContentTypeHeader       = "content-type"
 	AcceptHeader            = "accept"
 )
@@ -51,6 +70,9 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	req.Header.Set(DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
 		req.Header.Set(TimeZoneHeader, tz)
+	}
+	if ip := GetClientIP(); ip != "" {
+		req.Header.Set(ClientIPHeader, ip)
 	}
 	return req, nil
 }

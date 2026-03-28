@@ -18,8 +18,10 @@ import (
 	traceNoop "go.opentelemetry.io/otel/trace/noop"
 
 	lcommon "github.com/getlantern/common"
+	"github.com/getlantern/publicip"
 
 	"github.com/getlantern/radiance/api"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
@@ -108,6 +110,24 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	dataDir := settings.GetString(settings.DataPathKey)
 	kindling.SetKindling(kindling.NewKindling())
 	setUserConfig(platformDeviceID, dataDir, opts.Locale)
+
+	// Detect public IP before the first config fetch so the server knows our
+	// real IP even when requests arrive via domain fronting. Uses STUN, DNS,
+	// and HTTP in parallel — typically completes in 25-200ms. The 2-second
+	// timeout ensures startup isn't significantly delayed on constrained networks.
+	ipCtx, ipCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	result, err := publicip.Detect(ipCtx, &publicip.Config{
+		Timeout:      2 * time.Second,
+		MinConsensus: 1, // accept the first result to minimize delay
+	})
+	ipCancel()
+	if err != nil {
+		slog.Warn("Failed to detect public IP", "error", err)
+	} else {
+		backend.SetClientIP(result.IP.String())
+		slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+	}
+
 	apiHandler := api.NewAPIClient(dataDir)
 	issueReporter := issue.NewIssueReporter()
 
