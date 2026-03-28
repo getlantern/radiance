@@ -125,7 +125,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		slog.Warn("Failed to detect public IP", "error", err)
 	} else {
 		backend.SetClientIP(result.IP.String())
-		slog.Info("Detected public IP", "ip", result.IP, "confidence", result.Confidence, "sources", result.Sources)
+		slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
 	}
 
 	apiHandler := api.NewAPIClient(dataDir)
