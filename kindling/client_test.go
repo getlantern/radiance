@@ -17,8 +17,9 @@ func TestNewClient(t *testing.T) {
 		Level:     slog.LevelDebug,
 	})))
 	settings.Set(settings.DataPathKey, t.TempDir())
-	k = NewKindling()
-	SetKindling(k)
+	newK, err := NewKindling()
+	assert.NoError(t, err)
+	SetKindling(newK)
 
 	t.Cleanup(func() {
 		Close(context.Background())

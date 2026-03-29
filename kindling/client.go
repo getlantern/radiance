@@ -36,7 +36,17 @@ var (
 // HTTPClient returns a http client with kindling transport
 func HTTPClient() *http.Client {
 	if k == nil {
-		SetKindling(NewKindling())
+		newK, err := NewKindling()
+		if err != nil {
+			slog.Error("failed to create kindling client", slog.Any("error", err))
+		}
+		if newK != nil {
+			SetKindling(newK)
+		}
+	}
+	if k == nil {
+		slog.Warn("kindling unavailable, returning bare HTTP client")
+		return &http.Client{Timeout: common.DefaultHTTPTimeout}
 	}
 	httpClient := k.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
@@ -50,10 +60,8 @@ func Close(_ context.Context) error {
 		stopUpdater()
 	}
 	for _, c := range closeTransports {
-		if c != nil {
-			if err := c(); err != nil {
-				slog.Error("failed to close kindling transport", slog.Any("error", err))
-			}
+		if err := c(); err != nil {
+			slog.Error("failed to close kindling transport", slog.Any("error", err))
 		}
 	}
 	return nil
@@ -70,7 +78,7 @@ func SetKindling(a kindling.Kindling) {
 const tracerName = "github.com/getlantern/radiance/kindling"
 
 // NewKindling build a kindling client and bootstrap this package
-func NewKindling() kindling.Kindling {
+func NewKindling() (kindling.Kindling, error) {
 	dataDir := settings.GetString(settings.DataPathKey)
 	logger := &slogWriter{Logger: slog.Default()}
 
@@ -105,13 +113,10 @@ func NewKindling() kindling.Kindling {
 			slog.Error("failed to create fronted client", slog.Any("error", err))
 			span.RecordError(err)
 		}
-		closeTransports = append(closeTransports, func() error {
-			if f != nil {
-				f.Close()
-			}
-			return nil
-		})
-		kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
+		if f != nil {
+			closeTransports = append(closeTransports, func() error { f.Close(); return nil })
+			kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
+		}
 	}
 
 	if enabled := EnabledTransports["amp"]; enabled {
@@ -120,8 +125,9 @@ func NewKindling() kindling.Kindling {
 			slog.Error("failed to create amp client", slog.Any("error", err))
 			span.RecordError(err)
 		}
-		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindlingOptions = append(kindlingOptions, kindling.WithAMPCache(ampClient))
+		if ampClient != nil {
+			kindlingOptions = append(kindlingOptions, kindling.WithAMPCache(ampClient))
+		}
 	}
 
 	if enabled := EnabledTransports["dnstt"]; enabled {
@@ -132,8 +138,8 @@ func NewKindling() kindling.Kindling {
 		}
 		if dnsttOptions != nil {
 			closeTransports = append(closeTransports, dnsttOptions.Close)
+			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 		}
-		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 	}
 
 	if enabled := EnabledTransports["proxyless"]; enabled {

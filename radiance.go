@@ -108,7 +108,13 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	settings.Set(settings.LocaleKey, opts.Locale)
 
 	dataDir := settings.GetString(settings.DataPathKey)
-	kindling.SetKindling(kindling.NewKindling())
+	newK, err := kindling.NewKindling()
+	if err != nil {
+		slog.Error("failed to initialize kindling", slog.Any("error", err))
+	}
+	if newK != nil {
+		kindling.SetKindling(newK)
+	}
 	setUserConfig(platformDeviceID, dataDir, opts.Locale)
 
 	// Detect public IP before the first config fetch so the server knows our
