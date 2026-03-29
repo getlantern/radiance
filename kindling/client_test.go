@@ -9,6 +9,7 @@ import (
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewClient(t *testing.T) {
@@ -18,7 +19,8 @@ func TestNewClient(t *testing.T) {
 	})))
 	settings.Set(settings.DataPathKey, t.TempDir())
 	newK, err := NewKindling()
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, newK)
 	SetKindling(newK)
 
 	t.Cleanup(func() {

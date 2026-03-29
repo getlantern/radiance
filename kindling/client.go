@@ -33,22 +33,27 @@ var (
 	}
 )
 
-// HTTPClient returns a http client with kindling transport
+// HTTPClient returns a http client with kindling transport.
+// Thread-safe: uses kindlingMutex to guard lazy initialization.
 func HTTPClient() *http.Client {
+	kindlingMutex.Lock()
 	if k == nil {
 		newK, err := NewKindling()
 		if err != nil {
 			slog.Error("failed to create kindling client", slog.Any("error", err))
 		}
 		if newK != nil {
-			SetKindling(newK)
+			k = newK
 		}
 	}
-	if k == nil {
+	localK := k
+	kindlingMutex.Unlock()
+
+	if localK == nil {
 		slog.Warn("kindling unavailable, returning bare HTTP client")
 		return &http.Client{Timeout: common.DefaultHTTPTimeout}
 	}
-	httpClient := k.NewHTTPClient()
+	httpClient := localK.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
 	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
 	return httpClient
