@@ -28,7 +28,13 @@ func performKindlingPing(ctx context.Context, urlToHit string, runID string, dev
 	})
 
 	t1 := time.Now()
-	kindling.SetKindling(kindling.NewKindling())
+	newK, err := kindling.NewKindling()
+	if err != nil {
+		slog.Error("failed to initialize kindling", slog.Any("error", err))
+	}
+	if newK != nil {
+		kindling.SetKindling(newK)
+	}
 	defer kindling.Close(ctx)
 	cli := kindling.HTTPClient()
 
