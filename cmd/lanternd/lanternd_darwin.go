@@ -55,6 +55,9 @@ func plistPath() string {
 }
 
 func install(dataPath, logPath, logLevel string) error {
+	if err := checkInstalledVersion(); err != nil {
+		return err
+	}
 	exe, err := copyBin()
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 
 	"github.com/alexflint/go-arg"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/ipc"
 	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
@@ -32,6 +33,7 @@ type args struct {
 	ReportIssue  *ReportIssueCmd  `arg:"subcommand:report-issue" help:"report an issue"`
 	Logs         *LogsCmd         `arg:"subcommand:logs" help:"tail daemon logs"`
 	IP           *IPCmd           `arg:"subcommand:ip" help:"show public IP address"`
+	Version      *VersionCmd      `arg:"subcommand:version" help:"print version"`
 }
 
 func (args) Description() string {
@@ -65,6 +67,8 @@ func tailLogs(ctx context.Context, c *ipc.Client) error {
 	}
 	return err
 }
+
+type VersionCmd struct{}
 
 type IPCmd struct{}
 
@@ -129,6 +133,9 @@ func run(ctx context.Context, c *ipc.Client, a *args) error {
 		return tailLogs(ctx, c)
 	case a.IP != nil:
 		return runIP(ctx)
+	case a.Version != nil:
+		fmt.Println(common.Version)
+		return nil
 	default:
 		return fmt.Errorf("no subcommand specified")
 	}

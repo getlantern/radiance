@@ -31,6 +31,9 @@ func init() {
 }
 
 func install(dataPath, logPath, logLevel string) error {
+	if err := checkInstalledVersion(); err != nil {
+		return err
+	}
 	dataPath = os.ExpandEnv(dataPath)
 	logPath = os.ExpandEnv(logPath)
 
@@ -38,11 +41,6 @@ func install(dataPath, logPath, logLevel string) error {
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("failed to connect to Windows service manager: %w", err)
-	}
-
-	if service, err := m.OpenService(serviceName); err == nil {
-		service.Close()
-		return fmt.Errorf("service %q is already installed", serviceName)
 	}
 
 	exe, err := copyBin()

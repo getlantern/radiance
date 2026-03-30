@@ -47,15 +47,13 @@ In addition to being the core of the [Lantern client](https://github.com/getlant
 From the `cmd/` directory:
 
 ```sh
-# Build the daemon
-just build-daemon
-# or
 make build-daemon
-
-# Build the CLI
-just build-cli
-# or
 make build-cli
+```
+Or using [just](https://github.com/casey/just)
+```sh
+just build-daemon
+just build-cli
 ```
 
 Both binaries are output to `bin/`. You can also run the daemon directly with `make run-daemon`.
