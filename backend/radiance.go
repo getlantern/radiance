@@ -39,7 +39,7 @@ import (
 	"github.com/getlantern/radiance/vpn"
 )
 
-const tracerName = "github.com/getlantern/backend"
+const tracerName = "github.com/getlantern/radiance/backend"
 
 // LocalBackend ties all the core functionality of Radiance together. It manages the configuration,
 // servers, VPN connection, account management, issue reporting, and telemetry for the application.
@@ -158,6 +158,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 }
 
 func (r *LocalBackend) Start() {
+	if settings.GetBool(settings.TelemetryKey) {
+		if err := r.startTelemetry(); err != nil {
+			slog.Error("Failed to start telemetry", "error", err)
+		}
+	}
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.Country != "" {
