@@ -180,7 +180,10 @@ func copyBin() (string, error) {
 		return "", fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	dst := binPath
+	dst, err := filepath.EvalSymlinks(binPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve bin destination path: %w", err)
+	}
 	if src == dst {
 		return dst, nil
 	}
