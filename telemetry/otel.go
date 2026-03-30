@@ -127,7 +127,7 @@ func CloseContext(ctx context.Context) error {
 		}
 		shutdownOTEL = nil
 	}
-	// otel.SetTracerProvider(traceNoop.NewTracerProvider())
+	otel.SetTracerProvider(traceNoop.NewTracerProvider())
 	otel.SetMeterProvider(noop.NewMeterProvider())
 	return errs
 }

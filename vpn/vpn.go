@@ -504,7 +504,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 
 	// Record URL test results in a span linked to the bandit's trace.
 	if hasTrace {
-		_, span := otel.Tracer(tracerName).Start(traceCtx, "radiance.url_tests_complete",
+		_, span := otel.Tracer(tracerName).Start(traceCtx, "url_tests_complete",
 			trace.WithAttributes(
 				attribute.Int("bandit.test_count", len(results)),
 			),
