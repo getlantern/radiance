@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 
+	box "github.com/getlantern/lantern-box"
+	singjson "github.com/sagernet/sing/common/json"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -29,7 +31,10 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 	)
 	defer span.End()
 
-	buf, err := json.Marshal(data)
+	// Use sing-box's context-aware JSON so custom outbound types
+	// (e.g., samizdat Options) are serialized with their type-specific
+	// fields. Standard json.Marshal loses typed Options on any interface.
+	buf, err := singjson.MarshalContext(box.BaseContext(), data)
 	var res T
 	if err != nil {
 		return res, traces.RecordError(ctx, fmt.Errorf("failed to marshal payload: %w", err))
