@@ -65,6 +65,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	defaultDataPath := internal.DefaultDataPath()
+	defaultLogPath := internal.DefaultLogPath()
 	var err error
 	switch {
 	case a.Run != nil:

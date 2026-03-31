@@ -9,10 +9,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
-	"unicode"
-	"unicode/utf8"
-
-	"github.com/getlantern/appdir"
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
@@ -58,11 +54,16 @@ func init() {
 
 // Init initializes the common components of the application. This includes setting up the directories
 // for data and logs, initializing the logger, and setting up reporting.
-func Init(dataDir, logDir, logLevel string) error {
+func Init(dataDir, logDir, logLevel string) (err error) {
 	slog.Info("Initializing common package")
 	if initialized.Swap(true) {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			initialized.Store(false)
+		}
+	}()
 
 	reporting.Init(Version)
 	data, logs, err := setupDirectories(dataDir, logDir)
@@ -125,16 +126,19 @@ func createCrashReporter() {
 // not exist. If data or logs are the empty string, it will use the user's config directory retrieved
 // from the OS.
 func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
-	if d, ok := env.Get(env.DataPath); ok {
-		data = d
+	if path := env.GetString(env.DataPath); path != "" {
+		data = path
 	} else if data == "" {
-		data = outDir("data")
+		data = internal.DefaultDataPath()
 	}
-	if l, ok := env.Get(env.LogPath); ok {
-		logs = l
+	if path := env.GetString(env.LogPath); path != "" {
+		logs = path
 	} else if logs == "" {
-		logs = outDir("logs")
+		logs = internal.DefaultLogPath()
 	}
+	// ensure the data and logs directories end with the correct suffix
+	data = maybeAddSuffix(data, "data")
+	logs = maybeAddSuffix(logs, "logs")
 	data, _ = filepath.Abs(data)
 	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
@@ -143,36 +147,6 @@ func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 		}
 	}
 	return data, logs, nil
-}
-
-func outDir(subdir string) string {
-	var data string
-	var name string
-	if IsWindows() || IsMacOS() {
-		name = capitalizeFirstLetter(Name)
-	} else {
-		name = Name
-	}
-	if IsWindows() {
-		publicDir := os.Getenv("Public")
-		data = filepath.Join(publicDir, name)
-	} else {
-		data = appdir.General(name)
-	}
-	return maybeAddSuffix(data, subdir)
-}
-
-func capitalizeFirstLetter(s string) string {
-	if s == "" {
-		return ""
-	}
-
-	r, size := utf8.DecodeRuneInString(s)
-	if r == utf8.RuneError { // Handle invalid UTF-8 sequences
-		return s // Or handle error as needed
-	}
-
-	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 func maybeAddSuffix(path, suffix string) string {

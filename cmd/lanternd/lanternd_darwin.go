@@ -11,10 +11,8 @@ import (
 )
 
 const (
-	serviceName     = "com.lantern.lanternd"
-	defaultDataPath = "/Library/Application Support/Lantern"
-	defaultLogPath  = "/Library/Logs/Lantern"
-	binPath         = "/usr/local/bin/" + serviceName
+	serviceName = "com.lantern.lanternd"
+	binPath     = "/usr/local/bin/" + serviceName
 )
 
 func maybePlatformService() bool {

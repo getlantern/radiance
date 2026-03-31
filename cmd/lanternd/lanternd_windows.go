@@ -11,13 +11,13 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+
+	"github.com/getlantern/radiance/internal"
 )
 
 const (
-	serviceName     = "lanternd"
-	defaultDataPath = "$PROGRAMDATA\\lantern"
-	defaultLogPath  = "$PROGRAMDATA\\lantern"
-	binPath         = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
+	serviceName = "lanternd"
+	binPath     = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
 )
 
 var isWindowsService bool
@@ -199,8 +199,8 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 }
 
 func parseServiceArgs(args []string) (dataPath, logPath, logLevel string) {
-	dataPath = os.ExpandEnv(defaultDataPath)
-	logPath = os.ExpandEnv(defaultLogPath)
+	dataPath = internal.DefaultDataPath()
+	logPath = internal.DefaultLogPath()
 	logLevel = "info"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
