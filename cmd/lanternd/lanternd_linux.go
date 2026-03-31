@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	serviceName = "lanternd"
-	binPath     = "/usr/bin/" + serviceName
+	serviceName     = "lanternd"
+	binPath         = "/usr/bin/" + serviceName
+	systemdUnitPath = "/usr/lib/systemd/system/" + serviceName + ".service"
 )
 
 func maybePlatformService() bool {
@@ -47,10 +48,9 @@ func install(dataPath, logPath, logLevel string) error {
 		return err
 	}
 
-	unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", serviceName)
-	f, err := os.Create(unitPath)
+	f, err := os.Create(systemdUnitPath)
 	if err != nil {
-		return fmt.Errorf("failed to create unit file %s: %w", unitPath, err)
+		return fmt.Errorf("failed to create unit file %s: %w", systemdUnitPath, err)
 	}
 	defer f.Close()
 
@@ -61,7 +61,7 @@ func install(dataPath, logPath, logLevel string) error {
 		return fmt.Errorf("failed to write unit file: %w", err)
 	}
 
-	slog.Info("Installing systemd service", "unit", unitPath)
+	slog.Info("Installing systemd service", "unit", systemdUnitPath)
 	for _, args := range [][]string{
 		{"systemctl", "daemon-reload"},
 		{"systemctl", "enable", serviceName},
@@ -87,8 +87,7 @@ func uninstall() error {
 		}
 	}
 
-	unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", serviceName)
-	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(systemdUnitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove unit file: %w", err)
 	}
 
