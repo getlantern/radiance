@@ -308,6 +308,12 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			return errLibboxClosed
 		}
 		if err != nil {
+			slog.Warn("Failed to load outbound",
+				"tag", outbound.Tag,
+				"type", outbound.Type,
+				"group", group,
+				"error", err,
+			)
 			errs = append(errs, err)
 		} else {
 			b, _ := json.MarshalContext(ctx, outbound)
@@ -333,6 +339,12 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			return errLibboxClosed
 		}
 		if err != nil {
+			slog.Warn("Failed to load endpoint",
+				"tag", endpoint.Tag,
+				"type", endpoint.Type,
+				"group", group,
+				"error", err,
+			)
 			errs = append(errs, err)
 		} else {
 			b, _ := json.MarshalContext(ctx, endpoint)
