@@ -56,7 +56,7 @@ type BoxOptions struct {
 	// Options contains the main options that are merged into the base options with the exception of
 	// DNS, which overrides the base DNS options entirely instead of being merged. Options should
 	// contain all servers (both lantern and user).
-	Options O.Options `json:"options,omitempty"`
+	Options O.Options `json:"options"`
 	// SmartRouting contains smart routing rules to merge into the final options.
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
@@ -375,14 +375,6 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
-}
-
-func useIfNotZero[T comparable](newVal, oldVal T) T {
-	var zero T
-	if newVal != zero {
-		return newVal
-	}
-	return oldVal
 }
 
 func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {

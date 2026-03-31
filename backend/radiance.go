@@ -97,7 +97,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	case "ios", "android":
 		platformDeviceID = opts.DeviceID
 	default:
-		platformDeviceID = deviceid.Get()
+		platformDeviceID = deviceid.Get(settings.GetString(settings.DataPathKey))
 	}
 
 	dataDir := settings.GetString(settings.DataPathKey)
@@ -272,6 +272,12 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		country = cfg.Country
 	}
 
+	attachments := baseIssueAttachments()
+	if r.splitTunnelMgr.IsEnabled() {
+		attachments = append(attachments, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
+	}
+	attachments = append(attachments, additionalAttachments...)
+
 	report := issue.IssueReport{
 		Type:                  issueType,
 		Description:           description,
@@ -281,7 +287,7 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		UserID:                settings.GetString(settings.UserIDKey),
 		SubscriptionLevel:     settings.GetString(settings.UserLevelKey),
 		Locale:                settings.GetString(settings.LocaleKey),
-		AdditionalAttachments: append(baseIssueAttachments(), additionalAttachments...),
+		AdditionalAttachments: attachments,
 	}
 	err = r.issueReporter.Report(ctx, report)
 	if err != nil {
@@ -297,7 +303,7 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 func baseIssueAttachments() []string {
 	logPath := settings.GetString(settings.LogPathKey)
 	dataPath := settings.GetString(settings.DataPathKey)
-	// TODO: any other files we want to include?? split-tunnel config?
+	// TODO: any other files we want to include??
 	return []string{
 		filepath.Join(logPath, internal.CrashLogFileName),
 		filepath.Join(dataPath, internal.ConfigFileName),
@@ -618,13 +624,13 @@ func (r *LocalBackend) selectServer(tag string) error {
 	return nil
 }
 
-// Connections returns a list of all connections, both active and recently closed. If there are no
+// VPNConnections returns a list of all connections, both active and recently closed. If there are no
 // connections and the tunnel is open, an empty slice is returned without an error.
 func (r *LocalBackend) VPNConnections() ([]vpn.Connection, error) {
 	return r.vpnClient.Connections()
 }
 
-// ActiveConnections returns a list of currently active connections, ordered from newest to oldest.
+// ActiveVPNConnections returns a list of currently active connections, ordered from newest to oldest.
 func (r *LocalBackend) ActiveVPNConnections() ([]vpn.Connection, error) {
 	connections, err := r.vpnClient.Connections()
 	if err != nil {
@@ -669,7 +675,7 @@ func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
 	return r.vpnClient.CurrentAutoSelectedServer()
 }
 
-// StartAutoSelectionsListener starts polling for auto-selection changes and emitting events.
+// StartAutoSelectedListener starts polling for auto-selection changes and emitting events.
 func (r *LocalBackend) StartAutoSelectedListener() {
 	r.vpnClient.AutoSelectedChangeListener(r.ctx)
 }
@@ -770,7 +776,7 @@ func (r *LocalBackend) OAuthLoginCallback(ctx context.Context, oAuthToken string
 	return r.accountClient.OAuthLoginCallback(ctx, oAuthToken)
 }
 
-func (r *LocalBackend) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
+func (r *LocalBackend) OAuthLoginURL(ctx context.Context, provider string) (string, error) {
 	return r.accountClient.OAuthLoginURL(ctx, provider)
 }
 

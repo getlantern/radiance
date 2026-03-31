@@ -106,7 +106,7 @@ func accountLogin(ctx context.Context, c *ipc.Client, cmd *LoginCmd) error {
 		if provider == "" {
 			provider = "google"
 		}
-		url, err := c.OAuthLoginUrl(ctx, provider)
+		url, err := c.OAuthLoginURL(ctx, provider)
 		if err != nil {
 			return err
 		}

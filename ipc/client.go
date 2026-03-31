@@ -189,6 +189,9 @@ func (c *Client) GetServerByTag(ctx context.Context, tag string) (servers.Server
 		return servers.Server{}, false, err
 	}
 	server, err := sjson.UnmarshalExtendedContext[servers.Server](boxCtx, data)
+	if err != nil {
+		return servers.Server{}, false, err
+	}
 	return server, true, nil
 }
 
@@ -446,8 +449,8 @@ func (c *Client) DeleteAccount(ctx context.Context, email, password string) (*ac
 	return &userData, nil
 }
 
-// OAuthLoginUrl returns the OAuth login URL for the given provider.
-func (c *Client) OAuthLoginUrl(ctx context.Context, provider string) (string, error) {
+// OAuthLoginURL returns the OAuth login URL for the given provider.
+func (c *Client) OAuthLoginURL(ctx context.Context, provider string) (string, error) {
 	var resp URLResponse
 	q := url.Values{"provider": {provider}}
 	err := c.doJSON(ctx, http.MethodGet, accountOAuthEndpoint+"?"+q.Encode(), nil, &resp)

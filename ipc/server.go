@@ -835,7 +835,7 @@ func (s *localapi) accountOAuthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider is required", http.StatusBadRequest)
 		return
 	}
-	u, err := s.backend(r.Context()).OAuthLoginUrl(r.Context(), provider)
+	u, err := s.backend(r.Context()).OAuthLoginURL(r.Context(), provider)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

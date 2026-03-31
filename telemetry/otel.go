@@ -18,12 +18,13 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/metric/noop"
+	metricNoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
+	traceNoop "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials"
 
 	rcommon "github.com/getlantern/radiance/common"
@@ -61,7 +62,7 @@ func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string) error {
 	}
 	if err := Initialize(deviceID, *newConfig, settings.IsPro()); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
-		return fmt.Errorf("Failed to initialize OpenTelemetry: %w", err)
+		return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 	}
 	return nil
 }
@@ -128,7 +129,7 @@ func CloseContext(ctx context.Context) error {
 		shutdownOTEL = nil
 	}
 	otel.SetTracerProvider(traceNoop.NewTracerProvider())
-	otel.SetMeterProvider(noop.NewMeterProvider())
+	otel.SetMeterProvider(metricNoop.NewMeterProvider())
 	return errs
 }
 

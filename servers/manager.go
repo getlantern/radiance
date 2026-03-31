@@ -214,10 +214,6 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
-	servers := make([]Server, 0, len(options.Outbounds)+len(options.Endpoints))
-	for _, tag := range options.AllTags() {
-		servers = append(servers, m.optsMap[tag])
-	}
 	return nil
 }
 
@@ -346,20 +342,20 @@ func (m *Manager) removeServers(tags []string) ([]Server, error) {
 		return exists
 	}
 	for group, options := range m.servers {
-		removed := removed[len(removed):]
+		gremoved := removed[len(removed):]
 		options.Outbounds = slices.DeleteFunc(options.Outbounds, func(out option.Outbound) bool {
 			return remove(out)
 		})
 		options.Endpoints = slices.DeleteFunc(options.Endpoints, func(ep option.Endpoint) bool {
 			return remove(ep)
 		})
-		for _, server := range removed {
+		for _, server := range gremoved {
 			delete(options.Locations, server.Tag)
 			delete(m.optsMap, server.Tag)
 		}
 		m.servers[group] = options
-		if len(removed) > 0 {
-			m.logger.Info("Server configs removed", "group", group, "tags", removed)
+		if len(gremoved) > 0 {
+			m.logger.Info("Server configs removed", "group", group, "tags", gremoved)
 		}
 	}
 

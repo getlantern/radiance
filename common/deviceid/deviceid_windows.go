@@ -17,7 +17,7 @@ const (
 // Get returns a unique identifier for this device. The identifier is a random UUID that's stored in the registry
 // at HKEY_CURRENT_USERS\Software\Lantern\deviceid. If unable to read/write to the registry, this defaults to the
 // old-style device ID derived from MAC address.
-func Get() string {
+func Get(_ string) string {
 	key, _, err := registry.CreateKey(registry.CURRENT_USER, keyPath, registry.QUERY_VALUE|registry.SET_VALUE|registry.WRITE)
 	if err != nil {
 		slog.Error("Unable to create registry entry to store deviceID, defaulting to old-style device ID: %v", "error", err)
