@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	runtimeDebug "runtime/debug"
 	"time"
 
+	box "github.com/getlantern/lantern-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
+	singjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 
 	"github.com/getlantern/radiance/internal"
@@ -185,8 +188,17 @@ func (s *Server) updateOutboundsHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	var data servers.Servers
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	// Use sing-box's context-aware JSON decoder so custom outbound types
+	// (e.g., samizdat) are deserialized into their typed Options structs
+	// instead of generic map[string]any. Without this, fields like
+	// public_key are lost during the IPC round-trip.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	data, err := singjson.UnmarshalExtendedContext[servers.Servers](box.BaseContext(), body)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
