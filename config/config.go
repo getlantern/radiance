@@ -351,17 +351,19 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 		}
 		backoff.Reset()
 
-		// Use server-recommended poll interval if available.
+		// Use server-recommended poll interval if available, clamped to a
+		// minimum of 10s to prevent excessive polling.
 		interval := defaultPollInterval
 		if cfg := ch.config.Load(); cfg != nil && cfg.ConfigResponse.PollIntervalSeconds > 0 {
 			serverInterval := time.Duration(cfg.ConfigResponse.PollIntervalSeconds) * time.Second
-			if serverInterval >= 10*time.Second { // floor to prevent abuse
-				interval = serverInterval
-				slog.Debug("Using server-recommended poll interval",
-					"interval", interval,
-					"default", defaultPollInterval,
-				)
+			if serverInterval < 10*time.Second {
+				serverInterval = 10 * time.Second
 			}
+			interval = serverInterval
+			slog.Debug("Using server-recommended poll interval",
+				"interval", interval,
+				"default", defaultPollInterval,
+			)
 		}
 
 		select {
