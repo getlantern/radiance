@@ -21,6 +21,8 @@ import (
 	"github.com/getlantern/radiance/servers"
 )
 
+const maxIPCBodySize = 10 << 20 // 10 MB
+
 type selection struct {
 	GroupTag    string `json:"groupTag"`
 	OutboundTag string `json:"outboundTag"`
@@ -192,7 +194,7 @@ func (s *Server) updateOutboundsHandler(w http.ResponseWriter, r *http.Request) 
 	// (e.g., samizdat) are deserialized into their typed Options structs
 	// instead of generic map[string]any. Without this, fields like
 	// public_key are lost during the IPC round-trip.
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxIPCBodySize))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -225,8 +227,13 @@ func (s *Server) addOutboundsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	var data newOutbounds
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxIPCBodySize))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	data, err := singjson.UnmarshalExtendedContext[newOutbounds](box.BaseContext(), body)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
