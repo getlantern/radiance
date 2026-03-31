@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"strings"
 	"time"
 
 	lcommon "github.com/getlantern/common"
@@ -298,7 +299,8 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 	// add smart routing and ad block rules
 	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
 		slog.Debug("Adding smart-routing rules")
-		outbounds, rules, rulesets := cfg.SmartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
+		smartRoutingRules := normalizeSmartRoutingRules(cfg.SmartRouting)
+		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
@@ -429,6 +431,29 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
+}
+
+func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRoutingRules {
+	normalized := make(lcommon.SmartRoutingRules, 0, len(rules))
+	for _, sr := range rules {
+		cleaned := make([]string, 0, len(sr.Outbounds))
+		for _, outbound := range sr.Outbounds {
+			tag := strings.TrimSpace(outbound)
+			if tag == "" {
+				continue
+			}
+			cleaned = append(cleaned, tag)
+		}
+
+		sr.Outbounds = cleaned
+		if len(sr.Outbounds) == 0 {
+			slog.Warn("Skipping smart-routing rule with no outbounds", "category", sr.Category)
+			continue
+		}
+
+		normalized = append(normalized, sr)
+	}
+	return normalized
 }
 
 func useIfNotZero[T comparable](newVal, oldVal T) T {
