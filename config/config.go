@@ -334,8 +334,11 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 	return nil
 }
 
-// fetchLoop fetches the configuration every pollInterval.
-func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
+// fetchLoop fetches the configuration periodically. It uses the server's
+// recommended poll interval (PollIntervalSeconds) when available, falling
+// back to the default pollInterval. This allows the bandit to control how
+// often the client re-fetches based on learning confidence.
+func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 	backoff := common.NewBackoff(maxRetryDelay)
 	for {
 		if err := ch.fetchConfig(); err != nil {
@@ -347,10 +350,24 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 			continue
 		}
 		backoff.Reset()
+
+		// Use server-recommended poll interval if available.
+		interval := defaultPollInterval
+		if cfg := ch.config.Load(); cfg != nil && cfg.ConfigResponse.PollIntervalSeconds > 0 {
+			serverInterval := time.Duration(cfg.ConfigResponse.PollIntervalSeconds) * time.Second
+			if serverInterval >= 10*time.Second { // floor to prevent abuse
+				interval = serverInterval
+				slog.Debug("Using server-recommended poll interval",
+					"interval", interval,
+					"default", defaultPollInterval,
+				)
+			}
+		}
+
 		select {
 		case <-ch.ctx.Done():
 			return
-		case <-time.After(pollInterval):
+		case <-time.After(interval):
 		}
 	}
 }

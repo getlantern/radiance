@@ -224,8 +224,8 @@ github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58 h1:3wxMKw90adxiEzsJ
 github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58/go.mod h1:p6WdG48YAz5SCUpiMSGLy616A6YghKToc63y3NP7avI=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01 h1:Mmeh4/DA1OKN9tVWRAvTL5efFx4c7v9/55hoK17NclA=
 github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01/go.mod h1:3vR6+jQdWfWojZ77w+htCqEF5MO/Y2twJOpAvFuM9po=
-github.com/getlantern/common v1.2.1-0.20260325181816-33f69c725899 h1:aOKtUREDeyZ9J5Yp0I6zVjSWuMtlLNyfykKQ53VLfTc=
-github.com/getlantern/common v1.2.1-0.20260325181816-33f69c725899/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
+github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46 h1:Ab2esudqgFz2K1WYQKtX+58kaiVMX0UohjW2XmdEgf4=
+github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
 github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d h1:TrauJ2jdJqOAHyQB5wIL0kWN/dipqKagERE1I/TRVSY=
