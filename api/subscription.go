@@ -51,6 +51,7 @@ type SubscriptionResponse struct {
 	CustomerId     string `json:"customerId"`
 	SubscriptionId string `json:"subscriptionId"`
 	ClientSecret   string `json:"clientSecret"`
+	PendingSecret  string `json:"pending_secret"`
 	PublishableKey string `json:"publishableKey"`
 }
 
