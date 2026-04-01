@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/getlantern/radiance/ipc"
@@ -47,14 +48,17 @@ func vpnStatus(ctx context.Context, c *ipc.Client) error {
 		return err
 	}
 	line := string(status)
+	line = strings.ToUpper(line[:1]) + line[1:] // capitalize first letter
 	if status == vpn.Connected {
 		if sel, exists, err := c.SelectedServer(ctx); err == nil && exists {
-			line += " server=" + sel.Tag
+			line += "\nServer: " + sel.Tag
+		} else {
+			fmt.Printf("error getting selected server: err=%v, sel=%v, exists=%v\n", err, sel, exists)
 		}
 	}
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
 	if ip, err := GetPublicIP(tctx); err == nil {
-		line += " ip=" + ip
+		line += "\nIP: " + ip
 	}
 	tcancel()
 	fmt.Println(line)

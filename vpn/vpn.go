@@ -336,11 +336,7 @@ func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	if c.tunnel == nil {
 		return "", ErrTunnelNotConnected
 	}
-	outboundMgr := service.FromContext[adapter.OutboundManager](c.tunnel.ctx)
-	if outboundMgr == nil {
-		return "", errors.New("outbound manager not found")
-	}
-	outbound, loaded := outboundMgr.Outbound(AutoSelectTag)
+	outbound, loaded := c.tunnel.outboundMgr.Outbound(AutoSelectTag)
 	if !loaded {
 		return "", fmt.Errorf("auto select group not found")
 	}

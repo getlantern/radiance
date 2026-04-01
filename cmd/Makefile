@@ -31,3 +31,6 @@ ifeq ($(UNAME_S),Darwin)
 else
 	go build -o ../bin/$(LANTERN) ./lantern
 endif
+
+.PHONY: build
+build: build-daemon build-cli

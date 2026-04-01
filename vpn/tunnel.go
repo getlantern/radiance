@@ -48,8 +48,9 @@ type tunnel struct {
 
 	// optsMap is a map of current outbound/endpoint options JSON, used to deduplicate when adding
 	// outbounds/endpoints
-	optsMap   *lsync.TypedMap[string, []byte]
-	mutGrpMgr *groups.MutableGroupManager
+	optsMap     *lsync.TypedMap[string, []byte]
+	mutGrpMgr   *groups.MutableGroupManager
+	outboundMgr adapter.OutboundManager
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
@@ -199,11 +200,13 @@ func (t *tunnel) connect() (err error) {
 	slog.Debug("Libbox service started")
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
+	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 
 	mutGrpMgr, err := newMutableGroupManager(
 		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
 	)
 	if err != nil {
+		t.close()
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
 	t.mutGrpMgr = mutGrpMgr

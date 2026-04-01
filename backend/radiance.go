@@ -654,6 +654,14 @@ func (r *LocalBackend) ActiveVPNConnections() ([]vpn.Connection, error) {
 // SelectedServer returns the currently selected server and whether the server is still available.
 // The server may no longer be available if it was removed from the manager since it was selected.
 func (r *LocalBackend) SelectedServer() (servers.Server, bool, error) {
+	if settings.GetBool(settings.AutoConnectKey) {
+		tag, err := r.vpnClient.CurrentAutoSelectedServer()
+		if err != nil {
+			return servers.Server{}, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
+		}
+		server, found := r.srvManager.GetServerByTag(tag)
+		return server, found, nil
+	}
 	if !settings.Exists(settings.SelectedServerKey) {
 		return servers.Server{}, false, fmt.Errorf("no selected server")
 	}
