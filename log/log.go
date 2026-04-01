@@ -98,6 +98,9 @@ func NewLogger(cfg Config) *slog.Logger {
 	runtime.AddCleanup(&logWriter, func(f *os.File) {
 		f.Close()
 	}, f)
+	if !cfg.DisablePublisher {
+		logWriter = io.MultiWriter(logWriter, Publisher())
+	}
 	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slevel,
@@ -152,10 +155,6 @@ func NewLogger(cfg Config) *slog.Logger {
 		},
 	})
 	handler = &Handler{Handler: handler, w: logWriter}
-	if !cfg.DisablePublisher {
-		pub := newPublisher(200)
-		handler = &PublishHandler{inner: handler, publisher: pub}
-	}
 	logger := slog.New(handler)
 	if !loggingToStdOut {
 		if isWindows {

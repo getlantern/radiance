@@ -1021,11 +1021,7 @@ func (s *localapi) logsStreamHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case entry := <-ch:
-			data, err := json.Marshal(entry)
-			if err != nil {
-				continue
-			}
-			fmt.Fprintf(w, "data: %s\n", data)
+			fmt.Fprintf(w, "data: %s\n", entry)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return

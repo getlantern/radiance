@@ -55,11 +55,7 @@ type LogsCmd struct{}
 
 func tailLogs(ctx context.Context, c *ipc.Client) error {
 	err := c.TailLogs(ctx, func(entry rlog.LogEntry) {
-		if entry.Source != "" {
-			fmt.Printf("%s [%s] %s: %s\n", entry.Time, entry.Level, entry.Source, entry.Message)
-		} else {
-			fmt.Printf("%s [%s] %s\n", entry.Time, entry.Level, entry.Message)
-		}
+		fmt.Println(entry)
 	})
 	if ctx.Err() != nil {
 		fmt.Fprintln(os.Stderr, "\nStopped tailing logs.")

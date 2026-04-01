@@ -79,10 +79,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 // entry received until ctx is cancelled or the connection is closed.
 func (c *Client) TailLogs(ctx context.Context, handler func(rlog.LogEntry)) error {
 	return c.sseStream(ctx, logsStreamEndpoint, func(data []byte) {
-		var entry rlog.LogEntry
-		if json.Unmarshal(data, &entry) == nil {
-			handler(entry)
-		}
+		handler(string(data))
 	})
 }
 
@@ -113,7 +110,10 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 	for scanner.Scan() {
 		line := scanner.Text()
 		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			handler([]byte(data))
+			data = strings.TrimSpace(data)
+			if data != "" {
+				handler([]byte(data))
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {

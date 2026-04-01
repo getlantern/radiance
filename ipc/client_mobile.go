@@ -165,12 +165,9 @@ func (c *Client) TailLogs(ctx context.Context, handler func(rlog.LogEntry)) erro
 	go func() {
 		for ctx.Err() == nil {
 			c.sseStream(ctx, logsStreamEndpoint, func(data []byte) {
-				var entry rlog.LogEntry
-				if json.Unmarshal(data, &entry) == nil {
-					select {
-					case merged <- entry:
-					default:
-					}
+				select {
+				case merged <- string(data):
+				default:
 				}
 			})
 			// Server unavailable or disconnected; wait before retrying.

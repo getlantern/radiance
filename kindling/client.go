@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/getlantern/kindling"
@@ -152,6 +153,8 @@ type slogWriter struct {
 
 func (w *slogWriter) Write(p []byte) (n int, err error) {
 	// Convert the byte slice to a string and log it
-	w.Info(string(p))
+	s := string(p)
+	s = strings.TrimSpace(s)
+	w.Info(s)
 	return len(p), nil
 }

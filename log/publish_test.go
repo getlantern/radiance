@@ -15,12 +15,31 @@ func TestPushlisher(t *testing.T) {
 	ch, unsub := p.subscribe()
 	defer unsub()
 
-	entry := LogEntry{Time: "2025-01-01 00:00:00.000 UTC", Level: "INFO", Message: "hello"}
+	entry := "time=2025-01-01T00:00:00.000Z level=INFO msg=hello\n"
 	p.publish(entry)
 
 	select {
 	case got := <-ch:
 		assert.Equal(t, entry, got)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for broadcast")
+	}
+}
+
+func TestPublisherWrite(t *testing.T) {
+	p := newPublisher(10)
+
+	ch, unsub := p.subscribe()
+	defer unsub()
+
+	line := "time=2025-01-01T00:00:00.000Z level=INFO msg=hello\n"
+	n, err := p.Write([]byte(line))
+	require.NoError(t, err)
+	assert.Equal(t, len(line), n)
+
+	select {
+	case got := <-ch:
+		assert.Equal(t, line, got)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broadcast")
 	}
@@ -34,7 +53,7 @@ func TestMultipleSubscribers(t *testing.T) {
 	ch2, unsub2 := p.subscribe()
 	defer unsub2()
 
-	entry := LogEntry{Time: "2025-01-01 00:00:00.000 UTC", Level: "DEBUG", Message: "multi"}
+	entry := "time=2025-01-01T00:00:00.000Z level=DEBUG msg=multi\n"
 	p.publish(entry)
 
 	for _, ch := range []chan LogEntry{ch1, ch2} {
@@ -53,7 +72,7 @@ func TestUnsubscribe(t *testing.T) {
 	ch, unsub := p.subscribe()
 	unsub()
 
-	p.publish(LogEntry{Time: "2025-01-01 00:00:00.000 UTC", Level: "INFO", Message: "after unsub"})
+	p.publish("time=2025-01-01T00:00:00.000Z level=INFO msg=\"after unsub\"\n")
 
 	select {
 	case <-ch:
@@ -68,11 +87,7 @@ func TestRingBuffer(t *testing.T) {
 
 	// Fill the ring buffer with 5 entries, so only the last 3 should be available.
 	for i := range 5 {
-		p.publish(LogEntry{
-			Time:    "t",
-			Level:   "INFO",
-			Message: string(rune('a' + i)),
-		})
+		p.publish(string(rune('a' + i)) + "\n")
 	}
 
 	ch, unsub := p.subscribe()
@@ -83,12 +98,12 @@ func TestRingBuffer(t *testing.T) {
 	for range 3 {
 		select {
 		case e := <-ch:
-			msgs = append(msgs, e.Message)
+			msgs = append(msgs, e)
 		case <-time.After(time.Second):
 			t.Fatal("timed out reading ring buffer entries")
 		}
 	}
-	assert.Equal(t, []string{"c", "d", "e"}, msgs)
+	assert.Equal(t, []string{"c\n", "d\n", "e\n"}, msgs)
 }
 
 func TestConcurrentBroadcast(t *testing.T) {
@@ -102,7 +117,7 @@ func TestConcurrentBroadcast(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			p.publish(LogEntry{Time: "t", Level: "INFO", Message: "msg"})
+			p.publish("msg\n")
 		}(i)
 	}
 	wg.Wait()
