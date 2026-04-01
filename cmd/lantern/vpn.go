@@ -11,13 +11,14 @@ import (
 
 type ConnectCmd struct {
 	Name string `arg:"-n,--name" default:"auto" help:"server name to connect to"`
+	Wait bool   `arg:"-w,--wait" default:"false" help:"wait for IP change after connecting"`
 }
 
 type DisconnectCmd struct{}
 
 type StatusCmd struct{}
 
-func vpnConnect(ctx context.Context, c *ipc.Client, tag string) error {
+func vpnConnect(ctx context.Context, c *ipc.Client, tag string, wait bool) error {
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
 	prevIP, _ := GetPublicIP(tctx)
 	tcancel()
@@ -26,6 +27,9 @@ func vpnConnect(ctx context.Context, c *ipc.Client, tag string) error {
 		return err
 	}
 	fmt.Printf("Connected (tag: %s)\n", tag)
+	if !wait {
+		return nil
+	}
 
 	start := time.Now()
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)

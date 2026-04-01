@@ -67,8 +67,8 @@ type VPNClient struct {
 	platformIfce PlatformInterface
 	logger       *slog.Logger
 
-	preTestCancel context.CancelFunc
-	preTestDone   chan struct{}
+	offlineTestCancel context.CancelFunc
+	offlineTestDone   chan struct{}
 
 	mu sync.RWMutex
 }
@@ -89,10 +89,10 @@ func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInt
 	done := make(chan struct{})
 	close(done)
 	return &VPNClient{
-		platformIfce:  platformIfce,
-		logger:        logger,
-		preTestCancel: func() {},
-		preTestDone:   done,
+		platformIfce:      platformIfce,
+		logger:            logger,
+		offlineTestCancel: func() {},
+		offlineTestDone:   done,
 	}
 }
 
@@ -104,10 +104,10 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	defer span.End()
 
 	c.mu.Lock()
-	// Cancel any running pre-start tests and wait for them to finish. If no tests are running,
-	// preTestCancel is a no-op and preTestDone is already closed (returns immediately).
-	c.preTestCancel()
-	done := c.preTestDone
+	// Cancel any running offline tests and wait for them to finish. If no tests are running,
+	// offlineTestCancel is a no-op and offlineTestDone is already closed (returns immediately).
+	c.offlineTestCancel()
+	done := c.offlineTestDone
 	c.mu.Unlock()
 	<-done
 
@@ -432,28 +432,28 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		return ErrTunnelAlreadyConnected
 	}
 	select {
-	case <-c.preTestDone:
+	case <-c.offlineTestDone:
 		// no tests currently running, safe to start new tests
 	default:
 		c.mu.Unlock()
-		return errors.New("pre-start tests already running")
+		return errors.New("offline tests already running")
 	}
 	ctx, cancel := context.WithCancel(box.BaseContext())
-	c.preTestCancel = cancel
+	c.offlineTestCancel = cancel
 	done := make(chan struct{})
-	c.preTestDone = done
+	c.offlineTestDone = done
 	c.mu.Unlock()
 	defer close(done)
 
 	// Extract bandit trace context for distributed tracing
 	traceCtx, hasTrace := traces.ExtractBanditTraceContext(banditURLs)
 
-	c.logger.Info("Performing pre-start URL tests")
+	c.logger.Info("Performing offline URL tests")
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("preTest", tags, banditURLs))
+	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,
@@ -466,7 +466,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		},
 	}
 
-	// create pre-started box instance. we just use the standard box since we don't need a
+	// create offlineed box instance. we just use the standard box since we don't need a
 	// platform interface for testing.
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 	urlTestHistoryStorage := urltest.NewHistoryStorage()
@@ -487,19 +487,19 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	// starting the instance.
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("pre-start tests cancelled: %w", ctx.Err())
+		return fmt.Errorf("offline tests cancelled: %w", ctx.Err())
 	default:
 	}
 	if err := instance.PreStart(); err != nil {
 		return fmt.Errorf("failed to start sing-box instance: %w", err)
 	}
-	outbound, _ := instance.Outbound().Outbound("preTest")
+	outbound, _ := instance.Outbound().Outbound("offline-test")
 	tester, _ := outbound.(adapter.URLTestGroup)
 	// run URL tests
 	results, err := tester.URLTest(ctx)
 	if err != nil {
-		c.logger.Error("Pre-start URL test failed", "error", err)
-		return fmt.Errorf("pre-start URL test failed: %w", err)
+		c.logger.Error("offline URL test failed", "error", err)
+		return fmt.Errorf("offline URL test failed: %w", err)
 	}
 
 	// Record URL test results in a span linked to the bandit's trace.
@@ -522,7 +522,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	for tag, delay := range results {
 		fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
 	}
-	c.logger.Log(nil, log.LevelTrace, "Pre-start URL test complete", "results", strings.Join(fmttedResults, "; "))
+	c.logger.Log(nil, log.LevelTrace, "offline URL test complete", "results", strings.Join(fmttedResults, "; "))
 	return nil
 }
 

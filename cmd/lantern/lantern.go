@@ -98,7 +98,8 @@ func main() {
 	defer client.Close()
 
 	if err := run(ctx, client, &a); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		p.WriteHelpForSubcommand(os.Stdout, p.SubcommandNames()...)
 		os.Exit(1)
 	}
 }
@@ -106,7 +107,7 @@ func main() {
 func run(ctx context.Context, c *ipc.Client, a *args) error {
 	switch {
 	case a.Connect != nil:
-		return vpnConnect(ctx, c, a.Connect.Name)
+		return vpnConnect(ctx, c, a.Connect.Name, a.Connect.Wait)
 	case a.Disconnect != nil:
 		return c.DisconnectVPN(ctx)
 	case a.Status != nil:

@@ -53,6 +53,10 @@ func (daemonArgs) Description() string {
 	return "lanternd — Lantern VPN daemon"
 }
 
+func init() {
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
+}
+
 func main() {
 	if maybePlatformService() {
 		return
@@ -182,10 +186,7 @@ func copyBin() (string, error) {
 		return "", fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	dst, err := filepath.EvalSymlinks(binPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve bin destination path: %w", err)
-	}
+	dst := binPath
 	if src == dst {
 		return dst, nil
 	}
