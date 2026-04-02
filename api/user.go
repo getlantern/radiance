@@ -32,6 +32,12 @@ import (
 
 const saltFileName = ".salt"
 
+// datacapBackoffResetAfter is the minimum connection duration before we reset
+// the reconnect backoff. It must exceed the server's SSE idle timeout (~60s);
+// otherwise every normal timeout-triggered disconnect looks "long-lived" and
+// resets the backoff, causing a tight-loop reconnect.
+const datacapBackoffResetAfter = 90 * time.Second
+
 // pro-server requests
 type UserDataResponse struct {
 	*protos.BaseResponse           `json:",inline"`
@@ -177,7 +183,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		}
 		// Reset backoff if the connection was up for a while before dropping,
 		// so we reconnect quickly after a transient disconnect.
-		if time.Since(start) > 90*time.Second {
+		if time.Since(start) > datacapBackoffResetAfter {
 			bo.Reset()
 		}
 		bo.Wait(ctx)
