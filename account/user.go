@@ -115,7 +115,10 @@ func (a *Client) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	defer span.End()
 
 	getURL := "/datacap/" + settings.GetString(settings.DeviceIDKey)
-	resp, err := a.sendRequest(ctx, "GET", getURL, nil, nil, nil)
+	headers := map[string]string{
+		"Content-Type": "application/json",
+	}
+	resp, err := a.sendRequest(ctx, "GET", getURL, nil, headers, nil)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("getting datacap info: %w", err))
 	}
@@ -596,8 +599,20 @@ func (a *Client) setData(data *UserData) {
 		a.ClearUser()
 		return
 	}
+
+	// This case when user hits device limit while login
 	if data.LegacyUserData == nil {
-		slog.Info("no user data to set")
+		slog.Info("no user data to set, storing id and token only")
+		if data.LegacyID != 0 {
+			if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
+				slog.Error("failed to set user ID in settings", "error", err)
+			}
+		}
+		if data.LegacyToken != "" {
+			if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
+				slog.Error("failed to set token in settings", "error", err)
+			}
+		}
 		return
 	}
 
@@ -640,15 +655,17 @@ func (a *Client) setData(data *UserData) {
 		}
 	}
 
-	devices := []settings.Device{}
-	for _, d := range data.Devices {
-		devices = append(devices, settings.Device{
-			Name: d.Name,
-			ID:   d.Id,
-		})
-	}
-	if err := settings.Set(settings.DevicesKey, devices); err != nil {
-		slog.Error("failed to set devices in settings", "error", err)
+	if len(data.Devices) > 0 {
+		devices := []settings.Device{}
+		for _, d := range data.Devices {
+			devices = append(devices, settings.Device{
+				Name: d.Name,
+				ID:   d.Id,
+			})
+		}
+		if err := settings.Set(settings.DevicesKey, devices); err != nil {
+			slog.Error("failed to set devices in settings", "error", err)
+		}
 	}
 
 	if err := settings.Set(settings.UserDataKey, data); err != nil {
