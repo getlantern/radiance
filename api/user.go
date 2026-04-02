@@ -177,7 +177,7 @@ func (a *APIClient) DataCapStream(ctx context.Context) error {
 		}
 		// Reset backoff if the connection was up for a while before dropping,
 		// so we reconnect quickly after a transient disconnect.
-		if time.Since(start) > 30*time.Second {
+		if time.Since(start) > 90*time.Second {
 			bo.Reset()
 		}
 		bo.Wait(ctx)
