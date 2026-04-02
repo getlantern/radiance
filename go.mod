@@ -28,13 +28,15 @@ require (
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58
-	github.com/getlantern/common v1.2.1-0.20260325181816-33f69c725899
+	github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538
 	github.com/getlantern/keepcurrent v0.0.0-20260304213122-017d542145ae
-	github.com/getlantern/kindling v0.0.0-20260319225424-4736208dd171
-	github.com/getlantern/lantern-box v0.0.51
+	github.com/getlantern/kindling v0.0.0-20260329144042-b1825b9cb1bb
+	github.com/getlantern/lantern-box v0.0.55
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
+	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
+	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
@@ -113,7 +115,7 @@ require (
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90 // indirect
-	github.com/getlantern/samizdat v0.0.3-0.20260310125445-325cf1bd1b60 // indirect
+	github.com/getlantern/samizdat v0.0.3-0.20260327203406-ef7323341974 // indirect
 	github.com/go-chi/chi/v5 v5.2.2 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
@@ -131,6 +133,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
+	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/illarion/gonotify/v2 v2.0.3 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect

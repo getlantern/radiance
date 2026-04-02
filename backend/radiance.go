@@ -109,7 +109,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		settings.TelemetryKey:           opts.TelemetryConsent,
 	})
 
-	kindling.SetKindling(kindling.NewKindling(dataDir))
+	k, err := kindling.NewKindling(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize kindling: %w", err)
+	}
+	kindling.SetKindling(k)
 	accountClient := account.NewClient(kindling.HTTPClient(), dataDir)
 
 	svrMgr, err := servers.NewManager(

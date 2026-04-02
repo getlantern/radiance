@@ -37,7 +37,7 @@ type args struct {
 }
 
 func (args) Description() string {
-	return "Radiance CLI — command-line interface for the Radiance VPN daemon"
+	return "Lantern CLI — command-line interface for the Lantern VPN daemon"
 }
 
 type ReportIssueCmd struct {

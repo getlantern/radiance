@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -295,18 +296,28 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	// add smart routing and ad block rules
-	if len(bOptions.SmartRouting) > 0 {
+	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
+	if len(smartRoutingRules) > 0 {
 		slog.Debug("Adding smart-routing rules")
-		outbounds, rules, rulesets := bOptions.SmartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
-		opts.Outbounds = append(opts.Outbounds, outbounds...)
-		opts.Route.Rules = append(opts.Route.Rules, rules...)
-		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
+		if len(outbounds) == 0 || len(rules) == 0 || len(rulesets) == 0 {
+			slog.Warn("No valid smart-routing rules found after normalization, skipping smart-routing configuration")
+		} else {
+			opts.Outbounds = append(opts.Outbounds, outbounds...)
+			opts.Route.Rules = append(opts.Route.Rules, rules...)
+			opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		}
 	}
-	if len(bOptions.AdBlock) > 0 {
+	adBlockRules := normalizeAdBlockRules(bOptions.AdBlock)
+	if len(adBlockRules) > 0 {
 		slog.Debug("Adding ad-block rules")
 		rule, rulesets := bOptions.AdBlock.ToOptions()
-		opts.Route.Rules = append(opts.Route.Rules, rule)
-		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		if len(rulesets) == 0 {
+			slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
+		} else {
+			opts.Route.Rules = append(opts.Route.Rules, rule)
+			opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		}
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
@@ -375,6 +386,43 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		tags = append(tags, ep.Tag)
 	}
 	return tags
+}
+
+func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRoutingRules {
+	normalized := make(lcommon.SmartRoutingRules, 0, len(rules))
+	for _, sr := range rules {
+		cleaned := make([]string, 0, len(sr.Outbounds))
+		for _, outbound := range sr.Outbounds {
+			tag := strings.TrimSpace(outbound)
+			if tag == "" {
+				continue
+			}
+			cleaned = append(cleaned, tag)
+		}
+
+		sr.Outbounds = cleaned
+		if len(sr.Outbounds) == 0 {
+			slog.Warn("Skipping smart-routing rule with no outbounds", "category", sr.Category)
+			continue
+		}
+
+		normalized = append(normalized, sr)
+	}
+	return normalized
+}
+
+func normalizeAdBlockRules(rules lcommon.AdBlockRules) lcommon.AdBlockRules {
+	normalized := make(lcommon.AdBlockRules, 0, len(rules))
+	for _, rule := range rules {
+		tag := strings.TrimSpace(rule.Tag)
+		if tag == "" {
+			slog.Warn("Skipping ad-block rule with empty tag")
+			continue
+		}
+		rule.Tag = tag
+		normalized = append(normalized, rule)
+	}
+	return normalized
 }
 
 func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {

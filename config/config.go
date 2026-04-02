@@ -266,8 +266,11 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 	return nil
 }
 
-// fetchLoop fetches the configuration every pollInterval.
-func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
+// fetchLoop fetches the configuration periodically. It uses the server's
+// recommended poll interval (PollIntervalSeconds) when available, falling
+// back to the default pollInterval. This allows the bandit to control how
+// often the client re-fetches based on learning confidence.
+func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 	backoff := common.NewBackoff(maxRetryDelay)
 	for {
 		if err := ch.fetchConfig(); err != nil {
@@ -279,10 +282,26 @@ func (ch *ConfigHandler) fetchLoop(pollInterval time.Duration) {
 			continue
 		}
 		backoff.Reset()
+
+		// Use server-recommended poll interval if available, clamped to a
+		// minimum of 10s to prevent excessive polling.
+		interval := defaultPollInterval
+		if cfg := ch.config.Load(); cfg != nil && cfg.PollIntervalSeconds > 0 {
+			serverInterval := time.Duration(cfg.PollIntervalSeconds) * time.Second
+			if serverInterval < 10*time.Second {
+				serverInterval = 10 * time.Second
+			}
+			interval = serverInterval
+			ch.logger.Debug("Using server-recommended poll interval",
+				"interval", interval,
+				"default", defaultPollInterval,
+			)
+		}
+
 		select {
 		case <-ch.ctx.Done():
 			return
-		case <-time.After(pollInterval):
+		case <-time.After(interval):
 		}
 	}
 }
@@ -305,7 +324,7 @@ func (ch *ConfigHandler) isClosed() bool {
 // nil.
 func (ch *ConfigHandler) loadConfig() error {
 	ch.logger.Debug("reading config file")
-	cfg, err := Load(ch.configPath)
+	cfg, err := load(ch.configPath)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
@@ -316,7 +335,7 @@ func (ch *ConfigHandler) loadConfig() error {
 	return nil
 }
 
-func Load(path string) (*Config, error) {
+func load(path string) (*Config, error) {
 	buf, err := atomicfile.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil // No config file yet

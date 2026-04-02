@@ -35,12 +35,27 @@ var (
 	}
 )
 
-// HTTPClient returns a http client with kindling transport
+// HTTPClient returns a http client with kindling transport.
+// Thread-safe: uses kindlingMutex to guard lazy initialization.
 func HTTPClient() *http.Client {
+	kindlingMutex.Lock()
 	if k == nil {
-		SetKindling(NewKindling(settings.GetString(settings.DataPathKey)))
+		newK, err := NewKindling(settings.GetString(settings.DataPathKey))
+		if err != nil {
+			slog.Error("failed to create kindling client", slog.Any("error", err))
+		}
+		if newK != nil {
+			k = newK
+		}
 	}
-	httpClient := k.NewHTTPClient()
+	localK := k
+	kindlingMutex.Unlock()
+
+	if localK == nil {
+		slog.Warn("kindling unavailable, returning bare HTTP client")
+		return &http.Client{Timeout: common.DefaultHTTPTimeout}
+	}
+	httpClient := localK.NewHTTPClient()
 	httpClient.Timeout = common.DefaultHTTPTimeout
 	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
 	return httpClient
@@ -52,10 +67,8 @@ func Close() error {
 		stopUpdater()
 	}
 	for _, c := range closeTransports {
-		if c != nil {
-			if err := c(); err != nil {
-				slog.Error("failed to close kindling transport", slog.Any("error", err))
-			}
+		if err := c(); err != nil {
+			slog.Error("failed to close kindling transport", slog.Any("error", err))
 		}
 	}
 	return nil
@@ -72,7 +85,7 @@ func SetKindling(a kindling.Kindling) {
 const tracerName = "github.com/getlantern/radiance/kindling"
 
 // NewKindling build a kindling client and bootstrap this package
-func NewKindling(dataDir string) kindling.Kindling {
+func NewKindling(dataDir string) (kindling.Kindling, error) {
 	logger := &slogWriter{Logger: slog.Default()}
 
 	ctx, span := otel.Tracer(tracerName).Start(
@@ -106,13 +119,10 @@ func NewKindling(dataDir string) kindling.Kindling {
 			slog.Error("failed to create fronted client", slog.Any("error", err))
 			span.RecordError(err)
 		}
-		closeTransports = append(closeTransports, func() error {
-			if f != nil {
-				f.Close()
-			}
-			return nil
-		})
-		kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
+		if f != nil {
+			closeTransports = append(closeTransports, func() error { f.Close(); return nil })
+			kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
+		}
 	}
 
 	if enabled := EnabledTransports["amp"]; enabled {
@@ -121,8 +131,9 @@ func NewKindling(dataDir string) kindling.Kindling {
 			slog.Error("failed to create amp client", slog.Any("error", err))
 			span.RecordError(err)
 		}
-		// Kindling will skip amp transports if the request has a payload larger than 6kb
-		kindlingOptions = append(kindlingOptions, kindling.WithAMPCache(ampClient))
+		if ampClient != nil {
+			kindlingOptions = append(kindlingOptions, kindling.WithAMPCache(ampClient))
+		}
 	}
 
 	if enabled := EnabledTransports["dnstt"]; enabled {
@@ -133,8 +144,8 @@ func NewKindling(dataDir string) kindling.Kindling {
 		}
 		if dnsttOptions != nil {
 			closeTransports = append(closeTransports, dnsttOptions.Close)
+			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 		}
-		kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 	}
 
 	if enabled := EnabledTransports["proxyless"]; enabled {

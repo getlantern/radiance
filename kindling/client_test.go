@@ -5,11 +5,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewClient(t *testing.T) {
-	k = NewKindling(t.TempDir())
-	SetKindling(k)
+	newK, err := NewKindling(t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, newK)
+	SetKindling(newK)
 
 	t.Cleanup(func() {
 		Close()

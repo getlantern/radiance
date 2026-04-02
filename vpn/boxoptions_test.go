@@ -137,6 +137,16 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		assert.True(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
 		assert.True(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
 	})
+	t.Run("with smart routing and missing outbounds", func(t *testing.T) {
+		boxOptions.SmartRouting = cfg.SmartRouting
+		cfg.SmartRouting[0].Outbounds = nil
+		options, err := buildOptions(boxOptions)
+		require.NoError(t, err)
+		// check rules, rulesets, and outbounds are not built into options
+		assert.False(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
+		assert.False(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
+		assert.False(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
+	})
 	t.Run("with ad block", func(t *testing.T) {
 		boxOptions.AdBlock = cfg.AdBlock
 		options, err := buildOptions(boxOptions)

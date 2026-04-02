@@ -8,7 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel/trace"
 
 	rlog "github.com/getlantern/radiance/log"

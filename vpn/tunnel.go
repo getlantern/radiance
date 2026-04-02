@@ -346,6 +346,12 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			return errLibboxClosed
 		}
 		if err != nil {
+			slog.Warn("Failed to load outbound",
+				"tag", outbound.Tag,
+				"type", outbound.Type,
+				"group", group,
+				"error", err,
+			)
 			errs = append(errs, err)
 		} else {
 			b, _ := json.MarshalContext(ctx, outbound)
@@ -371,6 +377,12 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			return errLibboxClosed
 		}
 		if err != nil {
+			slog.Warn("Failed to load endpoint",
+				"tag", endpoint.Tag,
+				"type", endpoint.Type,
+				"group", group,
+				"error", err,
+			)
 			errs = append(errs, err)
 		} else {
 			b, _ := json.MarshalContext(ctx, endpoint)
@@ -461,13 +473,44 @@ func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 		return t.ctx.Err()
 	}
 
-	// collect current tags that are not in the new options
+	// collect tags present in the current group but absent from the new config
 	newTags := newOpts.AllTags()
 	var toRemove []string
 	for _, tag := range selector.All() {
 		if !slices.Contains(newTags, tag) {
 			toRemove = append(toRemove, tag)
 		}
+	}
+
+	// Add new outbounds first, before removing old ones. If all new
+	// outbounds fail to load (e.g. invalid config), we keep the old
+	// working outbounds to maintain connectivity.
+	addErr := t.addOutbounds(group, newOpts)
+	if errors.Is(addErr, errLibboxClosed) {
+		return addErr
+	}
+	if addErr != nil {
+		errs = append(errs, addErr)
+	}
+
+	// Check if any new outbound actually loaded into the group.
+	hasNewOutbound := false
+	for _, tag := range newTags {
+		if slices.Contains(selector.All(), tag) {
+			hasNewOutbound = true
+			break
+		}
+	}
+
+	if hasNewOutbound {
+		if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
+			return err
+		} else if err != nil {
+			errs = append(errs, err)
+		}
+	} else {
+		slog.Warn("All new outbounds failed to load, keeping old outbounds",
+			"group", group, "failed_tags", newTags, "would_remove_tags", toRemove)
 	}
 
 	if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
