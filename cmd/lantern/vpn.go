@@ -21,7 +21,10 @@ type StatusCmd struct{}
 
 func vpnConnect(ctx context.Context, c *ipc.Client, tag string, wait bool) error {
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
-	prevIP, _ := GetPublicIP(tctx)
+	var prevIP string
+	if wait {
+		prevIP, _ = getPublicIP(tctx)
+	}
 	tcancel()
 
 	if err := c.ConnectVPN(ctx, tag); err != nil {
@@ -32,14 +35,34 @@ func vpnConnect(ctx context.Context, c *ipc.Client, tag string, wait bool) error
 		return nil
 	}
 
-	start := time.Now()
+	fmt.Print("Waiting for IP change...")
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer waitCancel()
-	ip, err := WaitForIPChange(waitCtx, prevIP, 500*time.Millisecond)
+	start := time.Now()
+	ip, err := waitForIPChange(waitCtx, prevIP, 100*time.Millisecond)
 	if err == nil && ip != "" {
-		fmt.Printf("Public IP: %s (took %v)\n", ip, time.Since(start).Truncate(time.Millisecond))
+		fmt.Printf("\rPublic IP: %s (took %v)\n", ip, time.Since(start).Truncate(time.Millisecond))
+	} else {
+		fmt.Printf("\rIP change not detected after %v\n", time.Since(start).Truncate(time.Second))
 	}
 	return nil
+}
+
+func waitForIPChange(ctx context.Context, current string, interval time.Duration) (string, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return "", nil
+		case <-time.After(interval):
+			ip, err := getPublicIP(ctx)
+			if err != nil {
+				return "", nil
+			}
+			if ip != current {
+				return ip, nil
+			}
+		}
+	}
 }
 
 func vpnStatus(ctx context.Context, c *ipc.Client) error {
@@ -57,7 +80,7 @@ func vpnStatus(ctx context.Context, c *ipc.Client) error {
 		}
 	}
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
-	if ip, err := GetPublicIP(tctx); err == nil {
+	if ip, err := getPublicIP(tctx); err == nil {
 		line += "\nIP: " + ip
 	}
 	tcancel()

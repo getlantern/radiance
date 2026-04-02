@@ -14,21 +14,17 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// clientIP holds the detected public IP address, set once at startup.
-var clientIP atomic.Value // string
+// publicIP holds the detected public IP address, set once at startup.
+var publicIP atomic.Value // string
 
-// SetClientIP stores the detected public IP for inclusion in API requests.
-func SetClientIP(ip string) {
-	clientIP.Store(ip)
+func init() {
+	publicIP.Store("") // ensure publicIP is type string
 }
 
-// GetClientIP returns the detected public IP, or empty string if not yet detected.
-func GetClientIP() string {
-	v := clientIP.Load()
-	if v == nil {
-		return ""
-	}
-	return v.(string)
+// SetPublicIP stores the detected public IP for inclusion in API requests. It should only be called
+// once at startup after successfully detecting the public IP.
+func SetPublicIP(ip string) {
+	publicIP.Store(ip)
 }
 
 const (
@@ -69,7 +65,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
 		req.Header.Set(TimeZoneHeader, tz)
 	}
-	if ip := GetClientIP(); ip != "" {
+	if ip := publicIP.Load().(string); ip != "" {
 		req.Header.Set(ClientIPHeader, ip)
 	}
 	return req, nil

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"context"
 
@@ -65,19 +64,6 @@ func tailLogs(ctx context.Context, c *ipc.Client) error {
 }
 
 type VersionCmd struct{}
-
-type IPCmd struct{}
-
-func runIP(ctx context.Context) error {
-	tctx, tcancel := context.WithTimeout(ctx, 10*time.Second)
-	defer tcancel()
-	ip, err := GetPublicIP(tctx)
-	if err != nil {
-		return err
-	}
-	fmt.Println(ip)
-	return nil
-}
 
 func main() {
 	var a args
