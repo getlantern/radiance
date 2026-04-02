@@ -26,6 +26,7 @@ const (
 	ENV           Key = "RADIANCE_ENV"
 	UseSocks      Key = "RADIANCE_USE_SOCKS_PROXY"
 	SocksAddress  Key = "RADIANCE_SOCKS_ADDRESS"
+	AppVersion    Key = "RADIANCE_VERSION"
 
 	Testing Key = "RADIANCE_TESTING"
 )
@@ -41,6 +42,7 @@ var (
 		SocksAddress,
 		UseSocks,
 		ENV,
+		AppVersion,
 	}
 	envVars = map[string]any{}
 )

@@ -77,6 +77,9 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 		return nil
 	}
 
+	if v, ok := env.Get[string](env.AppVersion); ok && v != "" {
+		Version = v
+	}
 	reporting.Init(Version)
 	data, logs, err := setupDirectories(dataDir, logDir)
 	if err != nil {
