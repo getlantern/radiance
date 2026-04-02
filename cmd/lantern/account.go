@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -40,8 +41,8 @@ type SetEmailCmd struct{}
 type UsageCmd struct{}
 
 type DevicesCmd struct {
-	List   bool   `arg:"--list" help:"list user devices"`
-	Remove string `arg:"--remove" help:"remove a device by ID"`
+	List   bool   `arg:"-l,--list" help:"list user devices"`
+	Remove string `arg:"-r,--remove" help:"remove a device by ID"`
 }
 
 func runAccount(ctx context.Context, c *ipc.Client, cmd *AccountCmd) error {
@@ -271,7 +272,23 @@ func accountDataUsage(ctx context.Context, c *ipc.Client) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(info)
+	fmt.Printf("Enabled: %t\n", info.Enabled)
+	if !info.Enabled {
+		return nil
+	}
+	if info.Usage == nil {
+		return fmt.Errorf("data usage info is unavailable")
+	}
+	bytesAllowed, _ := strconv.Atoi(info.Usage.BytesAllotted)
+	BytesUsed, _ := strconv.Atoi(info.Usage.BytesUsed)
+	resetTime := info.Usage.AllotmentEndTime
+
+	fmt.Printf(
+		"Data used: %.2f MB / %.2f MB (%.2f%%)\n",
+		float64(BytesUsed)/1e6, float64(bytesAllowed)/1e6,
+		100*float64(BytesUsed)/float64(bytesAllowed),
+	)
+	fmt.Printf("Resets at: %s\n", resetTime)
 	return nil
 }
 

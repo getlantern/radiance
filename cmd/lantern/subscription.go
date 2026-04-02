@@ -10,55 +10,46 @@ import (
 )
 
 type SubscriptionCmd struct {
-	Plans         *SubscriptionPlansCmd  `arg:"subcommand:plans" help:"list subscription plans for a channel"`
-	Activate      *ActivateCmd           `arg:"subcommand:activate" help:"activate with reseller code"`
-	StripeSub     *StripeSubCmd          `arg:"subcommand:stripe-sub" help:"create Stripe subscription"`
-	Redirect      *PaymentRedirectCmd    `arg:"subcommand:redirect" help:"get payment redirect URL"`
-	SubRedirect   *SubPaymentRedirectCmd `arg:"subcommand:sub-redirect" help:"get subscription payment redirect URL"`
-	Referral      *ReferralCmd           `arg:"subcommand:referral" help:"attach referral code"`
-	StripeBilling *StripeBillingCmd      `arg:"subcommand:stripe-billing" help:"get Stripe billing portal URL"`
-	Verify        *VerifySubscriptionCmd `arg:"subcommand:verify" help:"verify subscription"`
+	Plans           *SubscriptionPlansCmd  `arg:"subcommand:plans" help:"list subscription plans for a channel"`
+	Activate        *ActivateCmd           `arg:"subcommand:activate" help:"activate with reseller code"`
+	StripeSub       *StripeSubCmd          `arg:"subcommand:stripe-sub" help:"create Stripe subscription"`
+	PaymentRedirect *PaymentRedirectCmd    `arg:"subcommand:redirect" help:"get payment redirect URL"`
+	Referral        *ReferralCmd           `arg:"subcommand:referral" help:"attach referral code"`
+	StripeBilling   *StripeBillingCmd      `arg:"subcommand:stripe-billing" help:"get Stripe billing portal URL"`
+	Verify          *VerifySubscriptionCmd `arg:"subcommand:verify" help:"verify subscription"`
 }
 
 type SubscriptionPlansCmd struct {
-	Channel string `arg:"--channel" help:"subscription channel"`
+	Channel string `arg:"-c,--channel" help:"subscription channel"`
 }
 
 type ActivateCmd struct {
-	Email string `arg:"--email" help:"email address"`
-	Code  string `arg:"--code" help:"reseller code"`
+	Email string `arg:"-e,--email" help:"email address"`
+	Code  string `arg:"-c,--code" help:"reseller code"`
 }
 
 type StripeSubCmd struct {
-	Email  string `arg:"--email" help:"email address"`
-	PlanID string `arg:"--plan" help:"plan ID"`
+	Email  string `arg:"-e,--email" help:"email address"`
+	PlanID string `arg:"-p,--plan" help:"plan ID"`
 }
 
 type PaymentRedirectCmd struct {
-	PlanID      string `arg:"--plan" help:"plan ID"`
-	Provider    string `arg:"--provider" help:"payment provider"`
-	Email       string `arg:"--email" help:"email address"`
-	DeviceName  string `arg:"--device" help:"device name"`
-	BillingType string `arg:"--billing-type" default:"subscription" help:"one_time or subscription"`
-}
-
-type SubPaymentRedirectCmd struct {
-	PlanID      string `arg:"--plan" help:"plan ID"`
-	Provider    string `arg:"--provider" help:"payment provider"`
-	Email       string `arg:"--email" help:"email address"`
-	DeviceName  string `arg:"--device" help:"device name"`
-	BillingType string `arg:"--billing-type" default:"subscription" help:"one_time or subscription"`
+	PlanID      string `arg:"-p,--plan" help:"plan ID"`
+	Provider    string `arg:"-P,--provider" help:"payment provider"`
+	Email       string `arg:"-e,--email" help:"email address"`
+	DeviceName  string `arg:"-d,--device" help:"device name"`
+	BillingType string `arg:"-b,--billing-type" default:"subscription" help:"one_time or subscription"`
 }
 
 type ReferralCmd struct {
-	Code string `arg:"--code" help:"referral code"`
+	Code string `arg:"-c,--code" help:"referral code"`
 }
 
 type StripeBillingCmd struct{}
 
 type VerifySubscriptionCmd struct {
-	Service    string `arg:"--service" help:"stripe, apple, or google"`
-	VerifyData string `arg:"--data" help:"verification data as JSON"`
+	Service    string `arg:"-s,--service" help:"stripe, apple, or google"`
+	VerifyData string `arg:"-d,--data" help:"verification data as JSON"`
 }
 
 func runSubscription(ctx context.Context, c *ipc.Client, cmd *SubscriptionCmd) error {
@@ -69,10 +60,8 @@ func runSubscription(ctx context.Context, c *ipc.Client, cmd *SubscriptionCmd) e
 		return subActivate(ctx, c, cmd.Activate)
 	case cmd.StripeSub != nil:
 		return subStripeSub(ctx, c, cmd.StripeSub)
-	case cmd.Redirect != nil:
-		return subRedirect(ctx, c, cmd.Redirect)
-	case cmd.SubRedirect != nil:
-		return subSubRedirect(ctx, c, cmd.SubRedirect)
+	case cmd.PaymentRedirect != nil:
+		return subRedirect(ctx, c, cmd.PaymentRedirect)
 	case cmd.Referral != nil:
 		return subReferral(ctx, c, cmd.Referral)
 	case cmd.StripeBilling != nil:
@@ -192,19 +181,6 @@ func subRedirect(ctx context.Context, c *ipc.Client, cmd *PaymentRedirectCmd) er
 		return err
 	}
 	url, err := c.PaymentRedirect(ctx, data)
-	if err != nil {
-		return err
-	}
-	fmt.Println(url)
-	return nil
-}
-
-func subSubRedirect(ctx context.Context, c *ipc.Client, cmd *SubPaymentRedirectCmd) error {
-	data, err := promptRedirectData(cmd.PlanID, cmd.Provider, cmd.Email, cmd.DeviceName, cmd.BillingType)
-	if err != nil {
-		return err
-	}
-	url, err := c.SubscriptionPaymentRedirectURL(ctx, data)
 	if err != nil {
 		return err
 	}

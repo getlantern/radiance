@@ -40,14 +40,13 @@ func (args) Description() string {
 }
 
 type ReportIssueCmd struct {
-	Type        int      `arg:"--type,required" help:"0=purchase 1=signin 2=spinner 3=blocked-sites 4=slow 5=link-device 6=crash 9=other 10=update"`
-	Description string   `arg:"--desc,required" help:"issue description"`
-	Email       string   `arg:"--email" help:"email address"`
-	Attachments []string `arg:"--attach" help:"additional attachment paths"`
+	Type        int    `arg:"-t,--type,required" help:"0=purchase 1=signin 2=spinner 3=blocked-sites 4=slow 5=link-device 6=crash 9=other 10=update"`
+	Description string `arg:"-d,--desc,required" help:"issue description"`
+	Email       string `arg:"-e,--email" help:"email address"`
 }
 
 func runReportIssue(ctx context.Context, c *ipc.Client, cmd *ReportIssueCmd) error {
-	return c.ReportIssue(ctx, issue.IssueType(cmd.Type), cmd.Description, cmd.Email, cmd.Attachments)
+	return c.ReportIssue(ctx, issue.IssueType(cmd.Type), cmd.Description, cmd.Email, nil)
 }
 
 type LogsCmd struct{}

@@ -11,20 +11,20 @@ import (
 )
 
 type ServersCmd struct {
-	Show           string `arg:"--show" help:"display server by tag"`
+	Show           string `arg:"-s,--show" help:"display server by tag"`
 	AddJSON        string `arg:"--add-json" help:"add servers from JSON config"`
 	AddURL         string `arg:"--add-url" help:"add servers from comma-separated URLs"`
 	SkipCertVerify bool   `arg:"--skip-cert-verify" help:"skip cert verification (with --add-url)"`
 	Remove         string `arg:"--remove" help:"comma-separated list of servers to remove"`
-	List           bool   `arg:"--list" help:"list servers"`
+	List           bool   `arg:"-l,--list" help:"list servers"`
 
 	PrivateServer *PrivateServerCmd `arg:"subcommand:private" help:"private server operations"`
 }
 
 type PrivateServerCmd struct {
-	Add          string `arg:"--add" help:"add private server with given tag"`
-	Invite       string `arg:"--invite" help:"invite to private server"`
-	RevokeInvite string `arg:"--revoke-invite" help:"revoke invite"`
+	Add          string `arg:"-a,--add" help:"add private server with given tag"`
+	Invite       string `arg:"-i,--invite" help:"invite to private server"`
+	RevokeInvite string `arg:"-r,--revoke-invite" help:"revoke invite"`
 	IP           string `arg:"--ip" help:"server IP"`
 	Port         int    `arg:"--port" help:"server port"`
 	Token        string `arg:"--token" help:"access token"`

@@ -510,13 +510,6 @@ func (c *Client) NewStripeSubscription(ctx context.Context, email, planID string
 	return resp.ClientSecret, err
 }
 
-// PaymentRedirect returns a payment redirect URL.
-func (c *Client) PaymentRedirect(ctx context.Context, data account.PaymentRedirectData) (string, error) {
-	var resp URLResponse
-	err := c.doJSON(ctx, http.MethodPost, subscriptionPaymentRedirectEndpoint, data, &resp)
-	return resp.URL, err
-}
-
 // ReferralAttach attaches a referral code to the current user.
 func (c *Client) ReferralAttach(ctx context.Context, code string) (bool, error) {
 	var resp SuccessResponse
@@ -528,6 +521,13 @@ func (c *Client) ReferralAttach(ctx context.Context, code string) (bool, error) 
 func (c *Client) StripeBillingPortalURL(ctx context.Context) (string, error) {
 	var resp URLResponse
 	err := c.doJSON(ctx, http.MethodGet, subscriptionBillingPortalEndpoint, nil, &resp)
+	return resp.URL, err
+}
+
+// PaymentRedirect returns a payment redirect URL.
+func (c *Client) PaymentRedirect(ctx context.Context, data account.PaymentRedirectData) (string, error) {
+	var resp URLResponse
+	err := c.doJSON(ctx, http.MethodPost, subscriptionPaymentRedirectEndpoint, data, &resp)
 	return resp.URL, err
 }
 

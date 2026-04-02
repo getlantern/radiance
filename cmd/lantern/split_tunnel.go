@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/getlantern/radiance/common/settings"
@@ -11,27 +12,33 @@ import (
 )
 
 type SplitTunnelCmd struct {
-	Enable *bool  `arg:"positional" help:"enable or disable split tunneling (true|false)"`
-	List   bool   `arg:"-l,--list" help:"list current filters"`
-	Add    string `arg:"--add" help:"add filter (TYPE:VALUE, e.g. domain-suffix:example.com)"`
-	Remove string `arg:"--remove" help:"remove filter (TYPE:VALUE)"`
+	Enable *bool                 `arg:"-e,--enable" help:"enable or disable split tunneling (true|false)"`
+	List   *SplitTunnelListCmd   `arg:"subcommand:list" help:"list current filters"`
+	Add    *SplitTunnelAddCmd    `arg:"subcommand:add" help:"add a filter"`
+	Remove *SplitTunnelRemoveCmd `arg:"subcommand:remove" help:"remove a filter"`
+}
+
+type SplitTunnelListCmd struct{}
+
+type SplitTunnelAddCmd struct {
+	Type  string `arg:"-t,--type,required" help:"filter type: domain, domain-suffix, domain-keyword, domain-regex, process-name, process-path, process-path-regex, package-name"`
+	Value string `arg:"-v,--value,required" help:"filter value (e.g. example.com)"`
+}
+
+type SplitTunnelRemoveCmd struct {
+	Type  string `arg:"-t,--type,required" help:"filter type: domain, domain-suffix, domain-keyword, domain-regex, process-name, process-path, process-path-regex, package-name"`
+	Value string `arg:"-v,--value,required" help:"filter value (e.g. example.com)"`
 }
 
 func runSplitTunnel(ctx context.Context, c *ipc.Client, cmd *SplitTunnelCmd) error {
 	switch {
-	case cmd.Add != "":
-		typ, val, err := parseFilter(cmd.Add)
-		if err != nil {
-			return err
-		}
-		return c.AddSplitTunnelItems(ctx, buildFilter(typ, val))
-	case cmd.Remove != "":
-		typ, val, err := parseFilter(cmd.Remove)
-		if err != nil {
-			return err
-		}
-		return c.RemoveSplitTunnelItems(ctx, buildFilter(typ, val))
-	case cmd.List:
+	case cmd.Add != nil:
+		typ := filterTypeFromArg(cmd.Add.Type)
+		return c.AddSplitTunnelItems(ctx, buildFilter(typ, cmd.Add.Value))
+	case cmd.Remove != nil:
+		typ := filterTypeFromArg(cmd.Remove.Type)
+		return c.RemoveSplitTunnelItems(ctx, buildFilter(typ, cmd.Remove.Value))
+	case cmd.List != nil:
 		return splitTunnelList(ctx, c)
 	case cmd.Enable != nil:
 		if err := c.EnableSplitTunneling(ctx, *cmd.Enable); err != nil {
@@ -62,13 +69,44 @@ func splitTunnelList(ctx context.Context, c *ipc.Client) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Enabled:", s[settings.SplitTunnelKey])
+	enabled, _ := strconv.ParseBool(fmt.Sprintf("%v", s[settings.SplitTunnelKey]))
+	fmt.Printf("Split tunneling: %v\n", enabled)
 	filters, err := c.SplitTunnelFilters(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Println(filters.String())
+	printFilters(filters)
 	return nil
+}
+
+func printFilters(f vpn.SplitTunnelFilter) {
+	type entry struct {
+		label  string
+		values []string
+	}
+	entries := []entry{
+		{"domain", f.Domain},
+		{"domain-suffix", f.DomainSuffix},
+		{"domain-keyword", f.DomainKeyword},
+		{"domain-regex", f.DomainRegex},
+		{"process-name", f.ProcessName},
+		{"process-path", f.ProcessPath},
+		{"process-path-regex", f.ProcessPathRegex},
+		{"package-name", f.PackageName},
+	}
+	hasAny := false
+	for _, e := range entries {
+		for _, v := range e.values {
+			if !hasAny {
+				fmt.Println("Filters:")
+				hasAny = true
+			}
+			fmt.Printf("  %s: %s\n", e.label, v)
+		}
+	}
+	if !hasAny {
+		fmt.Println("Filters: none")
+	}
 }
 
 // parseFilter splits "TYPE:VALUE" into the internal filter type and value.
