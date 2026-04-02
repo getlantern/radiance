@@ -7,6 +7,8 @@ import (
 // Version is the application version, injected at build time via ldflags:
 //
 //	-X 'github.com/getlantern/radiance/common.Version=x.y.z'
+//
+// Can also be overridden at runtime via the RADIANCE_VERSION environment variable.
 var Version = "dev"
 
 const (

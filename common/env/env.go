@@ -26,6 +26,7 @@ const (
 	ENV           Key = "RADIANCE_ENV"
 	UseSocks      Key = "RADIANCE_USE_SOCKS_PROXY"
 	SocksAddress  Key = "RADIANCE_SOCKS_ADDRESS"
+	AppVersion    Key = "RADIANCE_VERSION"
 
 	Testing Key = "RADIANCE_TESTING"
 )
@@ -41,6 +42,7 @@ var (
 		SocksAddress,
 		UseSocks,
 		ENV,
+		AppVersion,
 	}
 	envVars = map[string]any{}
 )
@@ -99,7 +101,17 @@ func SetStagingEnv() {
 	envVars[PrintCurl] = true
 }
 
+// alwaysString is the set of keys whose values must be stored as strings even if they
+// look numeric or boolean (e.g. RADIANCE_VERSION="9" should remain a string).
+var alwaysString = map[Key]bool{
+	AppVersion: true,
+}
+
 func parseAndSet(key, value string) {
+	if alwaysString[key] {
+		envVars[key] = value
+		return
+	}
 	// Attempt to parse as a boolean
 	if b, err := strconv.ParseBool(value); err == nil {
 		envVars[key] = b
