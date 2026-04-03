@@ -66,6 +66,21 @@ type Options struct {
 	Credentials  map[string]ServerCredentials `json:"credentials,omitempty"`
 }
 
+func (o Options) MarshalJSON() ([]byte, error) {
+	type _Options Options
+	return json.MarshalContext(box.BaseContext(), _Options(o))
+}
+
+func (o *Options) UnmarshalJSON(data []byte) error {
+	type _Options Options
+	v, err := json.UnmarshalExtendedContext[_Options](box.BaseContext(), data)
+	if err != nil {
+		return err
+	}
+	*o = Options(v)
+	return nil
+}
+
 // AllTags returns a slice of all tags from both endpoints and outbounds in the Options.
 func (o Options) AllTags() []string {
 	tags := make([]string, 0, len(o.Outbounds)+len(o.Endpoints))
@@ -80,6 +95,19 @@ func (o Options) AllTags() []string {
 
 type Servers map[ServerGroup]Options
 
+func (s Servers) MarshalJSON() ([]byte, error) {
+	return json.MarshalContext(box.BaseContext(), map[ServerGroup]Options(s))
+}
+
+func (s *Servers) UnmarshalJSON(data []byte) error {
+	v, err := json.UnmarshalExtendedContext[map[ServerGroup]Options](box.BaseContext(), data)
+	if err != nil {
+		return err
+	}
+	*s = v
+	return nil
+}
+
 type Server struct {
 	// Group indicates which group the server belongs to.
 	Group ServerGroup
@@ -89,6 +117,21 @@ type Server struct {
 	Type     string
 	Options  any // will be either [option.Endpoint] or [option.Outbound]
 	Location C.ServerLocation
+}
+
+func (s Server) MarshalJSON() ([]byte, error) {
+	type _Server Server
+	return json.MarshalContext(box.BaseContext(), _Server(s))
+}
+
+func (s *Server) UnmarshalJSON(data []byte) error {
+	type _Server Server
+	v, err := json.UnmarshalExtendedContext[_Server](box.BaseContext(), data)
+	if err != nil {
+		return err
+	}
+	*s = Server(v)
+	return nil
 }
 
 type optsMap map[string]Server
@@ -184,10 +227,7 @@ func (m *Manager) Servers() Servers {
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
-// the server was found. The returned Server contains pointer-rich sing-box types in its Options
-// field, so callers on a CGo callback stack should use [GetServerByTagJSON] instead. This method
-// does not use [common.RunOffCgoStack] because its only callers run on regular Go goroutines
-// (event subscribers, private server flows), never on CGo callback stacks.
+// the server was found.
 func (m *Manager) GetServerByTag(tag string) (Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()

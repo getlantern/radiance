@@ -24,8 +24,8 @@ const saltFileName = ".salt"
 
 // UserDataResponse represents the response from pro server
 type UserDataResponse struct {
-	*protos.BaseResponse           `json:",inline"`
-	*protos.LoginResponse_UserData `json:",inline"`
+	*protos.BaseResponse
+	*protos.LoginResponse_UserData
 }
 
 type SignupResponse = protos.SignupResponse
