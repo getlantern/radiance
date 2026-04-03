@@ -857,27 +857,16 @@ func (s *localapi) accountDataCapStreamHandler(w http.ResponseWriter, r *http.Re
 	if flusher == nil {
 		return
 	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	poll := func() {
-		info, err := s.backend(r.Context()).DataCapInfo(r.Context())
-		if err != nil {
-			slog.Error("datacap poll error", "error", err)
-			return
-		}
-		data, err := json.Marshal(info)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-	// Send initial data immediately
-	poll()
+	ch := s.backend(r.Context()).DataCapUpdates()
 	for {
 		select {
-		case <-ticker.C:
-			poll()
+		case info := <-ch:
+			data, err := json.Marshal(info)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}

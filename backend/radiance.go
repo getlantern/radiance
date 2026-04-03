@@ -64,6 +64,10 @@ type LocalBackend struct {
 	stopConnMetrics func()
 	connMetricsMu   sync.Mutex
 	vpnStatusSub    *events.Subscription[vpn.StatusUpdateEvent]
+
+	dataCapCh     chan *account.DataCapInfo // latest datacap update; nil when stream not running
+	stopDataCap   context.CancelFunc
+	dataCapMu     sync.Mutex
 }
 
 type Options struct {
@@ -158,6 +162,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		stopChan:  make(chan struct{}),
 		closeOnce: sync.Once{},
 		deviceID:  platformDeviceID,
+		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
 	return r, nil
 }
@@ -261,6 +266,7 @@ func (r *LocalBackend) addShutdownFunc(fns ...func() error) {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		r.stopDataCapStream()
 		r.confHandler.Stop()
 		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
@@ -430,9 +436,10 @@ func (r *LocalBackend) startTelemetry() error {
 	})
 	r.telemetryCfgSub.Store(sub)
 
-	// subscribe to VPN status events to start/stop connection metrics collection
+	// subscribe to VPN status events to start/stop connection metrics and datacap stream
 	r.vpnStatusSub = events.Subscribe(func(evt vpn.StatusUpdateEvent) {
 		r.updateConnMetrics(evt.Status)
+		r.updateDataCapStream(evt.Status)
 	})
 	return nil
 }
@@ -794,6 +801,57 @@ func (r *LocalBackend) ValidateEmailRecoveryCode(ctx context.Context, email, cod
 
 func (r *LocalBackend) DataCapInfo(ctx context.Context) (*account.DataCapInfo, error) {
 	return r.accountClient.DataCapInfo(ctx)
+}
+
+// DataCapUpdates returns the channel that receives datacap updates from the
+// upstream SSE stream. The stream runs while the VPN is connected; the channel
+// is never closed so callers should select on it alongside a context or other
+// signal.
+func (r *LocalBackend) DataCapUpdates() <-chan *account.DataCapInfo {
+	return r.dataCapCh
+}
+
+func (r *LocalBackend) updateDataCapStream(status vpn.VPNStatus) {
+	if status == vpn.Connected {
+		r.startDataCapStream()
+	} else {
+		r.stopDataCapStream()
+	}
+}
+
+func (r *LocalBackend) startDataCapStream() {
+	r.dataCapMu.Lock()
+	defer r.dataCapMu.Unlock()
+	if r.stopDataCap != nil {
+		return // already running
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	r.stopDataCap = cancel
+	go func() {
+		_ = r.accountClient.DataCapStream(ctx, func(info *account.DataCapInfo) {
+			// Non-blocking send; drops stale updates if the reader is slow.
+			select {
+			case r.dataCapCh <- info:
+			default:
+				select {
+				case <-r.dataCapCh:
+				default:
+				}
+				r.dataCapCh <- info
+			}
+		})
+	}()
+	slog.Debug("started datacap SSE stream")
+}
+
+func (r *LocalBackend) stopDataCapStream() {
+	r.dataCapMu.Lock()
+	defer r.dataCapMu.Unlock()
+	if r.stopDataCap != nil {
+		r.stopDataCap()
+		r.stopDataCap = nil
+		slog.Debug("stopped datacap SSE stream")
+	}
 }
 
 func (r *LocalBackend) RemoveDevice(ctx context.Context, deviceID string) (*account.LinkResponse, error) {
