@@ -281,6 +281,7 @@ func (a *Client) Login(ctx context.Context, email, password string) (*UserData, 
 		return nil, traces.RecordError(ctx, saltErr)
 	}
 	settings.Set(settings.OAuthLoginKey, false)
+	settings.Set(settings.OAuthProviderKey, "")
 	return &loginResp, nil
 }
 
@@ -301,6 +302,8 @@ func (a *Client) Logout(ctx context.Context, email string) (*UserData, error) {
 	}
 	a.ClearUser()
 	a.setSalt(nil)
+	settings.Set(settings.OAuthLoginKey, false)
+	settings.Set(settings.OAuthProviderKey, "")
 	if err := writeSalt(nil, a.saltPath); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
 	}
@@ -501,7 +504,9 @@ func (a *Client) OAuthLoginURL(ctx context.Context, provider string) (string, er
 	query.Set("returnTo", "lantern://auth")
 	loginURL.RawQuery = query.Encode()
 	// Persist the provider so it's available after the callback completes.
-	settings.Set(settings.OAuthProviderKey, provider)
+	if err := settings.Set(settings.OAuthProviderKey, provider); err != nil {
+		return "", fmt.Errorf("failed to persist OAuth provider: %w", err)
+	}
 	return loginURL.String(), nil
 }
 
