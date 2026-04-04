@@ -27,9 +27,23 @@ func vpnConnect(ctx context.Context, c *ipc.Client, tag string, wait bool) error
 	}
 	tcancel()
 
-	if err := c.ConnectVPN(ctx, tag); err != nil {
+	status, err := c.VPNStatus(ctx)
+	if err != nil {
 		return err
 	}
+	switch status {
+	case vpn.Connected:
+		if err := c.SelectServer(ctx, tag); err != nil {
+			return err
+		}
+	case vpn.Disconnected:
+		if err := c.ConnectVPN(ctx, tag); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("busy with VPN status: %s", status)
+	}
+
 	fmt.Printf("Connected (tag: %s)\n", tag)
 	if !wait {
 		return nil
