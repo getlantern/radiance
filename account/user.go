@@ -500,6 +500,8 @@ func (a *Client) OAuthLoginURL(ctx context.Context, provider string) (string, er
 	query.Set("proToken", settings.GetString(settings.TokenKey))
 	query.Set("returnTo", "lantern://auth")
 	loginURL.RawQuery = query.Encode()
+	// Persist the provider so it's available after the callback completes.
+	settings.Set(settings.OAuthProviderKey, provider)
 	return loginURL.String(), nil
 }
 

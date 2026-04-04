@@ -36,14 +36,15 @@ const (
 	ConfigFetchDisabledKey _key = "config_fetch_disabled" // bool
 
 	// User account related keys.
-	EmailKey      _key = "email"       // string
-	UserIDKey     _key = "user_id"     // string
-	UserLevelKey  _key = "user_level"  // string
-	TokenKey      _key = "token"       // string
-	JwtTokenKey   _key = "jwt_token"   // string
-	DevicesKey    _key = "devices"     // []Device
-	UserDataKey   _key = "user_data"   // [account.UserData]
-	OAuthLoginKey _key = "oauth_login" // bool
+	EmailKey         _key = "email"          // string
+	UserIDKey        _key = "user_id"        // string
+	UserLevelKey     _key = "user_level"     // string
+	TokenKey         _key = "token"          // string
+	JwtTokenKey      _key = "jwt_token"      // string
+	DevicesKey       _key = "devices"        // []Device
+	UserDataKey      _key = "user_data"      // [account.UserData]
+	OAuthLoginKey    _key = "oauth_login"    // bool
+	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
 
 	// VPN related keys.
 	SmartRoutingKey   _key = "smart_routing"   // bool
