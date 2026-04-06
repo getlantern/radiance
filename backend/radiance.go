@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
+
 	"time"
 
 	"github.com/Xuanwo/go-locale"
@@ -45,7 +45,9 @@ const tracerName = "github.com/getlantern/radiance/backend"
 // LocalBackend ties all the core functionality of Radiance together. It manages the configuration,
 // servers, VPN connection, account management, issue reporting, and telemetry for the application.
 type LocalBackend struct {
-	ctx           context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	confHandler   *config.ConfigHandler
 	issueReporter *issue.IssueReporter
 	accountClient *account.Client
@@ -60,14 +62,16 @@ type LocalBackend struct {
 
 	deviceID string
 
-	telemetryCfgSub atomic.Pointer[events.Subscription[config.NewConfigEvent]]
-	stopConnMetrics func()
+	telemetryCfgSub *events.Subscription[config.NewConfigEvent]
+	stopConnMetrics context.CancelFunc
 	connMetricsMu   sync.Mutex
-	vpnStatusSub    *events.Subscription[vpn.StatusUpdateEvent]
 
-	dataCapCh     chan *account.DataCapInfo // latest datacap update; nil when stream not running
-	stopDataCap   context.CancelFunc
-	dataCapMu     sync.Mutex
+	dataCapCh   chan *account.DataCapInfo // latest datacap update; nil when stream not running
+	stopDataCap context.CancelFunc
+	dataCapMu   sync.Mutex
+
+	stopURLTestListener context.CancelFunc
+	urlTestMu           sync.Mutex
 }
 
 type Options struct {
@@ -148,8 +152,10 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+	ctx, cancel := context.WithCancel(ctx)
 	r := &LocalBackend{
 		ctx:            ctx,
+		cancel:         cancel,
 		issueReporter:  issue.NewIssueReporter(kindling.HTTPClient()),
 		accountClient:  accountClient,
 		confHandler:    config.NewConfigHandler(ctx, cOpts),
@@ -188,6 +194,8 @@ func (r *LocalBackend) Start() {
 			slog.Error("Failed to start telemetry", "error", err)
 		}
 	}
+	r.startVPNStatusListeners()
+
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		if evt.New != nil && evt.New.Country != "" {
@@ -198,7 +206,7 @@ func (r *LocalBackend) Start() {
 		}
 	})
 	// update VPN outbounds when new config is received
-	events.Subscribe(func(evt config.NewConfigEvent) {
+	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		if evt.New == nil {
 			return
 		}
@@ -266,8 +274,7 @@ func (r *LocalBackend) addShutdownFunc(fns ...func() error) {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
-		r.stopDataCapStream()
-		r.confHandler.Stop()
+		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
 			if err := shutdown(); err != nil {
@@ -276,6 +283,18 @@ func (r *LocalBackend) Close() {
 		}
 	})
 	<-r.stopChan
+}
+
+func (r *LocalBackend) startVPNStatusListeners() {
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		r.updateConnMetrics(evt.Status)
+	})
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		r.updateDataCapStream(evt.Status)
+	})
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		r.updateURLTestListener(evt.Status)
+	})
 }
 
 //////////////////
@@ -418,11 +437,11 @@ func (r *LocalBackend) startTelemetry() error {
 			return fmt.Errorf("failed to initialize telemetry: %w", err)
 		}
 	}
-	if r.telemetryCfgSub.Load() != nil {
+	if r.telemetryCfgSub != nil {
 		return nil
 	}
 	// subscribe to config changes to update telemetry config
-	sub := events.Subscribe(func(evt config.NewConfigEvent) {
+	r.telemetryCfgSub = events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		if !settings.GetBool(settings.TelemetryKey) {
 			return
 		}
@@ -434,52 +453,33 @@ func (r *LocalBackend) startTelemetry() error {
 			slog.Error("Failed to update telemetry config", "error", err)
 		}
 	})
-	r.telemetryCfgSub.Store(sub)
-
-	// subscribe to VPN status events to start/stop connection metrics and datacap stream
-	r.vpnStatusSub = events.Subscribe(func(evt vpn.StatusUpdateEvent) {
-		r.updateConnMetrics(evt.Status)
-		r.updateDataCapStream(evt.Status)
-	})
 	return nil
 }
 
 func (r *LocalBackend) stopTelemetry() {
-	if sub := r.telemetryCfgSub.Swap(nil); sub != nil {
-		sub.Unsubscribe()
+	if r.telemetryCfgSub != nil {
+		r.telemetryCfgSub.Unsubscribe()
+		r.telemetryCfgSub = nil
 	}
-	if r.vpnStatusSub != nil {
-		r.vpnStatusSub.Unsubscribe()
-		r.vpnStatusSub = nil
-	}
-	r.stopConnMetricsIfRunning()
+	r.updateConnMetrics(vpn.Disconnected)
 	telemetry.Close()
 }
 
-// updateConnMetrics starts or stops connection metrics collection based on VPN status.
-// Metrics are only collected when the VPN is connected and telemetry is enabled.
 func (r *LocalBackend) updateConnMetrics(status vpn.VPNStatus) {
+	if !settings.GetBool(settings.TelemetryKey) {
+		return
+	}
+	r.connMetricsMu.Lock()
+	defer r.connMetricsMu.Unlock()
 	if status == vpn.Connected {
-		r.startConnMetrics()
-	} else {
-		r.stopConnMetricsIfRunning()
-	}
-}
-
-func (r *LocalBackend) startConnMetrics() {
-	r.connMetricsMu.Lock()
-	defer r.connMetricsMu.Unlock()
-	if r.stopConnMetrics != nil {
-		return // already running
-	}
-	r.stopConnMetrics = telemetry.StartConnectionMetrics(r.ctx, r.vpnClient, 1*time.Minute)
-	slog.Debug("Started connection metrics collection")
-}
-
-func (r *LocalBackend) stopConnMetricsIfRunning() {
-	r.connMetricsMu.Lock()
-	defer r.connMetricsMu.Unlock()
-	if r.stopConnMetrics != nil {
+		if r.stopConnMetrics != nil {
+			return // already running
+		}
+		ctx, cancel := context.WithCancel(r.ctx)
+		telemetry.StartConnectionMetrics(ctx, r.vpnClient, 1*time.Minute)
+		r.stopConnMetrics = cancel
+		slog.Debug("Started connection metrics collection")
+	} else if r.stopConnMetrics != nil {
 		r.stopConnMetrics()
 		r.stopConnMetrics = nil
 		slog.Debug("Stopped connection metrics collection")
@@ -554,6 +554,55 @@ func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken st
 
 func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string) error {
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
+}
+
+func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
+	r.urlTestMu.Lock()
+	defer r.urlTestMu.Unlock()
+	if status == vpn.Connected {
+		if r.stopURLTestListener != nil {
+			return // already running
+		}
+		storage := r.vpnClient.HistoryStorage()
+		if storage == nil {
+			return
+		}
+		ctx, cancel := context.WithCancel(r.ctx)
+		r.stopURLTestListener = cancel
+		hook := make(chan struct{}, 1)
+		storage.SetHook(hook)
+		go func() {
+			r.loadURLTestResults(storage)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-hook:
+					r.loadURLTestResults(storage)
+				}
+			}
+		}()
+		slog.Debug("Started URL test result listener")
+	} else if r.stopURLTestListener != nil {
+		r.stopURLTestListener()
+		r.stopURLTestListener = nil
+		slog.Debug("Stopped URL test result listener")
+	}
+}
+
+func (r *LocalBackend) loadURLTestResults(storage vpn.URLTestHistoryStorage) {
+	srvs := r.srvManager.Servers()
+	results := make(map[string]servers.URLTestResult)
+	for _, opts := range srvs {
+		for _, tag := range opts.AllTags() {
+			if h := storage.LoadURLTestHistory(tag); h != nil {
+				results[tag] = servers.URLTestResult{Delay: h.Delay, Time: h.Time}
+			}
+		}
+	}
+	if len(results) > 0 {
+		r.srvManager.UpdateURLTestResults(results)
+	}
 }
 
 /////////////////
@@ -720,11 +769,23 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	if err != nil {
 		return fmt.Errorf("no config available: %w", err)
 	}
-	return r.vpnClient.RunOfflineURLTests(
+	results, err := r.vpnClient.RunOfflineURLTests(
 		settings.GetString(settings.DataPathKey),
 		cfg.Options.Outbounds,
 		cfg.BanditURLOverrides,
 	)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	urlResults := make(map[string]servers.URLTestResult, len(results))
+	for tag, delay := range results {
+		urlResults[tag] = servers.URLTestResult{Delay: delay, Time: now}
+	}
+	if len(urlResults) > 0 {
+		r.srvManager.UpdateURLTestResults(urlResults)
+	}
+	return nil
 }
 
 //////////////////
@@ -812,45 +873,33 @@ func (r *LocalBackend) DataCapUpdates() <-chan *account.DataCapInfo {
 }
 
 func (r *LocalBackend) updateDataCapStream(status vpn.VPNStatus) {
+	r.dataCapMu.Lock()
+	defer r.dataCapMu.Unlock()
 	if status == vpn.Connected {
-		r.startDataCapStream()
-	} else {
-		r.stopDataCapStream()
-	}
-}
-
-func (r *LocalBackend) startDataCapStream() {
-	r.dataCapMu.Lock()
-	defer r.dataCapMu.Unlock()
-	if r.stopDataCap != nil {
-		return // already running
-	}
-	ctx, cancel := context.WithCancel(r.ctx)
-	r.stopDataCap = cancel
-	go func() {
-		_ = r.accountClient.DataCapStream(ctx, func(info *account.DataCapInfo) {
-			// Non-blocking send; drops stale updates if the reader is slow.
-			select {
-			case r.dataCapCh <- info:
-			default:
+		if r.stopDataCap != nil {
+			return // already running
+		}
+		ctx, cancel := context.WithCancel(r.ctx)
+		r.stopDataCap = cancel
+		go func() {
+			_ = r.accountClient.DataCapStream(ctx, func(info *account.DataCapInfo) {
+				// Non-blocking send; drops stale updates if the reader is slow.
 				select {
-				case <-r.dataCapCh:
+				case r.dataCapCh <- info:
 				default:
+					select {
+					case <-r.dataCapCh:
+					default:
+					}
+					r.dataCapCh <- info
 				}
-				r.dataCapCh <- info
-			}
-		})
-	}()
-	slog.Debug("started datacap SSE stream")
-}
-
-func (r *LocalBackend) stopDataCapStream() {
-	r.dataCapMu.Lock()
-	defer r.dataCapMu.Unlock()
-	if r.stopDataCap != nil {
+			})
+		}()
+		slog.Debug("Started datacap SSE stream")
+	} else if r.stopDataCap != nil {
 		r.stopDataCap()
 		r.stopDataCap = nil
-		slog.Debug("stopped datacap SSE stream")
+		slog.Debug("Stopped datacap SSE stream")
 	}
 }
 

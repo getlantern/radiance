@@ -7,6 +7,9 @@ import (
 	"github.com/getlantern/radiance/events"
 )
 
+// URLTestHistoryStorage is an alias for the sing-box adapter interface.
+type URLTestHistoryStorage = adapter.URLTestHistoryStorage
+
 // StatusUpdateEvent is emitted when the VPN status changes.
 type StatusUpdateEvent struct {
 	events.Event

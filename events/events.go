@@ -27,6 +27,7 @@
 package events
 
 import (
+	"context"
 	"reflect"
 	"sync"
 )
@@ -63,14 +64,34 @@ func Subscribe[T Event](callback func(evt T)) *Subscription[T] {
 // SubscribeOnce registers a callback function for the given event type T that will be invoked only
 // once. Returns a Subscription handle that can be used to unsubscribe if needed.
 func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
+	return SubscribeUntil(callback, func(evt T) bool { return true })
+}
+
+// SubscribeUntil registers a callback function for the given event type T that will be invoked until
+// the provided condition function returns true for an event. Returns a Subscription handle that can
+// be used to unsubscribe if needed.
+func SubscribeUntil[T Event](callback func(evt T), cond func(evt T) bool) *Subscription[T] {
 	ready := make(chan struct{})
 	var sub *Subscription[T]
 	sub = Subscribe(func(evt T) {
 		<-ready
 		callback(evt)
-		sub.Unsubscribe()
+		if cond(evt) {
+			sub.Unsubscribe()
+		}
 	})
 	close(ready)
+	return sub
+}
+
+// SubscribeContext registers a callback for event type T that is automatically unsubscribed when
+// the provided context is cancelled.
+func SubscribeContext[T Event](ctx context.Context, callback func(evt T)) *Subscription[T] {
+	sub := Subscribe(callback)
+	go func() {
+		<-ctx.Done()
+		sub.Unsubscribe()
+	}()
 	return sub
 }
 

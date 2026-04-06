@@ -233,6 +233,17 @@ func (c *VPNClient) Status() VPNStatus {
 	return c.tunnel.Status()
 }
 
+// HistoryStorage returns the URL test history storage from the tunnel's clash server,
+// or nil if the tunnel is not connected.
+func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.clashServer.HistoryStorage()
+}
+
 // isOpen returns true if the tunnel is open, false otherwise.
 // Note, this does not check if the tunnel can connect to a server.
 func (c *VPNClient) isOpen() bool {
@@ -421,18 +432,18 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) {
 //
 // If [VPNClient.Connect] is called while RunOfflineURLTests is running, the tests will be cancelled and
 // any results will be discarded.
-func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound, banditURLs map[string]string) error {
+func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
 	c.mu.Lock()
 	if c.tunnel != nil {
 		c.mu.Unlock()
-		return ErrTunnelAlreadyConnected
+		return nil, ErrTunnelAlreadyConnected
 	}
 	select {
 	case <-c.offlineTestDone:
 		// no tests currently running, safe to start new tests
 	default:
 		c.mu.Unlock()
-		return errors.New("offline tests already running")
+		return nil, errors.New("offline tests already running")
 	}
 	ctx, cancel := context.WithCancel(box.BaseContext())
 	c.offlineTestCancel = cancel
@@ -476,18 +487,18 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		Options: options,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create sing-box instance: %w", err)
+		return nil, fmt.Errorf("failed to create sing-box instance: %w", err)
 	}
 	defer instance.Close()
 	// connect may have been called while we were setting up, so check if we should abort before
 	// starting the instance.
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("offline tests cancelled: %w", ctx.Err())
+		return nil, fmt.Errorf("offline tests cancelled: %w", ctx.Err())
 	default:
 	}
 	if err := instance.PreStart(); err != nil {
-		return fmt.Errorf("failed to start sing-box instance: %w", err)
+		return nil, fmt.Errorf("failed to start sing-box instance: %w", err)
 	}
 	outbound, _ := instance.Outbound().Outbound("offline-test")
 	tester, _ := outbound.(adapter.URLTestGroup)
@@ -495,7 +506,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	results, err := tester.URLTest(ctx)
 	if err != nil {
 		c.logger.Error("offline URL test failed", "error", err)
-		return fmt.Errorf("offline URL test failed: %w", err)
+		return nil, fmt.Errorf("offline URL test failed: %w", err)
 	}
 
 	// Record URL test results in a span linked to the bandit's trace.
@@ -519,7 +530,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
 	}
 	c.logger.Log(nil, log.LevelTrace, "offline URL test complete", "results", strings.Join(fmttedResults, "; "))
-	return nil
+	return results, nil
 }
 
 // ClearNetErrorState attempts to clear any error state left by a previous unclean shutdown, such

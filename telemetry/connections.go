@@ -18,12 +18,9 @@ type ConnectionSource interface {
 }
 
 // StartConnectionMetrics periodically polls the number of active connections and their total
-// upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
-// that can be called to stop the polling.
-//
-// The caller is responsible for only calling this when the VPN is connected and telemetry is
-// enabled, and for calling the returned stop function when either condition changes.
-func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInterval time.Duration) func() {
+// upload and download bytes, setting the corresponding OpenTelemetry metrics. It runs until the
+// provided context is canceled.
+func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInterval time.Duration) {
 	ticker := time.NewTicker(pollInterval)
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
 	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
@@ -42,7 +39,6 @@ func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInter
 	if err != nil {
 		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
 	}
-	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		seenConnections := make(map[string]bool)
 		for {
@@ -96,5 +92,4 @@ func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInter
 			}
 		}
 	}()
-	return cancel
 }

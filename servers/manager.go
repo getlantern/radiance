@@ -117,6 +117,11 @@ type Server struct {
 	Type     string
 	Options  any // will be either [option.Endpoint] or [option.Outbound]
 	Location C.ServerLocation
+
+	// URLTestDelay is the most recent URL test latency in milliseconds (0 if no test result).
+	URLTestDelay uint16 `json:"urlTestDelay,omitempty"`
+	// URLTestTime is the time of the most recent URL test result.
+	URLTestTime time.Time `json:"urlTestTime,omitempty"`
 }
 
 func (s Server) MarshalJSON() ([]byte, error) {
@@ -137,7 +142,7 @@ func (s *Server) UnmarshalJSON(data []byte) error {
 type optsMap map[string]Server
 
 func (m optsMap) add(group, tag, typ string, options any, loc C.ServerLocation) {
-	m[tag] = Server{group, tag, typ, options, loc}
+	m[tag] = Server{Group: group, Tag: tag, Type: typ, Options: options, Location: loc}
 }
 
 // Manager manages server configurations, including endpoints and outbounds.
@@ -224,6 +229,26 @@ func (m *Manager) Servers() Servers {
 		}
 	}
 	return result
+}
+
+// UpdateURLTestResults updates the URL test delay and time for all servers that have results
+// in the provided map. The map keys are server tags.
+func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) {
+	m.access.Lock()
+	defer m.access.Unlock()
+	for tag, result := range results {
+		if srv, exists := m.optsMap[tag]; exists {
+			srv.URLTestDelay = result.Delay
+			srv.URLTestTime = result.Time
+			m.optsMap[tag] = srv
+		}
+	}
+}
+
+// URLTestResult holds the result of a single URL test.
+type URLTestResult struct {
+	Delay uint16
+	Time  time.Time
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether

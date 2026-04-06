@@ -231,7 +231,7 @@ func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
 	tun.status.Store(Connected)
 	c.tunnel = tun
 
-	err := c.RunOfflineURLTests("", nil, nil)
+	_, err := c.RunOfflineURLTests("", nil, nil)
 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
 }
 
