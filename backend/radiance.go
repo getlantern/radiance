@@ -260,7 +260,7 @@ func (r *LocalBackend) Start() {
 				span.End() // point-in-time marker — config was received at this timestamp
 			}
 		}
-		if err := r.setServers(true, list); err != nil {
+		if err := r.setServers(list, true); err != nil {
 			slog.Error("setting servers in manager", "error", err)
 		}
 		if err := r.RunOfflineURLTests(); err != nil {
@@ -268,6 +268,9 @@ func (r *LocalBackend) Start() {
 		}
 	})
 	r.confHandler.Start()
+	if err := r.RunOfflineURLTests(); err != nil {
+		slog.Error("Failed to run offline URL tests after config update", "error", err)
+	}
 }
 
 // addShutdownFunc adds a shutdown function(s) to the Radiance instance.
@@ -544,8 +547,8 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	return nil
 }
 
-func (r *LocalBackend) setServers(isLantern bool, list servers.ServerList) error {
-	if err := r.srvManager.SetServers(isLantern, list); err != nil {
+func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error {
+	if err := r.srvManager.SetServers(list, isLantern); err != nil {
 		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
 	}
 	err := r.vpnClient.UpdateOutbounds(list, isLantern)
@@ -791,9 +794,11 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	if err != nil {
 		return fmt.Errorf("no config available: %w", err)
 	}
+	svrs := r.srvManager.AllServers()
+	slog.Debug("Running offline URL tests", "server_count", len(svrs), "url_override_count", len(cfg.BanditURLOverrides))
 	results, err := r.vpnClient.RunOfflineURLTests(
 		settings.GetString(settings.DataPathKey),
-		cfg.Options.Outbounds,
+		servers.ServerList{Servers: svrs}.Outbounds(),
 		cfg.BanditURLOverrides,
 	)
 	if err != nil {

@@ -244,7 +244,7 @@ func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
 // SetServers sets the server options for servers with a matching IsLantern value.
 // Important: this will overwrite any existing servers with the same IsLantern value. To add new
 // servers without overwriting existing ones, use [AddServers] instead.
-func (m *Manager) SetServers(isLantern bool, list ServerList) error {
+func (m *Manager) SetServers(list ServerList, isLantern bool) error {
 	m.access.Lock()
 	defer m.access.Unlock()
 	// Remove existing with matching IsLantern

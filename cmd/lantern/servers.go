@@ -91,10 +91,15 @@ func printServerEntry(s *servers.Server, showLatency bool) {
 	if s.Location != (C.ServerLocation{}) {
 		fmt.Printf(" — %s, %s", s.Location.City, s.Location.Country)
 	}
-	if showLatency && s.URLTestResult != nil {
-		fmt.Printf(" (%dms)", s.URLTestResult.Delay)
+	if !showLatency {
+		fmt.Println()
+		return
 	}
-	fmt.Println()
+	if s.URLTestResult != nil {
+		fmt.Printf(" (%dms)\n", s.URLTestResult.Delay)
+	} else {
+		fmt.Println(" (n/a)")
+	}
 }
 
 func serversGet(ctx context.Context, c *ipc.Client, tag string) error {

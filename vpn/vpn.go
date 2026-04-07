@@ -529,7 +529,8 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	for tag, delay := range results {
 		fmttedResults = append(fmttedResults, fmt.Sprintf("%s: [%dms]", tag, delay))
 	}
-	c.logger.Log(nil, log.LevelTrace, "offline URL test complete", "results", strings.Join(fmttedResults, "; "))
+	c.logger.Info("offline URL test complete")
+	c.logger.Log(nil, log.LevelTrace, "offline URL test results", "results", strings.Join(fmttedResults, "; "))
 	return results, nil
 }
 
