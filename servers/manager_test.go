@@ -157,7 +157,9 @@ func TestAddServersByJSON(t *testing.T) {
 			Options:   cfg.Outbounds[0],
 		}
 		m := testManager(t)
-		require.NoError(t, m.AddServersByJSON(t.Context(), testConfig))
+		tags, err := m.AddServersByJSON(t.Context(), testConfig)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"out"}, tags)
 		got, exists := m.GetServerByTag("out")
 		assert.True(t, exists, "server was not added")
 		assert.Equal(t, want.Tag, got.Tag)
@@ -166,7 +168,8 @@ func TestAddServersByJSON(t *testing.T) {
 	})
 	t.Run("empty config", func(t *testing.T) {
 		m := testManager(t)
-		assert.Error(t, m.AddServersByJSON(t.Context(), []byte("{}")))
+		_, err := m.AddServersByJSON(t.Context(), []byte("{}"))
+		assert.Error(t, err)
 		assert.Empty(t, m.servers, "no servers should have been added")
 	})
 }
@@ -178,7 +181,9 @@ func TestAddServersByURL(t *testing.T) {
 	}
 	t.Run("valid urls", func(t *testing.T) {
 		m := testManager(t)
-		require.NoError(t, m.AddServersByURL(t.Context(), urls, false))
+		tags, err := m.AddServersByURL(t.Context(), urls, false)
+		require.NoError(t, err)
+		assert.Len(t, tags, 2)
 		_, exists := m.GetServerByTag("VLESS+over+WS+with+TLS")
 		assert.True(t, exists, "VLESS server should be added")
 		_, exists = m.GetServerByTag("Trojan+with+TLS")
@@ -186,7 +191,8 @@ func TestAddServersByURL(t *testing.T) {
 	})
 	t.Run("skip certificate", func(t *testing.T) {
 		m := testManager(t)
-		require.NoError(t, m.AddServersByURL(t.Context(), urls, true))
+		_, err := m.AddServersByURL(t.Context(), urls, true)
+		require.NoError(t, err)
 		server, exists := m.GetServerByTag("Trojan+with+TLS")
 		require.True(t, exists, "Trojan server should be added")
 
@@ -198,7 +204,8 @@ func TestAddServersByURL(t *testing.T) {
 	})
 	t.Run("empty urls", func(t *testing.T) {
 		m := testManager(t)
-		assert.Error(t, m.AddServersByURL(t.Context(), []string{}, false))
+		_, err := m.AddServersByURL(t.Context(), []string{}, false)
+		assert.Error(t, err)
 		assert.Empty(t, m.servers, "no servers should have been added")
 	})
 }

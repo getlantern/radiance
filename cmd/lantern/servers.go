@@ -38,10 +38,10 @@ func runServers(ctx context.Context, c *ipc.Client, cmd *ServersCmd) error {
 	case cmd.Show != "":
 		return serversGet(ctx, c, cmd.Show)
 	case cmd.AddJSON != "":
-		return c.AddServersByJSON(ctx, cmd.AddJSON)
+		return printAddedServers(c.AddServersByJSON(ctx, cmd.AddJSON))
 	case cmd.AddURL != "":
 		urls := strings.Split(cmd.AddURL, ",")
-		return c.AddServersByURL(ctx, urls, cmd.SkipCertVerify)
+		return printAddedServers(c.AddServersByURL(ctx, urls, cmd.SkipCertVerify))
 	case cmd.Remove != "":
 		return serversRemove(ctx, c, cmd.Remove)
 	case cmd.List:
@@ -133,6 +133,14 @@ func serversAutoSelections(ctx context.Context, c *ipc.Client, watch bool) error
 		return err
 	}
 	fmt.Printf("Selected: %s\n", sel.Tag)
+	return nil
+}
+
+func printAddedServers(tags []string, err error) error {
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Added %d server(s): %s\n", len(tags), strings.Join(tags, ", "))
 	return nil
 }
 

@@ -517,11 +517,12 @@ func (s *localapi) serversFromJSONHandler(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).AddServersByJSON(req.Config); err != nil {
+	tags, err := s.backend(r.Context()).AddServersByJSON(req.Config)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, tags)
 }
 
 func (s *localapi) serversFromURLsHandler(w http.ResponseWriter, r *http.Request) {
@@ -530,11 +531,12 @@ func (s *localapi) serversFromURLsHandler(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).AddServersByURL(req.URLs, req.SkipCertVerification); err != nil {
+	tags, err := s.backend(r.Context()).AddServersByURL(req.URLs, req.SkipCertVerification)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, tags)
 }
 
 func (s *localapi) serversPrivateAddHandler(w http.ResponseWriter, r *http.Request) {

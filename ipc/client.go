@@ -214,16 +214,30 @@ func (c *Client) RemoveServers(ctx context.Context, tags []string) error {
 	return err
 }
 
-// AddServersByJSON adds servers from a JSON configuration string.
-func (c *Client) AddServersByJSON(ctx context.Context, config string) error {
-	_, err := c.do(ctx, http.MethodPost, serversFromJSONEndpoint, JSONConfigRequest{Config: config})
-	return err
+// AddServersByJSON adds servers from a JSON configuration string and returns the tags of the added servers.
+func (c *Client) AddServersByJSON(ctx context.Context, config string) ([]string, error) {
+	data, err := c.do(ctx, http.MethodPost, serversFromJSONEndpoint, JSONConfigRequest{Config: config})
+	if err != nil {
+		return nil, err
+	}
+	var tags []string
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return nil, err
+	}
+	return tags, nil
 }
 
-// AddServersByURL adds servers from the given URLs.
-func (c *Client) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) error {
-	_, err := c.do(ctx, http.MethodPost, serversFromURLsEndpoint, URLsRequest{URLs: urls, SkipCertVerification: skipCertVerification})
-	return err
+// AddServersByURL adds servers from the given URLs and returns the tags of the added servers.
+func (c *Client) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) ([]string, error) {
+	data, err := c.do(ctx, http.MethodPost, serversFromURLsEndpoint, URLsRequest{URLs: urls, SkipCertVerification: skipCertVerification})
+	if err != nil {
+		return nil, err
+	}
+	var tags []string
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return nil, err
+	}
+	return tags, nil
 }
 
 // AddPrivateServer adds a private server.

@@ -14,7 +14,6 @@ import (
 
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
-	"github.com/getlantern/radiance/servers"
 )
 
 func TestSaveConfig(t *testing.T) {
@@ -164,10 +163,6 @@ func TestHandlerFetchConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "parsing config", "Error message should indicate parsing error")
 	})
 }
-
-type mockSrvManager struct{}
-
-func (m *mockSrvManager) SetServers(_ bool, _ servers.ServerList) error { return nil }
 
 // Make sure MockFetcher implements the Fetcher interface
 var _ Fetcher = (*MockFetcher)(nil)

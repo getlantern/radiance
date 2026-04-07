@@ -555,11 +555,11 @@ func (r *LocalBackend) setServers(isLantern bool, list servers.ServerList) error
 	return nil
 }
 
-func (r *LocalBackend) AddServersByJSON(config string) error {
+func (r *LocalBackend) AddServersByJSON(config string) ([]string, error) {
 	return r.srvManager.AddServersByJSON(context.Background(), []byte(config))
 }
 
-func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool) error {
+func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool) ([]string, error) {
 	return r.srvManager.AddServersByURL(context.Background(), urls, skipCertVerification)
 }
 

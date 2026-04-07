@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/getlantern/publicip"
@@ -45,14 +46,21 @@ func runIP(ctx context.Context) error {
 	return nil
 }
 
+// fakeIPRange is the CIDR used by sing-box's fake-ip DNS. Addresses in this
+// range can briefly appear as the "public IP" right after the VPN connects,
+// before the tunnel is fully established.
+var fakeIPRange = netip.MustParsePrefix("198.18.0.0/15")
+
 // getPublicIP fetches the public IP address
 func getPublicIP(ctx context.Context) (string, error) {
 	result, err := publicip.Detect(ctx, publicIPCfg)
 	if err != nil {
 		return "", err
 	}
-	if result.IP.IsPrivate() || result.IP.IsLoopback() || result.IP.IsUnspecified() {
-		return "", fmt.Errorf("detected IP is not a valid public IP: %s", result.IP.String())
+	ip := result.IP
+	addr, ok := netip.AddrFromSlice(ip)
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() || (ok && fakeIPRange.Contains(addr)) {
+		return "", fmt.Errorf("detected IP is not a valid public IP: %s", ip.String())
 	}
-	return result.IP.String(), nil
+	return ip.String(), nil
 }

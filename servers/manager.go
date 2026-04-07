@@ -480,7 +480,7 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 }
 
 // AddServersByJSON adds any outbounds and endpoints defined in the provided sing-box JSON config.
-func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) error {
+func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) ([]string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBySingboxJSON")
 	defer span.End()
 	type singboxConfig struct {
@@ -489,39 +489,42 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) error {
 	}
 	cfg, err := json.UnmarshalExtendedContext[singboxConfig](box.BaseContext(), config)
 	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
 	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
-		return traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
+		return nil, traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
-	var servers []*Server
+	servers := make([]*Server, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
+	tags := make([]string, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
 	for _, out := range cfg.Outbounds {
 		servers = append(servers, &Server{Tag: out.Tag, Type: out.Type, Options: out})
+		tags = append(tags, out.Tag)
 	}
 	for _, ep := range cfg.Endpoints {
 		servers = append(servers, &Server{Tag: ep.Tag, Type: ep.Type, Options: ep})
+		tags = append(tags, ep.Tag)
 	}
 	if err := m.AddServers(false, ServerList{Servers: servers}, true); err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
-	return nil
+	return tags, nil
 }
 
 // AddServersByURL adds a server(s) by downloading and parsing the config from a list of URLs.
-func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) error {
+func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) ([]string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURLs")
 	defer span.End()
 	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
 	if !loaded {
-		return traces.RecordError(ctx, fmt.Errorf("URL config provider not loaded"))
+		return nil, traces.RecordError(ctx, fmt.Errorf("URL config provider not loaded"))
 	}
 	cfg, err := urlProvider.Parse(ctx, []byte(strings.Join(urls, "\n")))
 	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to parse URLs: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse URLs: %w", err))
 	}
 	cfgURLs, ok := cfg.Options.([]url.URL)
 	if !ok || len(cfgURLs) == 0 {
-		return traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
+		return nil, traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
 	}
 
 	if skipCertVerification {
@@ -537,11 +540,11 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVe
 
 	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
 	if !loaded {
-		return traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))
+		return nil, traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))
 	}
 	singBoxCfg, err := singBoxProvider.Serialize(ctx, cfg)
 	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
 	}
 	m.logger.Info("Added servers based on URLs", "serverCount", len(cfgURLs), "skipCertVerification", skipCertVerification)
 	return m.AddServersByJSON(ctx, singBoxCfg)
