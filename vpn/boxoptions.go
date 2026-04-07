@@ -32,7 +32,6 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
-	"github.com/getlantern/radiance/servers"
 )
 
 const (
@@ -145,7 +144,7 @@ func baseOpts(basePath string) O.Options {
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
 				DefaultMode:        AutoSelectTag,
-				ModeList:           []string{servers.ModeLantern, servers.ModeUser, AutoSelectTag},
+				ModeList:           []string{ManualSelectTag, AutoSelectTag},
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{

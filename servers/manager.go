@@ -41,12 +41,7 @@ import (
 	"github.com/sagernet/sing/common/json"
 )
 
-const (
-	// ModeLantern and ModeUser are Clash API mode names.
-	ModeLantern = "lantern"
-	ModeUser    = "user"
-	tracerName  = "github.com/getlantern/radiance/servers"
-)
+const tracerName = "github.com/getlantern/radiance/servers"
 
 // ServerCredentials holds the access token and invite status for a private server.
 type ServerCredentials struct {
@@ -323,6 +318,11 @@ func (m *Manager) saveServers() error {
 	return atomicfile.WriteFile(m.serversFile, buf, 0644)
 }
 
+const (
+	modeLantern = "lantern"
+	modeUser    = "user"
+)
+
 func (m *Manager) loadServers() error {
 	buf, err := atomicfile.ReadFile(m.serversFile)
 	if errors.Is(err, os.ErrNotExist) {
@@ -345,19 +345,19 @@ func (m *Manager) loadServers() error {
 		return nil
 	}
 
-	// Fall back to old format: map[string]Options
+	// Fall back to old format: map[string]Options and mirgrate to new format on save.
 	type oldOptions struct {
 		Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
 		Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
-		Locations   map[string]C.ServerLocation   `json:"locations,omitempty"`
-		Credentials map[string]ServerCredentials  `json:"credentials,omitempty"`
+		Locations   map[string]C.ServerLocation  `json:"locations,omitempty"`
+		Credentials map[string]ServerCredentials `json:"credentials,omitempty"`
 	}
 	old, err := json.UnmarshalExtendedContext[map[string]oldOptions](ctx, buf)
 	if err != nil {
 		return fmt.Errorf("unmarshal server options: %w", err)
 	}
 	for group, opts := range old {
-		isLantern := group == ModeLantern
+		isLantern := group == modeLantern
 		for _, out := range opts.Outbounds {
 			srv := &Server{
 				Tag: out.Tag, Type: out.Type, IsLantern: isLantern,
