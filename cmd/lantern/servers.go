@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/ipc"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
@@ -17,6 +19,7 @@ type ServersCmd struct {
 	SkipCertVerify bool   `arg:"--skip-cert-verify" help:"skip cert verification (with --add-url)"`
 	Remove         string `arg:"--remove" help:"comma-separated list of servers to remove"`
 	List           bool   `arg:"-l,--list" help:"list servers"`
+	Latency        bool   `arg:"--latency" help:"include URL test latency results (with --list)"`
 
 	PrivateServer *PrivateServerCmd `arg:"subcommand:private" help:"private server operations"`
 }
@@ -42,7 +45,7 @@ func runServers(ctx context.Context, c *ipc.Client, cmd *ServersCmd) error {
 	case cmd.Remove != "":
 		return serversRemove(ctx, c, cmd.Remove)
 	case cmd.List:
-		return serversList(ctx, c)
+		return serversList(ctx, c, cmd.Latency)
 	case cmd.PrivateServer != nil:
 		return runPrivateServer(ctx, c, cmd.PrivateServer)
 	default:
@@ -68,35 +71,28 @@ func runPrivateServer(ctx context.Context, c *ipc.Client, cmd *PrivateServerCmd)
 	}
 }
 
-func serversList(ctx context.Context, c *ipc.Client) error {
+func serversList(ctx context.Context, c *ipc.Client, showLatency bool) error {
 	srvs, err := c.Servers(ctx)
 	if err != nil {
 		return err
 	}
-	found := false
-	for group, opts := range srvs {
-		if len(opts.Outbounds) == 0 && len(opts.Endpoints) == 0 {
-			continue
-		}
-		found = true
-		fmt.Println(group)
-		for _, s := range opts.Outbounds {
-			printServerEntry(s.Tag, s.Type, opts)
-		}
-		for _, s := range opts.Endpoints {
-			printServerEntry(s.Tag, s.Type, opts)
-		}
-	}
-	if !found {
+	if len(srvs) == 0 {
 		fmt.Println("No servers available")
+		return nil
+	}
+	for _, s := range srvs {
+		printServerEntry(s, showLatency)
 	}
 	return nil
 }
 
-func printServerEntry(tag, typ string, opts servers.Options) {
-	fmt.Printf("  %s [%s]", tag, typ)
-	if loc, ok := opts.Locations[tag]; ok {
-		fmt.Printf(" — %s, %s", loc.City, loc.Country)
+func printServerEntry(s *servers.Server, showLatency bool) {
+	fmt.Printf("  %s [%s]", s.Tag, s.Type)
+	if s.Location != (C.ServerLocation{}) {
+		fmt.Printf(" — %s, %s", s.Location.City, s.Location.Country)
+	}
+	if showLatency && s.URLTestResult != nil {
+		fmt.Printf(" (%dms)", s.URLTestResult.Delay)
 	}
 	fmt.Println()
 }

@@ -38,6 +38,8 @@ import (
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
+
+	"github.com/sagernet/sing-box/option"
 )
 
 const tracerName = "github.com/getlantern/radiance/backend"
@@ -231,12 +233,20 @@ func (r *LocalBackend) Start() {
 			key := strings.ToLower(strings.ReplaceAll(sl.City, " ", "-") + "-" + sl.CountryCode)
 			locs[key] = sl
 		}
-		opts := servers.Options{
-			Outbounds:    cfg.Options.Outbounds,
-			Endpoints:    cfg.Options.Endpoints,
-			Locations:    locs,
-			URLOverrides: cfg.BanditURLOverrides,
+		var srvs []*servers.Server
+		for _, out := range cfg.Options.Outbounds {
+			srvs = append(srvs, &servers.Server{
+				Tag: out.Tag, Type: out.Type, IsLantern: true,
+				Options: out, Location: locs[out.Tag],
+			})
 		}
+		for _, ep := range cfg.Options.Endpoints {
+			srvs = append(srvs, &servers.Server{
+				Tag: ep.Tag, Type: ep.Type, IsLantern: true,
+				Options: ep, Location: locs[ep.Tag],
+			})
+		}
+		list := servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
 		if len(cfg.BanditURLOverrides) > 0 {
 			// Create a marker span linked to the API's bandit trace so the
 			// config fetch appears in the same distributed trace as the callback.
@@ -250,7 +260,7 @@ func (r *LocalBackend) Start() {
 				span.End() // point-in-time marker — config was received at this timestamp
 			}
 		}
-		if err := r.setServers(servers.SGLantern, opts); err != nil {
+		if err := r.setServers(true, list); err != nil {
 			slog.Error("setting servers in manager", "error", err)
 		}
 		if err := r.RunOfflineURLTests(); err != nil {
@@ -490,19 +500,19 @@ func (r *LocalBackend) updateConnMetrics(status vpn.VPNStatus) {
 // Server management //
 ///////////////////////
 
-func (r *LocalBackend) Servers() servers.Servers {
-	return r.srvManager.Servers()
+func (r *LocalBackend) AllServers() []*servers.Server {
+	return r.srvManager.AllServers()
 }
 
-func (r *LocalBackend) GetServerByTag(tag string) (servers.Server, bool) {
+func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
 	return r.srvManager.GetServerByTag(tag)
 }
 
-func (r *LocalBackend) AddServers(group servers.ServerGroup, options servers.Options) error {
-	if err := r.srvManager.AddServers(group, options, true); err != nil {
+func (r *LocalBackend) AddServers(isLantern bool, list servers.ServerList) error {
+	if err := r.srvManager.AddServers(isLantern, list, true); err != nil {
 		return fmt.Errorf("failed to add servers to ServerManager: %w", err)
 	}
-	if err := r.vpnClient.AddOutbounds(group, options); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+	if err := r.vpnClient.AddOutbounds(list, isLantern); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to add outbounds to VPN client: %w", err)
 	}
 	return nil
@@ -513,23 +523,32 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to remove servers from ServerManager: %w", err)
 	}
-	servers := make(map[string][]string)
+	var lanternTags, userTags []string
 	for _, srv := range removed {
-		servers[srv.Group] = append(servers[srv.Group], srv.Tag)
+		if srv.IsLantern {
+			lanternTags = append(lanternTags, srv.Tag)
+		} else {
+			userTags = append(userTags, srv.Tag)
+		}
 	}
-	for group, tags := range servers {
-		if err := r.vpnClient.RemoveOutbounds(group, tags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-			return fmt.Errorf("failed to remove outbounds from VPN client: %w", err)
+	if len(lanternTags) > 0 {
+		if err := r.vpnClient.RemoveOutbounds(lanternTags, true); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			return fmt.Errorf("failed to remove lantern outbounds: %w", err)
+		}
+	}
+	if len(userTags) > 0 {
+		if err := r.vpnClient.RemoveOutbounds(userTags, false); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			return fmt.Errorf("failed to remove user outbounds: %w", err)
 		}
 	}
 	return nil
 }
 
-func (r *LocalBackend) setServers(group servers.ServerGroup, options servers.Options) error {
-	if err := r.srvManager.SetServers(group, options); err != nil {
+func (r *LocalBackend) setServers(isLantern bool, list servers.ServerList) error {
+	if err := r.srvManager.SetServers(isLantern, list); err != nil {
 		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
 	}
-	err := r.vpnClient.UpdateOutbounds(group, options)
+	err := r.vpnClient.UpdateOutbounds(list, isLantern)
 	if err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("Failed to update VPN outbounds after config change", "error", err)
 	}
@@ -591,13 +610,10 @@ func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 }
 
 func (r *LocalBackend) loadURLTestResults(storage vpn.URLTestHistoryStorage) {
-	srvs := r.srvManager.Servers()
 	results := make(map[string]servers.URLTestResult)
-	for _, opts := range srvs {
-		for _, tag := range opts.AllTags() {
-			if h := storage.LoadURLTestHistory(tag); h != nil {
-				results[tag] = servers.URLTestResult{Delay: h.Delay, Time: h.Time}
-			}
+	for _, srv := range r.srvManager.AllServers() {
+		if h := storage.LoadURLTestHistory(srv.Tag); h != nil {
+			results[srv.Tag] = servers.URLTestResult{Delay: h.Delay, Time: h.Time}
 		}
 	}
 	if len(results) > 0 {
@@ -649,9 +665,15 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			bOptions.AdBlock = cfg.AdBlock
 		}
 	}
-	if userServers, ok := r.srvManager.Servers()[servers.SGUser]; ok {
-		bOptions.Options.Outbounds = append(bOptions.Options.Outbounds, userServers.Outbounds...)
-		bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, userServers.Endpoints...)
+	for _, srv := range r.srvManager.AllServers() {
+		if !srv.IsLantern {
+			switch opts := srv.Options.(type) {
+			case option.Outbound:
+				bOptions.Options.Outbounds = append(bOptions.Options.Outbounds, opts)
+			case option.Endpoint:
+				bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, opts)
+			}
+		}
 	}
 	return bOptions
 }
@@ -729,28 +751,28 @@ func (r *LocalBackend) ActiveVPNConnections() ([]vpn.Connection, error) {
 
 // SelectedServer returns the currently selected server and whether the server is still available.
 // The server may no longer be available if it was removed from the manager since it was selected.
-func (r *LocalBackend) SelectedServer() (servers.Server, bool, error) {
+func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 	if settings.GetBool(settings.AutoConnectKey) {
 		tag, err := r.vpnClient.CurrentAutoSelectedServer()
 		if err != nil {
-			return servers.Server{}, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
+			return nil, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
 		}
 		server, found := r.srvManager.GetServerByTag(tag)
 		return server, found, nil
 	}
 	if !settings.Exists(settings.SelectedServerKey) {
-		return servers.Server{}, false, fmt.Errorf("no selected server")
+		return nil, false, fmt.Errorf("no selected server")
 	}
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
-		return servers.Server{}, false, fmt.Errorf("failed to get selected server from settings: %w", err)
+		return nil, false, fmt.Errorf("failed to get selected server from settings: %w", err)
 	}
 	server, found := r.srvManager.GetServerByTag(selected.Tag)
 	stillExists := found &&
-		server.Group == selected.Group &&
+		server.IsLantern == selected.IsLantern &&
 		server.Type == selected.Type &&
 		server.Location == selected.Location
-	return selected, stillExists, nil
+	return &selected, stillExists, nil
 }
 
 // CurrentAutoSelectedServer returns the tag of the server that is currently auto-selected by the

@@ -167,7 +167,7 @@ func TestHandlerFetchConfig(t *testing.T) {
 
 type mockSrvManager struct{}
 
-func (m *mockSrvManager) SetServers(_ string, _ servers.Options) error { return nil }
+func (m *mockSrvManager) SetServers(_ bool, _ servers.ServerList) error { return nil }
 
 // Make sure MockFetcher implements the Fetcher interface
 var _ Fetcher = (*MockFetcher)(nil)

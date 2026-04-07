@@ -137,20 +137,22 @@ func (c *Client) SelectServer(ctx context.Context, tag string) error {
 }
 
 // SelectedServer returns the currently selected server and whether it still exists.
-func (c *Client) SelectedServer(ctx context.Context) (servers.Server, bool, error) {
+func (c *Client) SelectedServer(ctx context.Context) (*servers.Server, bool, error) {
 	data, err := c.do(ctx, http.MethodGet, serverSelectedEndpoint, nil)
 	if err != nil {
-		return servers.Server{}, false, err
+		return nil, false, err
 	}
 	resp, err := sjson.UnmarshalExtendedContext[SelectedServerResponse](boxCtx, data)
 	return resp.Server, resp.Exists, err
 }
 
 // AutoSelected returns the server that's currently auto-selected.
-func (c *Client) AutoSelected(ctx context.Context) (servers.Server, error) {
-	var selected servers.Server
-	err := c.doJSON(ctx, http.MethodGet, serverAutoSelectedEndpoint, nil, &selected)
-	return selected, err
+func (c *Client) AutoSelected(ctx context.Context) (*servers.Server, error) {
+	data, err := c.do(ctx, http.MethodGet, serverAutoSelectedEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	return sjson.UnmarshalExtendedContext[*servers.Server](boxCtx, data)
 }
 
 // AutoSelectedEvents connects to the auto-selected event stream. It calls handler for each
@@ -169,35 +171,35 @@ func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSe
 // Server management //
 ///////////////////////
 
-// Servers returns all server groups.
-func (c *Client) Servers(ctx context.Context) (servers.Servers, error) {
+// Servers returns all servers.
+func (c *Client) Servers(ctx context.Context) ([]*servers.Server, error) {
 	data, err := c.do(ctx, http.MethodGet, serversEndpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	return sjson.UnmarshalExtendedContext[servers.Servers](boxCtx, data)
+	return sjson.UnmarshalExtendedContext[[]*servers.Server](boxCtx, data)
 }
 
 // GetServerByTag returns the server with the given tag.
-func (c *Client) GetServerByTag(ctx context.Context, tag string) (servers.Server, bool, error) {
+func (c *Client) GetServerByTag(ctx context.Context, tag string) (*servers.Server, bool, error) {
 	q := url.Values{"tag": {tag}}
 	data, err := c.do(ctx, http.MethodGet, serversEndpoint+"?"+q.Encode(), nil)
 	if err != nil {
 		if IsNotFound(err) {
-			return servers.Server{}, false, nil
+			return nil, false, nil
 		}
-		return servers.Server{}, false, err
+		return nil, false, err
 	}
-	server, err := sjson.UnmarshalExtendedContext[servers.Server](boxCtx, data)
+	server, err := sjson.UnmarshalExtendedContext[*servers.Server](boxCtx, data)
 	if err != nil {
-		return servers.Server{}, false, err
+		return nil, false, err
 	}
 	return server, true, nil
 }
 
-// AddServers adds servers to the given group.
-func (c *Client) AddServers(ctx context.Context, group servers.ServerGroup, options servers.Options) error {
-	req := AddServersRequest{Group: group, Options: options}
+// AddServers adds servers.
+func (c *Client) AddServers(ctx context.Context, isLantern bool, list servers.ServerList) error {
+	req := AddServersRequest{IsLantern: isLantern, Servers: list}
 	body, err := sjson.MarshalContext(boxCtx, req)
 	if err != nil {
 		return fmt.Errorf("marshal add servers request: %w", err)

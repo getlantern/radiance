@@ -195,19 +195,19 @@ func TestSelectServer_DisconnectedTunnel(t *testing.T) {
 
 func TestUpdateOutbounds_NilTunnel(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
-	err := c.UpdateOutbounds("lantern", servers.Options{})
+	err := c.UpdateOutbounds(servers.ServerList{}, true)
 	assert.ErrorIs(t, err, ErrTunnelNotConnected)
 }
 
 func TestAddOutbounds_NilTunnel(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
-	err := c.AddOutbounds("lantern", servers.Options{})
+	err := c.AddOutbounds(servers.ServerList{}, true)
 	assert.ErrorIs(t, err, ErrTunnelNotConnected)
 }
 
 func TestRemoveOutbounds_NilTunnel(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
-	err := c.RemoveOutbounds("lantern", []string{"tag1"})
+	err := c.RemoveOutbounds([]string{"tag1"}, true)
 	assert.ErrorIs(t, err, ErrTunnelNotConnected)
 }
 

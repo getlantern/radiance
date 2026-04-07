@@ -4,18 +4,17 @@
 package servers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,13 +41,11 @@ import (
 	"github.com/sagernet/sing/common/json"
 )
 
-type ServerGroup = string
-
 const (
-	SGLantern ServerGroup = "lantern"
-	SGUser    ServerGroup = "user"
-
-	tracerName = "github.com/getlantern/radiance/servers"
+	// ModeLantern and ModeUser are Clash API mode names.
+	ModeLantern = "lantern"
+	ModeUser    = "user"
+	tracerName  = "github.com/getlantern/radiance/servers"
 )
 
 // ServerCredentials holds the access token and invite status for a private server.
@@ -58,98 +55,105 @@ type ServerCredentials struct {
 	IsJoined    bool   `json:"is_joined,omitempty"` // whether the user has joined the server (i.e. accepted the invite)
 }
 
-type Options struct {
-	Outbounds    []option.Outbound            `json:"outbounds,omitempty"`
-	Endpoints    []option.Endpoint            `json:"endpoints,omitempty"`
-	Locations    map[string]C.ServerLocation  `json:"locations,omitempty"`
-	URLOverrides map[string]string            `json:"url_overrides,omitempty"`
-	Credentials  map[string]ServerCredentials `json:"credentials,omitempty"`
+type Server struct {
+	Tag           string             `json:"tag"`
+	Type          string             `json:"type"`
+	IsLantern     bool               `json:"isLantern"`
+	Options       any                `json:"options"`
+	Location      C.ServerLocation   `json:"location,omitempty"`
+	Credentials   *ServerCredentials `json:"credentials,omitempty"`
+	URLTestResult *URLTestResult     `json:"urlTestResult,omitempty"`
 }
 
-func (o Options) MarshalJSON() ([]byte, error) {
-	type _Options Options
-	return json.MarshalContext(box.BaseContext(), _Options(o))
+// serverJSON is the on-wire representation of a Server. The Options field is split into
+// explicit Outbound/Endpoint fields so that the sing-box context-aware JSON marshaler can
+// properly serialize/deserialize the typed options (e.g. SamizdatOutboundOptions).
+type serverJSON struct {
+	Tag           string             `json:"tag"`
+	Type          string             `json:"type"`
+	IsLantern     bool               `json:"isLantern"`
+	Outbound      *option.Outbound   `json:"outbound,omitempty"`
+	Endpoint      *option.Endpoint   `json:"endpoint,omitempty"`
+	Location      C.ServerLocation   `json:"location,omitempty"`
+	Credentials   *ServerCredentials `json:"credentials,omitempty"`
+	URLTestResult *URLTestResult     `json:"urlTestResult,omitempty"`
 }
 
-func (o *Options) UnmarshalJSON(data []byte) error {
-	type _Options Options
-	v, err := json.UnmarshalExtendedContext[_Options](box.BaseContext(), data)
+func (s Server) MarshalJSON() ([]byte, error) {
+	sj := serverJSON{
+		Tag:           s.Tag,
+		Type:          s.Type,
+		IsLantern:     s.IsLantern,
+		Location:      s.Location,
+		Credentials:   s.Credentials,
+		URLTestResult: s.URLTestResult,
+	}
+	switch opts := s.Options.(type) {
+	case option.Outbound:
+		sj.Outbound = &opts
+	case option.Endpoint:
+		sj.Endpoint = &opts
+	}
+	return json.MarshalContext(box.BaseContext(), sj)
+}
+
+func (s *Server) UnmarshalJSON(data []byte) error {
+	sj, err := json.UnmarshalExtendedContext[serverJSON](box.BaseContext(), data)
 	if err != nil {
 		return err
 	}
-	*o = Options(v)
+	s.Tag = sj.Tag
+	s.Type = sj.Type
+	s.IsLantern = sj.IsLantern
+	s.Location = sj.Location
+	s.Credentials = sj.Credentials
+	s.URLTestResult = sj.URLTestResult
+	if sj.Outbound != nil {
+		s.Options = *sj.Outbound
+	} else if sj.Endpoint != nil {
+		s.Options = *sj.Endpoint
+	}
 	return nil
 }
 
-// AllTags returns a slice of all tags from both endpoints and outbounds in the Options.
-func (o Options) AllTags() []string {
-	tags := make([]string, 0, len(o.Outbounds)+len(o.Endpoints))
-	for _, ep := range o.Endpoints {
-		tags = append(tags, ep.Tag)
-	}
-	for _, out := range o.Outbounds {
-		tags = append(tags, out.Tag)
+// ServerList is a batch of servers with optional URL overrides for bulk operations.
+type ServerList struct {
+	Servers      []*Server         `json:"servers"`
+	URLOverrides map[string]string `json:"url_overrides,omitempty"`
+}
+
+func (sl ServerList) Tags() []string {
+	tags := make([]string, 0, len(sl.Servers))
+	for _, s := range sl.Servers {
+		tags = append(tags, s.Tag)
 	}
 	return tags
 }
 
-type Servers map[ServerGroup]Options
-
-func (s Servers) MarshalJSON() ([]byte, error) {
-	return json.MarshalContext(box.BaseContext(), map[ServerGroup]Options(s))
-}
-
-func (s *Servers) UnmarshalJSON(data []byte) error {
-	v, err := json.UnmarshalExtendedContext[map[ServerGroup]Options](box.BaseContext(), data)
-	if err != nil {
-		return err
+func (sl ServerList) Outbounds() []option.Outbound {
+	var out []option.Outbound
+	for _, s := range sl.Servers {
+		if o, ok := s.Options.(option.Outbound); ok {
+			out = append(out, o)
+		}
 	}
-	*s = v
-	return nil
+	return out
 }
 
-type Server struct {
-	// Group indicates which group the server belongs to.
-	Group ServerGroup
-	// Tag is the tag/name of the server
-	Tag string
-	// Type is the type of the server, e.g. "http", "shadowsocks", etc.
-	Type     string
-	Options  any // will be either [option.Endpoint] or [option.Outbound]
-	Location C.ServerLocation
-
-	// URLTestDelay is the most recent URL test latency in milliseconds (0 if no test result).
-	URLTestDelay uint16 `json:"urlTestDelay,omitempty"`
-	// URLTestTime is the time of the most recent URL test result.
-	URLTestTime time.Time `json:"urlTestTime,omitempty"`
-}
-
-func (s Server) MarshalJSON() ([]byte, error) {
-	type _Server Server
-	return json.MarshalContext(box.BaseContext(), _Server(s))
-}
-
-func (s *Server) UnmarshalJSON(data []byte) error {
-	type _Server Server
-	v, err := json.UnmarshalExtendedContext[_Server](box.BaseContext(), data)
-	if err != nil {
-		return err
+func (sl ServerList) Endpoints() []option.Endpoint {
+	var eps []option.Endpoint
+	for _, s := range sl.Servers {
+		if e, ok := s.Options.(option.Endpoint); ok {
+			eps = append(eps, e)
+		}
 	}
-	*s = Server(v)
-	return nil
-}
-
-type optsMap map[string]Server
-
-func (m optsMap) add(group, tag, typ string, options any, loc C.ServerLocation) {
-	m[tag] = Server{Group: group, Tag: tag, Type: typ, Options: options, Location: loc}
+	return eps
 }
 
 // Manager manages server configurations, including endpoints and outbounds.
 type Manager struct {
 	access  sync.RWMutex
-	servers Servers
-	optsMap optsMap // map of tag to option for quick access
+	servers map[string]*Server // tag -> Server
 
 	logger      *slog.Logger
 	serversFile string
@@ -159,21 +163,7 @@ type Manager struct {
 // NewManager creates a new Manager instance, loading server options from disk.
 func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 	mgr := &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-			SGUser: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-		},
-		optsMap:     map[string]Server{},
+		servers:     make(map[string]*Server),
 		serversFile: filepath.Join(dataPath, internal.ServersFileName),
 		logger:      logger,
 		// Use the bypass proxy dialer to route requests outside the VPN tunnel.
@@ -186,7 +176,7 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 		mgr.logger.Error("Failed to load servers", "file", mgr.serversFile, "error", err)
 		return nil, fmt.Errorf("failed to load servers from file: %w", err)
 	}
-	mgr.logger.Log(nil, log.LevelTrace, "Loaded servers", "servers", mgr.servers)
+	mgr.logger.Log(nil, log.LevelTrace, "Loaded servers")
 	return mgr, nil
 }
 
@@ -213,217 +203,108 @@ func retryableHTTPClient(logger *slog.Logger) *retryablehttp.Client {
 	return client
 }
 
-// Servers returns the current server configurations for both groups ([SGLantern] and [SGUser]).
-func (m *Manager) Servers() Servers {
+// AllServers returns a deep-copied slice of all servers.
+func (m *Manager) AllServers() []*Server {
 	m.access.RLock()
 	defer m.access.RUnlock()
-
-	result := make(Servers, len(m.servers))
-	for group, opts := range m.servers {
-		result[group] = Options{
-			Outbounds:    append([]option.Outbound{}, opts.Outbounds...),
-			Endpoints:    append([]option.Endpoint{}, opts.Endpoints...),
-			Locations:    maps.Clone(opts.Locations),
-			URLOverrides: maps.Clone(opts.URLOverrides),
-			Credentials:  maps.Clone(opts.Credentials),
-		}
+	result := make([]*Server, 0, len(m.servers))
+	for _, srv := range m.servers {
+		cp := *srv
+		result = append(result, &cp)
 	}
 	return result
 }
 
-// UpdateURLTestResults updates the URL test delay and time for all servers that have results
-// in the provided map. The map keys are server tags.
+// URLTestResult holds the result of a single URL test.
+type URLTestResult struct {
+	Delay uint16    `json:"delay"`
+	Time  time.Time `json:"time"`
+}
+
+// UpdateURLTestResults updates the URL test results for servers matching the provided tags.
 func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) {
 	m.access.Lock()
 	defer m.access.Unlock()
 	for tag, result := range results {
-		if srv, exists := m.optsMap[tag]; exists {
-			srv.URLTestDelay = result.Delay
-			srv.URLTestTime = result.Time
-			m.optsMap[tag] = srv
+		if srv, exists := m.servers[tag]; exists {
+			r := result
+			srv.URLTestResult = &r
 		}
 	}
 }
 
-// URLTestResult holds the result of a single URL test.
-type URLTestResult struct {
-	Delay uint16
-	Time  time.Time
-}
-
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
 // the server was found.
-func (m *Manager) GetServerByTag(tag string) (Server, bool) {
+func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
 	m.access.RLock()
 	defer m.access.RUnlock()
-	s, exists := m.optsMap[tag]
-	return s, exists
+	s, exists := m.servers[tag]
+	if !exists {
+		return nil, false
+	}
+	cp := *s
+	return &cp, true
 }
 
-// SetServers sets the server options for a specific group.
-// Important: this will overwrite any existing servers for that group. To add new servers without
-// overwriting existing ones, use [AddServers] instead.
-func (m *Manager) SetServers(group ServerGroup, options Options) error {
-	switch group {
-	case SGLantern, SGUser:
-	default:
-		return fmt.Errorf("invalid server group: %s", group)
-	}
-
+// SetServers sets the server options for servers with a matching IsLantern value.
+// Important: this will overwrite any existing servers with the same IsLantern value. To add new
+// servers without overwriting existing ones, use [AddServers] instead.
+func (m *Manager) SetServers(isLantern bool, list ServerList) error {
 	m.access.Lock()
 	defer m.access.Unlock()
-	if err := m.setServers(group, options); err != nil {
-		return fmt.Errorf("set servers: %w", err)
+	// Remove existing with matching IsLantern
+	for tag, srv := range m.servers {
+		if srv.IsLantern == isLantern {
+			delete(m.servers, tag)
+		}
 	}
-
-	if err := m.saveServers(); err != nil {
-		return fmt.Errorf("failed to save servers: %w", err)
+	// Add new
+	for _, srv := range list.Servers {
+		srv.IsLantern = isLantern
+		m.servers[srv.Tag] = srv
 	}
-	return nil
+	return m.saveServers()
 }
 
-func (m *Manager) setServers(group ServerGroup, options Options) error {
-	m.logger.Log(nil, log.LevelTrace, "Setting servers", "group", group, "options", options)
-	opts := Options{
-		Outbounds:    append([]option.Outbound{}, options.Outbounds...),
-		Endpoints:    append([]option.Endpoint{}, options.Endpoints...),
-		Locations:    make(map[string]C.ServerLocation, len(options.Locations)),
-		URLOverrides: maps.Clone(options.URLOverrides),
-		Credentials:  make(map[string]ServerCredentials, len(options.Credentials)),
-	}
-	maps.Copy(opts.Locations, options.Locations)
-	maps.Copy(opts.Credentials, options.Credentials)
-	for _, ep := range opts.Endpoints {
-		m.optsMap.add(group, ep.Tag, ep.Type, ep, options.Locations[ep.Tag])
-	}
-	for _, out := range opts.Outbounds {
-		m.optsMap.add(group, out.Tag, out.Type, out, options.Locations[out.Tag])
-	}
-	m.servers[group] = opts
-	return nil
-}
-
-// AddServers adds new servers to the specified group. If force is true, it will overwrite any
+// AddServers adds new servers. If force is true, it will overwrite any
 // existing servers with the same tags.
-func (m *Manager) AddServers(group ServerGroup, options Options, force bool) error {
-	switch group {
-	case SGLantern, SGUser:
-	default:
-		return fmt.Errorf("invalid server group: %s", group)
-	}
-	if len(options.Endpoints) == 0 && len(options.Outbounds) == 0 {
+func (m *Manager) AddServers(isLantern bool, list ServerList, force bool) error {
+	if len(list.Servers) == 0 {
 		return nil
 	}
 
 	m.access.Lock()
 	defer m.access.Unlock()
 
-	m.logger.Log(nil, log.LevelTrace, "Adding servers", "group", group, "options", options)
-	added := m.merge(group, options, force)
-	if err := m.saveServers(); err != nil {
-		return fmt.Errorf("failed to save servers: %w", err)
-	}
-	m.logger.Info("Server configs added", "group", group, "newCount", len(added))
-	return nil
-}
-
-func (m *Manager) merge(group ServerGroup, options Options, force bool) []Server {
-	var added []Server
-	servers := m.servers[group]
-	for _, ep := range options.Endpoints {
+	for _, srv := range list.Servers {
+		srv.IsLantern = isLantern
 		if !force {
-			if _, exists := m.optsMap[ep.Tag]; exists {
+			if _, exists := m.servers[srv.Tag]; exists {
 				continue
 			}
 		}
-		servers.Endpoints = append(servers.Endpoints, ep)
-		servers.Locations[ep.Tag] = options.Locations[ep.Tag]
-		m.optsMap.add(group, ep.Tag, ep.Type, ep, options.Locations[ep.Tag])
-		added = append(added, m.optsMap[ep.Tag])
-		if creds, ok := options.Credentials[ep.Tag]; ok {
-			servers.Credentials[ep.Tag] = creds
-		}
+		m.servers[srv.Tag] = srv
 	}
-	for _, out := range options.Outbounds {
-		if !force {
-			if _, exists := m.optsMap[out.Tag]; exists {
-				continue
-			}
-		}
-		servers.Outbounds = append(servers.Outbounds, out)
-		servers.Locations[out.Tag] = options.Locations[out.Tag]
-		m.optsMap.add(group, out.Tag, out.Type, out, options.Locations[out.Tag])
-		added = append(added, m.optsMap[out.Tag])
-		if creds, ok := options.Credentials[out.Tag]; ok {
-			servers.Credentials[out.Tag] = creds
-		}
-	}
-	for k, v := range options.URLOverrides {
-		if servers.URLOverrides == nil {
-			servers.URLOverrides = make(map[string]string)
-		}
-		servers.URLOverrides[k] = v
-	}
-	if force {
-		servers.Endpoints = slices.CompactFunc(servers.Endpoints, func(ep1, ep2 option.Endpoint) bool {
-			return ep1.Tag == ep2.Tag
-		})
-		servers.Outbounds = slices.CompactFunc(servers.Outbounds, func(ob1, ob2 option.Outbound) bool {
-			return ob1.Tag == ob2.Tag
-		})
-	}
-	m.servers[group] = servers
-	return added
+	return m.saveServers()
 }
 
 // RemoveServer removes a server config by its tag.
 func (m *Manager) RemoveServer(tag string) error {
-	_, err := m.removeServers([]string{tag})
+	_, err := m.RemoveServers([]string{tag})
 	return err
 }
 
 // RemoveServers removes multiple server configs by their tags and returns the removed servers.
-func (m *Manager) RemoveServers(tags []string) ([]Server, error) {
-	return m.removeServers(tags)
-}
-
-func (m *Manager) removeServers(tags []string) ([]Server, error) {
+func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
 	m.access.Lock()
 	defer m.access.Unlock()
-
-	removed := make([]Server, 0, len(tags))
-	remove := func(it any) bool {
-		var tag string
-		switch v := it.(type) {
-		case option.Endpoint:
-			tag = v.Tag
-		case option.Outbound:
-			tag = v.Tag
-		}
-		server, exists := m.optsMap[tag]
-		if exists {
-			removed = append(removed, server)
-		}
-		return exists
-	}
-	for group, options := range m.servers {
-		gremoved := removed[len(removed):]
-		options.Outbounds = slices.DeleteFunc(options.Outbounds, func(out option.Outbound) bool {
-			return remove(out)
-		})
-		options.Endpoints = slices.DeleteFunc(options.Endpoints, func(ep option.Endpoint) bool {
-			return remove(ep)
-		})
-		for _, server := range gremoved {
-			delete(options.Locations, server.Tag)
-			delete(m.optsMap, server.Tag)
-		}
-		m.servers[group] = options
-		if len(gremoved) > 0 {
-			m.logger.Info("Server configs removed", "group", group, "tags", gremoved)
+	removed := make([]*Server, 0, len(tags))
+	for _, tag := range tags {
+		if srv, exists := m.servers[tag]; exists {
+			removed = append(removed, srv)
+			delete(m.servers, tag)
 		}
 	}
-
 	if err := m.saveServers(); err != nil {
 		return nil, fmt.Errorf("failed to save servers: %w", err)
 	}
@@ -431,9 +312,11 @@ func (m *Manager) removeServers(tags []string) ([]Server, error) {
 }
 
 func (m *Manager) saveServers() error {
-	m.logger.Log(nil, log.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
-	ctx := box.BaseContext()
-	buf, err := json.MarshalContext(ctx, m.servers)
+	servers := make([]*Server, 0, len(m.servers))
+	for _, srv := range m.servers {
+		servers = append(servers, srv)
+	}
+	buf, err := json.MarshalContext(box.BaseContext(), servers)
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
@@ -448,13 +331,56 @@ func (m *Manager) loadServers() error {
 	if err != nil {
 		return fmt.Errorf("read server file %q: %w", m.serversFile, err)
 	}
-	servers, err := json.UnmarshalExtendedContext[Servers](box.BaseContext(), buf)
+	buf = bytes.TrimSpace(buf)
+	ctx := box.BaseContext()
+
+	if len(buf) > 0 && buf[0] == '[' {
+		loaded, err := json.UnmarshalExtendedContext[[]*Server](ctx, buf)
+		if err != nil {
+			return fmt.Errorf("unmarshal servers: %w", err)
+		}
+		for _, srv := range loaded {
+			m.servers[srv.Tag] = srv
+		}
+		return nil
+	}
+
+	// Fall back to old format: map[string]Options
+	type oldOptions struct {
+		Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
+		Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
+		Locations   map[string]C.ServerLocation   `json:"locations,omitempty"`
+		Credentials map[string]ServerCredentials  `json:"credentials,omitempty"`
+	}
+	old, err := json.UnmarshalExtendedContext[map[string]oldOptions](ctx, buf)
 	if err != nil {
 		return fmt.Errorf("unmarshal server options: %w", err)
 	}
-	m.setServers(SGLantern, servers[SGLantern])
-	m.setServers(SGUser, servers[SGUser])
-	return nil
+	for group, opts := range old {
+		isLantern := group == ModeLantern
+		for _, out := range opts.Outbounds {
+			srv := &Server{
+				Tag: out.Tag, Type: out.Type, IsLantern: isLantern,
+				Options: out, Location: opts.Locations[out.Tag],
+			}
+			if creds, ok := opts.Credentials[out.Tag]; ok {
+				srv.Credentials = &creds
+			}
+			m.servers[out.Tag] = srv
+		}
+		for _, ep := range opts.Endpoints {
+			srv := &Server{
+				Tag: ep.Tag, Type: ep.Type, IsLantern: isLantern,
+				Options: ep, Location: opts.Locations[ep.Tag],
+			}
+			if creds, ok := opts.Credentials[ep.Tag]; ok {
+				srv.Credentials = &creds
+			}
+			m.servers[ep.Tag] = srv
+		}
+	}
+	// Re-save in new format
+	return m.saveServers()
 }
 
 // Lantern Server Manager Integration
@@ -482,29 +408,34 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	type remoteConfig struct {
+		Outbounds []option.Outbound `json:"outbounds,omitempty"`
+		Endpoints []option.Endpoint `json:"endpoints,omitempty"`
+	}
 	ctx := box.BaseContext()
-	servers, err := json.UnmarshalExtendedContext[Options](ctx, body)
+	cfg, err := json.UnmarshalExtendedContext[remoteConfig](ctx, body)
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
-	if len(servers.Endpoints) == 0 && len(servers.Outbounds) == 0 {
+	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
 		return fmt.Errorf("no endpoints or outbounds in response")
 	}
 
 	// TODO: update when we support endpoints
-	servers.Outbounds[0].Tag = tag
-	// If the server location is provided, set it for the server's tag.
-	if loc != (C.ServerLocation{}) {
-		servers.Locations = map[string]C.ServerLocation{
-			tag: loc,
-		}
-	}
-	// Store the credentials for the server's tag.
-	servers.Credentials = map[string]ServerCredentials{
-		tag: {AccessToken: accessToken, Port: port, IsJoined: joined},
+	cfg.Outbounds[0].Tag = tag
+	srv := &Server{
+		Tag:       tag,
+		Type:      cfg.Outbounds[0].Type,
+		IsLantern: false,
+		Options:   cfg.Outbounds[0],
+		Location:  loc,
+		Credentials: &ServerCredentials{
+			AccessToken: accessToken, Port: port, IsJoined: joined,
+		},
 	}
 	slog.Info("Adding private server from remote manager", "tag", tag, "ip", ip, "port", port, "location", loc, "is_joined", joined)
-	return m.AddServers(SGUser, servers, true)
+	list := ServerList{Servers: []*Server{srv}}
+	return m.AddServers(false, list, true)
 }
 
 // InviteToPrivateServer invites another user to the server manager instance and returns a connection
@@ -552,14 +483,25 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBySingboxJSON")
 	defer span.End()
-	opts, err := json.UnmarshalExtendedContext[Options](box.BaseContext(), config)
+	type singboxConfig struct {
+		Outbounds []option.Outbound `json:"outbounds,omitempty"`
+		Endpoints []option.Endpoint `json:"endpoints,omitempty"`
+	}
+	cfg, err := json.UnmarshalExtendedContext[singboxConfig](box.BaseContext(), config)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
-	if len(opts.Endpoints) == 0 && len(opts.Outbounds) == 0 {
+	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
 		return traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
-	if err := m.AddServers(SGUser, opts, true); err != nil {
+	var servers []*Server
+	for _, out := range cfg.Outbounds {
+		servers = append(servers, &Server{Tag: out.Tag, Type: out.Type, Options: out})
+	}
+	for _, ep := range cfg.Endpoints {
+		servers = append(servers, &Server{Tag: ep.Tag, Type: ep.Type, Options: ep})
+	}
+	if err := m.AddServers(false, ServerList{Servers: servers}, true); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
 	return nil

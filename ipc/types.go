@@ -41,8 +41,8 @@ type JSONConfigRequest struct {
 }
 
 type AddServersRequest struct {
-	Group   servers.ServerGroup `json:"group"`
-	Options servers.Options     `json:"options"`
+	IsLantern bool               `json:"isLantern"`
+	Servers   servers.ServerList `json:"servers"`
 }
 
 type RemoveServersRequest struct {
@@ -112,8 +112,8 @@ type IssueReportRequest struct {
 // Shared response types used by both client and server.
 
 type SelectedServerResponse struct {
-	Server servers.Server `json:"server"`
-	Exists bool           `json:"exists"`
+	Server *servers.Server `json:"server"`
+	Exists bool            `json:"exists"`
 }
 
 type SignupResponse struct {

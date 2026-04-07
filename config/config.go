@@ -34,7 +34,6 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/servers"
 )
 
 const (
@@ -50,10 +49,6 @@ var (
 
 // Config includes all configuration data from the Lantern API
 type Config = C.ConfigResponse
-
-type ServerManager interface {
-	SetServers(serverGroup servers.ServerGroup, opts servers.Options) error
-}
 
 type Options struct {
 	PollInterval  time.Duration

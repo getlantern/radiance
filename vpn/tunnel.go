@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	lcommon "github.com/getlantern/common"
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
 
@@ -292,24 +291,28 @@ func (t *tunnel) setStatus(status VPNStatus, err error) {
 
 var errLibboxClosed = errors.New("libbox closed")
 
-func (t *tunnel) addOutbounds(group string, options servers.Options) (err error) {
-	if len(options.Outbounds) == 0 && len(options.Endpoints) == 0 {
+func (t *tunnel) addOutbounds(list servers.ServerList, isLantern bool) (err error) {
+	outbounds := list.Outbounds()
+	endpoints := list.Endpoints()
+	if len(outbounds) == 0 && len(endpoints) == 0 {
 		slog.Debug("No outbounds or endpoints to add")
 		return nil
 	}
 
-	slog.Info("Adding servers to group", "tags", options.AllTags())
+	slog.Info("Adding servers", "tags", list.Tags())
 	// remove duplicates from newOpts before adding to avoid unnecessary reloads
-	newOptions := removeDuplicates(t.ctx, t.optsMap, options)
+	newList := removeDuplicates(t.ctx, t.optsMap, list)
+	newOutbounds := newList.Outbounds()
+	newEndpoints := newList.Endpoints()
 
 	ctx := t.ctx
 	router := service.FromContext[adapter.Router](ctx)
 
 	var errs []error
-	if group == servers.SGLantern && t.clientContextTracker != nil {
+	if isLantern && t.clientContextTracker != nil {
 		// preemptively merge the new lantern tags into the clientContextInjector match bounds to
 		// capture any new connections before finished adding the servers.
-		if tags := options.AllTags(); len(tags) > 0 {
+		if tags := list.Tags(); len(tags) > 0 {
 			slog.Log(nil, rlog.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
 			matchBounds := t.clientContextTracker.MatchBounds()
 			matchBounds.Outbound = append(matchBounds.Outbound, tags...)
@@ -320,7 +323,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 				// Rebuild bounds from the full set of lantern tags currently in the
 				// ManualSelectTag group, rather than just the tags from this call.
 				mb := t.clientContextTracker.MatchBounds()
-				mb.Outbound = append(mb.Outbound, options.AllTags()...)
+				mb.Outbound = append(mb.Outbound, list.Tags()...)
 				// Deduplicate: the preemptive merge above may have already added these tags.
 				slices.Sort(mb.Outbound)
 				mb.Outbound = slices.Compact(mb.Outbound)
@@ -333,7 +336,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		mutGrpMgr = t.mutGrpMgr
 		added     = 0
 	)
-	for _, outbound := range newOptions.Outbounds {
+	for _, outbound := range newOutbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
@@ -349,7 +352,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			slog.Warn("Failed to load outbound",
 				"tag", outbound.Tag,
 				"type", outbound.Type,
-				"group", group,
+				"isLantern", isLantern,
 				"error", err,
 			)
 			errs = append(errs, err)
@@ -364,7 +367,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		return ctx.Err()
 	}
 
-	for _, endpoint := range newOptions.Endpoints {
+	for _, endpoint := range newEndpoints {
 		logger := t.logFactory.NewLogger("endpoint/" + endpoint.Tag + "[" + endpoint.Type + "]")
 		err := mutGrpMgr.CreateEndpointForGroup(
 			ctx, router, logger, ManualSelectTag, endpoint.Tag, endpoint.Type, endpoint.Options,
@@ -380,7 +383,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			slog.Warn("Failed to load endpoint",
 				"tag", endpoint.Tag,
 				"type", endpoint.Type,
-				"group", group,
+				"isLantern", isLantern,
 				"error", err,
 			)
 			errs = append(errs, err)
@@ -391,14 +394,14 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		}
 	}
 
-	if len(options.URLOverrides) > 0 {
+	if len(list.URLOverrides) > 0 {
 		slog.Info("Applying bandit URL overrides to URL test group",
-			"override_count", len(options.URLOverrides),
+			"override_count", len(list.URLOverrides),
 		)
 	}
-	if err := t.mutGrpMgr.SetURLOverrides(AutoSelectTag, options.URLOverrides); err != nil {
+	if err := t.mutGrpMgr.SetURLOverrides(AutoSelectTag, list.URLOverrides); err != nil {
 		slog.Warn("Failed to set URL overrides", "error", err)
-	} else if len(options.URLOverrides) > 0 {
+	} else if len(list.URLOverrides) > 0 {
 		// Trigger an immediate URL test cycle when we have bandit overrides so
 		// callback probes are hit within seconds of config receipt rather than
 		// waiting for the next scheduled interval (3 min).
@@ -413,7 +416,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 	return errors.Join(errs...)
 }
 
-func (t *tunnel) removeOutbounds(group string, tags []string) error {
+func (t *tunnel) removeOutbounds(tags []string, isLantern bool) error {
 	var (
 		mutGrpMgr = t.mutGrpMgr
 		removed   []string
@@ -440,7 +443,7 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 			removed = append(removed, tag)
 		}
 	}
-	if t.clientContextTracker != nil && group == servers.SGLantern {
+	if t.clientContextTracker != nil && isLantern {
 		mb := t.clientContextTracker.MatchBounds()
 		mb.Outbound = slices.DeleteFunc(mb.Outbound, func(s string) bool {
 			return slices.Contains(removed, s)
@@ -454,9 +457,11 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 	return errors.Join(errs...)
 }
 
-func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
+func (t *tunnel) updateOutbounds(list servers.ServerList, isLantern bool) error {
 	var errs []error
-	if len(newOpts.Outbounds) == 0 && len(newOpts.Endpoints) == 0 && len(newOpts.URLOverrides) == 0 {
+	outbounds := list.Outbounds()
+	endpoints := list.Endpoints()
+	if len(outbounds) == 0 && len(endpoints) == 0 && len(list.URLOverrides) == 0 {
 		slog.Debug("No outbounds, endpoints, or bandit overrides to update, skipping")
 		return nil
 	}
@@ -474,7 +479,7 @@ func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	}
 
 	// collect tags present in the current group but absent from the new config
-	newTags := newOpts.AllTags()
+	newTags := list.Tags()
 	var toRemove []string
 	for _, tag := range selector.All() {
 		if !slices.Contains(newTags, tag) {
@@ -485,7 +490,7 @@ func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	// Add new outbounds first, before removing old ones. If all new
 	// outbounds fail to load (e.g. invalid config), we keep the old
 	// working outbounds to maintain connectivity.
-	addErr := t.addOutbounds(group, newOpts)
+	addErr := t.addOutbounds(list, isLantern)
 	if errors.Is(addErr, errLibboxClosed) {
 		return addErr
 	}
@@ -503,22 +508,22 @@ func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	}
 
 	if hasNewOutbound {
-		if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
+		if err := t.removeOutbounds(toRemove, isLantern); errors.Is(err, errLibboxClosed) {
 			return err
 		} else if err != nil {
 			errs = append(errs, err)
 		}
 	} else {
 		slog.Warn("All new outbounds failed to load, keeping old outbounds",
-			"group", group, "failed_tags", newTags, "would_remove_tags", toRemove)
+			"isLantern", isLantern, "failed_tags", newTags, "would_remove_tags", toRemove)
 	}
 
-	if err := t.removeOutbounds(group, toRemove); errors.Is(err, errLibboxClosed) {
+	if err := t.removeOutbounds(toRemove, isLantern); errors.Is(err, errLibboxClosed) {
 		return err
 	} else if err != nil {
 		errs = append(errs, err)
 	}
-	if err := t.addOutbounds(group, newOpts); errors.Is(err, errLibboxClosed) {
+	if err := t.addOutbounds(list, isLantern); errors.Is(err, errLibboxClosed) {
 		return err
 	} else if err != nil {
 		errs = append(errs, err)
@@ -526,40 +531,26 @@ func (t *tunnel) updateOutbounds(group string, newOpts servers.Options) error {
 	return errors.Join(errs...)
 }
 
-func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], new servers.Options) servers.Options {
+func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], list servers.ServerList) servers.ServerList {
 	slog.Log(nil, rlog.LevelTrace, "Removing duplicate outbounds/endpoints")
-	deduped := servers.Options{
-		Outbounds:    []O.Outbound{},
-		Endpoints:    []O.Endpoint{},
-		Locations:    map[string]lcommon.ServerLocation{},
-		URLOverrides: new.URLOverrides,
-		Credentials:  new.Credentials,
-	}
+	var deduped []*servers.Server
 	var dropped []string
-	for _, out := range new.Outbounds {
-		if currOpts, exists := curr.Load(out.Tag); exists {
-			if outBytes, _ := json.MarshalContext(ctx, out); bytes.Equal(currOpts, outBytes) {
-				dropped = append(dropped, out.Tag)
+	for _, srv := range list.Servers {
+		if currOpts, exists := curr.Load(srv.Tag); exists {
+			if srvBytes, _ := json.MarshalContext(ctx, srv.Options); bytes.Equal(currOpts, srvBytes) {
+				dropped = append(dropped, srv.Tag)
 				continue
 			}
 		}
-		deduped.Outbounds = append(deduped.Outbounds, out)
-		deduped.Locations[out.Tag] = new.Locations[out.Tag]
-	}
-	for _, ep := range new.Endpoints {
-		if currOpts, exists := curr.Load(ep.Tag); exists {
-			if epBytes, _ := json.MarshalContext(ctx, ep); bytes.Equal(currOpts, epBytes) {
-				dropped = append(dropped, ep.Tag)
-				continue
-			}
-		}
-		deduped.Endpoints = append(deduped.Endpoints, ep)
-		deduped.Locations[ep.Tag] = new.Locations[ep.Tag]
+		deduped = append(deduped, srv)
 	}
 	if len(dropped) > 0 {
 		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", dropped)
 	}
-	return deduped
+	return servers.ServerList{
+		Servers:      deduped,
+		URLOverrides: list.URLOverrides,
+	}
 }
 
 func makeOutboundOptsMap(ctx context.Context, options string) *lsync.TypedMap[string, []byte] {

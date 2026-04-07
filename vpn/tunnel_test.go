@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	lcommon "github.com/getlantern/common"
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
 	O "github.com/sagernet/sing-box/option"
@@ -100,22 +99,19 @@ func TestRemoveDuplicates(t *testing.T) {
 	bEp1, _ := json.MarshalContext(ctx, ep1)
 	curr.Store(ep1.Tag, bEp1)
 
-	newOpts := servers.Options{
-		Outbounds: []O.Outbound{out1, out2},
-		Endpoints: []O.Endpoint{ep1},
-		Locations: map[string]lcommon.ServerLocation{
-			out1.Tag: {},
-			out2.Tag: {},
-			ep1.Tag:  {},
+	list := servers.ServerList{
+		Servers: []*servers.Server{
+			{Tag: out1.Tag, Type: out1.Type, Options: out1},
+			{Tag: out2.Tag, Type: out2.Type, Options: out2},
+			{Tag: ep1.Tag, Type: ep1.Type, Options: ep1},
 		},
 	}
 
-	result := removeDuplicates(ctx, &curr, newOpts)
+	result := removeDuplicates(ctx, &curr, list)
 
 	// out1 and ep1 are duplicates, only out2 should remain.
-	assert.Len(t, result.Outbounds, 1)
-	assert.Equal(t, "http-2", result.Outbounds[0].Tag)
-	assert.Empty(t, result.Endpoints)
+	assert.Len(t, result.Servers, 1)
+	assert.Equal(t, "http-2", result.Servers[0].Tag)
 }
 
 func TestRemoveDuplicates_AllNew(t *testing.T) {
@@ -125,25 +121,23 @@ func TestRemoveDuplicates_AllNew(t *testing.T) {
 	out1 := O.Outbound{Type: "http", Tag: "http-1", Options: &O.HTTPOutboundOptions{}}
 	out2 := O.Outbound{Type: "socks", Tag: "socks-1", Options: &O.SOCKSOutboundOptions{}}
 
-	newOpts := servers.Options{
-		Outbounds: []O.Outbound{out1, out2},
-		Locations: map[string]lcommon.ServerLocation{
-			out1.Tag: {},
-			out2.Tag: {},
+	list := servers.ServerList{
+		Servers: []*servers.Server{
+			{Tag: out1.Tag, Type: out1.Type, Options: out1},
+			{Tag: out2.Tag, Type: out2.Type, Options: out2},
 		},
 	}
 
-	result := removeDuplicates(ctx, &curr, newOpts)
-	assert.Len(t, result.Outbounds, 2)
+	result := removeDuplicates(ctx, &curr, list)
+	assert.Len(t, result.Servers, 2)
 }
 
 func TestRemoveDuplicates_Empty(t *testing.T) {
 	ctx := box.BaseContext()
 	var curr lsync.TypedMap[string, []byte]
 
-	result := removeDuplicates(ctx, &curr, servers.Options{})
-	assert.Empty(t, result.Outbounds)
-	assert.Empty(t, result.Endpoints)
+	result := removeDuplicates(ctx, &curr, servers.ServerList{})
+	assert.Empty(t, result.Servers)
 }
 
 func TestContextDone(t *testing.T) {

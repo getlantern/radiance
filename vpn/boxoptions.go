@@ -145,7 +145,7 @@ func baseOpts(basePath string) O.Options {
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
 				DefaultMode:        AutoSelectTag,
-				ModeList:           []string{servers.SGLantern, servers.SGUser, AutoSelectTag},
+				ModeList:           []string{servers.ModeLantern, servers.ModeUser, AutoSelectTag},
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{

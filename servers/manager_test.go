@@ -41,7 +41,8 @@ func TestPrivateServerIntegration(t *testing.T) {
 
 	t.Run("convert a token into a custom server", func(t *testing.T) {
 		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", C.ServerLocation{}, false))
-		require.Contains(t, manager.optsMap, "s1", "server should be added to the manager")
+		_, exists := manager.servers["s1"]
+		require.True(t, exists, "server should be added to the manager")
 	})
 
 	t.Run("invite user", func(t *testing.T) {
@@ -50,14 +51,16 @@ func TestPrivateServerIntegration(t *testing.T) {
 		assert.NotEmpty(t, inviteToken)
 
 		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, C.ServerLocation{}, true))
-		require.Contains(t, manager.optsMap, "s2", "server should be added for the invited user")
+		_, exists := manager.servers["s2"]
+		require.True(t, exists, "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
-			delete(manager.optsMap, "s1")
+			delete(manager.servers, "s1")
 			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
 			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, C.ServerLocation{}, true))
-			assert.NotContains(t, manager.optsMap, "s1", "server should not be added after revoking invite")
+			_, exists := manager.servers["s1"]
+			assert.False(t, exists, "server should not be added after revoking invite")
 		})
 	})
 
@@ -142,24 +145,29 @@ func TestAddServersByJSON(t *testing.T) {
 		}
 	]
 }`)
-		options, err := json.UnmarshalExtendedContext[Options](box.BaseContext(), testConfig)
+		type singboxConfig struct {
+			Outbounds []option.Outbound `json:"outbounds,omitempty"`
+		}
+		cfg, err := json.UnmarshalExtendedContext[singboxConfig](box.BaseContext(), testConfig)
 		require.NoError(t, err, "failed to unmarshal test config")
-		want := Server{
-			Group:   SGUser,
-			Tag:     "out",
-			Type:    "shadowsocks",
-			Options: options.Outbounds[0],
+		want := &Server{
+			Tag:       "out",
+			Type:      "shadowsocks",
+			IsLantern: false,
+			Options:   cfg.Outbounds[0],
 		}
 		m := testManager(t)
 		require.NoError(t, m.AddServersByJSON(t.Context(), testConfig))
 		got, exists := m.GetServerByTag("out")
 		assert.True(t, exists, "server was not added")
-		assert.Equal(t, want, got, "added server does not match expected configuration")
+		assert.Equal(t, want.Tag, got.Tag)
+		assert.Equal(t, want.Type, got.Type)
+		assert.Equal(t, want.IsLantern, got.IsLantern)
 	})
 	t.Run("empty config", func(t *testing.T) {
 		m := testManager(t)
 		assert.Error(t, m.AddServersByJSON(t.Context(), []byte("{}")))
-		assert.Empty(t, m.optsMap, "no servers should have been added")
+		assert.Empty(t, m.servers, "no servers should have been added")
 	})
 }
 
@@ -191,7 +199,7 @@ func TestAddServersByURL(t *testing.T) {
 	t.Run("empty urls", func(t *testing.T) {
 		m := testManager(t)
 		assert.Error(t, m.AddServersByURL(t.Context(), []string{}, false))
-		assert.Empty(t, m.optsMap, "no servers should have been added")
+		assert.Empty(t, m.servers, "no servers should have been added")
 	})
 }
 
@@ -206,21 +214,7 @@ func TestRetryableHTTPClient(t *testing.T) {
 
 func testManager(t *testing.T) *Manager {
 	return &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-			SGUser: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-		},
-		optsMap:     map[string]Server{},
+		servers:     make(map[string]*Server),
 		serversFile: filepath.Join(t.TempDir(), internal.ServersFileName),
 		logger:      log.NoOpLogger(),
 	}

@@ -426,12 +426,17 @@ func (s *localapi) serverSelectedHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *localapi) serverAutoSelectedHandler(w http.ResponseWriter, r *http.Request) {
-	selected, err := s.backend(r.Context()).CurrentAutoSelectedServer()
+	tag, err := s.backend(r.Context()).CurrentAutoSelectedServer()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, selected)
+	server, found := s.backend(r.Context()).GetServerByTag(tag)
+	if !found {
+		http.Error(w, "auto-selected server not found", http.StatusNotFound)
+		return
+	}
+	writeSingJSON(w, http.StatusOK, server)
 }
 
 func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *http.Request) {
@@ -477,7 +482,7 @@ func (s *localapi) serversHandler(w http.ResponseWriter, r *http.Request) {
 		writeSingJSON(w, http.StatusOK, server)
 		return
 	}
-	writeSingJSON(w, http.StatusOK, s.backend(r.Context()).Servers())
+	writeSingJSON(w, http.StatusOK, s.backend(r.Context()).AllServers())
 }
 
 func (s *localapi) serversAddHandler(w http.ResponseWriter, r *http.Request) {
@@ -486,7 +491,7 @@ func (s *localapi) serversAddHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).AddServers(req.Group, req.Options); err != nil {
+	if err := s.backend(r.Context()).AddServers(req.IsLantern, req.Servers); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
