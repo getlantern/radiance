@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -109,62 +108,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error: %v\n", err)
 	}
-}
-
-// checkInstalledVersion checks whether the currently installed binary at binPath
-// is already at the current version or newer. Returns nil if install should proceed,
-// or an error explaining why it should be skipped.
-func checkInstalledVersion() error {
-	out, err := exec.Command(binPath, "version").Output()
-	if err != nil {
-		// Not installed or can't run — proceed with install.
-		return nil
-	}
-	installed := strings.TrimSpace(string(out))
-	if installed == "" {
-		return nil
-	}
-	cmp, err := compareVersions(installed, common.Version)
-	if err != nil {
-		// Can't parse — proceed with install to be safe.
-		return nil
-	}
-	if cmp >= 0 {
-		return fmt.Errorf("version %s is already installed (>= %s), skipping install", installed, common.Version)
-	}
-	slog.Info("Upgrading", "from", installed, "to", common.Version)
-	return nil
-}
-
-// compareVersions compares two semver strings (major.minor.patch).
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
-func compareVersions(a, b string) (int, error) {
-	pa, err := parseVersion(a)
-	if err != nil {
-		return 0, err
-	}
-	pb, err := parseVersion(b)
-	if err != nil {
-		return 0, err
-	}
-	for i := range 3 {
-		if pa[i] < pb[i] {
-			return -1, nil
-		}
-		if pa[i] > pb[i] {
-			return 1, nil
-		}
-	}
-	return 0, nil
-}
-
-func parseVersion(v string) ([3]int, error) {
-	var parts [3]int
-	n, err := fmt.Sscanf(v, "%d.%d.%d", &parts[0], &parts[1], &parts[2])
-	if err != nil || n != 3 {
-		return parts, fmt.Errorf("invalid version %q", v)
-	}
-	return parts, nil
 }
 
 func withDefault(val, def string) string {

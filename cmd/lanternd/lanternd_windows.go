@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
 )
 
@@ -31,17 +32,22 @@ func init() {
 }
 
 func install(dataPath, logPath, logLevel string) error {
-	if err := checkInstalledVersion(); err != nil {
-		return err
-	}
 	dataPath = os.ExpandEnv(dataPath)
 	logPath = os.ExpandEnv(logPath)
 
-	slog.Info("Installing Windows service..")
+	slog.Info("Installing Windows service..", "version", common.Version)
+
+	// Remove any existing service so we can recreate it cleanly.
+	// Errors are expected on first install when no service exists yet.
+	if err := uninstall(); err != nil {
+		slog.Debug("No existing service to remove (expected on first install)", "error", err)
+	}
+
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("failed to connect to Windows service manager: %w", err)
 	}
+	defer m.Disconnect()
 
 	exe, err := copyBin()
 	if err != nil {

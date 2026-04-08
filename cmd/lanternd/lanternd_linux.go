@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"text/template"
+
+	"github.com/getlantern/radiance/common"
 )
 
 const (
@@ -40,9 +42,14 @@ WantedBy=multi-user.target
 `))
 
 func install(dataPath, logPath, logLevel string) error {
-	if err := checkInstalledVersion(); err != nil {
-		return err
+	slog.Info("Installing systemd service..", "version", common.Version)
+
+	// Remove any existing service so we can recreate it cleanly.
+	// Errors are expected on first install when no service exists yet.
+	if err := uninstall(); err != nil {
+		slog.Debug("No existing service to remove (expected on first install)", "error", err)
 	}
+
 	exe, err := copyBin()
 	if err != nil {
 		return err
