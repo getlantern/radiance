@@ -21,9 +21,10 @@ import (
 )
 
 type Client struct {
-	http     *http.Client
-	localapi *localapi
-	mu       sync.RWMutex
+	http      *http.Client
+	localapi  *localapi
+	localOnly bool // when true, serve all requests in-process; never attempt the IPC socket
+	mu        sync.RWMutex
 }
 
 func NewClient(ctx context.Context, opts backend.Options) (*Client, error) {
@@ -37,8 +38,21 @@ func NewClient(ctx context.Context, opts backend.Options) (*Client, error) {
 	return c, nil
 }
 
+// NewLoopbackClient creates a Client that serves all requests in-process
+// through the given LocalBackend without attempting IPC socket connections.
+// The backend is NOT owned by this client — Close will not shut it down.
+func NewLoopbackClient(b *backend.LocalBackend) *Client {
+	c := newClient()
+	c.localapi = newLocalAPI(b, false)
+	c.localOnly = true
+	return c
+}
+
 // Close releases resources held by the client, including any local backend.
 func (c *Client) Close() {
+	if c.localOnly {
+		return
+	}
 	c.stopLocal()
 	c.http.CloseIdleConnections()
 }
@@ -75,6 +89,10 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+
+	if c.localOnly {
+		return c.doLocal(req)
 	}
 
 	resp, err := c.http.Do(req)
@@ -192,6 +210,9 @@ func (c *Client) TailLogs(ctx context.Context, handler func(rlog.LogEntry)) erro
 // sseStream connects to an SSE endpoint and calls handler for each event data line.
 // Blocks until ctx is cancelled or the connection is closed.
 func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]byte)) error {
+	if c.localOnly {
+		return ErrIPCNotRunning
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("create SSE request: %w", err)
