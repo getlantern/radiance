@@ -288,7 +288,9 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 			opts.Route.OverrideAndroidVPN = true
 			kv := kernelVersion()
 			slog.Debug("detected kernel version", "kernel", kv)
-			if kernelBelow(kv, minAndroidSystemStackKernel) {
+			if kv == "" {
+				slog.Warn("kernel version unknown, keeping default TUN stack")
+			} else if kernelBelow(kv, minAndroidSystemStackKernel) {
 				opts.Inbounds[0].Options.(*O.TunInboundOptions).Stack = "gvisor"
 				slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
 			}
@@ -543,18 +545,42 @@ func groupRule(group string) O.Rule {
 
 // kernelBelow reports whether the kernel version string v is below min.
 // Only the first two components (major.minor) are compared, e.g. "5.10" or "4.19.0-android13".
+// Returns false if either version string cannot be parsed.
 func kernelBelow(v, min string) bool {
-	maj := func(s string) (int, int) {
+	parseKernelMajorMinor := func(s string) (int, int, bool) {
 		p := strings.SplitN(s, ".", 3)
 		if len(p) < 2 {
-			return 0, 0
+			return 0, 0, false
 		}
-		major, _ := strconv.Atoi(p[0])
-		minor, _ := strconv.Atoi(p[1])
-		return major, minor
+		// Strip non-numeric suffixes (e.g. "19" from "19-android13")
+		numericPrefix := func(part string) string {
+			for i, r := range part {
+				if r < '0' || r > '9' {
+					return part[:i]
+				}
+			}
+			return part
+		}
+		majorStr := numericPrefix(p[0])
+		minorStr := numericPrefix(p[1])
+		if majorStr == "" || minorStr == "" {
+			return 0, 0, false
+		}
+		major, err := strconv.Atoi(majorStr)
+		if err != nil {
+			return 0, 0, false
+		}
+		minor, err := strconv.Atoi(minorStr)
+		if err != nil {
+			return 0, 0, false
+		}
+		return major, minor, true
 	}
-	vMaj, vMin := maj(v)
-	mMaj, mMin := maj(min)
+	vMaj, vMin, vok := parseKernelMajorMinor(v)
+	mMaj, mMin, mok := parseKernelMajorMinor(min)
+	if !vok || !mok {
+		return false
+	}
 	return vMaj < mMaj || (vMaj == mMaj && vMin < mMin)
 }
 
