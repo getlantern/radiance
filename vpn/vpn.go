@@ -30,6 +30,8 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 
+	C "github.com/getlantern/common"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
@@ -42,7 +44,21 @@ import (
 
 const (
 	tracerName = "github.com/getlantern/radiance/vpn"
+
+	// locationFetchTimeout is how long to wait for a config re-fetch when
+	// the user selects a location without a pre-assigned outbound.
+	locationFetchTimeout = 15 * time.Second
 )
+
+// SetPreferredLocationFunc is called when the user selects a location that
+// doesn't have a pre-assigned outbound. It triggers a config re-fetch with
+// PreferredServerLocation so the server assigns a proxy for that region.
+// Set by the Radiance instance during initialization.
+var SetPreferredLocationFunc func(country, city string)
+
+// LookupLocationFunc resolves a location-only tag (e.g. "frankfurt-de") to
+// its full ServerLocation details. Set by the Radiance instance.
+var LookupLocationFunc func(tag string) (C.ServerLocation, bool)
 
 func init() {
 	forwardToTunnel := func(action func(ctx context.Context) error, desc string) {
@@ -199,6 +215,9 @@ func Disconnect() error {
 }
 
 // SelectServer selects the specified server for the tunnel. The tunnel must already be open.
+// If the tag refers to a location without a pre-assigned outbound (e.g. "frankfurt-de"),
+// it triggers a config re-fetch with PreferredServerLocation and waits for the new
+// outbound to arrive before selecting it.
 func SelectServer(ctx context.Context, group, tag string) error {
 	if !isOpen(ctx) {
 		return errors.New("tunnel is not open")
@@ -212,11 +231,85 @@ func SelectServer(ctx context.Context, group, tag string) error {
 		return nil
 	}
 	slog.Info("Selecting server", "group", group, "tag", tag)
-	if err := ipc.SelectOutbound(ctx, group, tag); err != nil {
-		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
-		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
+	if err := ipc.SelectOutbound(ctx, group, tag); err == nil {
+		return nil
 	}
-	return nil
+
+	// Outbound not found — check if this is a location-only tag (e.g. "frankfurt-de")
+	// that needs a config re-fetch to get an outbound assigned.
+	loc, ok := findLocationByTag(tag)
+	if !ok || SetPreferredLocationFunc == nil {
+		slog.Error("Failed to select server", "group", group, "tag", tag)
+		return fmt.Errorf("outbound %q not found in group %q and no matching location", tag, group)
+	}
+
+	slog.Info("Location has no outbound, requesting config with preferred location",
+		"tag", tag, "city", loc.City, "country_code", loc.CountryCode)
+
+	// Subscribe to server updates BEFORE triggering the fetch to avoid races.
+	outboundTag := make(chan string, 1)
+	sub := events.Subscribe(func(e servers.ServersUpdatedEvent) {
+		if e.Group != servers.ServerGroup(group) || e.Options == nil {
+			return
+		}
+		// Look for a new outbound whose location matches the requested city/country.
+		for outTag, outLoc := range e.Options.Locations {
+			if outLoc.City == loc.City && outLoc.CountryCode == loc.CountryCode {
+				// Only match actual outbound tags, not location-only keys.
+				if isOutboundTag(outTag, e.Options) {
+					select {
+					case outboundTag <- outTag:
+					default:
+					}
+					return
+				}
+			}
+		}
+	})
+	defer sub.Unsubscribe()
+
+	// Trigger the config re-fetch with the preferred location.
+	SetPreferredLocationFunc(loc.Country, loc.City)
+
+	// Wait for the new outbound to arrive.
+	select {
+	case newTag := <-outboundTag:
+		slog.Info("Received outbound for preferred location, selecting",
+			"tag", newTag, "city", loc.City, "country_code", loc.CountryCode)
+		if err := ipc.SelectOutbound(ctx, group, newTag); err != nil {
+			slog.Error("Failed to select new outbound", "group", group, "tag", newTag, "error", err)
+			return fmt.Errorf("failed to select server %s/%s: %w", group, newTag, err)
+		}
+		return nil
+	case <-time.After(locationFetchTimeout):
+		slog.Error("Timed out waiting for outbound for preferred location",
+			"tag", tag, "city", loc.City, "country_code", loc.CountryCode)
+		return fmt.Errorf("timed out waiting for outbound for location %s", tag)
+	}
+}
+
+// findLocationByTag looks up a location by its tag via the registered callback.
+func findLocationByTag(tag string) (C.ServerLocation, bool) {
+	if LookupLocationFunc == nil {
+		return C.ServerLocation{}, false
+	}
+	return LookupLocationFunc(tag)
+}
+
+// isOutboundTag returns true if the tag corresponds to an actual outbound or endpoint,
+// not a location-only entry (like "frankfurt-de").
+func isOutboundTag(tag string, opts *servers.Options) bool {
+	for _, ob := range opts.Outbounds {
+		if ob.Tag == tag {
+			return true
+		}
+	}
+	for _, ep := range opts.Endpoints {
+		if ep.Tag == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // Status represents the current status of the tunnel, including whether it is open, the selected

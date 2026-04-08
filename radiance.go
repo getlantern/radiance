@@ -172,6 +172,20 @@ func NewRadiance(opts Options) (*Radiance, error) {
 		}
 	})
 	r.confHandler = config.NewConfigHandler(cOpts)
+
+	// Wire up VPN location callbacks so SelectServer can trigger a config
+	// re-fetch when the user picks a location without a pre-assigned outbound.
+	vpn.SetPreferredLocationFunc = func(country, city string) {
+		r.confHandler.SetPreferredServerLocation(country, city)
+	}
+	vpn.LookupLocationFunc = func(tag string) (lcommon.ServerLocation, bool) {
+		svr, ok := svrMgr.GetServerByTag(tag)
+		if ok && svr.Location.City != "" {
+			return svr.Location, true
+		}
+		return lcommon.ServerLocation{}, false
+	}
+
 	// Register AFTER NewConfigHandler so the disk-load event is already
 	// consumed. Runs whenever a new config is applied to provide continuous
 	// bandit callback data even when the VPN tunnel is not active.
