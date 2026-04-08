@@ -531,6 +531,15 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 		removedTags = append(removedTags, srv.Tag)
 	}
 	if len(removedTags) > 0 {
+		var selected servers.Server
+		if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil {
+			if slices.Contains(removedTags, selected.Tag) {
+				// clear selected server from settings if it's being removed
+				if err := settings.Set(settings.SelectedServerKey, nil); err != nil {
+					slog.Warn("Failed to clear selected server from settings after it was removed", "error", err)
+				}
+			}
+		}
 		if err := r.vpnClient.RemoveOutbounds(removedTags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 			return fmt.Errorf("failed to remove outbounds: %w", err)
 		}
