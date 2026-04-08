@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,11 @@ const (
 
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
+	// minAndroidSystemStackKernel is the minimum Linux kernel version (major.minor) required
+	// for the system TUN stack to work reliably on Android only. Devices running a
+	// kernel below this version fall back to gvisor. This constant has no effect on
+	// other platforms.
+	minAndroidSystemStackKernel = "5.10"
 )
 
 // this is the base options that is need for everything to work correctly. this should not be
@@ -276,10 +282,16 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 		}
 		opts.Inbounds = []O.Inbound{socksIn}
 	} else {
-		// platform-specific overrides
+
 		switch common.Platform {
 		case "android":
 			opts.Route.OverrideAndroidVPN = true
+			kv := kernelVersion()
+			slog.Debug("detected kernel version", "kernel", kv)
+			if kernelBelow(kv, minAndroidSystemStackKernel) {
+				opts.Inbounds[0].Options.(*O.TunInboundOptions).Stack = "gvisor"
+				slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
+			}
 			slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
 		case "linux":
 			opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
@@ -529,6 +541,23 @@ func groupRule(group string) O.Rule {
 	}
 }
 
+// kernelBelow reports whether the kernel version string v is below min.
+// Only the first two components (major.minor) are compared, e.g. "5.10" or "4.19.0-android13".
+func kernelBelow(v, min string) bool {
+	maj := func(s string) (int, int) {
+		p := strings.SplitN(s, ".", 3)
+		if len(p) < 2 {
+			return 0, 0
+		}
+		major, _ := strconv.Atoi(p[0])
+		minor, _ := strconv.Atoi(p[1])
+		return major, minor
+	}
+	vMaj, vMin := maj(v)
+	mMaj, mMin := maj(min)
+	return vMaj < mMaj || (vMaj == mMaj && vMin < mMin)
+}
+
 func catchAllBlockerRule() O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
@@ -540,7 +569,6 @@ func catchAllBlockerRule() O.Rule {
 		},
 	}
 }
-
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
 	var serverOpts any
