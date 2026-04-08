@@ -317,39 +317,63 @@ func (c *childProcess) HandleCrash(err error) {
 }
 
 // babysit runs the daemon as a child process and monitors it. If the child exits unexpectedly
-// (crash, panic, etc.), the parent immediately cleans up any stale VPN network state so the OS
-// network remains usable without requiring a reboot or manual intervention.
+// (crash, panic, etc.), the parent immediately cleans up any stale VPN network state and
+// automatically restarts the child process with exponential backoff.
 //
 // Graceful shutdown is signaled by closing the child's stdin pipe — this works cross-platform,
 // including inside a Windows service where there is no console for signal delivery.
 func babysit(args []string, dataPath, logPath, logLevel string) error {
-	child, err := spawnChild(args, dataPath, logPath, logLevel)
-	if err != nil {
-		return err
-	}
-	child.logger.Info("Monitoring daemon process")
-
-	// On termination signal, close the child's stdin pipe to trigger graceful shutdown.
+	// On termination signal, request graceful shutdown of the current child.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		child.RequestShutdown()
-	}()
+	stopping := false
 
-	err = <-child.Done()
-	signal.Stop(sigCh)
+	const resetAfter = 2 * time.Minute // reset backoff if child ran longer than this
+	bo := common.NewBackoff(60 * time.Second)
 
-	if err != nil {
-		child.HandleCrash(err)
+	for {
+		child, err := spawnChild(args, dataPath, logPath, logLevel)
+		if err != nil {
+			if stopping {
+				return nil
+			}
+			return err
+		}
+		child.logger.Info("Monitoring daemon process")
+		startedAt := time.Now()
+
+		// Wait for either a termination signal or child exit.
+		select {
+		case sig := <-sigCh:
+			stopping = true
+			child.logger.Info("Received signal, shutting down child", "signal", sig)
+			child.RequestShutdown()
+			err = child.WaitOrKill(15 * time.Second)
+		case err = <-child.Done():
+		}
+
+		if stopping {
+			signal.Stop(sigCh)
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				os.Exit(exitErr.ExitCode())
+			}
+			return err
+		}
+
+		// Unexpected exit — clean up and restart.
+		if err != nil {
+			child.HandleCrash(err)
+		}
+
+		// Reset backoff if the child ran for a while (i.e. it wasn't a fast crash loop).
+		if time.Since(startedAt) > resetAfter {
+			bo.Reset()
+		}
+
+		child.logger.Info("Restarting child process")
+		bo.Wait(context.Background())
 	}
-
-	// Propagate the child's exit code.
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		os.Exit(exitErr.ExitCode())
-	}
-	return err
 }
 
 func runDaemon(ctx context.Context, dataPath, logPath, logLevel string) error {
