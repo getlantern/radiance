@@ -219,6 +219,21 @@ func (m *Manager) getServerByTagLocked(tag string) (Server, bool) {
 	return s, true
 }
 
+// GetLocationByTag looks up a location by tag from the Locations map (which
+// includes both outbound locations and server-only locations like "frankfurt-de").
+// Unlike GetServerByTag, this finds location-only entries that don't have outbounds.
+func (m *Manager) GetLocationByTag(tag string) (C.ServerLocation, bool) {
+	m.access.RLock()
+	defer m.access.RUnlock()
+	if loc, ok := m.servers[SGLantern].Locations[tag]; ok {
+		return loc, true
+	}
+	if loc, ok := m.servers[SGUser].Locations[tag]; ok {
+		return loc, true
+	}
+	return C.ServerLocation{}, false
+}
+
 // ServersJSON returns the current server configurations as pre-marshalled JSON.
 // Safe to call from CGo callback stacks: the work runs on a dedicated Go goroutine
 // (via [common.RunOffCgoStack]) so pointer-rich sing-box types never touch the C stack.
