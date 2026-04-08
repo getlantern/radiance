@@ -511,11 +511,11 @@ func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
 	return r.srvManager.GetServerByTag(tag)
 }
 
-func (r *LocalBackend) AddServers(isLantern bool, list servers.ServerList) error {
-	if err := r.srvManager.AddServers(isLantern, list, true); err != nil {
+func (r *LocalBackend) AddServers(list servers.ServerList) error {
+	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("failed to add servers to ServerManager: %w", err)
 	}
-	if err := r.vpnClient.AddOutbounds(list, isLantern); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to add outbounds to VPN client: %w", err)
 	}
 	return nil
@@ -526,22 +526,13 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to remove servers from ServerManager: %w", err)
 	}
-	var lanternTags, userTags []string
+	removedTags := make([]string, 0, len(removed))
 	for _, srv := range removed {
-		if srv.IsLantern {
-			lanternTags = append(lanternTags, srv.Tag)
-		} else {
-			userTags = append(userTags, srv.Tag)
-		}
+		removedTags = append(removedTags, srv.Tag)
 	}
-	if len(lanternTags) > 0 {
-		if err := r.vpnClient.RemoveOutbounds(lanternTags, true); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-			return fmt.Errorf("failed to remove lantern outbounds: %w", err)
-		}
-	}
-	if len(userTags) > 0 {
-		if err := r.vpnClient.RemoveOutbounds(userTags, false); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-			return fmt.Errorf("failed to remove user outbounds: %w", err)
+	if len(removedTags) > 0 {
+		if err := r.vpnClient.RemoveOutbounds(removedTags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			return fmt.Errorf("failed to remove outbounds: %w", err)
 		}
 	}
 	return nil
@@ -551,7 +542,7 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 	if err := r.srvManager.SetServers(list, isLantern); err != nil {
 		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
 	}
-	err := r.vpnClient.UpdateOutbounds(list, isLantern)
+	err := r.vpnClient.UpdateOutbounds(list)
 	if err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("Failed to update VPN outbounds after config change", "error", err)
 	}

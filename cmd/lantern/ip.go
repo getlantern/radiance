@@ -59,6 +59,9 @@ func getPublicIP(ctx context.Context) (string, error) {
 	}
 	ip := result.IP
 	addr, ok := netip.AddrFromSlice(ip)
+	if ok {
+		addr = addr.Unmap() // normalize IPv4-mapped IPv6 to IPv4
+	}
 	if ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() || (ok && fakeIPRange.Contains(addr)) {
 		return "", fmt.Errorf("detected IP is not a valid public IP: %s", ip.String())
 	}

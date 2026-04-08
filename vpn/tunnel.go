@@ -291,7 +291,7 @@ func (t *tunnel) setStatus(status VPNStatus, err error) {
 
 var errLibboxClosed = errors.New("libbox closed")
 
-func (t *tunnel) addOutbounds(list servers.ServerList, isLantern bool) (err error) {
+func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -309,26 +309,32 @@ func (t *tunnel) addOutbounds(list servers.ServerList, isLantern bool) (err erro
 	router := service.FromContext[adapter.Router](ctx)
 
 	var errs []error
-	if isLantern && t.clientContextTracker != nil {
+	if t.clientContextTracker != nil {
 		// preemptively merge the new lantern tags into the clientContextInjector match bounds to
 		// capture any new connections before finished adding the servers.
-		if tags := list.Tags(); len(tags) > 0 {
+		lanternTags := make([]string, 0, len(newList.Servers))
+		for _, srv := range newList.Servers {
+			if srv.IsLantern {
+				lanternTags = append(lanternTags, srv.Tag)
+			}
+		}
+		if len(lanternTags) > 0 {
 			slog.Log(nil, rlog.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
 			matchBounds := t.clientContextTracker.MatchBounds()
-			matchBounds.Outbound = append(matchBounds.Outbound, tags...)
+			matchBounds.Outbound = append(matchBounds.Outbound, lanternTags...)
 			t.clientContextTracker.SetBounds(matchBounds)
 		}
 		defer func() {
-			if !errors.Is(err, errLibboxClosed) {
-				// Rebuild bounds from the full set of lantern tags currently in the
-				// ManualSelectTag group, rather than just the tags from this call.
-				mb := t.clientContextTracker.MatchBounds()
-				mb.Outbound = append(mb.Outbound, list.Tags()...)
-				// Deduplicate: the preemptive merge above may have already added these tags.
-				slices.Sort(mb.Outbound)
-				mb.Outbound = slices.Compact(mb.Outbound)
-				t.clientContextTracker.SetBounds(mb)
+			if errors.Is(err, errLibboxClosed) {
+				return
 			}
+			// Remove any lantern tags that failed to load from the match bounds.
+			mb := t.clientContextTracker.MatchBounds()
+			mb.Outbound = slices.DeleteFunc(mb.Outbound, func(tag string) bool {
+				_, loaded := t.optsMap.Load(tag)
+				return slices.Contains(lanternTags, tag) && !loaded
+			})
+			t.clientContextTracker.SetBounds(mb)
 		}()
 	}
 
@@ -352,7 +358,6 @@ func (t *tunnel) addOutbounds(list servers.ServerList, isLantern bool) (err erro
 			slog.Warn("Failed to load outbound",
 				"tag", outbound.Tag,
 				"type", outbound.Type,
-				"isLantern", isLantern,
 				"error", err,
 			)
 			errs = append(errs, err)
@@ -383,7 +388,6 @@ func (t *tunnel) addOutbounds(list servers.ServerList, isLantern bool) (err erro
 			slog.Warn("Failed to load endpoint",
 				"tag", endpoint.Tag,
 				"type", endpoint.Type,
-				"isLantern", isLantern,
 				"error", err,
 			)
 			errs = append(errs, err)
@@ -416,7 +420,7 @@ func (t *tunnel) addOutbounds(list servers.ServerList, isLantern bool) (err erro
 	return errors.Join(errs...)
 }
 
-func (t *tunnel) removeOutbounds(tags []string, isLantern bool) error {
+func (t *tunnel) removeOutbounds(tags []string) error {
 	var (
 		mutGrpMgr = t.mutGrpMgr
 		removed   []string
@@ -443,21 +447,18 @@ func (t *tunnel) removeOutbounds(tags []string, isLantern bool) error {
 			removed = append(removed, tag)
 		}
 	}
-	if t.clientContextTracker != nil && isLantern {
+	if t.clientContextTracker != nil && len(removed) > 0 {
 		mb := t.clientContextTracker.MatchBounds()
 		mb.Outbound = slices.DeleteFunc(mb.Outbound, func(s string) bool {
 			return slices.Contains(removed, s)
 		})
-		t.clientContextTracker.SetBounds(clientcontext.MatchBounds{
-			Inbound:  []string{"any"},
-			Outbound: mb.Outbound,
-		})
+		t.clientContextTracker.SetBounds(mb)
 	}
 	slog.Debug("Removed servers", "removed", len(removed))
 	return errors.Join(errs...)
 }
 
-func (t *tunnel) updateOutbounds(list servers.ServerList, isLantern bool) error {
+func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	var errs []error
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
@@ -490,7 +491,7 @@ func (t *tunnel) updateOutbounds(list servers.ServerList, isLantern bool) error 
 	// Add new outbounds first, before removing old ones. If all new
 	// outbounds fail to load (e.g. invalid config), we keep the old
 	// working outbounds to maintain connectivity.
-	addErr := t.addOutbounds(list, isLantern)
+	addErr := t.addOutbounds(list)
 	if errors.Is(addErr, errLibboxClosed) {
 		return addErr
 	}
@@ -498,7 +499,7 @@ func (t *tunnel) updateOutbounds(list servers.ServerList, isLantern bool) error 
 		errs = append(errs, addErr)
 	}
 
-	// Check if any new outbound actually loaded into the group.
+	// Check if any new outbound actually loaded
 	hasNewOutbound := false
 	for _, tag := range newTags {
 		if slices.Contains(selector.All(), tag) {
@@ -508,22 +509,22 @@ func (t *tunnel) updateOutbounds(list servers.ServerList, isLantern bool) error 
 	}
 
 	if hasNewOutbound {
-		if err := t.removeOutbounds(toRemove, isLantern); errors.Is(err, errLibboxClosed) {
+		if err := t.removeOutbounds(toRemove); errors.Is(err, errLibboxClosed) {
 			return err
 		} else if err != nil {
 			errs = append(errs, err)
 		}
 	} else {
 		slog.Warn("All new outbounds failed to load, keeping old outbounds",
-			"isLantern", isLantern, "failed_tags", newTags, "would_remove_tags", toRemove)
+			"failed_tags", newTags, "would_remove_tags", toRemove)
 	}
 
-	if err := t.removeOutbounds(toRemove, isLantern); errors.Is(err, errLibboxClosed) {
+	if err := t.removeOutbounds(toRemove); errors.Is(err, errLibboxClosed) {
 		return err
 	} else if err != nil {
 		errs = append(errs, err)
 	}
-	if err := t.addOutbounds(list, isLantern); errors.Is(err, errLibboxClosed) {
+	if err := t.addOutbounds(list); errors.Is(err, errLibboxClosed) {
 		return err
 	} else if err != nil {
 		errs = append(errs, err)

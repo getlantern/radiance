@@ -198,8 +198,8 @@ func (c *Client) GetServerByTag(ctx context.Context, tag string) (*servers.Serve
 }
 
 // AddServers adds servers.
-func (c *Client) AddServers(ctx context.Context, isLantern bool, list servers.ServerList) error {
-	req := AddServersRequest{IsLantern: isLantern, Servers: list}
+func (c *Client) AddServers(ctx context.Context, list servers.ServerList) error {
+	req := AddServersRequest{Servers: list}
 	body, err := sjson.MarshalContext(boxCtx, req)
 	if err != nil {
 		return fmt.Errorf("marshal add servers request: %w", err)

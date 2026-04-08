@@ -262,8 +262,9 @@ func (m *Manager) SetServers(list ServerList, isLantern bool) error {
 }
 
 // AddServers adds new servers. If force is true, it will overwrite any
-// existing servers with the same tags.
-func (m *Manager) AddServers(isLantern bool, list ServerList, force bool) error {
+// existing servers with the same tags. If force is false, it returns an error
+// if any of the tags already exist.
+func (m *Manager) AddServers(list ServerList, force bool) error {
 	if len(list.Servers) == 0 {
 		return nil
 	}
@@ -271,13 +272,14 @@ func (m *Manager) AddServers(isLantern bool, list ServerList, force bool) error 
 	m.access.Lock()
 	defer m.access.Unlock()
 
-	for _, srv := range list.Servers {
-		srv.IsLantern = isLantern
-		if !force {
+	if !force {
+		for _, srv := range list.Servers {
 			if _, exists := m.servers[srv.Tag]; exists {
-				continue
+				return fmt.Errorf("server %q already exists", srv.Tag)
 			}
 		}
+	}
+	for _, srv := range list.Servers {
 		m.servers[srv.Tag] = srv
 	}
 	return m.saveServers()
@@ -435,7 +437,7 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 	}
 	slog.Info("Adding private server from remote manager", "tag", tag, "ip", ip, "port", port, "location", loc, "is_joined", joined)
 	list := ServerList{Servers: []*Server{srv}}
-	return m.AddServers(false, list, true)
+	return m.AddServers(list, false)
 }
 
 // InviteToPrivateServer invites another user to the server manager instance and returns a connection
@@ -497,14 +499,20 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) ([]string
 	servers := make([]*Server, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
 	tags := make([]string, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
 	for _, out := range cfg.Outbounds {
+		if out.Tag == "" {
+			return nil, traces.RecordError(ctx, fmt.Errorf("outbound missing tag"))
+		}
 		servers = append(servers, &Server{Tag: out.Tag, Type: out.Type, Options: out})
 		tags = append(tags, out.Tag)
 	}
 	for _, ep := range cfg.Endpoints {
+		if ep.Tag == "" {
+			return nil, traces.RecordError(ctx, fmt.Errorf("endpoint missing tag"))
+		}
 		servers = append(servers, &Server{Tag: ep.Tag, Type: ep.Type, Options: ep})
 		tags = append(tags, ep.Tag)
 	}
-	if err := m.AddServers(false, ServerList{Servers: servers}, true); err != nil {
+	if err := m.AddServers(ServerList{Servers: servers}, false); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
 	return tags, nil

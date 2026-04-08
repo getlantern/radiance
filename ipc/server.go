@@ -491,7 +491,7 @@ func (s *localapi) serversAddHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).AddServers(req.IsLantern, req.Servers); err != nil {
+	if err := s.backend(r.Context()).AddServers(req.Servers); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -279,31 +279,31 @@ func (c *VPNClient) SelectServer(tag string) error {
 	return nil
 }
 
-func (c *VPNClient) UpdateOutbounds(list servers.ServerList, isLantern bool) error {
+func (c *VPNClient) UpdateOutbounds(list servers.ServerList) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return ErrTunnelNotConnected
 	}
-	return c.tunnel.updateOutbounds(list, isLantern)
+	return c.tunnel.updateOutbounds(list)
 }
 
-func (c *VPNClient) AddOutbounds(list servers.ServerList, isLantern bool) error {
+func (c *VPNClient) AddOutbounds(list servers.ServerList) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return ErrTunnelNotConnected
 	}
-	return c.tunnel.addOutbounds(list, isLantern)
+	return c.tunnel.addOutbounds(list)
 }
 
-func (c *VPNClient) RemoveOutbounds(tags []string, isLantern bool) error {
+func (c *VPNClient) RemoveOutbounds(tags []string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return ErrTunnelNotConnected
 	}
-	return c.tunnel.removeOutbounds(tags, isLantern)
+	return c.tunnel.removeOutbounds(tags)
 }
 
 // Connections returns a list of all connections, both active and recently closed. A non-nil error

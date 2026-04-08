@@ -41,8 +41,7 @@ type JSONConfigRequest struct {
 }
 
 type AddServersRequest struct {
-	IsLantern bool               `json:"isLantern"`
-	Servers   servers.ServerList `json:"servers"`
+	Servers servers.ServerList `json:"servers"`
 }
 
 type RemoveServersRequest struct {

@@ -297,7 +297,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	// add smart routing and ad block rules
 	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
 	if len(smartRoutingRules) > 0 {
-		slog.Debug("Adding smart-routing rules")
+		slog.Info("Adding smart-routing rules")
 		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
 		if len(outbounds) == 0 || len(rules) == 0 || len(rulesets) == 0 {
 			slog.Warn("No valid smart-routing rules found after normalization, skipping smart-routing configuration")
@@ -309,7 +309,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 	adBlockRules := normalizeAdBlockRules(bOptions.AdBlock)
 	if len(adBlockRules) > 0 {
-		slog.Debug("Adding ad-block rules")
+		slog.Info("Adding ad-block rules")
 		rule, rulesets := bOptions.AdBlock.ToOptions()
 		if len(rulesets) == 0 {
 			slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
