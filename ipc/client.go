@@ -180,6 +180,13 @@ func (c *Client) Servers(ctx context.Context) ([]*servers.Server, error) {
 	return sjson.UnmarshalExtendedContext[[]*servers.Server](boxCtx, data)
 }
 
+// ServersJSON returns all servers as raw JSON bytes.
+// This is useful when the caller needs to forward the JSON without re-marshaling,
+// since the server options require sing-box's context-aware JSON encoder.
+func (c *Client) ServersJSON(ctx context.Context) ([]byte, error) {
+	return c.do(ctx, http.MethodGet, serversEndpoint, nil)
+}
+
 // GetServerByTag returns the server with the given tag.
 func (c *Client) GetServerByTag(ctx context.Context, tag string) (*servers.Server, bool, error) {
 	q := url.Values{"tag": {tag}}
@@ -195,6 +202,19 @@ func (c *Client) GetServerByTag(ctx context.Context, tag string) (*servers.Serve
 		return nil, false, err
 	}
 	return server, true, nil
+}
+
+// GetServerByTagJSON returns the server with the given tag as raw JSON bytes.
+func (c *Client) GetServerByTagJSON(ctx context.Context, tag string) ([]byte, bool, error) {
+	q := url.Values{"tag": {tag}}
+	data, err := c.do(ctx, http.MethodGet, serversEndpoint+"?"+q.Encode(), nil)
+	if err != nil {
+		if IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 // AddServers adds servers.
