@@ -74,8 +74,7 @@ type ConfigHandler struct {
 	pollInterval  time.Duration
 	configPath    string
 	wgKeyPath     string
-	configMu      sync.RWMutex
-	startOnce     sync.Once
+	startOnce sync.Once
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
@@ -198,10 +197,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	}
 	cleanTags(&confResp)
 
-	if err = setWireGuardKeyInOptions(confResp.Options.Endpoints, privateKey); err != nil {
-		ch.logger.Error("failed to replace private key", "error", err)
-		return fmt.Errorf("setting wireguard private key: %w", err)
-	}
+	setWireGuardKeyInOptions(confResp.Options.Endpoints, privateKey)
 	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&confResp); err != nil {
 		ch.logger.Error("failed to set config", "error", err)
@@ -243,7 +239,7 @@ func cleanTags(cfg *C.ConfigResponse) {
 	cfg.OutboundLocations = nlocs
 }
 
-func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Key) error {
+func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Key) {
 	// Requires privilege and cannot conflict with existing system interfaces
 	// System tries to use system env; for mobile we need to tun device
 	system := !(common.IsAndroid() || common.IsIOS() || common.IsMacOS())
@@ -258,7 +254,6 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 		default:
 		}
 	}
-	return nil
 }
 
 // fetchLoop fetches the configuration periodically. It uses the server's

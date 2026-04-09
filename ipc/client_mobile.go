@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,18 +68,9 @@ func (c *Client) stopLocal() {
 // body needs to be marshaled using sing/json, it should be pre-marshaled to []byte before passing
 // to do. do returns an error if the response status is >= 400.
 func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]byte, error) {
-	var bodyReader io.Reader
-	if body != nil {
-		switch body := body.(type) {
-		case []byte:
-			bodyReader = bytes.NewReader(body)
-		default:
-			data, err := json.Marshal(body)
-			if err != nil {
-				return nil, fmt.Errorf("marshal request: %w", err)
-			}
-			bodyReader = bytes.NewReader(data)
-		}
+	bodyReader, err := marshalBody(body)
+	if err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, apiURL+endpoint, bodyReader)

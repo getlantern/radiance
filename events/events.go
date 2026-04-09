@@ -30,6 +30,7 @@ import (
 	"context"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 type Event interface {
@@ -71,16 +72,18 @@ func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
 // the provided condition function returns true for an event. Returns a Subscription handle that can
 // be used to unsubscribe if needed.
 func SubscribeUntil[T Event](callback func(evt T), cond func(evt T) bool) *Subscription[T] {
-	ready := make(chan struct{})
+	var done atomic.Bool
 	var sub *Subscription[T]
 	sub = Subscribe(func(evt T) {
-		<-ready
+		if done.Load() {
+			return
+		}
 		callback(evt)
 		if cond(evt) {
+			done.Store(true)
 			sub.Unsubscribe()
 		}
 	})
-	close(ready)
 	return sub
 }
 

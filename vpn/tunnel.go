@@ -519,16 +519,6 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 			"failed_tags", newTags, "would_remove_tags", toRemove)
 	}
 
-	if err := t.removeOutbounds(toRemove); errors.Is(err, errLibboxClosed) {
-		return err
-	} else if err != nil {
-		errs = append(errs, err)
-	}
-	if err := t.addOutbounds(list); errors.Is(err, errLibboxClosed) {
-		return err
-	} else if err != nil {
-		errs = append(errs, err)
-	}
 	return errors.Join(errs...)
 }
 

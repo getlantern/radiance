@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httputil"
 	"path/filepath"
@@ -187,10 +187,9 @@ func newIssueRequest(ctx context.Context, method, url string, body io.Reader) (*
 }
 
 func randStr(n int) string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	var hexStr string
 	for range n {
-		hexStr += fmt.Sprintf("%x", r.Intn(16))
+		hexStr += fmt.Sprintf("%x", rand.IntN(16))
 	}
 	return hexStr
 }

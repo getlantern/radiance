@@ -1,10 +1,12 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,6 +33,24 @@ func newClient() *Client {
 				Protocols:         &protocols,
 			},
 		},
+	}
+}
+
+// marshalBody encodes body as a JSON reader suitable for an HTTP request body.
+// Returns nil if body is nil.
+func marshalBody(body any) (io.Reader, error) {
+	if body == nil {
+		return nil, nil
+	}
+	switch body := body.(type) {
+	case []byte:
+		return bytes.NewReader(body), nil
+	default:
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request: %w", err)
+		}
+		return bytes.NewReader(data), nil
 	}
 }
 

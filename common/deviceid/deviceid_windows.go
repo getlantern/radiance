@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	keyPath = `Sofware\\Lantern`
+	keyPath = `Software\Lantern`
 )
 
 // Get returns a unique identifier for this device. The identifier is a random UUID that's stored in the registry
@@ -23,6 +23,7 @@ func Get(_ string) string {
 		slog.Error("Unable to create registry entry to store deviceID, defaulting to old-style device ID: %v", "error", err)
 		return OldStyleDeviceID()
 	}
+	defer key.Close()
 
 	existing, _, err := key.GetStringValue("deviceid")
 	if err != nil {
@@ -39,7 +40,7 @@ func Get(_ string) string {
 		deviceID := _deviceID.String()
 		err = key.SetStringValue("deviceid", deviceID)
 		if err != nil {
-			slog.Error("Error storing new deviceID, defaulting to old-style device IDL", "error", err)
+			slog.Error("Error storing new deviceID, defaulting to old-style device ID", "error", err)
 			return OldStyleDeviceID()
 		}
 		return deviceID

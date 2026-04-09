@@ -1017,7 +1017,7 @@ func (s *localapi) logsStreamHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case entry := <-ch:
-			fmt.Fprintf(w, "data: %s\n", entry)
+			fmt.Fprintf(w, "data: %s\n\n", entry)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return

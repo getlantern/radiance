@@ -339,7 +339,7 @@ func (a *Client) CompleteRecoveryByEmail(ctx context.Context, email, newPassword
 	}
 
 	data := &protos.CompleteRecoveryByEmailRequest{
-		Email:       email,
+		Email:       lowerCaseEmail,
 		Code:        code,
 		NewSalt:     newSalt,
 		NewVerifier: verifierKey.Bytes(),
@@ -414,6 +414,7 @@ func (a *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, co
 		return traces.RecordError(ctx, err)
 	}
 
+	newEmail = strings.ToLower(newEmail)
 	srpClient, err := newSRPClient(newEmail, password, newSalt)
 	if err != nil {
 		return traces.RecordError(ctx, err)

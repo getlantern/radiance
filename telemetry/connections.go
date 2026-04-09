@@ -26,18 +26,22 @@ func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInter
 	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
 	if err != nil {
 		slog.Warn("failed to create current_active_connections metric", slog.Any("error", err))
+		return
 	}
 	connectionDuration, err := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
 	if err != nil {
 		slog.Warn("failed to create connection_duration_seconds metric", slog.Any("error", err))
+		return
 	}
 	downlinkBytes, err := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
 	if err != nil {
 		slog.Warn("failed to create downlink_bytes metric", slog.Any("error", err))
+		return
 	}
 	uplinkBytes, err := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
 	if err != nil {
 		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
+		return
 	}
 	go func() {
 		seenConnections := make(map[string]bool)
@@ -54,7 +58,10 @@ func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInter
 					continue
 				}
 
+				// Track which connections are still reported so we can prune stale entries.
+				currentIDs := make(map[string]struct{}, len(conns))
 				for _, c := range conns {
+					currentIDs[c.ID] = struct{}{}
 					attributes := attribute.NewSet(
 						attribute.String("from_outbound", c.FromOutbound),
 						attribute.String("outbound_name", c.Outbound),
@@ -88,6 +95,13 @@ func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInter
 
 					downlinkBytes.Add(ctx, c.Downlink, metric.WithAttributeSet(attributes))
 					uplinkBytes.Add(ctx, c.Uplink, metric.WithAttributeSet(attributes))
+				}
+
+				// Remove entries for connections no longer reported by the source.
+				for id := range seenConnections {
+					if _, ok := currentIDs[id]; !ok {
+						delete(seenConnections, id)
+					}
 				}
 			}
 		}

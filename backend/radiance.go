@@ -273,17 +273,6 @@ func (r *LocalBackend) Start() {
 	}
 }
 
-// addShutdownFunc adds a shutdown function(s) to the Radiance instance.
-// This function is called when the Radiance instance is closed to ensure that all
-// resources are cleaned up properly.
-func (r *LocalBackend) addShutdownFunc(fns ...func() error) {
-	for _, fn := range fns {
-		if fn != nil {
-			r.shutdownFuncs = append(r.shutdownFuncs, fn)
-		}
-	}
-}
-
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
