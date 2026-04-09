@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,11 @@ const (
 
 	cacheID       = "lantern"
 	cacheFileName = "lantern.cache"
+	// minAndroidSystemStackKernel is the minimum Linux kernel version (major.minor) required
+	// for the system TUN stack to work reliably on Android only. Devices running a
+	// kernel below this version fall back to gvisor. This constant has no effect on
+	// other platforms.
+	minAndroidSystemStackKernel = "5.10"
 )
 
 var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
@@ -283,10 +289,18 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		}
 		opts.Inbounds = []O.Inbound{socksIn}
 	} else {
-		// platform-specific overrides
+
 		switch common.Platform {
 		case "android":
 			opts.Route.OverrideAndroidVPN = true
+			kv := kernelVersion()
+			slog.Debug("detected kernel version", "kernel", kv)
+			if kv == "" {
+				slog.Warn("kernel version unknown, keeping default TUN stack")
+			} else if kernelBelow(kv, minAndroidSystemStackKernel) {
+				opts.Inbounds[0].Options.(*O.TunInboundOptions).Stack = "gvisor"
+				slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
+			}
 			slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
 		case "linux":
 			opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
@@ -463,6 +477,47 @@ func selectModeRule(mode string) O.Rule {
 			},
 		},
 	}
+}
+
+// kernelBelow reports whether the kernel version string v is below min.
+// Only the first two components (major.minor) are compared, e.g. "5.10" or "4.19.0-android13".
+// Returns false if either version string cannot be parsed.
+func kernelBelow(v, min string) bool {
+	parseKernelMajorMinor := func(s string) (int, int, bool) {
+		p := strings.SplitN(s, ".", 3)
+		if len(p) < 2 {
+			return 0, 0, false
+		}
+		// Strip non-numeric suffixes (e.g. "19" from "19-android13")
+		numericPrefix := func(part string) string {
+			for i, r := range part {
+				if r < '0' || r > '9' {
+					return part[:i]
+				}
+			}
+			return part
+		}
+		majorStr := numericPrefix(p[0])
+		minorStr := numericPrefix(p[1])
+		if majorStr == "" || minorStr == "" {
+			return 0, 0, false
+		}
+		major, err := strconv.Atoi(majorStr)
+		if err != nil {
+			return 0, 0, false
+		}
+		minor, err := strconv.Atoi(minorStr)
+		if err != nil {
+			return 0, 0, false
+		}
+		return major, minor, true
+	}
+	vMaj, vMin, vok := parseKernelMajorMinor(v)
+	mMaj, mMin, mok := parseKernelMajorMinor(min)
+	if !vok || !mok {
+		return false
+	}
+	return vMaj < mMaj || (vMaj == mMaj && vMin < mMin)
 }
 
 func catchAllBlockerRule() O.Rule {

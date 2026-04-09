@@ -65,6 +65,10 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		}
 	}()
 
+	if v, ok := env.Get(env.AppVersion); ok && v != "" {
+		Version = v
+		slog.Info("Version overridden via RADIANCE_VERSION", "version", Version)
+	}
 	reporting.Init(Version)
 	data, logs, err := setupDirectories(dataDir, logDir)
 	if err != nil {

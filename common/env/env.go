@@ -26,6 +26,7 @@ var (
 	SocksAddress     _key = "RADIANCE_SOCKS_ADDRESS"
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
+	AppVersion       _key = "RADIANCE_VERSION"
 
 	Testing _key = "RADIANCE_TESTING"
 
