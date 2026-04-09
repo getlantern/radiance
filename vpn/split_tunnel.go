@@ -140,7 +140,6 @@ func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
 // tunnel configuration as a JSON-encoded []string. It first extracts values
 // from the parsed rule set (current sing-box format with snake_case keys),
 // then falls back to scanning the raw file for legacy camelCase keys.
-// It is safe to call from CGo callback stacks.
 func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, 16)
