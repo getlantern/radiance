@@ -471,11 +471,17 @@ func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []s
 	// URL-testing 30+ outbounds concurrently.
 	urlTestTags := tags
 	if len(urlOverrides) > 0 {
-		urlTestTags = make([]string, 0, len(urlOverrides))
+		filtered := make([]string, 0, len(urlOverrides))
 		for _, tag := range tags {
 			if _, hasOverride := urlOverrides[tag]; hasOverride {
-				urlTestTags = append(urlTestTags, tag)
+				filtered = append(filtered, tag)
 			}
+		}
+		if len(filtered) > 0 {
+			urlTestTags = filtered
+		} else {
+			slog.Warn("No URL-test tags matched URL overrides, falling back to all tags",
+				"group", serverGroup, "tags", len(tags), "overrides", len(urlOverrides))
 		}
 	}
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, urlTestTags, urlOverrides))
