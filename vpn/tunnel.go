@@ -294,26 +294,26 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 		autoTag   = groupAutoTag(group)
 		added     = 0
 	)
-	// Check if any URL overrides apply to the new outbounds/endpoints.
-	// If overrides exist but none match (stale keys), fall back to URL-testing all.
-	hasApplicableOverrides := len(options.URLOverrides) == 0
-	if !hasApplicableOverrides {
+	// Determine whether to selectively URL-test only overridden outbounds.
+	// When overrides exist and at least one matches a new tag, only add
+	// matching outbounds to the URL test group. Otherwise test all.
+	selectiveURLTest := false
+	if len(options.URLOverrides) > 0 {
 		for _, ob := range newOptions.Outbounds {
 			if _, ok := options.URLOverrides[ob.Tag]; ok {
-				hasApplicableOverrides = true
+				selectiveURLTest = true
 				break
 			}
 		}
-		if !hasApplicableOverrides {
+		if !selectiveURLTest {
 			for _, ep := range newOptions.Endpoints {
 				if _, ok := options.URLOverrides[ep.Tag]; ok {
-					hasApplicableOverrides = true
+					selectiveURLTest = true
 					break
 				}
 			}
 		}
 	}
-	urlTestAll := !hasApplicableOverrides || len(options.URLOverrides) == 0
 
 	// for each outbound/endpoint in new add to group
 	for _, outbound := range newOptions.Outbounds {
@@ -326,7 +326,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			// URL override (or if no applicable overrides exist). Extra outbounds
 			// (Pro user non-smart locations) are available for manual selection
 			// but not URL-tested, avoiding OOM on Android.
-			if _, hasOverride := options.URLOverrides[outbound.Tag]; hasOverride || urlTestAll {
+			if _, hasOverride := options.URLOverrides[outbound.Tag]; hasOverride || !selectiveURLTest {
 				err = mutGrpMgr.AddToGroup(autoTag, outbound.Tag)
 			}
 		}
@@ -358,7 +358,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			ctx, router, logger, group, endpoint.Tag, endpoint.Type, endpoint.Options,
 		)
 		if err == nil {
-			if _, hasOverride := options.URLOverrides[endpoint.Tag]; hasOverride || urlTestAll {
+			if _, hasOverride := options.URLOverrides[endpoint.Tag]; hasOverride || !selectiveURLTest {
 				err = mutGrpMgr.AddToGroup(autoTag, endpoint.Tag)
 			}
 		}

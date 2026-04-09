@@ -481,7 +481,7 @@ func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []s
 			urlTestTags = filtered
 		} else {
 			slog.Warn("No URL-test tags matched URL overrides, falling back to all tags",
-				"group", serverGroup, "tags", len(tags), "overrides", len(urlOverrides))
+				"serverGroup", serverGroup, "tagCount", len(tags), "overrideCount", len(urlOverrides))
 		}
 	}
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, urlTestTags, urlOverrides))
