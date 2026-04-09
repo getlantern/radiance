@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	serviceName = "lanternd"
+	serviceName = "LanternSvc"
 	binPath     = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
 )
 
