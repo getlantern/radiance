@@ -301,8 +301,13 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			ctx, router, logger, group, outbound.Tag, outbound.Type, outbound.Options,
 		)
 		if err == nil {
-			// add to urltest
-			err = mutGrpMgr.AddToGroup(autoTag, outbound.Tag)
+			// Only add to URL test group if this outbound has a bandit callback
+			// URL override. Extra outbounds (Pro user non-smart locations) are
+			// available for manual selection but not URL-tested, avoiding OOM
+			// on Android from testing too many outbounds concurrently.
+			if _, hasOverride := options.URLOverrides[outbound.Tag]; hasOverride || len(options.URLOverrides) == 0 {
+				err = mutGrpMgr.AddToGroup(autoTag, outbound.Tag)
+			}
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
@@ -332,8 +337,9 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 			ctx, router, logger, group, endpoint.Tag, endpoint.Type, endpoint.Options,
 		)
 		if err == nil {
-			// add to urltest
-			err = mutGrpMgr.AddToGroup(autoTag, endpoint.Tag)
+			if _, hasOverride := options.URLOverrides[endpoint.Tag]; hasOverride || len(options.URLOverrides) == 0 {
+				err = mutGrpMgr.AddToGroup(autoTag, endpoint.Tag)
+			}
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
