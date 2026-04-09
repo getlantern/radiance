@@ -531,18 +531,7 @@ func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	// (those with callback URLs). Extra outbounds remain in the sing-box
 	// instance so we can dial through them, but testing all ~36 wastes
 	// time and delays callbacks past the 30s probe expiry window.
-	urlTestTags := tags
-	if len(cfg.BanditURLOverrides) > 0 {
-		filtered := make([]string, 0, len(cfg.BanditURLOverrides))
-		for _, tag := range tags {
-			if _, ok := cfg.BanditURLOverrides[tag]; ok {
-				filtered = append(filtered, tag)
-			}
-		}
-		if len(filtered) > 0 {
-			urlTestTags = filtered
-		}
-	}
+	urlTestTags := filterURLTestTags(tags, cfg.BanditURLOverrides, "preTest")
 	outbounds = append(outbounds, urlTestOutbound("preTest", urlTestTags, cfg.BanditURLOverrides))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},

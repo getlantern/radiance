@@ -479,25 +479,7 @@ func useIfNotZero[T comparable](newVal, oldVal T) T {
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
-	// When bandit URL overrides exist, only URL-test the outbounds that have
-	// callback URLs (the smart-selected subset). All outbounds remain in the
-	// selector for manual selection. This prevents OOM on Android from
-	// URL-testing 30+ outbounds concurrently.
-	urlTestTags := tags
-	if len(urlOverrides) > 0 {
-		filtered := make([]string, 0, len(urlOverrides))
-		for _, tag := range tags {
-			if _, hasOverride := urlOverrides[tag]; hasOverride {
-				filtered = append(filtered, tag)
-			}
-		}
-		if len(filtered) > 0 {
-			urlTestTags = filtered
-		} else {
-			slog.Warn("No URL-test tags matched URL overrides, falling back to all tags",
-				"serverGroup", serverGroup, "tagCount", len(tags), "overrideCount", len(urlOverrides))
-		}
-	}
+	urlTestTags := filterURLTestTags(tags, urlOverrides, serverGroup)
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, urlTestTags, urlOverrides))
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
 	slog.Log(
@@ -653,4 +635,25 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 		Type:    typ,
 		Options: serverOpts,
 	}
+}
+
+// filterURLTestTags returns only the tags that have URL overrides when overrides
+// are present. If no overrides exist or none match, returns all tags unchanged.
+// The context parameter is used for log attribution.
+func filterURLTestTags(tags []string, urlOverrides map[string]string, context string) []string {
+	if len(urlOverrides) == 0 {
+		return tags
+	}
+	filtered := make([]string, 0, len(urlOverrides))
+	for _, tag := range tags {
+		if _, ok := urlOverrides[tag]; ok {
+			filtered = append(filtered, tag)
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	slog.Warn("No URL-test tags matched URL overrides, falling back to all tags",
+		"context", context, "tagCount", len(tags), "overrideCount", len(urlOverrides))
+	return tags
 }
