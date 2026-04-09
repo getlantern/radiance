@@ -479,7 +479,26 @@ func useIfNotZero[T comparable](newVal, oldVal T) T {
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags, urlOverrides))
+	// When bandit URL overrides exist, only URL-test the outbounds that have
+	// callback URLs (the smart-selected subset). All outbounds remain in the
+	// selector for manual selection. This prevents OOM on Android from
+	// URL-testing 30+ outbounds concurrently.
+	urlTestTags := tags
+	if len(urlOverrides) > 0 {
+		filtered := make([]string, 0, len(urlOverrides))
+		for _, tag := range tags {
+			if _, hasOverride := urlOverrides[tag]; hasOverride {
+				filtered = append(filtered, tag)
+			}
+		}
+		if len(filtered) > 0 {
+			urlTestTags = filtered
+		} else {
+			slog.Warn("No URL-test tags matched URL overrides, falling back to all tags",
+				"serverGroup", serverGroup, "tagCount", len(tags), "overrideCount", len(urlOverrides))
+		}
+	}
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, urlTestTags, urlOverrides))
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
 	slog.Log(
 		nil, internal.LevelTrace, "Added group outbounds",
