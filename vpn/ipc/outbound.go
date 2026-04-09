@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	runtimeDebug "runtime/debug"
+	"strings"
 	"time"
 
 	box "github.com/getlantern/lantern-box"
@@ -29,9 +30,17 @@ type selection struct {
 }
 
 // SelectOutbound selects an outbound within a group.
-func SelectOutbound(ctx context.Context, groupTag, outboundTag string) error {
+// Returns (true, nil) on success, (false, nil) when the outbound tag doesn't
+// exist in the group, or (false, err) for other failures.
+func SelectOutbound(ctx context.Context, groupTag, outboundTag string) (bool, error) {
 	_, err := sendRequest[empty](ctx, "POST", selectEndpoint, selection{groupTag, outboundTag})
-	return err
+	if err != nil {
+		if strings.Contains(err.Error(), "not found in group") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Server) selectHandler(w http.ResponseWriter, r *http.Request) {

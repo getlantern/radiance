@@ -173,16 +173,20 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	})
 	r.confHandler = config.NewConfigHandler(cOpts)
 
-	// Wire up VPN location callbacks so SelectServer can trigger a config
-	// re-fetch when the user picks a location without a pre-assigned outbound.
-	vpn.SetLocationCallbacks(
-		func(country, city string) {
-			r.confHandler.SetPreferredServerLocation(country, city)
-		},
-		func(tag string) (lcommon.ServerLocation, bool) {
-			return svrMgr.GetLocationByTag(tag)
-		},
-	)
+	// Let SelectServer resolve location-only tags (e.g. "frankfurt-de")
+	// to their full ServerLocation details from the server manager.
+	vpn.SetLocationProvider(func(tag string) (lcommon.ServerLocation, bool) {
+		return svrMgr.GetLocationByTag(tag)
+	})
+
+	// When SelectServer can't find an outbound for a location, it emits
+	// PreferredLocationRequestEvent. We subscribe here to trigger a config
+	// re-fetch with the preferred location so the server assigns a proxy.
+	locSub := events.Subscribe(func(evt vpn.PreferredLocationRequestEvent) {
+		slog.Info("Received preferred location request, fetching config",
+			"city", evt.City, "country", evt.Country)
+		r.confHandler.SetPreferredServerLocation(evt.Country, evt.City)
+	})
 
 	// Register AFTER NewConfigHandler so the disk-load event is already
 	// consumed. Runs whenever a new config is applied to provide continuous
@@ -192,6 +196,7 @@ func NewRadiance(opts Options) (*Radiance, error) {
 	})
 	r.addShutdownFunc(telemetry.Close, kindling.Close, func(_ context.Context) error {
 		sub.Unsubscribe()
+		locSub.Unsubscribe()
 		return nil
 	})
 	return r, nil

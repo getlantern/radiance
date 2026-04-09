@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
@@ -50,30 +51,25 @@ const (
 	locationFetchTimeout = 15 * time.Second
 )
 
-var (
-	locationCallbacksMu     sync.RWMutex
-	setPreferredLocationFn  func(country, city string)
-	lookupLocationFn        func(tag string) (C.ServerLocation, bool)
-)
-
-// SetLocationCallbacks registers the callbacks used when SelectServer encounters
-// a location-only tag. Thread-safe; typically called once from NewRadiance.
-func SetLocationCallbacks(
-	setPreferred func(country, city string),
-	lookup func(tag string) (C.ServerLocation, bool),
-) {
-	locationCallbacksMu.Lock()
-	defer locationCallbacksMu.Unlock()
-	setPreferredLocationFn = setPreferred
-	lookupLocationFn = lookup
+// PreferredLocationRequestEvent is emitted when the user selects a location
+// that doesn't have a pre-assigned outbound (e.g. "frankfurt-de"). The
+// Radiance layer subscribes and triggers a config re-fetch with
+// PreferredServerLocation so the server assigns a proxy for that region.
+type PreferredLocationRequestEvent struct {
+	events.Event
+	Country     string
+	City        string
+	CountryCode string
 }
 
-// ClearLocationCallbacks removes the registered callbacks. Called on shutdown.
-func ClearLocationCallbacks() {
-	locationCallbacksMu.Lock()
-	defer locationCallbacksMu.Unlock()
-	setPreferredLocationFn = nil
-	lookupLocationFn = nil
+// locationProvider resolves a location-only tag to its full details.
+// Set via SetLocationProvider during initialization.
+var locationProvider atomic.Pointer[func(tag string) (C.ServerLocation, bool)]
+
+// SetLocationProvider registers the function that resolves location-only tags
+// (e.g. "frankfurt-de") to their ServerLocation details. Called once from NewRadiance.
+func SetLocationProvider(fn func(tag string) (C.ServerLocation, bool)) {
+	locationProvider.Store(&fn)
 }
 
 func init() {
@@ -247,30 +243,26 @@ func SelectServer(ctx context.Context, group, tag string) error {
 		return nil
 	}
 	slog.Info("Selecting server", "group", group, "tag", tag)
-	selectErr := ipc.SelectOutbound(ctx, group, tag)
-	if selectErr == nil {
-		return nil
+	found, err := ipc.SelectOutbound(ctx, group, tag)
+	if err != nil {
+		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
+		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
-
-	// Only attempt the location-refetch flow for "not found" errors.
-	// Other errors (IPC unavailable, context cancelled, etc.) should propagate.
-	if !strings.Contains(selectErr.Error(), "not found in group") {
-		slog.Error("Failed to select server", "group", group, "tag", tag, "error", selectErr)
-		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, selectErr)
+	if found {
+		return nil
 	}
 
 	// Outbound not found — check if this is a location-only tag (e.g. "frankfurt-de")
 	// that needs a config re-fetch to get an outbound assigned.
-	loc, setPreferred, ok := findLocationAndCallback(tag)
+	loc, ok := lookupLocation(tag)
 	if !ok {
-		slog.Error("Failed to select server", "group", group, "tag", tag, "error", selectErr)
 		return fmt.Errorf("outbound %q not found in group %q and no matching location", tag, group)
 	}
 
 	slog.Info("Location has no outbound, requesting config with preferred location",
 		"tag", tag, "city", loc.City, "country_code", loc.CountryCode)
 
-	// Subscribe to server updates BEFORE triggering the fetch to avoid races.
+	// Subscribe to server updates BEFORE emitting the event to avoid races.
 	outboundTag := make(chan string, 1)
 	sub := events.Subscribe(func(e servers.ServersUpdatedEvent) {
 		if e.Group != servers.ServerGroup(group) || e.Options == nil {
@@ -279,7 +271,6 @@ func SelectServer(ctx context.Context, group, tag string) error {
 		// Look for a new outbound whose location matches the requested city/country.
 		for outTag, outLoc := range e.Options.Locations {
 			if outLoc.City == loc.City && outLoc.CountryCode == loc.CountryCode {
-				// Only match actual outbound tags, not location-only keys.
 				if isOutboundTag(outTag, e.Options) {
 					select {
 					case outboundTag <- outTag:
@@ -292,8 +283,12 @@ func SelectServer(ctx context.Context, group, tag string) error {
 	})
 	defer sub.Unsubscribe()
 
-	// Trigger the config re-fetch with the preferred location.
-	setPreferred(loc.Country, loc.City)
+	// Emit event so the Radiance layer triggers a config re-fetch.
+	events.Emit(PreferredLocationRequestEvent{
+		Country:     loc.Country,
+		City:        loc.City,
+		CountryCode: loc.CountryCode,
+	})
 
 	// Wait for the new outbound to arrive, respecting context cancellation.
 	timer := time.NewTimer(locationFetchTimeout)
@@ -302,37 +297,31 @@ func SelectServer(ctx context.Context, group, tag string) error {
 	case newTag := <-outboundTag:
 		slog.Info("Received outbound for preferred location, selecting",
 			"tag", newTag, "city", loc.City, "country_code", loc.CountryCode)
-		if err := ipc.SelectOutbound(ctx, group, newTag); err != nil {
-			slog.Error("Failed to select new outbound", "group", group, "tag", newTag, "error", err)
+		if found, err := ipc.SelectOutbound(ctx, group, newTag); err != nil {
 			return fmt.Errorf("failed to select server %s/%s: %w", group, newTag, err)
+		} else if !found {
+			return fmt.Errorf("outbound %q arrived but not found in group after config update", newTag)
 		}
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("context cancelled waiting for outbound for location %s: %w", tag, ctx.Err())
 	case <-timer.C:
-		slog.Error("Timed out waiting for outbound for preferred location",
-			"tag", tag, "city", loc.City, "country_code", loc.CountryCode)
 		return fmt.Errorf("timed out waiting for outbound for location %s", tag)
 	}
 }
 
-// findLocationAndCallback looks up a location by tag and returns the
-// setPreferred callback. Returns ok=false if the tag isn't a known
-// location or callbacks aren't registered.
-func findLocationAndCallback(tag string) (C.ServerLocation, func(string, string), bool) {
-	locationCallbacksMu.RLock()
-	lookup := lookupLocationFn
-	setPref := setPreferredLocationFn
-	locationCallbacksMu.RUnlock()
-
-	if lookup == nil || setPref == nil {
-		return C.ServerLocation{}, nil, false
+// lookupLocation resolves a location-only tag to its full ServerLocation details
+// via the registered provider.
+func lookupLocation(tag string) (C.ServerLocation, bool) {
+	fn := locationProvider.Load()
+	if fn == nil {
+		return C.ServerLocation{}, false
 	}
-	loc, ok := lookup(tag)
+	loc, ok := (*fn)(tag)
 	if !ok || loc.City == "" {
-		return C.ServerLocation{}, nil, false
+		return C.ServerLocation{}, false
 	}
-	return loc, setPref, true
+	return loc, true
 }
 
 // isOutboundTag returns true if the tag corresponds to an actual outbound or endpoint,
