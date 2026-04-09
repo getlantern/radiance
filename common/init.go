@@ -150,7 +150,7 @@ func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 }
 
 func maybeAddSuffix(path, suffix string) string {
-	if strings.ToLower(filepath.Base(path)) != suffix {
+	if !strings.EqualFold(filepath.Base(path), suffix) {
 		path = filepath.Join(path, suffix)
 	}
 	return path

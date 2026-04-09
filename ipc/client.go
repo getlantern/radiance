@@ -146,6 +146,11 @@ func (c *Client) SelectedServer(ctx context.Context) (*servers.Server, bool, err
 	return resp.Server, resp.Exists, err
 }
 
+// SelectedServerJSON returns the currently selected server as raw JSON bytes.
+func (c *Client) SelectedServerJSON(ctx context.Context) ([]byte, error) {
+	return c.do(ctx, http.MethodGet, serverSelectedEndpoint, nil)
+}
+
 // AutoSelected returns the server that's currently auto-selected.
 func (c *Client) AutoSelected(ctx context.Context) (*servers.Server, error) {
 	data, err := c.do(ctx, http.MethodGet, serverAutoSelectedEndpoint, nil)
