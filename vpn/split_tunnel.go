@@ -121,22 +121,19 @@ func (s *SplitTunnel) Filters() Filter {
 }
 
 // ItemsJSON returns the items for the given filter type as a JSON-encoded []string.
-// It is safe to call from CGo callback stacks (uses RunOffCgoStack internally).
 func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
-	return common.RunOffCgoStack(func() (string, error) {
-		items, err := s.Filters().Items(filterType)
-		if err != nil {
-			return "", err
-		}
-		if items == nil {
-			items = []string{}
-		}
-		b, err := json.Marshal(items)
-		if err != nil {
-			return "", err
-		}
-		return string(b), nil
-	})
+	items, err := s.Filters().Items(filterType)
+	if err != nil {
+		return "", err
+	}
+	if items == nil {
+		items = []string{}
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // EnabledAppsJSON returns all enabled app/process identifiers from the split
@@ -145,68 +142,66 @@ func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
 // then falls back to scanning the raw file for legacy camelCase keys.
 // It is safe to call from CGo callback stacks.
 func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
-	return common.RunOffCgoStack(func() (string, error) {
-		seen := map[string]struct{}{}
-		out := make([]string, 0, 16)
-		isWindows := common.IsWindows()
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 16)
+	isWindows := common.IsWindows()
 
-		addString := func(str string) {
-			str = strings.TrimSpace(str)
-			if str == "" {
-				return
-			}
-			key := str
-			if isWindows {
-				key = strings.ToLower(str)
-			}
-			if _, exists := seen[key]; exists {
-				return
-			}
-			seen[key] = struct{}{}
-			out = append(out, str)
+	addString := func(str string) {
+		str = strings.TrimSpace(str)
+		if str == "" {
+			return
 		}
-
-		addSlice := func(items []string) {
-			for _, str := range items {
-				addString(str)
-			}
+		key := str
+		if isWindows {
+			key = strings.ToLower(str)
 		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, str)
+	}
 
-		// Extract from the parsed rule set (current format).
-		f := s.Filters()
-		addSlice(f.ProcessPath)
-		addSlice(f.ProcessPathRegex)
-		addSlice(f.ProcessName)
-		addSlice(f.PackageName)
+	addSlice := func(items []string) {
+		for _, str := range items {
+			addString(str)
+		}
+	}
 
-		// Fall back to legacy camelCase top-level keys in the raw file.
-		b, err := atomicfile.ReadFile(s.ruleFile)
-		if err == nil && len(b) > 0 {
-			m, parseErr := singjson.UnmarshalExtended[map[string]any](b)
-			if parseErr == nil {
-				legacyKeys := []string{
-					"processPathRegex", "processPath", "packageName",
+	// Extract from the parsed rule set (current format).
+	f := s.Filters()
+	addSlice(f.ProcessPath)
+	addSlice(f.ProcessPathRegex)
+	addSlice(f.ProcessName)
+	addSlice(f.PackageName)
+
+	// Fall back to legacy camelCase top-level keys in the raw file.
+	b, err := atomicfile.ReadFile(s.ruleFile)
+	if err == nil && len(b) > 0 {
+		m, parseErr := singjson.UnmarshalExtended[map[string]any](b)
+		if parseErr == nil {
+			legacyKeys := []string{
+				"processPathRegex", "processPath", "packageName",
+			}
+			for _, k := range legacyKeys {
+				arr, ok := m[k].([]any)
+				if !ok {
+					continue
 				}
-				for _, k := range legacyKeys {
-					arr, ok := m[k].([]any)
-					if !ok {
-						continue
-					}
-					for _, it := range arr {
-						if str, ok := it.(string); ok {
-							addString(str)
-						}
+				for _, it := range arr {
+					if str, ok := it.(string); ok {
+						addString(str)
 					}
 				}
 			}
 		}
+	}
 
-		encoded, err := json.Marshal(out)
-		if err != nil {
-			return "", err
-		}
-		return string(encoded), nil
-	})
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 // AddItem adds a new item to the filter of the given type.
