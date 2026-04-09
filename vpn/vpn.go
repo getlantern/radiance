@@ -51,25 +51,23 @@ const (
 	locationFetchTimeout = 15 * time.Second
 )
 
-// PreferredLocationRequestEvent is emitted when the user selects a location
-// that doesn't have a pre-assigned outbound (e.g. "frankfurt-de"). The
-// Radiance layer subscribes and triggers a config re-fetch with
-// PreferredServerLocation so the server assigns a proxy for that region.
-type PreferredLocationRequestEvent struct {
-	events.Event
-	Country     string
-	City        string
-	CountryCode string
+// LocationCallbacks holds the functions needed to handle location-only tags
+// in SelectServer. Set once via SetLocationCallbacks from NewRadiance.
+type LocationCallbacks struct {
+	// Lookup resolves a location-only tag (e.g. "frankfurt-de") to its
+	// full ServerLocation details.
+	Lookup func(tag string) (C.ServerLocation, bool)
+	// SetPreferred triggers a config re-fetch with the given preferred
+	// server location so the server assigns a proxy for that region.
+	SetPreferred func(country, city string)
 }
 
-// locationProvider resolves a location-only tag to its full details.
-// Set via SetLocationProvider during initialization.
-var locationProvider atomic.Pointer[func(tag string) (C.ServerLocation, bool)]
+var locationCallbacks atomic.Pointer[LocationCallbacks]
 
-// SetLocationProvider registers the function that resolves location-only tags
-// (e.g. "frankfurt-de") to their ServerLocation details. Called once from NewRadiance.
-func SetLocationProvider(fn func(tag string) (C.ServerLocation, bool)) {
-	locationProvider.Store(&fn)
+// SetLocationCallbacks registers the callbacks used when SelectServer encounters
+// a location-only tag. Called once from NewRadiance.
+func SetLocationCallbacks(cb *LocationCallbacks) {
+	locationCallbacks.Store(cb)
 }
 
 func init() {
@@ -254,8 +252,12 @@ func SelectServer(ctx context.Context, group, tag string) error {
 
 	// Outbound not found — check if this is a location-only tag (e.g. "frankfurt-de")
 	// that needs a config re-fetch to get an outbound assigned.
-	loc, ok := lookupLocation(tag)
-	if !ok {
+	cb := locationCallbacks.Load()
+	if cb == nil {
+		return fmt.Errorf("outbound %q not found in group %q (no location callbacks registered)", tag, group)
+	}
+	loc, ok := cb.Lookup(tag)
+	if !ok || loc.City == "" {
 		return fmt.Errorf("outbound %q not found in group %q and no matching location", tag, group)
 	}
 
@@ -283,12 +285,8 @@ func SelectServer(ctx context.Context, group, tag string) error {
 	})
 	defer sub.Unsubscribe()
 
-	// Emit event so the Radiance layer triggers a config re-fetch.
-	events.Emit(PreferredLocationRequestEvent{
-		Country:     loc.Country,
-		City:        loc.City,
-		CountryCode: loc.CountryCode,
-	})
+	// Trigger config re-fetch with the preferred location.
+	cb.SetPreferred(loc.Country, loc.City)
 
 	// Wait for the new outbound to arrive, respecting context cancellation.
 	timer := time.NewTimer(locationFetchTimeout)
@@ -308,20 +306,6 @@ func SelectServer(ctx context.Context, group, tag string) error {
 	case <-timer.C:
 		return fmt.Errorf("timed out waiting for outbound for location %s", tag)
 	}
-}
-
-// lookupLocation resolves a location-only tag to its full ServerLocation details
-// via the registered provider.
-func lookupLocation(tag string) (C.ServerLocation, bool) {
-	fn := locationProvider.Load()
-	if fn == nil {
-		return C.ServerLocation{}, false
-	}
-	loc, ok := (*fn)(tag)
-	if !ok || loc.City == "" {
-		return C.ServerLocation{}, false
-	}
-	return loc, true
 }
 
 // isOutboundTag returns true if the tag corresponds to an actual outbound or endpoint,
