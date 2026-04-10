@@ -13,9 +13,12 @@ else
    LANTERN := lantern
 endif
 
+VERSION ?=
+LDFLAGS := $(if $(VERSION),-ldflags "-X 'github.com/getlantern/radiance/common.Version=$(VERSION)'")
+
 .PHONY: build-daemon
 build-daemon:
-	go build -tags "$(TAGS)" -o ../bin/$(LANTERND) ./lanternd
+	go build -tags "$(TAGS)" $(LDFLAGS) -o ../bin/$(LANTERND) ./lanternd
 
 .PHONY: run-daemon
 run-daemon:
@@ -27,9 +30,9 @@ run-daemon:
 .PHONY: build-cli
 build-cli:
 ifeq ($(UNAME_S),Darwin)
-	go build -tags "standalone" -o ../bin/$(LANTERN) ./lantern
+	go build -tags "standalone" $(LDFLAGS) -o ../bin/$(LANTERN) ./lantern
 else
-	go build -o ../bin/$(LANTERN) ./lantern
+	go build $(LDFLAGS) -o ../bin/$(LANTERN) ./lantern
 endif
 
 .PHONY: build

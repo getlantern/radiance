@@ -20,7 +20,7 @@ const (
 func Get(_ string) string {
 	key, _, err := registry.CreateKey(registry.CURRENT_USER, keyPath, registry.QUERY_VALUE|registry.SET_VALUE|registry.WRITE)
 	if err != nil {
-		slog.Error("Unable to create registry entry to store deviceID, defaulting to old-style device ID: %v", "error", err)
+		slog.Error("Unable to create registry entry to store deviceID, defaulting to old-style device ID", "error", err)
 		return OldStyleDeviceID()
 	}
 	defer key.Close()

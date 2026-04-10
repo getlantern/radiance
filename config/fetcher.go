@@ -54,7 +54,7 @@ type fetcher struct {
 // newFetcher creates a new fetcher with the given http client.
 func newFetcher(locale string, apiClient *account.Client, httpClient *http.Client) Fetcher {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{Timeout: common.DefaultHTTPTimeout}
 	}
 	return &fetcher{
 		lastModified: time.Time{},

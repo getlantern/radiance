@@ -95,9 +95,6 @@ func NewLogger(cfg Config) *slog.Logger {
 	} else {
 		logWriter = io.MultiWriter(os.Stdout, logRotator)
 	}
-	runtime.AddCleanup(&logWriter, func(f *os.File) {
-		f.Close()
-	}, f)
 	if !cfg.DisablePublisher {
 		logWriter = io.MultiWriter(logWriter, Publisher())
 	}

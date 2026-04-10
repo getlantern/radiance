@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPushlisher(t *testing.T) {
+func TestPublisher(t *testing.T) {
 	p := newPublisher(10)
 
 	ch, unsub := p.subscribe()
@@ -87,7 +87,7 @@ func TestRingBuffer(t *testing.T) {
 
 	// Fill the ring buffer with 5 entries, so only the last 3 should be available.
 	for i := range 5 {
-		p.publish(string(rune('a' + i)) + "\n")
+		p.publish(string(rune('a'+i)) + "\n")
 	}
 
 	ch, unsub := p.subscribe()
