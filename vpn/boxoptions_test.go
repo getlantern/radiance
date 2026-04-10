@@ -379,28 +379,3 @@ func TestKernelBelow(t *testing.T) {
 	}
 }
 
-func TestFilterURLTestTags(t *testing.T) {
-	allTags := []string{"a", "b", "c", "d", "e"}
-
-	t.Run("no overrides returns all tags", func(t *testing.T) {
-		result := filterURLTestTags(allTags, nil, "test")
-		assert.Equal(t, allTags, result)
-	})
-
-	t.Run("empty overrides returns all tags", func(t *testing.T) {
-		result := filterURLTestTags(allTags, map[string]string{}, "test")
-		assert.Equal(t, allTags, result)
-	})
-
-	t.Run("overrides with matches filters to matched tags", func(t *testing.T) {
-		overrides := map[string]string{"b": "url1", "d": "url2"}
-		result := filterURLTestTags(allTags, overrides, "test")
-		assert.Equal(t, []string{"b", "d"}, result)
-	})
-
-	t.Run("overrides with no matches falls back to all tags", func(t *testing.T) {
-		overrides := map[string]string{"x": "url1", "y": "url2"}
-		result := filterURLTestTags(allTags, overrides, "test")
-		assert.Equal(t, allTags, result)
-	})
-}

@@ -527,12 +527,9 @@ func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	// When bandit URL overrides exist, only URL-test the smart outbounds
-	// (those with callback URLs). Extra outbounds remain in the sing-box
-	// instance so we can dial through them, but testing all ~36 wastes
-	// time and delays callbacks past the 30s probe expiry window.
-	urlTestTags := filterURLTestTags(tags, cfg.BanditURLOverrides, "preTest")
-	outbounds = append(outbounds, urlTestOutbound("preTest", urlTestTags, cfg.BanditURLOverrides))
+	// All outbounds get URL-tested — the server now sends callback
+	// URLs for every outbound, and the dependency's worker pool bounds memory.
+	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,
