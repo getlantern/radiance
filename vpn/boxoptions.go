@@ -480,7 +480,7 @@ func useIfNotZero[T comparable](newVal, oldVal T) T {
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
 	// All outbounds go in the URL test group — the server now sends callback
-	// URLs for every outbound, and the worker pool (N=6) bounds memory.
+	// URLs for every outbound, and the dependency's worker pool bounds memory.
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags, urlOverrides))
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
 	slog.Log(

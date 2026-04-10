@@ -527,8 +527,8 @@ func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	// All outbounds get URL-tested — the server now sends callback URLs for
-	// every outbound, and the worker pool (N=6) bounds memory.
+	// All outbounds get URL-tested — the server now sends callback
+	// URLs for every outbound, and the dependency's worker pool bounds memory.
 	outbounds = append(outbounds, urlTestOutbound("preTest", tags, cfg.BanditURLOverrides))
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},

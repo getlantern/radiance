@@ -296,7 +296,7 @@ func (t *tunnel) addOutbounds(group string, options servers.Options) (err error)
 	)
 	// for each outbound/endpoint in new add to group.
 	// All outbounds go in the URL test group — the server now sends callback
-	// URLs for every outbound, and the worker pool (N=6) bounds memory.
+	// URLs for every outbound, and the bounded worker pool helps limit memory usage.
 	for _, outbound := range newOptions.Outbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
 		err := mutGrpMgr.CreateOutboundForGroup(
