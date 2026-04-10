@@ -56,7 +56,7 @@ func sendRequest[T any](ctx context.Context, method, endpoint string, data any) 
 		return res, traces.RecordError(ctx, fmt.Errorf("request failed: %w", err))
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return res, traces.RecordError(ctx, readErrorResponse(resp))
 	}
 	if _, ok := any(&res).(*empty); ok {
