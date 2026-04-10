@@ -417,19 +417,25 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 			}
 		}
 		err := mutGrpMgr.RemoveFromGroup(group, tag)
-		if err == nil {
-			// remove from urltest
-			err = mutGrpMgr.RemoveFromGroup(autoTag, tag)
-		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
 		}
 		if err != nil {
 			errs = append(errs, err)
-		} else {
-			t.optsMap.Delete(tag)
-			removed++
+			continue
 		}
+		// Best-effort removal from URL test group — extra outbounds
+		// (non-smart) are only in the selector, not the URL test group,
+		// so this removal is expected to fail for them.
+		if utErr := mutGrpMgr.RemoveFromGroup(autoTag, tag); utErr != nil {
+			if errors.Is(utErr, groups.ErrIsClosed) {
+				return errLibboxClosed
+			}
+			slog.Debug("Outbound not in URL test group, skipping removal",
+				"tag", tag, "group", autoTag)
+		}
+		t.optsMap.Delete(tag)
+		removed++
 	}
 	if t.clientContextTracker != nil {
 		t.updateClientContextTracker()
