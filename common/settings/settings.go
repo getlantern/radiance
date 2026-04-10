@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,7 +120,18 @@ func Get(key _key) any {
 }
 
 func GetString(key _key) string {
-	return k.k.String(key.String())
+	// JSON round-trip turns all numbers into float64 and since koanf uses Sprintf("%v") for string
+	// conversion, large integers (i.e. userID) get converted to scientific notation (e.g. 3.87286618e+08)
+	// so we handle float64 separately
+	value := Get(key)
+	switch v := value.(type) {
+	case float64:
+		return strconv.FormatInt(int64(v), 10)
+	case string:
+		return v
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 func GetBool(key _key) bool {
