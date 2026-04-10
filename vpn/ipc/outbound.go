@@ -205,11 +205,17 @@ func (s *Server) updateOutboundsHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	slog.Debug("Updating outbounds")
-	if err := s.service.UpdateOutbounds(data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusAccepted)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in UpdateOutbounds", "recover", r, "stack", string(runtimeDebug.Stack()))
+			}
+		}()
+		if err := s.service.UpdateOutbounds(data); err != nil {
+			slog.Error("Failed to update outbounds", "error", err)
+		}
+	}()
 }
 
 type newOutbounds struct {
@@ -238,11 +244,17 @@ func (s *Server) addOutboundsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Debug("Adding outbounds", "group", data.Group)
-	if err := s.service.AddOutbounds(data.Group, data.Servers); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusAccepted)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in AddOutbounds", "recover", r, "stack", string(runtimeDebug.Stack()))
+			}
+		}()
+		if err := s.service.AddOutbounds(data.Group, data.Servers); err != nil {
+			slog.Error("Failed to add outbounds", "error", err)
+		}
+	}()
 }
 
 type outboundsToRemove struct {
@@ -265,9 +277,15 @@ func (s *Server) removeOutboundsHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.service.RemoveOutbounds(data.Group, data.Tags); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusAccepted)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in RemoveOutbounds", "recover", r, "stack", string(runtimeDebug.Stack()))
+			}
+		}()
+		if err := s.service.RemoveOutbounds(data.Group, data.Tags); err != nil {
+			slog.Error("Failed to remove outbounds", "error", err)
+		}
+	}()
 }
