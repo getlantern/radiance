@@ -432,7 +432,7 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 				return errLibboxClosed
 			}
 			slog.Debug("Failed best-effort removal from URL test group",
-				"tag", tag, "group", autoTag, "err", utErr)
+				"tag", tag, "group", autoTag, "error", utErr)
 		}
 		t.optsMap.Delete(tag)
 		removed++
