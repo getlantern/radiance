@@ -111,8 +111,8 @@ func NewServer(service Service) *Server {
 
 	svr := &http.Server{
 		Handler:      s.router,
-		ReadTimeout:  time.Second * 5,
-		WriteTimeout: time.Second * 5,
+		ReadTimeout:  time.Second * 15,
+		WriteTimeout: time.Second * 30,
 	}
 	if addAuth {
 		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {

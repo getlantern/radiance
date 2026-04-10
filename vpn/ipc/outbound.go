@@ -190,6 +190,12 @@ func (s *Server) updateOutboundsHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in updateOutboundsHandler", "recover", r, "stack", string(runtimeDebug.Stack()))
+			http.Error(w, fmt.Sprint(r), http.StatusInternalServerError)
+		}
+	}()
 	// Use sing-box's context-aware JSON decoder so custom outbound types
 	// (e.g., samizdat) are deserialized into their typed Options structs
 	// instead of generic map[string]any. Without this, fields like
@@ -227,6 +233,12 @@ func (s *Server) addOutboundsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in addOutboundsHandler", "recover", r, "stack", string(runtimeDebug.Stack()))
+			http.Error(w, fmt.Sprint(r), http.StatusInternalServerError)
+		}
+	}()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxIPCBodySize))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -260,6 +272,12 @@ func (s *Server) removeOutboundsHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, ErrServiceIsNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in removeOutboundsHandler", "recover", r, "stack", string(runtimeDebug.Stack()))
+			http.Error(w, fmt.Sprint(r), http.StatusInternalServerError)
+		}
+	}()
 	var data outboundsToRemove
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
