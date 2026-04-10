@@ -431,8 +431,8 @@ func (t *tunnel) removeOutbounds(group string, tags []string) error {
 			if errors.Is(utErr, groups.ErrIsClosed) {
 				return errLibboxClosed
 			}
-			slog.Debug("Outbound not in URL test group, skipping removal",
-				"tag", tag, "group", autoTag)
+			slog.Debug("Failed best-effort removal from URL test group",
+				"tag", tag, "group", autoTag, "err", utErr)
 		}
 		t.optsMap.Delete(tag)
 		removed++
