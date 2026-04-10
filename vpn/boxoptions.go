@@ -479,8 +479,9 @@ func useIfNotZero[T comparable](newVal, oldVal T) T {
 }
 
 func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
-	urlTestTags := filterURLTestTags(tags, urlOverrides, serverGroup)
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, urlTestTags, urlOverrides))
+	// All outbounds go in the URL test group — the server now sends callback
+	// URLs for every outbound, and the worker pool (N=6) bounds memory.
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags, urlOverrides))
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
 	slog.Log(
 		nil, internal.LevelTrace, "Added group outbounds",
@@ -637,23 +638,3 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 	}
 }
 
-// filterURLTestTags returns only the tags that have URL overrides when overrides
-// are present. If no overrides exist or none match, returns all tags unchanged.
-// The context parameter is used for log attribution.
-func filterURLTestTags(tags []string, urlOverrides map[string]string, context string) []string {
-	if len(urlOverrides) == 0 {
-		return tags
-	}
-	filtered := make([]string, 0, len(urlOverrides))
-	for _, tag := range tags {
-		if _, ok := urlOverrides[tag]; ok {
-			filtered = append(filtered, tag)
-		}
-	}
-	if len(filtered) > 0 {
-		return filtered
-	}
-	slog.Warn("No URL-test tags matched URL overrides, falling back to all tags",
-		"context", context, "tagCount", len(tags), "overrideCount", len(urlOverrides))
-	return tags
-}
