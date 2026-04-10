@@ -423,6 +423,7 @@ func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) {
 	_, adBlockChanged := updates[settings.AdBlockKey]
 	_, smartRoutingChanged := updates[settings.SmartRoutingKey]
 	if (adBlockChanged || smartRoutingChanged) && r.vpnClient.Status() == vpn.Connected {
+		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
 		bOptions := r.getBoxOptions()
 		go r.vpnClient.Restart(bOptions)
 	}

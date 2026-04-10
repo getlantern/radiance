@@ -488,23 +488,31 @@ func (s *SplitTunnel) initRuleMap() {
 	}
 	for i := range s.activeFilter.Rules {
 		rule := &s.activeFilter.Rules[i].DefaultOptions
-		switch {
-		case len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
-			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0:
+		matched := false
+		if len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
+			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0 {
 			s.ruleMap[TypeDomain] = rule
-		case len(rule.ProcessName) > 0:
+			matched = true
+		}
+		if len(rule.ProcessName) > 0 {
 			s.ruleMap[TypeProcessName] = rule
-		case len(rule.ProcessPath) > 0:
+			matched = true
+		}
+		if len(rule.ProcessPath) > 0 {
 			s.ruleMap[TypeProcessPath] = rule
-		case len(rule.ProcessPathRegex) > 0:
+			matched = true
+		}
+		if len(rule.ProcessPathRegex) > 0 {
 			s.ruleMap[TypeProcessPathRegex] = rule
-		case len(rule.PackageName) > 0:
+			matched = true
+		}
+		if len(rule.PackageName) > 0 {
 			s.ruleMap[TypePackageName] = rule
-		default:
-			if emptyIdx < len(missing) {
-				s.ruleMap[missing[emptyIdx]] = rule
-				emptyIdx++
-			}
+			matched = true
+		}
+		if !matched && emptyIdx < len(missing) {
+			s.ruleMap[missing[emptyIdx]] = rule
+			emptyIdx++
 		}
 	}
 
