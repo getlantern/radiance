@@ -105,14 +105,16 @@ func TestAddRemoveItems(t *testing.T) {
 }
 
 func TestFilterPersistence(t *testing.T) {
-	st := setupTestSplitTunnel(t)
+	testutil.SetPathsForTesting(t)
+	st, err := NewSplitTunnelHandler()
+	require.NoError(t, err)
 	require.NoError(t, st.AddItem("domain", "example.com"))
 
 	f := st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain)
 
-	st = newSplitTunnel(settings.GetString(settings.DataPathKey))
-	assert.NoError(t, st.loadRule())
+	st, err = NewSplitTunnelHandler()
+	require.NoError(t, err)
 	f = st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")
 }

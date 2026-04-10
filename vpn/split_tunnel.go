@@ -375,21 +375,36 @@ func remove(s []string, items []string) []string {
 }
 
 func (s *SplitTunnel) saveToFile() error {
-	rule := s.rule
-	rule.Rules[1].LogicalOptions.Rules = slices.DeleteFunc(rule.Rules[1].LogicalOptions.Rules, func(r O.HeadlessRule) bool {
-		return isEmptyRule(r.DefaultOptions)
-	})
-
-	if len(rule.Rules[1].LogicalOptions.Rules) == 0 {
-		rule.Rules = rule.Rules[:1] // remove the default rule if it's empty
+	// Build a serialization-only copy of the rules, filtering out empty entries
+	// without mutating the live activeFilter/ruleMap state.
+	filterRules := make([]O.HeadlessRule, 0, len(s.activeFilter.Rules))
+	for _, r := range s.activeFilter.Rules {
+		if !isEmptyRule(r.DefaultOptions) {
+			filterRules = append(filterRules, r)
+		}
 	}
+
+	outerRules := []O.HeadlessRule{s.rule.Rules[0]} // disable rule
+	if len(filterRules) > 0 {
+		outerRules = append(outerRules, O.HeadlessRule{
+			Type: s.rule.Rules[1].Type,
+			LogicalOptions: O.LogicalHeadlessRule{
+				Mode:  s.activeFilter.Mode,
+				Rules: filterRules,
+			},
+		})
+	}
+
 	rs := O.PlainRuleSetCompat{
 		Version: 3,
 		Options: O.PlainRuleSet{
 			Rules: []O.HeadlessRule{
 				{
-					Type:           "logical",
-					LogicalOptions: rule,
+					Type: "logical",
+					LogicalOptions: O.LogicalHeadlessRule{
+						Mode:  s.rule.Mode,
+						Rules: outerRules,
+					},
 				},
 			},
 		},
@@ -401,7 +416,6 @@ func (s *SplitTunnel) saveToFile() error {
 	if err := atomicfile.WriteFile(s.ruleFile, buf, 0644); err != nil {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
-	s.initRuleMap()
 	return nil
 }
 
@@ -544,47 +558,72 @@ func defaultRule() O.LogicalHeadlessRule {
 func (s *SplitTunnel) initRuleMap() {
 	s.ruleMap = make(map[string]*O.DefaultHeadlessRule)
 
+	categories := []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName}
+
+	// First pass: find which categories already have rules, and ensure empty
+	// rules exist for the rest. All appends happen before any pointers are
+	// stored so that slice reallocation cannot invalidate them.
+	found := make(map[string]bool, len(categories))
 	for i := range s.activeFilter.Rules {
 		rule := &s.activeFilter.Rules[i].DefaultOptions
-
-		// Categorize the rule based on its contents
 		if len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
 			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0 {
-			s.ruleMap[TypeDomain] = rule
+			found[TypeDomain] = true
 		}
 		if len(rule.ProcessName) > 0 {
-			s.ruleMap[TypeProcessName] = rule
+			found[TypeProcessName] = true
 		}
 		if len(rule.ProcessPath) > 0 {
-			s.ruleMap[TypeProcessPath] = rule
+			found[TypeProcessPath] = true
 		}
 		if len(rule.ProcessPathRegex) > 0 {
-			s.ruleMap[TypeProcessPathRegex] = rule
+			found[TypeProcessPathRegex] = true
 		}
 		if len(rule.PackageName) > 0 {
-			s.ruleMap[TypePackageName] = rule
+			found[TypePackageName] = true
+		}
+	}
+	for _, cat := range categories {
+		if !found[cat] {
+			s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
+				Type:           C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{},
+			})
 		}
 	}
 
-	for _, ruleType := range []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName} {
-		s.ensureRuleExists(ruleType)
+	// Second pass: the slice is now stable — store pointers into ruleMap.
+	// Empty rules are assigned to the first unmatched category.
+	emptyIdx := 0
+	missing := make([]string, 0, len(categories))
+	for _, cat := range categories {
+		if !found[cat] {
+			missing = append(missing, cat)
+		}
+	}
+	for i := range s.activeFilter.Rules {
+		rule := &s.activeFilter.Rules[i].DefaultOptions
+		switch {
+		case len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
+			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0:
+			s.ruleMap[TypeDomain] = rule
+		case len(rule.ProcessName) > 0:
+			s.ruleMap[TypeProcessName] = rule
+		case len(rule.ProcessPath) > 0:
+			s.ruleMap[TypeProcessPath] = rule
+		case len(rule.ProcessPathRegex) > 0:
+			s.ruleMap[TypeProcessPathRegex] = rule
+		case len(rule.PackageName) > 0:
+			s.ruleMap[TypePackageName] = rule
+		default:
+			if emptyIdx < len(missing) {
+				s.ruleMap[missing[emptyIdx]] = rule
+				emptyIdx++
+			}
+		}
 	}
 
 	s.ruleMap[TypeDomainKeyword] = s.ruleMap[TypeDomain]
 	s.ruleMap[TypeDomainRegex] = s.ruleMap[TypeDomain]
 	s.ruleMap[TypeDomainSuffix] = s.ruleMap[TypeDomain]
-}
-
-func (s *SplitTunnel) ensureRuleExists(category string) *O.DefaultHeadlessRule {
-	if rule, ok := s.ruleMap[category]; ok {
-		return rule
-	}
-
-	// Create new rule and add it to activeFilter
-	s.activeFilter.Rules = append(s.activeFilter.Rules, O.HeadlessRule{
-		Type:           C.RuleTypeDefault,
-		DefaultOptions: O.DefaultHeadlessRule{},
-	})
-	s.ruleMap[category] = &s.activeFilter.Rules[len(s.activeFilter.Rules)-1].DefaultOptions
-	return s.ruleMap[category]
 }
