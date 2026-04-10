@@ -110,6 +110,23 @@ func TestFilterPersistence(t *testing.T) {
 	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")
 }
 
+func TestFilterPersistenceAfterLoad(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Simulate the daemon path: NewSplitTunnelHandler (newSplitTunnel + loadRule), then AddItems
+	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
+	f := st.Filters()
+	assert.Equal(t, []string{"example.com"}, f.Domain, "filter should be set in memory after AddItems")
+
+	// Reload from disk to verify persistence
+	st2, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	f = st2.Filters()
+	assert.Equal(t, []string{"example.com"}, f.Domain, "filter should persist to disk after AddItems")
+}
+
 func TestUpdateFilterUnsupportedType(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 	err := st.AddItem("unsupported", "foo")
