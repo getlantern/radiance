@@ -31,6 +31,7 @@ type Mapping struct {
 	Protocol      string // "TCP" or "UDP"
 	LeaseDuration time.Duration
 	Method        string // "upnp-igd2", "upnp-igd1"
+	Description   string // UPnP mapping description
 }
 
 // Forwarder manages port mappings on the local gateway via UPnP IGD.
@@ -49,8 +50,8 @@ func New() *Forwarder {
 }
 
 // MapPort opens a port on the gateway, forwarding external traffic to the given
-// internal port on this machine. It tries UPnP IGDv2, then IGDv1. If the
-// requested external port is taken, it retries with random ports.
+// internal port on this machine. It tries UPnP IGDv2, then IGDv1, selecting a
+// random external port and retrying if the chosen port cannot be mapped.
 func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, description string) (*Mapping, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -120,8 +121,9 @@ func (f *Forwarder) StartRenewal(ctx context.Context) {
 		return
 	}
 	f.stopC = make(chan struct{})
+	stopC := f.stopC // capture for goroutine to avoid race with stopRenewal
 	m := *f.mapping
-	pf := f // capture for goroutine
+	pf := f
 	f.mu.Unlock()
 
 	renewInterval := m.LeaseDuration / 2
@@ -136,7 +138,7 @@ func (f *Forwarder) StartRenewal(ctx context.Context) {
 			select {
 			case <-ticker.C:
 				pf.renewMapping(ctx, m)
-			case <-pf.stopC:
+			case <-stopC:
 				return
 			case <-ctx.Done():
 				return
@@ -151,19 +153,23 @@ func (f *Forwarder) renewMapping(ctx context.Context, m Mapping) {
 	if f.mapping == nil {
 		return
 	}
+	desc := m.Description
+	if desc == "" {
+		desc = "Lantern Peer Proxy"
+	}
 	switch {
 	case f.igd2Client != nil:
 		_ = f.igd2Client.AddPortMappingCtx(ctx,
 			"", m.ExternalPort, m.Protocol,
 			m.InternalPort, m.InternalIP,
-			true, "Lantern Peer Proxy",
+			true, desc,
 			uint32(m.LeaseDuration.Seconds()),
 		)
 	case f.igd1Client != nil:
 		_ = f.igd1Client.AddPortMappingCtx(ctx,
 			"", m.ExternalPort, m.Protocol,
 			m.InternalPort, m.InternalIP,
-			true, "Lantern Peer Proxy",
+			true, desc,
 			uint32(m.LeaseDuration.Seconds()),
 		)
 	}
@@ -188,28 +194,32 @@ func (f *Forwarder) tryIGD2(ctx context.Context, localIP string, internalPort ui
 	if err != nil || len(clients) == 0 {
 		return nil, fmt.Errorf("no IGDv2 gateway found")
 	}
-	client := clients[0]
 
-	for i := 0; i < maxRetries; i++ {
-		extPort := randomPort()
-		err = client.AddPortMappingCtx(ctx,
-			"", extPort, "TCP",
-			internalPort, localIP,
-			true, desc, leaseDuration,
-		)
-		if err == nil {
-			f.igd2Client = client
-			return &Mapping{
-				ExternalPort:  extPort,
-				InternalPort:  internalPort,
-				InternalIP:    localIP,
-				Protocol:      "TCP",
-				LeaseDuration: time.Duration(leaseDuration) * time.Second,
-				Method:        "upnp-igd2",
-			}, nil
+	var lastErr error
+	for _, client := range clients {
+		for i := 0; i < maxRetries; i++ {
+			extPort := randomPort()
+			err = client.AddPortMappingCtx(ctx,
+				"", extPort, "TCP",
+				internalPort, localIP,
+				true, desc, leaseDuration,
+			)
+			if err == nil {
+				f.igd2Client = client
+				return &Mapping{
+					ExternalPort:  extPort,
+					InternalPort:  internalPort,
+					InternalIP:    localIP,
+					Protocol:      "TCP",
+					LeaseDuration: time.Duration(leaseDuration) * time.Second,
+					Method:        "upnp-igd2",
+					Description:   desc,
+				}, nil
+			}
+			lastErr = err
 		}
 	}
-	return nil, fmt.Errorf("IGDv2 failed after %d attempts: %w", maxRetries, err)
+	return nil, fmt.Errorf("IGDv2 failed after %d attempts on %d clients: %w", maxRetries, len(clients), lastErr)
 }
 
 func (f *Forwarder) tryIGD1(ctx context.Context, localIP string, internalPort uint16, desc string) (*Mapping, error) {
@@ -217,32 +227,40 @@ func (f *Forwarder) tryIGD1(ctx context.Context, localIP string, internalPort ui
 	if err != nil || len(clients) == 0 {
 		return nil, fmt.Errorf("no IGDv1 gateway found")
 	}
-	client := clients[0]
 
-	for i := 0; i < maxRetries; i++ {
-		extPort := randomPort()
-		err = client.AddPortMappingCtx(ctx,
-			"", extPort, "TCP",
-			internalPort, localIP,
-			true, desc, leaseDuration,
-		)
-		if err == nil {
-			f.igd1Client = client
-			return &Mapping{
-				ExternalPort:  extPort,
-				InternalPort:  internalPort,
-				InternalIP:    localIP,
-				Protocol:      "TCP",
-				LeaseDuration: time.Duration(leaseDuration) * time.Second,
-				Method:        "upnp-igd1",
-			}, nil
+	var lastErr error
+	for _, client := range clients {
+		for i := 0; i < maxRetries; i++ {
+			extPort := randomPort()
+			if err := client.AddPortMappingCtx(ctx,
+				"", extPort, "TCP",
+				internalPort, localIP,
+				true, desc, leaseDuration,
+			); err == nil {
+				f.igd1Client = client
+				return &Mapping{
+					ExternalPort:  extPort,
+					InternalPort:  internalPort,
+					InternalIP:    localIP,
+					Protocol:      "TCP",
+					LeaseDuration: time.Duration(leaseDuration) * time.Second,
+					Method:        "upnp-igd1",
+					Description:   desc,
+				}, nil
+			} else {
+				lastErr = err
+			}
 		}
 	}
-	return nil, fmt.Errorf("IGDv1 failed after %d attempts: %w", maxRetries, err)
+	return nil, fmt.Errorf("IGDv1 failed after %d attempts on %d clients: %w", maxRetries, len(clients), lastErr)
 }
 
 func randomPort() uint16 {
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(portRangeMax-portRangeMin)))
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(portRangeMax-portRangeMin+1)))
+	if err != nil {
+		// Fallback to time-based if CSPRNG fails (should never happen)
+		return uint16(time.Now().UnixNano()%int64(portRangeMax-portRangeMin+1)) + portRangeMin
+	}
 	return uint16(n.Int64()) + portRangeMin
 }
 
