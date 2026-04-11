@@ -27,7 +27,8 @@ type PeerStatus struct {
 }
 
 // SetPeerController registers the peer proxy controller with the IPC server.
-// Must be called before Start(). If not called, peer endpoints return 501.
+// Must be called before Start(). If not called, start/stop return 501 and
+// status returns {active: false}.
 func (s *Server) SetPeerController(pc PeerController) {
 	s.peerController = pc
 }
@@ -58,14 +59,14 @@ func (s *Server) peerStartHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer proxy not available", http.StatusNotImplemented)
 		return
 	}
-	ctx := r.Context()
 	slog.Info("IPC: starting peer proxy")
 
 	// Process asynchronously — starting the peer proxy involves UPnP discovery
-	// and API registration which can take several seconds.
+	// and API registration which can take several seconds. Use the service
+	// context (not the request context, which is canceled when the handler returns).
 	w.WriteHeader(http.StatusAccepted)
 	go func() {
-		if err := s.peerController.Start(ctx); err != nil {
+		if err := s.peerController.Start(s.service.Ctx()); err != nil {
 			slog.Error("Failed to start peer proxy", "error", err)
 		}
 	}()

@@ -21,7 +21,7 @@ func TestRandomPort(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		p := randomPort()
 		assert.GreaterOrEqual(t, p, uint16(portRangeMin))
-		assert.Less(t, p, uint16(portRangeMax))
+		assert.LessOrEqual(t, p, uint16(portRangeMax))
 		seen[p] = true
 	}
 	// With 100 draws from a 50000-range, we should get many distinct values

@@ -112,7 +112,7 @@ func (p *PeerProxy) Start(ctx context.Context) error {
 	slog.Info("Peer proxy registered", "route_id", p.routeID)
 
 	// 4. Start sing-box instance with the server config
-	instance, err := p.startSingbox(ctx, regResp.ServerConfig)
+	instance, err := p.startSingbox(regResp.ServerConfig)
 	if err != nil {
 		_ = p.deregister(ctx)
 		_ = p.forwarder.UnmapPort(ctx)
@@ -207,6 +207,9 @@ func (p *PeerProxy) register(ctx context.Context, externalIP string, externalPor
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Lantern-Device-Id", p.deviceID)
+	if p.userToken != "" {
+		req.Header.Set("X-Lantern-Pro-Token", p.userToken)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -259,6 +262,9 @@ func (p *PeerProxy) heartbeat(ctx context.Context) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Lantern-Device-Id", p.deviceID)
+	if p.userToken != "" {
+		req.Header.Set("X-Lantern-Pro-Token", p.userToken)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -284,17 +290,23 @@ func (p *PeerProxy) deregister(ctx context.Context) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Lantern-Device-Id", p.deviceID)
+	if p.userToken != "" {
+		req.Header.Set("X-Lantern-Pro-Token", p.userToken)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("deregister: %s", resp.Status)
+	}
 	return nil
 }
 
 // startSingbox creates and starts a sing-box instance with the given server config JSON.
-func (p *PeerProxy) startSingbox(ctx context.Context, serverConfigJSON string) (*sbox.Box, error) {
+func (p *PeerProxy) startSingbox(serverConfigJSON string) (*sbox.Box, error) {
 	opts, err := singjson.UnmarshalExtendedContext[sboxOption.Options](box.BaseContext(), []byte(serverConfigJSON))
 	if err != nil {
 		return nil, fmt.Errorf("parsing server config: %w", err)
