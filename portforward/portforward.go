@@ -8,8 +8,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -252,4 +255,43 @@ func LocalIP() (string, error) {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String(), nil
+}
+
+// ExternalIP discovers this machine's public IP by querying external services.
+// It tries multiple providers for redundancy.
+func ExternalIP(ctx context.Context) (string, error) {
+	providers := []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://icanhazip.com",
+	}
+	for _, url := range providers {
+		ip, err := fetchExternalIP(ctx, url)
+		if err == nil && ip != "" {
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("failed to determine external IP from any provider")
+}
+
+func fetchExternalIP(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
+		return "", err
+	}
+	ip := strings.TrimSpace(string(body))
+	if net.ParseIP(ip) == nil {
+		return "", fmt.Errorf("invalid IP: %q", ip)
+	}
+	return ip, nil
 }
