@@ -156,15 +156,46 @@ func connect(group, tag string) error {
 }
 
 // Restart restarts the tunnel by reconnecting to the currently selected server.
+//
+// The selected server is captured before the underlying libbox service is torn
+// down and re-applied after it comes back up. The rebuilt selector always
+// initializes to auto, so without this restore step the user's selection would
+// silently be lost on every restart (e.g. when toggling smart-routing or
+// ad-blocking while connected).
 func Restart() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
 	defer span.End()
+
+	var selectedGroup, selectedTag string
+	if isOpen(ctx) {
+		slog.Debug("Tunnel is open get connected server")
+		g, t, err := ipc.GetSelected(ctx)
+		slog.Debug("Got connected server", "group", g, "tag", t, "error", err)
+		if err != nil {
+			slog.Warn("Failed to capture selected server before restart", "error", err)
+		} else {
+			selectedGroup, selectedTag = g, t
+		}
+	}
 
 	options, err := getOptions()
 	if err != nil {
 		return err
 	}
-	return traces.RecordError(ctx, ipc.RestartService(ctx, options))
+	if err := traces.RecordError(ctx, ipc.RestartService(ctx, options)); err != nil {
+		return err
+	}
+
+	// Skip restoring auto: the rebuilt tunnel already defaults to auto.
+	if selectedGroup == "" || selectedGroup == autoAllTag {
+		return nil
+	}
+	slog.Debug("Restoring selected server after restart", "group", selectedGroup, "tag", selectedTag)
+	if err := Connect(selectedGroup, selectedTag); err != nil {
+		slog.Warn("Failed to restore selected server after restart",
+			"group", selectedGroup, "tag", selectedTag, "error", err)
+	}
+	return nil
 }
 
 func getOptions() (string, error) {
@@ -368,8 +399,8 @@ func AutoServerSelections() (AutoSelections, error) {
 }
 
 const (
-	rapidPollInterval = 500 * time.Millisecond
-	rapidPollWindow   = 15 * time.Second
+	rapidPollInterval  = 500 * time.Millisecond
+	rapidPollWindow    = 15 * time.Second
 	steadyPollInterval = 10 * time.Second
 )
 
@@ -577,7 +608,6 @@ func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	return results, traceCtx, hasTrace, nil
 }
 
-
 func saveURLTestResults(storage *urltest.HistoryStorage, path string, results map[string]uint16) error {
 	slog.Debug("Saving URL test history", "path", path)
 	history := make(map[string]*adapter.URLTestHistory, len(results))
@@ -647,11 +677,7 @@ func restartTunnel() error {
 		return nil
 	}
 	slog.Info("Restarting tunnel")
-	options, err := getOptions()
-	if err != nil {
-		return err
-	}
-	if err := ipc.RestartService(ctx, options); err != nil {
+	if err := Restart(); err != nil {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 	return nil
