@@ -9,7 +9,6 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httputil"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/traces"
 
 	"google.golang.org/protobuf/proto"
@@ -118,8 +116,8 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		OsVersion:         osVersion,
 	}
 
-	logPath := filepath.Join(settings.GetString(settings.LogPathKey), internal.LogFileName)
-	archive, err := buildIssueArchive(logPath, report.AdditionalAttachments, maxCompressedSize)
+	logDir := settings.GetString(settings.LogPathKey)
+	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, maxCompressedSize)
 	if err != nil {
 		slog.Error("failed to build issue archive", "error", err)
 	}

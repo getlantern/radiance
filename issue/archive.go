@@ -10,19 +10,49 @@ import (
 	"path/filepath"
 )
 
-// buildIssueArchive creates a zip archive containing the log file and additional
-// attachment files. The total compressed archive size will not exceed maxSize bytes.
-//
-// Additional files are included only if space permits after the log.
-func buildIssueArchive(logPath string, additionalFiles []string, maxSize int64) ([]byte, error) {
-	logData, err := snapshotLogFile(logPath, maxSize)
-	if err != nil {
-		slog.Warn("unable to snapshot log file, trying additional files only", "path", logPath, "error", err)
+// buildIssueArchive creates a zip archive containing all .log files found in
+// logDir plus additional attachment files. The primary log (lantern.log) is
+// given truncation priority; secondary log files and attachments are included
+// greedily if space permits. The total compressed archive size will not exceed
+// maxSize bytes.
+func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) ([]byte, error) {
+	logFiles := globLogFiles(logDir)
+
+	var primaryLogData []byte
+	var secondaryLogs []extraFile
+
+	for _, lf := range logFiles {
+		data, err := snapshotLogFile(lf, maxSize)
+		if err != nil {
+			slog.Warn("unable to snapshot log file", "path", lf, "error", err)
+			continue
+		}
+		if len(data) == 0 {
+			continue
+		}
+		if filepath.Base(lf) == logArchiveName {
+			primaryLogData = data
+		} else {
+			secondaryLogs = append(secondaryLogs, extraFile{
+				name: filepath.Base(lf),
+				data: data,
+			})
+		}
 	}
 
-	extras := readExtraFiles(additionalFiles)
+	attachments := readExtraFiles(additionalFiles)
 
-	return fitArchive(logData, extras, maxSize)
+	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
+}
+
+// globLogFiles returns all .log files in dir, sorted by filepath.Glob order.
+func globLogFiles(dir string) []string {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.log"))
+	if err != nil {
+		slog.Warn("unable to glob log files", "dir", dir, "error", err)
+		return nil
+	}
+	return matches
 }
 
 // snapshotLogFile opens the log file, records its current size, and reads the tail
@@ -88,14 +118,18 @@ func readExtraFiles(paths []string) []extraFile {
 	return files
 }
 
-// fitArchive builds a zip archive that fits within maxSize, prioritizing log data.
-func fitArchive(logData []byte, extras []extraFile, maxSize int64) ([]byte, error) {
-	if len(logData) == 0 && len(extras) == 0 {
+// fitArchive builds a zip archive that fits within maxSize. The primary log
+// (lantern.log) is given truncation priority, followed by secondary log files,
+// then attachments.
+func fitArchive(primaryLog []byte, secondaryLogs []extraFile, attachments []extraFile, maxSize int64) ([]byte, error) {
+	allLogs := logsFromPrimary(primaryLog, secondaryLogs)
+
+	if len(allLogs) == 0 && len(attachments) == 0 {
 		return nil, nil
 	}
 
 	// Try everything.
-	buf, err := writeArchive(logData, extras)
+	buf, err := writeArchive(allLogs, attachments)
 	if err != nil {
 		return nil, err
 	}
@@ -103,44 +137,56 @@ func fitArchive(logData []byte, extras []extraFile, maxSize int64) ([]byte, erro
 		return buf.Bytes(), nil
 	}
 
-	// Try full log, no extras.
-	if len(logData) > 0 {
-		buf, err = writeArchive(logData, nil)
+	// Try primary log only.
+	primaryLogs := logsFromPrimary(primaryLog, nil)
+	if len(primaryLog) > 0 {
+		buf, err = writeArchive(primaryLogs, nil)
 		if err != nil {
 			return nil, err
 		}
 		if int64(buf.Len()) <= maxSize {
-			// Full log fits — greedily add extras that still fit.
-			return addExtrasGreedily(logData, extras, maxSize)
+			// Full primary fits — greedily add secondary logs, then attachments.
+			return addExtrasGreedily(primaryLogs, secondaryLogs, attachments, maxSize)
 		}
 
-		// Full log doesn't fit — binary search for the maximum tail.
-		tailSize := searchMaxLogTail(logData, maxSize)
-		tail := logData[len(logData)-tailSize:]
-		return addExtrasGreedily(tail, extras, maxSize)
+		// Full primary doesn't fit — binary search for the maximum tail.
+		tailSize := searchMaxLogTail(primaryLog, maxSize)
+		tail := primaryLog[len(primaryLog)-tailSize:]
+		trimmedPrimary := logsFromPrimary(tail, nil)
+		return addExtrasGreedily(trimmedPrimary, secondaryLogs, attachments, maxSize)
 	}
 
-	// No log data — try extras only.
-	return addExtrasGreedily(nil, extras, maxSize)
+	// No primary log — greedily add secondary logs and attachments.
+	return addExtrasGreedily(nil, secondaryLogs, attachments, maxSize)
+}
+
+// logsFromPrimary builds a combined log entry list with the primary log first.
+func logsFromPrimary(primaryLog []byte, secondaryLogs []extraFile) []extraFile {
+	var logs []extraFile
+	if len(primaryLog) > 0 {
+		logs = append(logs, extraFile{name: logArchiveName, data: primaryLog})
+	}
+	logs = append(logs, secondaryLogs...)
+	return logs
 }
 
 const logArchiveName = "lantern.log"
 
-func writeArchive(logData []byte, extras []extraFile) (*bytes.Buffer, error) {
+func writeArchive(logs []extraFile, attachments []extraFile) (*bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
 	w := zip.NewWriter(buf)
 
-	if len(logData) > 0 {
-		fw, err := w.Create(logArchiveName)
+	for _, l := range logs {
+		fw, err := w.Create(l.name)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := fw.Write(logData); err != nil {
+		if _, err := fw.Write(l.data); err != nil {
 			return nil, err
 		}
 	}
 
-	for _, f := range extras {
+	for _, f := range attachments {
 		fw, err := w.Create("attachments/" + f.name)
 		if err != nil {
 			return nil, err
@@ -171,7 +217,8 @@ func searchMaxLogTail(logData []byte, maxSize int64) int {
 			tailBytes = n
 		}
 
-		buf, err := writeArchive(logData[n-tailBytes:], nil)
+		logs := []extraFile{{name: logArchiveName, data: logData[n-tailBytes:]}}
+		buf, err := writeArchive(logs, nil)
 		if err != nil {
 			hi = mid - 1
 			continue
@@ -186,27 +233,45 @@ func searchMaxLogTail(logData []byte, maxSize int64) int {
 	return best
 }
 
-// addExtrasGreedily starts from the given log data and adds extra files one by one,
-// keeping each only if the archive still fits within maxSize.
-func addExtrasGreedily(logData []byte, extras []extraFile, maxSize int64) ([]byte, error) {
-	var included []extraFile
-	buf, err := writeArchive(logData, nil)
+// addExtrasGreedily starts from the given base logs and greedily adds secondary
+// log files then attachment files, keeping each only if the archive still fits
+// within maxSize.
+func addExtrasGreedily(baseLogs []extraFile, secondaryLogs []extraFile, attachments []extraFile, maxSize int64) ([]byte, error) {
+	currentLogs := make([]extraFile, len(baseLogs))
+	copy(currentLogs, baseLogs)
+	var currentAttachments []extraFile
+
+	buf, err := writeArchive(currentLogs, nil)
 	if err != nil {
 		return nil, err
 	}
 	lastGood := buf.Bytes()
 
-	for _, f := range extras {
-		// Safe append that won't modify the existing slice's backing array.
-		trial := append(included[:len(included):len(included)], f)
-		buf, err := writeArchive(logData, trial)
+	// Greedily add secondary log files.
+	for _, sl := range secondaryLogs {
+		trial := append(currentLogs[:len(currentLogs):len(currentLogs)], sl)
+		buf, err := writeArchive(trial, currentAttachments)
 		if err != nil {
 			continue
 		}
 		if int64(buf.Len()) <= maxSize {
-			included = trial
+			currentLogs = trial
 			lastGood = buf.Bytes()
 		}
 	}
+
+	// Greedily add attachment files.
+	for _, a := range attachments {
+		trial := append(currentAttachments[:len(currentAttachments):len(currentAttachments)], a)
+		buf, err := writeArchive(currentLogs, trial)
+		if err != nil {
+			continue
+		}
+		if int64(buf.Len()) <= maxSize {
+			currentAttachments = trial
+			lastGood = buf.Bytes()
+		}
+	}
+
 	return lastGood, nil
 }

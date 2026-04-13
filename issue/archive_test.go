@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,14 +31,14 @@ func TestSnapshotLogFile(t *testing.T) {
 
 		// maxCompressed=100 → maxRead = 100*20 = 2000
 		// Write 5000 bytes so the file exceeds the cap.
-		full := strings.Repeat("X", 5000)
-		require.NoError(t, os.WriteFile(logPath, []byte(full), 0644))
+		full := bytes.Repeat([]byte("X"), 5000)
+		require.NoError(t, os.WriteFile(logPath, full, 0644))
 
 		data, err := snapshotLogFile(logPath, 100)
 		require.NoError(t, err)
 		assert.Equal(t, 2000, len(data))
 		// Should be the tail of the file.
-		assert.Equal(t, full[3000:], string(data))
+		assert.Equal(t, string(full[3000:]), string(data))
 	})
 
 	t.Run("returns nil for empty file", func(t *testing.T) {
@@ -84,6 +83,35 @@ func TestSnapshotLogFile(t *testing.T) {
 	})
 }
 
+func TestGlobLogFiles(t *testing.T) {
+	t.Run("finds all log files", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("main"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash.log"), []byte("crash"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("not a log"), 0644))
+
+		files := globLogFiles(dir)
+		require.Len(t, files, 2)
+		bases := make([]string, len(files))
+		for i, f := range files {
+			bases[i] = filepath.Base(f)
+		}
+		assert.Contains(t, bases, "lantern.log")
+		assert.Contains(t, bases, "lantern-crash.log")
+	})
+
+	t.Run("returns nil for empty dir", func(t *testing.T) {
+		dir := t.TempDir()
+		files := globLogFiles(dir)
+		assert.Nil(t, files)
+	})
+
+	t.Run("returns nil for nonexistent dir", func(t *testing.T) {
+		files := globLogFiles("/nonexistent/dir")
+		assert.Nil(t, files)
+	})
+}
+
 func TestReadExtraFiles(t *testing.T) {
 	t.Run("reads existing files", func(t *testing.T) {
 		dir := t.TempDir()
@@ -118,8 +146,8 @@ func TestReadExtraFiles(t *testing.T) {
 
 func TestWriteArchive(t *testing.T) {
 	t.Run("log only", func(t *testing.T) {
-		logData := []byte("some log content")
-		buf, err := writeArchive(logData, nil)
+		logs := []extraFile{{name: logArchiveName, data: []byte("some log content")}}
+		buf, err := writeArchive(logs, nil)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, buf.Bytes())
@@ -128,25 +156,27 @@ func TestWriteArchive(t *testing.T) {
 		assert.Equal(t, "some log content", entries[0].content)
 	})
 
-	t.Run("log with extras", func(t *testing.T) {
-		logData := []byte("log line")
-		extras := []extraFile{
-			{name: "config.json", data: []byte(`{"key":"val"}`)},
-			{name: "screenshot.png", data: []byte("fake png")},
+	t.Run("multiple logs with attachments", func(t *testing.T) {
+		logs := []extraFile{
+			{name: "lantern.log", data: []byte("main log")},
+			{name: "lantern-crash.log", data: []byte("crash log")},
 		}
-		buf, err := writeArchive(logData, extras)
+		attachments := []extraFile{
+			{name: "config.json", data: []byte(`{"key":"val"}`)},
+		}
+		buf, err := writeArchive(logs, attachments)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, buf.Bytes())
 		require.Len(t, entries, 3)
-		assert.Equal(t, logArchiveName, entries[0].name)
-		assert.Equal(t, "attachments/config.json", entries[1].name)
-		assert.Equal(t, "attachments/screenshot.png", entries[2].name)
+		assert.Equal(t, "lantern.log", entries[0].name)
+		assert.Equal(t, "lantern-crash.log", entries[1].name)
+		assert.Equal(t, "attachments/config.json", entries[2].name)
 	})
 
-	t.Run("extras only", func(t *testing.T) {
-		extras := []extraFile{{name: "file.txt", data: []byte("hello")}}
-		buf, err := writeArchive(nil, extras)
+	t.Run("attachments only", func(t *testing.T) {
+		attachments := []extraFile{{name: "file.txt", data: []byte("hello")}}
+		buf, err := writeArchive(nil, attachments)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, buf.Bytes())
@@ -166,32 +196,34 @@ func TestWriteArchive(t *testing.T) {
 func TestFitArchive(t *testing.T) {
 	t.Run("everything fits", func(t *testing.T) {
 		logData := []byte("small log")
-		extras := []extraFile{{name: "a.txt", data: []byte("small")}}
-		result, err := fitArchive(logData, extras, 1024*1024)
+		secondary := []extraFile{{name: "crash.log", data: []byte("crash")}}
+		attachments := []extraFile{{name: "a.txt", data: []byte("small")}}
+		result, err := fitArchive(logData, secondary, attachments, 1024*1024)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
 		entries := readZipEntries(t, result)
-		assert.Len(t, entries, 2)
+		assert.Len(t, entries, 3)
 	})
 
 	t.Run("nil log and nil extras returns nil", func(t *testing.T) {
-		result, err := fitArchive(nil, nil, 1024*1024)
+		result, err := fitArchive(nil, nil, nil, 1024*1024)
 		require.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
-	t.Run("extras dropped when too large", func(t *testing.T) {
+	t.Run("attachments dropped when too large", func(t *testing.T) {
 		logData := []byte("log data")
-		// Make an extra that's big enough to push past a small maxSize.
-		bigExtra := extraFile{name: "big.bin", data: bytes.Repeat([]byte{0xFF}, 50*1024)}
+		// Make an attachment that's big enough to push past a small maxSize.
+		bigAttachment := extraFile{name: "big.bin", data: bytes.Repeat([]byte{0xFF}, 50*1024)}
 
 		// Find the compressed size of just the log.
-		logOnly, err := writeArchive(logData, nil)
+		logs := []extraFile{{name: logArchiveName, data: logData}}
+		logOnly, err := writeArchive(logs, nil)
 		require.NoError(t, err)
 		maxSize := int64(logOnly.Len()) + 100 // just barely enough for log, not the extra
 
-		result, err := fitArchive(logData, []extraFile{bigExtra}, maxSize)
+		result, err := fitArchive(logData, nil, []extraFile{bigAttachment}, maxSize)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, result)
@@ -209,7 +241,7 @@ func TestFitArchive(t *testing.T) {
 
 		maxSize := int64(512 * 1024) // 512KB
 
-		result, err := fitArchive(logData, nil, maxSize)
+		result, err := fitArchive(logData, nil, nil, maxSize)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, int64(len(result)), maxSize)
 
@@ -224,12 +256,10 @@ func TestFitArchive(t *testing.T) {
 			"included content should be the tail of the original log")
 	})
 
-	t.Run("extras only when no log", func(t *testing.T) {
-		extras := []extraFile{
-			{name: "a.txt", data: []byte("aaa")},
-			{name: "b.txt", data: []byte("bbb")},
-		}
-		result, err := fitArchive(nil, extras, 1024*1024)
+	t.Run("secondary logs and attachments only when no primary", func(t *testing.T) {
+		secondary := []extraFile{{name: "crash.log", data: []byte("crash")}}
+		attachments := []extraFile{{name: "a.txt", data: []byte("aaa")}}
+		result, err := fitArchive(nil, secondary, attachments, 1024*1024)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, result)
@@ -255,7 +285,8 @@ func TestSearchMaxLogTail(t *testing.T) {
 		assert.Less(t, tailSize, len(logData))
 
 		// Verify the result actually fits.
-		buf, err := writeArchive(logData[len(logData)-tailSize:], nil)
+		logs := []extraFile{{name: logArchiveName, data: logData[len(logData)-tailSize:]}}
+		buf, err := writeArchive(logs, nil)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, int64(buf.Len()), maxSize)
 	})
@@ -263,12 +294,10 @@ func TestSearchMaxLogTail(t *testing.T) {
 
 func TestAddExtrasGreedily(t *testing.T) {
 	t.Run("adds all when they fit", func(t *testing.T) {
-		logData := []byte("log")
-		extras := []extraFile{
-			{name: "a.txt", data: []byte("aaa")},
-			{name: "b.txt", data: []byte("bbb")},
-		}
-		result, err := addExtrasGreedily(logData, extras, 1024*1024)
+		baseLogs := []extraFile{{name: logArchiveName, data: []byte("log")}}
+		secondary := []extraFile{{name: "crash.log", data: []byte("crash")}}
+		attachments := []extraFile{{name: "a.txt", data: []byte("aaa")}}
+		result, err := addExtrasGreedily(baseLogs, secondary, attachments, 1024*1024)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, result)
@@ -276,16 +305,16 @@ func TestAddExtrasGreedily(t *testing.T) {
 	})
 
 	t.Run("skips extras that would exceed limit", func(t *testing.T) {
-		logData := []byte("log")
+		baseLogs := []extraFile{{name: logArchiveName, data: []byte("log")}}
 		small := extraFile{name: "small.txt", data: []byte("s")}
 		big := extraFile{name: "big.bin", data: bytes.Repeat([]byte{0xFF}, 50*1024)}
 
 		// Budget enough for log + small, but not big.
-		bufWithSmall, err := writeArchive(logData, []extraFile{small})
+		bufWithSmall, err := writeArchive(baseLogs, []extraFile{small})
 		require.NoError(t, err)
 		maxSize := int64(bufWithSmall.Len()) + 50 // tight budget
 
-		result, err := addExtrasGreedily(logData, []extraFile{small, big}, maxSize)
+		result, err := addExtrasGreedily(baseLogs, nil, []extraFile{small, big}, maxSize)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, result)
@@ -299,8 +328,8 @@ func TestAddExtrasGreedily(t *testing.T) {
 	})
 
 	t.Run("no extras returns log only", func(t *testing.T) {
-		logData := []byte("log content")
-		result, err := addExtrasGreedily(logData, nil, 1024*1024)
+		baseLogs := []extraFile{{name: logArchiveName, data: []byte("log content")}}
+		result, err := addExtrasGreedily(baseLogs, nil, nil, 1024*1024)
 		require.NoError(t, err)
 
 		entries := readZipEntries(t, result)
@@ -312,13 +341,12 @@ func TestAddExtrasGreedily(t *testing.T) {
 func TestBuildIssueArchive(t *testing.T) {
 	t.Run("end to end with log and extras", func(t *testing.T) {
 		dir := t.TempDir()
-		logPath := filepath.Join(dir, "lantern.log")
-		require.NoError(t, os.WriteFile(logPath, []byte("log line 1\nlog line 2\n"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("log line 1\nlog line 2\n"), 0644))
 
 		extra := filepath.Join(dir, "extra.txt")
 		require.NoError(t, os.WriteFile(extra, []byte("extra content"), 0644))
 
-		result, err := buildIssueArchive(logPath, []string{extra}, 1024*1024)
+		result, err := buildIssueArchive(dir, []string{extra}, 1024*1024)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -329,12 +357,31 @@ func TestBuildIssueArchive(t *testing.T) {
 		assert.Equal(t, "attachments/extra.txt", entries[1].name)
 	})
 
-	t.Run("missing log file still includes extras", func(t *testing.T) {
+	t.Run("includes all log files in directory", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("main log"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash.log"), []byte("crash log"), 0644))
+
+		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		entries := readZipEntries(t, result)
+		require.Len(t, entries, 2)
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.name
+		}
+		assert.Contains(t, names, "lantern.log")
+		assert.Contains(t, names, "lantern-crash.log")
+	})
+
+	t.Run("missing log dir still includes extras", func(t *testing.T) {
 		dir := t.TempDir()
 		extra := filepath.Join(dir, "extra.txt")
 		require.NoError(t, os.WriteFile(extra, []byte("data"), 0644))
 
-		result, err := buildIssueArchive(filepath.Join(dir, "nonexistent.log"), []string{extra}, 1024*1024)
+		result, err := buildIssueArchive(filepath.Join(dir, "nonexistent"), []string{extra}, 1024*1024)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -345,15 +392,14 @@ func TestBuildIssueArchive(t *testing.T) {
 
 	t.Run("archive respects maxSize", func(t *testing.T) {
 		dir := t.TempDir()
-		logPath := filepath.Join(dir, "lantern.log")
 		// Write incompressible data (2MB).
 		logContent := make([]byte, 2*1024*1024)
 		_, err := rand.Read(logContent)
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(logPath, logContent, 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), logContent, 0644))
 
 		maxSize := int64(512 * 1024)
-		result, err := buildIssueArchive(logPath, nil, maxSize)
+		result, err := buildIssueArchive(dir, nil, maxSize)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, int64(len(result)), maxSize)
 
