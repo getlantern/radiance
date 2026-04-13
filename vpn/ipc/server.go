@@ -44,11 +44,12 @@ type Service interface {
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr       *http.Server
-	service   Service
-	router    chi.Router
-	vpnStatus atomic.Value // string
-	closed    atomic.Bool
+	svr            *http.Server
+	service        Service
+	peerController PeerController
+	router         chi.Router
+	vpnStatus      atomic.Value // string
+	closed         atomic.Bool
 }
 
 // StatusUpdateEvent is emitted when the VPN status changes.
@@ -108,6 +109,11 @@ func NewServer(service Service) *Server {
 	s.router.Post(addOutboundsEndpoint, s.addOutboundsHandler)
 	s.router.Post(removeOutboundsEndpoint, s.removeOutboundsHandler)
 	s.router.Post(closeConnectionsEndpoint, s.closeConnectionHandler)
+
+	// Peer proxy endpoints
+	s.router.Post(peerStartEndpoint, s.peerStartHandler)
+	s.router.Post(peerStopEndpoint, s.peerStopHandler)
+	s.router.Get(peerStatusEndpoint, s.peerStatusHandler)
 
 	svr := &http.Server{
 		Handler:      s.router,
