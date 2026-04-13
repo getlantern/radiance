@@ -98,14 +98,15 @@ func TestAddRemoveItems(t *testing.T) {
 
 func TestFilterPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
-	st := newSplitTunnel(tmpDir, rlog.NoOpLogger())
+	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
 	require.NoError(t, st.AddItem("domain", "example.com"))
 
 	f := st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain)
 
-	st = newSplitTunnel(tmpDir, rlog.NoOpLogger())
-	assert.NoError(t, st.loadRule())
+	st, err = NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
 	f = st.Filters()
 	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")
 }

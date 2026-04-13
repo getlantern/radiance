@@ -348,7 +348,6 @@ func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
 		if err == nil {
-			// add to autoselect
 			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
@@ -378,7 +377,6 @@ func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
 			ctx, router, logger, ManualSelectTag, endpoint.Tag, endpoint.Type, endpoint.Options,
 		)
 		if err == nil {
-			// add to autoselect
 			err = mutGrpMgr.AddToGroup(AutoSelectTag, endpoint.Tag)
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
