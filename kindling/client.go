@@ -33,32 +33,49 @@ var (
 		"proxyless": true,
 		"fronted":   true,
 	}
+	defaultTransportClone = http.DefaultTransport.(*http.Transport).Clone()
 )
 
-// HTTPClient returns a http client with kindling transport.
-// Thread-safe: uses kindlingMutex to guard lazy initialization.
+// HTTPClient returns an HTTP client whose transport lazily initializes
+// kindling on the first request. This avoids blocking startup while still
+// providing censorship-circumvention transports once they are needed.
 func HTTPClient() *http.Client {
-	kindlingMutex.Lock()
-	if k == nil {
-		newK, err := NewKindling(settings.GetString(settings.DataPathKey))
-		if err != nil {
-			slog.Error("failed to create kindling client", slog.Any("error", err))
-		}
-		if newK != nil {
-			k = newK
-		}
+	return &http.Client{
+		Timeout:   common.DefaultHTTPTimeout,
+		Transport: &lazyTransport{},
 	}
-	localK := k
-	kindlingMutex.Unlock()
+}
 
-	if localK == nil {
-		slog.Warn("kindling unavailable, returning bare HTTP client")
-		return &http.Client{Timeout: common.DefaultHTTPTimeout}
-	}
-	httpClient := localK.NewHTTPClient()
-	httpClient.Timeout = common.DefaultHTTPTimeout
-	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
-	return httpClient
+// lazyTransport is an http.RoundTripper that initializes the kindling-backed
+// transport on the first RoundTrip call.
+type lazyTransport struct {
+	once sync.Once
+	rt   http.RoundTripper
+}
+
+func (t *lazyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.once.Do(func() {
+		kindlingMutex.Lock()
+		if k == nil {
+			newK, err := NewKindling(settings.GetString(settings.DataPathKey))
+			if err != nil {
+				slog.Error("failed to create kindling client", slog.Any("error", err))
+			}
+			if newK != nil {
+				k = newK
+			}
+		}
+		localK := k
+		kindlingMutex.Unlock()
+
+		if localK != nil {
+			t.rt = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(localK.NewHTTPClient().Transport))
+		} else {
+			slog.Warn("kindling unavailable, using default transport clone")
+			t.rt = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+		}
+	})
+	return t.rt.RoundTrip(req)
 }
 
 // Close stop all concurrent config fetches that can be happening in background
