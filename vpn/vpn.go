@@ -157,45 +157,20 @@ func connect(group, tag string) error {
 
 // Restart restarts the tunnel by reconnecting to the currently selected server.
 //
-// The selected server is captured before the underlying libbox service is torn
-// down and re-applied after it comes back up. The rebuilt selector always
-// initializes to auto, so without this restore step the user's selection would
-// silently be lost on every restart (e.g. when toggling smart-routing or
-// ad-blocking while connected).
+// On Android, the platform interface restart is asynchronous and tears down the
+// running libbox in favor of a fresh one. Any in-process selection restore here
+// would land on the soon-to-be-destroyed instance and be lost. The user's
+// selection is preserved by SelectServer persisting (group, tag) to settings,
+// which vpn_tunnel.StartVPN reads when bringing the new libbox up.
 func Restart() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
 	defer span.End()
-
-	var selectedGroup, selectedTag string
-	if isOpen(ctx) {
-		slog.Debug("Tunnel is open get connected server")
-		g, t, err := ipc.GetSelected(ctx)
-		slog.Debug("Got connected server", "group", g, "tag", t, "error", err)
-		if err != nil {
-			slog.Warn("Failed to capture selected server before restart", "error", err)
-		} else {
-			selectedGroup, selectedTag = g, t
-		}
-	}
 
 	options, err := getOptions()
 	if err != nil {
 		return err
 	}
-	if err := traces.RecordError(ctx, ipc.RestartService(ctx, options)); err != nil {
-		return err
-	}
-
-	// Skip restoring auto: the rebuilt tunnel already defaults to auto.
-	if selectedGroup == "" || selectedGroup == autoAllTag {
-		return nil
-	}
-	slog.Debug("Restoring selected server after restart", "group", selectedGroup, "tag", selectedTag)
-	if err := Connect(selectedGroup, selectedTag); err != nil {
-		slog.Warn("Failed to restore selected server after restart",
-			"group", selectedGroup, "tag", selectedTag, "error", err)
-	}
-	return nil
+	return traces.RecordError(ctx, ipc.RestartService(ctx, options))
 }
 
 func getOptions() (string, error) {
@@ -230,6 +205,11 @@ func Disconnect() error {
 }
 
 // SelectServer selects the specified server for the tunnel. The tunnel must already be open.
+//
+// The selection is also persisted to settings so that vpn_tunnel.StartVPN can
+// restore it when Android's VPN service lifecycle creates a fresh libbox. The
+// in-memory selector state on the running libbox doesn't survive the OS-driven
+// teardown/start cycle.
 func SelectServer(ctx context.Context, group, tag string) error {
 	if !isOpen(ctx) {
 		return errors.New("tunnel is not open")
@@ -240,6 +220,7 @@ func SelectServer(ctx context.Context, group, tag string) error {
 			slog.Error("Failed to set auto mode", "group", group, "error", err)
 			return fmt.Errorf("failed to set auto mode: %w", err)
 		}
+		persistSelection("", "")
 		return nil
 	}
 	slog.Info("Selecting server", "group", group, "tag", tag)
@@ -247,7 +228,29 @@ func SelectServer(ctx context.Context, group, tag string) error {
 		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
+	persistSelection(group, tag)
 	return nil
+}
+
+// persistSelection writes the current server selection to settings so it can
+// outlive the libbox instance. Errors are logged but don't fail the caller —
+// the selection still took effect on the live tunnel.
+func persistSelection(group, tag string) {
+	if err := settings.Set(settings.SelectedServerGroupKey, group); err != nil {
+		slog.Warn("Failed to persist selected server group", "error", err)
+	}
+	if err := settings.Set(settings.SelectedServerTagKey, tag); err != nil {
+		slog.Warn("Failed to persist selected server tag", "error", err)
+	}
+}
+
+// LastSelectedServer returns the most recently persisted server selection, or
+// empty strings if the user is on auto / has never selected a server. Used by
+// vpn_tunnel.StartVPN to bring up new libbox instances pinned to the user's
+// choice instead of falling back to auto.
+func LastSelectedServer() (group, tag string) {
+	return settings.GetString(settings.SelectedServerGroupKey),
+		settings.GetString(settings.SelectedServerTagKey)
 }
 
 // Status represents the current status of the tunnel, including whether it is open, the selected

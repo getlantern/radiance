@@ -38,6 +38,11 @@ const (
 	LoginResponseKey = "login_response"
 	SmartRoutingKey  = "smart_routing"
 	AdBlockKey       = "ad_block"
+	// SelectedServerGroupKey / SelectedServerTagKey persist the user's last
+	// server selection so it survives Android's async tunnel-restart lifecycle
+	// (the new libbox is created without any in-memory selector state).
+	SelectedServerGroupKey = "selected_server_group"
+	SelectedServerTagKey   = "selected_server_tag"
 	DataCapUsageKey  = "datacap_usage"
 	filePathKey      = "file_path"
 
