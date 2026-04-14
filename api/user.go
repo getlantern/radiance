@@ -768,7 +768,17 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 	}
 	var changed bool
 	if data.LegacyUserData == nil {
-		slog.Info("no user data to set")
+		slog.Info("No legacy user data in response, storing user ID and token only")
+		if data.LegacyID != 0 {
+			if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
+				slog.Error("failed to set user ID in settings", "error", err)
+			}
+		}
+		if data.LegacyToken != "" {
+			if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
+				slog.Error("failed to set token in settings", "error", err)
+			}
+		}
 		return
 	}
 
