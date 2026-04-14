@@ -312,3 +312,35 @@ func (m *mockAuthClient) LoginPrepare(ctx context.Context, req *protos.PrepareRe
 	m.cache[req.Email] = hex.EncodeToString(state)
 	return &protos.PrepareResponse{B: B.Bytes(), Proof: proof}, nil
 }
+
+func TestSetData_NilLegacyUserData(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	t.Cleanup(settings.Reset)
+
+	ac := &APIClient{}
+
+	data := &protos.LoginResponse{
+		LegacyID:    12345,
+		LegacyToken: "test-pro-token",
+		Devices: []*protos.LoginResponse_Device{
+			{Id: "device-1", Name: "Phone"},
+			{Id: "device-2", Name: "Laptop"},
+		},
+		// LegacyUserData intentionally nil to simulate device-limit flow
+	}
+
+	ac.setData(data)
+
+	// Verify legacy ID and pro token are persisted
+	assert.Equal(t, int64(12345), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "test-pro-token", settings.GetString(settings.TokenKey))
+
+	// Verify devices are persisted
+	devices, err := settings.Devices()
+	require.NoError(t, err)
+	assert.Len(t, devices, 2)
+	assert.Equal(t, "device-1", devices[0].ID)
+	assert.Equal(t, "Phone", devices[0].Name)
+	assert.Equal(t, "device-2", devices[1].ID)
+	assert.Equal(t, "Laptop", devices[1].Name)
+}
