@@ -768,7 +768,7 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 	}
 	var changed bool
 	if data.LegacyUserData == nil {
-		slog.Info("No legacy user data in response, storing user ID and token only")
+		slog.Info("No legacy user data in response, storing legacy ID and pro token only")
 		if data.LegacyID != 0 {
 			if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
 				slog.Error("failed to set user ID in settings", "error", err)
@@ -778,6 +778,17 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 			if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
 				slog.Error("failed to set token in settings", "error", err)
 			}
+		}
+
+		devices := []settings.Device{}
+		for _, d := range data.Devices {
+			devices = append(devices, settings.Device{
+				Name: d.Name,
+				ID:   d.Id,
+			})
+		}
+		if err := settings.Set(settings.DevicesKey, devices); err != nil {
+			slog.Error("failed to set devices in settings", "error", err)
 		}
 		return
 	}
