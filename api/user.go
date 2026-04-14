@@ -768,7 +768,30 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 	}
 	var changed bool
 	if data.LegacyUserData == nil {
-		slog.Info("no user data to set")
+		slog.Info("No legacy user data in response, storing legacy ID and pro token only")
+		if data.LegacyID != 0 {
+			if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
+				slog.Error("failed to set user ID in settings", "error", err)
+			}
+		}
+		if data.LegacyToken != "" {
+			if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
+				slog.Error("failed to set token in settings", "error", err)
+			}
+		}
+
+		if data.Devices != nil && len(data.Devices) > 0 {
+			devices := []settings.Device{}
+			for _, d := range data.Devices {
+				devices = append(devices, settings.Device{
+					Name: d.Name,
+					ID:   d.Id,
+				})
+			}
+			if err := settings.Set(settings.DevicesKey, devices); err != nil {
+				slog.Error("failed to set devices in settings", "error", err)
+			}
+		}
 		return
 	}
 
@@ -809,16 +832,17 @@ func (a *APIClient) setData(data *protos.LoginResponse) {
 			slog.Error("failed to set JWT token in settings", "error", err)
 		}
 	}
-
-	devices := []settings.Device{}
-	for _, d := range data.Devices {
-		devices = append(devices, settings.Device{
-			Name: d.Name,
-			ID:   d.Id,
-		})
-	}
-	if err := settings.Set(settings.DevicesKey, devices); err != nil {
-		slog.Error("failed to set devices in settings", "error", err)
+	if data.Devices != nil && len(data.Devices) > 0 {
+		devices := []settings.Device{}
+		for _, d := range data.Devices {
+			devices = append(devices, settings.Device{
+				Name: d.Name,
+				ID:   d.Id,
+			})
+		}
+		if err := settings.Set(settings.DevicesKey, devices); err != nil {
+			slog.Error("failed to set devices in settings", "error", err)
+		}
 	}
 
 	if err := settings.Set(settings.LoginResponseKey, data); err != nil {
