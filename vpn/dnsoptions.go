@@ -43,7 +43,12 @@ func buildDNSServers() []option.DNSServerOptions {
 	}
 
 	// quad9 doesn't transmit EDNS Client-Subnet data in order to avoid
-	// transmitting the user IP  address to the remote site.
+	// transmitting the user IP address to the remote site.
+	// Use detour "direct" so that DNS resolution works at sing-box startup
+	// before the proxy URL-test group has a known network interface. A/AAAA
+	// queries for user traffic are routed through dns_fakeip anyway, so
+	// dns_remote is only used for non-A/AAAA lookups and rule-set downloads —
+	// neither of which requires proxying.
 	remote := option.DNSServerOptions{
 		Type: constant.DNSTypeHTTPS,
 		Tag:  "dns_remote",
@@ -57,7 +62,7 @@ func buildDNSServers() []option.DNSServerOptions {
 					},
 					LocalDNSServerOptions: option.LocalDNSServerOptions{
 						DialerOptions: option.DialerOptions{
-							Detour: "auto",
+							Detour: "direct",
 						},
 					},
 				},
