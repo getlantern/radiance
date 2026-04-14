@@ -155,13 +155,7 @@ func connect(group, tag string) error {
 	return SelectServer(ctx, group, tag)
 }
 
-// Restart restarts the tunnel by reconnecting to the currently selected server.
-//
-// On Android, the platform interface restart is asynchronous and tears down the
-// running libbox in favor of a fresh one. Any in-process selection restore here
-// would land on the soon-to-be-destroyed instance and be lost. The user's
-// selection is preserved by SelectServer persisting (group, tag) to settings,
-// which vpn_tunnel.StartVPN reads when bringing the new libbox up.
+// Restart restarts the tunnel by stopping and starting the service.
 func Restart() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
 	defer span.End()
