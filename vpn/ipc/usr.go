@@ -23,9 +23,10 @@ func init() {
 type usrKey struct{}
 
 type usr struct {
-	uid     string
-	uname   string
-	isAdmin bool
+	uid            string
+	uname          string
+	isAdmin        bool
+	inControlGroup bool
 }
 
 func contextWithUsr(ctx context.Context, u usr) context.Context {
