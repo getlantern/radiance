@@ -103,6 +103,7 @@ func AutoConnect(group string) error {
 			if err := ipc.SetClashMode(ctx, autoAllTag); err != nil {
 				return fmt.Errorf("failed to set auto mode: %w", err)
 			}
+			persistSelection("", "")
 			return nil
 		}
 		return traces.RecordError(ctx, connect(autoAllTag, ""))
@@ -226,25 +227,59 @@ func SelectServer(ctx context.Context, group, tag string) error {
 	return nil
 }
 
-// persistSelection writes the current server selection to settings so it can
-// outlive the libbox instance. Errors are logged but don't fail the caller —
-// the selection still took effect on the live tunnel.
+const selectedServerFileName = "selected_server.json"
+
+type selectedServer struct {
+	Group string `json:"group"`
+	Tag   string `json:"tag"`
+}
+
+// persistSelection saves the server selection to a file (not settings, which is read-only
+// in the tunnel process). Errors are logged but not propagated.
 func persistSelection(group, tag string) {
-	if err := settings.Set(settings.SelectedServerGroupKey, group); err != nil {
-		slog.Warn("Failed to persist selected server group", "error", err)
+	dataPath := settings.GetString(settings.DataPathKey)
+	if dataPath == "" {
+		slog.Warn("Cannot persist server selection: data path not set")
+		return
 	}
-	if err := settings.Set(settings.SelectedServerTagKey, tag); err != nil {
-		slog.Warn("Failed to persist selected server tag", "error", err)
+	filePath := filepath.Join(dataPath, selectedServerFileName)
+	data, err := json.Marshal(selectedServer{Group: group, Tag: tag})
+	if err != nil {
+		slog.Warn("Failed to marshal server selection", "error", err)
+		return
+	}
+	if err := atomicfile.WriteFile(filePath, data, 0o644); err != nil {
+		slog.Warn("Failed to persist server selection", "error", err)
 	}
 }
 
-// LastSelectedServer returns the most recently persisted server selection, or
-// empty strings if the user is on auto / has never selected a server. Used by
-// vpn_tunnel.StartVPN to bring up new libbox instances pinned to the user's
-// choice instead of falling back to auto.
+// ClearLastSelectedServer removes the persisted server selection so the next
+// StartVPN falls through to AutoConnect.
+func ClearLastSelectedServer() {
+	persistSelection("", "")
+}
+
+// LastSelectedServer returns the persisted server selection, or empty strings
+// if on auto or no selection was ever saved.
 func LastSelectedServer() (group, tag string) {
-	return settings.GetString(settings.SelectedServerGroupKey),
-		settings.GetString(settings.SelectedServerTagKey)
+	dataPath := settings.GetString(settings.DataPathKey)
+	if dataPath == "" {
+		return "", ""
+	}
+	filePath := filepath.Join(dataPath, selectedServerFileName)
+	data, err := atomicfile.ReadFile(filePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("Failed to read persisted server selection", "error", err)
+		}
+		return "", ""
+	}
+	var sel selectedServer
+	if err := json.Unmarshal(data, &sel); err != nil {
+		slog.Warn("Failed to unmarshal persisted server selection", "error", err)
+		return "", ""
+	}
+	return sel.Group, sel.Tag
 }
 
 // Status represents the current status of the tunnel, including whether it is open, the selected
