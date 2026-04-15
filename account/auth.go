@@ -56,15 +56,15 @@ func (a *Client) clientProof(ctx context.Context, email, password string, salt [
 
 	key, err := srpClient.Key()
 	if err != nil || key == nil {
-		return nil, fmt.Errorf("generating Client key %w", err)
+		return nil, fmt.Errorf("user_not_found error while generating Client key %w", err)
 	}
 	if !srpClient.GoodServerProof(salt, email, srpB.Proof) {
-		return nil, fmt.Errorf("checking server proof %w", err)
+		return nil, fmt.Errorf("user_not_found checking server proof %w", err)
 	}
 
 	proof, err := srpClient.ClientProof()
 	if err != nil {
-		return nil, fmt.Errorf("generating client proof %w", err)
+		return nil, fmt.Errorf("user_not_found generating client proof %w", err)
 	}
 	return proof, nil
 }

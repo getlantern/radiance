@@ -294,8 +294,13 @@ func (a *Client) Logout(ctx context.Context, email string) (*UserData, error) {
 		DeviceId:     settings.GetString(settings.DeviceIDKey),
 		LegacyUserID: settings.GetInt64(settings.UserIDKey),
 		LegacyToken:  settings.GetString(settings.TokenKey),
-		Token:        settings.GetString(settings.JwtTokenKey),
 	}
+	// JWT token is only set for OAuth users; omit the field entirely when empty
+	jwtToken := settings.GetString(settings.JwtTokenKey)
+	if jwtToken != "" {
+		logout.Token = jwtToken
+	}
+	slog.Info("Logout request", "request", logout, "JWTTokenSet", jwtToken != "")
 	_, err := a.sendRequest(ctx, "POST", "/users/logout", nil, nil, logout)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
