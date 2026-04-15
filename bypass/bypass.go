@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/getlantern/radiance/log"
 )
 
 const (
@@ -41,7 +43,7 @@ func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	}
 	proxyConn, err := dialer.DialContext(ctx, "tcp", ProxyAddr)
 	if err != nil {
-		slog.Debug("bypass proxy not reachable, falling back to direct dial", "addr", addr, "error", err)
+		slog.Log(nil, log.LevelTrace, "bypass proxy not reachable, falling back to direct dial", "addr", addr, "error", err)
 		return dialer.DialContext(ctx, network, addr)
 	}
 	tunnelConn, err := httpConnect(ctx, proxyConn, addr)

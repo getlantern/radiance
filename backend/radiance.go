@@ -194,6 +194,7 @@ func (r *LocalBackend) Start() {
 		}
 	}
 	r.startVPNStatusListeners()
+	r.StartAutoSelectedListener()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
@@ -264,12 +265,7 @@ func (r *LocalBackend) Start() {
 			slog.Error("Failed to run offline URL tests after config update", "error", err)
 		}
 	})
-	go func() {
-		r.confHandler.Start()
-		if err := r.RunOfflineURLTests(); err != nil {
-			slog.Error("Failed to run offline URL tests after config update", "error", err)
-		}
-	}()
+	go r.confHandler.Start()
 }
 
 func (r *LocalBackend) Close() {
