@@ -171,6 +171,23 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 }
 
 func (r *LocalBackend) Start() {
+	// eagerly start kindling so it's ready by the time we need to make network requests
+	kindling.Init()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, err := publicip.Detect(ctx, &publicip.Config{
+			Timeout:      2 * time.Second,
+			MinConsensus: 1,
+		})
+		cancel()
+		if err != nil {
+			slog.Warn("Failed to get public IP", "error", err)
+		} else {
+			common.SetPublicIP(result.IP.String())
+			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+		}
+	}()
+
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
 			slog.Error("Failed to start telemetry", "error", err)
@@ -248,21 +265,6 @@ func (r *LocalBackend) Start() {
 		}
 	})
 	go func() {
-		// get public IP so it's available for the initial config fetch and included in issue
-		// reports, but don't block startup if it fails for some reason
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		result, err := publicip.Detect(ctx, &publicip.Config{
-			Timeout:      2 * time.Second,
-			MinConsensus: 1, // accept the first result to minimize delay
-		})
-		cancel()
-		if err != nil {
-			slog.Warn("Failed to get public IP", "error", err)
-		} else {
-			common.SetPublicIP(result.IP.String())
-			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
-		}
-
 		r.confHandler.Start()
 		if err := r.RunOfflineURLTests(); err != nil {
 			slog.Error("Failed to run offline URL tests after config update", "error", err)

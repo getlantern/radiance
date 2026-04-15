@@ -1,3 +1,5 @@
+// Package kindling provides a wrapper around the kindling library to create an HTTP client with
+// various transports (domain fronting, AMP, DNS tunneling, proxyless) from a shared kindling instance.
 package kindling
 
 import (
@@ -23,7 +25,7 @@ import (
 
 var (
 	k               kindling.Kindling
-	kindlingMutex   sync.Mutex
+	initOnce        sync.Once
 	stopUpdater     func()
 	closeTransports []func() error
 	// EnabledTransports is used for testing purposes for enabling/disabling kindling transports
@@ -34,48 +36,47 @@ var (
 		"fronted":   true,
 	}
 	defaultTransportClone = http.DefaultTransport.(*http.Transport).Clone()
+
+	// transport is the shared http.RoundTripper set once by initOnce.
+	transport http.RoundTripper
 )
 
-// HTTPClient returns an HTTP client whose transport lazily initializes
-// kindling on the first request. This avoids blocking startup while still
-// providing censorship-circumvention transports once they are needed.
-func HTTPClient() *http.Client {
-	return &http.Client{
-		Timeout:   common.DefaultHTTPTimeout,
-		Transport: &lazyTransport{},
+// initKindling initializes the package-level kindling instance and shared
+// transport.
+func initKindling() {
+	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
+	if err != nil {
+		slog.Error("failed to create kindling client", slog.Any("error", err))
+	}
+	if newK != nil {
+		k = newK
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(newK.NewHTTPClient().Transport))
+	} else {
+		slog.Warn("kindling unavailable, using default transport clone")
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
 	}
 }
 
-// lazyTransport is an http.RoundTripper that initializes the kindling-backed
-// transport on the first RoundTrip call.
-type lazyTransport struct {
-	once sync.Once
-	rt   http.RoundTripper
+func Init() {
+	go initOnce.Do(initKindling)
 }
 
-func (t *lazyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.once.Do(func() {
-		kindlingMutex.Lock()
-		if k == nil {
-			newK, err := NewKindling(settings.GetString(settings.DataPathKey))
-			if err != nil {
-				slog.Error("failed to create kindling client", slog.Any("error", err))
-			}
-			if newK != nil {
-				k = newK
-			}
-		}
-		localK := k
-		kindlingMutex.Unlock()
+// HTTPClient returns an HTTP client backed by kindling. The underlying
+// transport blocks on first use until kindling is initialized.
+func HTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   common.DefaultHTTPTimeout,
+		Transport: readyTransport{},
+	}
+}
 
-		if localK != nil {
-			t.rt = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(localK.NewHTTPClient().Transport))
-		} else {
-			slog.Warn("kindling unavailable, using default transport clone")
-			t.rt = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
-		}
-	})
-	return t.rt.RoundTrip(req)
+// readyTransport blocks until initOnce has completed, then delegates to the
+// shared transport.
+type readyTransport struct{}
+
+func (readyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	initOnce.Do(initKindling)
+	return transport.RoundTrip(req)
 }
 
 // Close stop all concurrent config fetches that can be happening in background
@@ -91,12 +92,20 @@ func Close() error {
 	return nil
 }
 
-// SetKindling sets the kindling method used for building the HTTP client
-// This function is useful for testing purposes.
+// SetKindling sets the kindling method used for building the HTTP client.
+// This function is useful for testing purposes. It bypasses the normal
+// initialization path, so Warm()/initOnce will be a no-op after this call
+// only if called before them. For tests, call SetKindling before any
+// HTTPClient usage.
 func SetKindling(a kindling.Kindling) {
-	kindlingMutex.Lock()
-	defer kindlingMutex.Unlock()
-	k = a
+	initOnce.Do(func() {
+		k = a
+		if a != nil {
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(a.NewHTTPClient().Transport))
+		} else {
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+		}
+	})
 }
 
 const tracerName = "github.com/getlantern/radiance/kindling"
