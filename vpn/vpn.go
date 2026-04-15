@@ -199,12 +199,7 @@ func Disconnect() error {
 	return traces.RecordError(ctx, ipc.StopService(ctx))
 }
 
-// SelectServer selects the specified server for the tunnel. The tunnel must already be open.
-//
-// The selection is also persisted to settings so that vpn_tunnel.StartVPN can
-// restore it when Android's VPN service lifecycle creates a fresh libbox. The
-// in-memory selector state on the running libbox doesn't survive the OS-driven
-// teardown/start cycle.
+// SelectServer selects the specified server for the tunnel.
 func SelectServer(ctx context.Context, group, tag string) error {
 	if !isOpen(ctx) {
 		return errors.New("tunnel is not open")
