@@ -93,6 +93,11 @@ type Manager struct {
 	servers  Servers
 	optsMaps map[ServerGroup]map[string]any // map of tag to option for quick access
 
+	// saveMu serializes disk writes in saveServers. This is separate from access
+	// so that readers (e.g. ServersJSON) aren't blocked during disk I/O — only
+	// during the brief JSON marshalling step.
+	saveMu sync.Mutex
+
 	serversFile string
 	httpClient  *http.Client
 }
@@ -264,9 +269,7 @@ func (m *Manager) SetServers(group ServerGroup, options Options) error {
 	if err := m.setServers(group, options); err != nil {
 		return fmt.Errorf("set servers: %w", err)
 	}
-
-	m.access.Lock()
-	defer m.access.Unlock()
+	// saveServers acquires its own locks; don't hold the write lock across it.
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers: %w", err)
 	}
@@ -319,11 +322,13 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 		return fmt.Errorf("invalid server group: %s", group)
 	}
 
+	// Perform the in-memory mutation under the write lock, then release it
+	// before saving to disk (saveServers acquires its own locks).
 	m.access.Lock()
-	defer m.access.Unlock()
-
 	slog.Log(nil, internal.LevelTrace, "Adding servers", "group", group, "options", opts)
 	existingTags := m.merge(group, opts)
+	m.access.Unlock()
+
 	if len(existingTags) > 0 {
 		slog.Warn("Some servers were not added because they already exist", "tags", existingTags)
 	}
@@ -387,15 +392,16 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 
 // RemoveServer removes a server config by its tag.
 func (m *Manager) RemoveServer(tag string) error {
+	// Perform the in-memory mutation under the write lock, then release it
+	// before saving to disk (saveServers acquires its own locks).
 	m.access.Lock()
-	defer m.access.Unlock()
-
 	slog.Log(nil, internal.LevelTrace, "Removing server", "tag", tag)
 	// check which group the server belongs to so we can get the correct optsMaps and servers
 	group := SGLantern
 	if _, exists := m.optsMaps[group][tag]; !exists {
 		group = SGUser
 		if _, exists := m.optsMaps[group][tag]; !exists {
+			m.access.Unlock()
 			slog.Warn("Tried to remove non-existent server", "tag", tag)
 			return fmt.Errorf("server with tag %q not found", tag)
 		}
@@ -412,6 +418,8 @@ func (m *Manager) RemoveServer(tag string) error {
 	delete(servers.Locations, tag)
 	delete(servers.Credentials, tag)
 	m.servers[group] = servers
+	m.access.Unlock()
+
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
 	}
@@ -432,13 +440,24 @@ func remove[T comparable](slice []T, item T) []T {
 	return slice[:len(slice)-1]
 }
 
+// saveServers marshals the current server state to JSON and writes it to disk.
+//
+// The write lock is NOT held across this function. Marshalling happens under
+// a brief RLock (so readers like ServersJSON can still proceed between saves),
+// and disk I/O is serialized via saveMu so concurrent saves don't clobber
+// the file. This prevents readers from being starved by long-running JSON
+// marshalling or disk writes (see getlantern/engineering#3176).
 func (m *Manager) saveServers() error {
+	m.access.RLock()
 	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
 	ctx := box.BaseContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
+	m.access.RUnlock()
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
 	return atomicfile.WriteFile(m.serversFile, buf, 0644)
 }
 
