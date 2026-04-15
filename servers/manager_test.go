@@ -210,6 +210,63 @@ func TestAddServersByURL(t *testing.T) {
 	})
 }
 
+// TestSaveServersConcurrent verifies that concurrent saves don't leave stale
+// state on disk. Regression test for getlantern/engineering#3176 — with the
+// previous implementation, two concurrent saveServers calls could reorder
+// their marshal/write sequence and leave the older snapshot on disk.
+func TestSaveServersConcurrent(t *testing.T) {
+	mgr := testManager(t)
+
+	// Run many concurrent mutations.
+	const concurrency = 20
+	const opsPerGoroutine = 10
+	done := make(chan struct{}, concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < opsPerGoroutine; j++ {
+				tag := fmt.Sprintf("concurrent-%d-%d", id, j)
+				list := ServerList{
+					Servers: []*Server{{
+						Tag:  tag,
+						Type: "shadowsocks",
+						Options: option.Outbound{
+							Tag:  tag,
+							Type: "shadowsocks",
+							Options: &option.ShadowsocksOutboundOptions{
+								ServerOptions: option.ServerOptions{Server: "9.9.9.9", ServerPort: 443},
+								Method:        "chacha20-ietf-poly1305",
+								Password:      "pw",
+							},
+						},
+						Location: C.ServerLocation{Country: "US", City: "X", CountryCode: "US"},
+					}},
+				}
+				_ = mgr.AddServers(list, true)
+			}
+		}(i)
+	}
+	for i := 0; i < concurrency; i++ {
+		<-done
+	}
+
+	// After all concurrent operations, force a save and reload into a fresh
+	// manager. The reloaded state must have exactly the same servers as the
+	// original — if saves can reorder, the file would lag behind.
+	require.NoError(t, mgr.saveServers())
+
+	mgr2 := testManager(t)
+	mgr2.serversFile = mgr.serversFile
+	require.NoError(t, mgr2.loadServers())
+	assert.Equal(t, len(mgr.AllServers()), len(mgr2.AllServers()),
+		"reloaded server count must match in-memory count")
+
+	for _, srv := range mgr.AllServers() {
+		_, ok := mgr2.GetServerByTag(srv.Tag)
+		assert.True(t, ok, "server %q must survive save/reload", srv.Tag)
+	}
+}
+
 func TestRetryableHTTPClient(t *testing.T) {
 	cli := retryableHTTPClient(log.NoOpLogger()).StandardClient()
 	request, err := http.NewRequest(http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)

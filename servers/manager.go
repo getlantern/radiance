@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,38 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 )
+
+// Thresholds for flagging slow operations on the servers Manager.
+//
+// These instrument the lock/marshal/disk path to help root-cause cases like
+// Freshdesk #172640, where saveServers held the write lock for 1+ minute
+// and starved cgo-callback readers in GetAvailableServers. See
+// getlantern/engineering#3176 for context.
+const (
+	// saveSlowThreshold: log a WARN with per-phase breakdown if saveServers
+	// exceeds this. Normal operation is well under 100ms.
+	saveSlowThreshold = 2 * time.Second
+	// saveCriticalThreshold: additionally dump all goroutine stacks if
+	// saveServers exceeds this. Useful for forensics when something really
+	// pathological is happening (e.g., fsync stall, GC back-pressure).
+	saveCriticalThreshold = 15 * time.Second
+
+	// readerWaitThreshold: log a WARN with a goroutine stack dump if a
+	// reader (AllServers / GetServerByTag) waits longer than this to
+	// acquire the RLock. Direct evidence of reader starvation.
+	readerWaitThreshold = 1 * time.Second
+)
+
+// dumpAllGoroutines returns a formatted string of all current goroutine
+// stacks. Used when a lock wait or save duration is pathologically long —
+// lets us see what's actually holding the lock or hogging the CPU at the
+// time. Callers should gate this behind a rare threshold since it stops
+// the world briefly.
+func dumpAllGoroutines() string {
+	buf := make([]byte, 1<<20) // 1 MiB is enough for most crashes
+	n := runtime.Stack(buf, true)
+	return string(buf[:n])
+}
 
 const tracerName = "github.com/getlantern/radiance/servers"
 
@@ -150,6 +183,11 @@ type Manager struct {
 	access  sync.RWMutex
 	servers map[string]*Server // tag -> Server
 
+	// saveMu serializes disk writes in saveServers. This is separate from access
+	// so that readers (e.g. AllServers) aren't blocked during disk I/O — only
+	// during the brief JSON marshalling step.
+	saveMu sync.Mutex
+
 	logger      *slog.Logger
 	serversFile string
 	httpClient  *http.Client
@@ -200,8 +238,11 @@ func retryableHTTPClient(logger *slog.Logger) *retryablehttp.Client {
 
 // AllServers returns a deep-copied slice of all servers.
 func (m *Manager) AllServers() []*Server {
+	start := time.Now()
 	m.access.RLock()
+	wait := time.Since(start)
 	defer m.access.RUnlock()
+	warnIfReaderStarved("AllServers", wait)
 	result := make([]*Server, 0, len(m.servers))
 	for _, srv := range m.servers {
 		cp := *srv
@@ -231,8 +272,11 @@ func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) {
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
 // the server was found.
 func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
+	start := time.Now()
 	m.access.RLock()
+	wait := time.Since(start)
 	defer m.access.RUnlock()
+	warnIfReaderStarved("GetServerByTag", wait)
 	s, exists := m.servers[tag]
 	if !exists {
 		return nil, false
@@ -241,23 +285,40 @@ func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
 	return &cp, true
 }
 
+// warnIfReaderStarved logs a WARN with a goroutine stack dump when a reader
+// waited too long to acquire the RLock — direct evidence of lock contention
+// or writer starvation. Stack dump lets us see what's holding things up.
+func warnIfReaderStarved(caller string, wait time.Duration) {
+	if wait < readerWaitThreshold {
+		return
+	}
+	slog.Warn("servers.Manager reader RLock wait exceeded threshold",
+		"caller", caller,
+		"wait", wait,
+		"goroutines", dumpAllGoroutines(),
+	)
+}
+
 // SetServers sets the server options for servers with a matching IsLantern value.
 // Important: this will overwrite any existing servers with the same IsLantern value. To add new
 // servers without overwriting existing ones, use [AddServers] instead.
 func (m *Manager) SetServers(list ServerList, isLantern bool) error {
-	m.access.Lock()
-	defer m.access.Unlock()
-	// Remove existing with matching IsLantern
-	for tag, srv := range m.servers {
-		if srv.IsLantern == isLantern {
-			delete(m.servers, tag)
+	func() {
+		m.access.Lock()
+		defer m.access.Unlock()
+		// Remove existing with matching IsLantern
+		for tag, srv := range m.servers {
+			if srv.IsLantern == isLantern {
+				delete(m.servers, tag)
+			}
 		}
-	}
-	// Add new
-	for _, srv := range list.Servers {
-		srv.IsLantern = isLantern
-		m.servers[srv.Tag] = srv
-	}
+		// Add new
+		for _, srv := range list.Servers {
+			srv.IsLantern = isLantern
+			m.servers[srv.Tag] = srv
+		}
+	}()
+	// saveServers acquires its own locks; don't hold the write lock across it.
 	return m.saveServers()
 }
 
@@ -269,19 +330,27 @@ func (m *Manager) AddServers(list ServerList, force bool) error {
 		return nil
 	}
 
-	m.access.Lock()
-	defer m.access.Unlock()
-
-	if !force {
-		for _, srv := range list.Servers {
-			if _, exists := m.servers[srv.Tag]; exists {
-				return fmt.Errorf("server %q already exists", srv.Tag)
+	// Perform the in-memory mutation under the write lock, then release it
+	// before saving to disk (saveServers acquires its own locks). Scoped
+	// in a closure so defer Unlock is robust against future early returns.
+	if err := func() error {
+		m.access.Lock()
+		defer m.access.Unlock()
+		if !force {
+			for _, srv := range list.Servers {
+				if _, exists := m.servers[srv.Tag]; exists {
+					return fmt.Errorf("server %q already exists", srv.Tag)
+				}
 			}
 		}
+		for _, srv := range list.Servers {
+			m.servers[srv.Tag] = srv
+		}
+		return nil
+	}(); err != nil {
+		return err
 	}
-	for _, srv := range list.Servers {
-		m.servers[srv.Tag] = srv
-	}
+	// saveServers acquires its own locks; don't hold the write lock across it.
 	return m.saveServers()
 }
 
@@ -293,31 +362,100 @@ func (m *Manager) RemoveServer(tag string) error {
 
 // RemoveServers removes multiple server configs by their tags and returns the removed servers.
 func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
-	m.access.Lock()
-	defer m.access.Unlock()
-	removed := make([]*Server, 0, len(tags))
-	for _, tag := range tags {
-		if srv, exists := m.servers[tag]; exists {
-			removed = append(removed, srv)
-			delete(m.servers, tag)
+	// Perform the in-memory mutation under the write lock, then release it
+	// before saving to disk (saveServers acquires its own locks). Scoped in
+	// a closure so defer Unlock is robust against future early returns.
+	removed := func() []*Server {
+		m.access.Lock()
+		defer m.access.Unlock()
+		r := make([]*Server, 0, len(tags))
+		for _, tag := range tags {
+			if srv, exists := m.servers[tag]; exists {
+				r = append(r, srv)
+				delete(m.servers, tag)
+			}
 		}
-	}
+		return r
+	}()
+	// saveServers acquires its own locks; don't hold the write lock across it.
 	if err := m.saveServers(); err != nil {
 		return nil, fmt.Errorf("failed to save servers: %w", err)
 	}
 	return removed, nil
 }
 
+// saveServers marshals the current server state to JSON and writes it to disk.
+//
+// The access write lock is NOT held across this function; only a brief RLock
+// around marshalling. saveMu serializes the full marshal+write sequence so
+// concurrent callers can't reorder and overwrite a newer snapshot with an
+// older one. Readers (e.g. AllServers) are not blocked by the disk write —
+// only by the brief marshal window (see getlantern/engineering#3176).
+//
+// Each phase (saveMu wait, RLock+marshal, disk write) is timed so we can
+// root-cause any future slow case — we still don't have a definitive
+// explanation for the 1-minute hold observed in Freshdesk #172640.
 func (m *Manager) saveServers() error {
+	start := time.Now()
+
+	// Hold saveMu across the whole marshal+write so two concurrent saves
+	// can't write out-of-order snapshots. (Marshal(A), Marshal(B), Write(B),
+	// Write(A) would leave stale data on disk.)
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+	saveMuWait := time.Since(start)
+
+	marshalStart := time.Now()
+	m.access.RLock()
+	rlockWait := time.Since(marshalStart)
 	servers := make([]*Server, 0, len(m.servers))
 	for _, srv := range m.servers {
 		servers = append(servers, srv)
 	}
 	buf, err := json.MarshalContext(box.BaseContext(), servers)
+	m.access.RUnlock()
+	marshalDur := time.Since(marshalStart) - rlockWait
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
-	return atomicfile.WriteFile(m.serversFile, buf, 0644)
+
+	writeStart := time.Now()
+	werr := atomicfile.WriteFile(m.serversFile, buf, 0644)
+	writeDur := time.Since(writeStart)
+
+	total := time.Since(start)
+	slog.Log(nil, log.LevelTrace, "saveServers timing",
+		"file", m.serversFile,
+		"size", len(buf),
+		"total_ms", total.Milliseconds(),
+		"save_mu_wait_ms", saveMuWait.Milliseconds(),
+		"rlock_wait_ms", rlockWait.Milliseconds(),
+		"marshal_ms", marshalDur.Milliseconds(),
+		"write_ms", writeDur.Milliseconds(),
+	)
+
+	switch {
+	case total >= saveCriticalThreshold:
+		slog.Warn("saveServers critically slow — dumping all goroutines",
+			"total", total,
+			"save_mu_wait", saveMuWait,
+			"rlock_wait", rlockWait,
+			"marshal", marshalDur,
+			"write", writeDur,
+			"size", len(buf),
+			"goroutines", dumpAllGoroutines(),
+		)
+	case total >= saveSlowThreshold:
+		slog.Warn("saveServers slow",
+			"total", total,
+			"save_mu_wait", saveMuWait,
+			"rlock_wait", rlockWait,
+			"marshal", marshalDur,
+			"write", writeDur,
+			"size", len(buf),
+		)
+	}
+	return werr
 }
 
 const (
