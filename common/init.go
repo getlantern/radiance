@@ -19,7 +19,6 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 )
@@ -58,7 +57,7 @@ func Stage() bool {
 }
 
 // Init initializes the common components of the application. This includes setting up the directories
-// for data and logs, initializing the logger, and setting up reporting.
+// for data and logs, and configures the logger.
 func Init(dataDir, logDir, logLevel string) error {
 	slog.Info("Initializing common package")
 	return initialize(dataDir, logDir, logLevel, false)
@@ -81,7 +80,6 @@ func initialize(dataDir, logDir, logLevel string, readonly bool) error {
 		Version = v
 		slog.Info("Version overridden via RADIANCE_VERSION", "version", Version)
 	}
-	reporting.Init(Version)
 	data, logs, err := setupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
