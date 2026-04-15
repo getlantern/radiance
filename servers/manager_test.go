@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -461,6 +462,55 @@ func TestServers(t *testing.T) {
 		assert.Len(t, servers[SGUser].Outbounds, 0)
 		assert.Len(t, servers[SGUser].Endpoints, 0)
 	})
+}
+
+// TestSaveServersConcurrent verifies that concurrent saves don't leave stale
+// state on disk. Regression test for getlantern/engineering#3176 — with the
+// previous implementation, two concurrent saveServers calls could reorder
+// their marshal/write sequence and leave the older snapshot on disk.
+func TestSaveServersConcurrent(t *testing.T) {
+	mgr := newTestManager(t)
+
+	// Run many concurrent mutations.
+	const concurrency = 20
+	const opsPerGoroutine = 10
+	done := make(chan struct{}, concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < opsPerGoroutine; j++ {
+				tag := fmt.Sprintf("concurrent-%d-%d", id, j)
+				opts := Options{
+					Outbounds: []option.Outbound{{Tag: tag, Type: "shadowsocks", Options: &option.ShadowsocksOutboundOptions{
+						ServerOptions: option.ServerOptions{Server: "9.9.9.9", ServerPort: 443},
+						Method:        "chacha20-ietf-poly1305",
+						Password:      "pw",
+					}}},
+					Endpoints: []option.Endpoint{},
+					Locations: map[string]C.ServerLocation{
+						tag: {Country: "US", City: "X", CountryCode: "US"},
+					},
+					Credentials: map[string]ServerCredentials{},
+				}
+				_ = mgr.AddServers(SGUser, opts)
+			}
+		}(i)
+	}
+	for i := 0; i < concurrency; i++ {
+		<-done
+	}
+
+	// After all concurrent operations, the on-disk file must match the
+	// current in-memory state. If saves can reorder, the file would lag.
+	inMem, err := mgr.ServersJSON()
+	require.NoError(t, err)
+
+	// Force a final save so we compare against the last committed snapshot.
+	require.NoError(t, mgr.saveServers())
+
+	onDiskBytes, err := os.ReadFile(mgr.serversFile)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(inMem), string(onDiskBytes), "disk file must match in-memory state after concurrent saves")
 }
 
 func TestRetryableHTTPClient(t *testing.T) {
