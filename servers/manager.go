@@ -323,11 +323,14 @@ func (m *Manager) AddServers(group ServerGroup, opts Options) error {
 	}
 
 	// Perform the in-memory mutation under the write lock, then release it
-	// before saving to disk (saveServers acquires its own locks).
-	m.access.Lock()
-	slog.Log(nil, internal.LevelTrace, "Adding servers", "group", group, "options", opts)
-	existingTags := m.merge(group, opts)
-	m.access.Unlock()
+	// before saving to disk (saveServers acquires its own locks). Scoped
+	// in a closure so defer Unlock is robust against future early returns.
+	existingTags := func() []string {
+		m.access.Lock()
+		defer m.access.Unlock()
+		slog.Log(nil, internal.LevelTrace, "Adding servers", "group", group, "options", opts)
+		return m.merge(group, opts)
+	}()
 
 	if len(existingTags) > 0 {
 		slog.Warn("Some servers were not added because they already exist", "tags", existingTags)
@@ -393,32 +396,38 @@ func (m *Manager) merge(group ServerGroup, options Options) []string {
 // RemoveServer removes a server config by its tag.
 func (m *Manager) RemoveServer(tag string) error {
 	// Perform the in-memory mutation under the write lock, then release it
-	// before saving to disk (saveServers acquires its own locks).
-	m.access.Lock()
-	slog.Log(nil, internal.LevelTrace, "Removing server", "tag", tag)
-	// check which group the server belongs to so we can get the correct optsMaps and servers
-	group := SGLantern
-	if _, exists := m.optsMaps[group][tag]; !exists {
-		group = SGUser
-		if _, exists := m.optsMaps[group][tag]; !exists {
-			m.access.Unlock()
-			slog.Warn("Tried to remove non-existent server", "tag", tag)
-			return fmt.Errorf("server with tag %q not found", tag)
+	// before saving to disk (saveServers acquires its own locks). Scoped in
+	// a closure so defer Unlock is robust against future early returns.
+	group, err := func() (ServerGroup, error) {
+		m.access.Lock()
+		defer m.access.Unlock()
+		slog.Log(nil, internal.LevelTrace, "Removing server", "tag", tag)
+		// check which group the server belongs to
+		g := SGLantern
+		if _, exists := m.optsMaps[g][tag]; !exists {
+			g = SGUser
+			if _, exists := m.optsMaps[g][tag]; !exists {
+				return "", fmt.Errorf("server with tag %q not found", tag)
+			}
 		}
+		// remove the server from the optsMaps and servers
+		servers := m.servers[g]
+		switch v := m.optsMaps[g][tag].(type) {
+		case option.Endpoint:
+			servers.Endpoints = remove(servers.Endpoints, v)
+		case option.Outbound:
+			servers.Outbounds = remove(servers.Outbounds, v)
+		}
+		delete(m.optsMaps[g], tag)
+		delete(servers.Locations, tag)
+		delete(servers.Credentials, tag)
+		m.servers[g] = servers
+		return g, nil
+	}()
+	if err != nil {
+		slog.Warn("Tried to remove non-existent server", "tag", tag)
+		return err
 	}
-	// remove the server from the optsMaps and servers
-	servers := m.servers[group]
-	switch v := m.optsMaps[group][tag].(type) {
-	case option.Endpoint:
-		servers.Endpoints = remove(servers.Endpoints, v)
-	case option.Outbound:
-		servers.Outbounds = remove(servers.Outbounds, v)
-	}
-	delete(m.optsMaps[group], tag)
-	delete(servers.Locations, tag)
-	delete(servers.Credentials, tag)
-	m.servers[group] = servers
-	m.access.Unlock()
 
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("failed to save servers after removing %q: %w", tag, err)
@@ -442,22 +451,26 @@ func remove[T comparable](slice []T, item T) []T {
 
 // saveServers marshals the current server state to JSON and writes it to disk.
 //
-// The write lock is NOT held across this function. Marshalling happens under
-// a brief RLock (so readers like ServersJSON can still proceed between saves),
-// and disk I/O is serialized via saveMu so concurrent saves don't clobber
-// the file. This prevents readers from being starved by long-running JSON
-// marshalling or disk writes (see getlantern/engineering#3176).
+// The access write lock is NOT held across this function; only a brief RLock
+// around marshalling. saveMu serializes the full marshal+write sequence so
+// concurrent callers can't reorder and overwrite a newer snapshot with an
+// older one. Readers (e.g. ServersJSON) are not blocked by the disk write —
+// only by the brief marshal window (see getlantern/engineering#3176).
 func (m *Manager) saveServers() error {
+	// Hold saveMu across the whole marshal+write so two concurrent saves
+	// can't write out-of-order snapshots. (Marshal(A), Marshal(B), Write(B),
+	// Write(A) would leave stale data on disk.)
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
 	m.access.RLock()
-	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "servers", m.servers)
 	ctx := box.BaseContext()
 	buf, err := json.MarshalContext(ctx, m.servers)
 	m.access.RUnlock()
 	if err != nil {
 		return fmt.Errorf("marshal servers: %w", err)
 	}
-	m.saveMu.Lock()
-	defer m.saveMu.Unlock()
+	slog.Log(nil, internal.LevelTrace, "Saving server configs to file", "file", m.serversFile, "size", len(buf))
 	return atomicfile.WriteFile(m.serversFile, buf, 0644)
 }
 
