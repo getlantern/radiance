@@ -193,6 +193,21 @@ func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSe
 }
 
 ///////////////////////
+// Config events     //
+///////////////////////
+
+// ConfigEvents connects to the config event stream. The server emits a frame
+// on every config.NewConfigEvent; the payload is intentionally empty — callers
+// should treat each frame as a "refresh" signal and fetch any state they need
+// via the other GET endpoints. The handler is called once per frame received
+// until ctx is cancelled or the connection is closed.
+func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
+	return c.sseStream(ctx, configEventsEndpoint, func(data []byte) {
+		handler()
+	})
+}
+
+///////////////////////
 // Server management //
 ///////////////////////
 
