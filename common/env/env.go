@@ -68,6 +68,9 @@ func init() {
 // app's working directory is "/" but the data directory (where the test harness
 // pushes .env) is elsewhere (e.g. /data/user/0/org.getlantern.lantern/.lantern).
 func LoadFromDir(dir string) {
+	if dir == "" {
+		return
+	}
 	path := filepath.Join(dir, ".env")
 	buf, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
