@@ -78,7 +78,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		Platform:       common.Platform,
 		AppName:        common.Name,
 		DeviceID:       settings.GetString(settings.DeviceIDKey),
-		UserID:         settings.GetString(settings.UserIDKey),
+		UserID:         fmt.Sprintf("%d", settings.GetInt64(settings.UserIDKey)),
 		ProToken:       settings.GetString(settings.TokenKey),
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
