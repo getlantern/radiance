@@ -124,6 +124,9 @@ func GetString(key _key) string {
 	// conversion, large integers (i.e. userID) get converted to scientific notation (e.g. 3.87286618e+08)
 	// so we handle float64 separately
 	value := Get(key)
+	if value == nil {
+		return ""
+	}
 	switch v := value.(type) {
 	case float64:
 		return strconv.FormatInt(int64(v), 10)
