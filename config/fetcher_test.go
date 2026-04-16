@@ -1,82 +1,20 @@
 package config
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
+	"net/http/httptest"
 	"testing"
 
 	C "github.com/getlantern/common"
-	"github.com/getlantern/kindling"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	"github.com/getlantern/radiance/api"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
-	rkindling "github.com/getlantern/radiance/kindling"
-	"github.com/getlantern/radiance/kindling/fronted"
 )
-
-func TestDomainFrontingFetchConfig(t *testing.T) {
-	// Disable this test for now since it depends on external service.
-	t.Skip("Skipping TestDomainFrontingFetchConfig since it depends on external service.")
-	dataDir := t.TempDir()
-	f, err := fronted.NewFronted(context.Background(), reporting.PanicListener, filepath.Join(dataDir, "fronted_cache.json"), io.Discard)
-	require.NoError(t, err)
-	k, err := kindling.NewKindling(
-		"radiance-df-test",
-		kindling.WithDomainFronting(f),
-	)
-	require.NoError(t, err)
-	rkindling.SetKindling(k)
-	fetcher := newFetcher("en-US", &api.APIClient{})
-
-	privateKey, err := wgtypes.GenerateKey()
-	require.NoError(t, err)
-
-	_, err = fetcher.fetchConfig(context.Background(), C.ServerLocation{Country: "US"}, privateKey.PublicKey().String())
-	// We expect a 500 error since the user does not have any matching tracks.
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
-}
-
-func TestProxylessFetchConfig(t *testing.T) {
-	// Disable this test for now since it depends on external service.
-	t.Skip("Skipping TestProxylessFetchConfig since it depends on external service.")
-	k, err := kindling.NewKindling(
-		"radiance-df-test",
-		kindling.WithProxyless("df.iantem.io"),
-	)
-	require.NoError(t, err)
-	rkindling.SetKindling(k)
-	fetcher := newFetcher("en-US", &api.APIClient{})
-
-	privateKey, err := wgtypes.GenerateKey()
-	require.NoError(t, err)
-
-	_, err = fetcher.fetchConfig(context.Background(), C.ServerLocation{Country: "US"}, privateKey.PublicKey().String())
-	// We expect a 500 error since the user does not have any matching tracks.
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no lantern-cloud tracks")
-
-}
-
-type mockRoundTripper struct {
-	req  *http.Request
-	resp *http.Response
-	err  error
-}
-
-func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	m.req = req
-	return m.resp, m.err
-}
 
 func TestFetchConfig(t *testing.T) {
 	settings.InitSettings(t.TempDir())
@@ -88,25 +26,20 @@ func TestFetchConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name                 string
-		preferredServerLoc   *C.ServerLocation
-		mockResponse         *http.Response
-		mockError            error
-		expectedConfig       []byte
-		expectedErrorMessage string
+		name               string
+		preferredServerLoc *C.ServerLocation
+		serverStatus       int
+		serverBody         string
+		expectedConfig     []byte
+		expectError        bool
 	}{
 		{
-			name: "successful fetch with new config",
+			name: "successful fetch",
 			preferredServerLoc: &C.ServerLocation{
 				Country: "US",
 			},
-			mockResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body: io.NopCloser(bytes.NewReader(func() []byte {
-					data := []byte(`{"key":"value"}`)
-					return data
-				}())),
-			},
+			serverStatus:   http.StatusOK,
+			serverBody:     `{"key":"value"}`,
 			expectedConfig: []byte(`{"key":"value"}`),
 		},
 		{
@@ -114,81 +47,54 @@ func TestFetchConfig(t *testing.T) {
 			preferredServerLoc: &C.ServerLocation{
 				Country: "US",
 			},
-			mockResponse: &http.Response{
-				StatusCode: http.StatusNotModified,
-				Body:       io.NopCloser(bytes.NewReader(nil)),
-			},
+			serverStatus:   http.StatusNotModified,
 			expectedConfig: nil,
-		},
-		{
-			name: "error during request",
-			preferredServerLoc: &C.ServerLocation{
-				Country: "US",
-			},
-			mockError:            context.DeadlineExceeded,
-			expectedErrorMessage: "context deadline exceeded",
 		},
 	}
 
-	apiClient := &api.APIClient{}
-	defer apiClient.Reset()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockRT := &mockRoundTripper{
-				resp: tt.mockResponse,
-				err:  tt.mockError,
-			}
-			rkindling.SetKindling(&mockKindling{
-				&http.Client{
-					Transport: mockRT,
-				},
-			})
-			fetcher := newFetcher("en-US", &api.APIClient{})
+			var capturedReq *http.Request
+			var capturedBody []byte
 
-			gotConfig, err := fetcher.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				capturedBody = body
+				capturedReq = r
+				w.WriteHeader(tt.serverStatus)
+				if tt.serverBody != "" {
+					w.Write([]byte(tt.serverBody))
+				}
+			}))
+			defer srv.Close()
 
-			if tt.expectedErrorMessage != "" {
+			f := newFetcher("en-US", nil, srv.Client()).(*fetcher)
+			f.baseURL = srv.URL
+
+			gotConfig, err := f.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
+
+			if tt.expectError {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedErrorMessage)
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expectedConfig, gotConfig)
 			}
 
-			if tt.mockResponse != nil {
-				require.NotNil(t, mockRT.req)
-				assert.Equal(t, "application/json", mockRT.req.Header.Get("Content-Type"))
-				assert.Equal(t, "no-cache", mockRT.req.Header.Get("Cache-Control"))
+			require.NotNil(t, capturedReq)
+			assert.Equal(t, "application/json", capturedReq.Header.Get("Content-Type"))
+			assert.Equal(t, "no-cache", capturedReq.Header.Get("Cache-Control"))
 
-				body, err := io.ReadAll(mockRT.req.Body)
-				require.NoError(t, err)
+			var confReq C.ConfigRequest
+			err = json.Unmarshal(capturedBody, &confReq)
+			require.NoError(t, err)
 
-				var confReq C.ConfigRequest
-				err = json.Unmarshal(body, &confReq)
-				require.NoError(t, err)
-
-				assert.Equal(t, common.Platform, confReq.Platform)
-				assert.Equal(t, common.Name, confReq.AppName)
-				assert.Equal(t, settings.GetString(settings.DeviceIDKey), confReq.DeviceID)
-				assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
-				if tt.preferredServerLoc != nil {
-					assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
-				}
+			assert.Equal(t, common.Platform, confReq.Platform)
+			assert.Equal(t, common.Name, confReq.AppName)
+			assert.Equal(t, settings.GetString(settings.DeviceIDKey), confReq.DeviceID)
+			assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
+			if tt.preferredServerLoc != nil {
+				assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 			}
 		})
 	}
-}
-
-type mockKindling struct {
-	c *http.Client
-}
-
-// NewHTTPClient returns a new HTTP client that is configured to use kindling.
-func (m *mockKindling) NewHTTPClient() *http.Client {
-	return m.c
-}
-
-// ReplaceTransport replaces an existing transport RoundTripper generator with the provided one.
-func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
-	panic("not implemented") // TODO: Implement
 }

@@ -18,10 +18,12 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	metricNoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	traceNoop "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials"
 
 	semconv "github.com/getlantern/semconv"
@@ -33,10 +35,8 @@ import (
 )
 
 var (
-	initMutex                   sync.Mutex
-	shutdownOTEL                func(context.Context) error
-	harvestConnections          sync.Once
-	harvestConnectionTickerStop func()
+	initMutex    sync.Mutex
+	shutdownOTEL func(context.Context) error
 )
 
 type Attributes struct {
@@ -58,18 +58,18 @@ type Attributes struct {
 // OnNewConfig handles OpenTelemetry re-initialization when the configuration changes.
 func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string) error {
 	// Check if the old OTEL configuration is the same as the new one.
-	if oldConfig != nil && reflect.DeepEqual(oldConfig.ConfigResponse.OTEL, newConfig.ConfigResponse.OTEL) {
+	if oldConfig != nil && reflect.DeepEqual(oldConfig.OTEL, newConfig.OTEL) {
 		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
 		return nil
 	}
-	if err := initialize(deviceID, newConfig.ConfigResponse, settings.IsPro()); err != nil {
+	if err := Initialize(deviceID, *newConfig, settings.IsPro()); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
-		return fmt.Errorf("Failed to initialize OpenTelemetry: %w", err)
+		return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 	}
 	return nil
 }
 
-func initialize(deviceID string, configResponse common.ConfigResponse, pro bool) error {
+func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 
@@ -109,23 +109,18 @@ func initialize(deviceID string, configResponse common.ConfigResponse, pro bool)
 	}
 
 	shutdownOTEL = shutdown
-
-	harvestConnections.Do(func() {
-		harvestConnectionTickerStop = harvestConnectionMetrics(1 * time.Minute)
-	})
 	return nil
 }
 
-func Close(ctx context.Context) error {
+func Close() error {
+	return CloseContext(context.Background())
+}
+
+func CloseContext(ctx context.Context) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 
 	var errs error
-
-	// stop collecting connection metrics
-	if harvestConnectionTickerStop != nil {
-		harvestConnectionTickerStop()
-	}
 
 	if shutdownOTEL != nil {
 		slog.Info("Shutting down existing OpenTelemetry SDK")
@@ -135,12 +130,14 @@ func Close(ctx context.Context) error {
 		}
 		shutdownOTEL = nil
 	}
+	otel.SetTracerProvider(traceNoop.NewTracerProvider())
+	otel.SetMeterProvider(metricNoop.NewMeterProvider())
 	return errs
 }
 
 func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 	e := "prod"
-	if v, ok := env.Get[string](env.ENV); ok {
+	if v := env.GetString(env.ENV); v != "" {
 		e = v
 	}
 	return []attribute.KeyValue{
@@ -164,7 +161,7 @@ func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 
 // setupOTelSDK bootstraps the OpenTelemetry pipeline.
 // If it does not return an error, make sure to call shutdown for proper cleanup.
-func setupOTelSDK(ctx context.Context, attributes Attributes, cfg common.ConfigResponse) (func(context.Context) error, error) {
+func setupOTelSDK(ctx context.Context, attributes Attributes, cfg config.Config) (func(context.Context) error, error) {
 	if cfg.Features == nil {
 		cfg.Features = make(map[string]bool)
 	}

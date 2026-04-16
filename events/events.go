@@ -27,7 +27,10 @@
 package events
 
 import (
+	"context"
+	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 type Event interface {
@@ -36,7 +39,7 @@ type Event interface {
 }
 
 var (
-	subscriptions   = make(map[any]map[*Subscription[Event]]func(any))
+	subscriptions   = make(map[reflect.Type]map[*Subscription[Event]]func(any))
 	subscriptionsMu sync.RWMutex
 )
 
@@ -50,26 +53,48 @@ type Subscription[T Event] struct {
 func Subscribe[T Event](callback func(evt T)) *Subscription[T] {
 	subscriptionsMu.Lock()
 	defer subscriptionsMu.Unlock()
-	var evt T
-	if subscriptions[evt] == nil {
-		subscriptions[evt] = make(map[*Subscription[Event]]func(any))
+	key := reflect.TypeFor[T]()
+	if subscriptions[key] == nil {
+		subscriptions[key] = make(map[*Subscription[Event]]func(any))
 	}
 	sub := &Subscription[T]{}
-	subscriptions[evt][(*Subscription[Event])(sub)] = func(e any) { callback(e.(T)) }
+	subscriptions[key][(*Subscription[Event])(sub)] = func(e any) { callback(e.(T)) }
 	return sub
 }
 
 // SubscribeOnce registers a callback function for the given event type T that will be invoked only
 // once. Returns a Subscription handle that can be used to unsubscribe if needed.
 func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
-	ready := make(chan struct{})
+	return SubscribeUntil(callback, func(evt T) bool { return true })
+}
+
+// SubscribeUntil registers a callback function for the given event type T that will be invoked until
+// the provided condition function returns true for an event. Returns a Subscription handle that can
+// be used to unsubscribe if needed.
+func SubscribeUntil[T Event](callback func(evt T), cond func(evt T) bool) *Subscription[T] {
+	var done atomic.Bool
 	var sub *Subscription[T]
 	sub = Subscribe(func(evt T) {
-		<-ready
+		if done.Load() {
+			return
+		}
 		callback(evt)
-		sub.Unsubscribe()
+		if cond(evt) {
+			done.Store(true)
+			sub.Unsubscribe()
+		}
 	})
-	close(ready)
+	return sub
+}
+
+// SubscribeContext registers a callback for event type T that is automatically unsubscribed when
+// the provided context is cancelled.
+func SubscribeContext[T Event](ctx context.Context, callback func(evt T)) *Subscription[T] {
+	sub := Subscribe(callback)
+	go func() {
+		<-ctx.Done()
+		sub.Unsubscribe()
+	}()
 	return sub
 }
 
@@ -77,11 +102,11 @@ func SubscribeOnce[T Event](callback func(evt T)) *Subscription[T] {
 func Unsubscribe[T Event](sub *Subscription[T]) {
 	subscriptionsMu.Lock()
 	defer subscriptionsMu.Unlock()
-	var evt T
-	if subs, ok := subscriptions[evt]; ok {
+	key := reflect.TypeFor[T]()
+	if subs, ok := subscriptions[key]; ok {
 		delete(subs, (*Subscription[Event])(sub))
 		if len(subs) == 0 {
-			delete(subscriptions, evt)
+			delete(subscriptions, key)
 		}
 	}
 }
@@ -95,8 +120,7 @@ func (e *Subscription[T]) Unsubscribe() {
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()
-	var e T
-	if subs, ok := subscriptions[e]; ok {
+	if subs, ok := subscriptions[reflect.TypeFor[T]()]; ok {
 		for _, cb := range subs {
 			go cb(evt)
 		}

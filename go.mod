@@ -23,9 +23,9 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58
-	github.com/getlantern/appdir v0.0.0-20250324200952-507a0625eb01
 	github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538
@@ -36,7 +36,6 @@ require (
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
-	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
@@ -52,7 +51,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.41.0
 	go.opentelemetry.io/otel/sdk v1.41.0
 	go.opentelemetry.io/otel/sdk/metric v1.41.0
-	go.uber.org/mock v0.5.0
+	golang.org/x/term v0.40.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -67,6 +66,7 @@ require (
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
+	github.com/alexflint/go-scalar v1.2.0 // indirect
 	github.com/alitto/pond/v2 v2.1.5 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
 	github.com/anacrolix/chansync v0.7.0 // indirect
@@ -114,6 +114,7 @@ require (
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260327203406-ef7323341974 // indirect
+	github.com/go-chi/chi/v5 v5.2.2 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250103232110-6a9a0fde9288 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
 	github.com/go-llsqlite/crawshaw v0.5.6-0.20250312230104-194977a03421 // indirect
@@ -206,12 +207,12 @@ require (
 	go.etcd.io/bbolt v1.3.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
+	go.uber.org/mock v0.5.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	golang.getoutline.org/sdk v0.0.21 // indirect
 	golang.getoutline.org/sdk/x v0.1.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260209200024-4cfbd4190f57 // indirect
@@ -235,14 +236,13 @@ require (
 	github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 // indirect
 	github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175
 	github.com/getsentry/sentry-go v0.31.1
-	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/render v1.0.3 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gofrs/uuid/v5 v5.3.2
+	github.com/gofrs/uuid/v5 v5.3.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect

@@ -9,32 +9,40 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/getlantern/radiance/vpn/ipc"
+	"github.com/getlantern/radiance/vpn"
 )
 
-// harvestConnectionMetrics periodically polls the number of active connections and their total
-// upload and download bytes, setting the corresponding OpenTelemetry metrics. It returns a function
-// that can be called to stop the polling.
-func harvestConnectionMetrics(pollInterval time.Duration) func() {
+// ConnectionSource provides access to the current VPN connections for metrics collection.
+type ConnectionSource interface {
+	Connections() ([]vpn.Connection, error)
+}
+
+// StartConnectionMetrics periodically polls the number of active connections and their total
+// upload and download bytes, setting the corresponding OpenTelemetry metrics. It runs until the
+// provided context is canceled.
+func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInterval time.Duration) {
 	ticker := time.NewTicker(pollInterval)
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
 	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
 	if err != nil {
 		slog.Warn("failed to create current_active_connections metric", slog.Any("error", err))
+		return
 	}
 	connectionDuration, err := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
 	if err != nil {
 		slog.Warn("failed to create connection_duration_seconds metric", slog.Any("error", err))
+		return
 	}
 	downlinkBytes, err := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
 	if err != nil {
 		slog.Warn("failed to create downlink_bytes metric", slog.Any("error", err))
+		return
 	}
 	uplinkBytes, err := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
 	if err != nil {
 		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
+		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		seenConnections := make(map[string]bool)
 		for {
@@ -44,20 +52,16 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 				return
 			case <-ticker.C:
 				slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
-				vpnStatus, err := ipc.GetStatus(ctx)
+				conns, err := src.Connections()
 				if err != nil {
-					slog.Warn("failed to get service status", "error", err)
-				}
-				if vpnStatus != ipc.Connected {
-					continue
-				}
-				conns, err := ipc.GetConnections(ctx)
-				if err != nil {
-					slog.Warn("failed to retrieve connections", slog.Any("error", err))
+					slog.Debug("failed to retrieve connections for metrics", slog.Any("error", err))
 					continue
 				}
 
+				// Track which connections are still reported so we can prune stale entries.
+				currentIDs := make(map[string]struct{}, len(conns))
 				for _, c := range conns {
+					currentIDs[c.ID] = struct{}{}
 					attributes := attribute.NewSet(
 						attribute.String("from_outbound", c.FromOutbound),
 						attribute.String("outbound_name", c.Outbound),
@@ -92,8 +96,14 @@ func harvestConnectionMetrics(pollInterval time.Duration) func() {
 					downlinkBytes.Add(ctx, c.Downlink, metric.WithAttributeSet(attributes))
 					uplinkBytes.Add(ctx, c.Uplink, metric.WithAttributeSet(attributes))
 				}
+
+				// Remove entries for connections no longer reported by the source.
+				for id := range seenConnections {
+					if _, ok := currentIDs[id]; !ok {
+						delete(seenConnections, id)
+					}
+				}
 			}
 		}
 	}()
-	return cancel
 }

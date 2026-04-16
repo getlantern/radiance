@@ -1,118 +1,56 @@
 package vpn
 
 import (
-	"context"
-	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
-	"github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	LC "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
 	lbO "github.com/getlantern/lantern-box/option"
 
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/servers"
 )
 
 func TestBuildOptions(t *testing.T) {
-	testOpts, _, err := testBoxOptions("")
-	require.NoError(t, err, "get test box options")
-	lanternTags, lanternOuts := filterOutbounds(*testOpts, constant.TypeHTTP)
-	userTags, userOuts := filterOutbounds(*testOpts, constant.TypeSOCKS)
-	cfg := config.Config{
-		ConfigResponse: LC.ConfigResponse{
-			Options: O.Options{
-				Outbounds: lanternOuts,
-			},
-		},
-	}
-	svrs := servers.Servers{
-		servers.SGUser: servers.Options{
-			Outbounds: userOuts,
-		},
-	}
+	options, tags := testBoxOptions(t)
 	tests := []struct {
 		name        string
-		lanternTags []string
-		userTags    []string
+		boxOptions  BoxOptions
 		shouldError bool
 	}{
 		{
-			name:        "config without user servers",
-			lanternTags: lanternTags,
+			name: "success",
+			boxOptions: BoxOptions{
+				BasePath: t.TempDir(),
+				Options:  options,
+			},
 		},
 		{
-			name:     "user servers without config",
-			userTags: userTags,
-		},
-		{
-			name:        "config and user servers",
-			lanternTags: lanternTags,
-			userTags:    userTags,
-		},
-		{
-			name:        "neither config nor user servers",
+			name: "no servers available",
+			boxOptions: BoxOptions{
+				BasePath: t.TempDir(),
+			},
 			shouldError: true,
 		},
 	}
-	hasGroupWithTags := func(t *testing.T, outs []O.Outbound, group string, tags []string) {
-		out := findOutbound(outs, group)
-		if !assert.NotNilf(t, out, "group %s not found", group) {
-			return
-		}
-		switch opts := out.Options.(type) {
-		case *lbO.MutableSelectorOutboundOptions:
-			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
-		case *O.SelectorOutboundOptions:
-			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
-		case *lbO.MutableURLTestOutboundOptions:
-			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
-		case *O.URLTestOutboundOptions:
-			assert.ElementsMatchf(t, tags, opts.Outbounds, "group %s does not have correct outbounds", group)
-		default:
-			assert.Failf(t, fmt.Sprintf("%s[%T] is not a group outbound", group, opts), "")
-		}
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := t.TempDir()
-			if len(tt.lanternTags) > 0 {
-				testOptsToFile(t, cfg, filepath.Join(path, common.ConfigFileName))
-			}
-			if len(tt.userTags) > 0 {
-				testOptsToFile(t, svrs, filepath.Join(path, common.ServersFileName))
-			}
-			opts, err := buildOptions(context.Background(), path)
+			opts, err := buildOptions(tt.boxOptions)
 			if tt.shouldError {
 				require.Error(t, err, "expected error but got none")
 				return
 			}
 			require.NoError(t, err)
 
-			gotOutbounds := opts.Outbounds
-			require.NotEmpty(t, gotOutbounds, "no outbounds in built options")
-
-			assert.NotNil(t, findOutbound(gotOutbounds, constant.TypeDirect), "direct outbound not found")
-			assert.NotNil(t, findOutbound(gotOutbounds, constant.TypeBlock), "block outbound not found")
-
-			hasGroupWithTags(t, gotOutbounds, servers.SGLantern, append(tt.lanternTags, autoLanternTag))
-			hasGroupWithTags(t, gotOutbounds, servers.SGUser, append(tt.userTags, autoUserTag))
-
-			hasGroupWithTags(t, gotOutbounds, autoLanternTag, tt.lanternTags)
-			hasGroupWithTags(t, gotOutbounds, autoUserTag, tt.userTags)
-			hasGroupWithTags(t, gotOutbounds, autoAllTag, []string{autoLanternTag, autoUserTag})
-
-			assert.FileExists(t, filepath.Join(path, debugLanternBoxOptionsFilename), "debug option file must be written")
+			urlTest := urlTestOutbound(AutoSelectTag, tags, nil)
+			assert.Contains(t, opts.Outbounds, urlTest, "options should contain auto-select URL test outbound")
+			selector := selectorOutbound(ManualSelectTag, tags)
+			assert.Contains(t, opts.Outbounds, selector, "options should contain manual-select selector outbound")
 		})
 	}
 }
@@ -185,18 +123,14 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 	wantAdBlockOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(adBlockJSON))
 	require.NoError(t, err)
 
-	buf, err := os.ReadFile("testdata/config.json")
-	require.NoError(t, err, "read test config file")
-
+	cfg := testConfig(t)
+	boxOptions := BoxOptions{
+		BasePath: t.TempDir(),
+		Options:  cfg.Options,
+	}
 	t.Run("with smart routing", func(t *testing.T) {
-		tmp := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
-
-		require.NoError(t, settings.InitSettings(tmp))
-		t.Cleanup(settings.Reset)
-
-		settings.Set(settings.SmartRoutingKey, true)
-		options, err := buildOptions(context.Background(), tmp)
+		boxOptions.SmartRouting = cfg.SmartRouting
+		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check rules, rulesets, and outbounds are correctly built into options
 		assert.True(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
@@ -204,52 +138,18 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		assert.True(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
 	})
 	t.Run("with smart routing and missing outbounds", func(t *testing.T) {
-		tmp := t.TempDir()
-		cfg, err := json.UnmarshalExtendedContext[config.Config](box.BaseContext(), buf)
-		require.NoError(t, err, "parse test config")
-		require.NotEmpty(t, cfg.ConfigResponse.SmartRouting, "test config missing smart routing rules")
-
-		cfg.ConfigResponse.SmartRouting[0].Outbounds = nil
-		cfgBuf, err := json.Marshal(cfg)
-		require.NoError(t, err, "marshal modified test config")
-		require.NoError(
-			t,
-			os.WriteFile(filepath.Join(tmp, common.ConfigFileName), cfgBuf, 0o644),
-			"write modified config to temp dir",
-		)
-
-		require.NoError(t, settings.InitSettings(tmp))
-		t.Cleanup(settings.Reset)
-
-		settings.Set(settings.SmartRoutingKey, true)
-		options, err := buildOptions(context.Background(), tmp)
+		boxOptions.SmartRouting = cfg.SmartRouting
+		cfg.SmartRouting[0].Outbounds = nil
+		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
-
-		assert.Nil(
-			t,
-			findOutbound(options.Outbounds, "sr-openai"),
-			"should not create smart-routing outbound when rule outbounds are missing",
-		)
-
-		assert.False(
-			t,
-			contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]),
-			"should skip smart-routing ruleset when rule outbounds are missing",
-		)
-		hasSmartRoutingRule := slices.ContainsFunc(options.Route.Rules, func(rule O.Rule) bool {
-			return len(rule.DefaultOptions.RuleSet) == 1 && rule.DefaultOptions.RuleSet[0] == "openai"
-		})
-		assert.False(t, hasSmartRoutingRule, "should skip smart-routing rule when rule outbounds are missing")
+		// check rules, rulesets, and outbounds are not built into options
+		assert.False(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
+		assert.False(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
+		assert.False(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
 	})
 	t.Run("with ad block", func(t *testing.T) {
-		tmp := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(tmp, common.ConfigFileName), buf, 0644), "write test config file to temp dir")
-
-		require.NoError(t, settings.InitSettings(tmp))
-		t.Cleanup(settings.Reset)
-
-		settings.Set(settings.AdBlockKey, true)
-		options, err := buildOptions(context.Background(), tmp)
+		boxOptions.AdBlock = cfg.AdBlock
+		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
 		for _, rs := range wantAdBlockOpts.Route.RuleSet {
@@ -262,32 +162,23 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 }
 
 func TestBuildOptions_BanditURLOverrides(t *testing.T) {
-	testOpts, _, err := testBoxOptions("")
-	require.NoError(t, err)
-	lanternTags, lanternOuts := filterOutbounds(*testOpts, constant.TypeHTTP)
-	require.NotEmpty(t, lanternTags, "need at least one HTTP outbound for test")
-
+	cfg := testConfig(t)
 	overrides := map[string]string{
-		lanternTags[0]: "https://example.com/callback?token=abc",
+		cfg.Options.Outbounds[0].Tag: "https://example.com/callback?token=abc",
 	}
-	cfg := config.Config{
-		ConfigResponse: LC.ConfigResponse{
-			Options:            O.Options{Outbounds: lanternOuts},
-			BanditURLOverrides: overrides,
-		},
+	boxOptions := BoxOptions{
+		BasePath:           t.TempDir(),
+		Options:            cfg.Options,
+		BanditURLOverrides: overrides,
 	}
-
-	path := t.TempDir()
-	testOptsToFile(t, cfg, filepath.Join(path, common.ConfigFileName))
-
-	opts, err := buildOptions(context.Background(), path)
+	opts, err := buildOptions(boxOptions)
 	require.NoError(t, err)
 
-	out := findOutbound(opts.Outbounds, autoLanternTag)
-	require.NotNil(t, out, "auto-lantern outbound not found")
+	out := findOutbound(opts.Outbounds, AutoSelectTag)
+	require.NotNil(t, out, "missing auto-select outbound")
 
-	mutOpts, ok := out.Options.(*lbO.MutableURLTestOutboundOptions)
-	require.True(t, ok, "auto-lantern outbound should be MutableURLTestOutboundOptions")
+	require.IsType(t, &lbO.MutableURLTestOutboundOptions{}, out.Options, "auto-select outbound options should be MutableURLTestOutboundOptions")
+	mutOpts := out.Options.(*lbO.MutableURLTestOutboundOptions)
 	assert.Equal(t, overrides, mutOpts.URLOverrides, "URLOverrides should be wired from config")
 }
 
@@ -330,34 +221,33 @@ func findOutbound(outs []O.Outbound, tag string) *O.Outbound {
 	return &outs[idx]
 }
 
-func testOptsToFile[T any](t *testing.T, opts T, path string) {
-	buf, err := json.Marshal(opts)
-	require.NoError(t, err, "marshal options")
-	require.NoError(t, os.WriteFile(path, buf, 0644), "write options to file")
+func testConfig(t *testing.T) config.Config {
+	buf, err := os.ReadFile("testdata/config.json")
+	require.NoError(t, err, "read test config file")
+
+	cfg, err := json.UnmarshalExtendedContext[config.Config](box.BaseContext(), buf)
+	require.NoError(t, err, "unmarshal test config")
+	return cfg
 }
 
-func testBoxOptions(tmpPath string) (*O.Options, string, error) {
-	content, err := os.ReadFile("testdata/boxopts.json")
-	if err != nil {
-		return nil, "", err
+func testBoxOptions(t *testing.T) (O.Options, []string) {
+	cfg := testConfig(t)
+	var tags []string
+	for _, o := range cfg.Options.Outbounds {
+		tags = append(tags, o.Tag)
 	}
-	opts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), content)
-	if err != nil {
-		return nil, "", err
+	for _, ep := range cfg.Options.Endpoints {
+		tags = append(tags, ep.Tag)
 	}
-
-	opts.Experimental.CacheFile.Path = filepath.Join(tmpPath, cacheFileName)
-	opts.Experimental.CacheFile.CacheID = cacheID
-	buf, _ := json.Marshal(opts)
-	return &opts, string(buf), nil
+	return cfg.Options, tags
 }
 
 func TestKernelBelow(t *testing.T) {
 	tests := []struct {
-		name  string
-		v     string
-		min   string
-		want  bool
+		name string
+		v    string
+		min  string
+		want bool
 	}{
 		{"below major", "4.19.0", "5.10", true},
 		{"below minor", "5.4.0", "5.10", true},
@@ -378,4 +268,3 @@ func TestKernelBelow(t *testing.T) {
 		})
 	}
 }
-

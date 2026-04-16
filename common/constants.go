@@ -7,17 +7,11 @@ import (
 // Version is the application version, injected at build time via ldflags:
 //
 //	-X 'github.com/getlantern/radiance/common.Version=x.y.z'
-//
-// Can also be overridden at runtime via the RADIANCE_VERSION environment variable.
 var Version = "dev"
 
 const (
 	Name = "lantern"
 
-	// filenames
-	LogFileName        = "lantern.log"
-	ConfigFileName     = "config.json"
-	ServersFileName    = "servers.json"
 	DefaultHTTPTimeout = (60 * time.Second)
 
 	// API URLs
@@ -26,7 +20,6 @@ const (
 	BaseURL           = "https://df.iantem.io/api/v1"
 	StageBaseURL      = "https://api.staging.iantem.io/v1"
 )
-
 
 // GetProServerURL returns the pro server URL based on the current environment.
 func GetProServerURL() string {

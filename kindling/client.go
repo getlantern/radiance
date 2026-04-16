@@ -1,3 +1,5 @@
+// Package kindling provides a wrapper around the kindling library to create an HTTP client with
+// various transports (domain fronting, AMP, DNS tunneling, proxyless) from a shared kindling instance.
 package kindling
 
 import (
@@ -5,23 +7,25 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/getlantern/kindling"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	"github.com/getlantern/radiance/traces"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var (
 	k               kindling.Kindling
-	kindlingMutex   sync.Mutex
+	initOnce        sync.Once
 	stopUpdater     func()
 	closeTransports []func() error
 	// EnabledTransports is used for testing purposes for enabling/disabling kindling transports
@@ -31,36 +35,52 @@ var (
 		"proxyless": true,
 		"fronted":   true,
 	}
+	defaultTransportClone = http.DefaultTransport.(*http.Transport).Clone()
+
+	// transport is the shared http.RoundTripper set once by initOnce.
+	transport http.RoundTripper
 )
 
-// HTTPClient returns a http client with kindling transport.
-// Thread-safe: uses kindlingMutex to guard lazy initialization.
-func HTTPClient() *http.Client {
-	kindlingMutex.Lock()
-	if k == nil {
-		newK, err := NewKindling()
-		if err != nil {
-			slog.Error("failed to create kindling client", slog.Any("error", err))
-		}
-		if newK != nil {
-			k = newK
-		}
+// initKindling initializes the package-level kindling instance and shared
+// transport.
+func initKindling() {
+	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
+	if err != nil {
+		slog.Error("failed to create kindling client", slog.Any("error", err))
 	}
-	localK := k
-	kindlingMutex.Unlock()
+	if newK != nil {
+		k = newK
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(newK.NewHTTPClient().Transport))
+	} else {
+		slog.Warn("kindling unavailable, using default transport clone")
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+	}
+}
 
-	if localK == nil {
-		slog.Warn("kindling unavailable, returning bare HTTP client")
-		return &http.Client{Timeout: common.DefaultHTTPTimeout}
+func Init() {
+	go initOnce.Do(initKindling)
+}
+
+// HTTPClient returns an HTTP client backed by kindling. The underlying
+// transport blocks on first use until kindling is initialized.
+func HTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   common.DefaultHTTPTimeout,
+		Transport: readyTransport{},
 	}
-	httpClient := localK.NewHTTPClient()
-	httpClient.Timeout = common.DefaultHTTPTimeout
-	httpClient.Transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(httpClient.Transport))
-	return httpClient
+}
+
+// readyTransport blocks until initOnce has completed, then delegates to the
+// shared transport.
+type readyTransport struct{}
+
+func (readyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	initOnce.Do(initKindling)
+	return transport.RoundTrip(req)
 }
 
 // Close stop all concurrent config fetches that can be happening in background
-func Close(_ context.Context) error {
+func Close() error {
 	if stopUpdater != nil {
 		stopUpdater()
 	}
@@ -72,19 +92,26 @@ func Close(_ context.Context) error {
 	return nil
 }
 
-// SetKindling sets the kindling method used for building the HTTP client
-// This function is useful for testing purposes.
+// SetKindling sets the kindling method used for building the HTTP client.
+// This function is useful for testing purposes. It bypasses the normal
+// initialization path, so Warm()/initOnce will be a no-op after this call
+// only if called before them. For tests, call SetKindling before any
+// HTTPClient usage.
 func SetKindling(a kindling.Kindling) {
-	kindlingMutex.Lock()
-	defer kindlingMutex.Unlock()
-	k = a
+	initOnce.Do(func() {
+		k = a
+		if a != nil {
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(a.NewHTTPClient().Transport))
+		} else {
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+		}
+	})
 }
 
 const tracerName = "github.com/getlantern/radiance/kindling"
 
 // NewKindling build a kindling client and bootstrap this package
-func NewKindling() (kindling.Kindling, error) {
-	dataDir := settings.GetString(settings.DataPathKey)
+func NewKindling(dataDir string) (kindling.Kindling, error) {
 	logger := &slogWriter{Logger: slog.Default()}
 
 	ctx, span := otel.Tracer(tracerName).Start(
@@ -163,6 +190,8 @@ type slogWriter struct {
 
 func (w *slogWriter) Write(p []byte) (n int, err error) {
 	// Convert the byte slice to a string and log it
-	w.Info(string(p))
+	s := string(p)
+	s = strings.TrimSpace(s)
+	w.Info(s)
 	return len(p), nil
 }

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/getlantern/radiance/log"
 )
 
 const (
@@ -21,21 +23,6 @@ const (
 	// BypassInboundTag is the sing-box inbound tag used for routing bypass traffic to direct.
 	BypassInboundTag = "bypass-in"
 
-	// TunnelProxyPort is the port for the local tunnel proxy listener.
-	// Traffic entering this inbound is routed through the active VPN proxy,
-	// unlike bypass traffic which is routed directly.
-	TunnelProxyPort = 14986
-
-	// TunnelInboundTag is the sing-box inbound tag for the tunnel proxy.
-	// Unlike BypassInboundTag, this has no routing rule sending it to direct,
-	// so traffic falls through to the active proxy group.
-	TunnelInboundTag = "tunnel-in"
-)
-
-// TunnelProxyAddr is the address of the local tunnel proxy listener.
-var TunnelProxyAddr = net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", TunnelProxyPort))
-
-const (
 	// connectTimeout is the default timeout for the HTTP CONNECT handshake
 	// when the caller's context has no deadline.
 	connectTimeout = 10 * time.Second
@@ -56,7 +43,7 @@ func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	}
 	proxyConn, err := dialer.DialContext(ctx, "tcp", ProxyAddr)
 	if err != nil {
-		slog.Debug("bypass proxy not reachable, falling back to direct dial", "addr", addr, "error", err)
+		slog.Log(nil, log.LevelTrace, "bypass proxy not reachable, falling back to direct dial", "addr", addr, "error", err)
 		return dialer.DialContext(ctx, network, addr)
 	}
 	tunnelConn, err := httpConnect(ctx, proxyConn, addr)
@@ -71,27 +58,6 @@ func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 // amp.WithDialer which expects func(network, addr string) (net.Conn, error).
 func Dial(network, addr string) (net.Conn, error) {
 	return DialContext(context.Background(), network, addr)
-}
-
-// TunnelDialContext connects through the local tunnel proxy, which routes
-// traffic through the active VPN proxy outbound. Unlike DialContext, it does
-// NOT fall back to a direct dial when the proxy is unreachable — if the VPN is
-// not running, the connection fails.
-func TunnelDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{
-		Timeout:   dialTimeout,
-		KeepAlive: dialKeepAlive,
-	}
-	proxyConn, err := dialer.DialContext(ctx, "tcp", TunnelProxyAddr)
-	if err != nil {
-		return nil, fmt.Errorf("tunnel proxy not reachable: %w", err)
-	}
-	tunnelConn, err := httpConnect(ctx, proxyConn, addr)
-	if err != nil {
-		proxyConn.Close()
-		return nil, err
-	}
-	return tunnelConn, nil
 }
 
 // bufferedConn wraps a net.Conn with a bufio.Reader so that any bytes

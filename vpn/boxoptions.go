@@ -9,15 +9,16 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	lcommon "github.com/getlantern/common"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	lcommon "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
@@ -30,17 +31,13 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/log"
 )
 
 const (
-	autoAllTag = "auto"
-
-	autoLanternTag = "auto-lantern"
-	autoUserTag    = "auto-user"
+	AutoSelectTag   = "auto"
+	ManualSelectTag = "manual"
 
 	urlTestInterval    = 3 * time.Minute // must be less than urlTestIdleTimeout
 	urlTestIdleTimeout = 15 * time.Minute
@@ -54,11 +51,35 @@ const (
 	minAndroidSystemStackKernel = "5.10"
 )
 
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
+
+func ReservedTags() []string {
+	return slices.Clone(reservedTags)
+}
+
+type BoxOptions struct {
+	BasePath string `json:"base_path,omitempty"`
+	// Options contains the main options that are merged into the base options with the exception of
+	// DNS, which overrides the base DNS options entirely instead of being merged. Options should
+	// contain all servers (both lantern and user).
+	Options O.Options `json:"options"`
+	// SmartRouting contains smart routing rules to merge into the final options.
+	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
+	// AdBlock contains ad block rules to merge into the final options.
+	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
+	// the bandit Thompson sampling system. When set, these override the
+	// default MutableURLTest URL for each specific outbound, allowing the
+	// server to detect which proxies successfully connected.
+	BanditURLOverrides  map[string]string `json:"bandit_url_overrides,omitempty"`
+	BanditThroughputURL string            `json:"bandit_throughput_url,omitempty"`
+}
+
 // this is the base options that is need for everything to work correctly. this should not be
 // changed unless you know what you're doing.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
-
+	cacheFile := filepath.Join(basePath, cacheFileName)
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	return O.Options{
 		Log: &O.LogOptions{
@@ -99,16 +120,6 @@ func baseOpts(basePath string) O.Options {
 					},
 				},
 			},
-			{
-				Type: C.TypeMixed,
-				Tag:  bypass.TunnelInboundTag,
-				Options: &O.HTTPMixedInboundOptions{
-					ListenOptions: O.ListenOptions{
-						Listen:     &loopbackAddr,
-						ListenPort: bypass.TunnelProxyPort,
-					},
-				},
-			},
 		},
 		Outbounds: []O.Outbound{
 			{
@@ -138,13 +149,13 @@ func baseOpts(basePath string) O.Options {
 		},
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI: &O.ClashAPIOptions{
-				DefaultMode:        autoAllTag,
-				ModeList:           []string{servers.SGLantern, servers.SGUser, autoAllTag},
+				DefaultMode:        AutoSelectTag,
+				ModeList:           []string{ManualSelectTag, AutoSelectTag},
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{
 				Enabled: true,
-				Path:    cacheFileName,
+				Path:    cacheFile,
 				CacheID: cacheID,
 			},
 		},
@@ -245,25 +256,21 @@ func baseRoutingRules() []O.Rule {
 }
 
 // buildOptions builds the box options using the config options and user servers.
-func buildOptions(ctx context.Context, path string) (O.Options, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "buildOptions")
+func buildOptions(bOptions BoxOptions) (O.Options, error) {
+	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
-	slog.Log(nil, internal.LevelTrace, "Starting buildOptions", "path", path)
+	if len(bOptions.Options.Outbounds) == 0 && len(bOptions.Options.Endpoints) == 0 {
+		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+	}
 
-	opts := baseOpts(path)
+	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", bOptions.BasePath)
+
+	opts := baseOpts(bOptions.BasePath)
 	slog.Debug("Base options initialized")
 
-	// update default options and paths
-	opts.Experimental.CacheFile.Path = filepath.Join(path, cacheFileName)
-
-	slog.Log(nil, internal.LevelTrace, "Updated default options and paths",
-		"cacheFilePath", opts.Experimental.CacheFile.Path,
-		"clashAPIDefaultMode", opts.Experimental.ClashAPI.DefaultMode,
-	)
-
-	if _, useSocks := env.Get[bool](env.UseSocks); useSocks {
-		socksAddr, _ := env.Get[string](env.SocksAddress)
+	if env.GetBool(env.UseSocks) {
+		socksAddr, _ := env.Get(env.SocksAddress)
 		slog.Info("Using SOCKS proxy for inbound as per environment variable", "socksAddr", socksAddr)
 		addrPort, err := netip.ParseAddrPort(socksAddr)
 		if err != nil {
@@ -301,81 +308,48 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 		}
 	}
 
-	// Load config file
-	confPath := filepath.Join(path, common.ConfigFileName)
-	slog.Debug("Loading config file", "confPath", confPath)
-	cfg, err := loadConfig(confPath)
-	if err != nil {
-		slog.Error("Failed to load config options", "error", err)
-		return O.Options{}, err
-	}
-
 	// add smart routing and ad block rules
-	if settings.GetBool(settings.SmartRoutingKey) && len(cfg.SmartRouting) > 0 {
-		slog.Debug("Adding smart-routing rules")
-		smartRoutingRules := normalizeSmartRoutingRules(cfg.SmartRouting)
+	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
+	if len(smartRoutingRules) > 0 {
+		slog.Info("Adding smart-routing rules")
 		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
-		opts.Outbounds = append(opts.Outbounds, outbounds...)
-		opts.Route.Rules = append(opts.Route.Rules, rules...)
-		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		if len(outbounds) == 0 || len(rules) == 0 || len(rulesets) == 0 {
+			slog.Warn("No valid smart-routing rules found after normalization, skipping smart-routing configuration")
+		} else {
+			opts.Outbounds = append(opts.Outbounds, outbounds...)
+			opts.Route.Rules = append(opts.Route.Rules, rules...)
+			opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		}
 	}
-	if settings.GetBool(settings.AdBlockKey) && len(cfg.AdBlock) > 0 {
-		slog.Debug("Adding ad-block rules")
-		rule, rulesets := cfg.AdBlock.ToOptions()
-		opts.Route.Rules = append(opts.Route.Rules, rule)
-		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
-	}
-
-	var lanternTags []string
-	configOpts := cfg.Options
-	if len(configOpts.Outbounds) == 0 && len(configOpts.Endpoints) == 0 {
-		slog.Warn("Config loaded but no outbounds or endpoints found")
-	}
-	lanternTags = mergeAndCollectTags(&opts, &configOpts)
-	slog.Debug("Merged config options", "tags", lanternTags)
-
-	appendGroupOutbounds(&opts, servers.SGLantern, autoLanternTag, lanternTags, cfg.BanditURLOverrides)
-
-	// Load user servers
-	slog.Debug("Loading user servers")
-	userOpts, err := loadUserOptions(path)
-	if err != nil {
-		slog.Error("Failed to load user servers", "error", err)
-		return O.Options{}, err
-	}
-	var userTags []string
-	if len(userOpts.Outbounds) == 0 && len(userOpts.Endpoints) == 0 {
-		slog.Info("No user servers found")
-	} else {
-		userTags = mergeAndCollectTags(&opts, &userOpts)
-		slog.Debug("Merged user server options", "tags", userTags)
-	}
-	appendGroupOutbounds(&opts, servers.SGUser, autoUserTag, userTags, nil)
-
-	if len(lanternTags) == 0 && len(userTags) == 0 {
-		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+	adBlockRules := normalizeAdBlockRules(bOptions.AdBlock)
+	if len(adBlockRules) > 0 {
+		slog.Info("Adding ad-block rules")
+		rule, rulesets := bOptions.AdBlock.ToOptions()
+		if len(rulesets) == 0 {
+			slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
+		} else {
+			opts.Route.Rules = append(opts.Route.Rules, rule)
+			opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		}
 	}
 
-	// Add auto all outbound
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}, nil))
+	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
-	// Add routing rules for the groups
-	opts.Route.Rules = append(opts.Route.Rules, groupRule(autoAllTag))
-	opts.Route.Rules = append(opts.Route.Rules, groupRule(servers.SGLantern))
-	opts.Route.Rules = append(opts.Route.Rules, groupRule(servers.SGUser))
+	// add mode selector outbounds and rules
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
+	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, tags))
+	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
+	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
-	slog.Debug("Finished building options", slog.String("env", common.Env()))
+	slog.Debug("Finished building options", "env", common.Env())
 
 	span.AddEvent("finished building options", trace.WithAttributes(
-		attribute.String("options", string(writeBoxOptions(path, opts))),
-		attribute.String("env", common.Env()),
+		attribute.String("options", string(writeBoxOptions(bOptions.BasePath, opts))),
 	))
 	return opts, nil
 }
-
-const debugLanternBoxOptionsFilename = "debug-lantern-box-options.json"
 
 // writeBoxOptions marshals the options as JSON and stores them in a file so we can debug them
 // we can ignore the errors here since the tunnel will error out anyway if something is wrong
@@ -391,36 +365,16 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
 		return buf
 	}
-	if err := atomicfile.WriteFile(filepath.Join(path, debugLanternBoxOptionsFilename), b.Bytes(), 0644); err != nil {
+	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), b.Bytes(), 0644); err != nil {
 		slog.Warn("failed to write options file", slog.Any("error", err))
 		return buf
 	}
 	return b.Bytes()
 }
 
-///////////////////////
+//////////////////////
 // Helper functions //
 //////////////////////
-
-func loadConfig(path string) (lcommon.ConfigResponse, error) {
-	cfg, err := config.Load(path)
-	if err != nil {
-		return lcommon.ConfigResponse{}, fmt.Errorf("load config: %w", err)
-	}
-	if cfg == nil {
-		return lcommon.ConfigResponse{}, nil
-	}
-	return cfg.ConfigResponse, nil
-}
-
-func loadUserOptions(path string) (O.Options, error) {
-	mgr, err := servers.NewManager(path)
-	if err != nil {
-		return O.Options{}, fmt.Errorf("server manager: %w", err)
-	}
-	u := mgr.Servers()[servers.SGUser]
-	return O.Options{Outbounds: u.Outbounds, Endpoints: u.Endpoints}, nil
-}
 
 // mergeAndCollectTags merges src into dst and returns all outbound/endpoint tags from src.
 func mergeAndCollectTags(dst, src *O.Options) []string {
@@ -470,38 +424,18 @@ func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRo
 	return normalized
 }
 
-func useIfNotZero[T comparable](newVal, oldVal T) T {
-	var zero T
-	if newVal != zero {
-		return newVal
+func normalizeAdBlockRules(rules lcommon.AdBlockRules) lcommon.AdBlockRules {
+	normalized := make(lcommon.AdBlockRules, 0, len(rules))
+	for _, rule := range rules {
+		tag := strings.TrimSpace(rule.Tag)
+		if tag == "" {
+			slog.Warn("Skipping ad-block rule with empty tag")
+			continue
+		}
+		rule.Tag = tag
+		normalized = append(normalized, rule)
 	}
-	return oldVal
-}
-
-func appendGroupOutbounds(opts *O.Options, serverGroup, autoTag string, tags []string, urlOverrides map[string]string) {
-	// All outbounds go in the URL test group — the server now sends callback
-	// URLs for every outbound, and the dependency's worker pool bounds memory.
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(autoTag, tags, urlOverrides))
-	opts.Outbounds = append(opts.Outbounds, selectorOutbound(serverGroup, append([]string{autoTag}, tags...)))
-	slog.Log(
-		nil, internal.LevelTrace, "Added group outbounds",
-		"serverGroup", serverGroup,
-		"tags", tags,
-		"outbounds", opts.Outbounds[len(opts.Outbounds)-2:],
-	)
-}
-
-func groupAutoTag(group string) string {
-	switch group {
-	case servers.SGLantern:
-		return autoLanternTag
-	case servers.SGUser:
-		return autoUserTag
-	case "all", "":
-		return autoAllTag
-	default:
-		return ""
-	}
+	return normalized
 }
 
 func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {
@@ -518,27 +452,27 @@ func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]str
 	}
 }
 
-func selectorOutbound(group string, outbounds []string) O.Outbound {
+func selectorOutbound(tag string, outbounds []string) O.Outbound {
 	return O.Outbound{
 		Type: lbC.TypeMutableSelector,
-		Tag:  group,
+		Tag:  tag,
 		Options: &lbO.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
 		},
 	}
 }
 
-func groupRule(group string) O.Rule {
+func selectModeRule(mode string) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
 			RawDefaultRule: O.RawDefaultRule{
-				ClashMode: group,
+				ClashMode: mode,
 			},
 			RuleAction: O.RuleAction{
 				Action: C.RuleActionTypeRoute,
 				RouteOptions: O.RouteActionOptions{
-					Outbound: group,
+					Outbound: mode,
 				},
 			},
 		},
@@ -637,4 +571,3 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 		Options: serverOpts,
 	}
 }
-

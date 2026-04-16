@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -8,10 +9,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/getlantern/radiance"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/ipc"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -20,7 +22,7 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 		os.RemoveAll(dataDir)
 	}
 	os.MkdirAll(dataDir, 0o755)
-	r, err := radiance.NewRadiance(radiance.Options{
+	be, err := backend.NewLocalBackend(context.Background(), backend.Options{
 		DataDir: dataDir,
 		LogDir:  dataDir,
 		Locale:  "en-US",
@@ -28,7 +30,7 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 	if err != nil {
 		return fmt.Errorf("failed to create radiance instance: %w", err)
 	}
-	defer r.Close()
+	defer be.Close()
 	settings.Set(settings.UserIDKey, userId)
 	settings.Set(settings.TokenKey, token)
 	settings.Set(settings.UserLevelKey, "")
@@ -40,14 +42,16 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 		},
 	})
 
-	ipcServer, err := vpn.InitIPC(dataDir, "", "trace", nil)
+	be.Start()
+
+	ipcServer := ipc.NewServer(be, false)
+	err = ipcServer.Start()
 	if err != nil {
 		return fmt.Errorf("failed to initialize IPC server: %w", err)
 	}
 	exit := func() {
-		status, _ := vpn.GetStatus()
-		if status.TunnelOpen {
-			vpn.Disconnect()
+		if be.VPNStatus() != vpn.Disconnected {
+			be.DisconnectVPN()
 		}
 		ipcServer.Close()
 	}
@@ -70,7 +74,7 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 		}
 	}
 	t1 := time.Now()
-	if err = vpn.QuickConnect("all", nil); err != nil {
+	if err = be.ConnectVPN(vpn.AutoSelectTag); err != nil {
 		return fmt.Errorf("quick connect failed: %w", err)
 	}
 	fmt.Println("Quick connect successful")
@@ -79,7 +83,7 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 
 	proxyAddr := os.Getenv("RADIANCE_SOCKS_ADDRESS")
 	if proxyAddr == "" {
-	  proxyAddr = "127.0.0.1:6666"
+		proxyAddr = "127.0.0.1:6666"
 	}
 	cmd := exec.Command("curl", "-v", "-x", proxyAddr, "-s", urlToHit)
 
