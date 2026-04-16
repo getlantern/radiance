@@ -65,6 +65,11 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		}
 	}()
 
+	// Load .env from the data directory (needed on Android where the cwd is "/"
+	// and the init()-time .env read from cwd finds nothing). On desktop this is
+	// typically a no-op since the cwd .env already loaded in init().
+	env.LoadFromDir(dataDir)
+
 	if v, ok := env.Get(env.AppVersion); ok && v != "" {
 		Version = v
 		slog.Info("Version overridden via RADIANCE_VERSION", "version", Version)
