@@ -351,6 +351,18 @@ func (c *Client) EnableAdBlocking(ctx context.Context, enable bool) error {
 	return err
 }
 
+/////////
+// Env //
+/////////
+
+// PatchEnvVars updates the daemon's in-memory environment variables.
+// This is intended for dev/testing use only.
+func (c *Client) PatchEnvVars(ctx context.Context, updates map[string]string) (map[string]string, error) {
+	var result map[string]string
+	err := c.doJSON(ctx, http.MethodPatch, envEndpoint, updates, &result)
+	return result, err
+}
+
 //////////////////
 // Split Tunnel //
 /////////////////

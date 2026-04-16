@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
@@ -86,6 +87,9 @@ const (
 
 	// Logs endpoint
 	logsStreamEndpoint = "/logs/stream"
+
+	// Env endpoint (dev/testing)
+	envEndpoint = "/env"
 )
 
 var (
@@ -243,6 +247,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 
 	// Logs (SSE, skip tracer)
 	mux.HandleFunc("GET "+logsStreamEndpoint, s.logsStreamHandler)
+
+	// Env (dev/testing)
+	mux.HandleFunc(envEndpoint, traced(s.envHandler))
 
 	// Build the middleware chain: log -> (optional auth) -> mux
 	var handler http.Handler = mux
@@ -599,6 +606,25 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 		fallthrough
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, settings.GetAll())
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPatch:
+		var updates map[string]string
+		if err := decodeJSON(r, &updates); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		for k, v := range updates {
+			env.Set(k, v)
+		}
+		fallthrough
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, env.GetAll())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

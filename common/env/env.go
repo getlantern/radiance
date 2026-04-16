@@ -6,9 +6,11 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -30,6 +32,7 @@ var (
 
 	Testing _key = "RADIANCE_TESTING"
 
+	mu     sync.RWMutex
 	dotenv = map[string]string{}
 )
 
@@ -62,13 +65,33 @@ func init() {
 }
 
 func Get(key _key) (string, bool) {
-	if value, exists := dotenv[key.String()]; exists {
+	mu.RLock()
+	value, exists := dotenv[key.String()]
+	mu.RUnlock()
+	if exists {
 		return value, true
 	}
 	if value, exists := os.LookupEnv(key.String()); exists {
 		return value, true
 	}
 	return "", false
+}
+
+// Set sets a key in the in-memory dotenv map, overriding any .env file or OS
+// environment variable value. This is intended for dev/testing use via IPC.
+func Set(key string, value string) {
+	mu.Lock()
+	dotenv[key] = value
+	mu.Unlock()
+}
+
+// GetAll returns a copy of the in-memory dotenv map.
+func GetAll() map[string]string {
+	mu.RLock()
+	defer mu.RUnlock()
+	m := make(map[string]string, len(dotenv))
+	maps.Copy(m, dotenv)
+	return m
 }
 
 func GetString(key _key) string {
@@ -96,6 +119,6 @@ func GetInt(key _key) int {
 
 func SetStagingEnv() {
 	slog.Info("setting environment to staging for testing")
-	dotenv[ENV.String()] = "staging"
-	dotenv[PrintCurl.String()] = "true"
+	Set(ENV.String(), "staging")
+	Set(PrintCurl.String(), "true")
 }
