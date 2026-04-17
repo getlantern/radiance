@@ -103,6 +103,7 @@ func AutoConnect(group string) error {
 			if err := ipc.SetClashMode(ctx, autoAllTag); err != nil {
 				return fmt.Errorf("failed to set auto mode: %w", err)
 			}
+			persistSelection("", "")
 			return nil
 		}
 		return traces.RecordError(ctx, connect(autoAllTag, ""))
@@ -155,7 +156,7 @@ func connect(group, tag string) error {
 	return SelectServer(ctx, group, tag)
 }
 
-// Restart restarts the tunnel by reconnecting to the currently selected server.
+// Restart restarts the tunnel by stopping and starting the service.
 func Restart() error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "restart")
 	defer span.End()
@@ -198,7 +199,7 @@ func Disconnect() error {
 	return traces.RecordError(ctx, ipc.StopService(ctx))
 }
 
-// SelectServer selects the specified server for the tunnel. The tunnel must already be open.
+// SelectServer selects the specified server for the tunnel.
 func SelectServer(ctx context.Context, group, tag string) error {
 	if !isOpen(ctx) {
 		return errors.New("tunnel is not open")
@@ -209,6 +210,7 @@ func SelectServer(ctx context.Context, group, tag string) error {
 			slog.Error("Failed to set auto mode", "group", group, "error", err)
 			return fmt.Errorf("failed to set auto mode: %w", err)
 		}
+		persistSelection("", "")
 		return nil
 	}
 	slog.Info("Selecting server", "group", group, "tag", tag)
@@ -216,7 +218,63 @@ func SelectServer(ctx context.Context, group, tag string) error {
 		slog.Error("Failed to select server", "group", group, "tag", tag, "error", err)
 		return fmt.Errorf("failed to select server %s/%s: %w", group, tag, err)
 	}
+	persistSelection(group, tag)
 	return nil
+}
+
+const selectedServerFileName = "selected_server.json"
+
+type selectedServer struct {
+	Group string `json:"group"`
+	Tag   string `json:"tag"`
+}
+
+// persistSelection saves the server selection to a file (not settings, which is read-only
+// in the tunnel process). Errors are logged but not propagated.
+func persistSelection(group, tag string) {
+	dataPath := settings.GetString(settings.DataPathKey)
+	if dataPath == "" {
+		slog.Warn("Cannot persist server selection: data path not set")
+		return
+	}
+	filePath := filepath.Join(dataPath, selectedServerFileName)
+	data, err := json.Marshal(selectedServer{Group: group, Tag: tag})
+	if err != nil {
+		slog.Warn("Failed to marshal server selection", "error", err)
+		return
+	}
+	if err := atomicfile.WriteFile(filePath, data, 0o644); err != nil {
+		slog.Warn("Failed to persist server selection", "error", err)
+	}
+}
+
+// ClearLastSelectedServer removes the persisted server selection so the next
+// StartVPN falls through to AutoConnect.
+func ClearLastSelectedServer() {
+	persistSelection("", "")
+}
+
+// LastSelectedServer returns the persisted server selection, or empty strings
+// if on auto or no selection was ever saved.
+func LastSelectedServer() (group, tag string) {
+	dataPath := settings.GetString(settings.DataPathKey)
+	if dataPath == "" {
+		return "", ""
+	}
+	filePath := filepath.Join(dataPath, selectedServerFileName)
+	data, err := atomicfile.ReadFile(filePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("Failed to read persisted server selection", "error", err)
+		}
+		return "", ""
+	}
+	var sel selectedServer
+	if err := json.Unmarshal(data, &sel); err != nil {
+		slog.Warn("Failed to unmarshal persisted server selection", "error", err)
+		return "", ""
+	}
+	return sel.Group, sel.Tag
 }
 
 // Status represents the current status of the tunnel, including whether it is open, the selected
@@ -368,8 +426,8 @@ func AutoServerSelections() (AutoSelections, error) {
 }
 
 const (
-	rapidPollInterval = 500 * time.Millisecond
-	rapidPollWindow   = 15 * time.Second
+	rapidPollInterval  = 500 * time.Millisecond
+	rapidPollWindow    = 15 * time.Second
 	steadyPollInterval = 10 * time.Second
 )
 
@@ -577,7 +635,6 @@ func preTest(path string) (map[string]uint16, context.Context, bool, error) {
 	return results, traceCtx, hasTrace, nil
 }
 
-
 func saveURLTestResults(storage *urltest.HistoryStorage, path string, results map[string]uint16) error {
 	slog.Debug("Saving URL test history", "path", path)
 	history := make(map[string]*adapter.URLTestHistory, len(results))
@@ -647,11 +704,7 @@ func restartTunnel() error {
 		return nil
 	}
 	slog.Info("Restarting tunnel")
-	options, err := getOptions()
-	if err != nil {
-		return err
-	}
-	if err := ipc.RestartService(ctx, options); err != nil {
+	if err := Restart(); err != nil {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 	return nil

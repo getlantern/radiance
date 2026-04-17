@@ -36,9 +36,9 @@ const (
 	DevicesKey       = "devices"
 	LogLevelKey      = "log_level"
 	LoginResponseKey = "login_response"
-	SmartRoutingKey  = "smart_routing"
-	AdBlockKey       = "ad_block"
-	DataCapUsageKey  = "datacap_usage"
+	SmartRoutingKey = "smart_routing"
+	AdBlockKey      = "ad_block"
+	DataCapUsageKey = "datacap_usage"
 	filePathKey      = "file_path"
 
 	settingsFileName = "local.json"
