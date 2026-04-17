@@ -174,6 +174,7 @@ func getOptions() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to build options: %w", err)
 	}
+	preDownloadRuleSets(context.Background(), &options, dataPath)
 	opts, err := sbjson.Marshal(options)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal options: %w", err)
