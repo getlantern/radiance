@@ -24,6 +24,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 
@@ -62,7 +63,12 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	if t.status.Load() != Restarting {
 		t.setStatus(Connecting, nil)
 	}
-	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
+	// Unbounded signaling (and any other outbound that reads this value) must
+	// dial freddie outside the user's VPN tunnel, otherwise it recursively
+	// re-enters itself. kindling's RoundTripper dials via the physical
+	// interface and blocks until kindling init completes.
+	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), kindling.HTTPClient().Transport)
+	t.ctx, t.cancel = context.WithCancel(baseCtx)
 	defer func() {
 		if err != nil {
 			t.setStatus(ErrorStatus, err)
