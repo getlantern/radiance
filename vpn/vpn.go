@@ -131,6 +131,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
+	preDownloadRuleSets(ctx, &options, boxOptions.BasePath)
 	opts, err := sbjson.Marshal(options)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
@@ -211,6 +212,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to build options: %w", err)
 	}
+	preDownloadRuleSets(context.Background(), &options, boxOptions.BasePath)
 	opts, err := sbjson.Marshal(options)
 	if err != nil {
 		return fmt.Errorf("failed to marshal options: %w", err)
