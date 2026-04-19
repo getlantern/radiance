@@ -93,9 +93,19 @@ func Get[T any](key Key) (T, bool) {
 	return zero, false
 }
 
-// SetStagingEnv sets the environment to staging if it has not already been set.
-// This is used for testing that need to interact with staging services,
+// SetStagingEnv sets the environment to staging if it has not already
+// been set. Callers typically invoke this when the Flutter UI's
+// persisted `environment` setting is "staging", but that persisted
+// setting must not override a developer's explicit shell env —
+// RADIANCE_ENV from the shell wins. If RADIANCE_ENV is already set
+// (either via shell or a .env file picked up at init), leave it alone;
+// otherwise fall through to the staging default.
 func SetStagingEnv() {
+	if _, alreadySet := envVars[ENV]; alreadySet {
+		slog.Info("SetStagingEnv called but RADIANCE_ENV already set; honoring existing value", "value", envVars[ENV])
+		envVars[PrintCurl] = true
+		return
+	}
 	slog.Info("setting environment to staging for testing")
 	envVars[ENV] = "staging"
 	envVars[PrintCurl] = true
