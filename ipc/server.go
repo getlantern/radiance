@@ -18,6 +18,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/vpn"
@@ -41,6 +42,9 @@ const (
 	serverSelectedEndpoint           = "/server/selected"
 	serverAutoSelectedEndpoint       = "/server/auto-selected"
 	serverAutoSelectedEventsEndpoint = "/server/auto-selected/events"
+
+	// Config endpoints
+	configEventsEndpoint = "/config/events"
 
 	// Server management endpoints
 	serversEndpoint              = "/servers"
@@ -199,6 +203,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc(serverSelectedEndpoint, traced(s.serverSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEndpoint, traced(s.serverAutoSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEventsEndpoint, s.serverAutoSelectedEventsHandler)
+	mux.HandleFunc("GET "+configEventsEndpoint, s.configEventsHandler)
 
 	// Server management
 	mux.HandleFunc("GET "+serversEndpoint, traced(s.serversHandler))
@@ -467,6 +472,34 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 		select {
 		case data := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// configEventsHandler streams a notification on every config.NewConfigEvent.
+// The payload is always "{}" — subscribers only need to know a change
+// occurred and fetch fresh state through the other GET endpoints, so we don't
+// serialize the (potentially large) full Config.
+func (s *localapi) configEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan struct{}, 16)
+	sub := events.Subscribe(func(evt config.NewConfigEvent) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case <-ch:
+			fmt.Fprint(w, "data: {}\n\n")
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
