@@ -6,13 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdlog "log"
 	"log/slog"
+	"net"
+	"net/http"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	broflakeCommon "github.com/getlantern/broflake/common"
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
 
@@ -34,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 )
@@ -63,11 +70,36 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	if t.status.Load() != Restarting {
 		t.setStatus(Connecting, nil)
 	}
+	// Redirect broflake's internal debug logger (consumer/producer FSM
+	// state transitions, STUN cache population, ICE/peer-connection state
+	// changes, datachannel open/close) from its default os.Stderr target
+	// to our structured slog so the messages land in
+	// /Users/Shared/Lantern/Logs/lantern.log instead of the system
+	// extension's stderr (which on macOS goes nowhere the user can see).
+	// Each broflake Debugf call becomes one slog.Info line tagged
+	// subsys=broflake. Idempotent — broflakeCommon guards with a mutex,
+	// so repeated starts just re-point to the same writer.
+	broflakeCommon.SetDebugLogger(stdlog.New(&broflakeSlogWriter{}, "", 0))
+	// Note: a single broflakeSlogWriter instance persists for the life of
+	// this process regardless of VPN restarts. SetDebugLogger is
+	// idempotent; repeated starts overwrite the logger but each instance
+	// carries its own rate-limit state, which is fine — cross-restart
+	// rate-limiting isn't useful here.
 	// Unbounded signaling (and any other outbound that reads this value) must
 	// dial freddie outside the user's VPN tunnel, otherwise it recursively
 	// re-enters itself. kindling's RoundTripper dials via the physical
 	// interface and blocks until kindling init completes.
-	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), kindling.HTTPClient().Transport)
+	//
+	// We wrap it in a streaming-aware transport: kindling's race pipeline
+	// includes a non-streamable AMP transport that can win the race and
+	// buffer the full response body. Freddie's genesis endpoint is a
+	// long-poll SSE-style stream, so a buffered responder returns an
+	// immediate short body and the broflake consumer FSM sees EOF before
+	// any genesis message arrives, restarting forever without ever
+	// sending an offer. Setting Accept: text/event-stream on freddie
+	// requests makes kindling skip AMP and race only the streamable
+	// transports (fronted, smart), so the stream stays open.
+	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), &streamingRoundTripper{inner: kindling.HTTPClient().Transport})
 	t.ctx, t.cancel = context.WithCancel(baseCtx)
 	defer func() {
 		if err != nil {
@@ -570,5 +602,178 @@ func contextDone(ctx context.Context) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// streamingRoundTripper wraps an inner RoundTripper and sets
+// `Accept: text/event-stream` on outgoing requests that don't already have
+// an Accept header. This is specifically to work around kindling's race
+// pipeline: the AMP transport is non-streamable, so if it wins the race
+// against fronted/smart it buffers the full response body — which breaks
+// freddie's long-poll genesis subscription. Kindling filters non-streamable
+// transports only when the request Accept header is text/event-stream, so
+// we force it here.
+//
+// We don't override an already-set Accept (some callers may legitimately
+// ask for other content types); callers that expect streaming but omit
+// Accept get the streaming-friendly default, which matches what SSE
+// clients typically send anyway.
+type streamingRoundTripper struct {
+	inner http.RoundTripper
+
+	// freddieTransport short-circuits requests to
+	// `https://df.iantem.io/freddie/...` — broflake's signaling endpoint —
+	// around kindling entirely. kindling's race pipeline includes a
+	// "smart" transport that resolves via stdlib DNS before dialing; on
+	// a Lantern client with the TUN up, that stdlib lookup ends up
+	// querying the TUN's fakeip resolver (10.10.1.2:53), which loops
+	// back into the extension and times out. When fronted or amp lose
+	// the race, the whole POST fails, and broflake's consumer state 3
+	// treats an ICE-candidate signaling failure as fatal — it closes
+	// the peer connection and the datachannel never comes up.
+	//
+	// freddieTransport uses a dialer bound to the physical interface
+	// (via the same NetworkManager ProtectFunc rtcNet uses for UDP) and
+	// a Resolver that talks to a public DNS server (1.1.1.1) on that
+	// same interface. No TUN traffic, no kindling race — one predictable
+	// code path for every freddie round-trip.
+	freddieTransport http.RoundTripper
+	initFreddieOnce  sync.Once
+}
+
+// broflakeSlogWriter adapts broflake's log.Logger.Print* output to our
+// slog. Broflake writes one complete line per call, terminated with
+// "\n"; we strip that and forward as a single slog.Info record tagged
+// subsys=broflake so it's easy to filter. This is the only way to see
+// the broflake FSM state machine from inside the sandboxed system
+// extension — broflake writes to os.Stderr by default, and the
+// extension's stderr isn't attached to anything user-visible on macOS.
+//
+// Spammy messages (broflake's QUICLayer.Close-then-spin-loop bug in
+// ListenAndMaintainQUICConnection, which emits "QUIC listener error
+// (context canceled), closing!" thousands of times per second after a
+// single tunnel teardown) are rate-limited to one line per second so
+// the real signal isn't buried under disk-I/O-bound noise. Identified
+// here by exact substring — if the root cause gets fixed upstream,
+// the filter becomes a no-op.
+type broflakeSlogWriter struct {
+	lastSpamLog atomic.Int64 // unix-nanos of the most recent "spam" line logged
+}
+
+const broflakeSpamPattern = "QUIC listener error (context canceled), closing!"
+
+func (b *broflakeSlogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\n")
+	if msg == "" {
+		return len(p), nil
+	}
+	if strings.Contains(msg, broflakeSpamPattern) {
+		now := time.Now().UnixNano()
+		last := b.lastSpamLog.Load()
+		if now-last < int64(time.Second) {
+			return len(p), nil
+		}
+		b.lastSpamLog.Store(now)
+		slog.Info(msg+" (rate-limited: 1/s)", "subsys", "broflake")
+		return len(p), nil
+	}
+	slog.Info(msg, "subsys", "broflake")
+	return len(p), nil
+}
+
+func (s *streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("Accept") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	transport := s.inner
+	transportName := "kindling"
+	if req.URL != nil && req.URL.Host == "df.iantem.io" {
+		s.initFreddieOnce.Do(func() {
+			s.freddieTransport = newFreddieTransport(req.Context())
+		})
+		transport = s.freddieTransport
+		transportName = "freddie-direct"
+	}
+	slog.Info("unbounded signaling RoundTrip start",
+		slog.String("method", req.Method),
+		slog.String("url", req.URL.String()),
+		slog.String("accept", req.Header.Get("Accept")),
+		slog.String("transport", transportName))
+	start := time.Now()
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		slog.Error("unbounded signaling RoundTrip error",
+			slog.String("url", req.URL.String()),
+			slog.String("transport", transportName),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err))
+		return nil, err
+	}
+	slog.Info("unbounded signaling RoundTrip ok",
+		slog.String("url", req.URL.String()),
+		slog.String("transport", transportName),
+		slog.Int("status", resp.StatusCode),
+		slog.String("content_length", resp.Header.Get("Content-Length")),
+		slog.String("transfer_encoding", strings.Join(resp.TransferEncoding, ",")),
+		slog.Duration("duration_to_headers", time.Since(start)))
+	return resp, nil
+}
+
+// bindEgressToPhysicalInterface returns a net.Dialer/ListenConfig
+// Control function that binds new sockets to the platform's default
+// physical interface (IP_BOUND_IF on macOS/iOS, SO_BINDTODEVICE on
+// Linux/Android). Same logic sing-box's NewDefault uses when
+// auto_detect_interface is active — we reach for it here directly so
+// we can build control-plane dialers outside the sing-box outbound
+// graph. Returns nil when no NetworkManager is registered on ctx
+// (tests), letting the socket follow the routing table unmodified.
+func bindEgressToPhysicalInterface(ctx context.Context) control.Func {
+	nm := service.FromContext[adapter.NetworkManager](ctx)
+	if nm == nil {
+		return nil
+	}
+	if pf := nm.ProtectFunc(); pf != nil {
+		return pf
+	}
+	return nm.AutoDetectInterfaceFunc()
+}
+
+// newFreddieTransport builds a bespoke http.RoundTripper for
+// df.iantem.io requests. It bypasses kindling (so smart/fronted/amp's
+// race-and-maybe-stdlib-DNS can't time out on the TUN) and binds every
+// socket to the physical interface the sing-box NetworkManager has
+// detected, using 1.1.1.1 as the DNS resolver. For the test-bench
+// scenario where we need freddie reachable from inside the extension
+// process even while the TUN is up, this is the most predictable
+// path; it would need revisiting before shipping to censored clients
+// who need kindling's censorship-bypass transports.
+func newFreddieTransport(ctx context.Context) http.RoundTripper {
+	bindCtrl := bindEgressToPhysicalInterface(ctx)
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := &net.Dialer{
+				Timeout: 5 * time.Second,
+				Control: bindCtrl,
+			}
+			// Ignore the `address` the resolver was pointing at (which
+			// on a VPN-up Lantern client is the TUN's fakeip DNS) and
+			// force a public recursive resolver reachable over the
+			// physical interface.
+			return d.DialContext(ctx, "udp", "1.1.1.1:53")
+		},
+	}
+	dialer := &net.Dialer{
+		Timeout:  10 * time.Second,
+		Resolver: resolver,
+		Control:  bindCtrl,
+	}
+	return &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 0, // long-poll endpoint holds open ~20s
+		IdleConnTimeout:       30 * time.Second,
 	}
 }
