@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,38 @@ func init() {
 	if testing.Testing() {
 		dotenv[Testing.String()] = "true"
 		dotenv[LogLevel.String()] = "disable"
+	}
+}
+
+// LoadFromDir reads a .env file from the given directory and merges its values
+// into the dotenv map. Values from this call override any previously loaded from
+// the working-directory .env (from init). This is needed on Android where the
+// app's working directory is "/" but the data directory (where the test harness
+// pushes .env) is elsewhere (e.g. /data/user/0/org.getlantern.lantern/.lantern).
+func LoadFromDir(dir string) {
+	if dir == "" {
+		return
+	}
+	path := filepath.Join(dir, ".env")
+	buf, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		slog.Error(".env found in data dir but failed to read", slog.String("path", path), slog.Any("error", err))
+		return
+	}
+	slog.Info("Loaded .env from data directory", slog.String("path", path))
+	lines := strings.SplitSeq(string(buf), "\n")
+	for line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			dotenv[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
 	}
 }
 
