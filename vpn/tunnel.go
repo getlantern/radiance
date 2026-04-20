@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
@@ -25,6 +24,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 
@@ -65,13 +65,9 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	}
 	// Unbounded signaling (and any other outbound that reads this value) must
 	// dial freddie outside the user's VPN tunnel, otherwise it recursively
-	// re-enters itself. On macOS/iOS system extensions the PacketTunnelProvider
-	// process is the TUN's origin — its own outgoing connections bypass the
-	// TUN automatically — so a plain transport is enough to escape the loop.
-	// Kindling would also work but its fronted/race pipeline buffers streaming
-	// responses (breaks freddie's long-poll genesis subscription); a naked
-	// transport keeps the stream intact.
-	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), http.DefaultTransport)
+	// re-enters itself. kindling's RoundTripper dials via the physical
+	// interface and blocks until kindling init completes.
+	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), kindling.HTTPClient().Transport)
 	t.ctx, t.cancel = context.WithCancel(baseCtx)
 	defer func() {
 		if err != nil {
