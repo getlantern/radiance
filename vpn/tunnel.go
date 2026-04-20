@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
@@ -67,7 +68,17 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	// dial freddie outside the user's VPN tunnel, otherwise it recursively
 	// re-enters itself. kindling's RoundTripper dials via the physical
 	// interface and blocks until kindling init completes.
-	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), kindling.HTTPClient().Transport)
+	//
+	// We wrap it in a streaming-aware transport: kindling's race pipeline
+	// includes a non-streamable AMP transport that can win the race and
+	// buffer the full response body. Freddie's genesis endpoint is a
+	// long-poll SSE-style stream, so a buffered responder returns an
+	// immediate short body and the broflake consumer FSM sees EOF before
+	// any genesis message arrives, restarting forever without ever
+	// sending an offer. Setting Accept: text/event-stream on freddie
+	// requests makes kindling skip AMP and race only the streamable
+	// transports (fronted, smart), so the stream stays open.
+	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), streamingRoundTripper{inner: kindling.HTTPClient().Transport})
 	t.ctx, t.cancel = context.WithCancel(baseCtx)
 	defer func() {
 		if err != nil {
@@ -571,4 +582,29 @@ func contextDone(ctx context.Context) bool {
 	default:
 		return false
 	}
+}
+
+// streamingRoundTripper wraps an inner RoundTripper and sets
+// `Accept: text/event-stream` on outgoing requests that don't already have
+// an Accept header. This is specifically to work around kindling's race
+// pipeline: the AMP transport is non-streamable, so if it wins the race
+// against fronted/smart it buffers the full response body — which breaks
+// freddie's long-poll genesis subscription. Kindling filters non-streamable
+// transports only when the request Accept header is text/event-stream, so
+// we force it here.
+//
+// We don't override an already-set Accept (some callers may legitimately
+// ask for other content types); callers that expect streaming but omit
+// Accept get the streaming-friendly default, which matches what SSE
+// clients typically send anyway.
+type streamingRoundTripper struct {
+	inner http.RoundTripper
+}
+
+func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("Accept") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	return s.inner.RoundTrip(req)
 }
