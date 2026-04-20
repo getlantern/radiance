@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -606,5 +607,24 @@ func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		req = req.Clone(req.Context())
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	return s.inner.RoundTrip(req)
+	slog.Info("unbounded signaling RoundTrip start",
+		slog.String("method", req.Method),
+		slog.String("url", req.URL.String()),
+		slog.String("accept", req.Header.Get("Accept")))
+	start := time.Now()
+	resp, err := s.inner.RoundTrip(req)
+	if err != nil {
+		slog.Error("unbounded signaling RoundTrip error",
+			slog.String("url", req.URL.String()),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err))
+		return nil, err
+	}
+	slog.Info("unbounded signaling RoundTrip ok",
+		slog.String("url", req.URL.String()),
+		slog.Int("status", resp.StatusCode),
+		slog.String("content_length", resp.Header.Get("Content-Length")),
+		slog.String("transfer_encoding", strings.Join(resp.TransferEncoding, ",")),
+		slog.Duration("duration_to_headers", time.Since(start)))
+	return resp, nil
 }
