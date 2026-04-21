@@ -89,10 +89,17 @@ type Options struct {
 	TelemetryConsent  bool
 	PlatformInterface vpn.PlatformInterface
 	// EnvOverrides, if non-empty, are applied via os.Setenv before common.Init
-	// runs. This is how RADIANCE_* shell vars from the main Lantern process
-	// reach a sandboxed system extension (macOS/iOS), which has no shell env
-	// inheritance of its own. Callers pack these in the host-app layer and
-	// forward them through gomobile; see lantern/lantern-core/mobile.
+	// runs. The primary use case is forwarding RADIANCE_* shell vars from
+	// the main Lantern process to a sandboxed system extension (macOS/iOS),
+	// which has no shell env inheritance of its own. Callers pack these in
+	// the host-app layer and forward them through gomobile; see
+	// lantern/lantern-core/mobile.
+	//
+	// Note: every entry is applied verbatim via os.Setenv — no key
+	// validation or prefix filtering. Don't put anything here that you
+	// wouldn't put on the process's own shell env. The map is owned by
+	// the host-app, not by arbitrary callers, so the trust boundary is
+	// already above this point.
 	EnvOverrides map[string]string
 }
 
@@ -103,10 +110,20 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	// RADIANCE_VERSION once and freezes it into common.Version, so any
 	// later write (via /env IPC, env.Set, or os.Setenv) is ignored by
 	// the header-fill path. Must land here, before the first read.
+	//
+	// Aggregate failures rather than log-and-continue: if a key like
+	// RADIANCE_VERSION silently fails to apply, the backend would boot
+	// with the wrong version in every outbound request header, and the
+	// misconfiguration wouldn't surface until someone noticed server-
+	// side metrics were wrong.
+	var envOverrideErrs error
 	for k, v := range opts.EnvOverrides {
 		if err := os.Setenv(k, v); err != nil {
-			slog.Warn("failed to apply env override", slog.String("key", k), slog.Any("error", err))
+			envOverrideErrs = errors.Join(envOverrideErrs, fmt.Errorf("apply env override %q: %w", k, err))
 		}
+	}
+	if envOverrideErrs != nil {
+		return nil, fmt.Errorf("failed to apply environment overrides: %w", envOverrideErrs)
 	}
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize common components: %w", err)

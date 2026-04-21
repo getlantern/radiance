@@ -19,10 +19,15 @@ func TestGet_OSEnvWinsOverDotenv(t *testing.T) {
 	saved := cloneDotenv()
 	defer restoreDotenv(saved)
 
-	t.Setenv(ENV.String(), "prod")
-	Set(ENV.String(), "staging")
+	// Use a test-only key so this precedence check doesn't mutate the
+	// real RADIANCE_ENV process variable. Go runs package tests in
+	// parallel by default; a stray `RADIANCE_ENV=prod` set here could
+	// leak into sibling packages that call common.Env()/env.Get(ENV).
+	const testKey = "RADIANCE_UNIT_TEST_OS_WINS_KEY_DOES_NOT_EXIST"
+	t.Setenv(testKey, "prod")
+	Set(testKey, "staging")
 
-	got, ok := Get(ENV)
+	got, ok := Get(_key(testKey))
 	if !ok {
 		t.Fatal("Get returned ok=false")
 	}
