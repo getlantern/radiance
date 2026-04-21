@@ -208,6 +208,13 @@ func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 	})
 }
 
+// UpdateConfig forces an immediate config fetch on the daemon. Returns an error
+// if config fetching is disabled.
+func (c *Client) UpdateConfig(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, configUpdateEndpoint, nil)
+	return err
+}
+
 ///////////////////////
 // Server management //
 ///////////////////////

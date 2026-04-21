@@ -45,6 +45,7 @@ const (
 
 	// Config endpoints
 	configEventsEndpoint = "/config/events"
+	configUpdateEndpoint = "/config/update"
 
 	// Server management endpoints
 	serversEndpoint              = "/servers"
@@ -204,6 +205,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+serverAutoSelectedEndpoint, traced(s.serverAutoSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEventsEndpoint, s.serverAutoSelectedEventsHandler)
 	mux.HandleFunc("GET "+configEventsEndpoint, s.configEventsHandler)
+	mux.HandleFunc("POST "+configUpdateEndpoint, traced(s.configUpdateHandler))
 
 	// Server management
 	mux.HandleFunc("GET "+serversEndpoint, traced(s.serversHandler))
@@ -477,6 +479,18 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 			return
 		}
 	}
+}
+
+func (s *localapi) configUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend(r.Context()).UpdateConfig(); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, config.ErrConfigFetchDisabled) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // configEventsHandler streams a notification on every config.NewConfigEvent.

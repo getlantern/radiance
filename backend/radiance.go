@@ -370,6 +370,12 @@ func baseIssueAttachments() []string {
 //  Settings   //
 /////////////////
 
+// UpdateConfig forces an immediate fetch of the latest configuration. It returns
+// [config.ErrConfigFetchDisabled] if config fetching is disabled in settings.
+func (r *LocalBackend) UpdateConfig() error {
+	return r.confHandler.Update()
+}
+
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
 func (r *LocalBackend) Features() map[string]bool {

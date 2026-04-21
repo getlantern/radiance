@@ -45,6 +45,10 @@ var (
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when if there was an error
 	// fetching the configuration.
 	ErrFetchingConfig = errors.New("failed to fetch config")
+
+	// ErrConfigFetchDisabled is returned by [ConfigHandler.Update] when config fetching
+	// is disabled via settings.
+	ErrConfigFetchDisabled = errors.New("config fetching is disabled")
 )
 
 // Config includes all configuration data from the Lantern API
@@ -65,6 +69,7 @@ type ConfigHandler struct {
 	// config holds a configResult.
 	config  atomic.Pointer[Config]
 	ftr     Fetcher
+	started atomic.Bool
 	logger  *slog.Logger
 	options Options
 
@@ -109,6 +114,7 @@ func NewConfigHandler(ctx context.Context, options Options) *ConfigHandler {
 func (ch *ConfigHandler) Start() {
 	ch.startOnce.Do(func() {
 		ch.ftr = newFetcher(ch.options.Locale, ch.options.AccountClient, ch.options.HTTPClient)
+		ch.started.Store(true)
 		go ch.fetchLoop(ch.pollInterval)
 		events.Subscribe(func(evt account.UserChangeEvent) {
 			ch.logger.Debug("User change detected that requires config refetch")
@@ -291,6 +297,18 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 		case <-time.After(interval):
 		}
 	}
+}
+
+// Update immediately fetches the latest config. It returns [ErrConfigFetchDisabled]
+// if config fetching is disabled in settings.
+func (ch *ConfigHandler) Update() error {
+	if settings.GetBool(settings.ConfigFetchDisabledKey) {
+		return ErrConfigFetchDisabled
+	}
+	if !ch.started.Load() {
+		return fmt.Errorf("config handler not started")
+	}
+	return ch.fetchConfig()
 }
 
 // Stop stops the ConfigHandler from fetching new configurations.

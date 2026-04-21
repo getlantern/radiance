@@ -25,6 +25,7 @@ type args struct {
 	Features     *FeaturesCmd     `arg:"subcommand:features" help:"list available features and their status"`
 	Set          *SetCmd          `arg:"subcommand:set" help:"update one or more settings"`
 	Get          *GetCmd          `arg:"subcommand:get" help:"show one or all settings"`
+	UpdateConfig *UpdateConfigCmd `arg:"subcommand:update-config" help:"force an immediate config fetch"`
 	SplitTunnel  *SplitTunnelCmd  `arg:"subcommand:split-tunnel" help:"split-tunnel filter management"`
 	Account      *AccountCmd      `arg:"subcommand:account" help:"login, signup, user data, devices, recovery"`
 	Subscription *SubscriptionCmd `arg:"subcommand:subscription" help:"plans, payments, and billing"`
@@ -100,6 +101,8 @@ func run(ctx context.Context, c *ipc.Client, a *args) error {
 		return runSet(ctx, c, a.Set)
 	case a.Get != nil:
 		return runGet(ctx, c, a.Get)
+	case a.UpdateConfig != nil:
+		return runUpdateConfig(ctx, c)
 	case a.SplitTunnel != nil:
 		return runSplitTunnel(ctx, c, a.SplitTunnel)
 	case a.Account != nil:
