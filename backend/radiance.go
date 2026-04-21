@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -87,11 +88,27 @@ type Options struct {
 	// User choice for telemetry consent
 	TelemetryConsent  bool
 	PlatformInterface vpn.PlatformInterface
+	// EnvOverrides are applied via os.Setenv before common.Init so sandboxed
+	// system extensions (macOS/iOS), which don't inherit shell env, still see
+	// RADIANCE_* vars from the host process. Entries are set verbatim — no
+	// filtering.
+	EnvOverrides map[string]string
 }
 
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
+	// Must run before common.Init: it reads RADIANCE_VERSION once and
+	// freezes it, so a later Setenv is ignored by the header-fill path.
+	var envOverrideErrs error
+	for k, v := range opts.EnvOverrides {
+		if err := os.Setenv(k, v); err != nil {
+			envOverrideErrs = errors.Join(envOverrideErrs, fmt.Errorf("apply env override %q: %w", k, err))
+		}
+	}
+	if envOverrideErrs != nil {
+		return nil, fmt.Errorf("failed to apply environment overrides: %w", envOverrideErrs)
+	}
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize common components: %w", err)
 	}

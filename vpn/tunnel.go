@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
@@ -24,6 +25,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 
@@ -62,7 +64,11 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	if t.status.Load() != Restarting {
 		t.setStatus(Connecting, nil)
 	}
-	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
+	// Unbounded signaling must dial freddie outside the VPN tunnel or it
+	// recursively re-enters itself. streamingRoundTripper forces kindling to
+	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
+	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	t.ctx, t.cancel = context.WithCancel(baseCtx)
 	defer func() {
 		if err != nil {
 			t.setStatus(ErrorStatus, err)
@@ -565,4 +571,26 @@ func contextDone(ctx context.Context) bool {
 	default:
 		return false
 	}
+}
+
+// streamingRoundTripper defaults Accept to text/event-stream so kindling's
+// race pipeline drops non-streamable transports (AMP) that would otherwise
+// buffer freddie's long-poll body and break broflake's genesis subscription.
+type streamingRoundTripper struct {
+	inner http.RoundTripper
+}
+
+func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("Accept") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	resp, err := s.inner.RoundTrip(req)
+	if err != nil {
+		slog.Error("unbounded signaling RoundTrip error",
+			slog.String("url", req.URL.String()),
+			slog.Any("error", err))
+		return nil, err
+	}
+	return resp, nil
 }

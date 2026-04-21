@@ -64,21 +64,23 @@ func init() {
 	}
 }
 
+// Get returns the value for key. OS env takes precedence over .env / runtime
+// Set values (matching the package docstring); dotenv is the fallback.
 func Get(key _key) (string, bool) {
+	if value, exists := os.LookupEnv(key.String()); exists {
+		return value, true
+	}
 	mu.RLock()
 	value, exists := dotenv[key.String()]
 	mu.RUnlock()
 	if exists {
 		return value, true
 	}
-	if value, exists := os.LookupEnv(key.String()); exists {
-		return value, true
-	}
 	return "", false
 }
 
-// Set sets a key in the in-memory dotenv map, overriding any .env file or OS
-// environment variable value. This is intended for dev/testing use via IPC.
+// Set writes a key to the in-memory dotenv map. If the same key is set in
+// the OS env, Get still returns the OS value — shell env wins.
 func Set(key string, value string) {
 	mu.Lock()
 	dotenv[key] = value
