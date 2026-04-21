@@ -5,24 +5,13 @@ import (
 	"testing"
 )
 
-// TestGet_OSEnvWinsOverDotenv guards the precedence promised by the
-// package docstring: OS env > .env / runtime Set values.
-//
-// The regression this catches: the Flutter UI persists its current
-// environment as an app-setting and passes it to lantern-core on every
-// launch. When persisted = "staging", core calls SetStagingEnv which
-// writes dotenv[RADIANCE_ENV]="staging". If a developer starts the app
-// with `RADIANCE_ENV=prod Lantern` expecting prod, the dotenv value
-// silently wins without this fix — making it near-impossible to point
-// a desktop client at a different env than the last GUI session used.
+// Guards the precedence promised by the package docstring: OS env > dotenv.
 func TestGet_OSEnvWinsOverDotenv(t *testing.T) {
 	saved := cloneDotenv()
 	defer restoreDotenv(saved)
 
-	// Use a test-only key so this precedence check doesn't mutate the
-	// real RADIANCE_ENV process variable. Go runs package tests in
-	// parallel by default; a stray `RADIANCE_ENV=prod` set here could
-	// leak into sibling packages that call common.Env()/env.Get(ENV).
+	// Test-only key — don't mutate real RADIANCE_* vars that sibling
+	// packages may read during parallel test execution.
 	const testKey = "RADIANCE_UNIT_TEST_OS_WINS_KEY_DOES_NOT_EXIST"
 	t.Setenv(testKey, "prod")
 	Set(testKey, "staging")
@@ -36,18 +25,14 @@ func TestGet_OSEnvWinsOverDotenv(t *testing.T) {
 	}
 }
 
-// TestGet_DotenvFallsBackWhenOSUnset documents the other half of the
-// contract: Set / .env values are still consulted for keys the shell
-// hasn't explicitly set, so runtime instrumentation like SetStagingEnv
-// keeps working for users who don't export anything themselves.
+// Other half of the contract: dotenv is still consulted when OS env is unset,
+// so runtime instrumentation like SetStagingEnv keeps working.
 func TestGet_DotenvFallsBackWhenOSUnset(t *testing.T) {
 	saved := cloneDotenv()
 	defer restoreDotenv(saved)
 
-	// Use a test-only key to avoid colliding with anything the init
-	// loop may have read from .env or inherited from the process env.
 	const testKey = "RADIANCE_UNIT_TEST_KEY_DOES_NOT_EXIST"
-	_ = os.Unsetenv(testKey) // make absolutely sure OS doesn't have it
+	_ = os.Unsetenv(testKey)
 
 	Set(testKey, "from-dotenv")
 	got, ok := Get(_key(testKey))
