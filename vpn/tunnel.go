@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -65,20 +64,9 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	if t.status.Load() != Restarting {
 		t.setStatus(Connecting, nil)
 	}
-	// Unbounded signaling (and any other outbound that reads this value) must
-	// dial freddie outside the user's VPN tunnel, otherwise it recursively
-	// re-enters itself. kindling's RoundTripper dials via the physical
-	// interface and blocks until kindling init completes.
-	//
-	// We wrap it in a streaming-aware transport: kindling's race pipeline
-	// includes a non-streamable AMP transport that can win the race and
-	// buffer the full response body. Freddie's genesis endpoint is a
-	// long-poll SSE-style stream, so a buffered responder returns an
-	// immediate short body and the broflake consumer FSM sees EOF before
-	// any genesis message arrives, restarting forever without ever
-	// sending an offer. Setting Accept: text/event-stream on freddie
-	// requests makes kindling skip AMP and race only the streamable
-	// transports (fronted, smart), so the stream stays open.
+	// Unbounded signaling must dial freddie outside the VPN tunnel or it
+	// recursively re-enters itself. streamingRoundTripper forces kindling to
+	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), streamingRoundTripper{inner: kindling.HTTPClient().Transport})
 	t.ctx, t.cancel = context.WithCancel(baseCtx)
 	defer func() {
@@ -585,19 +573,9 @@ func contextDone(ctx context.Context) bool {
 	}
 }
 
-// streamingRoundTripper wraps an inner RoundTripper and sets
-// `Accept: text/event-stream` on outgoing requests that don't already have
-// an Accept header. This is specifically to work around kindling's race
-// pipeline: the AMP transport is non-streamable, so if it wins the race
-// against fronted/smart it buffers the full response body — which breaks
-// freddie's long-poll genesis subscription. Kindling filters non-streamable
-// transports only when the request Accept header is text/event-stream, so
-// we force it here.
-//
-// We don't override an already-set Accept (some callers may legitimately
-// ask for other content types); callers that expect streaming but omit
-// Accept get the streaming-friendly default, which matches what SSE
-// clients typically send anyway.
+// streamingRoundTripper defaults Accept to text/event-stream so kindling's
+// race pipeline drops non-streamable transports (AMP) that would otherwise
+// buffer freddie's long-poll body and break broflake's genesis subscription.
 type streamingRoundTripper struct {
 	inner http.RoundTripper
 }
@@ -607,24 +585,12 @@ func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		req = req.Clone(req.Context())
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	slog.Info("unbounded signaling RoundTrip start",
-		slog.String("method", req.Method),
-		slog.String("url", req.URL.String()),
-		slog.String("accept", req.Header.Get("Accept")))
-	start := time.Now()
 	resp, err := s.inner.RoundTrip(req)
 	if err != nil {
 		slog.Error("unbounded signaling RoundTrip error",
 			slog.String("url", req.URL.String()),
-			slog.Duration("duration", time.Since(start)),
 			slog.Any("error", err))
 		return nil, err
 	}
-	slog.Info("unbounded signaling RoundTrip ok",
-		slog.String("url", req.URL.String()),
-		slog.Int("status", resp.StatusCode),
-		slog.String("content_length", resp.Header.Get("Content-Length")),
-		slog.String("transfer_encoding", strings.Join(resp.TransferEncoding, ",")),
-		slog.Duration("duration_to_headers", time.Since(start)))
 	return resp, nil
 }
