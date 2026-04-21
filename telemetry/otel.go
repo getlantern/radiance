@@ -90,7 +90,7 @@ func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 	attrs := Attributes{
 		App:        "radiance",
 		DeviceID:   deviceID,
-		AppVersion: rcommon.Version,
+		AppVersion: rcommon.GetVersion(),
 		Platform:   rcommon.Platform,
 		GoVersion:  runtime.Version(),
 		OSName:     runtime.GOOS,

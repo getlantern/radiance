@@ -12,7 +12,6 @@ import (
 )
 
 type SplitTunnelCmd struct {
-	Enable *bool                 `arg:"-e,--enable" help:"enable or disable split tunneling (true|false)"`
 	List   *SplitTunnelListCmd   `arg:"subcommand:list" help:"list current filters"`
 	Add    *SplitTunnelAddCmd    `arg:"subcommand:add" help:"add a filter"`
 	Remove *SplitTunnelRemoveCmd `arg:"subcommand:remove" help:"remove a filter"`
@@ -38,30 +37,9 @@ func runSplitTunnel(ctx context.Context, c *ipc.Client, cmd *SplitTunnelCmd) err
 	case cmd.Remove != nil:
 		typ := filterTypeFromArg(cmd.Remove.Type)
 		return c.RemoveSplitTunnelItems(ctx, buildFilter(typ, cmd.Remove.Value))
-	case cmd.List != nil:
-		return splitTunnelList(ctx, c)
-	case cmd.Enable != nil:
-		if err := c.EnableSplitTunneling(ctx, *cmd.Enable); err != nil {
-			return err
-		}
-		fmt.Printf("Split tunneling set to %v\n", *cmd.Enable)
-		return nil
 	default:
-		return splitTunnelStatus(ctx, c)
+		return splitTunnelList(ctx, c)
 	}
-}
-
-func splitTunnelStatus(ctx context.Context, c *ipc.Client) error {
-	s, err := c.Settings(ctx)
-	if err != nil {
-		return err
-	}
-	v := s[settings.SplitTunnelKey]
-	if v == nil {
-		v = false
-	}
-	fmt.Printf("Split tunneling: %v\n", v)
-	return nil
 }
 
 func splitTunnelList(ctx context.Context, c *ipc.Client) error {

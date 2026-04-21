@@ -2,6 +2,8 @@ package common
 
 import (
 	"time"
+
+	"github.com/getlantern/radiance/common/env"
 )
 
 // Version is the application version, injected at build time via ldflags:
@@ -20,6 +22,13 @@ const (
 	BaseURL           = "https://df.iantem.io/api/v1"
 	StageBaseURL      = "https://api.staging.iantem.io/v1"
 )
+
+func GetVersion() string {
+	if v := env.GetString(env.AppVersion); v != "" {
+		return v
+	}
+	return Version
+}
 
 // GetProServerURL returns the pro server URL based on the current environment.
 func GetProServerURL() string {

@@ -56,8 +56,8 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	// based on consistent packet lengths.
 	req.Header.Add(RandomNoiseHeader, randomizedString())
 
-	req.Header.Set(AppVersionHeader, Version)
-	req.Header.Set(VersionHeader, Version)
+	req.Header.Set(AppVersionHeader, GetVersion())
+	req.Header.Set(VersionHeader, GetVersion())
 	req.Header.Set(UserIDHeader, settings.GetString(settings.UserIDKey))
 	req.Header.Set(PlatformHeader, Platform)
 	req.Header.Set(AppNameHeader, Name)

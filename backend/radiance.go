@@ -153,6 +153,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		return nil, fmt.Errorf("failed to create split tunnel manager: %w", err)
 	}
 
+	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
 		Locale:        opts.Locale,
@@ -160,13 +162,6 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		HTTPClient:    kindling.HTTPClient(),
 		Logger:        slog.Default().With("service", "config_handler"),
 	}
-	if disableFetch {
-		cOpts.PollInterval = -1
-		slog.Info("Config fetch disabled via environment variable", "env_var", env.DisableFetch)
-	}
-
-	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
-	ctx, cancel := context.WithCancel(ctx)
 	r := &LocalBackend{
 		ctx:            ctx,
 		cancel:         cancel,

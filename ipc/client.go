@@ -18,6 +18,7 @@ import (
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/issue"
+	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
 
@@ -363,6 +364,23 @@ func (c *Client) EnableSmartRouting(ctx context.Context, enable bool) error {
 
 func (c *Client) EnableAdBlocking(ctx context.Context, enable bool) error {
 	_, err := c.PatchSettings(ctx, settings.Settings{settings.AdBlockKey: enable})
+	return err
+}
+
+// EnableConfigFetch toggles periodic config fetching. Passing false sets
+// settings.ConfigFetchDisabledKey to true on the daemon.
+func (c *Client) EnableConfigFetch(ctx context.Context, enable bool) error {
+	_, err := c.PatchSettings(ctx, settings.Settings{settings.ConfigFetchDisabledKey: !enable})
+	return err
+}
+
+// SetLogLevel sets the daemon's log level. Valid values: trace, debug, info,
+// warn, error, fatal, panic, disable.
+func (c *Client) SetLogLevel(ctx context.Context, level string) error {
+	if _, err := rlog.ParseLogLevel(level); err != nil {
+		return err
+	}
+	_, err := c.PatchSettings(ctx, settings.Settings{settings.LogLevelKey: level})
 	return err
 }
 

@@ -157,7 +157,7 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			Platform:    common.Platform,
 			IsPro:       settings.IsPro(),
 			CountryCode: settings.GetString(settings.CountryCodeKey),
-			Version:     common.Version,
+			Version:     common.GetVersion(),
 		}
 	}
 	// Outbound match bounds start empty and are populated when lantern servers are added via
