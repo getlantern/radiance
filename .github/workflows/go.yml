@@ -5,9 +5,12 @@ name: Go
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "refactor" ]
+  # No branch filter here — run CI on every pull request regardless of target
+  # branch. This catches PRs aimed at refactor, feature branches, or anything
+  # else, not just main. The previous filter ("branches: [ main ]") silently
+  # skipped CI for PRs into refactor, which is our active dev branch.
   pull_request:
-    branches: [ "main" ]
 
 jobs:
 
