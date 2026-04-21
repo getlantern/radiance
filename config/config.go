@@ -67,11 +67,12 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config  atomic.Pointer[Config]
-	ftr     Fetcher
-	started atomic.Bool
-	logger  *slog.Logger
-	options Options
+	config   atomic.Pointer[Config]
+	ftr      Fetcher
+	started  atomic.Bool
+	fetching atomic.Bool
+	logger   *slog.Logger
+	options  Options
 
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -150,6 +151,11 @@ func (ch *ConfigHandler) fetchConfig() error {
 	if ch.isClosed() {
 		return fmt.Errorf("config handler is closed")
 	}
+	if !ch.fetching.CompareAndSwap(false, true) {
+		ch.logger.Info("config fetch already in flight, skipping")
+		return nil
+	}
+	defer ch.fetching.Store(false)
 
 	privateKey, err := ch.loadWGKey()
 	if err != nil && !errors.Is(err, ErrNoWGKey) {
