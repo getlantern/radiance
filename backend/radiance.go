@@ -206,7 +206,7 @@ func (r *LocalBackend) Start() {
 		}
 	}
 	r.startVPNStatusListeners()
-	r.StartAutoSelectedListener()
+	r.startAutoSelectedListener()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
@@ -787,9 +787,24 @@ func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
 	return r.vpnClient.CurrentAutoSelectedServer()
 }
 
-// StartAutoSelectedListener starts polling for auto-selection changes and emitting events.
-func (r *LocalBackend) StartAutoSelectedListener() {
-	r.vpnClient.AutoSelectedChangeListener(r.ctx)
+func (r *LocalBackend) startAutoSelectedListener() {
+	var (
+		mu     sync.Mutex
+		cancel context.CancelFunc
+	)
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cancel != nil {
+			cancel()
+			cancel = nil
+		}
+		if evt.Status == vpn.Connected {
+			var ctx context.Context
+			ctx, cancel = context.WithCancel(r.ctx)
+			r.vpnClient.AutoSelectedChangeListener(ctx)
+		}
+	})
 }
 
 func (r *LocalBackend) RunOfflineURLTests() error {
