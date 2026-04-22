@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/lantern-box/adapter"
-	"github.com/getlantern/lantern-box/adapter/groups"
+	lbgroups "github.com/getlantern/lantern-box/adapter/groups"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal/testutil"
@@ -186,6 +186,6 @@ func TestTunnelClose_ClosesMutableGroupManager(t *testing.T) {
 	// methods guard on m.closed and return ErrIsClosed; if the tunnel forgot to
 	// register mgm as a closer, this check returns nil and the test fails.
 	err = mgm.RemoveFromGroup(servers.SGLantern, "some-unknown-tag")
-	assert.ErrorIs(t, err, groups.ErrIsClosed,
+	assert.ErrorIs(t, err, lbgroups.ErrIsClosed,
 		"MutableGroupManager must be closed when tunnel closes, otherwise its removalQueue outlives the tunnel")
 }

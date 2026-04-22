@@ -208,7 +208,13 @@ func (t *tunnel) connect() (err error) {
 	// restart and keeps calling Remove on the already-closed manager, which panics inside
 	// sing-box-minimal (recovered as "panic during outbound/endpoint removal" spam every
 	// 5s). See Freshdesk #173359, #173158.
-	t.closers = append(t.closers, closerFunc(func() error { mutGrpMgr.Close(); return nil }))
+	//
+	// Prepend so this closer runs before libbox/sing-box managers: t.close() iterates
+	// t.closers in append order, and we want the removalQueue goroutine to exit before
+	// the OutboundManager it reads from is torn down.
+	t.closers = append([]io.Closer{
+		closerFunc(func() error { mutGrpMgr.Close(); return nil }),
+	}, t.closers...)
 
 	slog.Info("Tunnel connection established")
 	return nil
