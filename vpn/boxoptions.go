@@ -313,24 +313,20 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	if len(smartRoutingRules) > 0 {
 		slog.Info("Adding smart-routing rules")
 		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
-		if len(outbounds) == 0 || len(rules) == 0 || len(rulesets) == 0 {
-			slog.Warn("No valid smart-routing rules found after normalization, skipping smart-routing configuration")
-		} else {
-			opts.Outbounds = append(opts.Outbounds, outbounds...)
-			opts.Route.Rules = append(opts.Route.Rules, rules...)
-			opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
-		}
+		opts.Outbounds = append(opts.Outbounds, outbounds...)
+		opts.Route.Rules = append(opts.Route.Rules, rules...)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+	} else if len(bOptions.SmartRouting) > 0 && len(smartRoutingRules) == 0 {
+		slog.Warn("No valid smart-routing rules found after normalization, skipping smart-routing configuration")
 	}
 	adBlockRules := normalizeAdBlockRules(bOptions.AdBlock)
 	if len(adBlockRules) > 0 {
 		slog.Info("Adding ad-block rules")
 		rule, rulesets := bOptions.AdBlock.ToOptions()
-		if len(rulesets) == 0 {
-			slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
-		} else {
-			opts.Route.Rules = append(opts.Route.Rules, rule)
-			opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
-		}
+		opts.Route.Rules = append(opts.Route.Rules, rule)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+	} else if len(bOptions.AdBlock) > 0 && len(adBlockRules) == 0 {
+		slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
