@@ -668,6 +668,18 @@ func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		for k, v := range updates {
 			env.Set(k, v)
+			switch k {
+			case env.Country.String():
+				if err := settings.Set(settings.CountryCodeKey, v); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			case env.FeatureOverrides.String():
+				if err := settings.Set(settings.FeatureOverridesKey, v); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
 		}
 		fallthrough
 	case http.MethodGet:
