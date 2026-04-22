@@ -215,6 +215,10 @@ func (t *tunnel) connect() (err error) {
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
 	t.mutGrpMgr = mutGrpMgr
+	// Prepend: mgm's removalQueue reads from libbox-managed state, so close it first.
+	t.closers = append([]io.Closer{
+		closerFunc(func() error { mutGrpMgr.Close(); return nil }),
+	}, t.closers...)
 
 	slog.Info("Tunnel connection established")
 	return nil
@@ -563,6 +567,10 @@ func makeOutboundOptsMap(ctx context.Context, options string) *lsync.TypedMap[st
 	}
 	return &optsMap
 }
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 func contextDone(ctx context.Context) bool {
 	select {
