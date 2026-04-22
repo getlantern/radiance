@@ -6,8 +6,12 @@ import (
 
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
+	"github.com/getlantern/lantern-box/adapter/groups"
+	sbA "github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -147,4 +151,37 @@ func TestContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	assert.True(t, contextDone(ctx))
+}
+
+type fakeConnMgr struct{}
+
+func (fakeConnMgr) Connections() []trafficontrol.TrackerMetadata { return nil }
+
+// TestTunnelClose_ClosesMutableGroupManager verifies that when a tunnel closes, the
+// MutableGroupManager registered via t.closers is closed too. If the tunnel forgets
+// to register this closer, the mgm's removalQueue goroutine outlives the tunnel and
+// fires Remove on the already-closed sing-box OutboundManager, which panics inside
+// sing-box-minimal. Regression: Freshdesk #173359, #173158.
+func TestTunnelClose_ClosesMutableGroupManager(t *testing.T) {
+	// Minimal MutableGroupManager — nil outbound/endpoint managers are safe here because
+	// RemoveFromGroup's closed-check runs before touching them, and we never enqueue
+	// anything so the removalQueue goroutine is never started.
+	mgm := groups.NewMutableGroupManager(
+		logger.NOP(),
+		sbA.OutboundManager(nil),
+		sbA.EndpointManager(nil),
+		fakeConnMgr{},
+		nil,
+	)
+
+	tun := &tunnel{}
+	tun.status.Store(Connected)
+	tun.mutGrpMgr = mgm
+	tun.closers = append(tun.closers, closerFunc(func() error { mgm.Close(); return nil }))
+
+	require.NoError(t, tun.close())
+
+	err := mgm.RemoveFromGroup("some-group", "some-tag")
+	assert.ErrorIs(t, err, groups.ErrIsClosed,
+		"MutableGroupManager must be closed when tunnel closes; otherwise its removalQueue outlives the tunnel and panics against the stale outbound manager")
 }

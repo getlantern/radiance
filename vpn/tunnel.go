@@ -215,6 +215,12 @@ func (t *tunnel) connect() (err error) {
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
 	t.mutGrpMgr = mutGrpMgr
+	// MutableGroupManager owns a removalQueue goroutine that holds a reference to the
+	// sing-box OutboundManager. Without this close hook the goroutine survives a tunnel
+	// restart and keeps calling Remove on the already-closed manager, which panics inside
+	// sing-box-minimal (recovered as "panic during outbound/endpoint removal" spam every
+	// 5s). See Freshdesk #173359, #173158.
+	t.closers = append(t.closers, closerFunc(func() error { mutGrpMgr.Close(); return nil }))
 
 	slog.Info("Tunnel connection established")
 	return nil
@@ -572,6 +578,11 @@ func contextDone(ctx context.Context) bool {
 		return false
 	}
 }
+
+// closerFunc adapts a plain function into an io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 // streamingRoundTripper defaults Accept to text/event-stream so kindling's
 // race pipeline drops non-streamable transports (AMP) that would otherwise
