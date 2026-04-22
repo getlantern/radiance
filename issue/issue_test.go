@@ -3,10 +3,11 @@ package issue
 import (
 	"context"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/getlantern/osversion"
@@ -19,14 +20,13 @@ import (
 	"github.com/getlantern/radiance/kindling"
 )
 
-func TestSendReport(t *testing.T) {
+func TestSendReport_ProtobufPath(t *testing.T) {
 	settings.InitSettings(t.TempDir())
 	defer settings.Reset()
-	// Get OS version for expected report
+
 	osVer, err := osversion.GetHumanReadable()
 	require.NoError(t, err)
 
-	// Build expected report
 	want := &ReportIssueRequest{
 		Type:              ReportIssueRequest_NO_ACCESS,
 		CountryCode:       "US",
@@ -43,24 +43,25 @@ func TestSendReport(t *testing.T) {
 		Language:          settings.GetString(settings.LocaleKey),
 		Attachments: []*ReportIssueRequest_Attachment{
 			{
-				Type:    "application/zip",
+				Type:    "text/plain",
 				Name:    "Hello.txt",
 				Content: []byte("Hello World"),
 			},
 		},
 	}
 
-	srv := newTestServer(t, want)
-	defer srv.Close()
-
 	reporter := &IssueReporter{}
-	kindling.SetKindling(&mockKindling{newTestClient(t, srv.URL)})
+	kindling.SetKindling(&mockKindling{newValidatingClient(t, testExpectations{
+		wantContentTypePrefix: "application/x-protobuf",
+		wantProto:             want,
+	})})
 	report := IssueReport{
 		Type:        "Cannot access blocked sites",
 		Description: "Description placeholder-test only",
 		Attachments: []*Attachment{
 			{
 				Name: "Hello.txt",
+				Type: "text/plain",
 				Data: []byte("Hello World"),
 			},
 		},
@@ -72,76 +73,290 @@ func TestSendReport(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func newTestClient(t *testing.T, testURL string) *http.Client {
+func TestSendReport_MultipartPath(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
+
+	osVer, err := osversion.GetHumanReadable()
+	require.NoError(t, err)
+
+	want := &ReportIssueRequest{
+		Type:              ReportIssueRequest_NO_ACCESS,
+		CountryCode:       "US",
+		AppVersion:        common.Version,
+		SubscriptionLevel: "free",
+		Platform:          common.Platform,
+		Description:       "Description placeholder-test only",
+		UserEmail:         "radiancetest@getlantern.org",
+		DeviceId:          settings.GetString(settings.DeviceIDKey),
+		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
+		Device:            "Samsung Galaxy S10",
+		Model:             "SM-G973F",
+		OsVersion:         osVer,
+		Language:          settings.GetString(settings.LocaleKey),
+		Attachments: []*ReportIssueRequest_Attachment{
+			{
+				Type:    "text/plain",
+				Name:    "context.txt",
+				Content: []byte("Support context"),
+			},
+		},
+	}
+
+	reporter := &IssueReporter{}
+	kindling.SetKindling(&mockKindling{newValidatingClient(t, testExpectations{
+		wantContentTypePrefix: "multipart/form-data",
+		wantProto:             want,
+		wantMultipartFiles: []multipartFileExpectation{
+			{
+				FieldName:   attachmentPartName,
+				Filename:    "screenshot.png",
+				ContentType: "image/png",
+				Content:     []byte("png-bytes"),
+			},
+		},
+	})})
+	report := IssueReport{
+		Type:        "Cannot access blocked sites",
+		Description: "Description placeholder-test only",
+		Attachments: []*Attachment{
+			{
+				Name: "context.txt",
+				Type: "text/plain",
+				Data: []byte("Support context"),
+			},
+			{
+				Name:       "screenshot.png",
+				Type:       "image/png",
+				Data:       []byte("png-bytes"),
+				FirstClass: true,
+			},
+		},
+		Device: "Samsung Galaxy S10",
+		Model:  "SM-G973F",
+	}
+
+	err = reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
+	require.NoError(t, err)
+}
+
+func TestSendReportMultipartValidation(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
+
+	reporter := &IssueReporter{}
+
+	tests := []struct {
+		name        string
+		attachments []*Attachment
+		wantErr     string
+	}{
+		{
+			name: "rejects too many screenshots",
+			attachments: []*Attachment{
+				{Name: "1.png", Type: "image/png", Data: []byte("1"), FirstClass: true},
+				{Name: "2.png", Type: "image/png", Data: []byte("2"), FirstClass: true},
+				{Name: "3.png", Type: "image/png", Data: []byte("3"), FirstClass: true},
+				{Name: "4.png", Type: "image/png", Data: []byte("4"), FirstClass: true},
+			},
+			wantErr: "too many screenshot attachments",
+		},
+		{
+			name: "rejects unsupported screenshot types",
+			attachments: []*Attachment{
+				{Name: "report.pdf", Type: "application/pdf", Data: []byte("pdf"), FirstClass: true},
+			},
+			wantErr: "unsupported screenshot attachment type",
+		},
+		{
+			name: "rejects oversized total attachment payload",
+			attachments: []*Attachment{
+				{
+					Name:       "oversized.png",
+					Type:       "image/png",
+					Data:       bytesOfLen(maxIssueAttachmentBytes + 1),
+					FirstClass: true,
+				},
+			},
+			wantErr: "total issue attachment size exceeds",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := reporter.Report(context.Background(), IssueReport{
+				Type:        "Cannot access blocked sites",
+				Description: "validation path",
+				Attachments: tt.attachments,
+				Device:      "Test device",
+				Model:       "Model 1",
+			}, "radiancetest@getlantern.org", "US")
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func bytesOfLen(n int) []byte {
+	return make([]byte, n)
+}
+
+func newValidatingClient(t *testing.T, want testExpectations) *http.Client {
 	return &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			parsedURL, err := url.Parse(testURL)
-			if err != nil {
-				t.Fatalf("failed to parse testURL: %v", err)
+			require.True(
+				t,
+				strings.HasPrefix(req.Header.Get("Content-Type"), want.wantContentTypePrefix),
+				"unexpected content type: %s",
+				req.Header.Get("Content-Type"),
+			)
+
+			switch {
+			case strings.HasPrefix(req.Header.Get("Content-Type"), "application/x-protobuf"):
+				got := decodeProtoRequest(t, req.Body)
+				assertProtoMatches(t, want.wantProto, got)
+			case strings.HasPrefix(req.Header.Get("Content-Type"), "multipart/form-data"):
+				gotProto, gotFiles := decodeMultipartRequest(t, req)
+				assertProtoMatches(t, want.wantProto, gotProto)
+				require.Len(t, gotFiles, len(want.wantMultipartFiles))
+				for i, wantFile := range want.wantMultipartFiles {
+					gotFile := gotFiles[i]
+					assert.Equal(t, wantFile.FieldName, gotFile.FieldName)
+					assert.Equal(t, wantFile.Filename, gotFile.Filename)
+					assert.Equal(t, wantFile.ContentType, gotFile.ContentType)
+					assert.Equal(t, wantFile.Content, gotFile.Content)
+				}
+			default:
+				t.Fatalf("unexpected content type: %s", req.Header.Get("Content-Type"))
 			}
-			req.URL = parsedURL
-			return http.DefaultTransport.RoundTrip(req)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("ok")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
 		}),
 	}
 }
 
-// roundTripperFunc allows using a function as http.RoundTripper
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-// testServer wraps httptest.Server and holds the expected report for comparison
-type testServer struct {
-	*httptest.Server
-	want *ReportIssueRequest
+type testExpectations struct {
+	wantContentTypePrefix string
+	wantProto             *ReportIssueRequest
+	wantMultipartFiles    []multipartFileExpectation
 }
 
-func newTestServer(t *testing.T, want *ReportIssueRequest) *testServer {
-	ts := &testServer{want: want}
-	ts.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Read and unmarshal the request body
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err, "should read request body")
+type multipartFileExpectation struct {
+	FieldName   string
+	Filename    string
+	ContentType string
+	Content     []byte
+}
 
-		var got ReportIssueRequest
-		err = proto.Unmarshal(body, &got)
-		require.NoError(t, err, "should unmarshal protobuf request")
+func decodeProtoRequest(t *testing.T, body io.ReadCloser) *ReportIssueRequest {
+	t.Helper()
+	defer body.Close()
 
-		// Filter got.Attachments to only include the ones we're testing
-		// (exclude logs.zip and other dynamic attachments)
-		filteredAttachments := make([]*ReportIssueRequest_Attachment, 0)
-		for _, gotAtt := range got.Attachments {
-			for _, wantAtt := range ts.want.Attachments {
-				if gotAtt.Name == wantAtt.Name {
-					filteredAttachments = append(filteredAttachments, gotAtt)
-					break
-				}
+	payload, err := io.ReadAll(body)
+	require.NoError(t, err, "should read request body")
+
+	var got ReportIssueRequest
+	err = proto.Unmarshal(payload, &got)
+	require.NoError(t, err, "should unmarshal protobuf request")
+	return &got
+}
+
+func decodeMultipartRequest(
+	t *testing.T,
+	r *http.Request,
+) (*ReportIssueRequest, []multipartFileExpectation) {
+	t.Helper()
+
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	require.NoError(t, err, "should parse multipart content type")
+	require.Equal(t, "multipart/form-data", mediaType)
+
+	reader := multipart.NewReader(r.Body, params["boundary"])
+	var gotProto *ReportIssueRequest
+	gotFiles := make([]multipartFileExpectation, 0)
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err, "should read multipart body")
+
+		content, err := io.ReadAll(part)
+		require.NoError(t, err, "should read multipart part")
+
+		switch part.FormName() {
+		case requestPartName:
+			var request ReportIssueRequest
+			err = proto.Unmarshal(content, &request)
+			require.NoError(t, err, "should unmarshal request part")
+			gotProto = &request
+		case attachmentPartName:
+			gotFiles = append(gotFiles, multipartFileExpectation{
+				FieldName:   part.FormName(),
+				Filename:    part.FileName(),
+				ContentType: part.Header.Get("Content-Type"),
+				Content:     content,
+			})
+		default:
+			t.Fatalf("unexpected multipart form field: %s", part.FormName())
+		}
+	}
+
+	require.NotNil(t, gotProto, "multipart payload should include request part")
+	return gotProto, gotFiles
+}
+
+func assertProtoMatches(
+	t *testing.T,
+	want *ReportIssueRequest,
+	got *ReportIssueRequest,
+) {
+	t.Helper()
+	got.Attachments = filterExpectedAttachments(got.Attachments, want.Attachments)
+	if !assert.True(
+		t,
+		proto.Equal(want, got),
+		"received report should match expected report",
+	) {
+		t.Fatalf("protobuf payload mismatch")
+	}
+}
+
+func filterExpectedAttachments(
+	got []*ReportIssueRequest_Attachment,
+	want []*ReportIssueRequest_Attachment,
+) []*ReportIssueRequest_Attachment {
+	filtered := make([]*ReportIssueRequest_Attachment, 0, len(want))
+	for _, gotAttachment := range got {
+		for _, wantAttachment := range want {
+			if gotAttachment.Name == wantAttachment.Name {
+				filtered = append(filtered, gotAttachment)
+				break
 			}
 		}
-		got.Attachments = filteredAttachments
-
-		// Compare received report with expected report using proto.Equal
-		if assert.True(t, proto.Equal(ts.want, &got), "received report should match expected report") {
-			w.WriteHeader(http.StatusOK)
-		} else {
-			w.WriteHeader(http.StatusBadRequest)
-		}
-	}))
-	return ts
+	}
+	return filtered
 }
 
 type mockKindling struct {
 	c *http.Client
 }
 
-// NewHTTPClient returns a new HTTP client that is configured to use kindling.
 func (m *mockKindling) NewHTTPClient() *http.Client {
 	return m.c
 }
 
-// ReplaceTransport replaces an existing transport RoundTripper generator with the provided one.
 func (m *mockKindling) ReplaceTransport(name string, rt func(ctx context.Context, addr string) (http.RoundTripper, error)) error {
-	panic("not implemented") // TODO: Implement
+	panic("not implemented")
 }

@@ -78,13 +78,21 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 }
 
 // NewIssueRequest creates a new HTTP request with the required headers for issue reporting.
-func NewIssueRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+func NewIssueRequest(
+	ctx context.Context,
+	method, url string,
+	body io.Reader,
+	contentType string,
+) (*http.Request, error) {
 	req, err := NewRequestWithHeaders(ctx, method, url, body)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("content-type", "application/x-protobuf")
+	if contentType == "" {
+		contentType = "application/x-protobuf"
+	}
+	req.Header.Set("content-type", contentType)
 
 	// data caps
 	req.Header.Set(SupportedDataCapsHeader, "monthly,weekly,daily")

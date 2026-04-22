@@ -48,8 +48,10 @@ func randStr(n int) string {
 
 // Attachment is a file attachment
 type Attachment struct {
-	Name string
-	Data []byte
+	Name       string
+	Type       string
+	Data       []byte
+	FirstClass bool
 }
 
 type IssueReport struct {
@@ -114,13 +116,25 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		OsVersion:         osVersion,
 		Language:          settings.GetString(settings.LocaleKey),
 	}
+	firstClassAttachments := make([]*Attachment, 0, len(report.Attachments))
+	protoAttachmentBytes := 0
 
 	for _, attachment := range report.Attachments {
+		if attachment == nil || attachment.Name == "" || len(attachment.Data) == 0 {
+			continue
+		}
+
+		if attachment.FirstClass {
+			firstClassAttachments = append(firstClassAttachments, attachment)
+			continue
+		}
+
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
-			Type:    "application/zip",
+			Type:    attachmentContentType(attachment),
 			Name:    attachment.Name,
 			Content: attachment.Data,
 		})
+		protoAttachmentBytes += len(attachment.Data)
 	}
 
 	// Zip logs
@@ -135,16 +149,42 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 			Name:    "logs.zip",
 			Content: buf.Bytes(),
 		})
+		protoAttachmentBytes += len(buf.Bytes())
 		slog.Debug("log files zipped for issue report", "size", len(buf.Bytes()))
 	} else {
-		slog.Error("unable to zip log files", "error", err, "logDir", logDir, "maxSize", maxUncompressedLogSize)
+		slog.Error(
+			"unable to zip log files",
+			"error",
+			zipErr,
+			"logDir",
+			logDir,
+			"maxSize",
+			maxUncompressedLogSize,
+		)
 	}
 
-	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
 	if err != nil {
 		slog.Error("unable to marshal issue report", "error", err)
 		return fmt.Errorf("error marshaling proto: %w", err)
+	}
+
+	contentType := "application/x-protobuf"
+	body := bytes.NewReader(out)
+	if len(firstClassAttachments) > 0 {
+		if err := validateFirstClassAttachments(firstClassAttachments, protoAttachmentBytes); err != nil {
+			slog.Error("invalid issue attachments", "error", err)
+			return err
+		}
+
+		multipartBody, multipartContentType, err := buildMultipartIssueBody(out, firstClassAttachments)
+		if err != nil {
+			slog.Error("unable to build multipart issue report", "error", err)
+			return fmt.Errorf("build multipart issue report: %w", err)
+		}
+
+		body = bytes.NewReader(multipartBody.Bytes())
+		contentType = multipartContentType
 	}
 
 	issueURL := common.GetBaseURL() + "/issue"
@@ -152,7 +192,8 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport, userEma
 		ctx,
 		http.MethodPost,
 		issueURL,
-		bytes.NewReader(out),
+		body,
+		contentType,
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)
