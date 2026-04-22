@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/lantern-box/adapter"
+	"github.com/getlantern/lantern-box/adapter/groups"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal/testutil"
@@ -160,4 +161,31 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 
 	assert.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
 	return tun
+}
+
+// TestTunnelClose_ClosesMutableGroupManager verifies that the MutableGroupManager owned
+// by a tunnel is closed when the tunnel closes. This prevents the MutableGroupManager's
+// removalQueue goroutine from outliving the tunnel and firing Remove on the already-
+// closed sing-box OutboundManager, which panics inside sing-box-minimal.
+//
+// Regression: see Freshdesk #173359 and #173158 — users toggling Smart Routing
+// triggered a tunnel restart; the stale removalQueue from the previous tunnel kept
+// panicking every 5s as it drained its pending list against the dead Manager.
+func TestTunnelClose_ClosesMutableGroupManager(t *testing.T) {
+	testutil.SetPathsForTesting(t)
+	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	require.NoError(t, err, "failed to get test box options")
+
+	tun := testConnection(t, *testOpts)
+	require.NotNil(t, tun.mutGrpMgr, "tunnel should own a MutableGroupManager after start")
+	mgm := tun.mutGrpMgr
+
+	require.NoError(t, tun.close(), "tunnel close should succeed")
+
+	// After tun.close(), the MutableGroupManager must be closed too. Its mutating
+	// methods guard on m.closed and return ErrIsClosed; if the tunnel forgot to
+	// register mgm as a closer, this check returns nil and the test fails.
+	err = mgm.RemoveFromGroup(servers.SGLantern, "some-unknown-tag")
+	assert.ErrorIs(t, err, groups.ErrIsClosed,
+		"MutableGroupManager must be closed when tunnel closes, otherwise its removalQueue outlives the tunnel")
 }
