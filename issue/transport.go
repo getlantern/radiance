@@ -31,6 +31,8 @@ var attachmentTypeAliases = map[string]string{
 	"image/jpg": "image/jpeg",
 }
 
+// normalizeAttachmentType trims parameters and folds a few common aliases so
+// validation and multipart writing can reason about one canonical content type.
 func normalizeAttachmentType(contentType string) string {
 	contentType = strings.TrimSpace(strings.ToLower(contentType))
 	if contentType == "" {
@@ -48,6 +50,8 @@ func normalizeAttachmentType(contentType string) string {
 	return contentType
 }
 
+// attachmentContentType prefers an explicitly supplied type, then falls back to
+// the filename, and finally sniffs the payload when we have to.
 func attachmentContentType(attachment *Attachment) string {
 	if attachment == nil {
 		return octetStreamContentType
@@ -70,6 +74,8 @@ func attachmentContentType(attachment *Attachment) string {
 	return normalizeAttachmentType(http.DetectContentType(attachment.Data))
 }
 
+// validateFirstClassAttachments applies the screenshot limits before we switch
+// the issue request from the protobuf-only path to multipart/form-data.
 func validateFirstClassAttachments(attachments []*Attachment, existingBytes int) error {
 	count := 0
 	totalBytes := existingBytes
@@ -116,6 +122,8 @@ func validateFirstClassAttachments(attachments []*Attachment, existingBytes int)
 	return nil
 }
 
+// buildMultipartIssueBody keeps the protobuf request as one part and sends each
+// screenshot as its own attachment so the ticketing side can surface them directly.
 func buildMultipartIssueBody(
 	requestPayload []byte,
 	attachments []*Attachment,
@@ -175,6 +183,7 @@ func buildMultipartIssueBody(
 	return body, contentType, nil
 }
 
+// Keep disposition quoting in one place since filenames can come from users.
 func multipartContentDisposition(fieldName, filename string) string {
 	return fmt.Sprintf(
 		`form-data; name="%s"; filename="%s"`,
