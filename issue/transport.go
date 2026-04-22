@@ -61,8 +61,9 @@ func attachmentContentType(attachment *Attachment) string {
 		return contentType
 	}
 
+	name := strings.TrimSpace(attachment.Name)
 	if contentType := normalizeAttachmentType(
-		mime.TypeByExtension(strings.ToLower(filepath.Ext(attachment.Name))),
+		mime.TypeByExtension(strings.ToLower(filepath.Ext(name))),
 	); contentType != "" {
 		return contentType
 	}
@@ -85,9 +86,9 @@ func validateFirstClassAttachments(attachments []*Attachment, existingBytes int)
 			continue
 		}
 
-		name := strings.TrimSpace(attachment.Name)
-		if name == "" {
-			return fmt.Errorf("attachment name is required")
+		name, err := normalizeAttachmentName(attachment.Name)
+		if err != nil {
+			return err
 		}
 		if len(attachment.Data) == 0 {
 			return fmt.Errorf("attachment %q is empty", name)
@@ -151,10 +152,15 @@ func buildMultipartIssueBody(
 			continue
 		}
 
+		filename, err := normalizeAttachmentName(attachment.Name)
+		if err != nil {
+			return nil, "", err
+		}
+
 		partHeader := make(textproto.MIMEHeader)
 		partHeader.Set(
 			"Content-Disposition",
-			multipartContentDisposition(attachmentPartName, attachment.Name),
+			multipartContentDisposition(attachmentPartName, filename),
 		)
 		partHeader.Set("Content-Type", attachmentContentType(attachment))
 
@@ -190,6 +196,21 @@ func multipartContentDisposition(fieldName, filename string) string {
 		escapeMultipartToken(fieldName),
 		escapeMultipartToken(filename),
 	)
+}
+
+func normalizeAttachmentName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("attachment name is required")
+	}
+
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("attachment %q contains invalid control characters", name)
+		}
+	}
+
+	return name, nil
 }
 
 func escapeMultipartToken(value string) string {

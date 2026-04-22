@@ -92,7 +92,7 @@ func NewIssueRequest(
 	if contentType == "" {
 		contentType = "application/x-protobuf"
 	}
-	req.Header.Set("content-type", contentType)
+	req.Header.Set(ContentTypeHeader, contentType)
 
 	// data caps
 	req.Header.Set(SupportedDataCapsHeader, "monthly,weekly,daily")

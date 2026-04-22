@@ -140,6 +140,61 @@ func TestSendReport_MultipartPath(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSendReport_MultipartPathNormalizesScreenshotFilename(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
+
+	osVer, err := osversion.GetHumanReadable()
+	require.NoError(t, err)
+
+	want := &ReportIssueRequest{
+		Type:              ReportIssueRequest_NO_ACCESS,
+		CountryCode:       "US",
+		AppVersion:        common.Version,
+		SubscriptionLevel: "free",
+		Platform:          common.Platform,
+		Description:       "Description placeholder-test only",
+		UserEmail:         "radiancetest@getlantern.org",
+		DeviceId:          settings.GetString(settings.DeviceIDKey),
+		UserId:            strconv.FormatInt(settings.GetInt64(settings.UserIDKey), 10),
+		Device:            "Samsung Galaxy S10",
+		Model:             "SM-G973F",
+		OsVersion:         osVer,
+		Language:          settings.GetString(settings.LocaleKey),
+	}
+
+	reporter := &IssueReporter{}
+	kindling.SetKindling(&mockKindling{newValidatingClient(t, testExpectations{
+		wantContentTypePrefix: "multipart/form-data",
+		wantProto:             want,
+		wantMultipartFiles: []multipartFileExpectation{
+			{
+				FieldName:   attachmentPartName,
+				Filename:    "screenshot.png",
+				ContentType: "image/png",
+				Content:     []byte("png-bytes"),
+			},
+		},
+	})})
+	report := IssueReport{
+		Type:        "Cannot access blocked sites",
+		Description: "Description placeholder-test only",
+		Attachments: []*Attachment{
+			{
+				Name:       "  screenshot.png  ",
+				Type:       "image/png",
+				Data:       []byte("png-bytes"),
+				FirstClass: true,
+			},
+		},
+		Device: "Samsung Galaxy S10",
+		Model:  "SM-G973F",
+	}
+
+	err = reporter.Report(context.Background(), report, "radiancetest@getlantern.org", "US")
+	require.NoError(t, err)
+}
+
 func TestSendReportMultipartValidation(t *testing.T) {
 	settings.InitSettings(t.TempDir())
 	defer settings.Reset()
@@ -179,6 +234,13 @@ func TestSendReportMultipartValidation(t *testing.T) {
 				},
 			},
 			wantErr: "total issue attachment size exceeds",
+		},
+		{
+			name: "rejects screenshot names with control characters",
+			attachments: []*Attachment{
+				{Name: "bad\r\nname.png", Type: "image/png", Data: []byte("1"), FirstClass: true},
+			},
+			wantErr: "contains invalid control characters",
 		},
 	}
 
@@ -276,6 +338,7 @@ func decodeMultipartRequest(
 	r *http.Request,
 ) (*ReportIssueRequest, []multipartFileExpectation) {
 	t.Helper()
+	defer r.Body.Close()
 
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	require.NoError(t, err, "should parse multipart content type")
