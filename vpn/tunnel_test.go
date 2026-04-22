@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/lantern-box/adapter"
+	lbgroups "github.com/getlantern/lantern-box/adapter/groups"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal/testutil"
@@ -160,4 +161,19 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 
 	assert.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
 	return tun
+}
+
+func TestTunnelClose_ClosesMutableGroupManager(t *testing.T) {
+	testutil.SetPathsForTesting(t)
+	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
+	require.NoError(t, err)
+
+	tun := testConnection(t, *testOpts)
+	require.NotNil(t, tun.mutGrpMgr)
+	mgm := tun.mutGrpMgr
+
+	require.NoError(t, tun.close())
+
+	err = mgm.RemoveFromGroup(servers.SGLantern, "some-unknown-tag")
+	assert.ErrorIs(t, err, lbgroups.ErrIsClosed)
 }
