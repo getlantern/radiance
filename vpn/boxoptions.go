@@ -116,6 +116,25 @@ func baseOpts(basePath string) O.Options {
 				Tag:     "direct",
 				Options: &O.DirectOutboundOptions{},
 			},
+			// direct-ipv4 is used by remote rule-set downloads (see
+			// redirectRuleSetDetourToIPv4). Russian/cellular users frequently
+			// have no working IPv6 path to raw.githubusercontent.com; with a
+			// vanilla direct outbound the fetch returns "network is
+			// unreachable", the geosite/geoip bypass rules never load, and
+			// strict_route:true sends Russian traffic through the (already
+			// failing) proxy chain instead of direct — yielding the
+			// "connected but no internet" mode in Freshdesk #173534. Forcing
+			// ipv4-only eliminates this failure path without affecting the
+			// general direct outbound.
+			{
+				Type: C.TypeDirect,
+				Tag:  "direct-ipv4",
+				Options: &O.DirectOutboundOptions{
+					DialerOptions: O.DialerOptions{
+						DomainStrategy: O.DomainStrategy(C.DomainStrategyIPv4Only),
+					},
+				},
+			},
 			{
 				Type:    C.TypeBlock,
 				Tag:     "block",
@@ -317,13 +336,13 @@ func buildOptions(ctx context.Context, path string) (O.Options, error) {
 		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
-		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, redirectRuleSetDetourToIPv4(rulesets)...)
 	}
 	if settings.GetBool(settings.AdBlockKey) && len(cfg.AdBlock) > 0 {
 		slog.Debug("Adding ad-block rules")
 		rule, rulesets := cfg.AdBlock.ToOptions()
 		opts.Route.Rules = append(opts.Route.Rules, rule)
-		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
+		opts.Route.RuleSet = append(opts.Route.RuleSet, redirectRuleSetDetourToIPv4(rulesets)...)
 	}
 
 	var lanternTags []string
@@ -638,3 +657,22 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 	}
 }
 
+// redirectRuleSetDetourToIPv4 rewrites remote rule-set downloads to go through
+// the "direct-ipv4" outbound instead of the default "direct". raw.githubusercontent.com
+// (the usual host for server-delivered geosite/geoip bundles) has no working
+// IPv6 path on many censored-country cellular networks; with the default
+// direct outbound these fetches fail with "network is unreachable", the
+// bypass rules never load, and strict_route:true then routes everything
+// through the already-failing proxy (Freshdesk #173534).
+func redirectRuleSetDetourToIPv4(rulesets []O.RuleSet) []O.RuleSet {
+	for i := range rulesets {
+		if rulesets[i].Type != C.RuleSetTypeRemote {
+			continue
+		}
+		d := rulesets[i].RemoteOptions.DownloadDetour
+		if d == "" || d == "direct" {
+			rulesets[i].RemoteOptions.DownloadDetour = "direct-ipv4"
+		}
+	}
+	return rulesets
+}
