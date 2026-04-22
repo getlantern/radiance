@@ -829,6 +829,12 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	}
 	if len(urlResults) > 0 {
 		r.srvManager.UpdateURLTestResults(urlResults)
+		selected, err := r.vpnClient.CurrentAutoSelectedServer()
+		if err != nil {
+			slog.Warn("Failed to get current auto-selected server after URL tests", "error", err)
+		} else {
+			events.Emit(vpn.AutoSelectedEvent{Selected: selected})
+		}
 	}
 	return nil
 }
