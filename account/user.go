@@ -156,8 +156,9 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 		// If new user faces any issue while sign up user can sign up again
 		Temp: true,
 	}
-
-	resp, err := a.sendRequest(ctx, "POST", "/users/signup", nil, nil, data)
+	// Signup endpoint need to include device ID, user ID and pro token
+	// if not api wil create new user instead of linking to existing user which cause issue
+	resp, err := a.sendProRequest(ctx, "POST", "/users/signup", nil, nil, data)
 	if err != nil {
 		return nil, nil, traces.RecordError(ctx, err)
 	}
