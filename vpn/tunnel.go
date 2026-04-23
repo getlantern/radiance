@@ -14,21 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	lsync "github.com/getlantern/common/sync"
-	box "github.com/getlantern/lantern-box"
-
-	lbA "github.com/getlantern/lantern-box/adapter"
-	"github.com/getlantern/lantern-box/adapter/groups"
-	lblog "github.com/getlantern/lantern-box/log"
-	"github.com/getlantern/lantern-box/tracker/clientcontext"
-
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/kindling"
-	rlog "github.com/getlantern/radiance/log"
-	"github.com/getlantern/radiance/servers"
-
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/common/urltest"
@@ -38,6 +23,23 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	lsync "github.com/getlantern/common/sync"
+	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/getlantern/lantern-box/adapter/groups"
+	lblog "github.com/getlantern/lantern-box/log"
+	"github.com/getlantern/lantern-box/tracker/clientcontext"
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/kindling"
+	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/servers"
 )
 
 type tunnel struct {
@@ -62,8 +64,17 @@ type tunnel struct {
 	closers []io.Closer
 }
 
-func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (err error) {
-	if t.status.Load() != Restarting {
+func (t *tunnel) start(ctx context.Context, options string, platformIfce libbox.PlatformInterface) (err error) {
+	isRestart := t.status.Load() == Restarting
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.start",
+		trace.WithAttributes(
+			attribute.Int("options_size", len(options)),
+			attribute.String("platform", common.Platform),
+			attribute.Bool("is_restart", isRestart),
+		))
+	defer span.End()
+
+	if !isRestart {
 		t.setStatus(Connecting, nil)
 	}
 	// Unbounded signaling must dial freddie outside the VPN tunnel or it
@@ -77,13 +88,13 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 		}
 	}()
 
-	if err := t.init(options, platformIfce); err != nil {
+	if err := t.init(ctx, options, platformIfce); err != nil {
 		t.close()
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	if err := t.connect(); err != nil {
+	if err := t.connect(ctx); err != nil {
 		t.close()
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
@@ -93,7 +104,23 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 	return nil
 }
 
-func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) error {
+// traceSpan wraps fn in a child span of the caller's context and records any
+// error on the child span so failures show up per-phase in the trace.
+func traceSpan(ctx context.Context, name string, fn func() error) error {
+	_, span := otel.Tracer(tracerName).Start(ctx, name)
+	defer span.End()
+	err := fn()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.PlatformInterface) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
+	defer span.End()
+
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
 	// setup libbox service
@@ -110,7 +137,9 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	}
 
 	slog.Log(nil, rlog.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
-	if err := libbox.Setup(setupOpts); err != nil {
+	if err := traceSpan(ctx, "libbox.Setup", func() error {
+		return libbox.Setup(setupOpts)
+	}); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
@@ -124,8 +153,12 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	}
 
 	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
-	lb, err := libbox.NewServiceWithContext(t.ctx, options, platformIfce)
-	if err != nil {
+	var lb *libbox.BoxService
+	if err := traceSpan(ctx, "libbox.NewServiceWithContext", func() error {
+		var err error
+		lb, err = libbox.NewServiceWithContext(t.ctx, options, platformIfce)
+		return err
+	}); err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
 
@@ -192,7 +225,10 @@ func newMutableGroupManager(
 	return groups.NewMutableGroupManager(logger, oMgr, epMgr, connMgr, mutGroups), nil
 }
 
-func (t *tunnel) connect() (err error) {
+func (t *tunnel) connect(ctx context.Context) (err error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.connect")
+	defer span.End()
+
 	slog.Log(nil, rlog.LevelTrace, "Starting libbox service")
 
 	defer func() {
@@ -201,7 +237,9 @@ func (t *tunnel) connect() (err error) {
 			err = fmt.Errorf("panic starting libbox service: %v", r)
 		}
 	}()
-	if err := t.lbService.Start(); err != nil {
+	if err := traceSpan(ctx, "libbox.BoxService.Start", func() error {
+		return t.lbService.Start()
+	}); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
@@ -210,10 +248,14 @@ func (t *tunnel) connect() (err error) {
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 
-	mutGrpMgr, err := newMutableGroupManager(
-		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
-	)
-	if err != nil {
+	var mutGrpMgr *groups.MutableGroupManager
+	if err := traceSpan(ctx, "newMutableGroupManager", func() error {
+		var err error
+		mutGrpMgr, err = newMutableGroupManager(
+			t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
+		)
+		return err
+	}); err != nil {
 		t.close()
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
