@@ -22,6 +22,7 @@ import (
 	"github.com/sagernet/sing/service"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	lcommon "github.com/getlantern/common"
@@ -154,13 +155,17 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	return nil
 }
 
-// traceSpan wraps fn in a child span of the caller's context. Captures duration
-// even when fn returns an error; span.RecordError isn't called because the
-// caller already wraps the error with context before returning.
+// traceSpan wraps fn in a child span of the caller's context and records any
+// error on the child span so failures show up per-phase in the trace.
 func traceSpan(ctx context.Context, name string, fn func() error) error {
 	_, span := otel.Tracer(tracerName).Start(ctx, name)
 	defer span.End()
-	return fn()
+	err := fn()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
 }
 
 func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
