@@ -7,15 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"syscall"
+	"time"
 
 	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/account"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
@@ -133,18 +137,6 @@ func (c *Client) RunOfflineURLTests(ctx context.Context) error {
 	return err
 }
 
-// VPNStatusEvents connects to the VPN status event stream. It calls handler for each event
-// received until ctx is cancelled or the connection is closed.
-func (c *Client) VPNStatusEvents(ctx context.Context, handler func(vpn.StatusUpdateEvent)) error {
-	return c.sseStream(ctx, vpnStatusEventsEndpoint, func(data []byte) {
-		var evt vpn.StatusUpdateEvent
-		if err := json.Unmarshal(data, &evt); err != nil {
-			return
-		}
-		handler(evt)
-	})
-}
-
 ///////////////////////
 // Server selection  //
 ///////////////////////
@@ -181,32 +173,9 @@ func (c *Client) AutoSelected(ctx context.Context) (*servers.Server, error) {
 	return sjson.UnmarshalExtendedContext[*servers.Server](boxCtx, data)
 }
 
-// AutoSelectedEvents connects to the auto-selected event stream. It calls handler for each
-// event received until ctx is cancelled or the connection is closed.
-func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSelectedEvent)) error {
-	return c.sseStream(ctx, serverAutoSelectedEventsEndpoint, func(data []byte) {
-		var evt vpn.AutoSelectedEvent
-		if err := json.Unmarshal(data, &evt); err != nil {
-			return
-		}
-		handler(evt)
-	})
-}
-
-///////////////////////
-// Config events     //
-///////////////////////
-
-// ConfigEvents connects to the config event stream. The server emits a frame
-// on every config.NewConfigEvent; the payload is intentionally empty — callers
-// should treat each frame as a "refresh" signal and fetch any state they need
-// via the other GET endpoints. The handler is called once per frame received
-// until ctx is cancelled or the connection is closed.
-func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
-	return c.sseStream(ctx, configEventsEndpoint, func(data []byte) {
-		handler()
-	})
-}
+////////////
+// Config //
+////////////
 
 // UpdateConfig forces an immediate config fetch on the daemon. Returns an error
 // if config fetching is disabled.
@@ -588,18 +557,6 @@ func (c *Client) DataCapInfo(ctx context.Context) (*account.DataCapInfo, error) 
 	return &resp, err
 }
 
-// DataCapStream connects to the data cap event stream. It calls handler for each event
-// received until ctx is cancelled or the connection is closed.
-func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCapInfo)) error {
-	return c.sseStream(ctx, accountDataCapStreamEndpoint, func(data []byte) {
-		var info account.DataCapInfo
-		if err := json.Unmarshal(data, &info); err != nil {
-			return
-		}
-		handler(info)
-	})
-}
-
 ///////////////////
 // Subscriptions //
 ///////////////////
@@ -678,6 +635,79 @@ func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, des
 	_, err := c.do(ctx, http.MethodPost, issueEndpoint,
 		IssueReportRequest{IssueType: issueType, Description: description, Email: email, AdditionalAttachments: additionalAttachments})
 	return err
+}
+
+/////////////
+// streams //
+/////////////
+
+// sseRetryLoop runs sseStream in a retry loop until ctx is cancelled.
+func (c *Client) sseRetryLoop(ctx context.Context, endpoint string, handler func([]byte)) error {
+	bo := common.NewBackoff(30 * time.Second)
+	for ctx.Err() == nil {
+		err := c.sseStream(ctx, endpoint, handler)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// silently ignore IPC not running errors, since they are expected when the daemon is not running.
+		// prevent spamming the logs with errors until the daemon starts.
+		if err != nil && !errors.Is(err, ErrIPCNotRunning) {
+			slog.Warn("SSE stream ended, retrying", "endpoint", endpoint, "error", err)
+		}
+		bo.Wait(ctx)
+	}
+	return ctx.Err()
+}
+
+// dataCapStream runs the data-cap SSE stream only while the VPN is connected. Blocks until ctx
+// is cancelled.
+func (c *Client) dataCapStream(ctx context.Context, handler func(account.DataCapInfo)) error {
+	var (
+		mu       sync.Mutex
+		cancelFn context.CancelFunc
+	)
+
+	decode := func(data []byte) {
+		var info account.DataCapInfo
+		if err := json.Unmarshal(data, &info); err == nil {
+			handler(info)
+		}
+	}
+
+	start := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if cancelFn != nil {
+			return
+		}
+		subCtx, cancel := context.WithCancel(ctx)
+		cancelFn = cancel
+		go c.sseRetryLoop(subCtx, accountDataCapStreamEndpoint, decode)
+	}
+
+	stop := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if cancelFn != nil {
+			cancelFn()
+			cancelFn = nil
+		}
+	}
+	defer stop()
+
+	// check if VPN is already connected before starting the stream, otherwise we might miss the
+	// "connected" event that triggers the stream start
+	if status, err := c.VPNStatus(ctx); err == nil && status == vpn.Connected {
+		start()
+	}
+
+	return c.VPNStatusEvents(ctx, func(evt vpn.StatusUpdateEvent) {
+		if evt.Status == vpn.Connected {
+			start()
+		} else {
+			stop()
+		}
+	})
 }
 
 /////////////
