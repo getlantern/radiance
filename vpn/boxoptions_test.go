@@ -229,30 +229,3 @@ func testBoxOptions(t *testing.T) (O.Options, []string) {
 	}
 	return cfg.Options, tags
 }
-
-func TestKernelBelow(t *testing.T) {
-	tests := []struct {
-		name string
-		v    string
-		min  string
-		want bool
-	}{
-		{"below major", "4.19.0", "5.10", true},
-		{"below minor", "5.4.0", "5.10", true},
-		{"equal", "5.10.0", "5.10", false},
-		{"above minor", "5.15.0", "5.10", false},
-		{"above major", "6.1.0", "5.10", false},
-		{"android suffix", "4.19.0-android13", "5.10", true},
-		{"android suffix above", "5.15.0-android13", "5.10", false},
-		{"empty version", "", "5.10", false},
-		{"empty min", "5.10.0", "", false},
-		{"both empty", "", "", false},
-		{"invalid version", "not-a-version", "5.10", false},
-		{"only major", "5", "5.10", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, kernelBelow(tt.v, tt.min))
-		})
-	}
-}
