@@ -14,72 +14,41 @@ import (
 	"github.com/getlantern/radiance/servers"
 )
 
-func TestTunnelStatus(t *testing.T) {
-	tun := &tunnel{}
-	tun.status.Store(Disconnected)
-	assert.Equal(t, Disconnected, tun.Status())
-
-	tun.setStatus(Connecting, nil)
-	assert.Equal(t, Connecting, tun.Status())
-
-	tun.setStatus(Connected, nil)
-	assert.Equal(t, Connected, tun.Status())
-}
-
-func TestTunnelSetStatus_WithError(t *testing.T) {
-	tun := &tunnel{}
-	tun.status.Store(Disconnected)
-
-	testErr := assert.AnError
-	tun.setStatus(ErrorStatus, testErr)
-	assert.Equal(t, ErrorStatus, tun.Status())
-}
-
-func TestTunnelClose_NoResources(t *testing.T) {
-	tun := &tunnel{}
-	tun.status.Store(Connected)
-	err := tun.close()
-	assert.NoError(t, err)
-	assert.Equal(t, Disconnected, tun.Status())
-	assert.Nil(t, tun.closers)
-	assert.Nil(t, tun.lbService)
-}
-
-func TestTunnelClose_PreservesRestartingStatus(t *testing.T) {
-	tun := &tunnel{}
-	tun.status.Store(Restarting)
-	err := tun.close()
-	assert.NoError(t, err)
-	assert.Equal(t, Restarting, tun.Status(), "close should not override Restarting status")
-}
-
-func TestTunnelClose_WithCancel(t *testing.T) {
-	tun := &tunnel{}
-	tun.status.Store(Connected)
-	ctx, cancel := context.WithCancel(context.Background())
-	tun.cancel = cancel
-
-	err := tun.close()
-	assert.NoError(t, err)
-	assert.Error(t, ctx.Err(), "context should be cancelled after close")
-}
-
 type errCloser struct{ err error }
 
 func (c errCloser) Close() error { return c.err }
 
-func TestTunnelClose_CloserErrors(t *testing.T) {
-	tun := &tunnel{}
-	tun.status.Store(Connected)
-	tun.closers = append(tun.closers, errCloser{err: assert.AnError})
+func TestTunnelClose(t *testing.T) {
+	t.Run("no resources", func(t *testing.T) {
+		tun := &tunnel{}
+		err := tun.close()
+		assert.NoError(t, err)
+		assert.Nil(t, tun.closers)
+		assert.Nil(t, tun.lbService)
+	})
 
-	err := tun.close()
-	assert.ErrorIs(t, err, assert.AnError)
+	t.Run("cancels context", func(t *testing.T) {
+		tun := &tunnel{}
+		ctx, cancel := context.WithCancel(context.Background())
+		tun.cancel = cancel
+
+		err := tun.close()
+		assert.NoError(t, err)
+		assert.Error(t, ctx.Err(), "context should be cancelled after close")
+	})
+
+	t.Run("propagates closer errors", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.closers = append(tun.closers, errCloser{err: assert.AnError})
+
+		err := tun.close()
+		assert.ErrorIs(t, err, assert.AnError)
+	})
 }
 
 func TestSelectMode_NotConnected(t *testing.T) {
+	// A tunnel without an active libbox service is not running.
 	tun := &tunnel{}
-	tun.status.Store(Disconnected)
 	err := tun.selectMode(AutoSelectTag)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tunnel not running")
@@ -87,57 +56,49 @@ func TestSelectMode_NotConnected(t *testing.T) {
 
 func TestRemoveDuplicates(t *testing.T) {
 	ctx := box.BaseContext()
-
 	out1 := O.Outbound{Type: "http", Tag: "http-1", Options: &O.HTTPOutboundOptions{}}
 	out2 := O.Outbound{Type: "http", Tag: "http-2", Options: &O.HTTPOutboundOptions{}}
+	socks := O.Outbound{Type: "socks", Tag: "socks-1", Options: &O.SOCKSOutboundOptions{}}
 	ep1 := O.Endpoint{Type: "wireguard", Tag: "wg-1", Options: &O.WireGuardEndpointOptions{}}
 
-	// Build a current map with out1 and ep1.
-	var curr lsync.TypedMap[string, []byte]
-	b1, _ := json.MarshalContext(ctx, out1)
-	curr.Store(out1.Tag, b1)
-	bEp1, _ := json.MarshalContext(ctx, ep1)
-	curr.Store(ep1.Tag, bEp1)
+	t.Run("drops duplicates against current map", func(t *testing.T) {
+		var curr lsync.TypedMap[string, []byte]
+		b1, _ := json.MarshalContext(ctx, out1)
+		curr.Store(out1.Tag, b1)
+		bEp1, _ := json.MarshalContext(ctx, ep1)
+		curr.Store(ep1.Tag, bEp1)
 
-	list := servers.ServerList{
-		Servers: []*servers.Server{
-			{Tag: out1.Tag, Type: out1.Type, Options: out1},
-			{Tag: out2.Tag, Type: out2.Type, Options: out2},
-			{Tag: ep1.Tag, Type: ep1.Type, Options: ep1},
-		},
-	}
+		list := servers.ServerList{
+			Servers: []*servers.Server{
+				{Tag: out1.Tag, Type: out1.Type, Options: out1},
+				{Tag: out2.Tag, Type: out2.Type, Options: out2},
+				{Tag: ep1.Tag, Type: ep1.Type, Options: ep1},
+			},
+		}
 
-	result := removeDuplicates(ctx, &curr, list)
+		result := removeDuplicates(ctx, &curr, list)
+		assert.Len(t, result.Servers, 1)
+		assert.Equal(t, "http-2", result.Servers[0].Tag)
+	})
 
-	// out1 and ep1 are duplicates, only out2 should remain.
-	assert.Len(t, result.Servers, 1)
-	assert.Equal(t, "http-2", result.Servers[0].Tag)
-}
+	t.Run("keeps all servers when none are duplicates", func(t *testing.T) {
+		var curr lsync.TypedMap[string, []byte]
+		list := servers.ServerList{
+			Servers: []*servers.Server{
+				{Tag: out1.Tag, Type: out1.Type, Options: out1},
+				{Tag: socks.Tag, Type: socks.Type, Options: socks},
+			},
+		}
 
-func TestRemoveDuplicates_AllNew(t *testing.T) {
-	ctx := box.BaseContext()
-	var curr lsync.TypedMap[string, []byte]
+		result := removeDuplicates(ctx, &curr, list)
+		assert.Len(t, result.Servers, 2)
+	})
 
-	out1 := O.Outbound{Type: "http", Tag: "http-1", Options: &O.HTTPOutboundOptions{}}
-	out2 := O.Outbound{Type: "socks", Tag: "socks-1", Options: &O.SOCKSOutboundOptions{}}
-
-	list := servers.ServerList{
-		Servers: []*servers.Server{
-			{Tag: out1.Tag, Type: out1.Type, Options: out1},
-			{Tag: out2.Tag, Type: out2.Type, Options: out2},
-		},
-	}
-
-	result := removeDuplicates(ctx, &curr, list)
-	assert.Len(t, result.Servers, 2)
-}
-
-func TestRemoveDuplicates_Empty(t *testing.T) {
-	ctx := box.BaseContext()
-	var curr lsync.TypedMap[string, []byte]
-
-	result := removeDuplicates(ctx, &curr, servers.ServerList{})
-	assert.Empty(t, result.Servers)
+	t.Run("empty list yields empty result", func(t *testing.T) {
+		var curr lsync.TypedMap[string, []byte]
+		result := removeDuplicates(ctx, &curr, servers.ServerList{})
+		assert.Empty(t, result.Servers)
+	})
 }
 
 func TestContextDone(t *testing.T) {

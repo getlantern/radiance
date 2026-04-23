@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	lsync "github.com/getlantern/common/sync"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -57,25 +55,16 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
-	status  atomic.Value // VPNStatus
 	cancel  context.CancelFunc
 	closers []io.Closer
 }
 
-func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (err error) {
-	if t.status.Load() != Restarting {
-		t.setStatus(Connecting, nil)
-	}
+func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) error {
 	// Unbounded signaling must dial freddie outside the VPN tunnel or it
 	// recursively re-enters itself. streamingRoundTripper forces kindling to
 	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), streamingRoundTripper{inner: kindling.HTTPClient().Transport})
 	t.ctx, t.cancel = context.WithCancel(baseCtx)
-	defer func() {
-		if err != nil {
-			t.setStatus(ErrorStatus, err)
-		}
-	}()
 
 	if err := t.init(options, platformIfce); err != nil {
 		t.close()
@@ -88,7 +77,6 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (e
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
-	t.setStatus(Connected, nil)
 	t.optsMap = makeOutboundOptsMap(t.ctx, options)
 	return nil
 }
@@ -121,6 +109,7 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	if t.urltestHistory == nil {
 		t.urltestHistory = urltest.NewHistoryStorage()
 		service.MustRegister[adapter.URLTestHistoryStorage](t.ctx, t.urltestHistory)
+		t.closers = append(t.closers, t.urltestHistory)
 	}
 
 	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
@@ -228,8 +217,8 @@ func (t *tunnel) connect() (err error) {
 }
 
 func (t *tunnel) selectMode(mode string) error {
-	if status := t.Status(); status != Connected {
-		return fmt.Errorf("tunnel not running: status %v", status)
+	if t.lbService == nil {
+		return fmt.Errorf("tunnel not running")
 	}
 
 	if t.clashServer.Mode() != mode {
@@ -258,9 +247,6 @@ func (t *tunnel) selectOutbound(tag string) error {
 }
 
 func (t *tunnel) close() error {
-	if t.status.Load() != Restarting {
-		t.setStatus(Disconnecting, nil)
-	}
 	if t.cancel != nil {
 		t.cancel()
 	}
@@ -283,23 +269,7 @@ func (t *tunnel) close() error {
 
 	t.closers = nil
 	t.lbService = nil
-	if t.status.Load() != Restarting {
-		t.setStatus(Disconnected, nil)
-	}
 	return err
-}
-
-func (t *tunnel) Status() VPNStatus {
-	return t.status.Load().(VPNStatus)
-}
-
-func (t *tunnel) setStatus(status VPNStatus, err error) {
-	t.status.Store(status)
-	evt := StatusUpdateEvent{Status: status}
-	if err != nil {
-		evt.Error = err.Error()
-	}
-	events.Emit(evt)
 }
 
 var errLibboxClosed = errors.New("libbox closed")
