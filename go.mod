@@ -29,9 +29,9 @@ require (
 	github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538
-	github.com/getlantern/keepcurrent v0.0.0-20260304213122-017d542145ae
+	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
 	github.com/getlantern/kindling v0.0.0-20260329144042-b1825b9cb1bb
-	github.com/getlantern/lantern-box v0.0.70
+	github.com/getlantern/lantern-box v0.0.74
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb

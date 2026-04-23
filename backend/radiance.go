@@ -210,6 +210,9 @@ func (r *LocalBackend) Start() {
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
+		if env.GetString(env.Country) != "" {
+			return // respect env override if set
+		}
 		if evt.New != nil && evt.New.Country != "" {
 			if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
 				slog.Error("failed to set country code in settings", "error", err)

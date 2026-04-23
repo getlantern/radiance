@@ -233,15 +233,14 @@ func (c *VPNClient) Status() VPNStatus {
 	return c.tunnel.Status()
 }
 
-// HistoryStorage returns the URL test history storage from the tunnel's clash server,
-// or nil if the tunnel is not connected.
+// HistoryStorage returns the tunnel's URL test history storage or nil if the tunnel is not connected.
 func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return nil
 	}
-	return c.tunnel.clashServer.HistoryStorage()
+	return c.tunnel.urltestHistory
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.

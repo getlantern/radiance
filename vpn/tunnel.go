@@ -31,6 +31,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
+	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -40,10 +41,11 @@ import (
 )
 
 type tunnel struct {
-	ctx         context.Context
-	lbService   *libbox.BoxService
-	clashServer *clashapi.Server
-	logFactory  sblog.ObservableFactory
+	ctx            context.Context
+	lbService      *libbox.BoxService
+	clashServer    *clashapi.Server
+	urltestHistory adapter.URLTestHistoryStorage
+	logFactory     sblog.ObservableFactory
 
 	dataPath string
 
@@ -115,6 +117,12 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
+	t.urltestHistory = service.FromContext[adapter.URLTestHistoryStorage](t.ctx)
+	if t.urltestHistory == nil {
+		t.urltestHistory = urltest.NewHistoryStorage()
+		service.MustRegister[adapter.URLTestHistoryStorage](t.ctx, t.urltestHistory)
+	}
+
 	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
 	lb, err := libbox.NewServiceWithContext(t.ctx, options, platformIfce)
 	if err != nil {
@@ -131,11 +139,6 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
-
-	// history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
-	// if err := loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName)); err != nil {
-	// 	return fmt.Errorf("load urltest history: %w", err)
-	// }
 
 	// set memory limit for Android and iOS
 	switch common.Platform {
