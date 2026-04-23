@@ -64,8 +64,7 @@ type tunnel struct {
 	closers []io.Closer
 }
 
-func (t *tunnel) start(ctx context.Context, options string, platformIfce libbox.PlatformInterface) (err error) {
-	isRestart := t.status.Load() == Restarting
+func (t *tunnel) start(ctx context.Context, options string, platformIfce libbox.PlatformInterface, isRestart bool) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.start",
 		trace.WithAttributes(
 			attribute.Int("options_size", len(options)),
@@ -117,9 +116,15 @@ func traceSpan(ctx context.Context, name string, fn func() error) error {
 	return err
 }
 
-func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.PlatformInterface) error {
+func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.PlatformInterface) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
-	defer span.End()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
@@ -227,7 +232,13 @@ func newMutableGroupManager(
 
 func (t *tunnel) connect(ctx context.Context) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.connect")
-	defer span.End()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 
 	slog.Log(nil, rlog.LevelTrace, "Starting libbox service")
 

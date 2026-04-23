@@ -134,15 +134,15 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts)))
+	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts), false))
 }
 
-func (c *VPNClient) start(ctx context.Context, path, options string) error {
+func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool) error {
 	c.logger.Debug("Starting tunnel", "options", options)
 	t := tunnel{
 		dataPath: path,
 	}
-	if err := t.start(ctx, options, c.platformIfce); err != nil {
+	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
 	c.tunnel = &t
@@ -219,7 +219,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	if err := c.start(ctx, boxOptions.BasePath, string(opts)); err != nil {
+	if err := c.start(ctx, boxOptions.BasePath, string(opts), true); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
 		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
 	}
