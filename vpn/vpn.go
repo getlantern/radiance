@@ -117,8 +117,18 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 		switch status := c.tunnel.Status(); status {
 		case Connected:
 			return ErrTunnelAlreadyConnected
-		case Restarting, Connecting, Disconnecting:
+		case Connecting, Disconnecting:
 			return fmt.Errorf("tunnel is currently %s", status)
+		case Restarting:
+			// Restart() sets this status before delegating to the platform
+			// (platformIfce.RestartService) and returns immediately; on Android
+			// the platform may tear down the VPN service before the restart
+			// completes, in which case nothing ever transitions the tunnel
+			// back out of Restarting. If Connect is being called, either that
+			// restart was lost or the caller wants a fresh connection anyway
+			// — clean up and proceed rather than wedging the client.
+			c.logger.Warn("tunnel stuck in Restarting, cleaning up and reconnecting")
+			c.tunnel = nil
 		case Disconnected, ErrorStatus:
 			// Clean up the stale tunnel so we can reconnect.
 			c.tunnel = nil

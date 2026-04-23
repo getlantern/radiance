@@ -99,7 +99,7 @@ func TestConnect_AlreadyConnected(t *testing.T) {
 }
 
 func TestConnect_TransientStates(t *testing.T) {
-	for _, status := range []VPNStatus{Restarting, Connecting, Disconnecting} {
+	for _, status := range []VPNStatus{Connecting, Disconnecting} {
 		t.Run(string(status), func(t *testing.T) {
 			c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 			tun := &tunnel{}
@@ -114,7 +114,12 @@ func TestConnect_TransientStates(t *testing.T) {
 }
 
 func TestConnect_CleansUpStaleTunnel(t *testing.T) {
-	for _, status := range []VPNStatus{Disconnected, ErrorStatus} {
+	// Restarting is included because Restart() delegates to the platform and
+	// the platform may tear down the service before completing the restart
+	// (Android onDestroy without stopVPN), leaving the tunnel wedged in
+	// Restarting. Connect should be able to recover by cleaning up and
+	// starting fresh.
+	for _, status := range []VPNStatus{Disconnected, ErrorStatus, Restarting} {
 		t.Run(string(status), func(t *testing.T) {
 			c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 			tun := &tunnel{}
