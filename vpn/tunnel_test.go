@@ -15,7 +15,6 @@ import (
 
 	"github.com/getlantern/lantern-box/adapter"
 	lbgroups "github.com/getlantern/lantern-box/adapter/groups"
-
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal/testutil"
 	"github.com/getlantern/radiance/servers"
@@ -38,7 +37,7 @@ func TestConnection(t *testing.T) {
 		dataPath: tmp,
 	}
 
-	require.NoError(t, tun.start(optsStr, nil), "failed to establish connection")
+	require.NoError(t, tun.start(t.Context(), optsStr, nil), "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()
 	})
@@ -153,7 +152,7 @@ func testConnection(t *testing.T, opts sbO.Options) *tunnel {
 	}
 
 	options, _ := json.Marshal(opts)
-	err := tun.start(string(options), nil)
+	err := tun.start(t.Context(), string(options), nil)
 	require.NoError(t, err, "failed to establish connection")
 	t.Cleanup(func() {
 		tun.close()
