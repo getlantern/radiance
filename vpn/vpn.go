@@ -29,7 +29,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
-
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -147,7 +146,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	return traces.RecordError(ctx, c.start(boxOptions.BasePath, string(opts)))
+	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts), false))
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -163,11 +162,11 @@ func (c *VPNClient) Disconnect() error {
 	return traces.RecordError(ctx, c.close())
 }
 
-func (c *VPNClient) start(path, options string) error {
+func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool) error {
 	c.logger.Debug("Starting tunnel", "options", options)
 	c.setStatus(Connecting, nil)
 	t := tunnel{dataPath: path}
-	if err := t.start(options, c.platformIfce); err != nil {
+	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
 		c.setStatus(ErrorStatus, err)
 		return err
 	}
@@ -198,6 +197,9 @@ func (c *VPNClient) close() error {
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
 func (c *VPNClient) Restart(boxOptions BoxOptions) error {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "VPNClient.Restart")
+	defer span.End()
+
 	c.mu.Lock()
 	if c.tunnel == nil || c.Status() != Connected {
 		c.mu.Unlock()
@@ -208,35 +210,37 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	c.logger.Info("Restarting tunnel")
 
 	if c.platformIfce != nil {
+		span.SetAttributes(attribute.String("path", "platform_ifce"))
 		c.mu.Unlock()
 		if err := c.platformIfce.RestartService(); err != nil {
 			c.logger.Error("Failed to restart tunnel via platform interface", "error", err)
 			err = fmt.Errorf("platform interface restart failed: %w", err)
 			c.setStatus(ErrorStatus, err)
-			return err
+			return traces.RecordError(ctx, err)
 		}
 		c.logger.Info("Tunnel restarted successfully")
 		return nil
 	}
+	span.SetAttributes(attribute.String("path", "direct"))
 
 	defer c.mu.Unlock()
 	if err := c.close(); err != nil {
-		return fmt.Errorf("closing tunnel: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("closing tunnel: %w", err))
 	}
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		c.setStatus(ErrorStatus, err)
-		return fmt.Errorf("failed to build options: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
 	opts, err := sbjson.Marshal(options)
 	if err != nil {
 		c.setStatus(ErrorStatus, err)
-		return fmt.Errorf("failed to marshal options: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	if err := c.start(boxOptions.BasePath, string(opts)); err != nil {
+	if err := c.start(ctx, boxOptions.BasePath, string(opts), true); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
 		// c.start already set ErrorStatus; the guard lets Restarting→ErrorStatus through.
-		return fmt.Errorf("starting tunnel: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
 	}
 	c.logger.Info("Tunnel restarted successfully")
 	return nil
