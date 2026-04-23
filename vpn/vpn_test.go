@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 )
@@ -133,6 +135,41 @@ func TestConnect_CleansUpStaleTunnel(t *testing.T) {
 			// The tunnel should have been nilled out before buildOptions was called
 			assert.Contains(t, err.Error(), "no outbounds")
 		})
+	}
+}
+
+func TestConnect_RestartingEmitsDisconnectedEvent(t *testing.T) {
+	// When a stale tunnel is cleaned up from the Restarting state, we must
+	// emit a Disconnected status event so event-driven consumers transition
+	// out of Restarting even if Connect fails before start() runs.
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	tun := &tunnel{}
+	tun.status.Store(Restarting)
+	c.tunnel = tun
+
+	received := make(chan StatusUpdateEvent, 4)
+	sub := events.Subscribe(func(evt StatusUpdateEvent) {
+		received <- evt
+	})
+	defer events.Unsubscribe(sub)
+
+	// Connect will fail at buildOptions (no outbounds), so tunnel.start() never
+	// runs. Without the explicit setStatus call, no event would be emitted and
+	// subscribers would remain stuck on whatever the last event was.
+	err := c.Connect(BoxOptions{BasePath: t.TempDir()})
+	require.Error(t, err)
+
+	var sawDisconnected bool
+	deadline := time.After(time.Second)
+	for !sawDisconnected {
+		select {
+		case evt := <-received:
+			if evt.Status == Disconnected {
+				sawDisconnected = true
+			}
+		case <-deadline:
+			t.Fatal("expected Disconnected StatusUpdateEvent, none received")
+		}
 	}
 }
 

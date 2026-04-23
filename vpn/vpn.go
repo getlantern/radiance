@@ -127,7 +127,10 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 			// back out of Restarting. If Connect is being called, either that
 			// restart was lost or the caller wants a fresh connection anyway
 			// — clean up and proceed rather than wedging the client.
+			// Emit a Disconnected event so event-driven consumers transition
+			// out of Restarting even if Connect fails before start() runs.
 			c.logger.Warn("tunnel stuck in Restarting, cleaning up and reconnecting")
+			c.tunnel.setStatus(Disconnected, nil)
 			c.tunnel = nil
 		case Disconnected, ErrorStatus:
 			// Clean up the stale tunnel so we can reconnect.
