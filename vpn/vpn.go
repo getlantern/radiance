@@ -73,9 +73,16 @@ type VPNClient struct {
 	mu sync.RWMutex
 }
 
+// PlatformInterface defines the methods to interact with platform-specific services
 type PlatformInterface interface {
 	libbox.PlatformInterface
+	// RestartService is called when the VPNClient wants to restart the tunnel instead of direct
+	// disconnect/reconnect. This allows platforms to perform any necessary extra steps to restart
+	// the tunnel. RestartService should block until the tunnel has been restarted and is ready for
+	// use, or return an error if restart fails.
 	RestartService() error
+	// PostServiceClose is called after the tunnel has been closed. This allows platforms to perform
+	// any necessary cleanup.
 	PostServiceClose()
 }
 
