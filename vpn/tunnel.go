@@ -12,21 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	lcommon "github.com/getlantern/common"
-	lsync "github.com/getlantern/common/sync"
-	box "github.com/getlantern/lantern-box"
-
-	lbA "github.com/getlantern/lantern-box/adapter"
-	"github.com/getlantern/lantern-box/adapter/groups"
-	lblog "github.com/getlantern/lantern-box/log"
-	"github.com/getlantern/lantern-box/tracker/clientcontext"
-
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal"
-	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/vpn/ipc"
-
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/clashapi"
@@ -35,6 +20,23 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	lcommon "github.com/getlantern/common"
+	lsync "github.com/getlantern/common/sync"
+	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/getlantern/lantern-box/adapter/groups"
+	lblog "github.com/getlantern/lantern-box/log"
+	"github.com/getlantern/lantern-box/tracker/clientcontext"
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/vpn/ipc"
 )
 
 type tunnel struct {
@@ -57,17 +59,24 @@ type tunnel struct {
 	closers []io.Closer
 }
 
-func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) error {
+func (t *tunnel) start(ctx context.Context, options string, platformIfce libbox.PlatformInterface) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.start",
+		trace.WithAttributes(
+			attribute.Int("options_size", len(options)),
+			attribute.String("platform", common.Platform),
+		))
+	defer span.End()
+
 	t.status.Store(ipc.Connecting)
 	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
 
-	if err := t.init(options, platformIfce); err != nil {
+	if err := t.init(ctx, options, platformIfce); err != nil {
 		t.close()
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	if err := t.connect(); err != nil {
+	if err := t.connect(ctx); err != nil {
 		t.close()
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
@@ -77,7 +86,10 @@ func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) er
 	return nil
 }
 
-func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) error {
+func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.PlatformInterface) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
+	defer span.End()
+
 	slog.Log(nil, internal.LevelTrace, "Initializing tunnel")
 
 	// setup libbox service
@@ -94,7 +106,9 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	}
 
 	slog.Log(nil, internal.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
-	if err := libbox.Setup(setupOpts); err != nil {
+	if err := traceSpan(ctx, "libbox.Setup", func() error {
+		return libbox.Setup(setupOpts)
+	}); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
@@ -102,8 +116,12 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
 	slog.Log(nil, internal.LevelTrace, "Creating libbox service")
-	lb, err := libbox.NewServiceWithContext(t.ctx, options, platformIfce)
-	if err != nil {
+	var lb *libbox.BoxService
+	if err := traceSpan(ctx, "libbox.NewServiceWithContext", func() error {
+		var err error
+		lb, err = libbox.NewServiceWithContext(t.ctx, options, platformIfce)
+		return err
+	}); err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
 
@@ -119,7 +137,9 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	t.lbService = lb
 
 	history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
-	if err := loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName)); err != nil {
+	if err := traceSpan(ctx, "loadURLTestHistory", func() error {
+		return loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName))
+	}); err != nil {
 		return fmt.Errorf("load urltest history: %w", err)
 	}
 
@@ -133,6 +153,19 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 
 	slog.Info("Tunnel initializated")
 	return nil
+}
+
+// traceSpan wraps fn in a child span of the caller's context and records any
+// error on the child span so failures show up per-phase in the trace.
+func traceSpan(ctx context.Context, name string, fn func() error) error {
+	_, span := otel.Tracer(tracerName).Start(ctx, name)
+	defer span.End()
+	err := fn()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
 }
 
 func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
@@ -179,7 +212,10 @@ func newMutableGroupManager(
 	return groups.NewMutableGroupManager(logger, oMgr, epMgr, connMgr, mutGroups), nil
 }
 
-func (t *tunnel) connect() (err error) {
+func (t *tunnel) connect(ctx context.Context) (err error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.connect")
+	defer span.End()
+
 	slog.Log(nil, internal.LevelTrace, "Starting libbox service")
 
 	defer func() {
@@ -188,7 +224,9 @@ func (t *tunnel) connect() (err error) {
 			err = fmt.Errorf("panic starting libbox service: %v", r)
 		}
 	}()
-	if err := t.lbService.Start(); err != nil {
+	if err := traceSpan(ctx, "libbox.BoxService.Start", func() error {
+		return t.lbService.Start()
+	}); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
@@ -196,10 +234,14 @@ func (t *tunnel) connect() (err error) {
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 
-	mutGrpMgr, err := newMutableGroupManager(
-		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
-	)
-	if err != nil {
+	var mutGrpMgr *groups.MutableGroupManager
+	if err := traceSpan(ctx, "newMutableGroupManager", func() error {
+		var err error
+		mutGrpMgr, err = newMutableGroupManager(
+			t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
+		)
+		return err
+	}); err != nil {
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
 	t.mutGrpMgr = mutGrpMgr
