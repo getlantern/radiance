@@ -172,7 +172,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		vpnClient:      vpnClient,
 		splitTunnelMgr: splitTunnelMgr,
 		shutdownFuncs: []func() error{
-			telemetry.Close, kindling.Close, vpnClient.Close,
+			telemetry.Close, kindling.Close,
 		},
 		stopChan:  make(chan struct{}),
 		closeOnce: sync.Once{},
