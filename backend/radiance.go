@@ -647,6 +647,13 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 			return fmt.Errorf("no server found with tag %s", tag)
 		}
 	}
+	// If the tunnel is already up, treat ConnectVPN as a request to switch the
+	// active outbound. The UI calls into this path when the user picks a new
+	// server (or Smart Routing) while already connected, and expects a seamless
+	// swap instead of a "tunnel already connected" rejection.
+	if r.vpnClient.Status() == vpn.Connected {
+		return r.selectServer(tag)
+	}
 	bOptions := r.getBoxOptions()
 	if err := r.vpnClient.Connect(bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
