@@ -282,8 +282,9 @@ func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
 	return c.tunnel.urltestHistory
 }
 
-// SelectServer changes the currently selected server to the one specified by tag. If tag is AutoSelectTag,
-// the tunnel will switch to auto-select mode and automatically choose the best server.
+// SelectServer changes the currently selected server to the one specified by tag. If tag is
+// AutoSelectTag or the empty string, the tunnel will switch to auto-select mode and automatically
+// choose the best server.
 func (c *VPNClient) SelectServer(tag string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -291,7 +292,7 @@ func (c *VPNClient) SelectServer(tag string) error {
 		return ErrTunnelNotConnected
 	}
 	t := c.tunnel
-	if tag == AutoSelectTag {
+	if tag == AutoSelectTag || tag == "" {
 		return c.tunnel.selectMode(AutoSelectTag)
 	}
 

@@ -651,7 +651,7 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 	if err := r.vpnClient.Connect(bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
-	if err := r.selectServer(tag); err != nil {
+	if err := r.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
 	return nil
@@ -697,10 +697,6 @@ func (r *LocalBackend) RestartVPN() error {
 }
 
 func (r *LocalBackend) SelectServer(tag string) error {
-	return r.selectServer(tag)
-}
-
-func (r *LocalBackend) selectServer(tag string) error {
 	if err := r.vpnClient.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
