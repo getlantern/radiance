@@ -12,6 +12,9 @@ import (
 	"sync"
 
 	"github.com/sagernet/sing-box/experimental/clashapi"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -83,7 +86,7 @@ func (s *TunnelService) start(ctx context.Context, options string) error {
 	t := tunnel{
 		dataPath: path,
 	}
-	if err := t.start(options, s.platformIfce); err != nil {
+	if err := t.start(ctx, options, s.platformIfce); err != nil {
 		return fmt.Errorf("failed to start tunnel: %w", err)
 	}
 	s.tunnel = &t
@@ -122,6 +125,10 @@ func (s *TunnelService) close() error {
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
 func (s *TunnelService) Restart(ctx context.Context, options string) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "TunnelService.Restart",
+		trace.WithAttributes(attribute.Int("options_size", len(options))))
+	defer span.End()
+
 	s.mu.Lock()
 	if s.tunnel == nil {
 		s.mu.Unlock()
@@ -134,6 +141,7 @@ func (s *TunnelService) Restart(ctx context.Context, options string) error {
 
 	s.logger.Info("Restarting tunnel")
 	if s.platformIfce != nil {
+		span.SetAttributes(attribute.String("path", "platform_ifce"))
 		s.mu.Unlock()
 		if err := s.platformIfce.RestartService(); err != nil {
 			s.logger.Error("Failed to restart tunnel via platform interface", "error", err)
@@ -141,6 +149,7 @@ func (s *TunnelService) Restart(ctx context.Context, options string) error {
 		}
 		return nil
 	}
+	span.SetAttributes(attribute.String("path", "direct"))
 
 	defer s.mu.Unlock()
 	if err := s.close(); err != nil {
