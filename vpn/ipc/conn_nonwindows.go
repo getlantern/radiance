@@ -48,7 +48,7 @@ func listen() (net.Listener, error) {
 		Listener: listener,
 		path:     path,
 	}
-	// ensure listener is closed
+	// Close the listener when the socket wrapper is garbage-collected.
 	runtime.AddCleanup(socket, func(ll *net.UnixListener) {
 		ll.Close()
 	}, listener)
@@ -84,10 +84,48 @@ func getConnPeer(conn net.Conn) (p usr, err error) {
 	}
 
 	uidStr := strconv.FormatUint(uint64(uid), 10)
+	peer, err := getPeerUser(uid, uidStr)
+	if err != nil {
+		return p, err
+	}
+	return peer, nil
+}
+
+func linuxUserInControlGroup(u *user.User) (bool, error) {
+	controlGroupGID, err := controlGroupGID()
+	if err != nil {
+		return false, err
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return false, fmt.Errorf("lookup groups for %s: %w", u.Username, err)
+	}
+	for _, gid := range gids {
+		if gid == controlGroupGID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func getPeerUser(uid uint32, uidStr string) (usr, error) {
 	u, err := user.LookupId(uidStr)
 	if err != nil {
-		return p, fmt.Errorf("lookup user id %v: %w", uid, err)
+		return usr{}, fmt.Errorf("lookup user id %v: %w", uid, err)
 	}
+
+	if runtime.GOOS == "linux" {
+		inControlGroup, err := linuxUserInControlGroup(u)
+		if err != nil {
+			return usr{}, err
+		}
+		return usr{
+			uid:            uidStr,
+			uname:          u.Username,
+			inControlGroup: inControlGroup,
+		}, nil
+	}
+
 	return usr{
 		uid:     uidStr,
 		uname:   u.Username,
