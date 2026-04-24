@@ -697,6 +697,15 @@ func (r *LocalBackend) RestartVPN() error {
 }
 
 func (r *LocalBackend) SelectServer(tag string) error {
+	// Normalize up-front so the post-vpnClient settings branch below picks the
+	// auto path instead of falling through to the manual-tag srvManager lookup
+	// (which would reject "" with "no server found with tag"). Mirrors the
+	// same normalization in LocalBackend.ConnectVPN above. VPNClient.SelectServer
+	// already treats "" as AutoSelectTag internally (fac9089); this aligns the
+	// outer wrapper with that behavior so callers can use either spelling.
+	if tag == "" {
+		tag = vpn.AutoSelectTag
+	}
 	if err := r.vpnClient.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
