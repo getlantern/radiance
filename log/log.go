@@ -13,6 +13,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -63,10 +64,10 @@ func NewLogger(cfg Config) *slog.Logger {
 	slog.SetLogLoggerLevel(slevel)
 	leveler := settingsLeveler{fallback: slevel}
 
-	// lumberjack will create the log file if it does not exist with permissions 0600 otherwise it
-	// carries over the existing permissions. So we create it here with 0644 so we don't need root/admin
-	// privileges or chown/chmod to read it.
-	f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	// lumberjack creates the log file with 0600 if it does not exist, otherwise it carries over
+	// the existing permissions. Pre-create with [fileperm.File] so the platform-appropriate mode is
+	// applied.
+	f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, fileperm.File)
 	if err != nil {
 		slog.Warn("Failed to pre-create log file", "error", err, "path", cfg.LogPath)
 	} else {

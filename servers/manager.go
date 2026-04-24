@@ -29,6 +29,7 @@ import (
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
@@ -420,7 +421,7 @@ func (m *Manager) saveServers() error {
 	}
 
 	writeStart := time.Now()
-	werr := atomicfile.WriteFile(m.serversFile, buf, 0644)
+	werr := atomicfile.WriteFile(m.serversFile, buf, fileperm.File)
 	writeDur := time.Since(writeStart)
 
 	total := time.Since(start)

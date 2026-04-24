@@ -18,6 +18,7 @@ import (
 	"github.com/sagernet/sing/common/json"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 )
@@ -298,7 +299,7 @@ func (s *SplitTunnel) saveToFile() error {
 	if err != nil {
 		return fmt.Errorf("marshalling rule set: %w", err)
 	}
-	if err := atomicfile.WriteFile(s.ruleFile, buf, 0644); err != nil {
+	if err := atomicfile.WriteFile(s.ruleFile, buf, fileperm.File); err != nil {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
 	return nil

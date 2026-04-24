@@ -15,6 +15,7 @@ import (
 
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
@@ -219,7 +220,7 @@ func (a *Client) SignupEmailConfirmation(ctx context.Context, email, code string
 }
 
 func writeSalt(salt []byte, path string) error {
-	if err := os.WriteFile(path, salt, 0600); err != nil {
+	if err := os.WriteFile(path, salt, fileperm.File); err != nil {
 		return fmt.Errorf("writing salt to %s: %w", path, err)
 	}
 	return nil

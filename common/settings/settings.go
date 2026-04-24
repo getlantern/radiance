@@ -18,6 +18,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 )
 
 type _key string
@@ -229,7 +230,7 @@ func save() error {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
 	}
 
-	err = atomicfile.WriteFile(k.filePath, out, 0644)
+	err = atomicfile.WriteFile(k.filePath, out, fileperm.File)
 	if err != nil {
 		return fmt.Errorf("could not write koanf file: %w", err)
 	}
