@@ -1,0 +1,59 @@
+name: Refresh embedded fronted.yaml.gz
+
+# kindling/fronted/fronted.yaml.gz is the last-resort fallback config used
+# when both the live fetch and on-disk cache miss. The canonical copy lives
+# in getlantern/fronted and is updated daily by an external pipeline. Mirror
+# that here so a fresh install bootstrap doesn't fall back to a stale copy.
+
+on:
+  schedule:
+    # Run a few hours after the upstream daily commit (~00:15 UTC).
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest fronted.yaml.gz
+        run: |
+          curl -fsSL \
+            -o kindling/fronted/fronted.yaml.gz.new \
+            https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz
+          gzip -t kindling/fronted/fronted.yaml.gz.new
+          test -s kindling/fronted/fronted.yaml.gz.new
+
+      - name: Diff and replace
+        id: diff
+        run: |
+          if cmp -s kindling/fronted/fronted.yaml.gz.new kindling/fronted/fronted.yaml.gz; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            rm kindling/fronted/fronted.yaml.gz.new
+          else
+            mv kindling/fronted/fronted.yaml.gz.new kindling/fronted/fronted.yaml.gz
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "fronted: refresh embedded fronted.yaml.gz"
+          branch: chore/refresh-fronted-config
+          delete-branch: true
+          title: "fronted: refresh embedded fronted.yaml.gz"
+          body: |
+            Automated refresh of `kindling/fronted/fronted.yaml.gz` from
+            https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz.
+
+            The embedded copy is the last-resort fallback when the live
+            fetch and on-disk cache both miss. Keeping it close to upstream
+            so fresh installs in blocked-network conditions bootstrap on
+            something recent.
+          labels: dependencies
