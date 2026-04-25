@@ -35,6 +35,7 @@ const (
 	// Application behavior related keys.
 	TelemetryKey           _key = "telemetry_enabled"     // bool
 	ConfigFetchDisabledKey _key = "config_fetch_disabled" // bool
+	FeatureOverridesKey    _key = "feature_overrides"     // string
 
 	// User account related keys.
 	EmailKey         _key = "email"          // string

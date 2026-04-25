@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -87,11 +88,27 @@ type Options struct {
 	// User choice for telemetry consent
 	TelemetryConsent  bool
 	PlatformInterface vpn.PlatformInterface
+	// EnvOverrides are applied via os.Setenv before common.Init so sandboxed
+	// system extensions (macOS/iOS), which don't inherit shell env, still see
+	// RADIANCE_* vars from the host process. Entries are set verbatim — no
+	// filtering.
+	EnvOverrides map[string]string
 }
 
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
+	// Must run before common.Init: it reads RADIANCE_VERSION once and
+	// freezes it, so a later Setenv is ignored by the header-fill path.
+	var envOverrideErrs error
+	for k, v := range opts.EnvOverrides {
+		if err := os.Setenv(k, v); err != nil {
+			envOverrideErrs = errors.Join(envOverrideErrs, fmt.Errorf("apply env override %q: %w", k, err))
+		}
+	}
+	if envOverrideErrs != nil {
+		return nil, fmt.Errorf("failed to apply environment overrides: %w", envOverrideErrs)
+	}
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize common components: %w", err)
 	}
@@ -136,6 +153,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		return nil, fmt.Errorf("failed to create split tunnel manager: %w", err)
 	}
 
+	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
 		Locale:        opts.Locale,
@@ -143,13 +162,6 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		HTTPClient:    kindling.HTTPClient(),
 		Logger:        slog.Default().With("service", "config_handler"),
 	}
-	if disableFetch {
-		cOpts.PollInterval = -1
-		slog.Info("Config fetch disabled via environment variable", "env_var", env.DisableFetch)
-	}
-
-	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
-	ctx, cancel := context.WithCancel(ctx)
 	r := &LocalBackend{
 		ctx:            ctx,
 		cancel:         cancel,
@@ -160,7 +172,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		vpnClient:      vpnClient,
 		splitTunnelMgr: splitTunnelMgr,
 		shutdownFuncs: []func() error{
-			telemetry.Close, kindling.Close, vpnClient.Close,
+			telemetry.Close, kindling.Close,
 		},
 		stopChan:  make(chan struct{}),
 		closeOnce: sync.Once{},
@@ -194,10 +206,13 @@ func (r *LocalBackend) Start() {
 		}
 	}
 	r.startVPNStatusListeners()
-	r.StartAutoSelectedListener()
+	r.startAutoSelectedListener()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
+		if env.GetString(env.Country) != "" {
+			return // respect env override if set
+		}
 		if evt.New != nil && evt.New.Country != "" {
 			if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
 				slog.Error("failed to set country code in settings", "error", err)
@@ -357,6 +372,12 @@ func baseIssueAttachments() []string {
 /////////////////
 //  Settings   //
 /////////////////
+
+// UpdateConfig forces an immediate fetch of the latest configuration. It returns
+// [config.ErrConfigFetchDisabled] if config fetching is disabled in settings.
+func (r *LocalBackend) UpdateConfig() error {
+	return r.confHandler.Update()
+}
 
 // Features returns the features available in the current configuration, returned from the server in the
 // config response.
@@ -630,7 +651,7 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 	if err := r.vpnClient.Connect(bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
-	if err := r.selectServer(tag); err != nil {
+	if err := r.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
 	return nil
@@ -676,10 +697,15 @@ func (r *LocalBackend) RestartVPN() error {
 }
 
 func (r *LocalBackend) SelectServer(tag string) error {
-	return r.selectServer(tag)
-}
-
-func (r *LocalBackend) selectServer(tag string) error {
+	// Normalize up-front so the post-vpnClient settings branch below picks the
+	// auto path instead of falling through to the manual-tag srvManager lookup
+	// (which would reject "" with "no server found with tag"). Mirrors the
+	// same normalization in LocalBackend.ConnectVPN above. VPNClient.SelectServer
+	// already treats "" as AutoSelectTag internally (fac9089); this aligns the
+	// outer wrapper with that behavior so callers can use either spelling.
+	if tag == "" {
+		tag = vpn.AutoSelectTag
+	}
 	if err := r.vpnClient.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
@@ -769,9 +795,24 @@ func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
 	return r.vpnClient.CurrentAutoSelectedServer()
 }
 
-// StartAutoSelectedListener starts polling for auto-selection changes and emitting events.
-func (r *LocalBackend) StartAutoSelectedListener() {
-	r.vpnClient.AutoSelectedChangeListener(r.ctx)
+func (r *LocalBackend) startAutoSelectedListener() {
+	var (
+		mu     sync.Mutex
+		cancel context.CancelFunc
+	)
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cancel != nil {
+			cancel()
+			cancel = nil
+		}
+		if evt.Status == vpn.Connected {
+			var ctx context.Context
+			ctx, cancel = context.WithCancel(r.ctx)
+			r.vpnClient.AutoSelectedChangeListener(ctx)
+		}
+	})
 }
 
 func (r *LocalBackend) RunOfflineURLTests() error {
@@ -796,6 +837,12 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	}
 	if len(urlResults) > 0 {
 		r.srvManager.UpdateURLTestResults(urlResults)
+		selected, err := r.vpnClient.CurrentAutoSelectedServer()
+		if err != nil {
+			slog.Warn("Failed to get current auto-selected server after URL tests", "error", err)
+		} else {
+			events.Emit(vpn.AutoSelectedEvent{Selected: selected})
+		}
 	}
 	return nil
 }

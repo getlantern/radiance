@@ -121,7 +121,7 @@ func (a *Client) sendRequest(
 		req.Header.Set(k, v)
 	}
 	req.Header.Set(common.AppNameHeader, common.Name)
-	req.Header.Set(common.VersionHeader, common.Version)
+	req.Header.Set(common.VersionHeader, common.GetVersion())
 	req.Header.Set(common.PlatformHeader, common.Platform)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)

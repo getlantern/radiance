@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
@@ -28,7 +29,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
-
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -70,12 +70,21 @@ type VPNClient struct {
 	offlineTestCancel context.CancelFunc
 	offlineTestDone   chan struct{}
 
+	status atomic.Value // VPNStatus
+
 	mu sync.RWMutex
 }
 
+// PlatformInterface defines the methods to interact with platform-specific services
 type PlatformInterface interface {
 	libbox.PlatformInterface
+	// RestartService is called when the VPNClient wants to restart the tunnel instead of direct
+	// disconnect/reconnect. This allows platforms to perform any necessary extra steps to restart
+	// the tunnel. RestartService should block until the tunnel has been restarted and is ready for
+	// use, or return an error if restart fails.
 	RestartService() error
+	// PostServiceClose is called after the tunnel has been closed. This allows platforms to perform
+	// any necessary cleanup.
 	PostServiceClose()
 }
 
@@ -88,12 +97,14 @@ func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInt
 	_ = newSplitTunnel(dataPath, logger)
 	done := make(chan struct{})
 	close(done)
-	return &VPNClient{
+	c := &VPNClient{
 		platformIfce:      platformIfce,
 		logger:            logger,
 		offlineTestCancel: func() {},
 		offlineTestDone:   done,
 	}
+	c.status.Store(Disconnected)
+	return c
 }
 
 func (c *VPNClient) Connect(boxOptions BoxOptions) error {
@@ -114,7 +125,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel != nil {
-		switch status := c.tunnel.Status(); status {
+		switch status := c.Status(); status {
 		case Connected:
 			return ErrTunnelAlreadyConnected
 		case Restarting, Connecting, Disconnecting:
@@ -135,34 +146,32 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	return traces.RecordError(ctx, c.start(boxOptions.BasePath, string(opts)))
+	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts), false))
 }
 
-func (c *VPNClient) start(path, options string) error {
-	c.logger.Debug("Starting tunnel", "options", options)
-	t := tunnel{
-		dataPath: path,
-	}
-	if err := t.start(options, c.platformIfce); err != nil {
-		return fmt.Errorf("failed to start tunnel: %w", err)
-	}
-	c.tunnel = &t
-	return nil
-}
-
-// Close shuts down the currently running tunnel, if any. Returns an error if closing the tunnel fails.
-func (c *VPNClient) Close() error {
+// Disconnect closes the tunnel and all active connections.
+func (c *VPNClient) Disconnect() error {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
+	defer span.End()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel == nil {
 		return nil
 	}
-	if err := c.close(); err != nil {
+	c.logger.Info("Disconnecting VPN")
+	return traces.RecordError(ctx, c.close())
+}
+
+func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool) error {
+	c.logger.Debug("Starting tunnel", "options", options)
+	c.setStatus(Connecting, nil)
+	t := tunnel{dataPath: path}
+	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
+		c.setStatus(ErrorStatus, err)
 		return err
 	}
-	if c.platformIfce != nil {
-		c.platformIfce.PostServiceClose()
-	}
+	c.tunnel = &t
+	c.setStatus(Connected, nil)
 	return nil
 }
 
@@ -171,8 +180,14 @@ func (c *VPNClient) close() error {
 	c.tunnel = nil
 
 	c.logger.Info("Closing tunnel")
+	c.setStatus(Disconnecting, nil)
 	if err := t.close(); err != nil {
+		c.setStatus(ErrorStatus, err)
 		return err
+	}
+	c.setStatus(Disconnected, nil)
+	if c.platformIfce != nil {
+		c.platformIfce.PostServiceClose()
 	}
 	c.logger.Debug("Tunnel closed")
 	runtime.GC()
@@ -182,66 +197,53 @@ func (c *VPNClient) close() error {
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
 func (c *VPNClient) Restart(boxOptions BoxOptions) error {
+	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "VPNClient.Restart")
+	defer span.End()
+
 	c.mu.Lock()
-	if c.tunnel == nil || c.tunnel.Status() != Connected {
+	if c.tunnel == nil || c.Status() != Connected {
 		c.mu.Unlock()
 		return ErrTunnelNotConnected
 	}
 
-	t := c.tunnel
+	c.setStatus(Restarting, nil)
 	c.logger.Info("Restarting tunnel")
-	t.setStatus(Restarting, nil)
+
 	if c.platformIfce != nil {
+		span.SetAttributes(attribute.String("path", "platform_ifce"))
 		c.mu.Unlock()
 		if err := c.platformIfce.RestartService(); err != nil {
 			c.logger.Error("Failed to restart tunnel via platform interface", "error", err)
 			err = fmt.Errorf("platform interface restart failed: %w", err)
-			t.setStatus(ErrorStatus, err)
-			return err
+			c.setStatus(ErrorStatus, err)
+			return traces.RecordError(ctx, err)
 		}
 		c.logger.Info("Tunnel restarted successfully")
 		return nil
 	}
+	span.SetAttributes(attribute.String("path", "direct"))
 
 	defer c.mu.Unlock()
 	if err := c.close(); err != nil {
-		return fmt.Errorf("closing tunnel: %w", err)
+		return traces.RecordError(ctx, fmt.Errorf("closing tunnel: %w", err))
 	}
 	options, err := buildOptions(boxOptions)
 	if err != nil {
-		return fmt.Errorf("failed to build options: %w", err)
+		c.setStatus(ErrorStatus, err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
 	opts, err := sbjson.Marshal(options)
 	if err != nil {
-		return fmt.Errorf("failed to marshal options: %w", err)
+		c.setStatus(ErrorStatus, err)
+		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	if err := c.start(boxOptions.BasePath, string(opts)); err != nil {
+	if err := c.start(ctx, boxOptions.BasePath, string(opts), true); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
-		return fmt.Errorf("starting tunnel: %w", err)
+		// c.start already set ErrorStatus; the guard lets Restarting→ErrorStatus through.
+		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
 	}
 	c.logger.Info("Tunnel restarted successfully")
 	return nil
-}
-
-// Status returns the current status of the tunnel (e.g., running, closed).
-func (c *VPNClient) Status() VPNStatus {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.tunnel == nil {
-		return Disconnected
-	}
-	return c.tunnel.Status()
-}
-
-// HistoryStorage returns the URL test history storage from the tunnel's clash server,
-// or nil if the tunnel is not connected.
-func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.tunnel == nil {
-		return nil
-	}
-	return c.tunnel.clashServer.HistoryStorage()
 }
 
 // isOpen returns true if the tunnel is open, false otherwise.
@@ -250,24 +252,47 @@ func (c *VPNClient) isOpen() bool {
 	return c.Status() == Connected
 }
 
-// Disconnect closes the tunnel and all active connections.
-func (c *VPNClient) Disconnect() error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "disconnect")
-	defer span.End()
-	c.logger.Info("Disconnecting VPN")
-	return traces.RecordError(ctx, c.Close())
+// Status returns the current status of the tunnel (e.g., running, closed).
+func (c *VPNClient) Status() VPNStatus {
+	s, _ := c.status.Load().(VPNStatus)
+	return s
 }
 
-// SelectServer changes the currently selected server to the one specified by tag. If tag is AutoSelectTag,
-// the tunnel will switch to auto-select mode and automatically choose the best server.
+// setStatus stores and emits a status event. If the current status is Restarting, only allow
+// transitions to Connected or ErrorStatus to avoid emitting intermediate states during a restart.
+func (c *VPNClient) setStatus(s VPNStatus, err error) {
+	if cur, _ := c.status.Load().(VPNStatus); cur == Restarting && s != Connected && s != ErrorStatus {
+		return
+	}
+	c.status.Store(s)
+	evt := StatusUpdateEvent{Status: s}
+	if err != nil {
+		evt.Error = err.Error()
+	}
+	events.Emit(evt)
+}
+
+// HistoryStorage returns the tunnel's URL test history storage or nil if the tunnel is not connected.
+func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.urltestHistory
+}
+
+// SelectServer changes the currently selected server to the one specified by tag. If tag is
+// AutoSelectTag or the empty string, the tunnel will switch to auto-select mode and automatically
+// choose the best server.
 func (c *VPNClient) SelectServer(tag string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.tunnel == nil || c.tunnel.Status() != Connected {
+	if c.tunnel == nil || c.Status() != Connected {
 		return ErrTunnelNotConnected
 	}
 	t := c.tunnel
-	if tag == AutoSelectTag {
+	if tag == AutoSelectTag || tag == "" {
 		return c.tunnel.selectMode(AutoSelectTag)
 	}
 
@@ -534,9 +559,9 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	return results, nil
 }
 
-// ClearNetErrorState attempts to clear any error state left by a previous unclean shutdown, such
+// AttemptFixNetState attempts to clear any error state left by a previous unclean shutdown, such
 // as from a crash. No errors are returned and this fails silently.
-func ClearNetErrorState() {
+func AttemptFixNetState() {
 	options := baseOpts("")
 	options = option.Options{
 		DNS:      options.DNS,

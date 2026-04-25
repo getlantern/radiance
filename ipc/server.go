@@ -18,6 +18,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/vpn"
@@ -41,6 +42,10 @@ const (
 	serverSelectedEndpoint           = "/server/selected"
 	serverAutoSelectedEndpoint       = "/server/auto-selected"
 	serverAutoSelectedEventsEndpoint = "/server/auto-selected/events"
+
+	// Config endpoints
+	configEventsEndpoint = "/config/events"
+	configUpdateEndpoint = "/config/update"
 
 	// Server management endpoints
 	serversEndpoint              = "/servers"
@@ -199,6 +204,8 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc(serverSelectedEndpoint, traced(s.serverSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEndpoint, traced(s.serverAutoSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEventsEndpoint, s.serverAutoSelectedEventsHandler)
+	mux.HandleFunc("GET "+configEventsEndpoint, s.configEventsHandler)
+	mux.HandleFunc("POST "+configUpdateEndpoint, traced(s.configUpdateHandler))
 
 	// Server management
 	mux.HandleFunc("GET "+serversEndpoint, traced(s.serversHandler))
@@ -474,6 +481,46 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 	}
 }
 
+func (s *localapi) configUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend(r.Context()).UpdateConfig(); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, config.ErrConfigFetchDisabled) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// configEventsHandler streams a notification on every config.NewConfigEvent.
+// The payload is always "{}" — subscribers only need to know a change
+// occurred and fetch fresh state through the other GET endpoints, so we don't
+// serialize the (potentially large) full Config.
+func (s *localapi) configEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan struct{}, 16)
+	sub := events.Subscribe(func(evt config.NewConfigEvent) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case <-ch:
+			fmt.Fprint(w, "data: {}\n\n")
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 ///////////////////////
 // Server management //
 ///////////////////////
@@ -621,6 +668,18 @@ func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		for k, v := range updates {
 			env.Set(k, v)
+			switch k {
+			case env.Country.String():
+				if err := settings.Set(settings.CountryCodeKey, v); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			case env.FeatureOverrides.String():
+				if err := settings.Set(settings.FeatureOverridesKey, v); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
 		}
 		fallthrough
 	case http.MethodGet:

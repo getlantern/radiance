@@ -69,7 +69,7 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		Version = v
 		slog.Info("Version overridden via RADIANCE_VERSION", "version", Version)
 	}
-	reporting.Init(Version)
+	reporting.Init(GetVersion())
 	data, logs, err := setupDirectories(dataDir, logDir)
 	if err != nil {
 		return fmt.Errorf("failed to setup directories: %w", err)
@@ -81,7 +81,12 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 
 	settings.Set(settings.DataPathKey, data)
 	settings.Set(settings.LogPathKey, logs)
-	settings.Set(settings.LogLevelKey, logLevel)
+	// env override wins; otherwise preserve any persisted value; otherwise seed from the arg.
+	if v := env.GetString(env.LogLevel); v != "" {
+		settings.Set(settings.LogLevelKey, v)
+	} else if !settings.Exists(settings.LogLevelKey) {
+		settings.Set(settings.LogLevelKey, logLevel)
+	}
 
 	logger := log.NewLogger(log.Config{
 		LogPath: filepath.Join(logs, internal.LogFileName),

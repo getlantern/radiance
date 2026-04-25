@@ -1,6 +1,18 @@
 {
 	"smart_routing": [
 		{
+			"category": "direct",
+			"rule_sets": [
+				{
+					"tag": "sr-direct",
+					"url": "https://ruleset.com/direct.srs"
+				}
+			],
+			"outbounds": [
+				"direct"
+			]
+		},
+		{
 			"category": "openai",
 			"rule_sets": [
 				{

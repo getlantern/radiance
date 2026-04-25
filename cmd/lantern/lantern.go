@@ -23,10 +23,10 @@ type args struct {
 	Status       *StatusCmd       `arg:"subcommand:status" help:"show VPN status"`
 	Servers      *ServersCmd      `arg:"subcommand:servers" help:"manage servers"`
 	Features     *FeaturesCmd     `arg:"subcommand:features" help:"list available features and their status"`
-	SmartRouting *SmartRoutingCmd `arg:"subcommand:smart-routing" help:"show or set smart routing"`
-	AdBlock      *AdBlockCmd      `arg:"subcommand:ad-block" help:"show or set ad blocking"`
-	Telemetry    *TelemetryCmd    `arg:"subcommand:telemetry" help:"show or set telemetry"`
-	SplitTunnel  *SplitTunnelCmd  `arg:"subcommand:split-tunnel" help:"split-tunnel settings and filters"`
+	Set          *SetCmd          `arg:"subcommand:set" help:"update one or more settings"`
+	Get          *GetCmd          `arg:"subcommand:get" help:"show one or all settings"`
+	UpdateConfig *UpdateConfigCmd `arg:"subcommand:update-config" help:"force an immediate config fetch"`
+	SplitTunnel  *SplitTunnelCmd  `arg:"subcommand:split-tunnel" help:"split-tunnel filter management"`
 	Account      *AccountCmd      `arg:"subcommand:account" help:"login, signup, user data, devices, recovery"`
 	Subscription *SubscriptionCmd `arg:"subcommand:subscription" help:"plans, payments, and billing"`
 	ReportIssue  *ReportIssueCmd  `arg:"subcommand:report-issue" help:"report an issue"`
@@ -97,12 +97,12 @@ func run(ctx context.Context, c *ipc.Client, a *args) error {
 		return runServers(ctx, c, a.Servers)
 	case a.Features != nil:
 		return runFeatures(ctx, c)
-	case a.SmartRouting != nil:
-		return runSmartRouting(ctx, c, a.SmartRouting)
-	case a.AdBlock != nil:
-		return runAdBlock(ctx, c, a.AdBlock)
-	case a.Telemetry != nil:
-		return runTelemetry(ctx, c, a.Telemetry)
+	case a.Set != nil:
+		return runSet(ctx, c, a.Set)
+	case a.Get != nil:
+		return runGet(ctx, c, a.Get)
+	case a.UpdateConfig != nil:
+		return runUpdateConfig(ctx, c)
 	case a.SplitTunnel != nil:
 		return runSplitTunnel(ctx, c, a.SplitTunnel)
 	case a.Account != nil:

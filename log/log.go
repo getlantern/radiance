@@ -13,6 +13,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 const (
@@ -45,7 +46,13 @@ type Config struct {
 // and optionally to stdout.
 // Returns noop logger if log level is set to disable.
 func NewLogger(cfg Config) *slog.Logger {
-	level := env.GetString(env.LogLevel)
+	if env.GetBool(env.Testing) {
+		return NoOpLogger()
+	}
+	level := settings.GetString(settings.LogLevelKey)
+	if level == "" {
+		level = env.GetString(env.LogLevel)
+	}
 	if level == "" && cfg.Level != "" {
 		level = cfg.Level
 	}
@@ -54,9 +61,7 @@ func NewLogger(cfg Config) *slog.Logger {
 		slog.Warn("Failed to parse log level", "error", err)
 	}
 	slog.SetLogLoggerLevel(slevel)
-	if slevel == Disable {
-		return NoOpLogger()
-	}
+	leveler := settingsLeveler{fallback: slevel}
 
 	// lumberjack will create the log file if it does not exist with permissions 0600 otherwise it
 	// carries over the existing permissions. So we create it here with 0644 so we don't need root/admin
@@ -100,7 +105,7 @@ func NewLogger(cfg Config) *slog.Logger {
 	}
 	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		AddSource: true,
-		Level:     slevel,
+		Level:     leveler,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {
 			case slog.TimeKey:
@@ -172,6 +177,21 @@ type Handler struct {
 
 func (h *Handler) Writer() io.Writer {
 	return h.w
+}
+
+// settingsLeveler reads the current log level from settings on each call,
+// so changes to settings.LogLevelKey take effect without rebuilding the logger.
+type settingsLeveler struct {
+	fallback slog.Level
+}
+
+func (s settingsLeveler) Level() slog.Level {
+	if v := settings.GetString(settings.LogLevelKey); v != "" {
+		if lvl, err := ParseLogLevel(v); err == nil {
+			return lvl
+		}
+	}
+	return s.fallback
 }
 
 // ParseLogLevel parses a string representation of a log level and returns the corresponding slog.Level.

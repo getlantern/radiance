@@ -7,41 +7,45 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
-	"sync/atomic"
 	"time"
-
-	lsync "github.com/getlantern/common/sync"
-	box "github.com/getlantern/lantern-box"
-
-	lbA "github.com/getlantern/lantern-box/adapter"
-	"github.com/getlantern/lantern-box/adapter/groups"
-	lblog "github.com/getlantern/lantern-box/log"
-	"github.com/getlantern/lantern-box/tracker/clientcontext"
-
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/events"
-	rlog "github.com/getlantern/radiance/log"
-	"github.com/getlantern/radiance/servers"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
+	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/clashapi"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	lsync "github.com/getlantern/common/sync"
+	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/getlantern/lantern-box/adapter/groups"
+	lblog "github.com/getlantern/lantern-box/log"
+	"github.com/getlantern/lantern-box/tracker/clientcontext"
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling"
+	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/servers"
 )
 
 type tunnel struct {
-	ctx         context.Context
-	lbService   *libbox.BoxService
-	clashServer *clashapi.Server
-	logFactory  sblog.ObservableFactory
+	ctx            context.Context
+	lbService      *libbox.BoxService
+	clashServer    *clashapi.Server
+	urltestHistory adapter.URLTestHistoryStorage
+	logFactory     sblog.ObservableFactory
 
 	dataPath string
 
@@ -53,39 +57,63 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
-	status  atomic.Value // VPNStatus
 	cancel  context.CancelFunc
 	closers []io.Closer
 }
 
-func (t *tunnel) start(options string, platformIfce libbox.PlatformInterface) (err error) {
-	if t.status.Load() != Restarting {
-		t.setStatus(Connecting, nil)
-	}
-	t.ctx, t.cancel = context.WithCancel(box.BaseContext())
-	defer func() {
-		if err != nil {
-			t.setStatus(ErrorStatus, err)
-		}
-	}()
+func (t *tunnel) start(ctx context.Context, options string, platformIfce libbox.PlatformInterface, isRestart bool) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.start",
+		trace.WithAttributes(
+			attribute.Int("options_size", len(options)),
+			attribute.String("platform", common.Platform),
+			attribute.Bool("is_restart", isRestart),
+		))
+	defer span.End()
 
-	if err := t.init(options, platformIfce); err != nil {
+	// Unbounded signaling must dial freddie outside the VPN tunnel or it
+	// recursively re-enters itself. streamingRoundTripper forces kindling to
+	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
+	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	t.ctx, t.cancel = context.WithCancel(baseCtx)
+
+	if err := t.init(ctx, options, platformIfce); err != nil {
 		t.close()
 		slog.Error("Failed to initialize tunnel", "error", err)
 		return fmt.Errorf("initializing tunnel: %w", err)
 	}
 
-	if err := t.connect(); err != nil {
+	if err := t.connect(ctx); err != nil {
 		t.close()
 		slog.Error("Failed to connect tunnel", "error", err)
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
-	t.setStatus(Connected, nil)
 	t.optsMap = makeOutboundOptsMap(t.ctx, options)
 	return nil
 }
 
-func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) error {
+// traceSpan wraps fn in a child span of the caller's context and records any
+// error on the child span so failures show up per-phase in the trace.
+func traceSpan(ctx context.Context, name string, fn func() error) error {
+	_, span := otel.Tracer(tracerName).Start(ctx, name)
+	defer span.End()
+	err := fn()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.PlatformInterface) (err error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
 	// setup libbox service
@@ -102,16 +130,29 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 	}
 
 	slog.Log(nil, rlog.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
-	if err := libbox.Setup(setupOpts); err != nil {
+	if err := traceSpan(ctx, "libbox.Setup", func() error {
+		return libbox.Setup(setupOpts)
+	}); err != nil {
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
+	t.urltestHistory = service.FromContext[adapter.URLTestHistoryStorage](t.ctx)
+	if t.urltestHistory == nil {
+		t.urltestHistory = urltest.NewHistoryStorage()
+		service.MustRegister[adapter.URLTestHistoryStorage](t.ctx, t.urltestHistory)
+		t.closers = append(t.closers, t.urltestHistory)
+	}
+
 	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
-	lb, err := libbox.NewServiceWithContext(t.ctx, options, platformIfce)
-	if err != nil {
+	var lb *libbox.BoxService
+	if err := traceSpan(ctx, "libbox.NewServiceWithContext", func() error {
+		var err error
+		lb, err = libbox.NewServiceWithContext(t.ctx, options, platformIfce)
+		return err
+	}); err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
 
@@ -125,11 +166,6 @@ func (t *tunnel) init(options string, platformIfce libbox.PlatformInterface) err
 
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
-
-	// history := service.PtrFromContext[urltest.HistoryStorage](t.ctx)
-	// if err := loadURLTestHistory(history, filepath.Join(dataPath, urlTestHistoryFileName)); err != nil {
-	// 	return fmt.Errorf("load urltest history: %w", err)
-	// }
 
 	// set memory limit for Android and iOS
 	switch common.Platform {
@@ -151,7 +187,7 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			Platform:    common.Platform,
 			IsPro:       settings.IsPro(),
 			CountryCode: settings.GetString(settings.CountryCodeKey),
-			Version:     common.Version,
+			Version:     common.GetVersion(),
 		}
 	}
 	// Outbound match bounds start empty and are populated when lantern servers are added via
@@ -183,7 +219,16 @@ func newMutableGroupManager(
 	return groups.NewMutableGroupManager(logger, oMgr, epMgr, connMgr, mutGroups), nil
 }
 
-func (t *tunnel) connect() (err error) {
+func (t *tunnel) connect(ctx context.Context) (err error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.connect")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	slog.Log(nil, rlog.LevelTrace, "Starting libbox service")
 
 	defer func() {
@@ -192,7 +237,9 @@ func (t *tunnel) connect() (err error) {
 			err = fmt.Errorf("panic starting libbox service: %v", r)
 		}
 	}()
-	if err := t.lbService.Start(); err != nil {
+	if err := traceSpan(ctx, "libbox.BoxService.Start", func() error {
+		return t.lbService.Start()
+	}); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
@@ -201,22 +248,30 @@ func (t *tunnel) connect() (err error) {
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 
-	mutGrpMgr, err := newMutableGroupManager(
-		t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
-	)
-	if err != nil {
+	var mutGrpMgr *groups.MutableGroupManager
+	if err := traceSpan(ctx, "newMutableGroupManager", func() error {
+		var err error
+		mutGrpMgr, err = newMutableGroupManager(
+			t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
+		)
+		return err
+	}); err != nil {
 		t.close()
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
 	t.mutGrpMgr = mutGrpMgr
+	// Prepend: mgm's removalQueue reads from libbox-managed state, so close it first.
+	t.closers = append([]io.Closer{
+		closerFunc(func() error { mutGrpMgr.Close(); return nil }),
+	}, t.closers...)
 
 	slog.Info("Tunnel connection established")
 	return nil
 }
 
 func (t *tunnel) selectMode(mode string) error {
-	if status := t.Status(); status != Connected {
-		return fmt.Errorf("tunnel not running: status %v", status)
+	if t.lbService == nil {
+		return fmt.Errorf("tunnel not running")
 	}
 
 	if t.clashServer.Mode() != mode {
@@ -245,9 +300,6 @@ func (t *tunnel) selectOutbound(tag string) error {
 }
 
 func (t *tunnel) close() error {
-	if t.status.Load() != Restarting {
-		t.setStatus(Disconnecting, nil)
-	}
 	if t.cancel != nil {
 		t.cancel()
 	}
@@ -270,23 +322,7 @@ func (t *tunnel) close() error {
 
 	t.closers = nil
 	t.lbService = nil
-	if t.status.Load() != Restarting {
-		t.setStatus(Disconnected, nil)
-	}
 	return err
-}
-
-func (t *tunnel) Status() VPNStatus {
-	return t.status.Load().(VPNStatus)
-}
-
-func (t *tunnel) setStatus(status VPNStatus, err error) {
-	t.status.Store(status)
-	evt := StatusUpdateEvent{Status: status}
-	if err != nil {
-		evt.Error = err.Error()
-	}
-	events.Emit(evt)
 }
 
 var errLibboxClosed = errors.New("libbox closed")
@@ -558,6 +594,10 @@ func makeOutboundOptsMap(ctx context.Context, options string) *lsync.TypedMap[st
 	return &optsMap
 }
 
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
 func contextDone(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
@@ -565,4 +605,26 @@ func contextDone(ctx context.Context) bool {
 	default:
 		return false
 	}
+}
+
+// streamingRoundTripper defaults Accept to text/event-stream so kindling's
+// race pipeline drops non-streamable transports (AMP) that would otherwise
+// buffer freddie's long-poll body and break broflake's genesis subscription.
+type streamingRoundTripper struct {
+	inner http.RoundTripper
+}
+
+func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("Accept") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	resp, err := s.inner.RoundTrip(req)
+	if err != nil {
+		slog.Error("unbounded signaling RoundTrip error",
+			slog.String("url", req.URL.String()),
+			slog.Any("error", err))
+		return nil, err
+	}
+	return resp, nil
 }

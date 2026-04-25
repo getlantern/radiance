@@ -256,7 +256,7 @@ func (c *childProcess) WaitOrKill(timeout time.Duration) error {
 // HandleCrash cleans up stale VPN network state left by a crashed child.
 func (c *childProcess) HandleCrash(err error) {
 	c.logger.Warn("Daemon process exited unexpectedly, cleaning up network state", "error", err)
-	vpn.ClearNetErrorState()
+	vpn.AttemptFixNetState()
 }
 
 // babysit runs the daemon as a child process and monitors it. If the child exits unexpectedly

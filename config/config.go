@@ -45,6 +45,10 @@ var (
 	// ErrFetchingConfig is returned by [ConfigHandler.GetConfig] when if there was an error
 	// fetching the configuration.
 	ErrFetchingConfig = errors.New("failed to fetch config")
+
+	// ErrConfigFetchDisabled is returned by [ConfigHandler.Update] when config fetching
+	// is disabled via settings.
+	ErrConfigFetchDisabled = errors.New("config fetching is disabled")
 )
 
 // Config includes all configuration data from the Lantern API
@@ -63,25 +67,26 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config  atomic.Pointer[Config]
-	ftr     Fetcher
-	logger  *slog.Logger
-	options Options
+	config   atomic.Pointer[Config]
+	ftr      Fetcher
+	started  atomic.Bool
+	fetching atomic.Bool
+	logger   *slog.Logger
+	options  Options
 
-	ctx           context.Context
-	cancel        context.CancelFunc
-	fetchDisabled bool
-	pollInterval  time.Duration
-	configPath    string
-	wgKeyPath     string
-	startOnce sync.Once
+	ctx          context.Context
+	cancel       context.CancelFunc
+	pollInterval time.Duration
+	configPath   string
+	wgKeyPath    string
+	startOnce    sync.Once
 }
 
 // NewConfigHandler creates a new ConfigHandler that fetches the proxy configuration every pollInterval.
 func NewConfigHandler(ctx context.Context, options Options) *ConfigHandler {
 	ctx, cancel := context.WithCancel(ctx)
 	pollInterval := options.PollInterval
-	if pollInterval == 0 {
+	if pollInterval <= 0 {
 		pollInterval = defaultPollInterval
 	}
 	logger := options.Logger
@@ -90,14 +95,13 @@ func NewConfigHandler(ctx context.Context, options Options) *ConfigHandler {
 	}
 	dir := options.DataPath
 	ch := &ConfigHandler{
-		fetchDisabled: pollInterval < 0,
-		ctx:           ctx,
-		cancel:        cancel,
-		pollInterval:  pollInterval,
-		configPath:    filepath.Join(dir, internal.ConfigFileName),
-		wgKeyPath:     filepath.Join(dir, "wg.key"),
-		logger:        logger,
-		options:       options,
+		ctx:          ctx,
+		cancel:       cancel,
+		pollInterval: pollInterval,
+		configPath:   filepath.Join(dir, internal.ConfigFileName),
+		wgKeyPath:    filepath.Join(dir, "wg.key"),
+		logger:       logger,
+		options:      options,
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		ch.logger.Error("creating config directory", "error", err)
@@ -110,16 +114,15 @@ func NewConfigHandler(ctx context.Context, options Options) *ConfigHandler {
 
 func (ch *ConfigHandler) Start() {
 	ch.startOnce.Do(func() {
-		if !ch.fetchDisabled {
-			ch.ftr = newFetcher(ch.options.Locale, ch.options.AccountClient, ch.options.HTTPClient)
-			go ch.fetchLoop(ch.pollInterval)
-			events.Subscribe(func(evt account.UserChangeEvent) {
-				ch.logger.Debug("User change detected that requires config refetch")
-				if err := ch.fetchConfig(); err != nil {
-					ch.logger.Error("Failed to fetch config", "error", err)
-				}
-			})
-		}
+		ch.ftr = newFetcher(ch.options.Locale, ch.options.AccountClient, ch.options.HTTPClient)
+		ch.started.Store(true)
+		go ch.fetchLoop(ch.pollInterval)
+		events.Subscribe(func(evt account.UserChangeEvent) {
+			ch.logger.Debug("User change detected that requires config refetch")
+			if err := ch.fetchConfig(); err != nil {
+				ch.logger.Error("Failed to fetch config", "error", err)
+			}
+		})
 	})
 }
 
@@ -141,12 +144,18 @@ func (ch *ConfigHandler) loadWGKey() (wgtypes.Key, error) {
 }
 
 func (ch *ConfigHandler) fetchConfig() error {
-	if ch.fetchDisabled {
-		return fmt.Errorf("fetching config is disabled")
+	if settings.GetBool(settings.ConfigFetchDisabledKey) {
+		ch.logger.Info("config fetch disabled, skipping")
+		return nil
 	}
 	if ch.isClosed() {
 		return fmt.Errorf("config handler is closed")
 	}
+	if !ch.fetching.CompareAndSwap(false, true) {
+		ch.logger.Info("config fetch already in flight, skipping")
+		return nil
+	}
+	defer ch.fetching.Store(false)
 
 	privateKey, err := ch.loadWGKey()
 	if err != nil && !errors.Is(err, ErrNoWGKey) {
@@ -294,6 +303,18 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 		case <-time.After(interval):
 		}
 	}
+}
+
+// Update immediately fetches the latest config. It returns [ErrConfigFetchDisabled]
+// if config fetching is disabled in settings.
+func (ch *ConfigHandler) Update() error {
+	if settings.GetBool(settings.ConfigFetchDisabledKey) {
+		return ErrConfigFetchDisabled
+	}
+	if !ch.started.Load() {
+		return fmt.Errorf("config handler not started")
+	}
+	return ch.fetchConfig()
 }
 
 // Stop stops the ConfigHandler from fetching new configurations.

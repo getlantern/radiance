@@ -63,7 +63,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 				"type": "urltest",
 				"tag": "sr-openai",
 				"outbounds": ["http1-out", "socks1-out"],
-				"url": "https://google.com/generate_204", 
+				"url": "https://google.com/generate_204",
 				"interval": "3m0s",
 				"idle_timeout": "15m"
 			}
@@ -71,11 +71,22 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		"route": {
 			"rules": [
 				{
+					"rule_set": "sr-direct",
+					"outbound": "direct"
+				},
+				{
 					"rule_set": "openai",
 					"outbound": "sr-openai"
 				}
 			],
 			"rule_set": [
+				{
+				  "type": "remote",
+				  "tag": "sr-direct",
+				  "url": "https://ruleset.com/direct.srs",
+				  "download_detour": "direct",
+				  "update_interval": "24h0m0s"
+				},
 				{
 				  "type": "remote",
 				  "tag": "openai",
@@ -87,77 +98,54 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		}
 	}
 	`
-	adBlockJSON := `
-	{
-		"route": {
-			"rules": [
-				{
-					"rule_set": [
-						"adblock-1",
-						"adblock-2"
-					],
-					"action": "reject"
-				}
-			],
-			"rule_set": [
-				{
-				  "type": "remote",
-				  "tag": "adblock-1",
-				  "url": "https://ruleset.com/adblock-1.srs",
-				  "download_detour": "direct",
-				  "update_interval": "24h0m0s"
-				},
-				{
-				  "type": "remote",
-				  "tag": "adblock-2",
-				  "url": "https://ruleset.com/adblock-2.srs",
-				  "download_detour": "direct",
-				  "update_interval": "24h0m0s"
-				}
-			]
-		}
-	}
-	`
 	wantSmartRoutingOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(smartRouteJSON))
 	require.NoError(t, err)
-	wantAdBlockOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(adBlockJSON))
-	require.NoError(t, err)
 
-	cfg := testConfig(t)
-	boxOptions := BoxOptions{
-		BasePath: t.TempDir(),
-		Options:  cfg.Options,
-	}
 	t.Run("with smart routing", func(t *testing.T) {
-		boxOptions.SmartRouting = cfg.SmartRouting
+		cfg := testConfig(t)
+		boxOptions := BoxOptions{
+			BasePath:     t.TempDir(),
+			Options:      cfg.Options,
+			SmartRouting: cfg.SmartRouting,
+		}
 		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check rules, rulesets, and outbounds are correctly built into options
-		assert.True(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
-		assert.True(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
-		assert.True(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
+		assert.Subset(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules, "missing smart routing rule")
+		assert.Subset(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet, "missing smart routing ruleset")
+		assert.Subset(t, options.Outbounds, wantSmartRoutingOpts.Outbounds, "missing smart routing outbound")
 	})
 	t.Run("with smart routing and missing outbounds", func(t *testing.T) {
-		boxOptions.SmartRouting = cfg.SmartRouting
-		cfg.SmartRouting[0].Outbounds = nil
+		cfg := testConfig(t)
+		cfg.SmartRouting[1].Outbounds = nil
+		boxOptions := BoxOptions{
+			BasePath:     t.TempDir(),
+			Options:      cfg.Options,
+			SmartRouting: cfg.SmartRouting,
+		}
 		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
-		// check rules, rulesets, and outbounds are not built into options
-		assert.False(t, contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0]), "missing smart routing rule")
-		assert.False(t, contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0]), "missing smart routing ruleset")
-		assert.False(t, contains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0]), "missing smart routing outbound")
+		// sr-direct rule and ruleset should still be present (category still has outbounds)
+		assert.Contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0], "missing sr-direct rule")
+		assert.Contains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[0], "missing sr-direct ruleset")
+		// openai rule/ruleset and sr-openai outbound should be dropped (outbounds were nilled)
+		assert.NotContains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[1], "unexpected openai rule")
+		assert.NotContains(t, options.Route.RuleSet, wantSmartRoutingOpts.Route.RuleSet[1], "unexpected openai ruleset")
+		assert.NotContains(t, options.Outbounds, wantSmartRoutingOpts.Outbounds[0], "unexpected sr-openai outbound")
 	})
 	t.Run("with ad block", func(t *testing.T) {
-		boxOptions.AdBlock = cfg.AdBlock
+		cfg := testConfig(t)
+		boxOptions := BoxOptions{
+			BasePath: t.TempDir(),
+			Options:  cfg.Options,
+			AdBlock:  cfg.AdBlock,
+		}
+		wantRule, wantRulesets := cfg.AdBlock.ToOptions()
 		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
-		for _, rs := range wantAdBlockOpts.Route.RuleSet {
-			assert.True(t, contains(t, options.Route.RuleSet, rs), "missing ad block ruleset")
-		}
-
-		adRule := wantAdBlockOpts.Route.Rules[0]
-		assert.True(t, contains(t, options.Route.Rules, adRule), "missing ad block rule")
+		assert.Contains(t, options.Route.Rules, wantRule, "missing ad block rule")
+		assert.Subset(t, options.Route.RuleSet, wantRulesets, "missing ad block ruleset")
 	})
 }
 
