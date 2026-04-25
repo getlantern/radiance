@@ -3,6 +3,7 @@ package fronted
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +29,17 @@ const (
 	// bootstrap when raw.githubusercontent.com is unreachable.
 	configCacheName = "fronted_config.yaml.gz"
 )
+
+// embeddedConfig is the last-resort fallback when both the live fetch and
+// the local config cache fail — typical case is a fresh install with
+// raw.githubusercontent.com blocked from the very first boot. domainfront
+// itself doesn't embed a config (the old getlantern/fronted package did),
+// so the caller owns the embedded copy. Refresh periodically from
+// https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz
+// and commit alongside this file.
+//
+//go:embed fronted.yaml.gz
+var embeddedConfig []byte
 
 // bypassDialer adapts bypass.DialContext (a function) to the domainfront.Dialer
 // interface.
@@ -114,23 +126,26 @@ func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCach
 	return cfg, nil
 }
 
-// loadCachedConfig attempts to read a previously persisted fronted config.
-// Returns fetchErr if no cache exists or it can't be parsed, so callers see
-// the original fetch failure when we have nothing to fall back on.
+// loadCachedConfig tries, in order: the on-disk config cache (from a prior
+// successful fetch) and then the embedded config. Returns fetchErr only if
+// both fallbacks fail to parse — so a clean install with the live fetch
+// blocked still boots on the embedded copy.
 func loadCachedConfig(path string, fetchErr error) (*domainfront.Config, error) {
-	if path == "" {
-		return nil, fetchErr
+	if path != "" {
+		if f, err := os.Open(path); err == nil {
+			defer f.Close()
+			if cfg, err := domainfront.ParseConfigFromReader(f); err == nil {
+				slog.Warn("using cached fronted config", "path", path, "fetch_err", fetchErr)
+				return cfg, nil
+			} else {
+				slog.Warn("failed to parse on-disk fronted config, trying embedded", "path", path, "err", err)
+			}
+		}
 	}
-	f, err := os.Open(path)
+	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(embeddedConfig))
 	if err != nil {
-		return nil, fetchErr
+		return nil, fmt.Errorf("embedded fronted config parse failed: %w (original fetch error: %v)", err, fetchErr)
 	}
-	defer f.Close()
-	cfg, err := domainfront.ParseConfigFromReader(f)
-	if err != nil {
-		slog.Warn("failed to parse cached fronted config, using fetch error", "path", path, "err", err)
-		return nil, fetchErr
-	}
-	slog.Warn("using cached fronted config", "path", path, "fetch_err", fetchErr)
+	slog.Warn("using embedded fronted config", "fetch_err", fetchErr)
 	return cfg, nil
 }
