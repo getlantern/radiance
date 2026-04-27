@@ -34,6 +34,10 @@ var (
 	// circumvention QA — point it at a SOCKS server that egresses through a
 	// residential proxy in the country we want to simulate.
 	OutboundSocksAddress _key = "RADIANCE_OUTBOUND_SOCKS_ADDRESS"
+	// Platform overrides common.Platform for QA scenarios that want to
+	// impersonate a different OS (e.g. test the Android bandit path from a
+	// Linux/macOS process). Honored in common.Init().
+	Platform _key = "RADIANCE_PLATFORM"
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 	AppVersion       _key = "RADIANCE_VERSION"

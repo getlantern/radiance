@@ -427,7 +427,10 @@ func applyOutboundSocksDetour(opts *O.Options) error {
 	for i := range opts.Outbounds {
 		out := &opts.Outbounds[i]
 		switch out.Type {
-		case C.TypeSelector, C.TypeURLTest, C.TypeBlock, C.TypeDNS:
+		case C.TypeSelector, C.TypeURLTest, C.TypeBlock, C.TypeDNS, C.TypeDirect:
+			// selector/urltest wrap others; block/dns/direct don't dial
+			// real upstream proxies. `direct` in particular rejects Detour
+			// at runtime ("detour is not supported in direct context").
 			continue
 		}
 		if w, ok := out.Options.(O.DialerOptionsWrapper); ok {
