@@ -65,7 +65,7 @@ func main() {
 		// Russia. See cmd/api/maxmind.go LookupCountryASNState.
 		tz      = flag.String("tz", "Europe/Moscow", "TZ env var sent as the request's X-Lantern-Time-Zone")
 		locale  = flag.String("locale", "ru_RU", "locale to pass to the radiance backend (X-Lantern-Locale)")
-		timeout = flag.Duration("timeout", 90*time.Second, "overall timeout")
+		timeout = flag.Duration("timeout", 180*time.Second, "overall timeout (covers config fetch + URLTest convergence + probe retries)")
 	)
 	flag.Parse()
 
@@ -157,13 +157,30 @@ func main() {
 	}
 	defer be.DisconnectVPN()
 
-	fmt.Printf("[qa-bandit] VPN connected; probing %s through %s...\n", *probeURL, *socksIn)
-	body, dur, err := probeViaSocks(ctx, *socksIn, *probeURL)
-	if err != nil {
-		fmt.Printf("[qa-bandit] probe FAILED: %v (%.2fs)\n", err, dur.Seconds())
-		os.Exit(1)
+	// URLTest needs a few seconds to converge on a working outbound. UDP
+	// outbounds (hysteria2/wireguard/tuic) fail immediately through our
+	// bridge — it only does TCP CONNECT. After URLTest marks them dead,
+	// AutoSelect prefers TCP-based ones (samizdat/reflex/vmess/etc.).
+	fmt.Printf("[qa-bandit] VPN connected; waiting up to 30s for URLTest to converge, then probing %s through %s...\n", *probeURL, *socksIn)
+	var (
+		body string
+		dur  time.Duration
+		err2 error
+	)
+	deadline := time.Now().Add(30 * time.Second)
+	for attempt := 1; ; attempt++ {
+		body, dur, err2 = probeViaSocks(ctx, *socksIn, *probeURL)
+		if err2 == nil {
+			fmt.Printf("[qa-bandit] probe OK in %.2fs (attempt %d) — egress IP: %s\n", dur.Seconds(), attempt, body)
+			return
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			fmt.Printf("[qa-bandit] probe FAILED after %d attempts: %v\n", attempt, err2)
+			os.Exit(1)
+		}
+		fmt.Printf("[qa-bandit]   attempt %d failed (%v) — retrying in 3s...\n", attempt, err2)
+		time.Sleep(3 * time.Second)
 	}
-	fmt.Printf("[qa-bandit] probe OK in %.2fs — egress IP: %s\n", dur.Seconds(), body)
 }
 
 func banner(outboundSocks, platform, version, dataDir, socksIn string) {
