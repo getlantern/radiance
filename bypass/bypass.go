@@ -8,8 +8,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
+	"golang.org/x/net/proxy"
+
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/log"
 )
 
@@ -36,7 +40,14 @@ const (
 
 // DialContext tries to connect through the local bypass proxy. If the proxy is
 // not reachable (VPN not running), it falls back to a direct dial.
+//
+// QA: when env.OutboundSocksAddress is set, both the bypass-proxy path and the
+// direct-fallback path are replaced by a dial through that upstream SOCKS5,
+// so every dial out of radiance goes via the same residential egress.
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if d, ok := outboundSocksDialer(); ok {
+		return d.DialContext(ctx, network, addr)
+	}
 	dialer := &net.Dialer{
 		Timeout:   dialTimeout,
 		KeepAlive: dialKeepAlive,
@@ -52,6 +63,31 @@ func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 		return nil, err
 	}
 	return tunnelConn, nil
+}
+
+var (
+	outboundSocksOnce   sync.Once
+	outboundSocksDialFn proxy.ContextDialer
+)
+
+// outboundSocksDialer returns a SOCKS5 ContextDialer for env.OutboundSocksAddress
+// if set, cached after the first successful build.
+func outboundSocksDialer() (proxy.ContextDialer, bool) {
+	outboundSocksOnce.Do(func() {
+		addr, ok := env.Get(env.OutboundSocksAddress)
+		if !ok || addr == "" {
+			return
+		}
+		d, err := proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
+		if err != nil {
+			slog.Error("invalid RADIANCE_OUTBOUND_SOCKS_ADDRESS for bypass dialer", slog.Any("error", err), slog.String("addr", addr))
+			return
+		}
+		if cd, ok := d.(proxy.ContextDialer); ok {
+			outboundSocksDialFn = cd
+		}
+	})
+	return outboundSocksDialFn, outboundSocksDialFn != nil
 }
 
 // Dial is a convenience wrapper without context, suitable for use with

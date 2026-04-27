@@ -26,6 +26,14 @@ var (
 	ENV              _key = "RADIANCE_ENV"
 	UseSocks         _key = "RADIANCE_USE_SOCKS_PROXY"
 	SocksAddress     _key = "RADIANCE_SOCKS_ADDRESS"
+	// OutboundSocksAddress, when set to host:port of a SOCKS5 server, routes
+	// every outbound connection that radiance opens (kindling HTTP client,
+	// sing-box outbound tunnel dials, the bypass dialer) through that server.
+	// Distinct from SocksAddress, which sets up an inbound listener for other
+	// apps to use radiance as a SOCKS proxy. Intended for censorship-
+	// circumvention QA — point it at a SOCKS server that egresses through a
+	// residential proxy in the country we want to simulate.
+	OutboundSocksAddress _key = "RADIANCE_OUTBOUND_SOCKS_ADDRESS"
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 	AppVersion       _key = "RADIANCE_VERSION"

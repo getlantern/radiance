@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -352,6 +353,13 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
+	// QA: route every leaf outbound through an upstream SOCKS5 (e.g. one that
+	// egresses through a residential proxy in the country we want to simulate)
+	// before reaching its real destination. See env.OutboundSocksAddress.
+	if err := applyOutboundSocksDetour(&opts); err != nil {
+		return O.Options{}, err
+	}
+
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, tags))
@@ -392,6 +400,60 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 //////////////////////
 // Helper functions //
 //////////////////////
+
+// devOutboundSocksTag is the tag of the synthetic SOCKS5 outbound injected
+// when env.OutboundSocksAddress is set. Other outbounds get DialerOptions.Detour
+// pointing at this tag, so every real dial is wrapped in a SOCKS5 connection.
+const devOutboundSocksTag = "_dev_outbound_socks"
+
+// applyOutboundSocksDetour appends a SOCKS5 outbound to opts and rewrites every
+// other leaf outbound to dial through it, when env.OutboundSocksAddress is set.
+// Selector / urltest / block / dns outbounds are skipped — they don't dial
+// directly. No-op when the env var is unset.
+func applyOutboundSocksDetour(opts *O.Options) error {
+	addr, ok := env.Get(env.OutboundSocksAddress)
+	if !ok || addr == "" {
+		return nil
+	}
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid RADIANCE_OUTBOUND_SOCKS_ADDRESS %q: %w", addr, err)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return fmt.Errorf("invalid RADIANCE_OUTBOUND_SOCKS_ADDRESS port %q: %w", portStr, err)
+	}
+
+	for i := range opts.Outbounds {
+		out := &opts.Outbounds[i]
+		switch out.Type {
+		case C.TypeSelector, C.TypeURLTest, C.TypeBlock, C.TypeDNS:
+			continue
+		}
+		if w, ok := out.Options.(O.DialerOptionsWrapper); ok {
+			d := w.TakeDialerOptions()
+			d.Detour = devOutboundSocksTag
+			w.ReplaceDialerOptions(d)
+		}
+	}
+
+	opts.Outbounds = append(opts.Outbounds, O.Outbound{
+		Type: C.TypeSOCKS,
+		Tag:  devOutboundSocksTag,
+		Options: &O.SOCKSOutboundOptions{
+			ServerOptions: O.ServerOptions{
+				Server:     host,
+				ServerPort: uint16(port),
+			},
+			Version: "5",
+		},
+	})
+
+	slog.Info("RADIANCE_OUTBOUND_SOCKS_ADDRESS set — every sing-box outbound will dial via this SOCKS5",
+		slog.String("addr", addr),
+		slog.Int("rewritten_outbounds", len(opts.Outbounds)-1))
+	return nil
+}
 
 // mergeAndCollectTags merges src into dst and returns all outbound/endpoint tags from src.
 func mergeAndCollectTags(dst, src *O.Options) []string {
