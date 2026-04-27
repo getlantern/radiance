@@ -61,8 +61,8 @@ func Init() {
 	go initOnce.Do(initKindling)
 }
 
-// HTTPClient returns an HTTP client backed by kindling. The underlying
-// transport blocks on first use until kindling is initialized.
+// HTTPClient returns an HTTP client whose transport blocks on first use
+// until kindling is initialized.
 func HTTPClient() *http.Client {
 	return &http.Client{
 		Timeout:   common.DefaultHTTPTimeout,
@@ -79,7 +79,7 @@ func (readyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return transport.RoundTrip(req)
 }
 
-// Close stop all concurrent config fetches that can be happening in background
+// Close stops any in-flight config fetches and releases kindling transports.
 func Close() error {
 	if stopUpdater != nil {
 		stopUpdater()
@@ -92,11 +92,9 @@ func Close() error {
 	return nil
 }
 
-// SetKindling sets the kindling method used for building the HTTP client.
-// This function is useful for testing purposes. It bypasses the normal
-// initialization path, so Warm()/initOnce will be a no-op after this call
-// only if called before them. For tests, call SetKindling before any
-// HTTPClient usage.
+// SetKindling installs a kindling instance for tests, bypassing the normal
+// initialization path. Call it before any HTTPClient usage; otherwise
+// initOnce will have already run and this call becomes a no-op.
 func SetKindling(a kindling.Kindling) {
 	initOnce.Do(func() {
 		k = a

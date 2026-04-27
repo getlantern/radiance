@@ -115,10 +115,9 @@ type Server struct {
 	closed atomic.Bool
 }
 
-// NewServer creates a new Server instance with the provided Backend.
+// NewServer returns an IPC server backed by b. When withAuth is true, the
+// server authenticates each connection; when false, it accepts all connections.
 func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
-	// Only add auth middleware if not running on mobile, since mobile platforms have their own
-	// sandboxing and permission models.
 	svr := &http.Server{
 		Handler:     newLocalAPI(b, withAuth),
 		ReadTimeout: 5 * time.Second,

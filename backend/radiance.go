@@ -394,7 +394,6 @@ func (r *LocalBackend) Features() map[string]bool {
 		return map[string]bool{}
 	}
 	slog.Debug("Returning features from config", "features", cfg.Features)
-	// Return the features from the config
 	if cfg.Features == nil {
 		slog.Info("No features available in config, returning empty map")
 		return map[string]bool{}
@@ -696,13 +695,9 @@ func (r *LocalBackend) RestartVPN() error {
 	return r.vpnClient.Restart(bOptions)
 }
 
+// SelectServer selects the server identified by tag. The empty string is
+// treated as [vpn.AutoSelectTag].
 func (r *LocalBackend) SelectServer(tag string) error {
-	// Normalize up-front so the post-vpnClient settings branch below picks the
-	// auto path instead of falling through to the manual-tag srvManager lookup
-	// (which would reject "" with "no server found with tag"). Mirrors the
-	// same normalization in LocalBackend.ConnectVPN above. VPNClient.SelectServer
-	// already treats "" as AutoSelectTag internally (fac9089); this aligns the
-	// outer wrapper with that behavior so callers can use either spelling.
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}

@@ -76,8 +76,8 @@ type BoxOptions struct {
 	BanditThroughputURL string            `json:"bandit_throughput_url,omitempty"`
 }
 
-// this is the base options that is need for everything to work correctly. this should not be
-// changed unless you know what you're doing.
+// baseOpts returns the minimum sing-box options required for the tunnel to
+// function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
 	cacheFile := filepath.Join(basePath, cacheFileName)

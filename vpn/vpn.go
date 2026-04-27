@@ -115,8 +115,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	defer span.End()
 
 	c.mu.Lock()
-	// Cancel any running offline tests and wait for them to finish. If no tests are running,
-	// offlineTestCancel is a no-op and offlineTestDone is already closed (returns immediately).
+	// Cancel any running offline tests and wait for them to finish.
 	c.offlineTestCancel()
 	done := c.offlineTestDone
 	c.mu.Unlock()
@@ -252,7 +251,6 @@ func (c *VPNClient) isOpen() bool {
 	return c.Status() == Connected
 }
 
-// Status returns the current status of the tunnel (e.g., running, closed).
 func (c *VPNClient) Status() VPNStatus {
 	s, _ := c.status.Load().(VPNStatus)
 	return s
@@ -361,7 +359,6 @@ type AutoSelectedEvent struct {
 	Selected string `json:"selected"`
 }
 
-// CurrentAutoSelectedServer returns the tag of the currently auto-selected server
 func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")

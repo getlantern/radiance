@@ -91,7 +91,6 @@ func IsNotFound(err error) bool {
 //   VPN   //
 /////////////
 
-// VPNStatus returns the current VPN connection status.
 func (c *Client) VPNStatus(ctx context.Context) (vpn.VPNStatus, error) {
 	var status vpn.VPNStatus
 	err := c.doJSON(ctx, http.MethodGet, vpnStatusEndpoint, nil, &status)
@@ -302,7 +301,6 @@ func (c *Client) RevokePrivateServerInvite(ctx context.Context, ip string, port 
 // Settings //
 //////////////
 
-// Features returns the feature flags from the current configuration.
 func (c *Client) Features(ctx context.Context) (map[string]bool, error) {
 	var features map[string]bool
 	err := c.doJSON(ctx, http.MethodGet, featuresEndpoint, nil, &features)

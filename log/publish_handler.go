@@ -16,8 +16,8 @@ func Subscribe() (chan LogEntry, func()) {
 
 var defaultPublisher = newPublisher(200)
 
-// Publisher returns the default log publisher as an io.Writer. Include it in the
-// handler's writer chain so published entries share the same format.
+// Publisher returns the default log publisher. Include it in the handler's
+// writer chain so published entries share the same format.
 func Publisher() *publisher {
 	return defaultPublisher
 }

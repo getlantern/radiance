@@ -30,7 +30,6 @@ const (
 	Disable = slog.LevelInfo + 1000 // A level that disables logging, used for testing or no-op logger.
 )
 
-// Config holds the configuration for creating a new logger.
 type Config struct {
 	// LogPath is the full path to the log file.
 	LogPath string

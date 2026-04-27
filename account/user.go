@@ -23,7 +23,6 @@ import (
 
 const saltFileName = ".salt"
 
-// UserDataResponse represents the response from pro server
 type UserDataResponse struct {
 	*protos.BaseResponse
 	*protos.LoginResponse_UserData
@@ -94,7 +93,6 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 	return login, nil
 }
 
-// DataCapInfo represents the data cap info
 type DataCapInfo struct {
 	// Whether data cap is enabled for this device/user
 	Enabled bool `json:"enabled"`
@@ -102,7 +100,6 @@ type DataCapInfo struct {
 	Usage *DataCapUsageDetails `json:"usage,omitempty"`
 }
 
-// DataCapUsageDetails contains details of the data cap usage
 type DataCapUsageDetails struct {
 	BytesAllotted      string `json:"bytesAllotted"`
 	BytesUsed          string `json:"bytesUsed"`
@@ -110,7 +107,6 @@ type DataCapUsageDetails struct {
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
-// DataCapInfo returns information about this user's data cap
 func (a *Client) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
