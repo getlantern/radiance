@@ -40,6 +40,7 @@ import (
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -583,6 +584,11 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
+// urlTestFlushInterval bounds how often URL test results are written back to the servers manager
+// (and to disk). URL test cycles run on the order of minutes and notify per-result, so coalescing
+// into a periodic flush avoids re-marshalling and re-writing the servers file for each parallel result.
+const urlTestFlushInterval = 5 * time.Second
+
 func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 	r.urlTestMu.Lock()
 	defer r.urlTestMu.Unlock()
@@ -598,17 +604,7 @@ func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 		r.stopURLTestListener = cancel
 		hook := make(chan struct{}, 1)
 		storage.SetHook(hook)
-		go func() {
-			r.loadURLTestResults(storage)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-hook:
-					r.loadURLTestResults(storage)
-				}
-			}
-		}()
+		go r.runURLTestListener(ctx, storage, hook)
 		slog.Debug("Started URL test result listener")
 	} else if r.stopURLTestListener != nil {
 		r.stopURLTestListener()
@@ -617,7 +613,32 @@ func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 	}
 }
 
-func (r *LocalBackend) loadURLTestResults(storage vpn.URLTestHistoryStorage) {
+// runURLTestListener coalesces per-result hook notifications into a periodic flush so the servers
+// file isn't rewritten for each parallel URL test completion. A final flush runs on shutdown so any
+// results that arrived since the last tick are persisted.
+func (r *LocalBackend) runURLTestListener(ctx context.Context, storage vpn.URLTestHistoryStorage, hook <-chan struct{}) {
+	ticker := time.NewTicker(urlTestFlushInterval)
+	defer ticker.Stop()
+	dirty := true // start dirty so we persist any results that arrived before the listener started
+	for {
+		select {
+		case <-ctx.Done():
+			if dirty {
+				r.flushURLTestResults(storage)
+			}
+			return
+		case <-hook:
+			dirty = true
+		case <-ticker.C:
+			if dirty {
+				r.flushURLTestResults(storage)
+				dirty = false
+			}
+		}
+	}
+}
+
+func (r *LocalBackend) flushURLTestResults(storage vpn.URLTestHistoryStorage) {
 	results := make(map[string]servers.URLTestResult)
 	for _, srv := range r.srvManager.AllServers() {
 		if h := storage.LoadURLTestHistory(srv.Tag); h != nil {
@@ -625,7 +646,9 @@ func (r *LocalBackend) loadURLTestResults(storage vpn.URLTestHistoryStorage) {
 		}
 	}
 	if len(results) > 0 {
-		r.srvManager.UpdateURLTestResults(results)
+		if err := r.srvManager.UpdateURLTestResults(results); err != nil {
+			slog.Warn("Failed to persist URL test results", "error", err)
+		}
 	}
 }
 
@@ -673,6 +696,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			bOptions.AdBlock = cfg.AdBlock
 		}
 	}
+	seed := make(map[string]adapter.URLTestHistory)
 	for _, srv := range r.srvManager.AllServers() {
 		if !srv.IsLantern {
 			switch opts := srv.Options.(type) {
@@ -682,6 +706,15 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 				bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, opts)
 			}
 		}
+		if srv.URLTestResult != nil {
+			seed[srv.Tag] = adapter.URLTestHistory{
+				Time:  srv.URLTestResult.Time,
+				Delay: srv.URLTestResult.Delay,
+			}
+		}
+	}
+	if len(seed) > 0 {
+		bOptions.URLTestSeed = seed
 	}
 	return bOptions
 }
@@ -831,7 +864,9 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 		urlResults[tag] = servers.URLTestResult{Delay: delay, Time: now}
 	}
 	if len(urlResults) > 0 {
-		r.srvManager.UpdateURLTestResults(urlResults)
+		if err := r.srvManager.UpdateURLTestResults(urlResults); err != nil {
+			slog.Warn("Failed to persist offline URL test results", "error", err)
+		}
 		selected, err := r.vpnClient.CurrentAutoSelectedServer()
 		if err != nil {
 			slog.Warn("Failed to get current auto-selected server after URL tests", "error", err)

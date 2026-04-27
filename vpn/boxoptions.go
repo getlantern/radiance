@@ -22,6 +22,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -74,6 +75,10 @@ type BoxOptions struct {
 	// server to detect which proxies successfully connected.
 	BanditURLOverrides  map[string]string `json:"bandit_url_overrides,omitempty"`
 	BanditThroughputURL string            `json:"bandit_throughput_url,omitempty"`
+	// URLTestSeed seeds the tunnel's URL test history storage at startup so
+	// prior latency results survive across tunnel close/open. Keyed by
+	// outbound/endpoint tag.
+	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
 }
 
 // baseOpts returns the minimum sing-box options required for the tunnel to
@@ -290,7 +295,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		}
 		opts.Inbounds = []O.Inbound{socksIn}
 	} else {
-
 		switch common.Platform {
 		case "android":
 			opts.Route.OverrideAndroidVPN = true

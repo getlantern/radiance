@@ -33,6 +33,7 @@ import (
 	"github.com/getlantern/lantern-box/adapter/groups"
 	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/clientcontext"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling"
@@ -45,6 +46,7 @@ type tunnel struct {
 	lbService      *libbox.BoxService
 	clashServer    *clashapi.Server
 	urltestHistory adapter.URLTestHistoryStorage
+	urlTestSeed    map[string]adapter.URLTestHistory
 	logFactory     sblog.ObservableFactory
 
 	dataPath string
@@ -139,12 +141,12 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
-	t.urltestHistory = service.FromContext[adapter.URLTestHistoryStorage](t.ctx)
-	if t.urltestHistory == nil {
-		t.urltestHistory = urltest.NewHistoryStorage()
-		service.MustRegister[adapter.URLTestHistoryStorage](t.ctx, t.urltestHistory)
-		t.closers = append(t.closers, t.urltestHistory)
+	t.urltestHistory = urltest.NewHistoryStorage()
+	for tag, h := range t.urlTestSeed {
+		t.urltestHistory.StoreURLTestHistory(tag, &h)
 	}
+	service.MustRegister[adapter.URLTestHistoryStorage](t.ctx, t.urltestHistory)
+	t.closers = append(t.closers, t.urltestHistory)
 
 	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
 	var lb *libbox.BoxService

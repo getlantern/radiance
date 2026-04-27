@@ -258,16 +258,20 @@ type URLTestResult struct {
 	Time  time.Time `json:"time"`
 }
 
-// UpdateURLTestResults updates the URL test results for servers matching the provided tags.
-func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) {
-	m.access.Lock()
-	defer m.access.Unlock()
-	for tag, result := range results {
-		if srv, exists := m.servers[tag]; exists {
-			r := result
-			srv.URLTestResult = &r
+// UpdateURLTestResults updates the URL test results for servers matching the
+// provided tags and persists the change to disk.
+func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) error {
+	func() {
+		m.access.Lock()
+		defer m.access.Unlock()
+		for tag, result := range results {
+			if srv, exists := m.servers[tag]; exists {
+				r := result
+				srv.URLTestResult = &r
+			}
 		}
-	}
+	}()
+	return m.saveServers()
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
