@@ -64,8 +64,6 @@ github.com/alexflint/go-scalar v1.2.0 h1:WR7JPKkeNpnYIOfHRa7ivM21aWAdHD0gEWHCx+W
 github.com/alexflint/go-scalar v1.2.0/go.mod h1:LoFvNMqS1CPrMVltza4LvnGKhaSpc3oyLEBUZVhhS2o=
 github.com/alitto/pond v1.9.2 h1:9Qb75z/scEZVCoSU+osVmQ0I0JOeLfdTDafrbcJ8CLs=
 github.com/alitto/pond v1.9.2/go.mod h1:xQn3P/sHTYcU/1BR3i86IGIrilcrGC2LiS+E2+CJWsI=
-github.com/alitto/pond/v2 v2.1.5 h1:2pp/KAPcb02NSpHsjjnxnrTDzogMLsq+vFf/L0DB84A=
-github.com/alitto/pond/v2 v2.1.5/go.mod h1:xkjYEgQ05RSpWdfSd1nM3OVv7TBhLdy7rMp3+2Nq+yE=
 github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 h1:c02PsmoaChabVqAFm7pqPI1UIkDdDAjUaWa6ZmfxybQ=
 github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8/go.mod h1:7stWJ39LeusmMI8mjJuhFNRqep//vx0AsaySRoK9or0=
 github.com/anacrolix/chansync v0.7.0 h1:wgwxbsJRmOqNjil4INpxHrDp4rlqQhECxR8/WBP4Et0=
@@ -236,10 +234,10 @@ github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wd
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
 github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d h1:TrauJ2jdJqOAHyQB5wIL0kWN/dipqKagERE1I/TRVSY=
 github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d/go.mod h1:LA7cwZQtgXxBJdSJDj2ZgQNo/UY3Qa7nxNxzOuMMIyw=
+github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4 h1:/Q9FJvKPyuXfH6tfA+C+t9/AbvGWs3Yp9iqI74FYvb4=
+github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4/go.mod h1:nsdIvgenGUqPKnRFjkssbfxnV/WYWyC0c/t15qGym/A=
 github.com/getlantern/errors v1.0.4 h1:i2iR1M9GKj4WuingpNqJ+XQEw6i6dnAgKAmLj6ZB3X0=
 github.com/getlantern/errors v1.0.4/go.mod h1:/Foq8jtSDGP8GOXzAjeslsC4Ar/3kB+UiQH+WyV4pzY=
-github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538 h1:MjJ7DAHwiWCfP7sK/crqkUn9LlBs9bmJhwzVrVpS8pY=
-github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538/go.mod h1:2miS+mgq6csnGAUvW3w+VUODRAeo08rohkpkR99YGyM=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 h1:NlQedYmPI3pRAXJb+hLVVDGqfvvXGRPV8vp7XOjKAZ0=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65/go.mod h1:+ZU1h+iOVqWReBpky6d5Y2WL0sF2Llxu+QcxJFs2+OU=
 github.com/getlantern/hex v0.0.0-20220104173244-ad7e4b9194dc h1:sue+aeVx7JF5v36H1HfvcGFImLpSD5goj8d+MitovDU=
@@ -248,8 +246,8 @@ github.com/getlantern/hidden v0.0.0-20220104173330-f221c5a24770 h1:cSrD9ryDfTV2y
 github.com/getlantern/hidden v0.0.0-20220104173330-f221c5a24770/go.mod h1:GOQsoDnEHl6ZmNIL+5uVo+JWRFWozMEp18Izcb++H+A=
 github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694 h1:iLWm6S/47Hfk7FjW6yaD+1h6kO7C/iauV0DkVia/bXU=
 github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694/go.mod h1:ag5g9aWUw2FJcX5RVRpJ9EBQBy5yJuy2WXDouIn/m4w=
-github.com/getlantern/kindling v0.0.0-20260329144042-b1825b9cb1bb h1:A92dC/E/HvkEb1r4tAwCFNlcMsGdqKe5GMmxeUFid9M=
-github.com/getlantern/kindling v0.0.0-20260329144042-b1825b9cb1bb/go.mod h1:c5cFjpNrqX8wQ0PUE2blHrO7knAlRCVx3j1/G6zaVlY=
+github.com/getlantern/kindling v0.0.0-20260428171407-6143132aaf40 h1:P5pkaBGxWOGBn7bKzjzdln/ro+ShG1RUbOuy+7pSzXE=
+github.com/getlantern/kindling v0.0.0-20260428171407-6143132aaf40/go.mod h1:TGTxpoNVwc8Be4qkBNtf5oj2psJaEIZEq47GOPS7zkA=
 github.com/getlantern/lantern-box v0.0.74 h1:3LgqcjHX/lLJO4BCEg21vzFaDwiAcUyhdn5o6M6VAaQ=
 github.com/getlantern/lantern-box v0.0.74/go.mod h1:lRpNV/lDbsQ2NfA747Oa3mdZXzc0rDsgtlN0lDHh9pM=
 github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90 h1:P9JX1yAu2uq3b5YiT0sLtHkTrkZuttV8gPZh81nUuag=
@@ -272,8 +270,6 @@ github.com/getlantern/sing-box-minimal v1.12.22-lantern h1:dZXg3jJu8dZGvBAptoJ7L
 github.com/getlantern/sing-box-minimal v1.12.22-lantern/go.mod h1:LzlFRel9E92gX0HXWCdsxgeg+kuAEPzLR+Znixk9EI4=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9/go.mod h1:7uvbzuoOr3uYGHZx5QWlI8/C52XEf/aTb/tJFEe41Ak=
-github.com/getlantern/waitforserver v1.0.1 h1:xBjqJ3GgEk9JMWnDgRSiNHXINi6Lv2tGNjJR0hCkHFY=
-github.com/getlantern/waitforserver v1.0.1/go.mod h1:K1oSA8lNKgQ9iC00OFpMfMNm4UMrsxoGCdHf0NT9LGs=
 github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa h1:goZee1cURbWPiqX1xyjfwLB/zByQ50hEwonnnyLmcJQ=
 github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa/go.mod h1:Yo6Yk++Q9HRaCT+6/eYk3elNoNtjlJ3V5FufHY6ezto=
 github.com/getlantern/wazero v1.11.0-water.1 h1:mzUlaOoQKMDd16yL3mBIFrzg2nEK+gw7mdQgff1nOPQ=

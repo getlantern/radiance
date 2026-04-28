@@ -1,0 +1,65 @@
+name: Refresh embedded fronted.yaml.gz
+
+# kindling/fronted/fronted.yaml.gz is the last-resort fallback config used
+# when both the live fetch and on-disk cache miss. The canonical copy lives
+# in getlantern/fronted and is updated daily by an external pipeline. Mirror
+# that here so a fresh install bootstrap doesn't fall back to a stale copy.
+
+on:
+  schedule:
+    # Run a few hours after the upstream daily commit (~00:15 UTC).
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Serialize concurrent runs (cron + manual dispatch can race). cancel-in-progress
+# is false so a manual dispatch during a cron run still completes rather than
+# leaving the repo in a half-updated state.
+concurrency:
+  group: refresh-fronted-config
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest fronted.yaml.gz
+        run: |
+          curl -fsSL \
+            -o kindling/fronted/fronted.yaml.gz.new \
+            https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz
+          gzip -t kindling/fronted/fronted.yaml.gz.new
+          test -s kindling/fronted/fronted.yaml.gz.new
+
+      - name: Diff and replace
+        id: diff
+        run: |
+          if cmp -s kindling/fronted/fronted.yaml.gz.new kindling/fronted/fronted.yaml.gz; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            rm kindling/fronted/fronted.yaml.gz.new
+          else
+            mv kindling/fronted/fronted.yaml.gz.new kindling/fronted/fronted.yaml.gz
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add kindling/fronted/fronted.yaml.gz
+          git commit -m "fronted: refresh embedded fronted.yaml.gz"
+          # Rebase-and-retry to survive concurrent commits to the target branch.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, rebasing on latest origin and retrying..."
+            git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)"
+          done
+          echo "Push failed after 3 attempts" >&2
+          exit 1

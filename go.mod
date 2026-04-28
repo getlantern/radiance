@@ -28,9 +28,9 @@ require (
 	github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58
 	github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
-	github.com/getlantern/fronted v0.0.0-20260325003030-cb5041ba1538
+	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
-	github.com/getlantern/kindling v0.0.0-20260329144042-b1825b9cb1bb
+	github.com/getlantern/kindling v0.0.0-20260428171407-6143132aaf40
 	github.com/getlantern/lantern-box v0.0.74
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
@@ -67,7 +67,6 @@ require (
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
 	github.com/alexflint/go-scalar v1.2.0 // indirect
-	github.com/alitto/pond/v2 v2.1.5 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
 	github.com/anacrolix/chansync v0.7.0 // indirect
 	github.com/anacrolix/dht/v2 v2.23.0 // indirect
@@ -241,8 +240,6 @@ require (
 	github.com/cretz/bine v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
-	github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 // indirect
 	github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175
 	github.com/getsentry/sentry-go v0.31.1
 	github.com/go-chi/render v1.0.3 // indirect
