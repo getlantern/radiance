@@ -28,6 +28,11 @@ const (
 	// last successfully fetched fronted.yaml.gz so the next startup can
 	// bootstrap when raw.githubusercontent.com is unreachable.
 	configCacheName = "fronted_config.yaml.gz"
+	// maxConfigBytes caps the size of the gzipped fronted config we'll accept
+	// from the network. The real file is ~500 KB; this leaves room for growth
+	// while bounding memory if a misconfigured or compromised endpoint serves
+	// an unbounded body.
+	maxConfigBytes = 10 << 20 // 10 MiB
 )
 
 // embeddedConfig is the last-resort fallback when both the live fetch and
@@ -109,9 +114,14 @@ func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCach
 		return loadCachedConfig(configCache, fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, configURL))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Cap reads to maxConfigBytes + 1 so we can detect when the body exceeds
+	// the limit (vs. a body that happens to be exactly maxConfigBytes long).
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigBytes+1))
 	if err != nil {
 		return loadCachedConfig(configCache, fmt.Errorf("read response: %w", err))
+	}
+	if len(body) > maxConfigBytes {
+		return loadCachedConfig(configCache, fmt.Errorf("response body exceeds %d bytes", maxConfigBytes))
 	}
 	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(body))
 	if err != nil {
@@ -119,11 +129,45 @@ func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCach
 	}
 	// Persist after a known-good parse so we don't cache unparseable bytes.
 	if configCache != "" {
-		if err := os.WriteFile(configCache, body, 0o644); err != nil {
+		if err := writeFileAtomic(configCache, body, 0o644); err != nil {
 			slog.Warn("failed to persist fronted config cache", "path", configCache, "err", err)
 		}
 	}
 	return cfg, nil
+}
+
+// writeFileAtomic writes data to path via a same-directory temp file plus
+// rename, so a crash or power loss mid-write can't leave a truncated cache.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err = tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
 }
 
 // loadCachedConfig tries, in order: the on-disk config cache (from a prior

@@ -14,6 +14,13 @@ on:
 permissions:
   contents: write
 
+# Serialize concurrent runs (cron + manual dispatch can race). cancel-in-progress
+# is false so a manual dispatch during a cron run still completes rather than
+# leaving the repo in a half-updated state.
+concurrency:
+  group: refresh-fronted-config
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -46,4 +53,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add kindling/fronted/fronted.yaml.gz
           git commit -m "fronted: refresh embedded fronted.yaml.gz"
-          git push
+          # Rebase-and-retry to survive concurrent commits to the target branch.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, rebasing on latest origin and retrying..."
+            git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)"
+          done
+          echo "Push failed after 3 attempts" >&2
+          exit 1
