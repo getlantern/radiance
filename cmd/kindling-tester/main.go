@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	upstreamkindling "github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling"
 )
@@ -105,7 +106,8 @@ func main() {
 		kindling.EnabledTransports[name] = false
 	}
 
-	kindling.EnabledTransports[transport] = true
+	selected := upstreamkindling.TransportName(transport)
+	kindling.EnabledTransports[selected] = true
 	slog.Debug("enabled transports", slog.Any("enabled_transports", kindling.EnabledTransports))
 	if err := performKindlingPing(targetURL, runID, deviceID, uid, token, data); err != nil {
 		slog.Error("failed to perform kindling ping", slog.Any("error", err))

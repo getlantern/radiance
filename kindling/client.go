@@ -28,12 +28,12 @@ var (
 	initOnce        sync.Once
 	stopUpdater     func()
 	closeTransports []func() error
-	// enabledTransports is used for testing purposes for enabling/disabling kindling transports
-	enabledTransports = map[string]bool{
-		"dnstt":     false,
-		"amp":       true,
-		"proxyless": true,
-		"fronted":   true,
+	// EnabledTransports is used for testing purposes for enabling/disabling kindling transports
+	EnabledTransports = map[kindling.TransportName]bool{
+		kindling.TransportDNSTunnel:   false,
+		kindling.TransportAMP:         true,
+		kindling.TransportSmart:       true,
+		kindling.TransportDomainfront: true,
 	}
 	defaultTransportClone = http.DefaultTransport.(*http.Transport).Clone()
 
@@ -123,7 +123,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 	}
 
 	updaterCtx, cancel := context.WithCancel(ctx)
-	if enabled := enabledTransports["fronted"]; enabled {
+	if enabled := EnabledTransports[kindling.TransportDomainfront]; enabled {
 		f, err := fronted.NewFronted(updaterCtx, filepath.Join(dataDir, "fronted_cache.json"), logger)
 		if err != nil {
 			slog.Error("failed to create fronted client", slog.Any("error", err))
@@ -135,7 +135,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
-	if enabled := enabledTransports["amp"]; enabled {
+	if enabled := EnabledTransports[kindling.TransportAMP]; enabled {
 		ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 		if err != nil {
 			slog.Error("failed to create amp client", slog.Any("error", err))
@@ -146,7 +146,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
-	if enabled := enabledTransports["dnstt"]; enabled {
+	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled {
 		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 		if err != nil {
 			slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
@@ -158,7 +158,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
-	if enabled := enabledTransports["proxyless"]; enabled {
+	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
 		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
@@ -180,12 +180,12 @@ func (w *slogWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// setKindling sets the kindling method used for building the HTTP client.
+// SetKindling sets the kindling method used for building the HTTP client.
 // This function is useful for testing purposes. It bypasses the normal
 // initialization path, so Warm()/initOnce will be a no-op after this call
-// only if called before them. For tests, call setKindling before any
+// only if called before them. For tests, call SetKindling before any
 // HTTPClient usage.
-func setKindling(a kindling.Kindling) {
+func SetKindling(a kindling.Kindling) {
 	initOnce.Do(func() {
 		k = a
 		if a != nil {

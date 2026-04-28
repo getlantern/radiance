@@ -5,20 +5,25 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getlantern/kindling"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewClient(t *testing.T) {
-	transports := []string{"fronted", "proxyless", "amp"}
+	transports := []kindling.TransportName{
+		kindling.TransportDomainfront,
+		kindling.TransportSmart,
+		kindling.TransportAMP,
+	}
 
 	for _, tr := range transports {
-		t.Run(tr, func(t *testing.T) {
+		t.Run(string(tr), func(t *testing.T) {
 			for _, name := range transports {
-				enabledTransports[name] = false
+				EnabledTransports[name] = false
 			}
-			enabledTransports["dnstt"] = false
-			enabledTransports[tr] = true
+			EnabledTransports[kindling.TransportDNSTunnel] = false
+			EnabledTransports[tr] = true
 
 			initOnce = sync.Once{}
 			k = nil
@@ -28,7 +33,7 @@ func TestNewClient(t *testing.T) {
 			newK, err := NewKindling(t.TempDir())
 			require.NoError(t, err)
 			require.NotNil(t, newK)
-			setKindling(newK)
+			SetKindling(newK)
 
 			t.Cleanup(func() {
 				Close()
