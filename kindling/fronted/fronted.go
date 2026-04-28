@@ -17,6 +17,8 @@ import (
 
 	"github.com/getlantern/domainfront"
 	"github.com/getlantern/radiance/bypass"
+	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/kindling/smart"
 )
 
@@ -129,45 +131,11 @@ func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCach
 	}
 	// Persist after a known-good parse so we don't cache unparseable bytes.
 	if configCache != "" {
-		if err := writeFileAtomic(configCache, body, 0o644); err != nil {
+		if err := atomicfile.WriteFile(configCache, body, fileperm.File); err != nil {
 			slog.Warn("failed to persist fronted config cache", "path", configCache, "err", err)
 		}
 	}
 	return cfg, nil
-}
-
-// writeFileAtomic writes data to path via a same-directory temp file plus
-// rename, so a crash or power loss mid-write can't leave a truncated cache.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err = tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod temp: %w", err)
-	}
-	if _, err = tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err = tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync temp: %w", err)
-	}
-	if err = tmp.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err = os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
 }
 
 // loadCachedConfig tries, in order: the on-disk config cache (from a prior
