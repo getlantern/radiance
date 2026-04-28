@@ -54,6 +54,12 @@ Before writing an inline comment, consider whether a doc comment on the enclosin
 
 TODO comments must state *what* needs to happen and *why* it isn't done now. `TODO: ???` is not actionable — either resolve it or remove it.
 
+## Comment Verification
+
+After any edit that adds or modifies a comment, you MUST spawn a code-reviewer subagent with the diff before declaring the task done. The subagent applies the Code Comments checklist above and reports violations. Fix the violations and re-spawn until the subagent reports none.
+
+You MUST NOT skip this by self-reviewing the diff. The point of the subagent is to review without the generation bias of the Claude that wrote the comment — a self-review by the writer is a known failure mode and does not satisfy this step.
+
 ## Go Doc Comments
 
 - When a doc comment is warranted on an exported identifier, start it with the identifier's name and use complete sentences: `// Foo does X.` The first sentence is the summary shown by `go doc` and pkg.go.dev.
