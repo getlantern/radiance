@@ -28,8 +28,8 @@ var (
 	initOnce        sync.Once
 	stopUpdater     func()
 	closeTransports []func() error
-	// EnabledTransports is used for testing purposes for enabling/disabling kindling transports
-	EnabledTransports = map[string]bool{
+	// enabledTransports is used for testing purposes for enabling/disabling kindling transports
+	enabledTransports = map[string]bool{
 		"dnstt":     false,
 		"amp":       true,
 		"proxyless": true,
@@ -92,22 +92,6 @@ func Close() error {
 	return nil
 }
 
-// SetKindling sets the kindling method used for building the HTTP client.
-// This function is useful for testing purposes. It bypasses the normal
-// initialization path, so Warm()/initOnce will be a no-op after this call
-// only if called before them. For tests, call SetKindling before any
-// HTTPClient usage.
-func SetKindling(a kindling.Kindling) {
-	initOnce.Do(func() {
-		k = a
-		if a != nil {
-			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(a.NewHTTPClient().Transport))
-		} else {
-			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
-		}
-	})
-}
-
 const tracerName = "github.com/getlantern/radiance/kindling"
 
 // NewKindling build a kindling client and bootstrap this package
@@ -139,7 +123,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 	}
 
 	updaterCtx, cancel := context.WithCancel(ctx)
-	if enabled := EnabledTransports["fronted"]; enabled {
+	if enabled := enabledTransports["fronted"]; enabled {
 		f, err := fronted.NewFronted(updaterCtx, filepath.Join(dataDir, "fronted_cache.json"), logger)
 		if err != nil {
 			slog.Error("failed to create fronted client", slog.Any("error", err))
@@ -151,7 +135,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
-	if enabled := EnabledTransports["amp"]; enabled {
+	if enabled := enabledTransports["amp"]; enabled {
 		ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 		if err != nil {
 			slog.Error("failed to create amp client", slog.Any("error", err))
@@ -162,7 +146,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
-	if enabled := EnabledTransports["dnstt"]; enabled {
+	if enabled := enabledTransports["dnstt"]; enabled {
 		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 		if err != nil {
 			slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
@@ -174,7 +158,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
-	if enabled := EnabledTransports["proxyless"]; enabled {
+	if enabled := enabledTransports["proxyless"]; enabled {
 		// Most endpoints use df.iantem.io, but for some historical reasons
 		// "pro-server" calls still go to api.getiantem.org.
 		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
@@ -194,4 +178,20 @@ func (w *slogWriter) Write(p []byte) (n int, err error) {
 	s = strings.TrimSpace(s)
 	w.Info(s)
 	return len(p), nil
+}
+
+// setKindling sets the kindling method used for building the HTTP client.
+// This function is useful for testing purposes. It bypasses the normal
+// initialization path, so Warm()/initOnce will be a no-op after this call
+// only if called before them. For tests, call setKindling before any
+// HTTPClient usage.
+func setKindling(a kindling.Kindling) {
+	initOnce.Do(func() {
+		k = a
+		if a != nil {
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(a.NewHTTPClient().Transport))
+		} else {
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+		}
+	})
 }
