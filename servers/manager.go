@@ -29,6 +29,7 @@ import (
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
@@ -257,16 +258,20 @@ type URLTestResult struct {
 	Time  time.Time `json:"time"`
 }
 
-// UpdateURLTestResults updates the URL test results for servers matching the provided tags.
-func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) {
-	m.access.Lock()
-	defer m.access.Unlock()
-	for tag, result := range results {
-		if srv, exists := m.servers[tag]; exists {
-			r := result
-			srv.URLTestResult = &r
+// UpdateURLTestResults updates the URL test results for servers matching the
+// provided tags and persists the change to disk.
+func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) error {
+	func() {
+		m.access.Lock()
+		defer m.access.Unlock()
+		for tag, result := range results {
+			if srv, exists := m.servers[tag]; exists {
+				r := result
+				srv.URLTestResult = &r
+			}
 		}
-	}
+	}()
+	return m.saveServers()
 }
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
@@ -420,7 +425,7 @@ func (m *Manager) saveServers() error {
 	}
 
 	writeStart := time.Now()
-	werr := atomicfile.WriteFile(m.serversFile, buf, 0644)
+	werr := atomicfile.WriteFile(m.serversFile, buf, fileperm.File)
 	writeDur := time.Since(writeStart)
 
 	total := time.Since(start)

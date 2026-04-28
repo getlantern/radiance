@@ -115,8 +115,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	defer span.End()
 
 	c.mu.Lock()
-	// Cancel any running offline tests and wait for them to finish. If no tests are running,
-	// offlineTestCancel is a no-op and offlineTestDone is already closed (returns immediately).
+	// Cancel any running offline tests and wait for them to finish.
 	c.offlineTestCancel()
 	done := c.offlineTestDone
 	c.mu.Unlock()
@@ -146,7 +145,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts), false))
+	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts), false, boxOptions.URLTestSeed))
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -162,10 +161,10 @@ func (c *VPNClient) Disconnect() error {
 	return traces.RecordError(ctx, c.close())
 }
 
-func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool) error {
+func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool, urlTestSeed map[string]adapter.URLTestHistory) error {
 	c.logger.Debug("Starting tunnel", "options", options)
 	c.setStatus(Connecting, nil)
-	t := tunnel{dataPath: path}
+	t := tunnel{dataPath: path, urlTestSeed: urlTestSeed}
 	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
 		c.setStatus(ErrorStatus, err)
 		return err
@@ -237,7 +236,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 		c.setStatus(ErrorStatus, err)
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	if err := c.start(ctx, boxOptions.BasePath, string(opts), true); err != nil {
+	if err := c.start(ctx, boxOptions.BasePath, string(opts), true, boxOptions.URLTestSeed); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
 		// c.start already set ErrorStatus; the guard lets Restarting→ErrorStatus through.
 		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
@@ -252,7 +251,6 @@ func (c *VPNClient) isOpen() bool {
 	return c.Status() == Connected
 }
 
-// Status returns the current status of the tunnel (e.g., running, closed).
 func (c *VPNClient) Status() VPNStatus {
 	s, _ := c.status.Load().(VPNStatus)
 	return s
@@ -361,7 +359,6 @@ type AutoSelectedEvent struct {
 	Selected string `json:"selected"`
 }
 
-// CurrentAutoSelectedServer returns the tag of the currently auto-selected server
 func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")

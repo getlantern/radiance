@@ -61,8 +61,8 @@ func Init() {
 	go initOnce.Do(initKindling)
 }
 
-// HTTPClient returns an HTTP client backed by kindling. The underlying
-// transport blocks on first use until kindling is initialized.
+// HTTPClient returns an HTTP client whose transport blocks on first use
+// until kindling is initialized.
 func HTTPClient() *http.Client {
 	return &http.Client{
 		Timeout:   common.DefaultHTTPTimeout,
@@ -79,7 +79,7 @@ func (readyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return transport.RoundTrip(req)
 }
 
-// Close stop all concurrent config fetches that can be happening in background
+// Close stops any in-flight config fetches and releases kindling transports.
 func Close() error {
 	if stopUpdater != nil {
 		stopUpdater()

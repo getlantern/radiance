@@ -30,7 +30,6 @@ func GetVersion() string {
 	return Version
 }
 
-// GetProServerURL returns the pro server URL based on the current environment.
 func GetProServerURL() string {
 	if Stage() {
 		return StageProServerURL
@@ -38,7 +37,6 @@ func GetProServerURL() string {
 	return ProServerURL
 }
 
-// GetBaseURL returns the auth/user base URL based on the current environment.
 func GetBaseURL() string {
 	if Stage() {
 		return StageBaseURL

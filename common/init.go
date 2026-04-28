@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -121,7 +122,7 @@ func logModuleInfo() {
 
 func createCrashReporter() {
 	crashFilePath := filepath.Join(settings.GetString(settings.LogPathKey), internal.CrashLogFileName)
-	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileperm.File)
 	if err != nil {
 		slog.Error("Failed to open crash log file", "error", err)
 	} else {

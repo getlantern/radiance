@@ -22,6 +22,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -31,6 +32,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 )
@@ -67,16 +69,24 @@ type BoxOptions struct {
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// InitialServer chooses the outbound selected when the tunnel starts.
+	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
+	// must match an outbound or endpoint and forces manual selection.
+	InitialServer string `json:"initial_server,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
 	// default MutableURLTest URL for each specific outbound, allowing the
 	// server to detect which proxies successfully connected.
 	BanditURLOverrides  map[string]string `json:"bandit_url_overrides,omitempty"`
 	BanditThroughputURL string            `json:"bandit_throughput_url,omitempty"`
+	// URLTestSeed seeds the tunnel's URL test history storage at startup so
+	// prior latency results survive across tunnel close/open. Keyed by
+	// outbound/endpoint tag.
+	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
 }
 
-// this is the base options that is need for everything to work correctly. this should not be
-// changed unless you know what you're doing.
+// baseOpts returns the minimum sing-box options required for the tunnel to
+// function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
 	cacheFile := filepath.Join(basePath, cacheFileName)
@@ -289,7 +299,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		}
 		opts.Inbounds = []O.Inbound{socksIn}
 	} else {
-
 		switch common.Platform {
 		case "android":
 			opts.Route.OverrideAndroidVPN = true
@@ -330,6 +339,18 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
+	initial := bOptions.InitialServer
+	if initial == "" || initial == AutoSelectTag {
+		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
+	} else {
+		// The manual selector defaults to its first tag, so place initial at index 0.
+		i := slices.Index(tags, initial)
+		if i == -1 {
+			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
+		}
+		tags[0], tags[i] = tags[i], tags[0]
+		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
+	}
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
@@ -361,7 +382,7 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
 		return buf
 	}
-	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), b.Bytes(), 0644); err != nil {
+	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), b.Bytes(), fileperm.File); err != nil {
 		slog.Warn("failed to write options file", slog.Any("error", err))
 		return buf
 	}

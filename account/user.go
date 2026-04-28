@@ -15,6 +15,7 @@ import (
 
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
@@ -22,7 +23,6 @@ import (
 
 const saltFileName = ".salt"
 
-// UserDataResponse represents the response from pro server
 type UserDataResponse struct {
 	*protos.BaseResponse
 	*protos.LoginResponse_UserData
@@ -93,7 +93,6 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 	return login, nil
 }
 
-// DataCapInfo represents the data cap info
 type DataCapInfo struct {
 	// Whether data cap is enabled for this device/user
 	Enabled bool `json:"enabled"`
@@ -101,7 +100,6 @@ type DataCapInfo struct {
 	Usage *DataCapUsageDetails `json:"usage,omitempty"`
 }
 
-// DataCapUsageDetails contains details of the data cap usage
 type DataCapUsageDetails struct {
 	BytesAllotted      string `json:"bytesAllotted"`
 	BytesUsed          string `json:"bytesUsed"`
@@ -109,7 +107,6 @@ type DataCapUsageDetails struct {
 	AllotmentEndTime   string `json:"allotmentEndTime"`
 }
 
-// DataCapInfo returns information about this user's data cap
 func (a *Client) DataCapInfo(ctx context.Context) (*DataCapInfo, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "data_cap_info")
 	defer span.End()
@@ -219,7 +216,7 @@ func (a *Client) SignupEmailConfirmation(ctx context.Context, email, code string
 }
 
 func writeSalt(salt []byte, path string) error {
-	if err := os.WriteFile(path, salt, 0600); err != nil {
+	if err := os.WriteFile(path, salt, fileperm.File); err != nil {
 		return fmt.Errorf("writing salt to %s: %w", path, err)
 	}
 	return nil

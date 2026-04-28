@@ -40,6 +40,7 @@ import (
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -276,7 +277,14 @@ func (r *LocalBackend) Start() {
 		if err := r.setServers(list, true); err != nil {
 			slog.Error("setting servers in manager", "error", err)
 		}
-		if err := r.RunOfflineURLTests(); err != nil {
+		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
+			// ErrTunnelAlreadyConnected is the expected, non-error case while
+			// the VPN is up: setServers above already pushed the new outbounds
+			// (and any bandit URL overrides) into the running tunnel, and
+			// addOutbounds triggers an immediate URL test cycle for them via
+			// MutableURLTest.CheckOutbounds. The "offline" pre-warm path here
+			// is for the not-yet-connected case only — running both would
+			// duplicate work and conflict with the live URLTest selector.
 			slog.Error("Failed to run offline URL tests after config update", "error", err)
 		}
 	})
@@ -394,7 +402,6 @@ func (r *LocalBackend) Features() map[string]bool {
 		return map[string]bool{}
 	}
 	slog.Debug("Returning features from config", "features", cfg.Features)
-	// Return the features from the config
 	if cfg.Features == nil {
 		slog.Info("No features available in config, returning empty map")
 		return map[string]bool{}
@@ -584,12 +591,23 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
+// urlTestFlushInterval bounds how often URL test results are written back to the servers manager
+// (and to disk). URL test cycles run on the order of minutes and notify per-result, so coalescing
+// into a periodic flush avoids re-marshalling and re-writing the servers file for each parallel result.
+const urlTestFlushInterval = 5 * time.Second
+
 func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 	r.urlTestMu.Lock()
 	defer r.urlTestMu.Unlock()
-	if status == vpn.Connected {
+	// Status events are dispatched in unordered goroutines, so reacting to
+	// intermediate statuses (Connecting, Disconnecting, Restarting) risks a
+	// stale handler tearing down a listener a concurrent Connected handler
+	// just attached to the new tunnel.
+	switch status {
+	case vpn.Connected:
 		if r.stopURLTestListener != nil {
-			return // already running
+			r.stopURLTestListener()
+			r.stopURLTestListener = nil
 		}
 		storage := r.vpnClient.HistoryStorage()
 		if storage == nil {
@@ -599,26 +617,43 @@ func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 		r.stopURLTestListener = cancel
 		hook := make(chan struct{}, 1)
 		storage.SetHook(hook)
-		go func() {
-			r.loadURLTestResults(storage)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-hook:
-					r.loadURLTestResults(storage)
-				}
-			}
-		}()
+		go r.runURLTestListener(ctx, storage, hook)
 		slog.Debug("Started URL test result listener")
-	} else if r.stopURLTestListener != nil {
-		r.stopURLTestListener()
-		r.stopURLTestListener = nil
-		slog.Debug("Stopped URL test result listener")
+	case vpn.Disconnected, vpn.ErrorStatus:
+		if r.stopURLTestListener != nil {
+			r.stopURLTestListener()
+			r.stopURLTestListener = nil
+			slog.Debug("Stopped URL test result listener")
+		}
 	}
 }
 
-func (r *LocalBackend) loadURLTestResults(storage vpn.URLTestHistoryStorage) {
+// runURLTestListener coalesces per-result hook notifications into a periodic flush so the servers
+// file isn't rewritten for each parallel URL test completion. A final flush runs on shutdown so any
+// results that arrived since the last tick are persisted.
+func (r *LocalBackend) runURLTestListener(ctx context.Context, storage vpn.URLTestHistoryStorage, hook <-chan struct{}) {
+	ticker := time.NewTicker(urlTestFlushInterval)
+	defer ticker.Stop()
+	dirty := true // start dirty so we persist any results that arrived before the listener started
+	for {
+		select {
+		case <-ctx.Done():
+			if dirty {
+				r.flushURLTestResults(storage)
+			}
+			return
+		case <-hook:
+			dirty = true
+		case <-ticker.C:
+			if dirty {
+				r.flushURLTestResults(storage)
+				dirty = false
+			}
+		}
+	}
+}
+
+func (r *LocalBackend) flushURLTestResults(storage vpn.URLTestHistoryStorage) {
 	results := make(map[string]servers.URLTestResult)
 	for _, srv := range r.srvManager.AllServers() {
 		if h := storage.LoadURLTestHistory(srv.Tag); h != nil {
@@ -626,7 +661,9 @@ func (r *LocalBackend) loadURLTestResults(storage vpn.URLTestHistoryStorage) {
 		}
 	}
 	if len(results) > 0 {
-		r.srvManager.UpdateURLTestResults(results)
+		if err := r.srvManager.UpdateURLTestResults(results); err != nil {
+			slog.Warn("Failed to persist URL test results", "error", err)
+		}
 	}
 }
 
@@ -648,12 +685,11 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 		}
 	}
 	bOptions := r.getBoxOptions()
+	bOptions.InitialServer = tag
 	if err := r.vpnClient.Connect(bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
-	if err := r.SelectServer(tag); err != nil {
-		return fmt.Errorf("failed to select server: %w", err)
-	}
+	r.persistSelection(tag)
 	return nil
 }
 
@@ -674,6 +710,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			bOptions.AdBlock = cfg.AdBlock
 		}
 	}
+	seed := make(map[string]adapter.URLTestHistory)
 	for _, srv := range r.srvManager.AllServers() {
 		if !srv.IsLantern {
 			switch opts := srv.Options.(type) {
@@ -683,6 +720,15 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 				bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, opts)
 			}
 		}
+		if srv.URLTestResult != nil {
+			seed[srv.Tag] = adapter.URLTestHistory{
+				Time:  srv.URLTestResult.Time,
+				Delay: srv.URLTestResult.Delay,
+			}
+		}
+	}
+	if len(seed) > 0 {
+		bOptions.URLTestSeed = seed
 	}
 	return bOptions
 }
@@ -696,44 +742,45 @@ func (r *LocalBackend) RestartVPN() error {
 	return r.vpnClient.Restart(bOptions)
 }
 
+// SelectServer selects the server identified by tag. The empty string is
+// treated as [vpn.AutoSelectTag].
 func (r *LocalBackend) SelectServer(tag string) error {
-	// Normalize up-front so the post-vpnClient settings branch below picks the
-	// auto path instead of falling through to the manual-tag srvManager lookup
-	// (which would reject "" with "no server found with tag"). Mirrors the
-	// same normalization in LocalBackend.ConnectVPN above. VPNClient.SelectServer
-	// already treats "" as AutoSelectTag internally (fac9089); this aligns the
-	// outer wrapper with that behavior so callers can use either spelling.
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
 	if err := r.vpnClient.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
+	r.persistSelection(tag)
+	return nil
+}
+
+// persistSelection records the user's server choice in settings. tag must be
+// AutoSelectTag or the tag of a server known to the manager.
+func (r *LocalBackend) persistSelection(tag string) {
 	if tag == vpn.AutoSelectTag {
-		err := settings.Patch(settings.Settings{
+		if err := settings.Patch(settings.Settings{
 			settings.AutoConnectKey:    true,
 			settings.SelectedServerKey: nil,
-		})
-		if err != nil {
+		}); err != nil {
 			slog.Warn("failed to update settings", "error", err)
 		}
-		return nil
+		return
 	}
-
 	server, found := r.srvManager.GetServerByTag(tag)
-	if !found { // sanity check, the vpn should have errored if this were the case
-		return fmt.Errorf("no server found with tag %s", tag)
+	if !found {
+		slog.Warn("no server found for tag, skipping settings persistence", "tag", tag)
+		return
 	}
 	server.Options = nil
-	err := settings.Patch(settings.Settings{
+	if err := settings.Patch(settings.Settings{
 		settings.AutoConnectKey:    false,
 		settings.SelectedServerKey: server,
-	})
-	if err != nil {
+	}); err != nil {
 		slog.Warn("Failed to save selected server in settings", "error", err)
+		return
 	}
 	slog.Info("Selected server", "tag", tag, "type", server.Type)
-	return nil
 }
 
 // VPNConnections returns a list of all connections, both active and recently closed. If there are no
@@ -836,7 +883,9 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 		urlResults[tag] = servers.URLTestResult{Delay: delay, Time: now}
 	}
 	if len(urlResults) > 0 {
-		r.srvManager.UpdateURLTestResults(urlResults)
+		if err := r.srvManager.UpdateURLTestResults(urlResults); err != nil {
+			slog.Warn("Failed to persist offline URL test results", "error", err)
+		}
 		selected, err := r.vpnClient.CurrentAutoSelectedServer()
 		if err != nil {
 			slog.Warn("Failed to get current auto-selected server after URL tests", "error", err)

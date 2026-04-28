@@ -31,6 +31,7 @@ import (
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
@@ -168,7 +169,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 			return fmt.Errorf("failed to generate wg keys: %w", keyErr)
 		}
 
-		if writeErr := atomicfile.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), 0o600); writeErr != nil {
+		if writeErr := atomicfile.WriteFile(ch.wgKeyPath, []byte(privateKey.String()), fileperm.File); writeErr != nil {
 			return fmt.Errorf("writing wg key file: %w", writeErr)
 		}
 	}
@@ -190,7 +191,7 @@ func (ch *ConfigHandler) fetchConfig() error {
 	ch.logger.Info("Config fetched from server")
 
 	// Save the raw config for debugging
-	if writeErr := atomicfile.WriteFile(strings.TrimSuffix(ch.configPath, ".json")+"_raw.json", resp, 0o600); writeErr != nil {
+	if writeErr := atomicfile.WriteFile(strings.TrimSuffix(ch.configPath, ".json")+"_raw.json", resp, fileperm.File); writeErr != nil {
 		ch.logger.Error("writing raw config file", "error", writeErr)
 	}
 
@@ -395,7 +396,7 @@ func saveConfig(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}
-	return atomicfile.WriteFile(path, buf, 0644)
+	return atomicfile.WriteFile(path, buf, fileperm.File)
 }
 
 // GetConfig returns the current configuration. It returns an error if the config is not yet available.

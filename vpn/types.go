@@ -23,7 +23,6 @@ type Selector interface {
 	SelectOutbound(tag string) bool
 }
 
-// OutboundGroup represents a group of outbounds.
 type OutboundGroup struct {
 	Tag       string
 	Type      string
@@ -31,13 +30,11 @@ type OutboundGroup struct {
 	Outbounds []Outbounds
 }
 
-// Outbounds represents outbounds within a group.
 type Outbounds struct {
 	Tag  string
 	Type string
 }
 
-// Connection represents a network connection with relevant metadata.
 type Connection struct {
 	ID           string
 	Inbound      string

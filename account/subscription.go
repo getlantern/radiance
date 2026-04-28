@@ -40,14 +40,12 @@ type PaymentRedirectData struct {
 	BillingType SubscriptionType `json:"billingType"`
 }
 
-// SubscriptionPlans contains information about available subscription plans and payment providers.
 type SubscriptionPlans struct {
 	*protos.BaseResponse `json:",inline"`
 	Providers            map[string][]*protos.PaymentMethod `json:"providers"`
 	Plans                []*protos.Plan                     `json:"plans"`
 }
 
-// SubscriptionResponse contains information about a created subscription.
 type SubscriptionResponse struct {
 	CustomerID     string `json:"customerId"`
 	SubscriptionID string `json:"subscriptionId"`

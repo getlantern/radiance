@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 )
 
 // Get returns a unique identifier for this device. The identifier is a random UUID that's stored on
@@ -41,7 +42,7 @@ func Get(path string) string {
 		return OldStyleDeviceID()
 	}
 	deviceID := _deviceID.String()
-	if err := atomicfile.WriteFile(filename, []byte(deviceID), 0o644); err != nil {
+	if err := atomicfile.WriteFile(filename, []byte(deviceID), fileperm.File); err != nil {
 		slog.Error("Error storing new deviceID, defaulting to old-style device ID", "error", err)
 		return OldStyleDeviceID()
 	}
@@ -61,7 +62,7 @@ func migrateLegacyDeviceID(dst string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if err := atomicfile.WriteFile(dst, contents, 0o644); err != nil {
+	if err := atomicfile.WriteFile(dst, contents, fileperm.File); err != nil {
 		slog.Warn("Failed to migrate legacy deviceID", "error", err)
 		return "", false
 	}
