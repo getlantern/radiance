@@ -20,11 +20,14 @@ import (
 	"github.com/alitto/pond"
 	"github.com/getlantern/dnstt"
 	"github.com/getlantern/keepcurrent"
+	"github.com/goccy/go-yaml"
+	"go.opentelemetry.io/otel"
+
+	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling/smart"
 	"github.com/getlantern/radiance/traces"
-	"github.com/goccy/go-yaml"
-	"go.opentelemetry.io/otel"
 )
 
 type dnsttConfig struct {
@@ -195,7 +198,7 @@ func onNewDNSTTConfig(configFilepath string, gzippedYML []byte) error {
 
 	localConfigMutex.Lock()
 	defer localConfigMutex.Unlock()
-	return os.WriteFile(configFilepath, gzippedYML, 0644)
+	return atomicfile.WriteFile(configFilepath, gzippedYML, fileperm.File)
 }
 
 func newDNSTT(cfg dnsttConfig) (dnstt.DNSTT, error) {

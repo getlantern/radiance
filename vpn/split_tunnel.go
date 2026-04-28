@@ -2,7 +2,6 @@ package vpn
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,17 +15,17 @@ import (
 
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
-	singjson "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json"
 
-	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/log"
 )
 
 const (
 	splitTunnelTag  = "split-tunnel"
-	splitTunnelFile = splitTunnelTag + ".json"
+	splitTunnelFile = internal.SplitTunnelFileName
 
 	TypeDomain           = "domain"
 	TypeDomainSuffix     = "domainSuffix"
@@ -47,17 +46,18 @@ type SplitTunnel struct {
 	ruleMap      map[string]*O.DefaultHeadlessRule
 	enabled      *atomic.Bool
 	access       sync.Mutex
+	logger       *slog.Logger
 }
 
-func NewSplitTunnelHandler() (*SplitTunnel, error) {
-	s := newSplitTunnel(settings.GetString(settings.DataPathKey))
+func NewSplitTunnelHandler(dataPath string, logger *slog.Logger) (*SplitTunnel, error) {
+	s := newSplitTunnel(dataPath, logger)
 	if err := s.loadRule(); err != nil {
 		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", s.ruleFile, err)
 	}
 	return s, nil
 }
 
-func newSplitTunnel(path string) *SplitTunnel {
+func newSplitTunnel(path string, logger *slog.Logger) *SplitTunnel {
 	rule := defaultRule()
 	s := &SplitTunnel{
 		rule:         rule,
@@ -65,24 +65,17 @@ func newSplitTunnel(path string) *SplitTunnel {
 		activeFilter: &(rule.Rules[1].LogicalOptions),
 		ruleMap:      make(map[string]*O.DefaultHeadlessRule),
 		enabled:      &atomic.Bool{},
+		logger:       logger,
 	}
 	s.initRuleMap()
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
-		slog.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
+		logger.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
 		s.saveToFile()
 	}
 	return s
 }
 
-func (s *SplitTunnel) Enable() error {
-	return s.setEnabled(true)
-}
-
-func (s *SplitTunnel) Disable() error {
-	return s.setEnabled(false)
-}
-
-func (s *SplitTunnel) setEnabled(enabled bool) error {
+func (s *SplitTunnel) SetEnabled(enabled bool) error {
 	if s.enabled.Load() == enabled {
 		return nil
 	}
@@ -97,7 +90,7 @@ func (s *SplitTunnel) setEnabled(enabled bool) error {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
 	s.enabled.Store(enabled)
-	slog.Log(context.Background(), internal.LevelTrace, "Updated split-tunneling", "enabled", enabled)
+	s.logger.Log(context.Background(), log.LevelTrace, "Updated split-tunneling", "enabled", enabled)
 	return nil
 }
 
@@ -105,10 +98,10 @@ func (s *SplitTunnel) IsEnabled() bool {
 	return s.enabled.Load()
 }
 
-func (s *SplitTunnel) Filters() Filter {
+func (s *SplitTunnel) Filters() SplitTunnelFilter {
 	s.access.Lock()
 	defer s.access.Unlock()
-	return Filter{
+	return SplitTunnelFilter{
 		Domain:           slices.Clone(s.ruleMap[TypeDomain].Domain),
 		DomainSuffix:     slices.Clone(s.ruleMap[TypeDomainSuffix].DomainSuffix),
 		DomainKeyword:    slices.Clone(s.ruleMap[TypeDomainKeyword].DomainKeyword),
@@ -120,95 +113,12 @@ func (s *SplitTunnel) Filters() Filter {
 	}
 }
 
-// ItemsJSON returns the items for the given filter type as a JSON-encoded []string.
-func (s *SplitTunnel) ItemsJSON(filterType string) (string, error) {
-	items, err := s.Filters().Items(filterType)
-	if err != nil {
-		return "", err
-	}
-	if items == nil {
-		items = []string{}
-	}
-	b, err := json.Marshal(items)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// EnabledAppsJSON returns all enabled app/process identifiers from the split
-// tunnel configuration as a JSON-encoded []string. It first extracts values
-// from the parsed rule set (current sing-box format with snake_case keys),
-// then falls back to scanning the raw file for legacy camelCase keys.
-func (s *SplitTunnel) EnabledAppsJSON() (string, error) {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 16)
-	isWindows := common.IsWindows()
-
-	addString := func(str string) {
-		str = strings.TrimSpace(str)
-		if str == "" {
-			return
-		}
-		key := str
-		if isWindows {
-			key = strings.ToLower(str)
-		}
-		if _, exists := seen[key]; exists {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, str)
-	}
-
-	addSlice := func(items []string) {
-		for _, str := range items {
-			addString(str)
-		}
-	}
-
-	// Extract from the parsed rule set (current format).
-	f := s.Filters()
-	addSlice(f.ProcessPath)
-	addSlice(f.ProcessPathRegex)
-	addSlice(f.ProcessName)
-	addSlice(f.PackageName)
-
-	// Fall back to legacy camelCase top-level keys in the raw file.
-	b, err := atomicfile.ReadFile(s.ruleFile)
-	if err == nil && len(b) > 0 {
-		m, parseErr := singjson.UnmarshalExtended[map[string]any](b)
-		if parseErr == nil {
-			legacyKeys := []string{
-				"processPathRegex", "processPath", "packageName",
-			}
-			for _, k := range legacyKeys {
-				arr, ok := m[k].([]any)
-				if !ok {
-					continue
-				}
-				for _, it := range arr {
-					if str, ok := it.(string); ok {
-						addString(str)
-					}
-				}
-			}
-		}
-	}
-
-	encoded, err := json.Marshal(out)
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
-}
-
 // AddItem adds a new item to the filter of the given type.
 func (s *SplitTunnel) AddItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, merge); err != nil {
 		return err
 	}
-	slog.Debug("added item to filter", "filterType", filterType, "item", item)
+	s.logger.Debug("added item to filter", "filterType", filterType, "item", item)
 	if err := s.saveToFile(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -220,7 +130,7 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	if err := s.updateFilter(filterType, item, remove); err != nil {
 		return err
 	}
-	slog.Debug("removed item from filter", "filterType", filterType, "item", item)
+	s.logger.Debug("removed item from filter", "filterType", filterType, "item", item)
 	if err := s.saveToFile(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -228,20 +138,20 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 }
 
 // AddItems adds multiple items to the filter.
-func (s *SplitTunnel) AddItems(items Filter) error {
+func (s *SplitTunnel) AddItems(items SplitTunnelFilter) error {
 	s.updateFilters(items, merge)
-	slog.Debug("added items to filter", "items", items.String())
+	s.logger.Debug("added items to filter", "items", items.String())
 	return s.saveToFile()
 }
 
 // RemoveItems removes multiple items from the filter.
-func (s *SplitTunnel) RemoveItems(items Filter) error {
+func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
 	s.updateFilters(items, remove)
-	slog.Debug("removed items from filter", "items", items.String())
+	s.logger.Debug("removed items from filter", "items", items.String())
 	return s.saveToFile()
 }
 
-type Filter struct {
+type SplitTunnelFilter struct {
 	Domain           []string
 	DomainSuffix     []string
 	DomainKeyword    []string
@@ -252,31 +162,7 @@ type Filter struct {
 	PackageName      []string
 }
 
-// Items returns the items for the given filter type.
-func (f Filter) Items(filterType string) ([]string, error) {
-	switch filterType {
-	case TypeDomain:
-		return f.Domain, nil
-	case TypeDomainSuffix:
-		return f.DomainSuffix, nil
-	case TypeDomainKeyword:
-		return f.DomainKeyword, nil
-	case TypeDomainRegex:
-		return f.DomainRegex, nil
-	case TypeProcessName:
-		return f.ProcessName, nil
-	case TypeProcessPath:
-		return f.ProcessPath, nil
-	case TypeProcessPathRegex:
-		return f.ProcessPathRegex, nil
-	case TypePackageName:
-		return f.PackageName, nil
-	default:
-		return nil, fmt.Errorf("unsupported filter type: %s", filterType)
-	}
-}
-
-func (f Filter) String() string {
+func (f SplitTunnelFilter) String() string {
 	var str []string
 	if len(f.Domain) > 0 {
 		str = append(str, fmt.Sprintf("domain: %v", f.Domain))
@@ -337,7 +223,7 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 	return nil
 }
 
-func (s *SplitTunnel) updateFilters(diff Filter, fn actionFn) {
+func (s *SplitTunnel) updateFilters(diff SplitTunnelFilter, fn actionFn) {
 	s.access.Lock()
 	defer s.access.Unlock()
 
@@ -409,11 +295,11 @@ func (s *SplitTunnel) saveToFile() error {
 			},
 		},
 	}
-	buf, err := singjson.Marshal(rs)
+	buf, err := json.Marshal(rs)
 	if err != nil {
 		return fmt.Errorf("marshalling rule set: %w", err)
 	}
-	if err := atomicfile.WriteFile(s.ruleFile, buf, 0644); err != nil {
+	if err := atomicfile.WriteFile(s.ruleFile, buf, fileperm.File); err != nil {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
 	return nil
@@ -432,13 +318,13 @@ func (s *SplitTunnel) loadRule() error {
 	if err != nil {
 		return fmt.Errorf("reading rule file %s: %w", s.ruleFile, err)
 	}
-	ruleSet, err := singjson.UnmarshalExtended[O.PlainRuleSetCompat](content)
+	ruleSet, err := json.UnmarshalExtended[O.PlainRuleSetCompat](content)
 	if err != nil {
 		return fmt.Errorf("unmarshalling rule file %s: %w", s.ruleFile, err)
 	}
 	rules := ruleSet.Options.Rules
 	if len(rules) == 0 {
-		slog.Warn("split tunnel rule file format is invalid, using empty rule")
+		s.logger.Warn("split tunnel rule file format is invalid, using empty rule")
 		return nil
 	}
 
@@ -454,7 +340,7 @@ func (s *SplitTunnel) loadRule() error {
 	} else if len(s.rule.Rules) > 1 && s.rule.Rules[1].Type == C.RuleTypeDefault {
 		// Migrate legacy format: wrap DefaultOptions into LogicalOptions
 		// TODO(2/10): remove in future commit
-		slog.Debug("Migrating legacy split tunnel rule format")
+		s.logger.Debug("Migrating legacy split tunnel rule format")
 		legacyRule := s.rule.Rules[1].DefaultOptions
 		s.rule.Rules[1] = O.HeadlessRule{
 			Type: C.RuleTypeLogical,
@@ -514,7 +400,7 @@ func (s *SplitTunnel) loadRule() error {
 	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 
-	slog.Log(context.Background(), internal.LevelTrace, "loaded split tunnel rules",
+	s.logger.Log(context.Background(), log.LevelTrace, "loaded split tunnel rules",
 		"file", s.ruleFile, "filters", s.Filters().String(), "enabled", s.IsEnabled(),
 	)
 	return nil
@@ -604,7 +490,6 @@ func (s *SplitTunnel) initRuleMap() {
 	for i := range s.activeFilter.Rules {
 		rule := &s.activeFilter.Rules[i].DefaultOptions
 		matched := false
-
 		if len(rule.Domain) > 0 || len(rule.DomainSuffix) > 0 ||
 			len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0 {
 			s.ruleMap[TypeDomain] = rule

@@ -24,14 +24,9 @@ var ampPublicKey string
 
 const ampConfigURL = "https://raw.githubusercontent.com/getlantern/radiance/main/kindling/fronted/amp.yml.gz"
 
-// NewAMPClient creates a new AMP (Accelerated Mobile Pages) client for domain fronting.
-// It initializes the client with the provided context, log writer, and public key for verification.
-// The client automatically fetches and updates its configuration from a remote URL in the background.
-// The context parameter controls the lifecycle of background configuration updates.
-//   - ctx: Used to manage the lifecycle of background configuration updates.
-//   - logWriter: Writer for logging transport and client activity.
-//
-// Returns an initialized amp.Client or an error if setup fails.
+// NewAMPClient builds an AMP-cache-fronted client. ctx scopes the
+// background config-refresh loop; canceling it stops further updates but
+// does not invalidate the returned client.
 func NewAMPClient(ctx context.Context, storagePath string, logWriter io.Writer) (amp.Client, error) {
 	_, span := otel.Tracer(tracerName).Start(
 		ctx,

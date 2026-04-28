@@ -6,30 +6,27 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	C "github.com/getlantern/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/log"
 )
 
 func TestSaveConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, internal.ConfigFileName)
 
 	// Create a sample config to save
 	expectedConfig := Config{
-		ConfigResponse: C.ConfigResponse{
-			// Populate with sample data
-			Servers: []C.ServerLocation{
-				{Country: "US", City: "New York"},
-				{Country: "UK", City: "London"},
-			},
+		// Populate with sample data
+		Servers: []C.ServerLocation{
+			{Country: "US", City: "New York"},
+			{Country: "UK", City: "London"},
 		},
 	}
 	// Save the config
@@ -50,7 +47,7 @@ func TestSaveConfig(t *testing.T) {
 func TestGetConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, internal.ConfigFileName)
 
 	// Create a ConfigHandler with the mock parser
 	ch := &ConfigHandler{
@@ -67,11 +64,9 @@ func TestGetConfig(t *testing.T) {
 	// Test case: Valid config set
 	t.Run("ValidConfigSet", func(t *testing.T) {
 		expectedConfig := &Config{
-			ConfigResponse: C.ConfigResponse{
-				Servers: []C.ServerLocation{
-					{Country: "US", City: "New York"},
-					{Country: "UK", City: "London"},
-				},
+			Servers: []C.ServerLocation{
+				{Country: "US", City: "New York"},
+				{Country: "UK", City: "London"},
 			},
 		}
 
@@ -84,53 +79,10 @@ func TestGetConfig(t *testing.T) {
 	})
 }
 
-func TestSetPreferredServerLocation(t *testing.T) {
-	// Setup temporary directory for testing
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
-
-	// Create a ConfigHandler with the mock parser
-	ctx, cancel := context.WithCancel(context.Background())
-	ch := &ConfigHandler{
-		configPath: configPath,
-		ftr:        newFetcher("en-US", nil),
-		ctx:        ctx,
-		cancel:     cancel,
-	}
-
-	ch.config.Store(&Config{
-		ConfigResponse: C.ConfigResponse{
-			Servers: []C.ServerLocation{
-				{Country: "US", City: "New York"},
-				{Country: "UK", City: "London"},
-			},
-		},
-		PreferredLocation: C.ServerLocation{
-			Country: "US",
-			City:    "New York",
-		},
-	})
-
-	// Test case: Set preferred server location
-	t.Run("SetPreferredServerLocation", func(t *testing.T) {
-		country := "US"
-		city := "Los Angeles"
-
-		// Call SetPreferredServerLocation
-		ch.SetPreferredServerLocation(country, city)
-
-		// Verify the preferred location is updated
-		actualConfig, err := ch.GetConfig()
-		require.NoError(t, err, "Should not return an error when getting config")
-		assert.Equal(t, country, actualConfig.PreferredLocation.Country, "Preferred country should match")
-		assert.Equal(t, city, actualConfig.PreferredLocation.City, "Preferred city should match")
-	})
-}
-
 func TestHandlerFetchConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, common.ConfigFileName)
+	configPath := filepath.Join(tempDir, internal.ConfigFileName)
 
 	// Mock fetcher
 	mockFetcher := &MockFetcher{}
@@ -138,13 +90,12 @@ func TestHandlerFetchConfig(t *testing.T) {
 	// Create a ConfigHandler with the mock parser and fetcher
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := &ConfigHandler{
-		configPath:        configPath,
-		preferredLocation: atomic.Pointer[C.ServerLocation]{},
-		ftr:               mockFetcher,
-		wgKeyPath:         filepath.Join(tempDir, "wg.key"),
-		svrManager:        &mockSrvManager{},
-		ctx:               ctx,
-		cancel:            cancel,
+		configPath: configPath,
+		ftr:        mockFetcher,
+		wgKeyPath:  filepath.Join(tempDir, "wg.key"),
+		ctx:        ctx,
+		cancel:     cancel,
+		logger:     log.NoOpLogger(),
 	}
 
 	// Test case: No server location set
@@ -160,8 +111,8 @@ func TestHandlerFetchConfig(t *testing.T) {
 		require.NoError(t, err, "Should not return an error when no server location is set")
 		actualConfig, err := ch.GetConfig()
 		require.NoError(t, err, "Should not return an error when getting config")
-		assert.Equal(t, "US", actualConfig.ConfigResponse.Servers[0].Country, "First server country should match")
-		assert.Equal(t, "New York", actualConfig.ConfigResponse.Servers[0].City, "First server city should match")
+		assert.Equal(t, "US", actualConfig.Servers[0].Country, "First server country should match")
+		assert.Equal(t, "New York", actualConfig.Servers[0].City, "First server city should match")
 	})
 
 	// Test case: No stored config, fetch succeeds
@@ -174,15 +125,13 @@ func TestHandlerFetchConfig(t *testing.T) {
 		}`)
 		mockFetcher.err = nil
 
-		ch.preferredLocation.Store(&C.ServerLocation{Country: "US", City: "New York"})
-
 		err := ch.fetchConfig()
 		require.NoError(t, err, "Should not return an error when fetch succeeds")
 
 		actualConfig, err := ch.GetConfig()
 		require.NoError(t, err, "Should not return an error when getting config")
-		assert.Equal(t, "US", actualConfig.ConfigResponse.Servers[0].Country, "First server country should match")
-		assert.Equal(t, "New York", actualConfig.ConfigResponse.Servers[0].City, "First server city should match")
+		assert.Equal(t, "US", actualConfig.Servers[0].Country, "First server country should match")
+		assert.Equal(t, "New York", actualConfig.Servers[0].City, "First server city should match")
 	})
 
 	// Test case: Fetch fails
@@ -214,10 +163,6 @@ func TestHandlerFetchConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "parsing config", "Error message should indicate parsing error")
 	})
 }
-
-type mockSrvManager struct{}
-
-func (m *mockSrvManager) SetServers(_ string, _ servers.Options) error { return nil }
 
 // Make sure MockFetcher implements the Fetcher interface
 var _ Fetcher = (*MockFetcher)(nil)

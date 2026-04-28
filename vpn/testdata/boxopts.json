@@ -15,89 +15,43 @@
 			"tag": "direct"
 		},
 		{
-			"type": "block",
-			"tag": "block"
-		},
-		{
 			"type": "http",
-			"tag": "http1-out",
+			"tag": "http-out",
 			"server": "127.0.0.1",
 			"server_port": 4080
 		},
 		{
-			"type": "http",
-			"tag": "http2-out",
-			"server": "127.0.0.1",
-			"server_port": 4443
-		},
-		{
 			"type": "socks",
-			"tag": "socks1-out",
+			"tag": "socks-out",
 			"server": "127.0.0.1",
 			"server_port": 5080
 		},
 		{
-			"type": "socks",
-			"tag": "socks2-out",
-			"server": "127.0.0.1",
-			"server_port": 5443
-		},
-		{
 			"type": "mutableurltest",
-			"tag": "auto-http",
+			"tag": "auto",
 			"outbounds": [
-				"http1-out",
-				"http2-out"
-			]
-		},
-		{
-			"type": "mutableurltest",
-			"tag": "auto-socks",
-			"outbounds": [
-				"socks1-out",
-				"socks2-out"
+				"http-out",
+				"socks-out"
 			]
 		},
 		{
 			"type": "mutableselector",
-			"tag": "http",
+			"tag": "manual",
 			"outbounds": [
-				"auto-http",
-				"http1-out",
-				"http2-out"
-			]
-		},
-		{
-			"type": "mutableselector",
-			"tag": "socks",
-			"outbounds": [
-				"auto-socks",
-				"socks1-out",
-				"socks2-out"
-			]
-		},
-		{
-			"type": "mutableurltest",
-			"tag": "auto-all",
-			"outbounds": [
-				"auto-http",
-				"auto-socks"
+				"http-out",
+				"socks-out"
 			]
 		}
 	],
 	"route": {
 		"rules": [
 			{
-				"clash_mode": "direct",
-				"outbound": "direct"
+				"clash_mode": "auto",
+				"outbound": "auto"
 			},
 			{
-				"clash_mode": "http",
-				"outbound": "http"
-			},
-			{
-				"clash_mode": "socks",
-				"outbound": "socks"
+				"clash_mode": "manual",
+				"outbound": "manual"
 			}
 		]
 	},
@@ -107,7 +61,7 @@
 			"cache_id": "test_cache"
 		},
 		"clash_api": {
-			"default_mode": "Rule"
+			"default_mode": "auto"
 		}
 	}
 }

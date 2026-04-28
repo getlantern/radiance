@@ -1,150 +1,35 @@
 package servers
 
 import (
-	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	C "github.com/getlantern/common"
+	box "github.com/getlantern/lantern-box"
+
+	_ "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/log"
 
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/getlantern/radiance/common"
 )
 
-func newTestManager(t *testing.T) *Manager {
-	t.Helper()
-	dataPath := t.TempDir()
-	mgr := &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds: []option.Outbound{
-					{Tag: "ss-denver", Type: "shadowsocks", Options: &option.ShadowsocksOutboundOptions{
-						ServerOptions: option.ServerOptions{
-							Server:     "1.2.3.4",
-							ServerPort: 1080,
-						},
-						Method:   "chacha20-ietf-poly1305",
-						Password: "testpass",
-					}},
-				},
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: map[string]C.ServerLocation{
-					"ss-denver": {Country: "US", City: "Denver", CountryCode: "US"},
-				},
-				Credentials: make(map[string]ServerCredentials),
-			},
-			SGUser: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-		},
-		optsMaps: map[ServerGroup]map[string]any{
-			SGLantern: {"ss-denver": option.Outbound{Tag: "ss-denver", Type: "shadowsocks", Options: &option.ShadowsocksOutboundOptions{
-				ServerOptions: option.ServerOptions{Server: "1.2.3.4", ServerPort: 1080},
-				Method:        "chacha20-ietf-poly1305",
-				Password:      "testpass",
-			}}},
-			SGUser: make(map[string]any),
-		},
-		serversFile: filepath.Join(dataPath, common.ServersFileName),
-	}
-	return mgr
-}
-
-func TestServersJSON(t *testing.T) {
-	mgr := newTestManager(t)
-
-	b, err := mgr.ServersJSON()
-	require.NoError(t, err)
-	require.NotEmpty(t, b)
-
-	// Must be valid JSON
-	var raw map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(b, &raw), "ServersJSON must return valid JSON")
-	assert.Contains(t, raw, "lantern")
-	assert.Contains(t, raw, "user")
-
-	// Lantern group must include the sing-box type-specific fields
-	lanternJSON := string(raw["lantern"])
-	assert.Contains(t, lanternJSON, "shadowsocks", "should contain outbound type")
-	assert.Contains(t, lanternJSON, "1.2.3.4", "should contain server address")
-	assert.Contains(t, lanternJSON, "1080", "should contain server port")
-	assert.Contains(t, lanternJSON, "chacha20-ietf-poly1305", "should contain method")
-}
-
-func TestGetServerByTagJSON(t *testing.T) {
-	mgr := newTestManager(t)
-
-	t.Run("existing tag", func(t *testing.T) {
-		b, ok, err := mgr.GetServerByTagJSON("ss-denver")
-		require.NoError(t, err)
-		require.True(t, ok)
-		require.NotEmpty(t, b)
-
-		// Must be valid JSON
-		var raw map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(b, &raw), "GetServerByTagJSON must return valid JSON")
-		assert.Contains(t, raw, "Tag")
-		assert.Contains(t, raw, "Type")
-		assert.Contains(t, raw, "Options")
-		assert.Contains(t, raw, "Location")
-
-		// Verify the correct tag and type
-		fullJSON := string(b)
-		assert.Contains(t, fullJSON, "ss-denver")
-		assert.Contains(t, fullJSON, "shadowsocks")
-		assert.Contains(t, fullJSON, "Denver")
-	})
-
-	t.Run("missing tag", func(t *testing.T) {
-		b, ok, err := mgr.GetServerByTagJSON("nonexistent")
-		assert.NoError(t, err)
-		assert.False(t, ok)
-		assert.Nil(t, b)
-	})
-}
-
 func TestPrivateServerIntegration(t *testing.T) {
-	dataPath := t.TempDir()
-	manager := &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-			SGUser: Options{
-				Outbounds:   make([]option.Outbound, 0),
-				Endpoints:   make([]option.Endpoint, 0),
-				Locations:   make(map[string]C.ServerLocation),
-				Credentials: make(map[string]ServerCredentials),
-			},
-		},
-		optsMaps: map[ServerGroup]map[string]any{
-			SGLantern: make(map[string]any),
-			SGUser:    make(map[string]any),
-		},
-		serversFile: filepath.Join(dataPath, common.ServersFileName),
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
+	manager := testManager(t)
+	manager.httpClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
 			},
 		},
 	}
@@ -155,24 +40,27 @@ func TestPrivateServerIntegration(t *testing.T) {
 	port, _ := strconv.Atoi(parsedURL.Port())
 
 	t.Run("convert a token into a custom server", func(t *testing.T) {
-		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", nil, false))
-		require.Contains(t, manager.optsMaps[SGUser], "s1", "server should be added to the manager")
+		require.NoError(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, "rootToken", C.ServerLocation{}, false))
+		_, exists := manager.servers["s1"]
+		require.True(t, exists, "server should be added to the manager")
 	})
 
-	t.Run("invite a user", func(t *testing.T) {
+	t.Run("invite user", func(t *testing.T) {
 		inviteToken, err := manager.InviteToPrivateServer(parsedURL.Hostname(), port, "rootToken", "invite1")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, inviteToken)
 
-		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, nil, true))
-		require.Contains(t, manager.optsMaps[SGUser], "s2", "server should be added for the invited user")
+		require.NoError(t, manager.AddPrivateServer("s2", parsedURL.Hostname(), port, inviteToken, C.ServerLocation{}, true))
+		_, exists := manager.servers["s2"]
+		require.True(t, exists, "server should be added for the invited user")
 
 		t.Run("revoke user access", func(t *testing.T) {
-			delete(manager.optsMaps[SGUser], "s1")
+			delete(manager.servers, "s1")
 			require.NoError(t, manager.RevokePrivateServerInvite(parsedURL.Hostname(), port, "rootToken", "invite1"))
 			// trying to access again with the same token should fail
-			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, nil, true))
-			assert.NotContains(t, manager.optsMaps[SGUser], "s1", "server should not be added after revoking invite")
+			assert.Error(t, manager.AddPrivateServer("s1", parsedURL.Hostname(), port, inviteToken, C.ServerLocation{}, true))
+			_, exists := manager.servers["s1"]
+			assert.False(t, exists, "server should not be added after revoking invite")
 		})
 	})
 
@@ -186,8 +74,6 @@ type lanternServerManagerMock struct {
 func newLanternServerManagerMock() *httptest.Server {
 	testConfig := `
 {
-	"inbounds": [
-	],
 	"outbounds": [
 		{
 			"tag": "testing-out",
@@ -244,223 +130,83 @@ func (s *lanternServerManagerMock) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNotFound)
 }
 
-func TestAddServerWithSingBoxJSON(t *testing.T) {
-	dataPath := t.TempDir()
-	manager := &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
-			},
-			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
-			},
-		},
-		optsMaps: map[ServerGroup]map[string]any{
-			SGLantern: make(map[string]any),
-			SGUser:    make(map[string]any),
-		},
-		serversFile: filepath.Join(dataPath, common.ServersFileName),
-	}
-
-	ctx := context.Background()
-	jsonConfig := `
-	{
-		"outbounds": [
-			{
-               "type": "shadowsocks",
-               "tag": "ss-out",
-               "server": "127.0.0.1",
-               "server_port": 8388,
-               "method": "chacha20-ietf-poly1305",
-               "password": "randompasswordwith24char",
-               "network": "tcp"
-            }
-		]
-	}`
-
-	t.Run("adding server with a sing-box json config should work", func(t *testing.T) {
-		require.NoError(t, manager.AddServerWithSingboxJSON(ctx, []byte(jsonConfig)))
+func TestAddServersByJSON(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		testConfig := []byte(`
+{
+	"outbounds": [
+		{
+			"tag": "out",
+			"type": "shadowsocks",
+			"server": "127.0.0.1",
+			"server_port": 1080,
+			"method": "chacha20-ietf-poly1305",
+			"password": "<PASSWORD>",
+		}
+	]
+}`)
+		type singboxConfig struct {
+			Outbounds []option.Outbound `json:"outbounds,omitempty"`
+		}
+		cfg, err := json.UnmarshalExtendedContext[singboxConfig](box.BaseContext(), testConfig)
+		require.NoError(t, err, "failed to unmarshal test config")
+		want := &Server{
+			Tag:       "out",
+			Type:      "shadowsocks",
+			IsLantern: false,
+			Options:   cfg.Outbounds[0],
+		}
+		m := testManager(t)
+		tags, err := m.AddServersByJSON(t.Context(), testConfig)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"out"}, tags)
+		got, exists := m.GetServerByTag("out")
+		assert.True(t, exists, "server was not added")
+		assert.Equal(t, want.Tag, got.Tag)
+		assert.Equal(t, want.Type, got.Type)
+		assert.Equal(t, want.IsLantern, got.IsLantern)
 	})
-	t.Run("using a empty config should return an error", func(t *testing.T) {
-		require.Error(t, manager.AddServerWithSingboxJSON(ctx, []byte{}))
-	})
-	t.Run("providing a json that doesn't have any endpoints or outbounds should return a error", func(t *testing.T) {
-		require.Error(t, manager.AddServerWithSingboxJSON(ctx, json.RawMessage("{}")))
+	t.Run("empty config", func(t *testing.T) {
+		m := testManager(t)
+		_, err := m.AddServersByJSON(t.Context(), []byte("{}"))
+		assert.Error(t, err)
+		assert.Empty(t, m.servers, "no servers should have been added")
 	})
 }
 
-func TestAddServerBasedOnURLs(t *testing.T) {
-	dataPath := t.TempDir()
-	manager := &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
-			},
-			SGUser: Options{
-				Outbounds: make([]option.Outbound, 0),
-				Endpoints: make([]option.Endpoint, 0),
-				Locations: make(map[string]C.ServerLocation),
-			},
-		},
-		optsMaps: map[ServerGroup]map[string]any{
-			SGLantern: make(map[string]any),
-			SGUser:    make(map[string]any),
-		},
-		serversFile: filepath.Join(dataPath, common.ServersFileName),
-	}
-	ctx := context.Background()
-	after := func() {
-		manager.RemoveServer("VLESS+over+WS+with+TLS")
-		manager.RemoveServer("Trojan+with+TLS")
-		manager.RemoveServer("SpecialName")
-	}
-
-	urls := strings.Join([]string{
+func TestAddServersByURL(t *testing.T) {
+	urls := []string{
 		"vless://uuid@host:443?encryption=none&security=tls&type=ws&host=example.com&path=/vless#VLESS+over+WS+with+TLS",
 		"trojan://password@host:443?security=tls&sni=example.com#Trojan+with+TLS",
-	}, "\n")
-	t.Run("adding server based on URLs should work", func(t *testing.T) {
-		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, false, ""))
-		assert.Contains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
-		assert.Contains(t, manager.optsMaps[SGUser], "Trojan+with+TLS")
-		after()
-	})
-
-	t.Run("using empty URLs should return an error", func(t *testing.T) {
-		require.Error(t, manager.AddServerBasedOnURLs(ctx, "", false, ""))
-	})
-
-	t.Run("skip certificate verification option works", func(t *testing.T) {
-		require.NoError(t, manager.AddServerBasedOnURLs(ctx, urls, true, ""))
-		opts, isOutbound := manager.optsMaps[SGUser]["Trojan+with+TLS"].(option.Outbound)
-		require.True(t, isOutbound)
-		trojanSettings, ok := opts.Options.(*option.TrojanOutboundOptions)
-		require.True(t, ok)
-		require.NotNil(t, trojanSettings)
-		require.NotNil(t, trojanSettings.TLS)
-		assert.True(t, trojanSettings.OutboundTLSOptionsContainer.TLS.Insecure, trojanSettings.OutboundTLSOptionsContainer.TLS)
-		after()
-	})
-
-	url := "vless://uuid@host:443?encryption=none&security=tls&type=ws&host=example.com&path=/vless#VLESS+over+WS+with+TLS"
-	t.Run("adding single URL should work", func(t *testing.T) {
-		require.NoError(t, manager.AddServerBasedOnURLs(ctx, url, false, "SpecialName"))
-		assert.Contains(t, manager.optsMaps[SGUser], "SpecialName")
-		assert.NotContains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
-
-		require.NoError(t, manager.AddServerBasedOnURLs(ctx, url, false, ""))
-		assert.Contains(t, manager.optsMaps[SGUser], "VLESS+over+WS+with+TLS")
-		assert.Contains(t, manager.optsMaps[SGUser], "SpecialName")
-		after()
-	})
-}
-func TestServers(t *testing.T) {
-	dataPath := t.TempDir()
-	manager := &Manager{
-		servers: Servers{
-			SGLantern: Options{
-				Outbounds: []option.Outbound{
-					{Tag: "lantern-out", Type: "shadowsocks"},
-				},
-				Endpoints: []option.Endpoint{
-					{Tag: "lantern-ep", Type: "shadowsocks"},
-				},
-				Locations: map[string]C.ServerLocation{
-					"lantern-out": {City: "New York", Country: "US"},
-				},
-			},
-			SGUser: Options{
-				Outbounds: []option.Outbound{
-					{Tag: "user-out", Type: "trojan"},
-				},
-				Endpoints: []option.Endpoint{
-					{Tag: "user-ep", Type: "vless"},
-				},
-				Locations: map[string]C.ServerLocation{
-					"user-out": {City: "London", Country: "GB"},
-				},
-			},
-		},
-		optsMaps: map[ServerGroup]map[string]any{
-			SGLantern: {
-				"lantern-out": option.Outbound{Tag: "lantern-out", Type: "shadowsocks"},
-				"lantern-ep":  option.Endpoint{Tag: "lantern-ep", Type: "shadowsocks"},
-			},
-			SGUser: {
-				"user-out": option.Outbound{Tag: "user-out", Type: "trojan"},
-				"user-ep":  option.Endpoint{Tag: "user-ep", Type: "vless"},
-			},
-		},
-		serversFile: filepath.Join(dataPath, common.ServersFileName),
 	}
-
-	t.Run("returns copy of servers", func(t *testing.T) {
-		servers := manager.Servers()
-
-		require.NotNil(t, servers)
-		require.Contains(t, servers, SGLantern)
-		require.Contains(t, servers, SGUser)
-
-		assert.Len(t, servers[SGLantern].Outbounds, 1)
-		assert.Len(t, servers[SGLantern].Endpoints, 1)
-		assert.Equal(t, "lantern-out", servers[SGLantern].Outbounds[0].Tag)
-		assert.Equal(t, "lantern-ep", servers[SGLantern].Endpoints[0].Tag)
-
-		assert.Len(t, servers[SGUser].Outbounds, 1)
-		assert.Len(t, servers[SGUser].Endpoints, 1)
-		assert.Equal(t, "user-out", servers[SGUser].Outbounds[0].Tag)
-		assert.Equal(t, "user-ep", servers[SGUser].Endpoints[0].Tag)
-
-		assert.Equal(t, "New York", servers[SGLantern].Locations["lantern-out"].City)
-		assert.Equal(t, "London", servers[SGUser].Locations["user-out"].City)
+	t.Run("valid urls", func(t *testing.T) {
+		m := testManager(t)
+		tags, err := m.AddServersByURL(t.Context(), urls, false)
+		require.NoError(t, err)
+		assert.Len(t, tags, 2)
+		_, exists := m.GetServerByTag("VLESS+over+WS+with+TLS")
+		assert.True(t, exists, "VLESS server should be added")
+		_, exists = m.GetServerByTag("Trojan+with+TLS")
+		assert.True(t, exists, "Trojan server should be added")
 	})
+	t.Run("skip certificate", func(t *testing.T) {
+		m := testManager(t)
+		_, err := m.AddServersByURL(t.Context(), urls, true)
+		require.NoError(t, err)
+		server, exists := m.GetServerByTag("Trojan+with+TLS")
+		require.True(t, exists, "Trojan server should be added")
 
-	t.Run("modifications to returned copy don't affect original", func(t *testing.T) {
-		servers := manager.Servers()
-		assert.Len(t, servers[SGLantern].Outbounds, 1)
-		assert.Len(t, servers[SGUser].Endpoints, 1)
-
-		// Modify the copy
-		servers[SGLantern].Outbounds[0].Tag = "modified-out"
-
-		// Original should remain unchanged
-		originalServers := manager.Servers()
-		assert.NotEqual(t, originalServers[SGLantern].Outbounds[0].Tag, "modified-out")
+		options := server.Options.(option.Outbound).Options
+		require.IsType(t, &option.TrojanOutboundOptions{}, options)
+		trojanOpts := options.(*option.TrojanOutboundOptions)
+		require.NotNil(t, trojanOpts.TLS)
+		assert.True(t, trojanOpts.TLS.Insecure, "TLS.Insecure should be true")
 	})
-
-	t.Run("handles empty servers", func(t *testing.T) {
-		emptyManager := &Manager{
-			servers: Servers{
-				SGLantern: Options{
-					Outbounds: make([]option.Outbound, 0),
-					Endpoints: make([]option.Endpoint, 0),
-					Locations: make(map[string]C.ServerLocation),
-				},
-				SGUser: Options{
-					Outbounds: make([]option.Outbound, 0),
-					Endpoints: make([]option.Endpoint, 0),
-					Locations: make(map[string]C.ServerLocation),
-				},
-			},
-			optsMaps: map[ServerGroup]map[string]any{
-				SGLantern: make(map[string]any),
-				SGUser:    make(map[string]any),
-			},
-			serversFile: filepath.Join(dataPath, common.ServersFileName),
-		}
-
-		servers := emptyManager.Servers()
-		require.NotNil(t, servers)
-		assert.Len(t, servers[SGLantern].Outbounds, 0)
-		assert.Len(t, servers[SGLantern].Endpoints, 0)
-		assert.Len(t, servers[SGUser].Outbounds, 0)
-		assert.Len(t, servers[SGUser].Endpoints, 0)
+	t.Run("empty urls", func(t *testing.T) {
+		m := testManager(t)
+		_, err := m.AddServersByURL(t.Context(), []string{}, false)
+		assert.Error(t, err)
+		assert.Empty(t, m.servers, "no servers should have been added")
 	})
 }
 
@@ -469,7 +215,7 @@ func TestServers(t *testing.T) {
 // previous implementation, two concurrent saveServers calls could reorder
 // their marshal/write sequence and leave the older snapshot on disk.
 func TestSaveServersConcurrent(t *testing.T) {
-	mgr := newTestManager(t)
+	mgr := testManager(t)
 
 	// Run many concurrent mutations.
 	const concurrency = 20
@@ -480,19 +226,23 @@ func TestSaveServersConcurrent(t *testing.T) {
 			defer func() { done <- struct{}{} }()
 			for j := 0; j < opsPerGoroutine; j++ {
 				tag := fmt.Sprintf("concurrent-%d-%d", id, j)
-				opts := Options{
-					Outbounds: []option.Outbound{{Tag: tag, Type: "shadowsocks", Options: &option.ShadowsocksOutboundOptions{
-						ServerOptions: option.ServerOptions{Server: "9.9.9.9", ServerPort: 443},
-						Method:        "chacha20-ietf-poly1305",
-						Password:      "pw",
-					}}},
-					Endpoints: []option.Endpoint{},
-					Locations: map[string]C.ServerLocation{
-						tag: {Country: "US", City: "X", CountryCode: "US"},
-					},
-					Credentials: map[string]ServerCredentials{},
+				list := ServerList{
+					Servers: []*Server{{
+						Tag:  tag,
+						Type: "shadowsocks",
+						Options: option.Outbound{
+							Tag:  tag,
+							Type: "shadowsocks",
+							Options: &option.ShadowsocksOutboundOptions{
+								ServerOptions: option.ServerOptions{Server: "9.9.9.9", ServerPort: 443},
+								Method:        "chacha20-ietf-poly1305",
+								Password:      "pw",
+							},
+						},
+						Location: C.ServerLocation{Country: "US", City: "X", CountryCode: "US"},
+					}},
 				}
-				_ = mgr.AddServers(SGUser, opts)
+				_ = mgr.AddServers(list, true)
 			}
 		}(i)
 	}
@@ -500,24 +250,36 @@ func TestSaveServersConcurrent(t *testing.T) {
 		<-done
 	}
 
-	// After all concurrent operations, the on-disk file must match the
-	// current in-memory state. If saves can reorder, the file would lag.
-	inMem, err := mgr.ServersJSON()
-	require.NoError(t, err)
-
-	// Force a final save so we compare against the last committed snapshot.
+	// After all concurrent operations, force a save and reload into a fresh
+	// manager. The reloaded state must have exactly the same servers as the
+	// original — if saves can reorder, the file would lag behind.
 	require.NoError(t, mgr.saveServers())
 
-	onDiskBytes, err := os.ReadFile(mgr.serversFile)
-	require.NoError(t, err)
-	assert.JSONEq(t, string(inMem), string(onDiskBytes), "disk file must match in-memory state after concurrent saves")
+	mgr2 := testManager(t)
+	mgr2.serversFile = mgr.serversFile
+	require.NoError(t, mgr2.loadServers())
+	assert.Equal(t, len(mgr.AllServers()), len(mgr2.AllServers()),
+		"reloaded server count must match in-memory count")
+
+	for _, srv := range mgr.AllServers() {
+		_, ok := mgr2.GetServerByTag(srv.Tag)
+		assert.True(t, ok, "server %q must survive save/reload", srv.Tag)
+	}
 }
 
 func TestRetryableHTTPClient(t *testing.T) {
-	cli := retryableHTTPClient().StandardClient()
+	cli := retryableHTTPClient(log.NoOpLogger()).StandardClient()
 	request, err := http.NewRequest(http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 	require.NoError(t, err)
 	resp, err := cli.Do(request)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+func testManager(t *testing.T) *Manager {
+	return &Manager{
+		servers:     make(map[string]*Server),
+		serversFile: filepath.Join(t.TempDir(), internal.ServersFileName),
+		logger:      log.NoOpLogger(),
+	}
 }
