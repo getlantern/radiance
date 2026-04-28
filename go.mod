@@ -30,7 +30,7 @@ require (
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
-	github.com/getlantern/kindling v0.0.0-20260428160052-7e12821191c5
+	github.com/getlantern/kindling v0.0.0-20260428171407-6143132aaf40
 	github.com/getlantern/lantern-box v0.0.74
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
