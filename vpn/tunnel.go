@@ -16,7 +16,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/common/urltest"
-	"github.com/sagernet/sing-box/experimental/clashapi"
+	"github.com/sagernet/sing-box/experimental"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
@@ -44,7 +44,7 @@ import (
 type tunnel struct {
 	ctx            context.Context
 	lbService      *libbox.BoxService
-	clashServer    *clashapi.Server
+	clashServer    *clashServer
 	urltestHistory adapter.URLTestHistoryStorage
 	urlTestSeed    map[string]adapter.URLTestHistory
 	logFactory     sblog.ObservableFactory
@@ -141,6 +141,8 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
+	experimental.RegisterClashServerConstructor(newClashServer)
+
 	t.urltestHistory = urltest.NewHistoryStorage()
 	for tag, h := range t.urlTestSeed {
 		t.urltestHistory.StoreURLTestHistory(tag, &h)
@@ -157,6 +159,8 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	}); err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
 	}
+	cacheFile := service.FromContext[adapter.CacheFile](t.ctx)
+	service.MustRegister[adapter.CacheFile](t.ctx, &cacheFileWrapper{CacheFile: cacheFile})
 
 	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
@@ -247,7 +251,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	}
 	slog.Debug("Libbox service started")
 
-	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashapi.Server)
+	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashServer)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 
 	var mutGrpMgr *groups.MutableGroupManager
@@ -629,4 +633,19 @@ func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		return nil, err
 	}
 	return resp, nil
+}
+
+// cacheFileWrapper suppresses libbox's persistence of the selected outbound
+// so BoxOptions.InitialServer controls the selection on each connect rather
+// than a stale value from disk.
+type cacheFileWrapper struct {
+	adapter.CacheFile
+}
+
+func (c *cacheFileWrapper) LoadSelected(_ string) string {
+	return ""
+}
+
+func (c *cacheFileWrapper) StoreSelected(_, _ string) error {
+	return nil
 }

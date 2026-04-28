@@ -69,6 +69,10 @@ type BoxOptions struct {
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// InitialServer chooses the outbound selected when the tunnel starts.
+	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
+	// must match an outbound or endpoint and forces manual selection.
+	InitialServer string `json:"initial_server,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
 	// default MutableURLTest URL for each specific outbound, allowing the
@@ -335,6 +339,18 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
+	initial := bOptions.InitialServer
+	if initial == "" || initial == AutoSelectTag {
+		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
+	} else {
+		// The manual selector defaults to its first tag, so place initial at index 0.
+		i := slices.Index(tags, initial)
+		if i == -1 {
+			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
+		}
+		tags[0], tags[i] = tags[i], tags[0]
+		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
+	}
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))

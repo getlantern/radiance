@@ -592,9 +592,15 @@ const urlTestFlushInterval = 5 * time.Second
 func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 	r.urlTestMu.Lock()
 	defer r.urlTestMu.Unlock()
-	if status == vpn.Connected {
+	// Status events are dispatched in unordered goroutines, so reacting to
+	// intermediate statuses (Connecting, Disconnecting, Restarting) risks a
+	// stale handler tearing down a listener a concurrent Connected handler
+	// just attached to the new tunnel.
+	switch status {
+	case vpn.Connected:
 		if r.stopURLTestListener != nil {
-			return // already running
+			r.stopURLTestListener()
+			r.stopURLTestListener = nil
 		}
 		storage := r.vpnClient.HistoryStorage()
 		if storage == nil {
@@ -606,10 +612,12 @@ func (r *LocalBackend) updateURLTestListener(status vpn.VPNStatus) {
 		storage.SetHook(hook)
 		go r.runURLTestListener(ctx, storage, hook)
 		slog.Debug("Started URL test result listener")
-	} else if r.stopURLTestListener != nil {
-		r.stopURLTestListener()
-		r.stopURLTestListener = nil
-		slog.Debug("Stopped URL test result listener")
+	case vpn.Disconnected, vpn.ErrorStatus:
+		if r.stopURLTestListener != nil {
+			r.stopURLTestListener()
+			r.stopURLTestListener = nil
+			slog.Debug("Stopped URL test result listener")
+		}
 	}
 }
 
@@ -670,12 +678,11 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 		}
 	}
 	bOptions := r.getBoxOptions()
+	bOptions.InitialServer = tag
 	if err := r.vpnClient.Connect(bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
-	if err := r.SelectServer(tag); err != nil {
-		return fmt.Errorf("failed to select server: %w", err)
-	}
+	r.persistSelection(tag)
 	return nil
 }
 
@@ -737,31 +744,36 @@ func (r *LocalBackend) SelectServer(tag string) error {
 	if err := r.vpnClient.SelectServer(tag); err != nil {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
+	r.persistSelection(tag)
+	return nil
+}
+
+// persistSelection records the user's server choice in settings. tag must be
+// AutoSelectTag or the tag of a server known to the manager.
+func (r *LocalBackend) persistSelection(tag string) {
 	if tag == vpn.AutoSelectTag {
-		err := settings.Patch(settings.Settings{
+		if err := settings.Patch(settings.Settings{
 			settings.AutoConnectKey:    true,
 			settings.SelectedServerKey: nil,
-		})
-		if err != nil {
+		}); err != nil {
 			slog.Warn("failed to update settings", "error", err)
 		}
-		return nil
+		return
 	}
-
 	server, found := r.srvManager.GetServerByTag(tag)
-	if !found { // sanity check, the vpn should have errored if this were the case
-		return fmt.Errorf("no server found with tag %s", tag)
+	if !found {
+		slog.Warn("no server found for tag, skipping settings persistence", "tag", tag)
+		return
 	}
 	server.Options = nil
-	err := settings.Patch(settings.Settings{
+	if err := settings.Patch(settings.Settings{
 		settings.AutoConnectKey:    false,
 		settings.SelectedServerKey: server,
-	})
-	if err != nil {
+	}); err != nil {
 		slog.Warn("Failed to save selected server in settings", "error", err)
+		return
 	}
 	slog.Info("Selected server", "tag", tag, "type", server.Type)
-	return nil
 }
 
 // VPNConnections returns a list of all connections, both active and recently closed. If there are no
