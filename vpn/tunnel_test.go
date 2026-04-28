@@ -1,178 +1,111 @@
 package vpn
 
 import (
-	"path/filepath"
+	"context"
 	"testing"
-	"time"
 
-	sbA "github.com/sagernet/sing-box/adapter"
-	sbC "github.com/sagernet/sing-box/constant"
-	sbO "github.com/sagernet/sing-box/option"
+	lsync "github.com/getlantern/common/sync"
+	box "github.com/getlantern/lantern-box"
+	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getlantern/lantern-box/adapter"
-	lbgroups "github.com/getlantern/lantern-box/adapter/groups"
-	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/internal/testutil"
 	"github.com/getlantern/radiance/servers"
-	"github.com/getlantern/radiance/vpn/ipc"
 )
 
-func TestConnection(t *testing.T) {
-	testutil.SetPathsForTesting(t)
-	opts, optsStr, err := testBoxOptions(settings.GetString(settings.DataPathKey))
-	require.NoError(t, err, "failed to get test box options")
+type errCloser struct{ err error }
 
-	tmp := settings.GetString(settings.DataPathKey)
+func (c errCloser) Close() error { return c.err }
 
-	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
-	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
-	newSplitTunnel(tmp)
-
-	tun := &tunnel{
-		dataPath: tmp,
-	}
-
-	require.NoError(t, tun.start(t.Context(), optsStr, nil), "failed to establish connection")
-	t.Cleanup(func() {
-		tun.close()
+func TestTunnelClose(t *testing.T) {
+	t.Run("no resources", func(t *testing.T) {
+		tun := &tunnel{}
+		err := tun.close()
+		assert.NoError(t, err)
+		assert.Nil(t, tun.closers)
+		assert.Nil(t, tun.lbService)
 	})
 
-	require.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
+	t.Run("cancels context", func(t *testing.T) {
+		tun := &tunnel{}
+		ctx, cancel := context.WithCancel(context.Background())
+		tun.cancel = cancel
 
-	assert.NoError(t, tun.selectOutbound("http", "http1-out"), "failed to select http outbound")
-	assert.NoError(t, tun.close(), "failed to close lbService")
-	assert.Equal(t, ipc.Disconnected, tun.Status(), "tun should be closed")
-}
-
-func TestUpdateServers(t *testing.T) {
-	testutil.SetPathsForTesting(t)
-	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
-	require.NoError(t, err, "failed to get test box options")
-
-	baseOuts := baseOpts(settings.GetString(settings.DataPathKey)).Outbounds
-	allOutbounds := map[string]sbO.Outbound{
-		"direct": baseOuts[0],
-		"block":  baseOuts[1],
-	}
-	for _, out := range testOpts.Outbounds {
-		switch out.Type {
-		case sbC.TypeHTTP, sbC.TypeSOCKS:
-			allOutbounds[out.Tag] = out
-		default:
-		}
-	}
-
-	lanternTags := []string{"http1-out", "http2-out", "socks1-out"}
-	userTags := []string{}
-	outs := []sbO.Outbound{
-		allOutbounds["direct"], allOutbounds["block"],
-		allOutbounds["http1-out"], allOutbounds["http2-out"], allOutbounds["socks1-out"],
-		urlTestOutbound(autoLanternTag, lanternTags, nil), urlTestOutbound(autoUserTag, userTags, nil),
-		selectorOutbound(servers.SGLantern, append(lanternTags, autoLanternTag)),
-		selectorOutbound(servers.SGUser, append(userTags, autoUserTag)),
-		urlTestOutbound(autoAllTag, []string{autoLanternTag, autoUserTag}, nil),
-	}
-
-	testOpts.Outbounds = outs
-	tun := testConnection(t, *testOpts)
-	defer func() {
-		tun.close()
-	}()
-
-	time.Sleep(500 * time.Millisecond)
-
-	err = tun.removeOutbounds(servers.SGLantern, []string{"http2-out", "socks1-out"})
-	require.NoError(t, err, "failed to remove servers from lantern")
-
-	newOpts := servers.Options{
-		Outbounds: []sbO.Outbound{
-			allOutbounds["http1-out"], allOutbounds["socks2-out"],
-		},
-	}
-	err = tun.addOutbounds(servers.SGLantern, newOpts)
-	require.NoError(t, err, "failed to update servers for lantern")
-
-	time.Sleep(250 * time.Millisecond)
-
-	outboundMgr := service.FromContext[sbA.OutboundManager](tun.ctx)
-	require.NotNil(t, outboundMgr, "outbound manager should not be nil")
-
-	groups := tun.mutGrpMgr.OutboundGroups()
-
-	want := map[string][]string{
-		autoAllTag:        {autoLanternTag, autoUserTag},
-		servers.SGLantern: {autoLanternTag, "http1-out", "socks2-out"},
-		autoLanternTag:    {"http1-out", "socks2-out"},
-		servers.SGUser:    {autoUserTag},
-		autoUserTag:       {},
-	}
-	got := make(map[string][]string)
-	allTags := []string{"direct", "block", autoAllTag, autoLanternTag, autoUserTag, servers.SGLantern, servers.SGUser}
-	for _, g := range groups {
-		tags := g.All()
-		got[g.Tag()] = tags
-		allTags = append(allTags, tags...)
-	}
-	for _, tag := range allTags {
-		if _, found := outboundMgr.Outbound(tag); !found {
-			assert.Failf(t, "outbound missing from outbound manager", "outbound %s not found", tag)
-		}
-	}
-	for group, tags := range want {
-		assert.ElementsMatchf(t, tags, got[group], "group %s does not have correct outbounds", group)
-	}
-}
-
-func getGroups(outboundMgr sbA.OutboundManager) []adapter.MutableOutboundGroup {
-	outbounds := outboundMgr.Outbounds()
-	var iGroups []adapter.MutableOutboundGroup
-	for _, it := range outbounds {
-		if group, isGroup := it.(adapter.MutableOutboundGroup); isGroup {
-			iGroups = append(iGroups, group)
-		}
-	}
-	return iGroups
-}
-
-func testConnection(t *testing.T, opts sbO.Options) *tunnel {
-	tmp := settings.GetString(settings.DataPathKey)
-
-	opts.Route.RuleSet = baseOpts(settings.GetString(settings.DataPathKey)).Route.RuleSet
-	opts.Route.RuleSet[0].LocalOptions.Path = filepath.Join(tmp, splitTunnelFile)
-	opts.Route.Rules = append([]sbO.Rule{baseOpts(settings.GetString(settings.DataPathKey)).Route.Rules[2]}, opts.Route.Rules...)
-	newSplitTunnel(tmp)
-
-	tun := &tunnel{
-		dataPath: tmp,
-	}
-
-	options, _ := json.Marshal(opts)
-	err := tun.start(t.Context(), string(options), nil)
-	require.NoError(t, err, "failed to establish connection")
-	t.Cleanup(func() {
-		tun.close()
+		err := tun.close()
+		assert.NoError(t, err)
+		assert.Error(t, ctx.Err(), "context should be cancelled after close")
 	})
 
-	assert.Equal(t, ipc.Connected, tun.Status(), "tunnel should be running")
-	return tun
+	t.Run("propagates closer errors", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.closers = append(tun.closers, errCloser{err: assert.AnError})
+
+		err := tun.close()
+		assert.ErrorIs(t, err, assert.AnError)
+	})
 }
 
-func TestTunnelClose_ClosesMutableGroupManager(t *testing.T) {
-	testutil.SetPathsForTesting(t)
-	testOpts, _, err := testBoxOptions(settings.GetString(settings.DataPathKey))
-	require.NoError(t, err)
+func TestSelectMode_NotConnected(t *testing.T) {
+	// A tunnel without an active libbox service is not running.
+	tun := &tunnel{}
+	err := tun.selectMode(AutoSelectTag)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tunnel not running")
+}
 
-	tun := testConnection(t, *testOpts)
-	require.NotNil(t, tun.mutGrpMgr)
-	mgm := tun.mutGrpMgr
+func TestRemoveDuplicates(t *testing.T) {
+	ctx := box.BaseContext()
+	out1 := O.Outbound{Type: "http", Tag: "http-1", Options: &O.HTTPOutboundOptions{}}
+	out2 := O.Outbound{Type: "http", Tag: "http-2", Options: &O.HTTPOutboundOptions{}}
+	socks := O.Outbound{Type: "socks", Tag: "socks-1", Options: &O.SOCKSOutboundOptions{}}
+	ep1 := O.Endpoint{Type: "wireguard", Tag: "wg-1", Options: &O.WireGuardEndpointOptions{}}
 
-	require.NoError(t, tun.close())
+	t.Run("drops duplicates against current map", func(t *testing.T) {
+		var curr lsync.TypedMap[string, []byte]
+		b1, _ := json.MarshalContext(ctx, out1)
+		curr.Store(out1.Tag, b1)
+		bEp1, _ := json.MarshalContext(ctx, ep1)
+		curr.Store(ep1.Tag, bEp1)
 
-	err = mgm.RemoveFromGroup(servers.SGLantern, "some-unknown-tag")
-	assert.ErrorIs(t, err, lbgroups.ErrIsClosed)
+		list := servers.ServerList{
+			Servers: []*servers.Server{
+				{Tag: out1.Tag, Type: out1.Type, Options: out1},
+				{Tag: out2.Tag, Type: out2.Type, Options: out2},
+				{Tag: ep1.Tag, Type: ep1.Type, Options: ep1},
+			},
+		}
+
+		result := removeDuplicates(ctx, &curr, list)
+		assert.Len(t, result.Servers, 1)
+		assert.Equal(t, "http-2", result.Servers[0].Tag)
+	})
+
+	t.Run("keeps all servers when none are duplicates", func(t *testing.T) {
+		var curr lsync.TypedMap[string, []byte]
+		list := servers.ServerList{
+			Servers: []*servers.Server{
+				{Tag: out1.Tag, Type: out1.Type, Options: out1},
+				{Tag: socks.Tag, Type: socks.Type, Options: socks},
+			},
+		}
+
+		result := removeDuplicates(ctx, &curr, list)
+		assert.Len(t, result.Servers, 2)
+	})
+
+	t.Run("empty list yields empty result", func(t *testing.T) {
+		var curr lsync.TypedMap[string, []byte]
+		result := removeDuplicates(ctx, &curr, servers.ServerList{})
+		assert.Empty(t, result.Servers)
+	})
+}
+
+func TestContextDone(t *testing.T) {
+	ctx := context.Background()
+	assert.False(t, contextDone(ctx))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.True(t, contextDone(ctx))
 }

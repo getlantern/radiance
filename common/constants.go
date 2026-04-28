@@ -2,22 +2,18 @@ package common
 
 import (
 	"time"
+
+	"github.com/getlantern/radiance/common/env"
 )
 
 // Version is the application version, injected at build time via ldflags:
 //
 //	-X 'github.com/getlantern/radiance/common.Version=x.y.z'
-//
-// Can also be overridden at runtime via the RADIANCE_VERSION environment variable.
 var Version = "dev"
 
 const (
 	Name = "lantern"
 
-	// filenames
-	LogFileName        = "lantern.log"
-	ConfigFileName     = "config.json"
-	ServersFileName    = "servers.json"
 	DefaultHTTPTimeout = (60 * time.Second)
 
 	// API URLs
@@ -27,8 +23,13 @@ const (
 	StageBaseURL      = "https://api.staging.iantem.io/v1"
 )
 
+func GetVersion() string {
+	if v := env.GetString(env.AppVersion); v != "" {
+		return v
+	}
+	return Version
+}
 
-// GetProServerURL returns the pro server URL based on the current environment.
 func GetProServerURL() string {
 	if Stage() {
 		return StageProServerURL
@@ -36,7 +37,6 @@ func GetProServerURL() string {
 	return ProServerURL
 }
 
-// GetBaseURL returns the auth/user base URL based on the current environment.
 func GetBaseURL() string {
 	if Stage() {
 		return StageBaseURL

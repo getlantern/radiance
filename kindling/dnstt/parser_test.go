@@ -5,16 +5,16 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/getlantern/radiance/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/events"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -125,10 +125,6 @@ dnsttConfigs:
 
 func TestDNSTTOptions(t *testing.T) {
 	logger := bytes.NewBuffer(nil)
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     slog.LevelDebug,
-	})))
 	waitFor = 15 * time.Second
 	t.Run("embedded config only", func(t *testing.T) {
 		dnst, err := DNSTTOptions(context.Background(), "", logger)
