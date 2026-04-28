@@ -4,7 +4,9 @@ package kindling
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -14,8 +16,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/net/proxy"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
@@ -44,6 +48,24 @@ var (
 // initKindling initializes the package-level kindling instance and shared
 // transport.
 func initKindling() {
+	// Censorship-circumvention QA path: when OutboundSocksAddress is set,
+	// every outbound HTTP dial goes through that SOCKS5 server. Kindling's
+	// stacked transports (fronted/AMP/dnstt/proxyless) are skipped — the
+	// SOCKS5 is providing egress, and kindling's per-transport internal
+	// dialers don't expose an override hook today. As a result, when this
+	// var is set we are testing "does the bandit/tunnel path work given a
+	// reachable API channel" rather than the full anti-censorship stack.
+	if addr, ok := env.Get(env.OutboundSocksAddress); ok && addr != "" {
+		t, err := socksOnlyTransport(addr)
+		if err != nil {
+			slog.Error("invalid RADIANCE_OUTBOUND_SOCKS_ADDRESS, falling back to default transport", slog.Any("error", err))
+			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+			return
+		}
+		slog.Info("RADIANCE_OUTBOUND_SOCKS_ADDRESS set — routing all radiance HTTP through upstream SOCKS5", slog.String("addr", addr))
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(t))
+		return
+	}
 	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
 	if err != nil {
 		slog.Error("failed to create kindling client", slog.Any("error", err))
@@ -55,6 +77,28 @@ func initKindling() {
 		slog.Warn("kindling unavailable, using default transport clone")
 		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
 	}
+}
+
+// socksOnlyTransport returns an http.Transport that dials through the given
+// SOCKS5 server for every connection.
+func socksOnlyTransport(socksAddr string) (*http.Transport, error) {
+	d, err := proxy.SOCKS5("tcp", socksAddr, nil, proxy.Direct)
+	if err != nil {
+		return nil, fmt.Errorf("building SOCKS5 dialer for %s: %w", socksAddr, err)
+	}
+	ctxDialer, ok := d.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("SOCKS5 dialer does not support context")
+	}
+	t := defaultTransportClone.Clone()
+	t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return ctxDialer.DialContext(ctx, network, address)
+	}
+	// Disable HTTP_PROXY env-based proxying — we route via DialContext instead.
+	// (x/net/proxy's SOCKS5 sends the hostname to the upstream as ATYP=domain,
+	// so DNS resolution also happens at the SOCKS5 server, no local leak.)
+	t.Proxy = nil
+	return t, nil
 }
 
 func Init() {

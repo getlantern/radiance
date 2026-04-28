@@ -24,6 +24,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
@@ -82,7 +83,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
-		Protocols:      protocol.SupportedProtocols(),
+		Protocols:      filterProtocolsForBridge(protocol.SupportedProtocols()),
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred
@@ -228,4 +229,37 @@ func moduleVersion(modulePath ...string) (string, error) {
 	}
 
 	return "", fmt.Errorf("module %s not found", modulePath)
+}
+
+// udpOnlyProtocols are sing-box outbound protocols whose entry-server
+// connection is UDP-only. When radiance's outbound dials are detoured
+// through an upstream SOCKS5 (the QA path), our bridge SOCKS5 listener
+// only implements TCP CONNECT — UDP ASSOCIATE isn't wired — so these
+// outbounds can't be reached and would just clutter URLTest with
+// failures. Drop them from the request so the bandit doesn't pick them.
+var udpOnlyProtocols = map[string]struct{}{
+	"hysteria":  {},
+	"hysteria2": {},
+	"tuic":      {},
+	"wireguard": {},
+	"amnezia":   {}, // wireguard-based; same UDP constraint
+}
+
+// filterProtocolsForBridge returns the input slice unchanged unless
+// RADIANCE_OUTBOUND_SOCKS_ADDRESS is set, in which case UDP-only
+// protocols are filtered out.
+func filterProtocolsForBridge(in []string) []string {
+	if addr, _ := env.Get(env.OutboundSocksAddress); addr == "" {
+		return in
+	}
+	out := in[:0:0]
+	for _, p := range in {
+		if _, drop := udpOnlyProtocols[p]; drop {
+			continue
+		}
+		out = append(out, p)
+	}
+	slog.Info("RADIANCE_OUTBOUND_SOCKS_ADDRESS set — dropping UDP-only protocols from config request",
+		"kept", len(out), "dropped", len(in)-len(out))
+	return out
 }

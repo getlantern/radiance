@@ -78,6 +78,15 @@ func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 		return nil
 	}
 
+	// QA: when env.OutboundSocksAddress is set, the OTLP gRPC exporters do
+	// NOT honor the radiance dialer override and would phone home directly,
+	// leaking the test process's real IP and bypassing the SOCKS5 egress.
+	// Skip telemetry init in that mode.
+	if addr, ok := env.Get(env.OutboundSocksAddress); ok && addr != "" {
+		slog.Info("RADIANCE_OUTBOUND_SOCKS_ADDRESS set — skipping OpenTelemetry init (gRPC exporters cannot be routed via SOCKS5)", "addr", addr)
+		return nil
+	}
+
 	if shutdownOTEL != nil {
 		slog.Info("Shutting down existing OpenTelemetry SDK")
 		if err := shutdownOTEL(context.Background()); err != nil {

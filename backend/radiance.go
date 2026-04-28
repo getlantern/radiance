@@ -186,20 +186,28 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		result, err := publicip.Detect(ctx, &publicip.Config{
-			Timeout:      2 * time.Second,
-			MinConsensus: 1,
-		})
-		cancel()
-		if err != nil {
-			slog.Warn("Failed to get public IP", "error", err)
-		} else {
-			common.SetPublicIP(result.IP.String())
-			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
-		}
-	}()
+	// QA: when an upstream outbound SOCKS5 is set, publicip.Detect would
+	// leak the host's real IP via direct calls to AWS/ifconfig.me, and the
+	// resulting X-Lantern-Config-Client-IP header would override our Russia
+	// egress for the API's bandit lookup. Skip detection in that mode.
+	if addr, _ := env.Get(env.OutboundSocksAddress); addr == "" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			result, err := publicip.Detect(ctx, &publicip.Config{
+				Timeout:      2 * time.Second,
+				MinConsensus: 1,
+			})
+			cancel()
+			if err != nil {
+				slog.Warn("Failed to get public IP", "error", err)
+			} else {
+				common.SetPublicIP(result.IP.String())
+				slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+			}
+		}()
+	} else {
+		slog.Info("Skipping publicip.Detect because RADIANCE_OUTBOUND_SOCKS_ADDRESS is set", "addr", addr)
+	}
 
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
