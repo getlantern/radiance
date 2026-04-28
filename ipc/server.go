@@ -401,16 +401,17 @@ func (s *localapi) vpnStatusEventsHandler(w http.ResponseWriter, r *http.Request
 	})
 	defer sub.Unsubscribe()
 
-	// events.Subscribe is forward-only; enqueue the current status so a
-	// subscriber that attaches between two setStatus calls still observes the
-	// prior state. ch is the single ordering path: a direct write could land
-	// after an earlier event already queued by a concurrent emit.
+	// events.Subscribe is forward-only; write the current status directly
+	// to the wire so a subscriber that attaches between two setStatus calls
+	// still observes the prior state. Writing direct (rather than via ch)
+	// guarantees the snapshot is the first event the client sees and can't
+	// be dropped by ch backpressure: any concurrent emit that happens after
+	// VPNStatus() returns goes through ch and is delivered after this
+	// snapshot, preserving forward ordering.
 	if cur := s.backend(r.Context()).VPNStatus(); cur != "" {
 		if data, err := json.Marshal(vpn.StatusUpdateEvent{Status: cur}); err == nil {
-			select {
-			case ch <- data:
-			default:
-			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
 		}
 	}
 
