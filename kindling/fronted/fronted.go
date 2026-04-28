@@ -26,9 +26,8 @@ const (
 	tracerName       = "github.com/getlantern/radiance/kindling/fronted"
 	configURL        = "https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz"
 	initialFetchTime = 30 * time.Second
-	// configCacheName sits next to the runtime-state cacheFile. Holds the
-	// last successfully fetched fronted.yaml.gz so the next startup can
-	// bootstrap when raw.githubusercontent.com is unreachable.
+	// configCacheName holds the last successfully fetched config so the next
+	// startup can bootstrap when configURL is unreachable.
 	configCacheName = "fronted_config.yaml.gz"
 	// maxConfigBytes caps the size of the gzipped fronted config we'll accept
 	// from the network. The real file is ~500 KB; this leaves room for growth
@@ -39,17 +38,11 @@ const (
 
 // embeddedConfig is the last-resort fallback when both the live fetch and
 // the local config cache fail — typical case is a fresh install with
-// raw.githubusercontent.com blocked from the very first boot. domainfront
-// itself doesn't embed a config (the old getlantern/fronted package did),
-// so the caller owns the embedded copy. Refresh periodically from
-// https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz
-// and commit alongside this file.
+// raw.githubusercontent.com blocked from the very first boot.
 //
 //go:embed fronted.yaml.gz
 var embeddedConfig []byte
 
-// bypassDialer adapts bypass.DialContext (a function) to the domainfront.Dialer
-// interface.
 type bypassDialer struct{}
 
 func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -60,13 +53,9 @@ func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.
 // WithDomainFronting option. The caller owns the returned *Client and is
 // responsible for calling Close() to shut down background goroutines.
 //
-// The initial fronted.yaml.gz is fetched synchronously via the smart dialer
-// (bypassing DNS- and SNI-level blocking of raw.githubusercontent.com) with
-// a 30s timeout; subsequent updates happen on domainfront's internal 12h
-// loop using the same smart-dialer-backed HTTP client. On fetch failure we
-// fall back to the last successfully fetched config persisted next to
-// cacheFile, so a blocked or offline first boot after a prior good fetch
-// still initializes.
+// The initial config is fetched synchronously; on failure NewFronted falls
+// back to a previously cached config and then to an embedded copy, so it
+// does not block first boot when the config host is unreachable.
 func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*domainfront.Client, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "NewFronted")
 	defer span.End()
@@ -95,10 +84,8 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*do
 	return domainfront.New(ctx, cfg, opts...)
 }
 
-// fetchInitialConfig fetches the fronted config over HTTP and, on success,
-// persists the raw gzipped bytes to configCache for offline fallback. If the
-// fetch fails but configCache exists from a prior successful fetch, the
-// cached bytes are parsed and returned instead.
+// fetchInitialConfig persists only parsed-OK bytes to configCache; on any
+// failure it falls through to loadCachedConfig.
 func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCache string) (*domainfront.Config, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, initialFetchTime)
 	defer cancel()
@@ -129,7 +116,6 @@ func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCach
 	if err != nil {
 		return loadCachedConfig(configCache, fmt.Errorf("parse response: %w", err))
 	}
-	// Persist after a known-good parse so we don't cache unparseable bytes.
 	if configCache != "" {
 		if err := atomicfile.WriteFile(configCache, body, fileperm.File); err != nil {
 			slog.Warn("failed to persist fronted config cache", "path", configCache, "err", err)

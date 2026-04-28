@@ -28,7 +28,8 @@ var (
 	initOnce        sync.Once
 	stopUpdater     func()
 	closeTransports []func() error
-	// EnabledTransports is used for testing purposes for enabling/disabling kindling transports
+	// EnabledTransports gates which transports NewKindling wires up. Intended for tests; not a
+	// production toggle.
 	EnabledTransports = map[kindling.TransportName]bool{
 		kindling.TransportDNSTunnel:   false,
 		kindling.TransportAMP:         true,
@@ -37,12 +38,9 @@ var (
 	}
 	defaultTransportClone = http.DefaultTransport.(*http.Transport).Clone()
 
-	// transport is the shared http.RoundTripper set once by initOnce.
 	transport http.RoundTripper
 )
 
-// initKindling initializes the package-level kindling instance and shared
-// transport.
 func initKindling() {
 	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
 	if err != nil {
@@ -70,8 +68,6 @@ func HTTPClient() *http.Client {
 	}
 }
 
-// readyTransport blocks until initOnce has completed, then delegates to the
-// shared transport.
 type readyTransport struct{}
 
 func (readyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -94,7 +90,8 @@ func Close() error {
 
 const tracerName = "github.com/getlantern/radiance/kindling"
 
-// NewKindling build a kindling client and bootstrap this package
+// NewKindling builds a kindling client and registers package-level cleanup
+// hooks; call [Close] to release them.
 func NewKindling(dataDir string) (kindling.Kindling, error) {
 	logger := &slogWriter{Logger: slog.Default()}
 
@@ -106,12 +103,13 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 	defer span.End()
 
 	if common.Stage() {
-		// Disable domain fronting for stage environment to avoid hitting staging server issues due to fronted client failures.
+		// Staging runs proxyless-only; fronted client failures against staging
+		// hosts otherwise obscure the backend behavior we want to test.
 		return kindling.NewKindling("radiance",
 			kindling.WithPanicListener(reporting.PanicListener),
 			kindling.WithLogWriter(logger),
-			// Most endpoints use df.iantem.io, but for some historical reasons
-			// "pro-server" calls still go to api.getiantem.org.
+			// "pro-server" calls still target api.getiantem.org; everything
+			// else uses df.iantem.io.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
 		)
 	}
@@ -159,8 +157,8 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 	}
 
 	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
-		// Most endpoints use df.iantem.io, but for some historical reasons
-		// "pro-server" calls still go to api.getiantem.org.
+		// "pro-server" calls still target api.getiantem.org; everything
+		// else uses df.iantem.io.
 		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
 	}
 
@@ -173,18 +171,14 @@ type slogWriter struct {
 }
 
 func (w *slogWriter) Write(p []byte) (n int, err error) {
-	// Convert the byte slice to a string and log it
-	s := string(p)
-	s = strings.TrimSpace(s)
+	s := strings.TrimSpace(string(p))
 	w.Info(s)
 	return len(p), nil
 }
 
-// SetKindling sets the kindling method used for building the HTTP client.
-// This function is useful for testing purposes. It bypasses the normal
-// initialization path, so Warm()/initOnce will be a no-op after this call
-// only if called before them. For tests, call SetKindling before any
-// HTTPClient usage.
+// SetKindling installs a test-supplied kindling instance and consumes
+// initOnce, so it must be called before any Init or HTTPClient use or it
+// will silently no-op.
 func SetKindling(a kindling.Kindling) {
 	initOnce.Do(func() {
 		k = a
