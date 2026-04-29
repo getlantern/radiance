@@ -156,7 +156,6 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 
 	proToken := settings.GetString(settings.TokenKey)
 	userID := settings.GetString(settings.UserIDKey)
-	slog.Debug("Signing up user", "email", email, "proTokenSet", proToken)
 	if proToken == "" || userID == "" {
 		return nil, nil, traces.RecordError(ctx, errors.New("signup requires the pro token and user ID to continue"))
 	}
