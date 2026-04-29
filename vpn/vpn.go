@@ -263,6 +263,10 @@ func (c *VPNClient) setStatus(s VPNStatus, err error) {
 		return
 	}
 	c.status.Store(s)
+	// [vpn-state-trace] hop=daemon_setstatus — start of the status delivery chain.
+	// Pair this timestamp with hop=ssehandler_flushed / hop=ffi_to_port / hop=dart_applied
+	// to localize where Connecting/Disconnecting transitions stall on Windows.
+	slog.Info("[vpn-state-trace]", "hop", "daemon_setstatus", "status", s, "ts_ms", time.Now().UnixMilli())
 	evt := StatusUpdateEvent{Status: s}
 	if err != nil {
 		evt.Error = err.Error()

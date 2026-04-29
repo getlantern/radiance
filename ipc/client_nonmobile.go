@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	rlog "github.com/getlantern/radiance/log"
 )
@@ -101,6 +103,13 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 		if data, ok := strings.CutPrefix(line, "data: "); ok {
 			data = strings.TrimSpace(data)
 			if data != "" {
+				// [vpn-state-trace] hop=sse_parsed — moment the client side
+				// got a full SSE event from the named pipe. The gap to
+				// ssehandler_flushed measures pipe-transit + bufio.Scanner
+				// buffering on Windows.
+				if endpoint == vpnStatusEventsEndpoint {
+					slog.Info("[vpn-state-trace]", "hop", "sse_parsed", "data", string(data), "ts_ms", time.Now().UnixMilli())
+				}
 				handler([]byte(data))
 			}
 		}
