@@ -400,6 +400,16 @@ func (s *localapi) vpnStatusEventsHandler(w http.ResponseWriter, r *http.Request
 		}
 	})
 	defer sub.Unsubscribe()
+
+	// events.Subscribe is forward-only; write the current status directly
+	// so a subscriber that attaches between setStatus calls still sees it.
+	if cur := s.backend(r.Context()).VPNStatus(); cur != "" {
+		if data, err := json.Marshal(vpn.StatusUpdateEvent{Status: cur}); err == nil {
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+
 	for {
 		select {
 		case data := <-ch:
