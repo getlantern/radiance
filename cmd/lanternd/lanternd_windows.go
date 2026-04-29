@@ -19,6 +19,16 @@ import (
 const (
 	serviceName = "LanternSvc"
 	binPath     = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
+
+	// LanternSvc must be controllable from the non-elevated UI session; the SCM
+	// default DACL grants SERVICE_START to Administrators only, which makes
+	// OpenService return ERROR_ACCESS_DENIED for every standard-user start
+	// attempt. SY/BA keep their default full access; BU (Built-in Users) is
+	// granted query, start, stop, and interrogate.
+	serviceSDDL = "D:" +
+		"(A;;CCLCSWRPWPDTLOCRRC;;;SY)" +
+		"(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)" +
+		"(A;;CCLCSWRPWPLOCRRC;;;BU)"
 )
 
 var isWindowsService bool
@@ -88,12 +98,34 @@ func install(dataPath, logPath, logLevel string) error {
 	if err != nil {
 		return fmt.Errorf("failed to set service recovery actions: %w", err)
 	}
+
+	if err := setServiceDACL(); err != nil {
+		return fmt.Errorf("failed to set service DACL: %w", err)
+	}
+
 	if err := service.Start(); err != nil {
 		return fmt.Errorf("failed to start service: %w", err)
 	}
 
 	slog.Info("Windows service installed successfully")
 	return nil
+}
+
+func setServiceDACL() error {
+	sd, err := windows.SecurityDescriptorFromString(serviceSDDL)
+	if err != nil {
+		return fmt.Errorf("parse SDDL: %w", err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("read DACL from SD: %w", err)
+	}
+	return windows.SetNamedSecurityInfo(
+		serviceName,
+		windows.SE_SERVICE,
+		windows.DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil,
+	)
 }
 
 func uninstall() error {
