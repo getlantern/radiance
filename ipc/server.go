@@ -402,12 +402,7 @@ func (s *localapi) vpnStatusEventsHandler(w http.ResponseWriter, r *http.Request
 	defer sub.Unsubscribe()
 
 	// events.Subscribe is forward-only; write the current status directly
-	// to the wire so a subscriber that attaches between two setStatus calls
-	// still observes the prior state. Writing direct (rather than via ch)
-	// guarantees the snapshot is the first event the client sees and can't
-	// be dropped by ch backpressure: any concurrent emit that happens after
-	// VPNStatus() returns goes through ch and is delivered after this
-	// snapshot, preserving forward ordering.
+	// so a subscriber that attaches between setStatus calls still sees it.
 	if cur := s.backend(r.Context()).VPNStatus(); cur != "" {
 		if data, err := json.Marshal(vpn.StatusUpdateEvent{Status: cur}); err == nil {
 			fmt.Fprintf(w, "data: %s\n\n", data)
