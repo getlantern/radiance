@@ -86,6 +86,23 @@ func install(dataPath, logPath, logLevel string) error {
 	}
 	defer service.Close()
 
+	// A half-installed service (registered without recovery actions or with the
+	// default admin-only DACL) would block the non-elevated start this path is
+	// meant to enable, so any failure before installed=true rolls the install
+	// back.
+	installed := false
+	defer func() {
+		if installed {
+			return
+		}
+		if delErr := service.Delete(); delErr != nil {
+			slog.Warn("install rollback: failed to delete service", "error", delErr)
+		}
+		if rmErr := os.Remove(binPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("install rollback: failed to remove binary", "error", rmErr)
+		}
+	}()
+
 	err = service.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 1 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
@@ -107,6 +124,7 @@ func install(dataPath, logPath, logLevel string) error {
 		return fmt.Errorf("failed to start service: %w", err)
 	}
 
+	installed = true
 	slog.Info("Windows service installed successfully")
 	return nil
 }
