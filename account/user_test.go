@@ -249,6 +249,8 @@ func newTestClientWithSRP(t *testing.T, email, password string) (*Client, *testS
 
 func TestSignUp(t *testing.T) {
 	ac, _ := newTestClient(t)
+	settings.Set(settings.TokenKey, "test-token")
+	settings.Set(settings.UserIDKey, "123")
 	salt, signupResponse, err := ac.SignUp(context.Background(), "test@example.com", "password")
 	assert.NoError(t, err)
 	assert.NotNil(t, salt)
