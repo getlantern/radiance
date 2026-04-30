@@ -14,6 +14,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -98,6 +99,65 @@ func TestFetchConfig(t *testing.T) {
 			if tt.preferredServerLoc != nil {
 				assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 			}
+		})
+	}
+}
+
+func TestFetchConfigCountryHeaderOverride(t *testing.T) {
+	tests := []struct {
+		name          string
+		envCountry    string
+		devOverride   string
+		storedCountry string
+		wantHeader    string
+	}{
+		{
+			name:          "dev override sets country header",
+			devOverride:   "cn",
+			storedCountry: "US",
+			wantHeader:    "CN",
+		},
+		{
+			name:        "env country wins over dev override",
+			envCountry:  "ir",
+			devOverride: "CN",
+			wantHeader:  "IR",
+		},
+		{
+			name:          "auto ignores stored country",
+			storedCountry: "CN",
+			wantHeader:    "",
+		},
+	}
+
+	privateKey, err := wgtypes.GenerateKey()
+	require.NoError(t, err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings.Reset()
+			require.NoError(t, settings.InitSettings(t.TempDir()))
+			require.NoError(t, settings.Set(settings.DeviceIDKey, "mock-device-id"))
+			require.NoError(t, settings.Set(settings.UserIDKey, 1234567890))
+			require.NoError(t, settings.Set(settings.TokenKey, "mock-legacy-token"))
+			require.NoError(t, settings.Set(settings.CountryCodeKey, tt.storedCountry))
+			require.NoError(t, settings.Set(settings.DevCountryOverrideKey, tt.devOverride))
+			t.Setenv(env.Country.String(), tt.envCountry)
+
+			var gotHeader string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeader = r.Header.Get("X-Lantern-Client-Country")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"key":"value"}`))
+			}))
+			defer srv.Close()
+
+			f := newFetcher("en-US", nil, srv.Client()).(*fetcher)
+			f.baseURL = srv.URL
+
+			_, err := f.fetchConfig(t.Context(), common.PreferredLocation{}, privateKey.PublicKey().String())
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantHeader, gotHeader)
 		})
 	}
 }

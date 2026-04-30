@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"slices"
+	"strings"
 
 	C "github.com/getlantern/common"
 	"go.opentelemetry.io/otel"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
@@ -153,9 +155,9 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 
-	if val := settings.GetString(settings.CountryCodeKey); val != "" {
-		slog.Info("Setting x-lantern-client-country header", "country", val)
-		req.Header.Set("x-lantern-client-country", val)
+	if val, source := configCountryOverride(); val != "" {
+		slog.Info("Setting X-Lantern-Client-Country header", "country", val, "source", source)
+		req.Header.Set("X-Lantern-Client-Country", val)
 	}
 	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
 		slog.Info("Setting X-Lantern-Feature-Override header", "features", val)
@@ -202,6 +204,20 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unexpected status code: %d. %s", resp.StatusCode, buf)
 	}
+}
+
+func configCountryOverride() (string, string) {
+	if val := normalizeCountryCode(env.GetString(env.Country)); val != "" {
+		return val, env.Country.String()
+	}
+	if val := normalizeCountryCode(settings.GetString(settings.DevCountryOverrideKey)); val != "" {
+		return val, settings.DevCountryOverrideKey.String()
+	}
+	return "", ""
+}
+
+func normalizeCountryCode(country string) string {
+	return strings.ToUpper(strings.TrimSpace(country))
 }
 
 // singVersion returns the version of the sing-box module.

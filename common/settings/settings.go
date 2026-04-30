@@ -26,12 +26,13 @@ type _key string
 const (
 	// Keys for various settings.
 	// General settings keys.
-	DataPathKey    _key = "data_path"    // string
-	LogPathKey     _key = "log_path"     // string
-	LogLevelKey    _key = "log_level"    // string
-	CountryCodeKey _key = "country_code" // string
-	LocaleKey      _key = "locale"       // string
-	DeviceIDKey    _key = "device_id"    // string/int
+	DataPathKey           _key = "data_path"            // string
+	LogPathKey            _key = "log_path"             // string
+	LogLevelKey           _key = "log_level"            // string
+	CountryCodeKey        _key = "country_code"         // string
+	LocaleKey             _key = "locale"               // string
+	DeviceIDKey           _key = "device_id"            // string/int
+	DevCountryOverrideKey _key = "dev_country_override" // string
 
 	// Application behavior related keys.
 	TelemetryKey           _key = "telemetry_enabled"     // bool
