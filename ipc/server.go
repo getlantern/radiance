@@ -400,11 +400,27 @@ func (s *localapi) vpnStatusEventsHandler(w http.ResponseWriter, r *http.Request
 		}
 	})
 	defer sub.Unsubscribe()
+
+	// events.Subscribe is forward-only; write the current status directly
+	// so a subscriber that attaches between setStatus calls still sees it.
+	if cur := s.backend(r.Context()).VPNStatus(); cur != "" {
+		if data, err := json.Marshal(vpn.StatusUpdateEvent{Status: cur}); err == nil {
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+			slog.Info("[vpn-state-trace]", "hop", "ssehandler_flushed_replay", "data", string(data), "ts_ms", time.Now().UnixMilli())
+		}
+	}
+
 	for {
 		select {
 		case data := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
+			// [vpn-state-trace] hop=ssehandler_flushed — bytes handed to the
+			// HTTP response after Flush. Pairs with daemon_setstatus upstream
+			// and sse_parsed downstream to bracket transit through the
+			// (winio) named pipe on Windows.
+			slog.Info("[vpn-state-trace]", "hop", "ssehandler_flushed", "data", string(data), "ts_ms", time.Now().UnixMilli())
 		case <-r.Context().Done():
 			return
 		}
