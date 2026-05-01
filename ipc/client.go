@@ -369,13 +369,6 @@ func (c *Client) PatchEnvVars(ctx context.Context, updates map[string]string) (m
 	return result, err
 }
 
-// EnvVars returns the daemon's in-memory environment variables.
-func (c *Client) EnvVars(ctx context.Context) (map[string]string, error) {
-	var result map[string]string
-	err := c.doJSON(ctx, http.MethodGet, envEndpoint, nil, &result)
-	return result, err
-}
-
 //////////////////
 // Split Tunnel //
 /////////////////

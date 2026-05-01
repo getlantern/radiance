@@ -28,7 +28,7 @@ var settingNames = []string{
 	"fetch-config", "log-level", "feature-overrides", "country",
 }
 
-func settingValue(name string, s settings.Settings, e map[string]string) (any, bool) {
+func settingValue(name string, s settings.Settings) (any, bool) {
 	switch name {
 	case "smart-routing":
 		return orBool(s[settings.SmartRoutingKey]), true
@@ -43,11 +43,8 @@ func settingValue(name string, s settings.Settings, e map[string]string) (any, b
 	case "log-level":
 		return orString(s[settings.LogLevelKey]), true
 	case "feature-overrides":
-		return e[env.FeatureOverrides.String()], true
+		return orString(s[settings.FeatureOverridesKey]), true
 	case "country":
-		if v := e[env.Country.String()]; v != "" {
-			return v, true
-		}
 		return orString(s[settings.CountryCodeKey]), true
 	}
 	return nil, false
@@ -119,18 +116,14 @@ func runGet(ctx context.Context, c *ipc.Client, cmd *GetCmd) error {
 	if err != nil {
 		return err
 	}
-	e, err := c.EnvVars(ctx)
-	if err != nil {
-		return err
-	}
 	if cmd.Name == "" {
 		for _, name := range settingNames {
-			v, _ := settingValue(name, s, e)
+			v, _ := settingValue(name, s)
 			fmt.Printf("%s: %v\n", name, v)
 		}
 		return nil
 	}
-	v, ok := settingValue(cmd.Name, s, e)
+	v, ok := settingValue(cmd.Name, s)
 	if !ok {
 		return fmt.Errorf("unknown setting %q", cmd.Name)
 	}

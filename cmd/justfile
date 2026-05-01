@@ -16,5 +16,4 @@ cli_tags := if os() == "macos" { "standalone" } else { "" }
 build-cli:
     go build {{ if cli_tags != "" { "-tags " + cli_tags } else { "" } }} {{ldflags}} -o ../bin/{{lantern}} ./lantern
 
-build:
-    @just --no-deps build-daemon & just --no-deps build-cli & wait
+build: build-daemon build-cli
