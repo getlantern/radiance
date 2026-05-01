@@ -341,8 +341,7 @@ func (c *Client) EnableAdBlocking(ctx context.Context, enable bool) error {
 	return err
 }
 
-// EnableConfigFetch toggles periodic config fetching. Passing false sets
-// settings.ConfigFetchDisabledKey to true on the daemon.
+// EnableConfigFetch toggles periodic config fetching.
 func (c *Client) EnableConfigFetch(ctx context.Context, enable bool) error {
 	_, err := c.PatchSettings(ctx, settings.Settings{settings.ConfigFetchDisabledKey: !enable})
 	return err
@@ -367,6 +366,13 @@ func (c *Client) SetLogLevel(ctx context.Context, level string) error {
 func (c *Client) PatchEnvVars(ctx context.Context, updates map[string]string) (map[string]string, error) {
 	var result map[string]string
 	err := c.doJSON(ctx, http.MethodPatch, envEndpoint, updates, &result)
+	return result, err
+}
+
+// EnvVars returns the daemon's in-memory environment variables.
+func (c *Client) EnvVars(ctx context.Context) (map[string]string, error) {
+	var result map[string]string
+	err := c.doJSON(ctx, http.MethodGet, envEndpoint, nil, &result)
 	return result, err
 }
 
