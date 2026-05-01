@@ -23,20 +23,34 @@ func runFeatures(ctx context.Context, c *ipc.Client) error {
 	return nil
 }
 
-// settingViews is the single source of truth for which settings the CLI exposes
-// under `set`/`get` and how their user-facing values map to the underlying
-// settings keys.
-var settingViews = []struct {
-	name string
-	get  func(s settings.Settings, e map[string]string) any
-}{
-	{"smart-routing", func(s settings.Settings, _ map[string]string) any { return orBool(s[settings.SmartRoutingKey]) }},
-	{"ad-block", func(s settings.Settings, _ map[string]string) any { return orBool(s[settings.AdBlockKey]) }},
-	{"telemetry", func(s settings.Settings, _ map[string]string) any { return orBool(s[settings.TelemetryKey]) }},
-	{"split-tunnel", func(s settings.Settings, _ map[string]string) any { return orBool(s[settings.SplitTunnelKey]) }},
-	{"fetch-config", func(s settings.Settings, _ map[string]string) any { return !toBool(s[settings.ConfigFetchDisabledKey]) }},
-	{"log-level", func(s settings.Settings, _ map[string]string) any { return orString(s[settings.LogLevelKey]) }},
-	{"feature-overrides", func(_ settings.Settings, e map[string]string) any { return e[env.FeatureOverrides.String()] }},
+var settingNames = []string{
+	"smart-routing", "ad-block", "telemetry", "split-tunnel",
+	"fetch-config", "log-level", "feature-overrides", "country",
+}
+
+func settingValue(name string, s settings.Settings, e map[string]string) (any, bool) {
+	switch name {
+	case "smart-routing":
+		return orBool(s[settings.SmartRoutingKey]), true
+	case "ad-block":
+		return orBool(s[settings.AdBlockKey]), true
+	case "telemetry":
+		return orBool(s[settings.TelemetryKey]), true
+	case "split-tunnel":
+		return orBool(s[settings.SplitTunnelKey]), true
+	case "fetch-config":
+		return !toBool(s[settings.ConfigFetchDisabledKey]), true
+	case "log-level":
+		return orString(s[settings.LogLevelKey]), true
+	case "feature-overrides":
+		return e[env.FeatureOverrides.String()], true
+	case "country":
+		if v := e[env.Country.String()]; v != "" {
+			return v, true
+		}
+		return orString(s[settings.CountryCodeKey]), true
+	}
+	return nil, false
 }
 
 type SetCmd struct {
@@ -47,6 +61,7 @@ type SetCmd struct {
 	FetchConfig      *bool   `arg:"--fetch-config" help:"enable or disable periodic config fetching (true|false)"`
 	LogLevel         *string `arg:"--log-level" help:"log level (trace|debug|info|warn|error|fatal|panic|disable)"`
 	FeatureOverrides *string `arg:"--feature-overrides" help:"comma-separated feature flags to force-enable via the X-Lantern-Feature-Override header (empty string clears)"`
+	Country          *string `arg:"--country" help:"override the client country code sent to the config server (empty string clears)"`
 }
 
 func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
@@ -72,7 +87,14 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 		}
 		updates[settings.LogLevelKey] = *cmd.LogLevel
 	}
-	if len(updates) == 0 && cmd.FeatureOverrides == nil {
+	envUpdates := map[string]string{}
+	if cmd.FeatureOverrides != nil {
+		envUpdates[env.FeatureOverrides.String()] = *cmd.FeatureOverrides
+	}
+	if cmd.Country != nil {
+		envUpdates[env.Country.String()] = *cmd.Country
+	}
+	if len(updates) == 0 && len(envUpdates) == 0 {
 		return fmt.Errorf("no settings provided; pass one or more flags (see `lantern set --help`)")
 	}
 	if len(updates) > 0 {
@@ -80,11 +102,8 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 			return err
 		}
 	}
-	if cmd.FeatureOverrides != nil {
-		_, err := c.PatchEnvVars(ctx, map[string]string{
-			env.FeatureOverrides.String(): *cmd.FeatureOverrides,
-		})
-		if err != nil {
+	if len(envUpdates) > 0 {
+		if _, err := c.PatchEnvVars(ctx, envUpdates); err != nil {
 			return err
 		}
 	}
@@ -92,7 +111,7 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 }
 
 type GetCmd struct {
-	Name string `arg:"positional" help:"setting name (smart-routing, ad-block, telemetry, split-tunnel, fetch-config, log-level, feature-overrides); omit to list all"`
+	Name string `arg:"positional" help:"setting name (smart-routing, ad-block, telemetry, split-tunnel, fetch-config, log-level, feature-overrides, country); omit to list all"`
 }
 
 func runGet(ctx context.Context, c *ipc.Client, cmd *GetCmd) error {
@@ -105,18 +124,18 @@ func runGet(ctx context.Context, c *ipc.Client, cmd *GetCmd) error {
 		return err
 	}
 	if cmd.Name == "" {
-		for _, v := range settingViews {
-			fmt.Printf("%s: %v\n", v.name, v.get(s, e))
+		for _, name := range settingNames {
+			v, _ := settingValue(name, s, e)
+			fmt.Printf("%s: %v\n", name, v)
 		}
 		return nil
 	}
-	for _, v := range settingViews {
-		if v.name == cmd.Name {
-			fmt.Printf("%s: %v\n", v.name, v.get(s, e))
-			return nil
-		}
+	v, ok := settingValue(cmd.Name, s, e)
+	if !ok {
+		return fmt.Errorf("unknown setting %q", cmd.Name)
 	}
-	return fmt.Errorf("unknown setting %q", cmd.Name)
+	fmt.Printf("%s: %v\n", cmd.Name, v)
+	return nil
 }
 
 func orBool(v any) any {
