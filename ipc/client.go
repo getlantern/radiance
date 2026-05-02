@@ -628,9 +628,15 @@ func (c *Client) VerifySubscription(ctx context.Context, service account.Subscri
 // ReportIssue submits an issue report. additionalAttachments is a list of file paths for additional
 // files to include. Logs, diagnostics, and the config response are included automatically and do
 // not need to be specified.
-func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string) error {
+func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	_, err := c.do(ctx, http.MethodPost, issueEndpoint,
-		IssueReportRequest{IssueType: issueType, Description: description, Email: email, AdditionalAttachments: additionalAttachments})
+		IssueReportRequest{
+			IssueType:             issueType,
+			Description:           description,
+			Email:                 email,
+			AdditionalAttachments: additionalAttachments,
+			Attachments:           attachments,
+		})
 	return err
 }
 

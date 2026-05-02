@@ -323,9 +323,8 @@ func (r *LocalBackend) startVPNStatusListeners() {
 
 // ReportIssue allows the user to report an issue with the application. It collects relevant
 // information about the user's environment such as country, device ID, user ID, subscription level,
-// and locale, and log files to include in the report. The additionalAttachments parameter allows
-// the caller to include any extra files they want to attach to the issue report.
-func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string) error {
+// and locale, and log files to include in the report.
+func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, firstClassAttachments []*issue.Attachment) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
 	defer span.End()
 	// get country from the config returned by the backend
@@ -337,11 +336,11 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		country = cfg.Country
 	}
 
-	attachments := baseIssueAttachments()
+	attachmentPaths := baseIssueAttachments()
 	if r.splitTunnelMgr.IsEnabled() {
-		attachments = append(attachments, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
+		attachmentPaths = append(attachmentPaths, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
 	}
-	attachments = append(attachments, additionalAttachments...)
+	attachmentPaths = append(attachmentPaths, additionalAttachments...)
 
 	report := issue.IssueReport{
 		Type:                  issueType,
@@ -352,7 +351,8 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		UserID:                settings.GetString(settings.UserIDKey),
 		SubscriptionLevel:     settings.GetString(settings.UserLevelKey),
 		Locale:                settings.GetString(settings.LocaleKey),
-		AdditionalAttachments: attachments,
+		Attachments:           firstClassAttachments,
+		AdditionalAttachments: attachmentPaths,
 	}
 	err = r.issueReporter.Report(ctx, report)
 	if err != nil {

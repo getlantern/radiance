@@ -46,7 +46,7 @@ type ReportIssueCmd struct {
 }
 
 func runReportIssue(ctx context.Context, c *ipc.Client, cmd *ReportIssueCmd) error {
-	return c.ReportIssue(ctx, issue.IssueType(cmd.Type), cmd.Description, cmd.Email, nil)
+	return c.ReportIssue(ctx, issue.IssueType(cmd.Type), cmd.Description, cmd.Email, nil, nil)
 }
 
 type LogsCmd struct{}
