@@ -33,7 +33,7 @@ Available variables:
 | `RADIANCE_SOCKS_ADDRESS`        | Address (`host:port`) for the SOCKS proxy to use for inbound connections.                                                                                                                                                                                  |
 | `RADIANCE_ENV`                  | `prod` (default) or `dev`. `dev` enables additional debugging output, such as the sing-box config actually in use.                                                                                                                                         |
 | `RADIANCE_VERSION`              | Overrides the application version at runtime. Takes precedence over the version set at build time via ldflags. Example: `RADIANCE_VERSION=9.1.1`.                                                                                                          |
-| `RADIANCE_FEATURE_OVERRIDE`     | Comma-separated list of feature flags to force-enable on the server side. If set, the value is sent as the `X-Lantern-Feature-Override` header on config requests in any environment; recommended for testing only. Example: `RADIANCE_FEATURE_OVERRIDE=bandit_assignment`. |
+| `RADIANCE_FEATURE_OVERRIDES`    | Comma-separated list of feature flags to force-enable on the server side. If set, the value is sent as the `X-Lantern-Feature-Override` header on config requests in any environment; recommended for testing only. Example: `RADIANCE_FEATURE_OVERRIDES=bandit_assignment`. |
 
 
 ## Architecture
