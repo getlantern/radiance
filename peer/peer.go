@@ -1,0 +1,311 @@
+package peer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math/rand/v2"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox"
+
+	"github.com/getlantern/radiance/portforward"
+)
+
+// Lower bound avoids well-known/registered ports; upper bound stays below the
+// typical OS ephemeral range so the OS isn't likely to assign the same port
+// to another local process.
+const (
+	internalPortMin = 30000
+	internalPortMax = 50000
+)
+
+type portForwarder interface {
+	MapPort(ctx context.Context, internalPort uint16, description string) (*portforward.Mapping, error)
+	UnmapPort(ctx context.Context) error
+	StartRenewal(ctx context.Context)
+	ExternalIP(ctx context.Context) (string, error)
+}
+
+type boxService interface {
+	Start() error
+	Close() error
+}
+
+type boxFactory func(ctx context.Context, options string) (boxService, error)
+
+type Status struct {
+	Active       bool      `json:"active"`
+	SharingSince time.Time `json:"sharing_since,omitempty"`
+	ExternalIP   string    `json:"external_ip,omitempty"`
+	ExternalPort uint16    `json:"external_port,omitempty"`
+	RouteID      string    `json:"route_id,omitempty"`
+}
+
+// Config plumbs in dependencies. Zero-valued fields fall back to production
+// defaults; HeartbeatInterval and HeartbeatTimeout exist so tests can drive
+// the loop without sleeping a full minute.
+type Config struct {
+	API               *API
+	NewForwarder      func(ctx context.Context) (portForwarder, error)
+	BuildBoxService   boxFactory
+	HeartbeatInterval time.Duration
+	HeartbeatTimeout  time.Duration
+}
+
+// Client orchestrates one peer-proxy session: open UPnP port → register with
+// lantern-cloud → run a sing-box samizdat inbound on the forwarded port →
+// heartbeat → on shutdown: deregister + close inbound + unmap.
+//
+// Re-Starting a stopped Client is allowed.
+type Client struct {
+	cfg Config
+
+	mu        sync.Mutex
+	active    bool
+	status    Status
+	cancelRun context.CancelFunc
+	runDone   chan struct{}
+	forwarder portForwarder
+	box       boxService
+	routeID   string
+}
+
+func NewClient(cfg Config) (*Client, error) {
+	if cfg.API == nil {
+		return nil, errors.New("peer: Config.API is required")
+	}
+	if cfg.NewForwarder == nil {
+		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			return portforward.NewForwarder(ctx)
+		}
+	}
+	if cfg.BuildBoxService == nil {
+		cfg.BuildBoxService = defaultBuildBoxService
+	}
+	if cfg.HeartbeatTimeout == 0 {
+		cfg.HeartbeatTimeout = 30 * time.Second
+	}
+	return &Client{cfg: cfg}, nil
+}
+
+// Start opens the peer-proxy session. On success a background heartbeat
+// goroutine is running; on error any partial setup is torn down before
+// returning.
+func (c *Client) Start(ctx context.Context) error {
+	c.mu.Lock()
+	if c.active {
+		c.mu.Unlock()
+		return errors.New("peer client already active")
+	}
+	c.mu.Unlock()
+
+	fwd, err := c.cfg.NewForwarder(ctx)
+	if err != nil {
+		return fmt.Errorf("discover gateway: %w", err)
+	}
+	internalPort := pickInternalPort()
+	mapping, err := fwd.MapPort(ctx, internalPort, "Lantern Share My Connection")
+	if err != nil {
+		return fmt.Errorf("map port %d: %w", internalPort, err)
+	}
+
+	externalIP, err := fwd.ExternalIP(ctx)
+	if err != nil {
+		_ = fwd.UnmapPort(ctx)
+		return fmt.Errorf("get external ip: %w", err)
+	}
+	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
+		ExternalIP:   externalIP,
+		ExternalPort: mapping.ExternalPort,
+		InternalPort: mapping.InternalPort,
+	})
+	if err != nil {
+		_ = fwd.UnmapPort(ctx)
+		return fmt.Errorf("register with lantern-cloud: %w", err)
+	}
+
+	// runCtx must outlive Start, so it derives from Background() rather than
+	// the caller's ctx — otherwise libbox's stored ctx would die when Start
+	// returns and take the box's internal goroutines with it.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	box, err := c.cfg.BuildBoxService(runCtx, regResp.ServerConfig)
+	if err != nil {
+		cancelRun()
+		_ = c.cfg.API.Deregister(ctx, regResp.RouteID)
+		_ = fwd.UnmapPort(ctx)
+		return fmt.Errorf("build sing-box: %w", err)
+	}
+	if err := box.Start(); err != nil {
+		cancelRun()
+		_ = box.Close()
+		_ = c.cfg.API.Deregister(ctx, regResp.RouteID)
+		_ = fwd.UnmapPort(ctx)
+		return fmt.Errorf("start sing-box: %w", err)
+	}
+
+	heartbeat := c.cfg.HeartbeatInterval
+	if heartbeat == 0 {
+		heartbeat = time.Duration(regResp.HeartbeatIntervalSeconds) * time.Second
+		if heartbeat < time.Minute {
+			heartbeat = 5 * time.Minute
+		}
+	}
+	runDone := make(chan struct{})
+
+	c.mu.Lock()
+	c.active = true
+	c.forwarder = fwd
+	c.box = box
+	c.routeID = regResp.RouteID
+	c.cancelRun = cancelRun
+	c.runDone = runDone
+	c.status = Status{
+		Active:       true,
+		SharingSince: time.Now(),
+		ExternalIP:   externalIP,
+		ExternalPort: mapping.ExternalPort,
+		RouteID:      regResp.RouteID,
+	}
+	c.mu.Unlock()
+
+	fwd.StartRenewal(runCtx)
+	go c.heartbeatLoop(runCtx, heartbeat, runDone)
+
+	slog.Info("peer client started",
+		"external_ip", externalIP,
+		"external_port", mapping.ExternalPort,
+		"internal_port", mapping.InternalPort,
+		"method", mapping.Method,
+		"route_id", regResp.RouteID,
+		"heartbeat", heartbeat,
+	)
+	return nil
+}
+
+// Stop tears down an active session. Idempotent. Blocks until the heartbeat
+// goroutine has exited and all teardown calls have completed (or timed out).
+func (c *Client) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	if !c.active {
+		c.mu.Unlock()
+		return nil
+	}
+	cancel := c.cancelRun
+	done := c.runDone
+	fwd := c.forwarder
+	box := c.box
+	routeID := c.routeID
+	c.active = false
+	c.cancelRun = nil
+	c.runDone = nil
+	c.forwarder = nil
+	c.box = nil
+	c.routeID = ""
+	c.status = Status{}
+	c.mu.Unlock()
+
+	cancel()
+	<-done
+
+	var firstErr error
+	if err := c.cfg.API.Deregister(ctx, routeID); err != nil {
+		firstErr = fmt.Errorf("deregister: %w", err)
+		slog.Warn("peer client deregister failed (continuing teardown)", "err", err)
+	}
+	if err := box.Close(); err != nil {
+		if firstErr == nil {
+			firstErr = fmt.Errorf("close sing-box: %w", err)
+		}
+		slog.Warn("peer client sing-box close failed", "err", err)
+	}
+	if err := fwd.UnmapPort(ctx); err != nil {
+		if firstErr == nil {
+			firstErr = fmt.Errorf("unmap port: %w", err)
+		}
+		slog.Warn("peer client unmap port failed", "err", err)
+	}
+	slog.Info("peer client stopped", "route_id", routeID)
+	return firstErr
+}
+
+func (c *Client) IsActive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active
+}
+
+func (c *Client) CurrentStatus() Status {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
+}
+
+// heartbeatLoop closes done on exit so Stop can wait for the loop before
+// tearing down resources. The channel is passed in rather than read off the
+// Client because Stop nils c.runDone before waiting on its local copy.
+func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done chan struct{}) {
+	defer close(done)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.mu.Lock()
+			routeID := c.routeID
+			c.mu.Unlock()
+			if routeID == "" {
+				return
+			}
+			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
+			err := c.cfg.API.Heartbeat(hbCtx, routeID)
+			cancel()
+			if err != nil {
+				// A single transient blip shouldn't kill the registration —
+				// the server-side reaper will deprecate the row if heartbeats
+				// stay missing past expiration, and we'll observe that on a
+				// later heartbeat as a 404.
+				slog.Warn("peer heartbeat failed", "err", err, "route_id", routeID)
+				if isNotRegistered(err) {
+					slog.Info("peer route no longer registered server-side, stopping client")
+					// Stop runs in a separate goroutine to avoid the cyclic
+					// Stop → cancelRun → loop-exit deadlock.
+					go func() {
+						stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						_ = c.Stop(stopCtx)
+					}()
+					return
+				}
+			}
+		}
+	}
+}
+
+// isNotRegistered reports whether an error from the heartbeat is a 404 from
+// the server (deprecated / reaped / wrong owner). On 404 the registration is
+// gone and we stop ourselves; on any other error we keep trying.
+func isNotRegistered(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+func pickInternalPort() uint16 {
+	return uint16(internalPortMin + rand.IntN(internalPortMax-internalPortMin))
+}
+
+// We pass a nil PlatformInterface — peer-proxy inbounds don't need TUN /
+// platform-VPN integration the way the main VPN tunnel does. The samizdat
+// inbound is just an HTTPS server bound to a TCP port; sing-box's default
+// network stack handles it.
+func defaultBuildBoxService(ctx context.Context, options string) (boxService, error) {
+	bs, err := libbox.NewServiceWithContext(ctx, options, nil)
+	if err != nil {
+		return nil, fmt.Errorf("libbox.NewServiceWithContext: %w", err)
+	}
+	return bs, nil
+}
