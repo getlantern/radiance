@@ -24,6 +24,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
@@ -153,7 +154,13 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 
-	if val := settings.GetString(settings.CountryCodeKey); val != "" {
+	// x-lantern-client-country is a developer/test-only override that forces
+	// the server to apply diversion rules for a specific country. It MUST NOT
+	// be set from settings.CountryCodeKey (which is auto-populated from the
+	// server's first config response and is intended for issue reports), or
+	// the server's MaxMind ASN lookup short-circuits and returns ASN=0,
+	// breaking per-ASN bandit learning. See engineering #3398.
+	if val := env.GetString(env.Country); val != "" {
 		slog.Info("Setting x-lantern-client-country header", "country", val)
 		req.Header.Set("x-lantern-client-country", val)
 	}
