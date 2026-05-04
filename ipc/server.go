@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/vpn"
 
 	sjson "github.com/sagernet/sing/common/json"
@@ -59,6 +60,10 @@ const (
 	// Settings endpoints
 	featuresEndpoint = "/settings/features"
 	settingsEndpoint = "/settings"
+
+	// Peer-share ("Share My Connection") endpoints
+	peerStatusEndpoint       = "/peer/status"
+	peerStatusEventsEndpoint = "/peer/status/events"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -218,6 +223,11 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Settings
 	mux.HandleFunc("GET "+featuresEndpoint, traced(s.featuresHandler))
 	mux.HandleFunc(settingsEndpoint, traced(s.settingsHandler))
+
+	// Peer share
+	mux.HandleFunc("GET "+peerStatusEndpoint, traced(s.peerStatusHandler))
+	// SSE skips the tracer middleware since it buffers the entire response body.
+	mux.HandleFunc("GET "+peerStatusEventsEndpoint, s.peerStatusEventsHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -421,6 +431,51 @@ func (s *localapi) vpnStatusEventsHandler(w http.ResponseWriter, r *http.Request
 			// and sse_parsed downstream to bracket transit through the
 			// (winio) named pipe on Windows.
 			slog.Info("[vpn-state-trace]", "hop", "ssehandler_flushed", "data", string(data), "ts_ms", time.Now().UnixMilli())
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+/////////////////
+//  Peer share //
+/////////////////
+
+func (s *localapi) peerStatusHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).PeerStatus())
+}
+
+// peerStatusEventsHandler streams peer.StatusEvent over SSE. Replays the
+// current snapshot first so a subscriber attaching between events still sees
+// the live state.
+func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan []byte, 16)
+	sub := events.Subscribe(func(evt peer.StatusEvent) {
+		data, err := json.Marshal(evt)
+		if err != nil {
+			return
+		}
+		select {
+		case ch <- data:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+
+	if data, err := json.Marshal(peer.StatusEvent{Status: s.backend(r.Context()).PeerStatus()}); err == nil {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	for {
+		select {
+		case data := <-ch:
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}

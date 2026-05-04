@@ -35,6 +35,7 @@ import (
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -45,6 +46,13 @@ import (
 )
 
 const tracerName = "github.com/getlantern/radiance/backend"
+
+type peerController interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	IsActive() bool
+	CurrentStatus() peer.Status
+}
 
 // LocalBackend ties all the core functionality of Radiance together. It manages the configuration,
 // servers, VPN connection, account management, issue reporting, and telemetry for the application.
@@ -59,6 +67,9 @@ type LocalBackend struct {
 	srvManager     *servers.Manager
 	vpnClient      *vpn.VPNClient
 	splitTunnelMgr *vpn.SplitTunnel
+	peerClient     peerController
+	peerToggleMu   sync.Mutex
+	peerWG         sync.WaitGroup
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -155,6 +166,13 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+
+	peerAPI := peer.NewAPI(kindling.HTTPClient(), common.GetBaseURL(), platformDeviceID)
+	peerClient, err := peer.NewClient(peer.Config{API: peerAPI})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create peer client: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
@@ -172,6 +190,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		srvManager:     svrMgr,
 		vpnClient:      vpnClient,
 		splitTunnelMgr: splitTunnelMgr,
+		peerClient:     peerClient,
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
@@ -208,6 +227,8 @@ func (r *LocalBackend) Start() {
 	}
 	r.startVPNStatusListeners()
 	r.startAutoSelectedListener()
+
+	r.resumePeerShareIfEnabled()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
@@ -294,6 +315,20 @@ func (r *LocalBackend) Start() {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		// Wait for an in-flight peer auto-resume so we don't tear down ctx
+		// while it's mid-Start (which would leave a registered route + open
+		// box behind). Then stop with a fresh ctx so Deregister has a live
+		// HTTP deadline even though r.ctx is about to cancel.
+		if r.peerClient != nil {
+			r.peerWG.Wait()
+			if r.peerClient.IsActive() {
+				stopCtx, cancel := context.WithTimeout(context.Background(), peerStartTimeout)
+				if err := r.peerClient.Stop(stopCtx); err != nil {
+					slog.Warn("peer share stop on backend close returned error", "err", err)
+				}
+				cancel()
+			}
+		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
@@ -437,8 +472,73 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	r.maybeRestartVPN(diff)
 
+	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
+		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
+
+// applyPeerShare drives peerClient to match the toggle. On Start failure the
+// persisted setting is rolled back so reads of PeerShareEnabledKey reflect
+// runtime state. Stop errors are logged because a partial teardown shouldn't
+// keep the toggle on.
+//
+// peerToggleMu serializes concurrent toggles: without it, a fast off→on→off
+// sequence could see the second call's "already active" rollback racing the
+// third call's Stop.
+//
+// peerStartTimeout caps blocking time on a slow router; UPnP M-SEARCH +
+// /v1/peer/register normally complete in single-digit seconds.
+func (r *LocalBackend) applyPeerShare(enabled bool) error {
+	r.peerToggleMu.Lock()
+	defer r.peerToggleMu.Unlock()
+	if enabled {
+		startCtx, cancel := context.WithTimeout(r.ctx, peerStartTimeout)
+		defer cancel()
+		if err := r.peerClient.Start(startCtx); err != nil {
+			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
+				slog.Error("peer share rollback failed after Start error",
+					"start_err", err, "rollback_err", rbErr)
+			}
+			return fmt.Errorf("start peer share: %w", err)
+		}
+		return nil
+	}
+	if err := r.peerClient.Stop(r.ctx); err != nil {
+		slog.Warn("peer share stop returned error (toggle still off)", "err", err)
+	}
+	return nil
+}
+
+// resumePeerShareIfEnabled re-Starts the peer client if the user left the
+// toggle on across restarts. Runs in a goroutine because UPnP discovery and
+// registration can take several seconds and Start() must return promptly.
+// peerWG ensures Close waits for an in-flight resume to settle before
+// teardown, so we never leave a registered route or a running box behind.
+func (r *LocalBackend) resumePeerShareIfEnabled() {
+	if !settings.GetBool(settings.PeerShareEnabledKey) {
+		return
+	}
+	r.peerWG.Add(1)
+	go func() {
+		defer r.peerWG.Done()
+		if r.ctx.Err() != nil {
+			return
+		}
+		if err := r.applyPeerShare(true); err != nil {
+			slog.Warn("peer share auto-resume failed", "err", err)
+		}
+	}()
+}
+
+func (r *LocalBackend) PeerStatus() peer.Status {
+	return r.peerClient.CurrentStatus()
+}
+
+const peerStartTimeout = 30 * time.Second
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings
 // were changed and the VPN is currently connected.

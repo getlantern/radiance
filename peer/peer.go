@@ -12,8 +12,16 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
+
+// StatusEvent fires whenever the Client's session state changes — successful
+// Start, user Stop, or auto-Stop on a 404 heartbeat.
+type StatusEvent struct {
+	events.Event
+	Status Status `json:"status"`
+}
 
 // Lower bound avoids well-known/registered ports; upper bound stays below the
 // typical OS ephemeral range so the OS isn't likely to assign the same port
@@ -223,6 +231,7 @@ func (c *Client) Start(ctx context.Context) error {
 		ExternalPort: mapping.ExternalPort,
 		RouteID:      regResp.RouteID,
 	}
+	statusSnapshot := c.status
 	c.mu.Unlock()
 
 	fwd.StartRenewal(runCtx)
@@ -237,6 +246,7 @@ func (c *Client) Start(ctx context.Context) error {
 		"heartbeat", heartbeat,
 	)
 	success = true
+	events.Emit(StatusEvent{Status: statusSnapshot})
 	return nil
 }
 
@@ -283,6 +293,7 @@ func (c *Client) Stop(ctx context.Context) error {
 		slog.Warn("peer client unmap port failed", "err", err)
 	}
 	slog.Info("peer client stopped", "route_id", routeID)
+	events.Emit(StatusEvent{Status: Status{}})
 	return firstErr
 }
 
