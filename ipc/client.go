@@ -341,8 +341,7 @@ func (c *Client) EnableAdBlocking(ctx context.Context, enable bool) error {
 	return err
 }
 
-// EnableConfigFetch toggles periodic config fetching. Passing false sets
-// settings.ConfigFetchDisabledKey to true on the daemon.
+// EnableConfigFetch toggles periodic config fetching.
 func (c *Client) EnableConfigFetch(ctx context.Context, enable bool) error {
 	_, err := c.PatchSettings(ctx, settings.Settings{settings.ConfigFetchDisabledKey: !enable})
 	return err

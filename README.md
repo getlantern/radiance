@@ -21,17 +21,19 @@ Configuration can be controlled by setting environment variables or creating a `
 
 Available variables:
 
-*   `RADIANCE_LOG_LEVEL`: Sets the log level (e.g., `trace`, `debug`, `info`, `warn`, `error`, `fatal`).
-*   `RADIANCE_LOG_PATH`: Sets the absolute path to the log file.
-*   `RADIANCE_DATA_PATH`: Sets the absolute path to the data directory.
-*   `RADIANCE_DISABLE_FETCH_CONFIG`: If set to `true`, disables fetching the remote config.
-*   `RADIANCE_DISABLE_STDOUT_LOG`: Disable printing `radiance` logs to STDOUT. Logs will still be written to the log file.
-*   `RADIANCE_COUNTRY`: Simulate running from another country, specifically fetching a config as if running from X country. For example, `RADIANCE_COUNTRY=cn`
-*   `RADIANCE_USE_SOCKS_PROXY`: If set to `true`, replace the TUN with a SOCKS proxy for inbound connections.
-*   `RADIANCE_SOCKS_ADDRESS`: Specifies the address (`host:port`) for the SOCKS proxy to use for inbound connections.
-*   `RADIANCE_ENV`: Sets whether we're running in production or development mode. Set to `dev` for additional debugging output, such as the sing-box config actually in use. `prod` is the default.
-*   `RADIANCE_VERSION`: Overrides the application version at runtime. Takes precedence over the version set at build time via ldflags. For example, `RADIANCE_VERSION=9.1.1`.
-*   `RADIANCE_FEATURE_OVERRIDE`: Comma-separated list of feature flags to force-enable on the server side. If set, the value is sent as the `X-Lantern-Feature-Override` header on config requests in any environment, and it is recommended for testing/non-production use. For example, `RADIANCE_FEATURE_OVERRIDE=bandit_assignment` enables bandit-based proxy assignment during testing.
+| Variable                        | Description                                                                                                                                                                                                                                                |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RADIANCE_LOG_LEVEL`            | Log level: `trace`, `debug`, `info`, `warn`, `error`, `fatal`.                                                                                                                                                                                             |
+| `RADIANCE_LOG_PATH`             | Absolute path to the log file.                                                                                                                                                                                                                             |
+| `RADIANCE_DATA_PATH`            | Absolute path to the data directory.                                                                                                                                                                                                                       |
+| `RADIANCE_DISABLE_FETCH_CONFIG` | If `true`, disables fetching the remote config.                                                                                                                                                                                                            |
+| `RADIANCE_DISABLE_STDOUT_LOG`   | Disable printing `radiance` logs to STDOUT. Logs are still written to the log file.                                                                                                                                                                        |
+| `RADIANCE_COUNTRY`              | Simulate running from another country (fetches a config as if running from X country). Example: `RADIANCE_COUNTRY=cn`.                                                                                                                                     |
+| `RADIANCE_USE_SOCKS_PROXY`      | If `true`, replace the TUN with a SOCKS proxy for inbound connections.                                                                                                                                                                                     |
+| `RADIANCE_SOCKS_ADDRESS`        | Address (`host:port`) for the SOCKS proxy to use for inbound connections.                                                                                                                                                                                  |
+| `RADIANCE_ENV`                  | `prod` (default) or `dev`. `dev` enables additional debugging output, such as the sing-box config actually in use.                                                                                                                                         |
+| `RADIANCE_VERSION`              | Overrides the application version at runtime. Takes precedence over the version set at build time via ldflags. Example: `RADIANCE_VERSION=9.1.1`.                                                                                                          |
+| `RADIANCE_FEATURE_OVERRIDES`    | Comma-separated list of feature flags to force-enable on the server side. If set, the value is sent as the `X-Lantern-Feature-Override` header on config requests in any environment; recommended for testing only. Example: `RADIANCE_FEATURE_OVERRIDES=bandit_assignment`. |
 
 
 ## Architecture
@@ -45,8 +47,6 @@ In addition to being the core of the [Lantern client](https://github.com/getlant
 
 ### Building CLI & Daemon
 
-From the `cmd/` directory:
-
 ```sh
 make build-daemon
 make build-cli
@@ -59,27 +59,40 @@ just build-cli
 
 Both binaries are output to `bin/`. You can also run the daemon directly with `make run-daemon`.
 
+To install into `$GOBIN` instead:
+
+```sh
+make install   # or: just install
+```
+
+> [!note]
+> `make install` only compiles the `lanternd` and `lantern` binaries into `$GOBIN`. To register `lanternd` as a system service, run `lanternd install` (see below).
+
 ### Running
 
 ```sh
 # Start the daemon
-lanternd run --data-path ~/data --log-path ~/logs
+lanternd run --data-path /path/to/dir --log-path /path/to/dir
 
 # Install/uninstall as a system service
-lanternd install --data-path ~/data --log-path ~/logs
+lanternd install --data-path /path/to/dir --log-path /path/to/dir
 lanternd uninstall
 
-# CLI commands (requires a running daemon)
+# CLI (requires a running daemon)
 lantern connect [--tag <server-tag>]
 lantern disconnect
 lantern status
-lantern servers
-lantern account login
-lantern subscription
-lantern split-tunnel
-lantern logs
-lantern ip
+...
 ```
+Use `--help` to see full list of commands and usage.
+
+If `--data-path` and `--log-path` are omitted, `lanternd run` and `lanternd install` use platform-specific defaults:
+
+| Platform | `--data-path`                          | `--log-path`            |
+| -------- | -------------------------------------- | ----------------------- |
+| Linux    | `/var/lib/lantern`                     | `/var/log/lantern`      |
+| macOS    | `/Library/Application Support/Lantern` | `/Library/Logs/Lantern` |
+| Windows  | `%ProgramData%\Lantern`                | `%ProgramData%\Lantern` |
 
 ## Packages
 
