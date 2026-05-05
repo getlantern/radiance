@@ -49,6 +49,9 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if isConnectionError(err) {
+			return nil, ErrIPCNotRunning
+		}
 		return nil, fmt.Errorf("ipc request %s %s: %w", method, endpoint, err)
 	}
 	defer resp.Body.Close()
