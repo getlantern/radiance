@@ -294,6 +294,9 @@ func (r *LocalBackend) Start() {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		if err := r.DisconnectVPN(); err != nil {
+			slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
