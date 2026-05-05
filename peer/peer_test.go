@@ -463,6 +463,37 @@ func TestClient_Heartbeat_TransientErrorDoesNotStop(t *testing.T) {
 	assert.Equal(t, int64(0), srv.deregisterCount.Load())
 }
 
+// The peer's sing-box must bypass the user's own VPN TUN — verify both the
+// "no route block at all" and "existing route block" cases get the flag set,
+// and that other route-level keys are preserved.
+func TestEnsurePeerOutboundsBypassVPN(t *testing.T) {
+	t.Run("adds route block when missing", func(t *testing.T) {
+		in := `{"inbounds":[{"type":"samizdat","tag":"samizdat-in"}]}`
+		out, err := ensurePeerOutboundsBypassVPN(in)
+		require.NoError(t, err)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+		route := parsed["route"].(map[string]any)
+		assert.Equal(t, true, route["auto_detect_interface"])
+		assert.Contains(t, parsed, "inbounds", "must preserve other top-level fields")
+	})
+	t.Run("preserves existing route fields", func(t *testing.T) {
+		in := `{"route":{"rules":[{"action":"sniff"}],"final":"direct"}}`
+		out, err := ensurePeerOutboundsBypassVPN(in)
+		require.NoError(t, err)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+		route := parsed["route"].(map[string]any)
+		assert.Equal(t, true, route["auto_detect_interface"])
+		assert.Equal(t, "direct", route["final"])
+		assert.NotEmpty(t, route["rules"])
+	})
+	t.Run("rejects malformed json", func(t *testing.T) {
+		_, err := ensurePeerOutboundsBypassVPN(`{not json`)
+		assert.Error(t, err)
+	})
+}
+
 func TestPickInternalPort_InRange(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		p := pickInternalPort()
