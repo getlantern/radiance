@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 type RegisterRequest struct {
@@ -93,6 +95,14 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 		r.Header.Set("Content-Type", "application/json")
 	}
 	r.Header.Set("X-Lantern-Device-Id", a.deviceID)
+	// Forward the same feature-override header that config/fetcher.go uses
+	// for /config-new requests, so QA can flip on `peer_proxy` ahead of the
+	// public-flag rollout via FeatureOverridesKey (RADIANCE_FEATURE_OVERRIDES).
+	// Without this the server-side gate rejects register/heartbeat/deregister
+	// regardless of the local toggle.
+	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
+		r.Header.Set("X-Lantern-Feature-Override", val)
+	}
 
 	resp, err := a.httpClient.Do(r)
 	if err != nil {
