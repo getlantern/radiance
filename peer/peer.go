@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -173,11 +174,23 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
 	}
 
+	// The peer's outbound traffic must bypass any TUN device the user's own
+	// VPN may have installed — otherwise censored clients' traffic would
+	// egress through the local user's Lantern proxy instead of their
+	// residential connection, defeating the whole point of peer-sharing.
+	// auto_detect_interface tells sing-box to bind outbound dials to the
+	// underlying physical interface rather than whatever the OS routing
+	// table picks (which would be the VPN TUN if the VPN is up).
+	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
+	if err != nil {
+		return fmt.Errorf("patch sing-box options: %w", err)
+	}
+
 	// runCtx must outlive Start, so it derives from Background() rather than
 	// the caller's ctx — otherwise libbox's stored ctx would die when Start
 	// returns and take the box's internal goroutines with it.
 	runCtx, cancelRun = context.WithCancel(context.Background())
-	box, err = c.cfg.BuildBoxService(runCtx, regResp.ServerConfig)
+	box, err = c.cfg.BuildBoxService(runCtx, options)
 	if err != nil {
 		cancelRun()
 		return fmt.Errorf("build sing-box: %w", err)
@@ -334,6 +347,36 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 func isNotRegistered(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+// ensurePeerOutboundsBypassVPN guarantees the peer sing-box's outbound dials
+// bind to the physical interface rather than whatever the OS routing table
+// picks. Without this, when the user's own Lantern VPN is up its TUN holds
+// the default route and the peer's outbound traffic — i.e. the censored
+// client's destination requests — would egress through Lantern's proxy
+// network instead of the user's residential connection. That defeats the
+// whole point of using the user's home IP as a circumvention exit.
+//
+// We splice the flag into whatever sing-box options the server supplied
+// rather than relying on the server-side track config to set it, since the
+// VPN-bypass requirement is a property of the *client's* environment, not
+// the proxy track config.
+func ensurePeerOutboundsBypassVPN(options string) (string, error) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(options), &raw); err != nil {
+		return "", fmt.Errorf("decode options: %w", err)
+	}
+	route, _ := raw["route"].(map[string]any)
+	if route == nil {
+		route = map[string]any{}
+		raw["route"] = route
+	}
+	route["auto_detect_interface"] = true
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return "", fmt.Errorf("encode options: %w", err)
+	}
+	return string(out), nil
 }
 
 func pickInternalPort() uint16 {
