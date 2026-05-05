@@ -445,37 +445,40 @@ func (s *localapi) peerStatusHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).PeerStatus())
 }
 
-// peerStatusEventsHandler streams peer.StatusEvent over SSE. Replays the
-// current snapshot first so a subscriber attaching between events still sees
-// the live state.
+// peerStatusEventsHandler streams peer.StatusEvent over SSE. The wire
+// payload is always the live snapshot from PeerStatus(), not the event's
+// captured value: events.Emit dispatches each callback on its own goroutine
+// so a quick start→stop pair can land out of order, and we'd send a stale
+// "active" after a "inactive". Reading the live snapshot when the trigger
+// fires guarantees the SSE consumer's last message reflects current state.
 func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Request) {
 	flusher := sseWriter(w)
 	if flusher == nil {
 		return
 	}
-	ch := make(chan []byte, 16)
-	sub := events.Subscribe(func(evt peer.StatusEvent) {
-		data, err := json.Marshal(evt)
-		if err != nil {
-			return
-		}
+	trigger := make(chan struct{}, 1)
+	sub := events.Subscribe(func(_ peer.StatusEvent) {
 		select {
-		case ch <- data:
+		case trigger <- struct{}{}:
 		default:
 		}
 	})
 	defer sub.Unsubscribe()
 
-	if data, err := json.Marshal(peer.StatusEvent{Status: s.backend(r.Context()).PeerStatus()}); err == nil {
+	send := func() {
+		data, err := json.Marshal(peer.StatusEvent{Status: s.backend(r.Context()).PeerStatus()})
+		if err != nil {
+			return
+		}
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
+	send() // replay current snapshot for subscribers attaching between events
 
 	for {
 		select {
-		case data := <-ch:
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+		case <-trigger:
+			send()
 		case <-r.Context().Done():
 			return
 		}

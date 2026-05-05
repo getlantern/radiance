@@ -322,7 +322,7 @@ func (r *LocalBackend) Close() {
 		if r.peerClient != nil {
 			r.peerWG.Wait()
 			if r.peerClient.IsActive() {
-				stopCtx, cancel := context.WithTimeout(context.Background(), peerStartTimeout)
+				stopCtx, cancel := context.WithTimeout(context.Background(), peerToggleTimeout)
 				if err := r.peerClient.Stop(stopCtx); err != nil {
 					slog.Warn("peer share stop on backend close returned error", "err", err)
 				}
@@ -490,15 +490,15 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 // sequence could see the second call's "already active" rollback racing the
 // third call's Stop.
 //
-// peerStartTimeout caps blocking time on a slow router; UPnP M-SEARCH +
+// peerToggleTimeout caps blocking time on a slow router; UPnP M-SEARCH +
 // /v1/peer/register normally complete in single-digit seconds.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()
+	toggleCtx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
+	defer cancel()
 	if enabled {
-		startCtx, cancel := context.WithTimeout(r.ctx, peerStartTimeout)
-		defer cancel()
-		if err := r.peerClient.Start(startCtx); err != nil {
+		if err := r.peerClient.Start(toggleCtx); err != nil {
 			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
 				slog.Error("peer share rollback failed after Start error",
 					"start_err", err, "rollback_err", rbErr)
@@ -507,7 +507,7 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 		}
 		return nil
 	}
-	if err := r.peerClient.Stop(r.ctx); err != nil {
+	if err := r.peerClient.Stop(toggleCtx); err != nil {
 		slog.Warn("peer share stop returned error (toggle still off)", "err", err)
 	}
 	return nil
@@ -538,7 +538,7 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 	return r.peerClient.CurrentStatus()
 }
 
-const peerStartTimeout = 30 * time.Second
+const peerToggleTimeout = 30 * time.Second
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings
 // were changed and the VPN is currently connected.
