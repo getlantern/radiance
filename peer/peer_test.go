@@ -86,6 +86,32 @@ func (f *fakeForwarder) wasMapped() bool {
 	return f.mapped
 }
 
+// slowMapForwarder blocks MapPort on a gate channel and signals via entered
+// when the call is in flight. Used to race two concurrent Starts so the
+// test can observe the serialization invariant.
+type slowMapForwarder struct {
+	gate    chan struct{}
+	entered chan struct{}
+}
+
+func (f *slowMapForwarder) MapPort(_ context.Context, internalPort uint16, _ string) (*portforward.Mapping, error) {
+	select {
+	case f.entered <- struct{}{}:
+	default:
+	}
+	<-f.gate
+	return &portforward.Mapping{
+		ExternalPort: internalPort, InternalPort: internalPort,
+		InternalIP: "192.168.1.10", Protocol: "TCP",
+		LeaseDuration: time.Hour, Method: "fake",
+	}, nil
+}
+func (f *slowMapForwarder) UnmapPort(context.Context) error { return nil }
+func (f *slowMapForwarder) StartRenewal(context.Context)    {}
+func (f *slowMapForwarder) ExternalIP(context.Context) (string, error) {
+	return "203.0.113.99", nil
+}
+
 type fakeBoxService struct {
 	startErr  error
 	closeErr  error
@@ -233,6 +259,43 @@ func TestClient_Start_DoubleStartIsError(t *testing.T) {
 
 	err := c.Start(context.Background())
 	assert.ErrorContains(t, err, "already active")
+}
+
+// Two goroutines hitting Start at the same time must not both run setup —
+// the second one would overwrite the first's state, leaving the first
+// session orphaned with no way to Stop it through this Client.
+func TestClient_Start_ConcurrentStartsAreSerialized(t *testing.T) {
+	fwd := &slowMapForwarder{
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}, 1),
+	}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	c := newTestClient(t, fwd, box, srv)
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	results := make(chan error, 2)
+	for range 2 {
+		go func() { results <- c.Start(context.Background()) }()
+	}
+	// Wait for one Start to be inside MapPort holding starting=true; release
+	// it once the second Start has had a chance to observe the contended
+	// state and reject.
+	<-fwd.entered
+	close(fwd.gate)
+
+	var nilCount, errCount int
+	for range 2 {
+		if err := <-results; err == nil {
+			nilCount++
+		} else {
+			errCount++
+			assert.ErrorContains(t, err, "already active")
+		}
+	}
+	assert.Equal(t, 1, nilCount, "exactly one Start must succeed")
+	assert.Equal(t, 1, errCount, "the racing Start must be rejected")
+	assert.Equal(t, int64(1), srv.registerCount.Load())
 }
 
 func TestClient_Start_PortForwardFailureUnwinds(t *testing.T) {

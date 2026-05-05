@@ -63,7 +63,14 @@ type Config struct {
 type Client struct {
 	cfg Config
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// starting and active together serialize Start: starting is true while a
+	// Start call is in flight, active is true once it succeeds. Without
+	// starting, two concurrent Start calls could both pass the !active check
+	// and run setup in parallel — the second's state would overwrite the
+	// first's, orphaning a registered route + open box that this Client can
+	// no longer Stop.
+	starting  bool
 	active    bool
 	status    Status
 	cancelRun context.CancelFunc
@@ -72,6 +79,12 @@ type Client struct {
 	box       boxService
 	routeID   string
 }
+
+// peerCleanupTimeout caps how long Start's rollback path waits for
+// Deregister / UnmapPort. Cleanup uses a fresh Background context (not the
+// caller's ctx) so an already-canceled or expired Start ctx doesn't skip
+// teardown and leak the registered route or router rule.
+const peerCleanupTimeout = 30 * time.Second
 
 func NewClient(cfg Config) (*Client, error) {
 	if cfg.API == nil {
@@ -96,11 +109,46 @@ func NewClient(cfg Config) (*Client, error) {
 // returning.
 func (c *Client) Start(ctx context.Context) error {
 	c.mu.Lock()
-	if c.active {
+	if c.active || c.starting {
 		c.mu.Unlock()
 		return errors.New("peer client already active")
 	}
+	c.starting = true
 	c.mu.Unlock()
+
+	var (
+		success   bool
+		fwd       portForwarder
+		regResp   *RegisterResponse
+		box       boxService
+		runCtx    context.Context
+		cancelRun context.CancelFunc
+	)
+	defer func() {
+		c.mu.Lock()
+		c.starting = false
+		c.mu.Unlock()
+		if success {
+			return
+		}
+		// A fresh ctx — the caller's may already be canceled by the time we
+		// roll back, which would skip Deregister and UnmapPort and leak the
+		// registered route + router rule.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
+		defer cancel()
+		if box != nil {
+			_ = box.Close()
+		}
+		if cancelRun != nil {
+			cancelRun()
+		}
+		if regResp != nil {
+			_ = c.cfg.API.Deregister(cleanupCtx, regResp.RouteID)
+		}
+		if fwd != nil {
+			_ = fwd.UnmapPort(cleanupCtx)
+		}
+	}()
 
 	fwd, err := c.cfg.NewForwarder(ctx)
 	if err != nil {
@@ -114,35 +162,28 @@ func (c *Client) Start(ctx context.Context) error {
 
 	externalIP, err := fwd.ExternalIP(ctx)
 	if err != nil {
-		_ = fwd.UnmapPort(ctx)
 		return fmt.Errorf("get external ip: %w", err)
 	}
-	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
+	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
 	})
 	if err != nil {
-		_ = fwd.UnmapPort(ctx)
 		return fmt.Errorf("register with lantern-cloud: %w", err)
 	}
 
 	// runCtx must outlive Start, so it derives from Background() rather than
 	// the caller's ctx — otherwise libbox's stored ctx would die when Start
 	// returns and take the box's internal goroutines with it.
-	runCtx, cancelRun := context.WithCancel(context.Background())
-	box, err := c.cfg.BuildBoxService(runCtx, regResp.ServerConfig)
+	runCtx, cancelRun = context.WithCancel(context.Background())
+	box, err = c.cfg.BuildBoxService(runCtx, regResp.ServerConfig)
 	if err != nil {
 		cancelRun()
-		_ = c.cfg.API.Deregister(ctx, regResp.RouteID)
-		_ = fwd.UnmapPort(ctx)
 		return fmt.Errorf("build sing-box: %w", err)
 	}
 	if err := box.Start(); err != nil {
 		cancelRun()
-		_ = box.Close()
-		_ = c.cfg.API.Deregister(ctx, regResp.RouteID)
-		_ = fwd.UnmapPort(ctx)
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
@@ -182,6 +223,7 @@ func (c *Client) Start(ctx context.Context) error {
 		"route_id", regResp.RouteID,
 		"heartbeat", heartbeat,
 	)
+	success = true
 	return nil
 }
 

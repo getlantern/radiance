@@ -107,6 +107,11 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 // UnmapPort removes the active mapping. No-op if no mapping is active.
 // Always called as part of teardown — even if the gateway has already let
 // the lease expire, DeletePortMapping is the polite signal to the router.
+//
+// f.mapping is cleared only on a successful delete. A failed delete leaves
+// the mapping in place so the caller can retry; otherwise we'd "forget"
+// about a router rule that's actually still live and the user would have
+// to wait for the UPnP lease to expire.
 func (f *Forwarder) UnmapPort(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -119,13 +124,13 @@ func (f *Forwarder) UnmapPort(ctx context.Context) error {
 	}
 	m := f.mapping
 	client := f.client
-	f.mapping = nil
 	err := runWithCtx(ctx, func() error {
 		return client.DeletePortMapping("", m.ExternalPort, m.Protocol)
 	})
 	if err != nil {
 		return fmt.Errorf("delete port mapping: %w", err)
 	}
+	f.mapping = nil
 	return nil
 }
 
@@ -221,10 +226,16 @@ func localIP() (string, error) {
 func LocalIP() (string, error) { return localIP() }
 
 // runWithCtx wraps a blocking call so the caller's context can abort the
-// wait. The wrapped goroutine still runs to completion and may leak briefly
-// — UPnP/HTTP calls have their own underlying timeouts — but we no longer
-// hand the entire wait time to an unresponsive gateway.
+// wait. Returns ctx.Err() immediately if ctx is already cancelled, so the
+// gateway-side side effect (port mapping, etc.) doesn't fire after the
+// caller has already given up. If ctx cancels mid-call, the wrapped
+// goroutine still runs to completion — UPnP/HTTP calls have their own
+// underlying timeouts — but we no longer hand the entire wait time to an
+// unresponsive gateway.
 func runWithCtx(ctx context.Context, fn func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	done := make(chan error, 1)
 	go func() { done <- fn() }()
 	select {
