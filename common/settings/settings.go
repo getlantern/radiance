@@ -112,10 +112,9 @@ func InitSettings(fileDir string) error {
 	return nil
 }
 
-// candidateSource describes one possible location of persisted user
-// state. `contents` is always JSON in the current canonical schema —
-// either read directly (for the v9.x JSON files) or translated from a
-// pre-9.x platform-specific YAML on the way in.
+// candidateSource is one possible location of persisted user state.
+// contents is always canonical JSON — direct for v9.x, translated for
+// pre-9.x YAML.
 type candidateSource struct {
 	path     string
 	contents []byte
@@ -124,48 +123,23 @@ type candidateSource struct {
 }
 
 // migrateLegacySettingsIfNeeded recovers persisted user state written
-// by older client versions. Candidate paths considered in priority
-// order (highest first):
+// by older client versions. Candidates in priority order:
 //
-//  1. <fileDir>/settings.json         — current canonical path
-//  2. <fileDir>/local.json            — what v9.0.x wrote (renamed in #370)
-//  3. pre-9.x platform-specific YAML  — flashlight/lantern-client era:
-//     macOS:   ~/.lantern/settings.yaml
-//     Windows: %APPDATA%\Lantern\settings.yaml
-//     Linux:   ~/.config/lantern/settings.yaml
-//     iOS:     <fileDir>/userconfig.yaml
-//     (Android stored its state in an encrypted SQLite that we can't
-//     read here; that case needs a Kotlin-side migration outside this
-//     package.)
-//  4. <fileDir>/data/settings.json    — what v9.1.x wrote, due to a bug
-//                                       in #370's setupDirectories that
-//                                       appended an unconditional "/data"
-//                                       suffix to the caller's data dir
+//  1. <fileDir>/settings.json       — canonical
+//  2. <fileDir>/local.json          — v9.0.x (renamed in #370)
+//  3. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
+//  4. <fileDir>/data/settings.json  — v9.1.x (bugged: #370's
+//                                     setupDirectories appended an
+//                                     unconditional "/data" suffix)
 //
-// On the first launch of a fixed client, any subset of these may exist
-// depending on the user's upgrade path. Pick whichever has
-// user_level == "pro" so anyone who legitimately paid keeps their Pro
-// state regardless of which file holds the good copy. If none have
-// pro, prefer the higher-priority source so the user's identifiers
-// (user_id, token, device_id) survive — losing Pro is recoverable,
-// losing the device registration creates server-side orphans.
-//
-// Order rationale: canonical is most recent and authoritative.
-// v9.0.x's local.json is the next-most-recent legitimate state.
-// Pre-9.x YAML is older but trusted (real user state from
-// flashlight/lantern-client). v9.1.x's nested file is most recent but
-// known to be bugged (fresh device_id, possibly wrong user_id).
-//
-// Runs unconditionally — quick stat-and-read of a handful of small
-// files; no-op for the vast majority of installs that don't have any
-// of the legacy files.
+// Pick the highest-priority candidate with user_level=="pro"; if none
+// is pro, the highest-priority candidate that exists. Losing Pro is
+// recoverable; losing the device registration creates server-side
+// orphans, so identifier continuity wins ties.
 func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 	candidates := []candidateSource{
 		{path: canonicalPath, label: "canonical settings.json"},
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
-		// pre-9.x YAML is appended below after read+translate (only if
-		// it exists for this platform) so the pickIdx loop sees it as
-		// just another candidate.
 		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
 	}
 	for i := range candidates {
@@ -189,12 +163,9 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 			}
 		}
 	}
-	// Insert the pre-9.x YAML candidate (translated to canonical JSON)
-	// between local.json and data/settings.json. Only the platforms with
-	// known pre-9.x file layouts return a non-empty result here.
+	// Splice the pre-9.x YAML candidate before the v9.1.x nested file so
+	// priority is canonical > local.json > pre-9.x > nested.
 	if yc := legacyYAMLCandidate(fileDir); yc.exists {
-		// Splice in at index 2 (just before data/settings.json) so
-		// priority order is canonical > local.json > pre-9.x > nested.
 		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
 	}
 
