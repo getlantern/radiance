@@ -3,6 +3,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -159,5 +160,32 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 
 		_, err := os.Stat(canonical)
 		assert.True(t, os.IsNotExist(err), "no migration when no source files exist")
+	})
+
+	t.Run("unreadable canonical (non-ENOENT) skips migration", func(t *testing.T) {
+		// Permission error on the canonical path: don't fall through and
+		// overwrite a file we couldn't read. unix only — windows handles
+		// permissions differently and chmod wouldn't reproduce this.
+		if runtime.GOOS == "windows" {
+			t.Skip("permission semantics differ on windows")
+		}
+		tempDir := t.TempDir()
+		canonical := filepath.Join(tempDir, settingsFileName)
+		require.NoError(t, os.WriteFile(canonical, []byte(`{"user_level": "expired"}`), 0o644))
+		// Make the file unreadable.
+		require.NoError(t, os.Chmod(canonical, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(canonical, 0o644) })
+		// Stage a legacy-pro candidate that would otherwise win.
+		writeLegacy(t, tempDir, []byte(`{"user_id": 1, "user_level": "pro"}`))
+
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		// Restore readability and confirm the canonical contents are
+		// unchanged (still the expired body, not the legacy-pro body).
+		require.NoError(t, os.Chmod(canonical, 0o644))
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, `{"user_level": "expired"}`, string(got),
+			"canonical with non-ENOENT read error should be left alone")
 	})
 }

@@ -148,9 +148,23 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 	}
 	for i := range candidates {
 		b, err := os.ReadFile(candidates[i].path)
-		if err == nil {
+		switch {
+		case err == nil:
 			candidates[i].contents = b
 			candidates[i].exists = true
+		case errors.Is(err, fs.ErrNotExist):
+			// Expected — file just isn't there. Treat as not-present.
+		default:
+			// Permission / I/O error — log it but don't bail outright. If
+			// it's the canonical path that's unreadable for non-ENOENT
+			// reasons, skip migration entirely so we don't try to write
+			// over a file the OS is telling us we can't see; for legacy
+			// or nested paths, treat the same as not-present.
+			slog.Warn("legacy settings migration: read failed",
+				"path", candidates[i].path, "error", err)
+			if candidates[i].path == canonicalPath {
+				return
+			}
 		}
 	}
 
@@ -183,11 +197,13 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 }
 
 // writeMigrated overwrites the canonical settings file with the recovered
-// contents and logs the outcome. Errors are logged-and-swallowed: if the
-// write fails the caller falls through to the fresh-install path, which
-// is a worse UX but not a corruption risk.
+// contents and logs the outcome. Uses atomicfile.WriteFile (the same
+// mechanism the normal save path uses) so a crash mid-write can't leave
+// a half-written settings.json on disk. Errors are logged-and-swallowed:
+// if the write fails the caller falls through to the fresh-install path,
+// which is a worse UX but not a corruption risk.
 func writeMigrated(canonicalPath string, contents []byte, source string) {
-	if err := os.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
+	if err := atomicfile.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
 		slog.Warn("legacy settings migration: write failed",
 			"dst", canonicalPath, "source", source, "error", err)
 		return
