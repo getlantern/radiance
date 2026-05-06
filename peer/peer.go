@@ -233,6 +233,17 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
+	// Now that sing-box is listening with the just-built creds, ask the
+	// server to dial back through them. Splitting verify out of Register
+	// into this explicit follow-up avoids the chicken-and-egg where the
+	// server tried to verify before the peer could possibly be listening
+	// (the cert/key only arrive in the Register response). Failure here
+	// is fatal — the server has already deprecated the row, so the
+	// deferred cleanup tears the rest of the session down.
+	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
+		return fmt.Errorf("verify with lantern-cloud: %w", err)
+	}
+
 	// HeartbeatIntervalSeconds is server-driven so lantern-cloud can dial up
 	// the cadence on registrations it wants to expire faster. Honor any
 	// positive value verbatim — clamping short intervals up would defeat

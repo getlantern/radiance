@@ -47,32 +47,47 @@ type API struct {
 	deviceID   string
 }
 
-// NewAPI constructs the client. baseURL must not have a trailing slash and
-// must not include "/v1" — that's appended per-endpoint.
+// NewAPI constructs the client. baseURL must already include the API
+// version prefix (matches common.GetBaseURL() which returns ".../api/v1");
+// per-endpoint paths are appended without re-adding /v1, mirroring every
+// other radiance caller of common.GetBaseURL (config/fetcher.go,
+// issue/issue.go, etc.).
 func NewAPI(httpClient *http.Client, baseURL, deviceID string) *API {
 	return &API{httpClient: httpClient, baseURL: baseURL, deviceID: deviceID}
 }
 
 func (a *API) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
 	var resp RegisterResponse
-	if err := a.do(ctx, http.MethodPost, "/v1/peer/register", req, &resp); err != nil {
+	if err := a.do(ctx, http.MethodPost, "/peer/register", req, &resp); err != nil {
 		return nil, fmt.Errorf("register: %w", err)
 	}
 	return &resp, nil
+}
+
+// Verify asks lantern-cloud to dial the peer's external endpoint through a
+// freshly-built samizdat client. Called after Start has finished bringing
+// up sing-box locally so the server's verifier hits a live listener with
+// the matching creds. Server-side failure deprecates the row + returns
+// 422; the caller treats that as a fatal Start error and tears down.
+func (a *API) Verify(ctx context.Context, routeID string) error {
+	if err := a.do(ctx, http.MethodPost, "/peer/verify", LifecycleRequest{RouteID: routeID}, nil); err != nil {
+		return fmt.Errorf("verify: %w", err)
+	}
+	return nil
 }
 
 // Heartbeat extends the peer route's TTL. The server owner-gates via
 // X-Lantern-Device-Id, so a leaked route_id can't be used by another device
 // to keep the registration alive.
 func (a *API) Heartbeat(ctx context.Context, routeID string) error {
-	if err := a.do(ctx, http.MethodPost, "/v1/peer/heartbeat", LifecycleRequest{RouteID: routeID}, nil); err != nil {
+	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", LifecycleRequest{RouteID: routeID}, nil); err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
 	return nil
 }
 
 func (a *API) Deregister(ctx context.Context, routeID string) error {
-	if err := a.do(ctx, http.MethodPost, "/v1/peer/deregister", LifecycleRequest{RouteID: routeID}, nil); err != nil {
+	if err := a.do(ctx, http.MethodPost, "/peer/deregister", LifecycleRequest{RouteID: routeID}, nil); err != nil {
 		return fmt.Errorf("deregister: %w", err)
 	}
 	return nil

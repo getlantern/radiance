@@ -139,12 +139,15 @@ type stubServer struct {
 	server             *httptest.Server
 	registerStatus     int
 	registerResp       RegisterResponse
+	verifyStatus       int
 	heartbeatStatus    int
 	deregisterStatus   int
 	registerCount      atomic.Int64
+	verifyCount        atomic.Int64
 	heartbeatCount     atomic.Int64
 	deregisterCount    atomic.Int64
 	registerDeviceID   atomic.Value // string
+	verifyDeviceID     atomic.Value // string
 	heartbeatDeviceID  atomic.Value // string
 	deregisterDeviceID atomic.Value // string
 	lastRegisterReq    atomic.Value // RegisterRequest
@@ -155,6 +158,7 @@ func newStubServer(t *testing.T) *stubServer {
 	s := &stubServer{
 		t:                t,
 		registerStatus:   http.StatusOK,
+		verifyStatus:     http.StatusOK,
 		heartbeatStatus:  http.StatusOK,
 		deregisterStatus: http.StatusOK,
 		registerResp: RegisterResponse{
@@ -164,7 +168,7 @@ func newStubServer(t *testing.T) *stubServer {
 		},
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/peer/register", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
 		s.registerCount.Add(1)
 		s.registerDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		var req RegisterRequest
@@ -176,7 +180,16 @@ func newStubServer(t *testing.T) *stubServer {
 		}
 		_ = json.NewEncoder(w).Encode(s.registerResp)
 	})
-	mux.HandleFunc("/v1/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/peer/verify", func(w http.ResponseWriter, r *http.Request) {
+		s.verifyCount.Add(1)
+		s.verifyDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
+		if s.verifyStatus != http.StatusOK {
+			http.Error(w, "verify failed", s.verifyStatus)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatCount.Add(1)
 		s.heartbeatDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		if s.heartbeatStatus != http.StatusOK {
@@ -185,7 +198,7 @@ func newStubServer(t *testing.T) *stubServer {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/v1/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
 		s.deregisterCount.Add(1)
 		s.deregisterDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		if s.deregisterStatus != http.StatusOK {
