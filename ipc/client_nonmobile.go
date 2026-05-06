@@ -50,7 +50,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if isConnectionError(err) {
-			return nil, ErrIPCNotRunning
+			return nil, fmt.Errorf("ipc request %s %s: %w: %w", method, endpoint, ErrIPCNotRunning, err)
 		}
 		return nil, fmt.Errorf("ipc request %s %s: %w", method, endpoint, err)
 	}
@@ -89,7 +89,7 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if isConnectionError(err) {
-			return ErrIPCNotRunning
+			return fmt.Errorf("SSE connect %s: %w: %w", endpoint, ErrIPCNotRunning, err)
 		}
 		return fmt.Errorf("SSE connect %s: %w", endpoint, err)
 	}
