@@ -22,9 +22,12 @@ import (
 
 // testServer holds server-side SRP state for the mock auth server.
 type testServer struct {
-	salt     map[string][]byte
-	verifier []byte
-	cache    map[string]string
+	salt                                      map[string][]byte
+	verifier                                  []byte
+	cache                                     map[string]string
+	paymentRedirectIdempotencyKey             string
+	subscriptionPaymentRedirectIdempotencyKey string
+	paymentRedirectResponse                   any
 }
 
 func writeProtoResponse(w http.ResponseWriter, msg proto.Message) {
@@ -180,11 +183,17 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/subscription-payment-redirect", func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, map[string]string{"Redirect": "https://example.com/redirect"})
+		state.subscriptionPaymentRedirectIdempotencyKey = r.URL.Query().Get("idempotencyKey")
+		writeJSONResponse(w, map[string]string{"redirect": "https://example.com/redirect"})
 	})
 
 	mux.HandleFunc("/payment-redirect", func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, map[string]string{"Redirect": "https://example.com/redirect"})
+		state.paymentRedirectIdempotencyKey = r.URL.Query().Get("idempotencyKey")
+		resp := state.paymentRedirectResponse
+		if resp == nil {
+			resp = map[string]string{"redirect": "https://example.com/redirect"}
+		}
+		writeJSONResponse(w, resp)
 	})
 
 	mux.HandleFunc("/stripe-subscription", func(w http.ResponseWriter, r *http.Request) {
