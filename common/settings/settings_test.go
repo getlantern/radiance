@@ -32,38 +32,84 @@ func TestInitSettings(t *testing.T) {
 }
 
 func TestMigrateV91xSettingsIfNeeded(t *testing.T) {
+	writeNested := func(t *testing.T, dir string, contents []byte) {
+		t.Helper()
+		nd := filepath.Join(dir, "data")
+		require.NoError(t, os.MkdirAll(nd, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(nd, settingsFileName), contents, 0o644))
+	}
+
 	t.Run("nested file recovered when canonical is missing", func(t *testing.T) {
 		tempDir := t.TempDir()
-		nestedDir := filepath.Join(tempDir, "data")
-		require.NoError(t, os.MkdirAll(nestedDir, 0o755))
-		nestedPath := filepath.Join(nestedDir, settingsFileName)
 		want := []byte(`{"user_id": 135809562, "user_level": "pro", "device_id": "abc"}`)
-		require.NoError(t, os.WriteFile(nestedPath, want, 0o644))
+		writeNested(t, tempDir, want)
 
 		canonical := filepath.Join(tempDir, settingsFileName)
 		migrateV91xSettingsIfNeeded(tempDir, canonical)
 
 		got, err := os.ReadFile(canonical)
-		require.NoError(t, err, "canonical settings.json should exist after migration")
+		require.NoError(t, err)
 		assert.Equal(t, want, got, "migrated content should match nested file")
 	})
 
-	t.Run("canonical present takes precedence; nested ignored", func(t *testing.T) {
+	t.Run("canonical-pro wins over nested-expired (the typical broken upgrade)", func(t *testing.T) {
+		// v9.0.x wrote canonical with pro; v9.1.x wrote nested with expired
+		// because it lost the user_id. The fixed client must keep canonical.
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
-		canonicalContents := []byte(`{"user_id": 1, "user_level": "pro"}`)
-		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
-
-		nestedDir := filepath.Join(tempDir, "data")
-		require.NoError(t, os.MkdirAll(nestedDir, 0o755))
-		nestedPath := filepath.Join(nestedDir, settingsFileName)
-		require.NoError(t, os.WriteFile(nestedPath, []byte(`{"user_id": 999}`), 0o644))
+		canonicalPro := []byte(`{"user_id": 1, "user_level": "pro"}`)
+		require.NoError(t, os.WriteFile(canonical, canonicalPro, 0o644))
+		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
 
 		migrateV91xSettingsIfNeeded(tempDir, canonical)
 
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
-		assert.Equal(t, canonicalContents, got, "canonical should be unchanged when it already exists")
+		assert.Equal(t, canonicalPro, got, "canonical-pro should survive when nested is expired")
+	})
+
+	t.Run("nested-pro wins over canonical-expired (rare inverse case)", func(t *testing.T) {
+		// e.g., user paid via Shepherd during the v9.1.x window so the
+		// nested file legitimately has pro while canonical is stale.
+		tempDir := t.TempDir()
+		canonical := filepath.Join(tempDir, settingsFileName)
+		require.NoError(t, os.WriteFile(canonical, []byte(`{"user_id": 1, "user_level": "expired"}`), 0o644))
+		nestedPro := []byte(`{"user_id": 2, "user_level": "pro"}`)
+		writeNested(t, tempDir, nestedPro)
+
+		migrateV91xSettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, nestedPro, got, "nested-pro should overwrite canonical-expired")
+	})
+
+	t.Run("both pro: canonical wins (older deliberate state)", func(t *testing.T) {
+		tempDir := t.TempDir()
+		canonical := filepath.Join(tempDir, settingsFileName)
+		canonicalContents := []byte(`{"user_id": 1, "user_level": "pro"}`)
+		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
+		writeNested(t, tempDir, []byte(`{"user_id": 2, "user_level": "pro"}`))
+
+		migrateV91xSettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, canonicalContents, got, "canonical preferred when both pro")
+	})
+
+	t.Run("neither pro: canonical wins", func(t *testing.T) {
+		tempDir := t.TempDir()
+		canonical := filepath.Join(tempDir, settingsFileName)
+		canonicalContents := []byte(`{"user_id": 1, "user_level": "free"}`)
+		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
+		writeNested(t, tempDir, []byte(`{"user_id": 2, "user_level": "free"}`))
+
+		migrateV91xSettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, canonicalContents, got, "canonical preferred when neither has pro")
 	})
 
 	t.Run("no nested file is a no-op", func(t *testing.T) {

@@ -2,6 +2,7 @@
 package settings
 
 import (
+	jsonpkg "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -108,32 +109,79 @@ func InitSettings(fileDir string) error {
 // migrateV91xSettingsIfNeeded recovers settings written by v9.1.x clients
 // that landed in <fileDir>/data/settings.json because of a bug in
 // radiance #370 (setupDirectories appended an unconditional "/data"
-// suffix). On the first launch of a fixed client, if the canonical
-// path is empty but the nested path has data, copy it up so the user
-// keeps their persisted user_id, device_id, jwt token, and user_level
-// instead of starting fresh and showing "Pro expired."
+// suffix). On the first launch of a fixed client, the canonical path
+// (<fileDir>/settings.json) and the nested path (<fileDir>/data/
+// settings.json) may both contain a settings.json — the canonical one
+// from v9.0.x and the nested one freshly written by v9.1.x.
+//
+// We don't just prefer the canonical file: in the typical-affected
+// case the canonical is correct (user_level="pro") and the nested is
+// wrong (user_level="expired" because v9.1.x lost the user_id and got
+// a fresh server response). But in the inverse case — e.g., user paid
+// via Shepherd during the v9.1.x window — the nested file holds the
+// good state. So we read both and prefer whichever actually says "pro";
+// fall back to canonical-if-it-exists; finally fall back to nested.
 //
 // Runs unconditionally — quick stat check, no-op for the vast majority
 // of installs that never had the bad nested file.
 func migrateV91xSettingsIfNeeded(fileDir, canonicalPath string) {
-	if _, err := os.Stat(canonicalPath); err == nil {
-		// Canonical path already populated — either v9.0.x state survived
-		// the v9.1.x detour intact, or we've already migrated. Nothing to do.
+	nestedPath := filepath.Join(fileDir, "data", settingsFileName)
+	canonicalContents, canonicalErr := os.ReadFile(canonicalPath)
+	nestedContents, nestedErr := os.ReadFile(nestedPath)
+
+	// No nested file — nothing to migrate. The fixed client reads the
+	// canonical path normally (or starts fresh if neither exists).
+	if nestedErr != nil {
 		return
 	}
-	nested := filepath.Join(fileDir, "data", settingsFileName)
-	contents, err := os.ReadFile(nested)
-	if err != nil {
-		// No nested file (or unreadable) — fresh install, normal path.
+
+	// No canonical file but nested exists — copy nested up so the
+	// fixed client picks up the v9.1.x state instead of starting fresh.
+	if canonicalErr != nil {
+		writeMigrated(canonicalPath, nestedContents, "no canonical file")
 		return
 	}
+
+	// Both files exist. Prefer the one whose user_level == "pro" since
+	// that's the load-bearing concern: a user who had Pro in either path
+	// should keep Pro. If both or neither have pro, keep canonical.
+	canonicalPro := userLevelInJSON(canonicalContents) == "pro"
+	nestedPro := userLevelInJSON(nestedContents) == "pro"
+
+	if nestedPro && !canonicalPro {
+		writeMigrated(canonicalPath, nestedContents, "nested has pro, canonical does not")
+		return
+	}
+	// Canonical is preferred: it has pro, or neither has pro and we
+	// trust the older settings file as the more deliberate state.
+}
+
+// writeMigrated overwrites the canonical settings file with the recovered
+// contents and logs the outcome. Errors are logged-and-swallowed: if the
+// write fails the caller falls through to the fresh-install path, which
+// is a worse UX but not a corruption risk.
+func writeMigrated(canonicalPath string, contents []byte, reason string) {
 	if err := os.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
-		slog.Warn("v9.1.x settings migration: write failed; fresh install path will be used",
-			"src", nested, "dst", canonicalPath, "error", err)
+		slog.Warn("v9.1.x settings migration: write failed",
+			"dst", canonicalPath, "reason", reason, "error", err)
 		return
 	}
 	slog.Info("v9.1.x settings migration: recovered persisted state",
-		"src", nested, "dst", canonicalPath, "bytes", len(contents))
+		"dst", canonicalPath, "reason", reason, "bytes", len(contents))
+}
+
+// userLevelInJSON returns the value of the "user_level" key from a JSON
+// settings blob, or "" if the key is missing / the blob is malformed.
+// Lightweight extraction so the migration doesn't need to load the full
+// koanf state machine before we've decided which file to read.
+func userLevelInJSON(contents []byte) string {
+	var s struct {
+		UserLevel string `json:"user_level"`
+	}
+	if err := jsonpkg.Unmarshal(contents, &s); err != nil {
+		return ""
+	}
+	return s.UserLevel
 }
 
 func loadSettings(path string) error {
