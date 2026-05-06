@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/vpn"
 
 	sjson "github.com/sagernet/sing/common/json"
@@ -59,6 +60,10 @@ const (
 	// Settings endpoints
 	featuresEndpoint = "/settings/features"
 	settingsEndpoint = "/settings"
+
+	// Peer-share ("Share My Connection") endpoints
+	peerStatusEndpoint       = "/peer/status"
+	peerStatusEventsEndpoint = "/peer/status/events"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -218,6 +223,11 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Settings
 	mux.HandleFunc("GET "+featuresEndpoint, traced(s.featuresHandler))
 	mux.HandleFunc(settingsEndpoint, traced(s.settingsHandler))
+
+	// Peer share
+	mux.HandleFunc("GET "+peerStatusEndpoint, traced(s.peerStatusHandler))
+	// SSE skips the tracer middleware since it buffers the entire response body.
+	mux.HandleFunc("GET "+peerStatusEventsEndpoint, s.peerStatusEventsHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -421,6 +431,54 @@ func (s *localapi) vpnStatusEventsHandler(w http.ResponseWriter, r *http.Request
 			// and sse_parsed downstream to bracket transit through the
 			// (winio) named pipe on Windows.
 			slog.Info("[vpn-state-trace]", "hop", "ssehandler_flushed", "data", string(data), "ts_ms", time.Now().UnixMilli())
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+/////////////////
+//  Peer share //
+/////////////////
+
+func (s *localapi) peerStatusHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).PeerStatus())
+}
+
+// peerStatusEventsHandler streams peer.StatusEvent over SSE. The wire
+// payload is always the live snapshot from PeerStatus(), not the event's
+// captured value: events.Emit dispatches each callback on its own goroutine
+// so a quick start→stop pair can land out of order, and we'd send a stale
+// "active" after a "inactive". Reading the live snapshot when the trigger
+// fires guarantees the SSE consumer's last message reflects current state.
+func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	trigger := make(chan struct{}, 1)
+	sub := events.Subscribe(func(_ peer.StatusEvent) {
+		select {
+		case trigger <- struct{}{}:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+
+	send := func() {
+		data, err := json.Marshal(peer.StatusEvent{Status: s.backend(r.Context()).PeerStatus()})
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+	send() // replay current snapshot for subscribers attaching between events
+
+	for {
+		select {
+		case <-trigger:
+			send()
 		case <-r.Context().Done():
 			return
 		}

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
 
@@ -506,6 +507,38 @@ func TestAPIError_StringFormat(t *testing.T) {
 	e := &APIError{Status: 422, Body: "could not connect to peer port"}
 	assert.Contains(t, e.Error(), "422")
 	assert.Contains(t, e.Error(), "could not connect")
+}
+
+// Subscribers (the IPC SSE handler in production) need both edges so the UI
+// can render fresh state without polling.
+func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
+	fwd := &fakeForwarder{}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	c := newTestClient(t, fwd, box, srv)
+
+	got := make(chan StatusEvent, 4)
+	sub := events.Subscribe(func(evt StatusEvent) {
+		got <- evt
+	})
+	defer sub.Unsubscribe()
+
+	require.NoError(t, c.Start(context.Background()))
+	select {
+	case evt := <-got:
+		assert.True(t, evt.Status.Active)
+		assert.NotEmpty(t, evt.Status.RouteID)
+	case <-time.After(time.Second):
+		t.Fatal("no Start status event within 1s")
+	}
+
+	require.NoError(t, c.Stop(context.Background()))
+	select {
+	case evt := <-got:
+		assert.False(t, evt.Status.Active)
+	case <-time.After(time.Second):
+		t.Fatal("no Stop status event within 1s")
+	}
 }
 
 var _ portForwarder = (*fakeForwarder)(nil)

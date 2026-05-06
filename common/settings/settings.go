@@ -50,11 +50,12 @@ const (
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
 
 	// VPN related keys.
-	SmartRoutingKey   _key = "smart_routing"   // bool
-	SplitTunnelKey    _key = "split_tunnel"    // bool
-	AdBlockKey        _key = "ad_block"        // bool
-	AutoConnectKey    _key = "auto_connect"    // bool
-	SelectedServerKey _key = "selected_server" // [servers.Server] Server.Options is not stored
+	SmartRoutingKey     _key = "smart_routing"      // bool
+	SplitTunnelKey      _key = "split_tunnel"       // bool
+	AdBlockKey          _key = "ad_block"           // bool
+	AutoConnectKey      _key = "auto_connect"       // bool
+	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	SelectedServerKey   _key = "selected_server"    // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
 
