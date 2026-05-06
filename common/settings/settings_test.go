@@ -31,94 +31,133 @@ func TestInitSettings(t *testing.T) {
 	})
 }
 
-func TestMigrateV91xSettingsIfNeeded(t *testing.T) {
+func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 	writeNested := func(t *testing.T, dir string, contents []byte) {
 		t.Helper()
 		nd := filepath.Join(dir, "data")
 		require.NoError(t, os.MkdirAll(nd, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(nd, settingsFileName), contents, 0o644))
 	}
+	writeLegacy := func(t *testing.T, dir string, contents []byte) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), contents, 0o644))
+	}
 
-	t.Run("nested file recovered when canonical is missing", func(t *testing.T) {
+	t.Run("v9.0.x local.json recovered when canonical is missing (Derek's failing case)", func(t *testing.T) {
+		// User upgraded from v9.0.x straight to the fixed build. v9.0.x wrote
+		// to <dataDir>/local.json; canonical settings.json doesn't exist;
+		// no v9.1.x nested file. The fix must read local.json so Pro survives.
+		tempDir := t.TempDir()
+		want := []byte(`{"user_id": 3580849, "user_level": "pro", "token": "abc"}`)
+		writeLegacy(t, tempDir, want)
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "v9.0.x local.json should be migrated to canonical")
+	})
+
+	t.Run("v9.1.x nested file recovered when canonical is missing", func(t *testing.T) {
 		tempDir := t.TempDir()
 		want := []byte(`{"user_id": 135809562, "user_level": "pro", "device_id": "abc"}`)
 		writeNested(t, tempDir, want)
 
 		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateV91xSettingsIfNeeded(tempDir, canonical)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
 
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
-		assert.Equal(t, want, got, "migrated content should match nested file")
+		assert.Equal(t, want, got, "v9.1.x nested file should be migrated to canonical")
 	})
 
-	t.Run("canonical-pro wins over nested-expired (the typical broken upgrade)", func(t *testing.T) {
-		// v9.0.x wrote canonical with pro; v9.1.x wrote nested with expired
-		// because it lost the user_id. The fixed client must keep canonical.
+	t.Run("v9.0.x local.json wins over v9.1.x expired nested", func(t *testing.T) {
+		// Upgrade chain v9.0.x → v9.1.x → fix: legacy has pro, nested has
+		// expired (because v9.1.x lost the user_id). Migration must pick
+		// legacy so Pro survives.
+		tempDir := t.TempDir()
+		canonical := filepath.Join(tempDir, settingsFileName)
+		legacyPro := []byte(`{"user_id": 1, "user_level": "pro"}`)
+		writeLegacy(t, tempDir, legacyPro)
+		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
+
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, legacyPro, got, "legacy local.json with pro should beat nested expired")
+	})
+
+	t.Run("canonical-pro wins over nested-expired", func(t *testing.T) {
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
 		canonicalPro := []byte(`{"user_id": 1, "user_level": "pro"}`)
 		require.NoError(t, os.WriteFile(canonical, canonicalPro, 0o644))
 		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
 
-		migrateV91xSettingsIfNeeded(tempDir, canonical)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
 
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
-		assert.Equal(t, canonicalPro, got, "canonical-pro should survive when nested is expired")
+		assert.Equal(t, canonicalPro, got, "canonical-pro should survive")
 	})
 
-	t.Run("nested-pro wins over canonical-expired (rare inverse case)", func(t *testing.T) {
-		// e.g., user paid via Shepherd during the v9.1.x window so the
-		// nested file legitimately has pro while canonical is stale.
+	t.Run("nested-pro wins over canonical-expired and legacy-expired", func(t *testing.T) {
+		// e.g., user paid via Shepherd while on v9.1.x, so the nested file
+		// legitimately holds pro state.
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
 		require.NoError(t, os.WriteFile(canonical, []byte(`{"user_id": 1, "user_level": "expired"}`), 0o644))
+		writeLegacy(t, tempDir, []byte(`{"user_id": 1, "user_level": "expired"}`))
 		nestedPro := []byte(`{"user_id": 2, "user_level": "pro"}`)
 		writeNested(t, tempDir, nestedPro)
 
-		migrateV91xSettingsIfNeeded(tempDir, canonical)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
 
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
-		assert.Equal(t, nestedPro, got, "nested-pro should overwrite canonical-expired")
+		assert.Equal(t, nestedPro, got, "nested-pro should beat both canonical and legacy when only it has pro")
 	})
 
-	t.Run("both pro: canonical wins (older deliberate state)", func(t *testing.T) {
+	t.Run("all-pro: canonical wins (most recent deliberate state)", func(t *testing.T) {
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
 		canonicalContents := []byte(`{"user_id": 1, "user_level": "pro"}`)
 		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
-		writeNested(t, tempDir, []byte(`{"user_id": 2, "user_level": "pro"}`))
+		writeLegacy(t, tempDir, []byte(`{"user_id": 2, "user_level": "pro"}`))
+		writeNested(t, tempDir, []byte(`{"user_id": 3, "user_level": "pro"}`))
 
-		migrateV91xSettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, canonicalContents, got, "canonical preferred when both pro")
-	})
-
-	t.Run("neither pro: canonical wins", func(t *testing.T) {
-		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
-		canonicalContents := []byte(`{"user_id": 1, "user_level": "free"}`)
-		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
-		writeNested(t, tempDir, []byte(`{"user_id": 2, "user_level": "free"}`))
-
-		migrateV91xSettingsIfNeeded(tempDir, canonical)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
 
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
-		assert.Equal(t, canonicalContents, got, "canonical preferred when neither has pro")
+		assert.Equal(t, canonicalContents, got, "canonical preferred when all have pro")
 	})
 
-	t.Run("no nested file is a no-op", func(t *testing.T) {
+	t.Run("none have pro: legacy wins over nested when canonical missing", func(t *testing.T) {
+		// User identifiers must survive even when Pro state is non-pro,
+		// to keep the device registration intact server-side.
+		tempDir := t.TempDir()
+		canonical := filepath.Join(tempDir, settingsFileName)
+		legacyContents := []byte(`{"user_id": 1, "user_level": "free", "token": "abc"}`)
+		writeLegacy(t, tempDir, legacyContents)
+		writeNested(t, tempDir, []byte(`{"user_id": 2, "user_level": "free", "token": "xyz"}`))
+
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, legacyContents, got, "legacy preferred over nested when canonical missing and neither has pro")
+	})
+
+	t.Run("nothing on disk is a no-op", func(t *testing.T) {
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
 
-		migrateV91xSettingsIfNeeded(tempDir, canonical)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
 
 		_, err := os.Stat(canonical)
-		assert.True(t, os.IsNotExist(err), "no migration when no nested file exists")
+		assert.True(t, os.IsNotExist(err), "no migration when no source files exist")
 	})
 }

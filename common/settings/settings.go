@@ -60,6 +60,12 @@ const (
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
 
 	settingsFileName = "settings.json"
+	// legacySettingsFileName is what v9.0.x called the same file (it was
+	// renamed in radiance PR #370). On upgrade from v9.0.x, the user's
+	// persisted user_id / token / user_level live at <dataDir>/local.json;
+	// migrateLegacySettingsIfNeeded reads it from there so Pro state
+	// survives the rename.
+	legacySettingsFileName = "local.json"
 )
 
 var ErrNotExist = errors.New("key does not exist")
@@ -94,7 +100,7 @@ func InitSettings(fileDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
-	migrateV91xSettingsIfNeeded(fileDir, k.filePath)
+	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
@@ -106,68 +112,88 @@ func InitSettings(fileDir string) error {
 	return nil
 }
 
-// migrateV91xSettingsIfNeeded recovers settings written by v9.1.x clients
-// that landed in <fileDir>/data/settings.json because of a bug in
-// radiance #370 (setupDirectories appended an unconditional "/data"
-// suffix). On the first launch of a fixed client, the canonical path
-// (<fileDir>/settings.json) and the nested path (<fileDir>/data/
-// settings.json) may both contain a settings.json — the canonical one
-// from v9.0.x and the nested one freshly written by v9.1.x.
+// migrateLegacySettingsIfNeeded recovers persisted user state written
+// by older client versions. Three candidate paths are considered:
 //
-// We don't just prefer the canonical file: in the typical-affected
-// case the canonical is correct (user_level="pro") and the nested is
-// wrong (user_level="expired" because v9.1.x lost the user_id and got
-// a fresh server response). But in the inverse case — e.g., user paid
-// via Shepherd during the v9.1.x window — the nested file holds the
-// good state. So we read both and prefer whichever actually says "pro";
-// fall back to canonical-if-it-exists; finally fall back to nested.
+//   - <fileDir>/settings.json         — the current canonical path
+//   - <fileDir>/local.json            — what v9.0.x wrote (renamed in #370)
+//   - <fileDir>/data/settings.json    — what v9.1.x wrote, due to a bug in
+//                                       #370's setupDirectories that
+//                                       appended an unconditional "/data"
+//                                       suffix to the caller's data dir
 //
-// Runs unconditionally — quick stat check, no-op for the vast majority
-// of installs that never had the bad nested file.
-func migrateV91xSettingsIfNeeded(fileDir, canonicalPath string) {
-	nestedPath := filepath.Join(fileDir, "data", settingsFileName)
-	canonicalContents, canonicalErr := os.ReadFile(canonicalPath)
-	nestedContents, nestedErr := os.ReadFile(nestedPath)
-
-	// No nested file — nothing to migrate. The fixed client reads the
-	// canonical path normally (or starts fresh if neither exists).
-	if nestedErr != nil {
-		return
+// On the first launch of a fixed client, any of the three may exist
+// depending on the user's upgrade path. Pick whichever has
+// user_level == "pro" so anyone who legitimately paid keeps their Pro
+// state regardless of which file holds the good copy. If none have pro,
+// prefer canonical → v9.0.x → v9.1.x in that order so the user's
+// identifiers (user_id, token, device_id) survive — losing Pro is
+// recoverable, losing the device registration creates server-side
+// orphans.
+//
+// Runs unconditionally — quick stat-and-read of three small files;
+// no-op for the vast majority of installs that don't have a nested or
+// legacy file.
+func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
+	type candidate struct {
+		path     string
+		contents []byte
+		exists   bool
+		label    string
+	}
+	candidates := []candidate{
+		{path: canonicalPath, label: "canonical settings.json"},
+		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
+		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
+	}
+	for i := range candidates {
+		b, err := os.ReadFile(candidates[i].path)
+		if err == nil {
+			candidates[i].contents = b
+			candidates[i].exists = true
+		}
 	}
 
-	// No canonical file but nested exists — copy nested up so the
-	// fixed client picks up the v9.1.x state instead of starting fresh.
-	if canonicalErr != nil {
-		writeMigrated(canonicalPath, nestedContents, "no canonical file")
+	// Pick: highest-priority file with user_level=="pro"; if none has pro,
+	// highest-priority file that exists at all (with non-empty contents).
+	pickIdx := -1
+	for i, c := range candidates {
+		if c.exists && userLevelInJSON(c.contents) == "pro" {
+			pickIdx = i
+			break
+		}
+	}
+	if pickIdx == -1 {
+		for i, c := range candidates {
+			if c.exists {
+				pickIdx = i
+				break
+			}
+		}
+	}
+	if pickIdx == -1 {
+		// Nothing on disk yet — fresh install, normal path. No-op.
 		return
 	}
-
-	// Both files exist. Prefer the one whose user_level == "pro" since
-	// that's the load-bearing concern: a user who had Pro in either path
-	// should keep Pro. If both or neither have pro, keep canonical.
-	canonicalPro := userLevelInJSON(canonicalContents) == "pro"
-	nestedPro := userLevelInJSON(nestedContents) == "pro"
-
-	if nestedPro && !canonicalPro {
-		writeMigrated(canonicalPath, nestedContents, "nested has pro, canonical does not")
+	if candidates[pickIdx].path == canonicalPath {
+		// Canonical already wins — no migration needed.
 		return
 	}
-	// Canonical is preferred: it has pro, or neither has pro and we
-	// trust the older settings file as the more deliberate state.
+	writeMigrated(canonicalPath, candidates[pickIdx].contents, candidates[pickIdx].label)
 }
 
 // writeMigrated overwrites the canonical settings file with the recovered
 // contents and logs the outcome. Errors are logged-and-swallowed: if the
 // write fails the caller falls through to the fresh-install path, which
 // is a worse UX but not a corruption risk.
-func writeMigrated(canonicalPath string, contents []byte, reason string) {
+func writeMigrated(canonicalPath string, contents []byte, source string) {
 	if err := os.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
-		slog.Warn("v9.1.x settings migration: write failed",
-			"dst", canonicalPath, "reason", reason, "error", err)
+		slog.Warn("legacy settings migration: write failed",
+			"dst", canonicalPath, "source", source, "error", err)
 		return
 	}
-	slog.Info("v9.1.x settings migration: recovered persisted state",
-		"dst", canonicalPath, "reason", reason, "bytes", len(contents))
+	slog.Info("legacy settings migration: recovered persisted state",
+		"dst", canonicalPath, "source", source, "bytes", len(contents))
 }
 
 // userLevelInJSON returns the value of the "user_level" key from a JSON
