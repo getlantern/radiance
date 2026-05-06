@@ -162,6 +162,31 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 		assert.True(t, os.IsNotExist(err), "no migration when no source files exist")
 	})
 
+	t.Run("iOS userconfig.yaml recovered when canonical is missing", func(t *testing.T) {
+		// On iOS the legacy YAML is sandbox-relative — it lives next to
+		// where settings.json now lives, so legacyYAMLCandidate reads
+		// from fileDir directly and we can exercise it from a test
+		// without monkeypatching $HOME or $APPDATA. (Desktop legacy
+		// paths are covered via translateLegacyYAML's unit tests, which
+		// don't depend on the OS-specific path resolution.)
+		if runtime.GOOS != "ios" {
+			t.Skip("iOS-only path: legacy YAML elsewhere is OS-specific")
+		}
+		tempDir := t.TempDir()
+		yamlPath := filepath.Join(tempDir, "userconfig.yaml")
+		require.NoError(t, os.WriteFile(yamlPath, []byte(`UserID: 7777
+DeviceID: ios-device
+Token: tok
+`), 0o644))
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Contains(t, string(got), `"user_id":7777`)
+		assert.Contains(t, string(got), `"device_id":"ios-device"`)
+	})
+
 	t.Run("unreadable canonical (non-ENOENT) skips migration", func(t *testing.T) {
 		// Permission error on the canonical path: don't fall through and
 		// overwrite a file we couldn't read. unix only — windows handles
