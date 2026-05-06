@@ -2,6 +2,7 @@
 package settings
 
 import (
+	jsonpkg "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -59,6 +60,12 @@ const (
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
 
 	settingsFileName = "settings.json"
+	// legacySettingsFileName is what v9.0.x called the same file (it was
+	// renamed in radiance PR #370). On upgrade from v9.0.x, the user's
+	// persisted user_id / token / user_level live at <dataDir>/local.json;
+	// migrateLegacySettingsIfNeeded reads it from there so Pro state
+	// survives the rename.
+	legacySettingsFileName = "local.json"
 )
 
 var ErrNotExist = errors.New("key does not exist")
@@ -93,6 +100,7 @@ func InitSettings(fileDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
+	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
@@ -102,6 +110,120 @@ func InitSettings(fileDir string) error {
 	}
 	k.initialized = true
 	return nil
+}
+
+// migrateLegacySettingsIfNeeded recovers persisted user state written
+// by older client versions. Three candidate paths are considered:
+//
+//   - <fileDir>/settings.json         — the current canonical path
+//   - <fileDir>/local.json            — what v9.0.x wrote (renamed in #370)
+//   - <fileDir>/data/settings.json    — what v9.1.x wrote, due to a bug in
+//                                       #370's setupDirectories that
+//                                       appended an unconditional "/data"
+//                                       suffix to the caller's data dir
+//
+// On the first launch of a fixed client, any of the three may exist
+// depending on the user's upgrade path. Pick whichever has
+// user_level == "pro" so anyone who legitimately paid keeps their Pro
+// state regardless of which file holds the good copy. If none have pro,
+// prefer canonical → v9.0.x → v9.1.x in that order so the user's
+// identifiers (user_id, token, device_id) survive — losing Pro is
+// recoverable, losing the device registration creates server-side
+// orphans.
+//
+// Runs unconditionally — quick stat-and-read of three small files;
+// no-op for the vast majority of installs that don't have a nested or
+// legacy file.
+func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
+	type candidate struct {
+		path     string
+		contents []byte
+		exists   bool
+		label    string
+	}
+	candidates := []candidate{
+		{path: canonicalPath, label: "canonical settings.json"},
+		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
+		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
+	}
+	for i := range candidates {
+		b, err := os.ReadFile(candidates[i].path)
+		switch {
+		case err == nil:
+			candidates[i].contents = b
+			candidates[i].exists = true
+		case errors.Is(err, fs.ErrNotExist):
+			// Expected — file just isn't there. Treat as not-present.
+		default:
+			// Permission / I/O error — log it but don't bail outright. If
+			// it's the canonical path that's unreadable for non-ENOENT
+			// reasons, skip migration entirely so we don't try to write
+			// over a file the OS is telling us we can't see; for legacy
+			// or nested paths, treat the same as not-present.
+			slog.Warn("legacy settings migration: read failed",
+				"path", candidates[i].path, "error", err)
+			if candidates[i].path == canonicalPath {
+				return
+			}
+		}
+	}
+
+	// Pick: highest-priority file with user_level=="pro"; if none has pro,
+	// highest-priority file that exists at all (with non-empty contents).
+	pickIdx := -1
+	for i, c := range candidates {
+		if c.exists && userLevelInJSON(c.contents) == "pro" {
+			pickIdx = i
+			break
+		}
+	}
+	if pickIdx == -1 {
+		for i, c := range candidates {
+			if c.exists {
+				pickIdx = i
+				break
+			}
+		}
+	}
+	if pickIdx == -1 {
+		// Nothing on disk yet — fresh install, normal path. No-op.
+		return
+	}
+	if candidates[pickIdx].path == canonicalPath {
+		// Canonical already wins — no migration needed.
+		return
+	}
+	writeMigrated(canonicalPath, candidates[pickIdx].contents, candidates[pickIdx].label)
+}
+
+// writeMigrated overwrites the canonical settings file with the recovered
+// contents and logs the outcome. Uses atomicfile.WriteFile (the same
+// mechanism the normal save path uses) so a crash mid-write can't leave
+// a half-written settings.json on disk. Errors are logged-and-swallowed:
+// if the write fails the caller falls through to the fresh-install path,
+// which is a worse UX but not a corruption risk.
+func writeMigrated(canonicalPath string, contents []byte, source string) {
+	if err := atomicfile.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
+		slog.Warn("legacy settings migration: write failed",
+			"dst", canonicalPath, "source", source, "error", err)
+		return
+	}
+	slog.Info("legacy settings migration: recovered persisted state",
+		"dst", canonicalPath, "source", source, "bytes", len(contents))
+}
+
+// userLevelInJSON returns the value of the "user_level" key from a JSON
+// settings blob, or "" if the key is missing / the blob is malformed.
+// Lightweight extraction so the migration doesn't need to load the full
+// koanf state machine before we've decided which file to read.
+func userLevelInJSON(contents []byte) string {
+	var s struct {
+		UserLevel string `json:"user_level"`
+	}
+	if err := jsonpkg.Unmarshal(contents, &s); err != nil {
+		return ""
+	}
+	return s.UserLevel
 }
 
 func loadSettings(path string) error {

@@ -146,9 +146,15 @@ func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 	} else if logs == "" {
 		logs = internal.DefaultLogPath()
 	}
-	// ensure the data and logs directories end with the correct suffix
-	data = maybeAddSuffix(data, "data")
-	logs = maybeAddSuffix(logs, "logs")
+	// Honor the caller's path as-is. A previous version of this function
+	// unconditionally appended /data and /logs suffixes here even when the
+	// caller passed a fully-resolved path (e.g. Android passes
+	// <app.dataDir>/.lantern). That broke upgrade continuity: v9.0.x had
+	// written settings.json under <caller-path>/, while v9.1.x reads from
+	// <caller-path>/data/, so every existing install lost its persisted
+	// user_id, device_id, jwt token, and user_level on upgrade — surfacing
+	// as "Pro is suddenly expired after the update." See ticket #174515
+	// and the "Pro lost on upgrade" memory note.
 	data, _ = filepath.Abs(data)
 	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
@@ -157,11 +163,4 @@ func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 		}
 	}
 	return data, logs, nil
-}
-
-func maybeAddSuffix(path, suffix string) string {
-	if !strings.EqualFold(filepath.Base(path), suffix) {
-		path = filepath.Join(path, suffix)
-	}
-	return path
 }
