@@ -12,6 +12,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -420,8 +421,22 @@ func pickInternalPort() uint16 {
 // platform-VPN integration the way the main VPN tunnel does. The samizdat
 // inbound is just an HTTPS server bound to a TCP port; sing-box's default
 // network stack handles it.
-func defaultBuildBoxService(ctx context.Context, options string) (boxService, error) {
-	bs, err := libbox.NewServiceWithContext(ctx, options, nil)
+//
+// box.BaseContext registers the lantern-box protocol fields registries
+// (samizdat, reflex, etc.) into the ctx so libbox can decode the
+// inbounds[0].type="samizdat" stanza coming back from /peer/register.
+// Without it the user's ctx is missing InboundOptionsRegistry and
+// libbox returns "missing inbound fields registry in context" — the
+// failure mode is silent in CI because the integration tests stub
+// BuildBoxService entirely; only TestDefaultBuildBoxService_DecodesSamizdatInbound
+// exercises the real decode path.
+//
+// Runs in the same process as the user's VPN tunnel (vpn/tunnel.go),
+// which calls libbox.Setup once at process start; the registries set
+// here are scoped to this peer's box instance so the two coexist
+// without stomping on each other.
+func defaultBuildBoxService(_ context.Context, options string) (boxService, error) {
+	bs, err := libbox.NewServiceWithContext(box.BaseContext(), options, nil)
 	if err != nil {
 		return nil, fmt.Errorf("libbox.NewServiceWithContext: %w", err)
 	}

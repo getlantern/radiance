@@ -556,3 +556,46 @@ func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
 
 var _ portForwarder = (*fakeForwarder)(nil)
 var _ boxService = (*fakeBoxService)(nil)
+
+// TestDefaultBuildBoxService_DecodesSamizdatInbound is the regression net
+// for the "missing inbound fields registry in context" failure that bit
+// us live: defaultBuildBoxService used to call libbox.NewServiceWithContext
+// with a fresh ctx that didn't have the lantern-box protocol registries
+// (samizdat, reflex, …) plumbed in, so the JSON decoder couldn't resolve
+// inbounds[0].type="samizdat" → libbox.NewServiceWithContext returned an
+// error → applyPeerShare rolled the toggle back. The integration tests
+// stub BuildBoxService entirely, so neither the libbox setup nor the
+// samizdat decoder were exercised in CI.
+//
+// Calling defaultBuildBoxService directly with a minimal samizdat-inbound
+// options JSON walks the actual decode path. If the registry is missing
+// in the ctx that defaultBuildBoxService produces, libbox returns the
+// "missing inbound fields registry" error and this test fails before any
+// of the runtime cycle (rebuild, redeploy, toggle UI, dial-back) — what
+// used to take a 5-minute round-trip is now a 0.1s test failure.
+func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
+	// Minimal but complete samizdat inbound — every field that
+	// option.SamizdatInboundOptions's json tags require to round-trip.
+	// Values are placeholders; we don't run the box, just decode.
+	const opts = `{
+		"inbounds": [{
+			"type": "samizdat",
+			"tag": "samizdat-in",
+			"listen": "127.0.0.1",
+			"listen_port": 5698,
+			"private_key": "0000000000000000000000000000000000000000000000000000000000000000",
+			"short_ids": ["0000000000000000"],
+			"cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgIQCHOFXAcuEzPfyHK6LdwxwzAKBggqhkjOPQQDAjATMREw\nDwYDVQQKEwhJbnRlcm5ldDAeFw0yNjA1MDYwMDAwMDBaFw0yNzA1MDYwMDAwMDBa\nMBMxETAPBgNVBAoTCEludGVybmV0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\nb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyDUwmfVTZiQ+wR\nkQXjrkAwsOWK99JsM3R2bqNIMEYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwEQYDVR0RBAowCIIGdGVzdC5xMAoGCCqG\nSM49BAMCA0kAMEYCIQCqhyaQaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaIh\nAOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n-----END CERTIFICATE-----\n",
+			"key_pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaoAoGCCqGSM49\nAwEHoUQDQgAEb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyD\nUwmfVTZiQ+wRkQXjrkAwsOWK99JsM3R2bg==\n-----END EC PRIVATE KEY-----\n",
+			"masquerade_domain": "example.com"
+		}]
+	}`
+
+	bs, err := defaultBuildBoxService(context.Background(), opts)
+	require.NoError(t, err, "defaultBuildBoxService must decode a samizdat inbound — "+
+		"the lantern-box protocol registries have to be in ctx")
+	require.NotNil(t, bs)
+	// We never call Start; just verifying the decode path. Close drops
+	// any background structures libbox might have stood up.
+	_ = bs.Close()
+}
