@@ -112,36 +112,32 @@ func InitSettings(fileDir string) error {
 	return nil
 }
 
+// candidateSource is one possible location of persisted user state.
+// contents is always canonical JSON — direct for v9.x, translated for
+// pre-9.x YAML.
+type candidateSource struct {
+	path     string
+	contents []byte
+	exists   bool
+	label    string
+}
+
 // migrateLegacySettingsIfNeeded recovers persisted user state written
-// by older client versions. Three candidate paths are considered:
+// by older client versions. Candidates in priority order:
 //
-//   - <fileDir>/settings.json         — the current canonical path
-//   - <fileDir>/local.json            — what v9.0.x wrote (renamed in #370)
-//   - <fileDir>/data/settings.json    — what v9.1.x wrote, due to a bug in
-//                                       #370's setupDirectories that
-//                                       appended an unconditional "/data"
-//                                       suffix to the caller's data dir
+//  1. <fileDir>/settings.json       — canonical
+//  2. <fileDir>/local.json          — v9.0.x (renamed in #370)
+//  3. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
+//  4. <fileDir>/data/settings.json  — v9.1.x (bugged: #370's
+//                                     setupDirectories appended an
+//                                     unconditional "/data" suffix)
 //
-// On the first launch of a fixed client, any of the three may exist
-// depending on the user's upgrade path. Pick whichever has
-// user_level == "pro" so anyone who legitimately paid keeps their Pro
-// state regardless of which file holds the good copy. If none have pro,
-// prefer canonical → v9.0.x → v9.1.x in that order so the user's
-// identifiers (user_id, token, device_id) survive — losing Pro is
-// recoverable, losing the device registration creates server-side
-// orphans.
-//
-// Runs unconditionally — quick stat-and-read of three small files;
-// no-op for the vast majority of installs that don't have a nested or
-// legacy file.
+// Pick the highest-priority candidate with user_level=="pro"; if none
+// is pro, the highest-priority candidate that exists. Losing Pro is
+// recoverable; losing the device registration creates server-side
+// orphans, so identifier continuity wins ties.
 func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
-	type candidate struct {
-		path     string
-		contents []byte
-		exists   bool
-		label    string
-	}
-	candidates := []candidate{
+	candidates := []candidateSource{
 		{path: canonicalPath, label: "canonical settings.json"},
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
 		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
@@ -166,6 +162,11 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 				return
 			}
 		}
+	}
+	// Splice the pre-9.x YAML candidate before the v9.1.x nested file so
+	// priority is canonical > local.json > pre-9.x > nested.
+	if yc := legacyYAMLCandidate(fileDir); yc.exists {
+		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
 	}
 
 	// Pick: highest-priority file with user_level=="pro"; if none has pro,

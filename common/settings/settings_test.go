@@ -33,6 +33,15 @@ func TestInitSettings(t *testing.T) {
 }
 
 func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
+	// Redirect the OS-specific pre-9.x YAML lookup to nowhere by
+	// default so individual tests don't pick up the host machine's
+	// actual ~/Library/Application Support/Lantern/settings.yaml or
+	// equivalent. Sub-tests that exercise the YAML path opt in by
+	// pointing the function at their tempDir.
+	prevYAMLPath := legacyYAMLPathFn
+	legacyYAMLPathFn = func(string) (string, string) { return "", "" }
+	t.Cleanup(func() { legacyYAMLPathFn = prevYAMLPath })
+
 	writeNested := func(t *testing.T, dir string, contents []byte) {
 		t.Helper()
 		nd := filepath.Join(dir, "data")
@@ -160,6 +169,106 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 
 		_, err := os.Stat(canonical)
 		assert.True(t, os.IsNotExist(err), "no migration when no source files exist")
+	})
+
+	t.Run("pre-9.x desktop YAML recovered when no JSON candidates exist", func(t *testing.T) {
+		// Redirect the YAML lookup at a tempDir-local file so the test
+		// is portable across OSes.
+		tempDir := t.TempDir()
+		yamlPath := filepath.Join(tempDir, "fake-pre9x-settings.yaml")
+		require.NoError(t, os.WriteFile(yamlPath, []byte(`userID: 3580849
+deviceID: legacy-device-id
+userPro: true
+userToken: legacy-token
+emailAddress: derek@example.com
+`), 0o644))
+		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
+		t.Cleanup(func() { legacyYAMLPathFn = func(string) (string, string) { return "", "" } })
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		gotStr := string(got)
+		assert.Contains(t, gotStr, `"user_id":3580849`)
+		assert.Contains(t, gotStr, `"device_id":"legacy-device-id"`)
+		assert.Contains(t, gotStr, `"user_level":"pro"`)
+		assert.Contains(t, gotStr, `"token":"legacy-token"`)
+		assert.Contains(t, gotStr, `"email":"derek@example.com"`)
+	})
+
+	t.Run("v9.0.x local.json beats pre-9.x YAML", func(t *testing.T) {
+		// Both exist with pro state. local.json is the higher-priority
+		// (more recent) source, so it should win.
+		tempDir := t.TempDir()
+		yamlPath := filepath.Join(tempDir, "fake-pre9x-settings.yaml")
+		require.NoError(t, os.WriteFile(yamlPath, []byte(`userID: 1
+userPro: true
+userToken: legacy-token
+`), 0o644))
+		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
+		t.Cleanup(func() { legacyYAMLPathFn = func(string) (string, string) { return "", "" } })
+
+		writeLegacy(t, tempDir, []byte(`{"user_id": 2, "user_level": "pro", "token": "v9.0-token"}`))
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Contains(t, string(got), `"user_id": 2`,
+			"v9.0.x local.json should win over pre-9.x YAML when both have pro")
+		assert.Contains(t, string(got), `"v9.0-token"`)
+	})
+
+	t.Run("pre-9.x YAML beats v9.1.x bugged nested file", func(t *testing.T) {
+		// Pre-9.x has pro; v9.1.x nested has expired (the bugged case).
+		// Pre-9.x must win.
+		tempDir := t.TempDir()
+		yamlPath := filepath.Join(tempDir, "fake-pre9x-settings.yaml")
+		require.NoError(t, os.WriteFile(yamlPath, []byte(`userID: 1
+userPro: true
+userToken: legacy-token
+`), 0o644))
+		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
+		t.Cleanup(func() { legacyYAMLPathFn = func(string) (string, string) { return "", "" } })
+
+		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Contains(t, string(got), `"user_level":"pro"`,
+			"pre-9.x YAML with pro should win over v9.1.x nested expired")
+		assert.Contains(t, string(got), `"legacy-token"`)
+	})
+
+	t.Run("iOS userconfig.yaml recovered when canonical is missing", func(t *testing.T) {
+		// On iOS the legacy YAML is sandbox-relative — it lives next to
+		// where settings.json now lives, so legacyYAMLCandidate reads
+		// from fileDir directly and we can exercise it from a test
+		// without monkeypatching $HOME or $APPDATA. (Desktop legacy
+		// paths are covered via translateLegacyYAML's unit tests, which
+		// don't depend on the OS-specific path resolution.)
+		if runtime.GOOS != "ios" {
+			t.Skip("iOS-only path: legacy YAML elsewhere is OS-specific")
+		}
+		tempDir := t.TempDir()
+		yamlPath := filepath.Join(tempDir, "userconfig.yaml")
+		require.NoError(t, os.WriteFile(yamlPath, []byte(`UserID: 7777
+DeviceID: ios-device
+Token: tok
+`), 0o644))
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Contains(t, string(got), `"user_id":7777`)
+		assert.Contains(t, string(got), `"device_id":"ios-device"`)
 	})
 
 	t.Run("unreadable canonical (non-ENOENT) skips migration", func(t *testing.T) {
