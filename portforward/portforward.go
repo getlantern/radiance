@@ -113,6 +113,14 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 // about a router rule that's actually still live and the user would have
 // to wait for the UPnP lease to expire.
 func (f *Forwarder) UnmapPort(ctx context.Context) error {
+	// Defensive: callers that pass a *Forwarder through an interface (see
+	// peer.Client's portForwarder shim) can land here with f == nil if a
+	// failed construction collapsed `(*Forwarder)(nil), err` into a
+	// non-nil-but-typed-nil interface. A bare `f.mu.Lock()` would panic;
+	// this guard makes the cleanup path idempotent against that race.
+	if f == nil {
+		return nil
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.cancel != nil {

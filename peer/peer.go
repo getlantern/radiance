@@ -101,7 +101,18 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			return portforward.NewForwarder(ctx)
+			// Explicitly return a nil interface on error — `return
+			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
+			// pair into a typed-nil interface on failure, which then panics
+			// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
+			// because the nil-check passes (interface has a type) but the
+			// receiver is nil. Surfacing the underlying error here lets the
+			// caller see ErrNoPortForwarding instead of a runtime panic.
+			fwd, err := portforward.NewForwarder(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return fwd, nil
 		}
 	}
 	if cfg.BuildBoxService == nil {
