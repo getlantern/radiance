@@ -267,6 +267,17 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
+	// Now that sing-box is listening with the just-built creds, ask the
+	// server to dial back through them. Splitting verify out of Register
+	// into this explicit follow-up avoids the chicken-and-egg where the
+	// server tried to verify before the peer could possibly be listening
+	// (the cert/key only arrive in the Register response). Failure here
+	// is fatal — the server has already deprecated the row, so the
+	// deferred cleanup tears the rest of the session down.
+	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
+		return fmt.Errorf("verify with lantern-cloud: %w", err)
+	}
+
 	// Forward inbound accept/close events from lantern-box's samizdat
 	// inbound to the radiance event bus. Consumers (lantern-core's
 	// FlutterEventEmitter, future abuse aggregation) subscribe via
@@ -274,7 +285,9 @@ func (c *Client) Start(ctx context.Context) error {
 	// single-active; cleared on Stop and in the rollback defer so
 	// post-teardown accept-loop callbacks land on a no-op rather than
 	// emit events to a torn-down consumer. Must run AFTER box.Start so
-	// the accept loop is serving when notifications start flowing.
+	// the accept loop is serving when notifications start flowing. We
+	// set it after Verify so the verifier's transient probe connection
+	// doesn't surface as a real peer-connection event in the UI.
 	peerconn.SetListener(func(state int, source string) {
 		events.Emit(ConnectionEvent{State: state, Source: source})
 	})
