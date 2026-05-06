@@ -13,6 +13,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/events"
@@ -529,7 +530,10 @@ func pickInternalPort() uint16 {
 // (samizdat, reflex, etc.) into the ctx so libbox can decode the
 // inbounds[0].type="samizdat" stanza coming back from /peer/register.
 // Without it the user's ctx is missing InboundOptionsRegistry and
-// libbox returns "missing inbound fields registry in context".
+// libbox returns "missing inbound fields registry in context" — the
+// failure mode is silent in CI because the integration tests stub
+// BuildBoxService entirely; only TestDefaultBuildBoxService_DecodesSamizdatInbound
+// exercises the real decode path.
 //
 // We wrap so libbox sees the caller's Deadline/Done (so a Stop-induced
 // ctx cancel propagates to box internals) AND can still resolve the
