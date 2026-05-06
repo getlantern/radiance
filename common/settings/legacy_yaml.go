@@ -23,10 +23,14 @@ import (
 // readable from Go; Android stored its state in an encrypted SQLite
 // and needs a Kotlin-side migration):
 //
-//	macOS:   ~/.lantern/settings.yaml         (desktop schema)
-//	Windows: %APPDATA%\Lantern\settings.yaml  (desktop schema)
-//	Linux:   ~/.config/lantern/settings.yaml  (desktop schema)
-//	iOS:     <fileDir>/userconfig.yaml        (ios schema)
+//	macOS:   ~/Library/Application Support/Lantern/settings.yaml  (desktop)
+//	Windows: %APPDATA%\Lantern\settings.yaml                      (desktop)
+//	Linux:   ~/.config/lantern/settings.yaml                      (desktop)
+//	iOS:     <fileDir>/userconfig.yaml                            (ios)
+//
+// These match the path the pre-9.x flashlight + lantern-client used
+// (getlantern/appdir.General("Lantern"), with the linux build tag
+// lowercasing the app name).
 //
 // Field translation (desktop → canonical):
 //
@@ -46,8 +50,15 @@ import (
 // the Session proto and refreshed from the server. Leaving user_level
 // unset means the next /account/login decides; user_id/device_id
 // continuity is what we're after on iOS.)
+// legacyYAMLPathFn is the function legacyYAMLCandidate uses to resolve
+// the on-disk location of the pre-9.x YAML. Set as a package-level var
+// (rather than calling legacyYAMLPath directly) so tests can redirect
+// the lookup to a temp dir without mutating the host's
+// ~/Library/Application Support / %APPDATA% / ~/.config layout.
+var legacyYAMLPathFn = legacyYAMLPath
+
 func legacyYAMLCandidate(fileDir string) candidateSource {
-	path, layout := legacyYAMLPath(fileDir)
+	path, layout := legacyYAMLPathFn(fileDir)
 	if path == "" {
 		return candidateSource{}
 	}
@@ -75,34 +86,36 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 // settings file for this platform, plus the layout name we'll need to
 // pick the right unmarshal struct. Returns ("", "") if this platform
 // isn't supported here.
+//
+// Mirrors what getlantern/appdir.General("Lantern") produced in the
+// pre-9.x desktop clients:
+//   - darwin/windows: os.UserConfigDir() + "Lantern" (capitalized)
+//   - linux:          os.UserConfigDir() + "lantern" (the linux build
+//     tag in appdir lowercased the app name; pre-9.x clients on linux
+//     wrote to ~/.config/lantern, not ~/.config/Lantern)
+//
+// On iOS the YAML lives inside the app sandbox alongside the radiance
+// dataDir, so we look there directly.
 func legacyYAMLPath(fileDir string) (path, layout string) {
 	switch runtime.GOOS {
 	case "darwin":
-		// Note: this targets the pre-9.x desktop client, which wrote
-		// to ~/.lantern. The v9.x macOS app uses /Users/Shared/Lantern
-		// as its dataDir, so the legacy path is outside the dataDir
-		// we're handed. iOS (also runtime.GOOS == "darwin" with the
-		// "ios" build tag) uses a different layout — see the ios case.
-		if runtime.GOARCH == "arm64" || runtime.GOARCH == "amd64" {
-			// macOS desktop. We use $HOME instead of UserConfigDir
-			// because the pre-9.x client used ~/.lantern, not
-			// ~/Library/Application Support/Lantern.
-			if home, err := os.UserHomeDir(); err == nil {
-				return filepath.Join(home, ".lantern", "settings.yaml"), "desktop"
-			}
+		// macOS desktop. iOS uses GOOS=ios in modern Go (>= 1.16) and
+		// is handled separately below.
+		if cfg, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(cfg, "Lantern", "settings.yaml"), "desktop"
 		}
 	case "windows":
-		if appdata := os.Getenv("APPDATA"); appdata != "" {
-			return filepath.Join(appdata, "Lantern", "settings.yaml"), "desktop"
+		if cfg, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(cfg, "Lantern", "settings.yaml"), "desktop"
 		}
 	case "linux":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, ".config", "lantern", "settings.yaml"), "desktop"
+		// Linux pre-9.x lowercased the app name (see appdir_linux.go).
+		if cfg, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(cfg, "lantern", "settings.yaml"), "desktop"
 		}
 	case "ios":
-		// iOS Lantern wrote userconfig.yaml inside the app's data
-		// directory. The radiance dataDir on iOS is the same sandbox,
-		// so look right next to where settings.json now lives.
+		// iOS lantern-client wrote userconfig.yaml inside the app
+		// sandbox. The radiance dataDir on iOS is in the same sandbox.
 		return filepath.Join(fileDir, "userconfig.yaml"), "ios"
 	}
 	return "", ""
