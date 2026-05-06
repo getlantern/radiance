@@ -93,6 +93,7 @@ func InitSettings(fileDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
+	migrateV91xSettingsIfNeeded(fileDir, k.filePath)
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
@@ -102,6 +103,37 @@ func InitSettings(fileDir string) error {
 	}
 	k.initialized = true
 	return nil
+}
+
+// migrateV91xSettingsIfNeeded recovers settings written by v9.1.x clients
+// that landed in <fileDir>/data/settings.json because of a bug in
+// radiance #370 (setupDirectories appended an unconditional "/data"
+// suffix). On the first launch of a fixed client, if the canonical
+// path is empty but the nested path has data, copy it up so the user
+// keeps their persisted user_id, device_id, jwt token, and user_level
+// instead of starting fresh and showing "Pro expired."
+//
+// Runs unconditionally — quick stat check, no-op for the vast majority
+// of installs that never had the bad nested file.
+func migrateV91xSettingsIfNeeded(fileDir, canonicalPath string) {
+	if _, err := os.Stat(canonicalPath); err == nil {
+		// Canonical path already populated — either v9.0.x state survived
+		// the v9.1.x detour intact, or we've already migrated. Nothing to do.
+		return
+	}
+	nested := filepath.Join(fileDir, "data", settingsFileName)
+	contents, err := os.ReadFile(nested)
+	if err != nil {
+		// No nested file (or unreadable) — fresh install, normal path.
+		return
+	}
+	if err := os.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
+		slog.Warn("v9.1.x settings migration: write failed; fresh install path will be used",
+			"src", nested, "dst", canonicalPath, "error", err)
+		return
+	}
+	slog.Info("v9.1.x settings migration: recovered persisted state",
+		"src", nested, "dst", canonicalPath, "bytes", len(contents))
 }
 
 func loadSettings(path string) error {
