@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -598,4 +599,84 @@ func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
 	// We never call Start; just verifying the decode path. Close drops
 	// any background structures libbox might have stood up.
 	_ = bs.Close()
+}
+
+// All four peer endpoints must carry the same standard header set as
+// /config-new (X-Lantern-Config-Client-IP in particular). The server's
+// util.ClientIPWithAddr prefers that header over X-Forwarded-For and
+// RemoteAddr; without it, register/verify resolve a different IP than
+// radiance has detected, and the server's verifier dials an address the
+// peer's listener isn't bound to.
+func TestAPI_ForwardsCommonHeaders(t *testing.T) {
+	const fakePublicIP = "198.51.100.7"
+	common.SetPublicIP(fakePublicIP)
+	t.Cleanup(func() { common.SetPublicIP("") })
+
+	type capture struct {
+		clientIP  string
+		deviceID  string
+		platform  string
+		appName   string
+		userAgent string
+	}
+	captured := make(map[string]capture)
+	var mu sync.Mutex
+	record := func(path string, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		captured[path] = capture{
+			clientIP:  r.Header.Get(common.ClientIPHeader),
+			deviceID:  r.Header.Get(common.DeviceIDHeader),
+			platform:  r.Header.Get(common.PlatformHeader),
+			appName:   r.Header.Get(common.AppNameHeader),
+			userAgent: r.Header.Get("User-Agent"),
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/register", r)
+		_ = json.NewEncoder(w).Encode(RegisterResponse{
+			RouteID:                  "00000000-0000-0000-0000-000000000123",
+			ServerConfig:             `{}`,
+			HeartbeatIntervalSeconds: 60,
+		})
+	})
+	mux.HandleFunc("/peer/verify", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/verify", r)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/heartbeat", r)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/deregister", r)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	api := NewAPI(srv.Client(), srv.URL, "test-device-id")
+	ctx := context.Background()
+
+	_, err := api.Register(ctx, RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698, InternalPort: 35698})
+	require.NoError(t, err)
+	require.NoError(t, api.Verify(ctx, "00000000-0000-0000-0000-000000000123"))
+	require.NoError(t, api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123"))
+	require.NoError(t, api.Deregister(ctx, "00000000-0000-0000-0000-000000000123"))
+
+	for _, path := range []string{"/peer/register", "/peer/verify", "/peer/heartbeat", "/peer/deregister"} {
+		mu.Lock()
+		c, ok := captured[path]
+		mu.Unlock()
+		require.True(t, ok, "no request captured for %s", path)
+		assert.Equal(t, fakePublicIP, c.clientIP,
+			"%s must forward radiance's detected public IP via %s "+
+				"so server-side ClientIPWithAddr resolves the same IP it does for /config-new",
+			path, common.ClientIPHeader)
+		assert.Equal(t, "test-device-id", c.deviceID, "%s must carry %s", path, common.DeviceIDHeader)
+		assert.NotEmpty(t, c.platform, "%s must carry %s", path, common.PlatformHeader)
+		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
+	}
 }
