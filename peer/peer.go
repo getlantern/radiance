@@ -239,14 +239,28 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 
 	// Forward inbound accept/close events from lantern-box's samizdat
-	// inbound to the radiance event bus, so consumers (the Flutter globe,
-	// future abuse aggregation) get a per-connection stream. Listener is
-	// process-wide single-active; cleared on Stop. This must run AFTER
-	// box.Start() so the box's accept loop is live when the listener is
-	// registered.
-	peerconn.SetListener(func(state int, source string) {
-		events.Emit(ConnectionEvent{State: state, Source: source})
-	})
+	// inbound to the radiance event bus AND a localhost HTTP stats
+	// endpoint that Flutter polls to render the live globe. Listener is
+	// process-wide single-active; cleared automatically when runCtx
+	// cancels (in Stop / rollback). Must run AFTER box.Start so the
+	// box's accept loop is serving when notifications start flowing.
+	stats, statsErr := startConnStats(runCtx)
+	if statsErr != nil {
+		// Don't fail Start over a stats-endpoint error — a bound port
+		// shouldn't kill the user's peer-share session. Log and continue.
+		slog.Warn("peer connection stats endpoint failed to start", "err", statsErr)
+	} else {
+		// startConnStats sets a peerconn listener that feeds the snapshot
+		// HTTP server. Layer ConnectionEvent emission alongside, since
+		// Go-side consumers (e.g. metrics) may want the stream too.
+		peerconn.SetListener(func(state int, source string) {
+			stats.note(state, source)
+			events.Emit(ConnectionEvent{State: state, Source: source})
+		})
+		slog.Info("peer connection stats endpoint listening",
+			"addr", stats.addr(),
+		)
+	}
 
 	heartbeat := c.cfg.HeartbeatInterval
 	if heartbeat == 0 {
