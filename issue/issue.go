@@ -41,6 +41,12 @@ func NewIssueReporter(httpClient *http.Client) *IssueReporter {
 
 type IssueType int
 
+type Attachment struct {
+	Name string
+	Type string
+	Data []byte
+}
+
 const (
 	CannotCompletePurchase IssueType = iota
 	CannotSignIn
@@ -80,6 +86,10 @@ type IssueReport struct {
 	Locale            string
 	// device alphanumeric name
 	Model string
+	// Attachments contains in-memory screenshot attachments supplied by the caller.
+	// They are sent as separate multipart files, with at most
+	// [MaxFirstClassAttachmentCount] files and [MaxFirstClassAttachmentBytes] bytes.
+	Attachments []*Attachment
 	// AdditionalAttachments is a list of additional files to be attached. The log file will be
 	// automatically included.
 	AdditionalAttachments []string
@@ -116,17 +126,25 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		OsVersion:         osVersion,
 	}
 
+	firstClassAttachments := make([]*Attachment, 0, len(report.Attachments))
+	for _, attachment := range report.Attachments {
+		if attachment == nil {
+			continue
+		}
+		firstClassAttachments = append(firstClassAttachments, attachment)
+	}
+
 	logDir := settings.GetString(settings.LogPathKey)
 	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, maxCompressedSize)
 	if err != nil {
 		slog.Error("failed to build issue archive", "error", err)
 	}
 	if len(archive) > 0 {
-		r.Attachments = []*ReportIssueRequest_Attachment{{
+		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
 			Type:    "application/zip",
 			Name:    "logs.zip",
 			Content: archive,
-		}}
+		})
 	}
 
 	// send message to lantern-cloud
@@ -136,12 +154,30 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		return fmt.Errorf("error marshaling proto: %w", err)
 	}
 
+	contentType := "application/x-protobuf"
+	body := bytes.NewReader(out)
+	if len(firstClassAttachments) > 0 {
+		if err := validateFirstClassAttachments(firstClassAttachments); err != nil {
+			slog.Error("invalid issue attachments", "error", err)
+			return err
+		}
+
+		multipartBody, multipartContentType, err := buildMultipartIssueBody(out, firstClassAttachments)
+		if err != nil {
+			slog.Error("unable to build multipart issue report", "error", err)
+			return fmt.Errorf("build multipart issue report: %w", err)
+		}
+		body = bytes.NewReader(multipartBody.Bytes())
+		contentType = multipartContentType
+	}
+
 	issueURL := common.GetBaseURL() + "/issue"
 	req, err := newIssueRequest(
 		ctx,
 		http.MethodPost,
 		issueURL,
-		bytes.NewReader(out),
+		body,
+		contentType,
 	)
 	if err != nil {
 		slog.Error("unable to create issue report request", "error", err)
@@ -169,13 +205,16 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 }
 
 // newIssueRequest creates a new HTTP request with the required headers for issue reporting.
-func newIssueRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+func newIssueRequest(ctx context.Context, method, url string, body io.Reader, contentType string) (*http.Request, error) {
 	req, err := common.NewRequestWithHeaders(ctx, method, url, body)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("content-type", "application/x-protobuf")
+	if contentType == "" {
+		contentType = "application/x-protobuf"
+	}
+	req.Header.Set(common.ContentTypeHeader, contentType)
 	req.Header.Set(common.SupportedDataCapsHeader, "monthly,weekly,daily")
 	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
 		req.Header.Set(common.TimeZoneHeader, tz)
