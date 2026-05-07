@@ -5,18 +5,18 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/getlantern/radiance/common/settings"
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 // buildDNSServers returns a list of three DNSServerOptions, a local DNS server
-// used for local requests; a remote DNS server (like quad9)
-// for remote websites without sharing user private IP; and fake IP dns server, which
-// effectively resolves DNS locally while allowing us to route traffic based on
-// domains.
+// used for local requests; a remote DNS server (like quad9) for remote websites
+// without sharing user private IP; and fake IP dns server, which effectively resolves
+// DNS locally while allowing us to route traffic based on domains.
 func buildDNSServers() []option.DNSServerOptions {
 	local := option.DNSServerOptions{
 		Tag:  "dns_local",
@@ -82,27 +82,26 @@ var aliDNSLocales = map[string]struct{}{
 	"RURU": {},
 	"CN":   {},
 	"IR":   {},
-	"RU":   {},
 }
 
 func localDNSIP() string {
-	// First, normalize the locale to upper case and remove any hyphens or underscores.
 	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
 		slog.Info("Using AliDNS for locale", "locale", locale)
-		// AliDNS
 		return "223.5.5.5"
 	}
-	// Quad9, which is more privacy preserving by doing things such as
-	// not sending EDNS Client-Subnet data
+	if normalizedLocale == "RU" {
+		slog.Info("Using Yandex DNS for locale", "locale", locale)
+		return "77.88.8.8"
+	}
+	// default to Quad9
 	slog.Info("Using Quad9 for locale", "locale", locale)
 	return "9.9.9.9"
 }
 
 // normalizeLocale normalizes the locale string by converting it to upper case
-// and removing any hyphens or underscores. Locales can come it from all platforms in various
-// formats, so this helps standardize them for comparison.
+// and removing any hyphens or underscores.
 func normalizeLocale(locale string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(locale), "-", ""), "_", "")
 }
