@@ -17,6 +17,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -209,9 +210,28 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			// Manual port-forward override. Use case: networks where
+			// UPnP is disabled or unavailable (router has UPnP off for
+			// security, ISP-provided gateways without IGD, networks
+			// behind double-NAT) but the user has manually configured
+			// a port forward on their router. We trust the user's
+			// config — no UPnP roundtrip — and report the configured
+			// port as both the external and internal port (the 1:1
+			// case every consumer router exposes).
+			//
+			// Resolution order:
+			//   1. settings.PeerManualPortKey (Advanced UI)
+			//   2. RADIANCE_PEER_EXTERNAL_PORT env var (developer /
+			//      power-user override)
+			//   3. fall through to UPnP discovery
+			if port := uint16(settings.GetInt(settings.PeerManualPortKey)); port != 0 {
+				slog.Info("peer client using manual port forward",
+					"port", port, "source", "setting")
+				return &manualPortForwarder{port: port}, nil
+			}
 			if p := manualPort(); p != 0 {
 				slog.Info("peer client using manual port forward",
-					"port", p, "env", env.PeerExternalPort.String())
+					"port", p, "source", env.PeerExternalPort.String())
 				return &manualPortForwarder{port: p}, nil
 			}
 			// Explicitly return a nil interface on error — `return
