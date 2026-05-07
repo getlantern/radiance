@@ -7,15 +7,51 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
 	box "github.com/getlantern/lantern-box"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
+
+// manualPortForwarder satisfies the portForwarder interface without doing
+// any UPnP work. Used when env.PeerExternalPort is set.
+type manualPortForwarder struct{ port uint16 }
+
+func (m *manualPortForwarder) MapPort(_ context.Context, _ uint16, _ string) (*portforward.Mapping, error) {
+	return &portforward.Mapping{
+		ExternalPort: m.port,
+		InternalPort: m.port,
+		Method:       "manual-env",
+	}, nil
+}
+func (m *manualPortForwarder) UnmapPort(_ context.Context) error { return nil }
+func (m *manualPortForwarder) StartRenewal(_ context.Context)    {}
+func (m *manualPortForwarder) ExternalIP(_ context.Context) (string, error) {
+	// Empty lets the server fill the observed IP in from r.RemoteAddr,
+	// matching peer_handler's "external_ip empty → use observed" path.
+	return "", nil
+}
+
+// manualPort returns the parsed env.PeerExternalPort value, or 0 if unset
+// or invalid.
+func manualPort() uint16 {
+	raw := env.GetString(env.PeerExternalPort)
+	if raw == "" {
+		return 0
+	}
+	p, err := strconv.Atoi(raw)
+	if err != nil || p < 1 || p > 65535 {
+		slog.Warn("ignoring invalid "+env.PeerExternalPort.String(), "value", raw)
+		return 0
+	}
+	return uint16(p)
+}
 
 // StatusEvent fires whenever the Client's session state changes — successful
 // Start, user Stop, or auto-Stop on a 404 heartbeat.
@@ -102,6 +138,13 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			// Manual override short-circuits UPnP discovery entirely; see
+			// env.PeerExternalPort.
+			if p := manualPort(); p != 0 {
+				slog.Info("peer client using manual port forward",
+					"port", p, "env", env.PeerExternalPort.String())
+				return &manualPortForwarder{port: p}, nil
+			}
 			// Explicitly return a nil interface on error — `return
 			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
 			// pair into a typed-nil interface on failure, which then panics
@@ -426,12 +469,9 @@ func pickInternalPort() uint16 {
 // (samizdat, reflex, etc.) into the ctx so libbox can decode the
 // inbounds[0].type="samizdat" stanza coming back from /peer/register.
 // Without it the user's ctx is missing InboundOptionsRegistry and
-// libbox returns "missing inbound fields registry in context" — the
-// failure mode is silent in CI because the integration tests stub
-// BuildBoxService entirely; only TestDefaultBuildBoxService_DecodesSamizdatInbound
-// exercises the real decode path.
+// libbox returns "missing inbound fields registry in context".
 //
-// Runs in the same process as the user's VPN tunnel (vpn/tunnel.go),
+// This runs in the same process as the user's VPN tunnel (vpn/tunnel.go),
 // which calls libbox.Setup once at process start; the registries set
 // here are scoped to this peer's box instance so the two coexist
 // without stomping on each other.

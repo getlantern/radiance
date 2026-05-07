@@ -29,6 +29,10 @@ var (
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 	AppVersion       _key = "RADIANCE_VERSION"
+	// PeerExternalPort, when set to a 1..65535 value, makes peer.Client.Start
+	// skip UPnP discovery and treat the value as a manually-forwarded port
+	// on the user's router (handy for eero / ISP CPE that don't expose UPnP).
+	PeerExternalPort _key = "RADIANCE_PEER_EXTERNAL_PORT"
 
 	Testing _key = "RADIANCE_TESTING"
 
