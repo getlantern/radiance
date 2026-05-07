@@ -13,7 +13,6 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
-	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/events"
@@ -296,42 +295,16 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 
 	// Forward inbound accept/close events from lantern-box's samizdat
-	// inbound to the radiance event bus AND a localhost HTTP stats
-	// endpoint that Flutter polls to render the live globe. Listener is
-	// process-wide single-active; cleared automatically when runCtx
-	// cancels (in Stop / rollback). Must run AFTER box.Start so the
-	// box's accept loop is serving when notifications start flowing.
-	// Register BEFORE Verify so the verify-dial connection itself emits
-	// an event — the listener must be in place by the time the server
-	// dials back.
-	stats, statsErr := startConnStats(runCtx)
-	if statsErr != nil {
-		// Don't fail Start over a stats-endpoint error — a bound port
-		// shouldn't kill the user's peer-share session. Log and continue.
-		slog.Warn("peer connection stats endpoint failed to start", "err", statsErr)
-	} else {
-		// startConnStats sets a peerconn listener that feeds the snapshot
-		// HTTP server. Layer ConnectionEvent emission alongside, since
-		// Go-side consumers (e.g. metrics) may want the stream too.
-		peerconn.SetListener(func(state int, source string) {
-			stats.note(state, source)
-			events.Emit(ConnectionEvent{State: state, Source: source})
-		})
-		slog.Info("peer connection stats endpoint listening",
-			"addr", stats.addr(),
-		)
-	}
-
-	// Now that sing-box is listening with the just-built creds, ask the
-	// server to dial back through them. Splitting verify out of Register
-	// into this explicit follow-up avoids the chicken-and-egg where the
-	// server tried to verify before the peer could possibly be listening
-	// (the cert/key only arrive in the Register response). Failure here
-	// is fatal — the server has already deprecated the row, so the
-	// deferred cleanup tears the rest of the session down.
-	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
-		return fmt.Errorf("verify with lantern-cloud: %w", err)
-	}
+	// inbound to the radiance event bus. Consumers (lantern-core's
+	// FlutterEventEmitter, future abuse aggregation) subscribe via
+	// events.Subscribe[ConnectionEvent]. Listener is process-wide
+	// single-active; cleared on Stop and in the rollback defer so
+	// post-teardown accept-loop callbacks land on a no-op rather than
+	// emit events to a torn-down consumer. Must run AFTER box.Start so
+	// the accept loop is serving when notifications start flowing.
+	peerconn.SetListener(func(state int, source string) {
+		events.Emit(ConnectionEvent{State: state, Source: source})
+	})
 
 	// HeartbeatIntervalSeconds is server-driven so lantern-cloud can dial up
 	// the cadence on registrations it wants to expire faster. Honor any
