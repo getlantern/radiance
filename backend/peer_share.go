@@ -55,12 +55,17 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	defer cancel()
 	if enabled {
 		if err := r.peerClient.Start(toggleCtx); err != nil {
+			// Surface the underlying Start error so operators can see it
+			// in the daemon log (UPnP failure, registration 4xx, etc.)
+			// rather than only via the IPC HTTP response.
+			slog.Error("peer share start failed", "err", err)
 			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
 				slog.Error("peer share rollback failed after Start error",
 					"start_err", err, "rollback_err", rbErr)
 			}
 			return fmt.Errorf("start peer share: %w", err)
 		}
+		slog.Info("peer share start succeeded")
 		return nil
 	}
 	if err := r.peerClient.Stop(toggleCtx); err != nil {

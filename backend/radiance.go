@@ -213,7 +213,7 @@ func (r *LocalBackend) Start() {
 			slog.Warn("Failed to get public IP", "error", err)
 		} else {
 			common.SetPublicIP(result.IP.String())
-			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+			slog.Info("Detected public IP", "ip", result.IP.String(), "confidence", result.Confidence, "sources", result.Sources)
 		}
 	}()
 
