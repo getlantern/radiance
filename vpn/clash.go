@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
@@ -27,12 +28,17 @@ var _ adapter.ClashServer = (*clashServer)(nil)
 // owned resources beyond what's wired in via the sing-box service context.
 type clashServer struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
+	startOnce sync.Once
+
 	dnsRouter adapter.DNSRouter
 	outbound  adapter.OutboundManager
 	endpoint  adapter.EndpointManager
 
-	urlTestHistory adapter.URLTestHistoryStorage
-	trafficManager *trafficontrol.Manager
+	urlTestHistory    adapter.URLTestHistoryStorage
+	trafficManager    *trafficontrol.Manager
+	throughputTracker *throughputTracker
+	trackerDone       chan struct{}
 
 	mode     string
 	modeList []string
@@ -52,12 +58,17 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options option
 		return nil, fmt.Errorf("initial mode %q is not in mode list", initial)
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
+	trafficManager := trafficontrol.NewManager()
 	return &clashServer{
+		ctx:            runCtx,
+		cancel:         cancel,
 		dnsRouter:      service.FromContext[adapter.DNSRouter](ctx),
 		outbound:       service.FromContext[adapter.OutboundManager](ctx),
 		endpoint:       service.FromContext[adapter.EndpointManager](ctx),
 		urlTestHistory: service.FromContext[adapter.URLTestHistoryStorage](ctx),
-		trafficManager: trafficontrol.NewManager(),
+		trafficManager:    trafficManager,
+		throughputTracker: newThroughputTracker(trafficManager, time.Second),
 		modeList:       modeList,
 		mode:           initial,
 	}, nil
@@ -94,10 +105,21 @@ func (s *clashServer) ModeList() []string {
 }
 
 func (s *clashServer) Start(stage adapter.StartStage) error {
+	s.startOnce.Do(func() {
+		s.trackerDone = make(chan struct{})
+		go func() {
+			defer close(s.trackerDone)
+			s.throughputTracker.Run(s.ctx)
+		}()
+	})
 	return nil
 }
 
 func (s *clashServer) Close() error {
+	s.cancel()
+	if s.trackerDone != nil {
+		<-s.trackerDone
+	}
 	return nil
 }
 
@@ -111,6 +133,10 @@ func (s *clashServer) TrafficManager() *trafficontrol.Manager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.trafficManager
+}
+
+func (s *clashServer) ThroughputTracker() *throughputTracker {
+	return s.throughputTracker
 }
 
 func (s *clashServer) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) net.Conn {

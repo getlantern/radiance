@@ -102,10 +102,11 @@ type VerifySubscriptionRequest struct {
 }
 
 type IssueReportRequest struct {
-	IssueType             issue.IssueType `json:"issueType"`
-	Description           string          `json:"description"`
-	Email                 string          `json:"email"`
-	AdditionalAttachments []string        `json:"additionalAttachments"`
+	IssueType             issue.IssueType     `json:"issueType"`
+	Description           string              `json:"description"`
+	Email                 string              `json:"email"`
+	AdditionalAttachments []string            `json:"additionalAttachments"`
+	Attachments           []*issue.Attachment `json:"attachments"`
 }
 
 // Shared response types used by both client and server.

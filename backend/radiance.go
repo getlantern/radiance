@@ -59,6 +59,7 @@ type LocalBackend struct {
 	srvManager     *servers.Manager
 	vpnClient      *vpn.VPNClient
 	splitTunnelMgr *vpn.SplitTunnel
+	sessionHistory *vpn.SessionHistory
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -180,6 +181,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
+	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
+	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	return r, nil
 }
 
@@ -208,6 +211,7 @@ func (r *LocalBackend) Start() {
 	}
 	r.startVPNStatusListeners()
 	r.startAutoSelectedListener()
+	r.startSessionAutoSelectListener()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
@@ -320,15 +324,32 @@ func (r *LocalBackend) startVPNStatusListeners() {
 	})
 }
 
+func (r *LocalBackend) sessionInfo() vpn.SessionInfo {
+	return vpn.SessionInfo{
+		Status: r.vpnClient.Status,
+		SelectedServer: func() (tag, city, country string) {
+			server, _, err := r.SelectedServer()
+			if err != nil || server == nil {
+				return "", "", ""
+			}
+			return server.Tag, server.Location.City, server.Location.Country
+		},
+		Bytes: r.vpnClient.Bytes,
+	}
+}
+
+func (r *LocalBackend) Sessions(limit int) []vpn.Session {
+	return r.sessionHistory.Sessions(limit)
+}
+
 //////////////////
 // Issue Report //
 //////////////////
 
 // ReportIssue allows the user to report an issue with the application. It collects relevant
 // information about the user's environment such as country, device ID, user ID, subscription level,
-// and locale, and log files to include in the report. The additionalAttachments parameter allows
-// the caller to include any extra files they want to attach to the issue report.
-func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string) error {
+// and locale, and log files to include in the report.
+func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
 	defer span.End()
 	// get country from the config returned by the backend
@@ -340,11 +361,11 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		country = cfg.Country
 	}
 
-	attachments := baseIssueAttachments()
+	attachmentPaths := baseIssueAttachments()
 	if r.splitTunnelMgr.IsEnabled() {
-		attachments = append(attachments, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
+		attachmentPaths = append(attachmentPaths, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
 	}
-	attachments = append(attachments, additionalAttachments...)
+	attachmentPaths = append(attachmentPaths, additionalAttachments...)
 
 	report := issue.IssueReport{
 		Type:                  issueType,
@@ -355,7 +376,8 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		UserID:                settings.GetString(settings.UserIDKey),
 		SubscriptionLevel:     settings.GetString(settings.UserLevelKey),
 		Locale:                settings.GetString(settings.LocaleKey),
-		AdditionalAttachments: attachments,
+		Attachments:           attachments,
+		AdditionalAttachments: attachmentPaths,
 	}
 	err = r.issueReporter.Report(ctx, report)
 	if err != nil {
@@ -745,8 +767,7 @@ func (r *LocalBackend) RestartVPN() error {
 	return r.vpnClient.Restart(bOptions)
 }
 
-// SelectServer selects the server identified by tag. The empty string is
-// treated as [vpn.AutoSelectTag].
+// SelectServer selects the server identified by tag. The empty string is treated as [vpn.AutoSelectTag].
 func (r *LocalBackend) SelectServer(tag string) error {
 	if tag == "" {
 		tag = vpn.AutoSelectTag
@@ -755,6 +776,11 @@ func (r *LocalBackend) SelectServer(tag string) error {
 		return fmt.Errorf("failed to select server: %w", err)
 	}
 	r.persistSelection(tag)
+	if r.vpnClient.Status() == vpn.Connected {
+		if sel, _, err := r.SelectedServer(); err == nil && sel != nil {
+			r.sessionHistory.HandleServerChange(sel.Tag, sel.Location.City, sel.Location.Country)
+		}
+	}
 	return nil
 }
 
@@ -790,6 +816,10 @@ func (r *LocalBackend) persistSelection(tag string) {
 // connections and the tunnel is open, an empty slice is returned without an error.
 func (r *LocalBackend) VPNConnections() ([]vpn.Connection, error) {
 	return r.vpnClient.Connections()
+}
+
+func (r *LocalBackend) VPNThroughput() (vpn.ThroughputSnapshot, error) {
+	return r.vpnClient.Throughput()
 }
 
 // ActiveVPNConnections returns a list of currently active connections, ordered from newest to oldest.
@@ -843,6 +873,20 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 // VPN client.
 func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
 	return r.vpnClient.CurrentAutoSelectedServer()
+}
+
+func (r *LocalBackend) startSessionAutoSelectListener() {
+	events.SubscribeContext(r.ctx, func(evt vpn.AutoSelectedEvent) {
+		if evt.Selected == "" || r.vpnClient.Status() != vpn.Connected {
+			return
+		}
+		var city, country string
+		if server, found := r.srvManager.GetServerByTag(evt.Selected); found {
+			city = server.Location.City
+			country = server.Location.Country
+		}
+		r.sessionHistory.HandleServerChange(evt.Selected, city, country)
+	})
 }
 
 func (r *LocalBackend) startAutoSelectedListener() {

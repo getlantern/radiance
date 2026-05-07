@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -35,8 +36,10 @@ const (
 	vpnDisconnectEndpoint   = "/vpn/disconnect"
 	vpnRestartEndpoint      = "/vpn/restart"
 	vpnConnectionsEndpoint  = "/vpn/connections"
+	vpnThroughputEndpoint   = "/vpn/throughput"
 	vpnOfflineTestsEndpoint = "/vpn/offline-tests"
 	vpnStatusEventsEndpoint = "/vpn/status/events"
+	vpnSessionsEndpoint     = "/vpn/sessions"
 
 	// Server selection endpoints
 	serverSelectedEndpoint           = "/server/selected"
@@ -194,7 +197,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+vpnDisconnectEndpoint, traced(s.vpnDisconnectHandler))
 	mux.HandleFunc("POST "+vpnRestartEndpoint, traced(s.vpnRestartHandler))
 	mux.HandleFunc("GET "+vpnConnectionsEndpoint, traced(s.vpnConnectionsHandler))
+	mux.HandleFunc("GET "+vpnThroughputEndpoint, traced(s.vpnThroughputHandler))
 	mux.HandleFunc("POST "+vpnOfflineTestsEndpoint, traced(s.vpnOfflineTestsHandler))
+	mux.HandleFunc("GET "+vpnSessionsEndpoint, traced(s.vpnSessionsHandler))
 
 	// SSE routes skip the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+vpnStatusEventsEndpoint, s.vpnStatusEventsHandler)
@@ -373,6 +378,30 @@ func (s *localapi) vpnConnectionsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, conns)
+}
+
+func (s *localapi) vpnThroughputHandler(w http.ResponseWriter, r *http.Request) {
+	tp, err := s.backend(r.Context()).VPNThroughput()
+	if err != nil {
+		// Disconnected has no traffic; a zero snapshot is the correct value, not an error.
+		if errors.Is(err, vpn.ErrTunnelNotConnected) {
+			writeJSON(w, http.StatusOK, vpn.ThroughputSnapshot{})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tp)
+}
+
+func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).Sessions(limit))
 }
 
 func (s *localapi) vpnOfflineTestsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1096,7 +1125,7 @@ func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).ReportIssue(req.IssueType, req.Description, req.Email, req.AdditionalAttachments); err != nil {
+	if err := s.backend(r.Context()).ReportIssue(req.IssueType, req.Description, req.Email, req.AdditionalAttachments, req.Attachments); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
