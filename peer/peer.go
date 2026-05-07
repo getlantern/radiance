@@ -12,6 +12,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -21,6 +22,19 @@ import (
 type StatusEvent struct {
 	events.Event
 	Status Status `json:"status"`
+}
+
+// ConnectionEvent fires every time a remote client opens or closes a
+// samizdat session against the local peer's inbound. Source carries the
+// remote "ip:port" string; consumers (the globe view, abuse aggregation)
+// extract the IP for geo-lookup or rate-limit attribution.
+//
+//   State  +1 on accept, -1 on close
+//   Source remote peer "ip:port"
+type ConnectionEvent struct {
+	events.Event
+	State  int    `json:"state"`
+	Source string `json:"source"`
 }
 
 // Lower bound avoids well-known/registered ports; upper bound stays below the
@@ -156,6 +170,11 @@ func (c *Client) Start(ctx context.Context) error {
 		// registered route + router rule.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
+		// Always clear the connection listener on rollback. The listener is
+		// only Set on the success path, so this is a no-op if Start failed
+		// before reaching it — but cheap insurance against a future re-order
+		// that registers earlier.
+		peerconn.SetListener(nil)
 		if box != nil {
 			_ = box.Close()
 		}
@@ -218,6 +237,16 @@ func (c *Client) Start(ctx context.Context) error {
 		cancelRun()
 		return fmt.Errorf("start sing-box: %w", err)
 	}
+
+	// Forward inbound accept/close events from lantern-box's samizdat
+	// inbound to the radiance event bus, so consumers (the Flutter globe,
+	// future abuse aggregation) get a per-connection stream. Listener is
+	// process-wide single-active; cleared on Stop. This must run AFTER
+	// box.Start() so the box's accept loop is live when the listener is
+	// registered.
+	peerconn.SetListener(func(state int, source string) {
+		events.Emit(ConnectionEvent{State: state, Source: source})
+	})
 
 	heartbeat := c.cfg.HeartbeatInterval
 	if heartbeat == 0 {
@@ -282,6 +311,11 @@ func (c *Client) Stop(ctx context.Context) error {
 	c.routeID = ""
 	c.status = Status{}
 	c.mu.Unlock()
+
+	// Clear the connection listener BEFORE box.Close so any in-flight
+	// accept-loop callbacks land on a no-op rather than emit ConnectionEvents
+	// after the consumer side has already torn down its subscription.
+	peerconn.SetListener(nil)
 
 	cancel()
 	<-done
