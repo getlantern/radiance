@@ -327,7 +327,7 @@ func (r *LocalBackend) startVPNStatusListeners() {
 // ReportIssue allows the user to report an issue with the application. It collects relevant
 // information about the user's environment such as country, device ID, user ID, subscription level,
 // and locale, and log files to include in the report.
-func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, firstClassAttachments []*issue.Attachment) error {
+func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
 	defer span.End()
 	// get country from the config returned by the backend
@@ -354,7 +354,7 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		UserID:                settings.GetString(settings.UserIDKey),
 		SubscriptionLevel:     settings.GetString(settings.UserLevelKey),
 		Locale:                settings.GetString(settings.LocaleKey),
-		Attachments:           firstClassAttachments,
+		Attachments:           attachments,
 		AdditionalAttachments: attachmentPaths,
 	}
 	err = r.issueReporter.Report(ctx, report)

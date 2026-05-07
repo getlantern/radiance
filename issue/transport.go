@@ -12,8 +12,12 @@ import (
 )
 
 const (
-	maxFirstClassAttachmentCount = 3
-	maxIssueAttachmentBytes      = 15 * 1024 * 1024
+	// MaxFirstClassAttachmentCount is the maximum number of screenshot
+	// attachments that can be sent as first-class multipart files.
+	MaxFirstClassAttachmentCount = 3
+	// MaxFirstClassAttachmentBytes is the maximum combined size of screenshot
+	// attachments that can be sent as first-class multipart files.
+	MaxFirstClassAttachmentBytes = 15 * 1024 * 1024
 
 	requestPartName        = "request"
 	requestPartFilename    = "request.pb"
@@ -53,7 +57,7 @@ func normalizeAttachmentType(contentType string) string {
 // attachmentContentType prefers an explicitly supplied type, then falls back to
 // the filename, and finally sniffs the payload when we have to.
 func attachmentContentType(attachment *Attachment) string {
-	if attachment == nil {
+	if attachment == nil || len(attachment.Data) == 0 {
 		return octetStreamContentType
 	}
 
@@ -68,37 +72,38 @@ func attachmentContentType(attachment *Attachment) string {
 		return contentType
 	}
 
-	if len(attachment.Data) == 0 {
-		return octetStreamContentType
-	}
-
 	return normalizeAttachmentType(http.DetectContentType(attachment.Data))
 }
 
 // validateFirstClassAttachments applies the screenshot limits before we switch
 // the issue request from the protobuf-only path to multipart/form-data.
-func validateFirstClassAttachments(attachments []*Attachment, existingBytes int) error {
+func validateFirstClassAttachments(attachments []*Attachment) error {
 	count := 0
-	totalBytes := existingBytes
+	totalBytes := 0
 
 	for _, attachment := range attachments {
 		if attachment == nil {
 			continue
 		}
 
+		if len(attachment.Data) == 0 {
+			name := strings.TrimSpace(attachment.Name)
+			if name == "" {
+				return fmt.Errorf("attachment is empty")
+			}
+			return fmt.Errorf("attachment %q is empty", name)
+		}
+
 		name, err := normalizeAttachmentName(attachment.Name)
 		if err != nil {
 			return err
 		}
-		if len(attachment.Data) == 0 {
-			return fmt.Errorf("attachment %q is empty", name)
-		}
 
 		count++
-		if count > maxFirstClassAttachmentCount {
+		if count > MaxFirstClassAttachmentCount {
 			return fmt.Errorf(
 				"too many screenshot attachments: max %d",
-				maxFirstClassAttachmentCount,
+				MaxFirstClassAttachmentCount,
 			)
 		}
 
@@ -112,10 +117,10 @@ func validateFirstClassAttachments(attachments []*Attachment, existingBytes int)
 		}
 
 		totalBytes += len(attachment.Data)
-		if totalBytes > maxIssueAttachmentBytes {
+		if totalBytes > MaxFirstClassAttachmentBytes {
 			return fmt.Errorf(
-				"total issue attachment size exceeds %d bytes",
-				maxIssueAttachmentBytes,
+				"total screenshot attachment size exceeds %d bytes",
+				MaxFirstClassAttachmentBytes,
 			)
 		}
 	}

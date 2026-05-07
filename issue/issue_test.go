@@ -113,10 +113,9 @@ func TestSendReportWithFirstClassAttachment(t *testing.T) {
 		Model:             "SM-G973F",
 		Attachments: []*Attachment{
 			{
-				Name:       "screenshot.png",
-				Type:       "image/png",
-				Data:       []byte("png-bytes"),
-				FirstClass: true,
+				Name: "screenshot.png",
+				Type: "image/png",
+				Data: []byte("png-bytes"),
 			},
 		},
 	}
@@ -136,10 +135,9 @@ func TestSendReportRejectsInvalidFirstClassAttachment(t *testing.T) {
 		Email:       "radiancetest@getlantern.org",
 		Attachments: []*Attachment{
 			{
-				Name:       "report.pdf",
-				Type:       "application/pdf",
-				Data:       []byte("pdf"),
-				FirstClass: true,
+				Name: "report.pdf",
+				Type: "application/pdf",
+				Data: []byte("pdf"),
 			},
 		},
 	})

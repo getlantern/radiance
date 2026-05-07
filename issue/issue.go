@@ -42,10 +42,9 @@ func NewIssueReporter(httpClient *http.Client) *IssueReporter {
 type IssueType int
 
 type Attachment struct {
-	Name       string
-	Type       string
-	Data       []byte
-	FirstClass bool
+	Name string
+	Type string
+	Data []byte
 }
 
 const (
@@ -87,8 +86,9 @@ type IssueReport struct {
 	Locale            string
 	// device alphanumeric name
 	Model string
-	// Attachments contains in-memory attachments supplied by the caller. FirstClass
-	// attachments are sent as separate multipart files.
+	// Attachments contains in-memory screenshot attachments supplied by the caller.
+	// They are sent as separate multipart files, with at most
+	// [MaxFirstClassAttachmentCount] files and [MaxFirstClassAttachmentBytes] bytes.
 	Attachments []*Attachment
 	// AdditionalAttachments is a list of additional files to be attached. The log file will be
 	// automatically included.
@@ -127,21 +127,11 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	}
 
 	firstClassAttachments := make([]*Attachment, 0, len(report.Attachments))
-	protoAttachmentBytes := 0
 	for _, attachment := range report.Attachments {
-		if attachment == nil || attachment.Name == "" || len(attachment.Data) == 0 {
+		if attachment == nil {
 			continue
 		}
-		if attachment.FirstClass {
-			firstClassAttachments = append(firstClassAttachments, attachment)
-			continue
-		}
-		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
-			Type:    attachmentContentType(attachment),
-			Name:    attachment.Name,
-			Content: attachment.Data,
-		})
-		protoAttachmentBytes += len(attachment.Data)
+		firstClassAttachments = append(firstClassAttachments, attachment)
 	}
 
 	logDir := settings.GetString(settings.LogPathKey)
@@ -155,7 +145,6 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 			Name:    "logs.zip",
 			Content: archive,
 		})
-		protoAttachmentBytes += len(archive)
 	}
 
 	// send message to lantern-cloud
@@ -168,7 +157,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	contentType := "application/x-protobuf"
 	body := bytes.NewReader(out)
 	if len(firstClassAttachments) > 0 {
-		if err := validateFirstClassAttachments(firstClassAttachments, protoAttachmentBytes); err != nil {
+		if err := validateFirstClassAttachments(firstClassAttachments); err != nil {
 			slog.Error("invalid issue attachments", "error", err)
 			return err
 		}
