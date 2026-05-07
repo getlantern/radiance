@@ -77,57 +77,57 @@ func TestLocalDNSIP(t *testing.T) {
 		{
 			name:     "FAIR locale returns AliDNS",
 			locale:   "FAIR",
-			expected: "223.5.5.5",
+			expected: aliDNS,
 		},
 		{
 			name:     "fair lowercase returns AliDNS",
 			locale:   "fair",
-			expected: "223.5.5.5",
+			expected: aliDNS,
 		},
 		{
 			name:     "ZHCN locale returns AliDNS",
 			locale:   "ZHCN",
-			expected: "223.5.5.5",
+			expected: aliDNS,
 		},
 		{
 			name:     "zh-cn with hyphen returns AliDNS",
 			locale:   "zh-cn",
-			expected: "223.5.5.5",
+			expected: aliDNS,
 		},
 		{
 			name:     "zh_cn with underscore returns AliDNS",
 			locale:   "zh_cn",
-			expected: "223.5.5.5",
+			expected: aliDNS,
 		},
 		{
 			name:     "RURU locale returns AliDNS",
 			locale:   "RURU",
-			expected: "223.5.5.5",
+			expected: yandexDNS,
 		},
 		{
 			name:     "ru-ru with hyphen returns AliDNS",
 			locale:   "ru-ru",
-			expected: "223.5.5.5",
+			expected: yandexDNS,
 		},
 		{
 			name:     "en-US returns Quad9",
 			locale:   "en-US",
-			expected: "9.9.9.9",
+			expected: quad9DNS,
 		},
 		{
 			name:     "enus returns Quad9",
 			locale:   "enus",
-			expected: "9.9.9.9",
+			expected: quad9DNS,
 		},
 		{
 			name:     "empty locale returns Quad9",
 			locale:   "",
-			expected: "9.9.9.9",
+			expected: quad9DNS,
 		},
 		{
 			name:     "unknown locale returns Quad9",
 			locale:   "fr-FR",
-			expected: "9.9.9.9",
+			expected: quad9DNS,
 		},
 	}
 
