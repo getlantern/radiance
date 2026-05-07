@@ -2,6 +2,10 @@ module github.com/getlantern/radiance
 
 go 1.26.2
 
+// Local while peerconn listener registry is in flight; remove once
+// lantern-box tags a release that includes tracker/peerconn.
+replace github.com/getlantern/lantern-box => ../lantern-box
+
 replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.12.22-lantern
