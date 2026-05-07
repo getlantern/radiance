@@ -79,7 +79,6 @@ func buildDNSServers() []option.DNSServerOptions {
 var aliDNSLocales = map[string]struct{}{
 	"FAIR": {},
 	"ZHCN": {},
-	"RURU": {},
 	"CN":   {},
 	"IR":   {},
 }
@@ -91,7 +90,7 @@ func localDNSIP() string {
 		slog.Info("Using AliDNS for locale", "locale", locale)
 		return "223.5.5.5"
 	}
-	if normalizedLocale == "RU" {
+	if normalizedLocale == "RU" || normalizedLocale == "RURU" {
 		slog.Info("Using Yandex DNS for locale", "locale", locale)
 		return "77.88.8.8"
 	}
