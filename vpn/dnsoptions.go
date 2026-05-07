@@ -71,6 +71,12 @@ func buildDNSServers() []option.DNSServerOptions {
 	}
 }
 
+const (
+	aliDNS    = "223.5.5.5"
+	yandexDNS = "77.88.8.8"
+	quad9DNS  = "9.9.9.9"
+)
+
 // Locales where AliDNS is used as local DNS server. Note that AliDNS is
 // primarily attractive because it is accessible but is understood to return
 // results that are DNS poisoned for many sites. This is fine because our
@@ -88,15 +94,15 @@ func localDNSIP() string {
 	normalizedLocale := normalizeLocale(locale)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
 		slog.Info("Using AliDNS for locale", "locale", locale)
-		return "223.5.5.5"
+		return aliDNS
 	}
 	if normalizedLocale == "RU" || normalizedLocale == "RURU" {
 		slog.Info("Using Yandex DNS for locale", "locale", locale)
-		return "77.88.8.8"
+		return yandexDNS
 	}
 	// default to Quad9
 	slog.Info("Using Quad9 for locale", "locale", locale)
-	return "9.9.9.9"
+	return quad9DNS
 }
 
 // normalizeLocale normalizes the locale string by converting it to upper case
