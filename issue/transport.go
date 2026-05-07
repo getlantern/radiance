@@ -203,6 +203,8 @@ func multipartContentDisposition(fieldName, filename string) string {
 	)
 }
 
+// normalizeAttachmentName trims the filename and rejects characters that would
+// make the multipart header invalid.
 func normalizeAttachmentName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -218,6 +220,8 @@ func normalizeAttachmentName(name string) (string, error) {
 	return name, nil
 }
 
+// escapeMultipartToken quotes characters that are special in Content-Disposition
+// parameter values.
 func escapeMultipartToken(value string) string {
 	replacer := strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
 	return replacer.Replace(value)
