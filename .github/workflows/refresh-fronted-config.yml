@@ -53,7 +53,7 @@ jobs:
       # superseded by the next one rather than piling up as separate PRs.
       - name: Open / update refresh PR
         if: steps.diff.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@8a45c9a0f9071f4b1e4a0f3b660a1e9e3d9f0d7f # v7
         with:
           commit-message: "fronted: refresh embedded fronted.yaml.gz"
           title: "fronted: refresh embedded fronted.yaml.gz"
