@@ -180,12 +180,14 @@ func (a *Client) SubscriptionPaymentRedirectURL(ctx context.Context, data Paymen
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_payment_redirect_url")
 	defer span.End()
 	params := map[string]string{
-		"provider":       data.Provider,
-		"plan":           data.Plan,
-		"deviceName":     data.DeviceName,
-		"email":          data.Email,
-		"billingType":    string(data.BillingType),
-		"idempotencyKey": data.IdempotencyKey,
+		"provider":    data.Provider,
+		"plan":        data.Plan,
+		"deviceName":  data.DeviceName,
+		"email":       data.Email,
+		"billingType": string(data.BillingType),
+	}
+	if data.IdempotencyKey != "" {
+		params["idempotencyKey"] = data.IdempotencyKey
 	}
 	return a.paymentRedirect(ctx, "/subscription-payment-redirect", params)
 }
@@ -196,11 +198,13 @@ func (a *Client) PaymentRedirect(ctx context.Context, data PaymentRedirectData) 
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "payment_redirect")
 	defer span.End()
 	params := map[string]string{
-		"provider":       data.Provider,
-		"plan":           data.Plan,
-		"deviceName":     data.DeviceName,
-		"email":          data.Email,
-		"idempotencyKey": data.IdempotencyKey,
+		"provider":   data.Provider,
+		"plan":       data.Plan,
+		"deviceName": data.DeviceName,
+		"email":      data.Email,
+	}
+	if data.IdempotencyKey != "" {
+		params["idempotencyKey"] = data.IdempotencyKey
 	}
 	return a.paymentRedirect(ctx, "/payment-redirect", params)
 }

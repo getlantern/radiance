@@ -22,12 +22,14 @@ import (
 
 // testServer holds server-side SRP state for the mock auth server.
 type testServer struct {
-	salt                                      map[string][]byte
-	verifier                                  []byte
-	cache                                     map[string]string
-	paymentRedirectIdempotencyKey             string
-	subscriptionPaymentRedirectIdempotencyKey string
-	paymentRedirectResponse                   any
+	salt                                         map[string][]byte
+	verifier                                     []byte
+	cache                                        map[string]string
+	paymentRedirectIdempotencyKey                string
+	paymentRedirectHasIdempotencyKey             bool
+	subscriptionPaymentRedirectIdempotencyKey    string
+	subscriptionPaymentRedirectHasIdempotencyKey bool
+	paymentRedirectResponse                      any
 }
 
 func writeProtoResponse(w http.ResponseWriter, msg proto.Message) {
@@ -183,12 +185,16 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/subscription-payment-redirect", func(w http.ResponseWriter, r *http.Request) {
-		state.subscriptionPaymentRedirectIdempotencyKey = r.URL.Query().Get("idempotencyKey")
+		values := r.URL.Query()
+		state.subscriptionPaymentRedirectIdempotencyKey = values.Get("idempotencyKey")
+		_, state.subscriptionPaymentRedirectHasIdempotencyKey = values["idempotencyKey"]
 		writeJSONResponse(w, map[string]string{"redirect": "https://example.com/redirect"})
 	})
 
 	mux.HandleFunc("/payment-redirect", func(w http.ResponseWriter, r *http.Request) {
-		state.paymentRedirectIdempotencyKey = r.URL.Query().Get("idempotencyKey")
+		values := r.URL.Query()
+		state.paymentRedirectIdempotencyKey = values.Get("idempotencyKey")
+		_, state.paymentRedirectHasIdempotencyKey = values["idempotencyKey"]
 		resp := state.paymentRedirectResponse
 		if resp == nil {
 			resp = map[string]string{"redirect": "https://example.com/redirect"}

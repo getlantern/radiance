@@ -39,6 +39,26 @@ func TestPaymentRedirect(t *testing.T) {
 	assert.Equal(t, data.IdempotencyKey, ts.paymentRedirectIdempotencyKey)
 }
 
+func TestPaymentRedirectOmitsEmptyIdempotencyKey(t *testing.T) {
+	ac, ts := newTestClient(t)
+	data := PaymentRedirectData{
+		Provider:   "stripe",
+		Plan:       "pro",
+		DeviceName: "test-device",
+		Email:      "",
+	}
+
+	url, err := ac.PaymentRedirect(context.Background(), data)
+	require.NoError(t, err)
+	assert.NotEmpty(t, url)
+	assert.False(t, ts.paymentRedirectHasIdempotencyKey)
+
+	url, err = ac.SubscriptionPaymentRedirectURL(context.Background(), data)
+	require.NoError(t, err)
+	assert.NotEmpty(t, url)
+	assert.False(t, ts.subscriptionPaymentRedirectHasIdempotencyKey)
+}
+
 func TestPaymentRedirectRequiresRedirectURL(t *testing.T) {
 	ac, ts := newTestClient(t)
 	ts.paymentRedirectResponse = map[string]string{"status": "error", "error": "try again later"}
