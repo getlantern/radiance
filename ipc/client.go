@@ -129,6 +129,25 @@ func (c *Client) ActiveVPNConnections(ctx context.Context) ([]vpn.Connection, er
 	return conns, err
 }
 
+// VPNSessions returns recorded VPN sessions in descending order. A limit value of 0 returns all
+// sessions.
+func (c *Client) VPNSessions(ctx context.Context, limit int) ([]vpn.Session, error) {
+	endpoint := vpnSessionsEndpoint
+	if limit > 0 {
+		endpoint = fmt.Sprintf("%s?limit=%d", endpoint, limit)
+	}
+	var sessions []vpn.Session
+	err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &sessions)
+	return sessions, err
+}
+
+// VPNThroughput returns the most recent global and per-outbound throughput sample.
+func (c *Client) VPNThroughput(ctx context.Context) (vpn.ThroughputSnapshot, error) {
+	var s vpn.ThroughputSnapshot
+	err := c.doJSON(ctx, http.MethodGet, vpnThroughputEndpoint, nil, &s)
+	return s, err
+}
+
 // RunOfflineURLTests runs URL performance tests when offline (VPN disconnected) and caches the
 // results. This enables autoconnect to select the best server for the initial connection.
 func (c *Client) RunOfflineURLTests(ctx context.Context) error {
