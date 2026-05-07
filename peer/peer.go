@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"os"
 	"sync"
 	"time"
 
@@ -115,6 +116,24 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			// Manual port-forward override (RADIANCE_PEER_EXTERNAL_PORT).
+			// Use case: networks where UPnP is disabled or unavailable
+			// (router has UPnP off for security, ISP-provided gateways
+			// without IGD, networks behind double-NAT) but the user has
+			// manually configured a port forward on their router. We
+			// trust the user's config — no UPnP roundtrip — and report
+			// the configured port as both the external and internal
+			// port (the 1:1 case every consumer router exposes). The
+			// peer's samizdat inbound binds on this port and
+			// lantern-cloud is told to advertise the same port to
+			// connecting clients.
+			if extStr := os.Getenv("RADIANCE_PEER_EXTERNAL_PORT"); extStr != "" {
+				port, err := portforward.ParseManualPort(extStr)
+				if err != nil {
+					return nil, fmt.Errorf("RADIANCE_PEER_EXTERNAL_PORT: %w", err)
+				}
+				return portforward.NewManualForwarder(port)
+			}
 			// Explicitly return a nil interface on error — `return
 			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
 			// pair into a typed-nil interface on failure, which then panics
