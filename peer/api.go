@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -102,14 +103,23 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 		}
 		reqBody = bytes.NewReader(buf)
 	}
-	r, err := http.NewRequestWithContext(ctx, method, a.baseURL+path, reqBody)
+	// Use common.NewRequestWithHeaders so peer endpoints carry the same
+	// header set as /config-new — most importantly X-Lantern-Config-Client-IP,
+	// which the server's util.ClientIPWithAddr prefers over X-Forwarded-For
+	// and RemoteAddr. Without it, register/verify can resolve a different
+	// IP than radiance has detected as the client's public IP, and the
+	// server's verifier dials an address the peer's listener isn't bound to.
+	r, err := common.NewRequestWithHeaders(ctx, method, a.baseURL+path, reqBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 	}
-	r.Header.Set("X-Lantern-Device-Id", a.deviceID)
+	// NewRequestWithHeaders sets DeviceIDHeader from settings; override with
+	// the API's bound deviceID for parity with the prior behavior in case
+	// the two ever diverge.
+	r.Header.Set(common.DeviceIDHeader, a.deviceID)
 	// Forward the same feature-override header that config/fetcher.go uses
 	// for /config-new requests, so QA can flip on `peer_proxy` ahead of the
 	// public-flag rollout via FeatureOverridesKey (RADIANCE_FEATURE_OVERRIDES).
