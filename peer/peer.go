@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/lantern-box/tracker/peerconn"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -116,17 +117,26 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			// Manual port-forward override (RADIANCE_PEER_EXTERNAL_PORT).
-			// Use case: networks where UPnP is disabled or unavailable
-			// (router has UPnP off for security, ISP-provided gateways
-			// without IGD, networks behind double-NAT) but the user has
-			// manually configured a port forward on their router. We
-			// trust the user's config — no UPnP roundtrip — and report
-			// the configured port as both the external and internal
-			// port (the 1:1 case every consumer router exposes). The
-			// peer's samizdat inbound binds on this port and
-			// lantern-cloud is told to advertise the same port to
-			// connecting clients.
+			// Manual port-forward override. Use case: networks where
+			// UPnP is disabled or unavailable (router has UPnP off for
+			// security, ISP-provided gateways without IGD, networks
+			// behind double-NAT) but the user has manually configured
+			// a port forward on their router. We trust the user's
+			// config — no UPnP roundtrip — and report the configured
+			// port as both the external and internal port (the 1:1
+			// case every consumer router exposes). The peer's samizdat
+			// inbound binds on this port and lantern-cloud is told to
+			// advertise the same port to connecting clients.
+			//
+			// Resolution order:
+			//   1. settings.PeerManualPortKey (Advanced UI in the
+			//      Share My Connection screen)
+			//   2. RADIANCE_PEER_EXTERNAL_PORT env var (developer /
+			//      power-user override)
+			//   3. fall through to UPnP discovery
+			if port := uint16(settings.GetInt(settings.PeerManualPortKey)); port != 0 {
+				return portforward.NewManualForwarder(port)
+			}
 			if extStr := os.Getenv("RADIANCE_PEER_EXTERNAL_PORT"); extStr != "" {
 				port, err := portforward.ParseManualPort(extStr)
 				if err != nil {

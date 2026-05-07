@@ -55,6 +55,13 @@ const (
 	AdBlockKey          _key = "ad_block"           // bool
 	AutoConnectKey      _key = "auto_connect"       // bool
 	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	// PeerManualPortKey is the TCP port number the user has manually
+	// forwarded on their router (single-port 1:1 NAT). When non-zero,
+	// peer.Client.Start uses portforward.ManualForwarder with this port
+	// instead of probing UPnP. Surfaced as an Advanced setting in the
+	// Share My Connection UI for users on networks where UPnP is
+	// disabled or unavailable.
+	PeerManualPortKey _key = "peer_manual_port" // int (0 = use UPnP)
 	SelectedServerKey   _key = "selected_server"    // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
