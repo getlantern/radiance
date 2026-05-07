@@ -33,14 +33,21 @@ func init() {
 	}
 }
 
-type IPCmd struct{}
+type IPCmd struct {
+	JSON bool `arg:"--json" help:"output JSON"`
+}
 
-func runIP(ctx context.Context) error {
+func runIP(ctx context.Context, cmd *IPCmd) error {
 	tctx, tcancel := context.WithTimeout(ctx, 10*time.Second)
 	defer tcancel()
 	ip, err := getPublicIP(tctx)
 	if err != nil {
 		return err
+	}
+	if cmd.JSON {
+		return printJSON(struct {
+			IP string `json:"ip"`
+		}{IP: ip})
 	}
 	fmt.Println(ip)
 	return nil
