@@ -20,10 +20,10 @@ on:
         type: boolean
         default: false
       payment_redirect_plan_id:
-        description: "Optional staging plan ID; if blank, the test fetches one from /plans-v5"
+        description: "Staging plan ID; if blank, the test fetches one from /plans-v5"
         required: false
         type: string
-        default: ""
+        default: "1y-usd-10"
       payment_redirect_channel:
         description: "Plans channel used when plan ID is not supplied"
         required: false
@@ -85,7 +85,7 @@ jobs:
       env:
         RADIANCE_ENV: staging
         RADIANCE_RUN_STAGING_PAYMENT_REDIRECT: "1"
-        RADIANCE_PAYMENT_REDIRECT_PLAN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_plan_id || '' }}
+        RADIANCE_PAYMENT_REDIRECT_PLAN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_plan_id || '1y-usd-10' }}
         RADIANCE_PAYMENT_REDIRECT_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_channel || 'non-store' }}
         RADIANCE_PAYMENT_REDIRECT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_provider || 'stripe' }}
         RADIANCE_PAYMENT_REDIRECT_USER_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_user_id || '0' }}
