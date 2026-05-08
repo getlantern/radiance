@@ -42,14 +42,12 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 	deviceName := "radiance-staging-payment-redirect-" + uniquePaymentRedirectSuffix(t)
 	require.NoError(t, settings.Set(settings.DeviceIDKey, deviceName))
 	require.NoError(t, settings.Set(settings.LocaleKey, "en-US"))
-	require.NoError(t, settings.Set(settings.UserIDKey, stagingPaymentRedirectUserID(t)))
-	if token := strings.TrimSpace(os.Getenv(paymentRedirectTokenEnv)); token != "" {
-		require.NoError(t, settings.Set(settings.TokenKey, token))
-	}
 
 	client := NewClient(&http.Client{Timeout: 30 * time.Second}, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	ensureStagingPaymentRedirectUser(ctx, t, client)
 
 	planID := stagingPaymentRedirectPlanID(ctx, t, client)
 	provider := envOrDefault(paymentRedirectProviderEnv, "stripe")
@@ -134,13 +132,25 @@ func requireStagingPaymentRedirectOptIn(t *testing.T) {
 	}
 }
 
-func stagingPaymentRedirectUserID(t *testing.T) string {
+func ensureStagingPaymentRedirectUser(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
-	userID := envOrDefault(paymentRedirectUserIDEnv, "0")
+	token := strings.TrimSpace(os.Getenv(paymentRedirectTokenEnv))
+	userID := strings.TrimSpace(os.Getenv(paymentRedirectUserIDEnv))
+	if token == "" {
+		user, err := client.NewUser(ctx)
+		require.NoError(t, err)
+		require.NotZero(t, user.GetLegacyID())
+		require.NotEmpty(t, user.GetLegacyToken())
+		return
+	}
+	if userID == "" {
+		t.Fatalf("%s must be set when %s is set", paymentRedirectUserIDEnv, paymentRedirectTokenEnv)
+	}
 	if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
 		t.Fatalf("%s must be a base-10 integer: %v", paymentRedirectUserIDEnv, err)
 	}
-	return userID
+	require.NoError(t, settings.Set(settings.UserIDKey, userID))
+	require.NoError(t, settings.Set(settings.TokenKey, token))
 }
 
 func stagingPaymentRedirectPlanID(ctx context.Context, t *testing.T, client *Client) string {

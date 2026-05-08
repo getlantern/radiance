@@ -152,7 +152,8 @@ func (a *Client) StripeBillingPortalURL(ctx context.Context, baseURL, userID, pr
 }
 
 type redirect struct {
-	Redirect string `json:"redirect"`
+	*protos.BaseResponse `json:",inline"`
+	Redirect             string `json:"redirect"`
 }
 
 func (a *Client) paymentRedirect(ctx context.Context, path string, params map[string]string) (string, error) {
@@ -167,6 +168,9 @@ func (a *Client) paymentRedirect(ctx context.Context, path string, params map[st
 	var r redirect
 	if err := json.Unmarshal(resp, &r); err != nil {
 		return "", traces.RecordError(ctx, fmt.Errorf("unmarshaling payment redirect response: %w", err))
+	}
+	if r.BaseResponse != nil && r.Error != "" {
+		return "", traces.RecordError(ctx, fmt.Errorf("received bad response: %s", r.Error))
 	}
 	redirectURL := strings.TrimSpace(r.Redirect)
 	if redirectURL == "" {
