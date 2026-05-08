@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,8 @@ const (
 	paymentRedirectProviderEnv    = "RADIANCE_PAYMENT_REDIRECT_PROVIDER"
 	paymentRedirectEmailEnv       = "RADIANCE_PAYMENT_REDIRECT_EMAIL"
 	paymentRedirectBillingTypeEnv = "RADIANCE_PAYMENT_REDIRECT_BILLING_TYPE"
+	paymentRedirectUserIDEnv      = "RADIANCE_PAYMENT_REDIRECT_USER_ID"
+	paymentRedirectTokenEnv       = "RADIANCE_PAYMENT_REDIRECT_TOKEN"
 )
 
 func TestStagingPaymentRedirectIdempotency(t *testing.T) {
@@ -39,6 +42,10 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 	deviceName := "radiance-staging-payment-redirect-" + uniquePaymentRedirectSuffix(t)
 	require.NoError(t, settings.Set(settings.DeviceIDKey, deviceName))
 	require.NoError(t, settings.Set(settings.LocaleKey, "en-US"))
+	require.NoError(t, settings.Set(settings.UserIDKey, stagingPaymentRedirectUserID(t)))
+	if token := strings.TrimSpace(os.Getenv(paymentRedirectTokenEnv)); token != "" {
+		require.NoError(t, settings.Set(settings.TokenKey, token))
+	}
 
 	client := NewClient(&http.Client{Timeout: 30 * time.Second}, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -125,6 +132,15 @@ func requireStagingPaymentRedirectOptIn(t *testing.T) {
 	default:
 		t.Fatalf("RADIANCE_ENV must be stage or staging for this test")
 	}
+}
+
+func stagingPaymentRedirectUserID(t *testing.T) string {
+	t.Helper()
+	userID := envOrDefault(paymentRedirectUserIDEnv, "0")
+	if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
+		t.Fatalf("%s must be a base-10 integer: %v", paymentRedirectUserIDEnv, err)
+	}
+	return userID
 }
 
 func stagingPaymentRedirectPlanID(ctx context.Context, t *testing.T, client *Client) string {

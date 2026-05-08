@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: "stripe"
+      payment_redirect_user_id:
+        description: "Staging user ID header value for payment redirect requests"
+        required: false
+        type: string
+        default: "0"
 
 jobs:
 
@@ -83,4 +88,5 @@ jobs:
         RADIANCE_PAYMENT_REDIRECT_PLAN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_plan_id || '' }}
         RADIANCE_PAYMENT_REDIRECT_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_channel || 'non-store' }}
         RADIANCE_PAYMENT_REDIRECT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_provider || 'stripe' }}
+        RADIANCE_PAYMENT_REDIRECT_USER_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_redirect_user_id || '0' }}
       run: go test -v -tags integration ./account -run TestStagingPaymentRedirectIdempotency -count=1
