@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -33,11 +34,12 @@ const (
 
 // PaymentRedirectData contains the data required to generate a payment redirect URL.
 type PaymentRedirectData struct {
-	Plan        string           `json:"plan" validate:"required"`
-	Provider    string           `json:"provider" validate:"required"`
-	Email       string           `json:"email"`
-	DeviceName  string           `json:"deviceName" validate:"required" errorId:"device-name"`
-	BillingType SubscriptionType `json:"billingType"`
+	Plan           string           `json:"plan" validate:"required"`
+	Provider       string           `json:"provider" validate:"required"`
+	Email          string           `json:"email"`
+	DeviceName     string           `json:"deviceName" validate:"required" errorId:"device-name"`
+	BillingType    SubscriptionType `json:"billingType"`
+	IdempotencyKey string           `json:"idempotencyKey"`
 }
 
 type SubscriptionPlans struct {
@@ -150,7 +152,7 @@ func (a *Client) StripeBillingPortalURL(ctx context.Context, baseURL, userID, pr
 }
 
 type redirect struct {
-	Redirect string
+	Redirect string `json:"redirect"`
 }
 
 func (a *Client) paymentRedirect(ctx context.Context, path string, params map[string]string) (string, error) {
@@ -166,7 +168,11 @@ func (a *Client) paymentRedirect(ctx context.Context, path string, params map[st
 	if err := json.Unmarshal(resp, &r); err != nil {
 		return "", traces.RecordError(ctx, fmt.Errorf("unmarshaling payment redirect response: %w", err))
 	}
-	return r.Redirect, nil
+	redirectURL := strings.TrimSpace(r.Redirect)
+	if redirectURL == "" {
+		return "", traces.RecordError(ctx, fmt.Errorf("payment redirect response missing redirect URL"))
+	}
+	return redirectURL, nil
 }
 
 // SubscriptionPaymentRedirectURL generates a redirect URL for subscription payment.
@@ -179,6 +185,9 @@ func (a *Client) SubscriptionPaymentRedirectURL(ctx context.Context, data Paymen
 		"deviceName":  data.DeviceName,
 		"email":       data.Email,
 		"billingType": string(data.BillingType),
+	}
+	if data.IdempotencyKey != "" {
+		params["idempotencyKey"] = data.IdempotencyKey
 	}
 	return a.paymentRedirect(ctx, "/subscription-payment-redirect", params)
 }
@@ -193,6 +202,9 @@ func (a *Client) PaymentRedirect(ctx context.Context, data PaymentRedirectData) 
 		"plan":       data.Plan,
 		"deviceName": data.DeviceName,
 		"email":      data.Email,
+	}
+	if data.IdempotencyKey != "" {
+		params["idempotencyKey"] = data.IdempotencyKey
 	}
 	return a.paymentRedirect(ctx, "/payment-redirect", params)
 }
