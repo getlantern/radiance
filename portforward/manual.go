@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
-
-	"github.com/getlantern/publicip"
 )
 
 // ManualForwarder is a no-op port forwarder for users who can't (or won't)
@@ -78,25 +75,16 @@ func (f *ManualForwarder) UnmapPort(_ context.Context) error {
 // the user removes them, with no UPnP lease to renew.
 func (f *ManualForwarder) StartRenewal(_ context.Context) {}
 
-// ExternalIP probes a public-IP discovery service (the radiance default
-// methods, hitting api.iantem.io etc.) since there's no UPnP gateway to
-// ask. Cached for the duration of the forwarder's life — the user's
-// public IP shouldn't change mid-session, and a stale cache yields a
-// clean re-register on a heartbeat 404 if it does.
-func (f *ManualForwarder) ExternalIP(ctx context.Context) (string, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	result, err := publicip.Detect(probeCtx, &publicip.Config{
-		Timeout:      5 * time.Second,
-		MinConsensus: 1,
-	})
-	if err != nil {
-		return "", fmt.Errorf("detect public ip: %w", err)
-	}
-	if result.IP == nil {
-		return "", fmt.Errorf("public-ip detection returned no result")
-	}
-	return result.IP.String(), nil
+// ExternalIP returns "" so the server fills in the observed IP from the
+// register call's RemoteAddr (peer_handler's "external_ip empty → use
+// observed" path). Probing publicip.Detect from here regresses on
+// machines where Lantern's own tunnel is up — outbound goes through the
+// tunnel and the discovery endpoints either time out or report the
+// tunnel exit's IP rather than the user's WAN IP. Letting the server
+// use the observed RemoteAddr is also more correct: it's the IP that
+// will actually receive inbound traffic on the manually-forwarded port.
+func (f *ManualForwarder) ExternalIP(_ context.Context) (string, error) {
+	return "", nil
 }
 
 // ParseManualPort is a small helper for callers that want to read a

@@ -72,6 +72,23 @@ func TestManualForwarder_StartRenewal_NoOp(t *testing.T) {
 	f.StartRenewal(context.Background()) // must not panic
 }
 
+// TestManualForwarder_ExternalIP_ReturnsEmpty pins the contract that
+// ExternalIP returns "" with no error so the lantern-cloud peer_handler
+// fills the IP from the register call's RemoteAddr. A previous revision
+// regressed this to call publicip.Detect, which fails on machines where
+// Lantern's own VPN tunnel is up — outbound traffic gets routed through
+// the tunnel and the discovery endpoints return the tunnel exit's IP
+// (or time out entirely), breaking peer registration silently.
+func TestManualForwarder_ExternalIP_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	f, err := NewManualForwarder(5698)
+	require.NoError(t, err)
+	ip, err := f.ExternalIP(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, ip,
+		"ManualForwarder.ExternalIP must return \"\" so server uses observed RemoteAddr")
+}
+
 func TestParseManualPort(t *testing.T) {
 	t.Parallel()
 
