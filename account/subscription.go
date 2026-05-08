@@ -131,6 +131,42 @@ func (a *Client) VerifySubscription(ctx context.Context, service SubscriptionSer
 
 }
 
+type RestoreSubscriptionResponse struct {
+	Status          string                         `json:"status"`
+	ActualUserID    int64                          `json:"actualUserId,omitempty"`
+	ActualUserToken string                         `json:"actualUserToken,omitempty"`
+	Devices         []*protos.LoginResponse_Device `json:"devices,omitempty"`
+}
+
+// RestoreSubscription restores a previously purchased subscription for the given service.
+// For [GoogleService], data must contain "purchaseToken"; for [AppleService], it must contain
+// "receipt". Other services are rejected.
+func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionService, data map[string]string) (*RestoreSubscriptionResponse, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "restore_subscription")
+	defer span.End()
+
+	var path string
+	switch service {
+	case GoogleService:
+		path = "/restore-googleplay-subscription"
+	case AppleService:
+		path = "/restore-apple-subscription"
+	default:
+		return nil, traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
+	}
+
+	resp, err := a.sendProRequest(ctx, "POST", path, nil, nil, data)
+	if err != nil {
+		slog.Error("restoring subscription", "error", err)
+		return nil, traces.RecordError(ctx, fmt.Errorf("restoring subscription: %w", err))
+	}
+	var result RestoreSubscriptionResponse
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("unmarshaling restore subscription response: %w", err))
+	}
+	return &result, nil
+}
+
 // StripeBillingPortalURL generates the Stripe billing portal URL for the given user ID.
 // baseURL = common.GetProServerURL
 func (a *Client) StripeBillingPortalURL(ctx context.Context, baseURL, userID, proToken string) (string, error) {
