@@ -65,6 +65,14 @@ const (
 	// Advanced setting in the Share My Connection UI for users on
 	// networks where UPnP is disabled or unavailable.
 	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
+	// UnboundedKey is the local opt-in for the broflake / Unbounded
+	// widget proxy. When true AND the server-side Features[unbounded]
+	// flag is on AND the server provides UnboundedConfig (discovery
+	// + egress URLs), the widget proxy starts. Surfaced as a "Basic
+	// mode" option in the Share My Connection UI for networks where
+	// UPnP isn't workable but the user still wants to contribute via
+	// the WebRTC-based donor path.
+	UnboundedKey _key = "unbounded" // bool
 	SelectedServerKey   _key = "selected_server"    // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
