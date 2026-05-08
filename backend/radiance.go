@@ -39,6 +39,7 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -229,6 +230,13 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 
 	r.resumePeerShareIfEnabled()
+
+	// Wire the broflake / Unbounded widget proxy lifecycle to config
+	// updates. This single subscription handles all three start/stop
+	// triggers (local toggle, server feature flag, server-supplied
+	// config); InitSubscription is sync.Once-guarded so a future Start
+	// retry after Close won't double-subscribe.
+	unbounded.InitSubscription()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
