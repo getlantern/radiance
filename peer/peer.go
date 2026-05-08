@@ -12,6 +12,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -54,8 +55,9 @@ type Status struct {
 }
 
 // Config plumbs in dependencies. Zero-valued fields fall back to production
-// defaults; HeartbeatInterval, HeartbeatTimeout, and CredRotationInterval
-// exist so tests can drive the loops without sleeping a full minute / hour.
+// defaults; HeartbeatInterval, HeartbeatTimeout, CredRotationInterval, and
+// AbuseFlushInterval exist so tests can drive the loops without sleeping a
+// full minute / hour.
 type Config struct {
 	API                  *API
 	NewForwarder         func(ctx context.Context) (portForwarder, error)
@@ -63,6 +65,7 @@ type Config struct {
 	HeartbeatInterval    time.Duration
 	HeartbeatTimeout     time.Duration
 	CredRotationInterval time.Duration
+	AbuseFlushInterval   time.Duration
 }
 
 // Client orchestrates one peer-proxy session: open UPnP port → register with
@@ -119,6 +122,13 @@ type Client struct {
 // reconnect via the bandit. Acceptable trade-off vs. holding the same
 // cred for the full peer process lifetime.
 const peerCredRotationInterval = 1 * time.Hour
+
+// peerAbuseFlushInterval is how often the abuse aggregator drains its
+// in-memory bucket and emits an AbuseSummaryEvent. Long enough that
+// the aggregation actually does meaningful summarization (vs. just
+// ferrying every connection); short enough that lantern-cloud sees
+// abuse signals well within the cred-rotation window.
+const peerAbuseFlushInterval = 5 * time.Minute
 
 // peerCleanupTimeout caps how long Start's rollback path waits for
 // Deregister / UnmapPort. Cleanup uses a fresh Background context (not the
@@ -187,6 +197,11 @@ func (c *Client) Start(ctx context.Context) error {
 		// registered route + router rule.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
+		// Always clear the connection listener on rollback. The
+		// listener is registered on the success path; this is cheap
+		// insurance against a future re-order that registers earlier
+		// than expected.
+		peerconn.SetListener(nil)
 		if box != nil {
 			_ = box.Close()
 		}
@@ -285,6 +300,24 @@ func (c *Client) Start(ctx context.Context) error {
 		rotation = peerCredRotationInterval
 	}
 
+	// Wire the peer-share connection lifecycle hook to an in-memory
+	// abuse aggregator that buckets per-(source IP, destination port-
+	// class) and flushes a summary on the radiance event bus every
+	// flushInterval. Cleared on Stop / rollback so post-teardown
+	// callbacks land on a no-op rather than into a torn-down channel.
+	flushInterval := c.cfg.AbuseFlushInterval
+	if flushInterval == 0 {
+		flushInterval = peerAbuseFlushInterval
+	}
+	agg := newAbuseAggregator(flushInterval)
+	peerconn.SetListener(func(evt peerconn.Event) {
+		if evt.State != +1 {
+			return // only +1 carries destination; close events are no-op
+		}
+		agg.note(evt.Source, evt.Destination)
+	})
+	go agg.runFlushLoop(runCtx)
+
 	fwd.StartRenewal(runCtx)
 	go c.heartbeatLoop(runCtx, heartbeat, runDone)
 	go c.credRotationLoop(runCtx, rotation)
@@ -327,6 +360,13 @@ func (c *Client) Stop(ctx context.Context) error {
 	c.runCtx = nil
 	c.status = Status{}
 	c.mu.Unlock()
+
+	// Clear the connection listener BEFORE the box close so any
+	// in-flight accept callbacks land on a no-op rather than feed
+	// the (about-to-be-torn-down) abuse aggregator. The aggregator's
+	// flush goroutine exits when runCtx cancels via the cancel() call
+	// just below.
+	peerconn.SetListener(nil)
 
 	cancel()
 	<-done

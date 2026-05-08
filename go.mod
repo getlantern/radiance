@@ -2,6 +2,11 @@ module github.com/getlantern/radiance
 
 go 1.26.2
 
+// Local while peerconn Event-typed listener is in flight; remove once
+// lantern-box tags a release that includes the abuse-instrumentation
+// signature change.
+replace github.com/getlantern/lantern-box => ../lantern-box
+
 replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.12.22-lantern
@@ -113,7 +118,7 @@ require (
 	github.com/gaissmai/bart v0.11.1 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
-	github.com/getlantern/broflake v0.0.0-20260501210609-ce5f75aa2054 // indirect
+	github.com/getlantern/broflake v0.0.0-20260504215251-ed3cf75062d1 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260327203406-ef7323341974 // indirect
 	github.com/go-chi/chi/v5 v5.2.2 // indirect
