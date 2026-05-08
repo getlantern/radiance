@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -139,6 +140,10 @@ type stubServer struct {
 	server             *httptest.Server
 	registerStatus     int
 	registerResp       RegisterResponse
+	// registerRespFn lets a test return a different response per
+	// register call (e.g. cred-rotation tests need a fresh route_id
+	// each time). When non-nil, takes precedence over registerResp.
+	registerRespFn     func() RegisterResponse
 	heartbeatStatus    int
 	deregisterStatus   int
 	registerCount      atomic.Int64
@@ -174,7 +179,11 @@ func newStubServer(t *testing.T) *stubServer {
 			http.Error(w, "register failed", s.registerStatus)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(s.registerResp)
+		resp := s.registerResp
+		if s.registerRespFn != nil {
+			resp = s.registerRespFn()
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 	mux.HandleFunc("/v1/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatCount.Add(1)
@@ -507,6 +516,90 @@ func TestAPIError_StringFormat(t *testing.T) {
 	e := &APIError{Status: 422, Body: "could not connect to peer port"}
 	assert.Contains(t, e.Error(), "422")
 	assert.Contains(t, e.Error(), "could not connect")
+}
+
+// TestClient_RotatesCredentialsAtInterval pins the C2 fix from
+// engineering#3437: the peer client must re-register and rebuild its
+// libbox inbound on a schedule so a leaked credential's blast radius is
+// bounded by CredRotationInterval rather than peer process lifetime.
+//
+// Drives a short rotation interval (50ms) and asserts:
+//   1. Multiple registers happen (start + ≥2 rotations within 250ms).
+//   2. Each rotation deregisters the prior route_id.
+//   3. The peer's exposed RouteID changes — clients freshly assigned
+//      after a rotation see the new ID; the bandit catalog stops
+//      handing out the old one once Deregister lands.
+//   4. Multiple distinct boxes were built (the rotation actually
+//      rebuilt libbox; not just a no-op).
+//   5. The first box was closed (the old listener released its port).
+func TestClient_RotatesCredentialsAtInterval(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	srv := newStubServer(t)
+
+	// Each rotation needs a register response with a distinct
+	// route_id so we can verify the swap actually changed identifiers
+	// rather than re-registering the same id.
+	var registerSeq atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		n := registerSeq.Add(1)
+		return RegisterResponse{
+			RouteID:                  fmt.Sprintf("00000000-0000-0000-0000-00000000000%d", n),
+			ServerConfig:             `{"inbounds": [{"type":"samizdat","tag":"samizdat-in"}]}`,
+			HeartbeatIntervalSeconds: 60,
+		}
+	}
+
+	// Each BuildBoxService call gets a fresh fakeBoxService so we can
+	// see how many boxes were built and which ones got closed.
+	var (
+		boxesMu sync.Mutex
+		boxes   []*fakeBoxService
+	)
+	c := newTestClient(t, fwd, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = 50 * time.Millisecond
+		// Long heartbeat so heartbeat ticks don't compete with the
+		// register/deregister counters that we're asserting on.
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = func(_ context.Context, options string) (boxService, error) {
+			b := &fakeBoxService{gotConfig: options}
+			boxesMu.Lock()
+			boxes = append(boxes, b)
+			boxesMu.Unlock()
+			return b, nil
+		}
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	// Wait for at least 2 rotations on top of the initial register.
+	require.Eventually(t, func() bool {
+		return srv.registerCount.Load() >= 3
+	}, 1*time.Second, 25*time.Millisecond,
+		"expected ≥3 registers (initial + 2 rotations) within 1s; got %d",
+		srv.registerCount.Load())
+
+	// Each rotation deregisters the prior route — N rotations =>
+	// N deregisters (initial register is not preceded by one).
+	rotations := srv.registerCount.Load() - 1
+	assert.GreaterOrEqual(t, srv.deregisterCount.Load(), rotations-1,
+		"each rotation should deregister the prior route_id (got %d deregs vs %d rotations)",
+		srv.deregisterCount.Load(), rotations)
+
+	// RouteID exposed via Status should reflect the latest rotation.
+	c.mu.Lock()
+	currentRouteID := c.routeID
+	c.mu.Unlock()
+	assert.NotEqual(t, "00000000-0000-0000-0000-000000000001", currentRouteID,
+		"current route_id should have advanced past the initial register")
+
+	// Multiple boxes built; first one closed.
+	boxesMu.Lock()
+	defer boxesMu.Unlock()
+	require.GreaterOrEqual(t, len(boxes), 2,
+		"expected ≥2 libbox builds (initial + ≥1 rotation)")
+	assert.True(t, boxes[0].closed.Load(),
+		"first box should be closed by the first rotation")
 }
 
 // Subscribers (the IPC SSE handler in production) need both edges so the UI

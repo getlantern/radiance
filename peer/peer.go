@@ -54,14 +54,15 @@ type Status struct {
 }
 
 // Config plumbs in dependencies. Zero-valued fields fall back to production
-// defaults; HeartbeatInterval and HeartbeatTimeout exist so tests can drive
-// the loop without sleeping a full minute.
+// defaults; HeartbeatInterval, HeartbeatTimeout, and CredRotationInterval
+// exist so tests can drive the loops without sleeping a full minute / hour.
 type Config struct {
-	API               *API
-	NewForwarder      func(ctx context.Context) (portForwarder, error)
-	BuildBoxService   boxFactory
-	HeartbeatInterval time.Duration
-	HeartbeatTimeout  time.Duration
+	API                  *API
+	NewForwarder         func(ctx context.Context) (portForwarder, error)
+	BuildBoxService      boxFactory
+	HeartbeatInterval    time.Duration
+	HeartbeatTimeout     time.Duration
+	CredRotationInterval time.Duration
 }
 
 // Client orchestrates one peer-proxy session: open UPnP port → register with
@@ -87,7 +88,37 @@ type Client struct {
 	forwarder portForwarder
 	box       boxService
 	routeID   string
+	// externalPort / internalPort persist the port mapping picked at
+	// Start so the cred-rotation loop can re-register against the same
+	// (address, port) tuple without re-probing UPnP / re-mapping. The
+	// router-side mapping itself stays put across rotations; only the
+	// samizdat creds and route_id rotate.
+	externalPort uint16
+	internalPort uint16
+	// boxOptions is the fresh options string passed to BuildBoxService,
+	// kept for diagnostics and so the rotation path doesn't need to
+	// re-derive it from the (also-stored) box reference.
+	boxOptions string
+	// runCtx is captured here for the cred-rotation goroutine to bind
+	// the new libbox lifetime to the same context as the original Start.
+	// Stop's cancelRun() teardown still applies to the rebuilt box.
+	runCtx context.Context
 }
+
+// peerCredRotationInterval bounds how long a leaked samizdat
+// credential remains usable. At each tick the peer re-registers with
+// lantern-cloud (new route_id, new keypair, new shortID), rebuilds the
+// libbox service against the new options, and deregisters the prior
+// route. Caps blast radius from credential leakage (logs, telemetry,
+// memory dumps, the H2 leakage path in engineering#3440) to ~1h
+// regardless of peer process lifetime.
+//
+// Cost per rotation: one API.Register + Deregister round trip, one
+// libbox build + start + close cycle. Brief (~hundreds-of-ms) port-
+// rebind window during the swap; samizdat clients see TCP RST and
+// reconnect via the bandit. Acceptable trade-off vs. holding the same
+// cred for the full peer process lifetime.
+const peerCredRotationInterval = 1 * time.Hour
 
 // peerCleanupTimeout caps how long Start's rollback path waits for
 // Deregister / UnmapPort. Cleanup uses a fresh Background context (not the
@@ -233,6 +264,10 @@ func (c *Client) Start(ctx context.Context) error {
 	c.forwarder = fwd
 	c.box = box
 	c.routeID = regResp.RouteID
+	c.externalPort = mapping.ExternalPort
+	c.internalPort = mapping.InternalPort
+	c.boxOptions = options
+	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
 	c.status = Status{
@@ -245,8 +280,14 @@ func (c *Client) Start(ctx context.Context) error {
 	statusSnapshot := c.status
 	c.mu.Unlock()
 
+	rotation := c.cfg.CredRotationInterval
+	if rotation == 0 {
+		rotation = peerCredRotationInterval
+	}
+
 	fwd.StartRenewal(runCtx)
 	go c.heartbeatLoop(runCtx, heartbeat, runDone)
+	go c.credRotationLoop(runCtx, rotation)
 
 	slog.Info("peer client started",
 		"external_ip", externalIP,
@@ -280,6 +321,10 @@ func (c *Client) Stop(ctx context.Context) error {
 	c.forwarder = nil
 	c.box = nil
 	c.routeID = ""
+	c.externalPort = 0
+	c.internalPort = 0
+	c.boxOptions = ""
+	c.runCtx = nil
 	c.status = Status{}
 	c.mu.Unlock()
 
@@ -369,6 +414,141 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 func isNotRegistered(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+// credRotationLoop periodically rotates the peer's samizdat credentials
+// (X25519 keypair, shortID, masquerade) by re-registering with
+// lantern-cloud, rebuilding the libbox inbound, and deregistering the
+// prior route. Caps blast radius from credential leakage to ~interval
+// regardless of peer process lifetime — see peerCredRotationInterval.
+//
+// Closes done is the responsibility of heartbeatLoop; this loop just
+// exits when ctx is cancelled. We deliberately don't add another close
+// channel: heartbeatLoop's done already gates Stop, and rotation
+// failures are non-fatal (log + retry next tick), so there's nothing
+// the Stop path needs to wait on from this goroutine.
+func (c *Client) credRotationLoop(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := c.rotateCreds(ctx); err != nil {
+				// Don't kill the loop on a single failure — current
+				// box / route is still serving. Try again next tick.
+				slog.Warn("peer cred rotation failed; current creds remain in use", "err", err)
+			}
+		}
+	}
+}
+
+// rotateCreds atomically swaps the peer's samizdat credentials. On
+// success: a fresh route_id and keypair are in use, the libbox inbound
+// has been rebuilt against the new options, the prior route is
+// deregistered server-side, and the FlutterEvent stream sees no gap.
+// On failure: the prior creds and box continue serving — rotation is
+// best-effort. The router-side port mapping is preserved across the
+// rotation; only the in-process samizdat state changes.
+//
+// Sequence:
+//  1. Re-register with the same (externalIP, externalPort) as Start.
+//  2. Patch the new server-supplied options for VPN bypass.
+//  3. Build a new libbox service against the new options.
+//  4. Close the old box (releases the listening port).
+//  5. Start the new box (re-binds the same port, now with new creds).
+//  6. Atomic swap: c.box, c.routeID, c.boxOptions point at the new box.
+//  7. Best-effort deregister of the prior route_id so the bandit
+//     catalog stops handing the old (now-invalid) creds to clients.
+//
+// Steps 4-5 leave a brief (~hundreds of ms) window where the port
+// isn't bound; samizdat clients see TCP RST and reconnect. Acceptable
+// trade-off vs. the security cost of holding the same cred for the
+// peer process lifetime.
+func (c *Client) rotateCreds(ctx context.Context) error {
+	c.mu.Lock()
+	if !c.active {
+		c.mu.Unlock()
+		return errors.New("not active")
+	}
+	fwd := c.forwarder
+	extPort := c.externalPort
+	intPort := c.internalPort
+	oldRouteID := c.routeID
+	oldBox := c.box
+	c.mu.Unlock()
+
+	if fwd == nil || oldBox == nil {
+		return errors.New("rotateCreds: client state inconsistent")
+	}
+
+	externalIP, err := fwd.ExternalIP(ctx)
+	if err != nil {
+		return fmt.Errorf("get external ip: %w", err)
+	}
+	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
+		ExternalIP:   externalIP,
+		ExternalPort: extPort,
+		InternalPort: intPort,
+	})
+	if err != nil {
+		return fmt.Errorf("re-register: %w", err)
+	}
+	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
+	if err != nil {
+		return fmt.Errorf("patch sing-box options: %w", err)
+	}
+
+	c.mu.Lock()
+	runCtx := c.runCtx
+	c.mu.Unlock()
+	if runCtx == nil {
+		// Stop happened between the unlock above and here. Skip the
+		// build to avoid spinning up a libbox tied to a torn-down ctx.
+		// The new register row is harmless — server-side reaper will
+		// deprecate it after TTL since no heartbeat will arrive.
+		return errors.New("client stopped during rotation")
+	}
+	newBox, err := c.cfg.BuildBoxService(runCtx, options)
+	if err != nil {
+		return fmt.Errorf("build new sing-box: %w", err)
+	}
+
+	// Close old, start new. Order matters — both want the same port.
+	// If newBox.Start fails after oldBox.Close, we lost the listener
+	// and the next heartbeat / rotation tick is the recovery point.
+	if closeErr := oldBox.Close(); closeErr != nil {
+		slog.Warn("close old box during rotation", "err", closeErr)
+	}
+	if err := newBox.Start(); err != nil {
+		// Catastrophic: port is now unbound. Leave c.box pointing at
+		// oldBox so a future Stop tries to close it (idempotent on
+		// already-closed); the next rotation tick will try again.
+		return fmt.Errorf("start new sing-box: %w", err)
+	}
+
+	c.mu.Lock()
+	c.box = newBox
+	c.routeID = regResp.RouteID
+	c.boxOptions = options
+	c.status.RouteID = regResp.RouteID
+	c.mu.Unlock()
+
+	// Deregister the prior route so the bandit stops handing the old
+	// (now-invalid) creds to clients. Best-effort: the prior row will
+	// expire from its TTL anyway, but explicit deregister cuts the
+	// stale-creds window from up-to-TTL down to ~immediately.
+	if err := c.cfg.API.Deregister(ctx, oldRouteID); err != nil {
+		slog.Warn("deregister prior route after rotation",
+			"err", err, "old_route_id", oldRouteID)
+	}
+
+	slog.Info("peer cred rotation succeeded",
+		"new_route_id", regResp.RouteID,
+		"old_route_id", oldRouteID,
+	)
+	return nil
 }
 
 // ensurePeerOutboundsBypassVPN guarantees the peer sing-box's outbound dials
