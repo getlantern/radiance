@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	maxCompressedSize = 20 * 1024 * 1024 // 20 MB
+	maxCompressedSize = 19 * 1024 * 1024 // 19 MB
 	tracerName        = "github.com/getlantern/radiance/issue"
 )
 
