@@ -356,10 +356,23 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// doesn't surface as a real peer-connection event in the UI.
 	peerconn.SetListener(func(state int, source string) {
 		if c.listenerDraining.Load() {
+			// Diagnostic: if Notify reaches this point but we drop because
+			// the drain flag is set, that's the post-Stop racing-Notify case
+			// the flag was added to silence. Logging makes its frequency
+			// observable instead of "events silently vanish."
+			slog.Debug("peer listener: dropping post-Stop Notify",
+				"state", state, "source", source)
 			return
 		}
+		// One-line breadcrumb per accept/close so we can correlate samizdat-in
+		// activity with peer-connection FlutterEvents on the consumer side
+		// — without this, "no globe arcs despite samizdat traffic" is
+		// indistinguishable from "events fire but the bridge swallows them."
+		slog.Info("peer listener: forwarding connection event",
+			"state", state, "source", source)
 		events.Emit(ConnectionEvent{State: state, Source: source})
 	})
+	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
 
 	heartbeat := c.cfg.HeartbeatInterval
 	if heartbeat == 0 {
