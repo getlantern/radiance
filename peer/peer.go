@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -149,6 +150,19 @@ type Client struct {
 	forwarder portForwarder
 	box       boxService
 	routeID   string
+
+	// listenerDraining short-circuits the peerconn listener wrapper while
+	// box.Close is firing per-connection disconnect callbacks. peerconn.Notify
+	// reads its registered listener under an RLock and then releases the lock
+	// before invoking it, so SetListener(nil) alone races against in-flight
+	// Notify calls — under load (real client traffic), Close fires N disconnect
+	// callbacks from N goroutines that have already snapshotted the listener,
+	// each then events.Emit spawns one more goroutine per subscriber. The
+	// Flutter-side subscriber posts main-thread tasks per event, and a
+	// hundred-task flood against a Flutter engine that's simultaneously
+	// processing the SmC-off state change is the Flutter mutex crash we hit.
+	// Setting this flag before box.Close drops the cascade inline.
+	listenerDraining atomic.Bool
 }
 
 // peerCleanupTimeout caps how long Start's rollback path waits for
@@ -204,6 +218,11 @@ func (c *Client) Start(ctx context.Context) error {
 	c.startingDone = make(chan struct{})
 	c.mu.Unlock()
 
+	// Re-arm the listener wrapper. Stop / rollback flips this to true to
+	// silence the disconnect cascade during box.Close; if we don't reset
+	// here, a Stop→Start cycle would leave the wrapper permanently muted.
+	c.listenerDraining.Store(false)
+
 	var (
 		success   bool
 		fwd       portForwarder
@@ -230,7 +249,9 @@ func (c *Client) Start(ctx context.Context) error {
 		// Always clear the connection listener on rollback. The listener is
 		// only Set on the success path, so this is a no-op if Start failed
 		// before reaching it — but cheap insurance against a future re-order
-		// that registers earlier.
+		// that registers earlier. Drain-flag first so any in-flight Notify
+		// callbacks short-circuit even if SetListener races (see Stop).
+		c.listenerDraining.Store(true)
 		peerconn.SetListener(nil)
 		if box != nil {
 			_ = box.Close()
@@ -304,6 +325,9 @@ func (c *Client) Start(ctx context.Context) error {
 	// emit events to a torn-down consumer. Must run AFTER box.Start so
 	// the accept loop is serving when notifications start flowing.
 	peerconn.SetListener(func(state int, source string) {
+		if c.listenerDraining.Load() {
+			return
+		}
 		events.Emit(ConnectionEvent{State: state, Source: source})
 	})
 
@@ -394,9 +418,15 @@ func (c *Client) Stop(ctx context.Context) error {
 	c.status = Status{}
 	c.mu.Unlock()
 
-	// Clear the connection listener BEFORE box.Close so any in-flight
-	// accept-loop callbacks land on a no-op rather than emit ConnectionEvents
-	// after the consumer side has already torn down its subscription.
+	// Suppress the connection listener BEFORE box.Close. peerconn.Notify
+	// reads its registered listener under an RLock and releases it before
+	// invoking — SetListener(nil) alone races against in-flight Notify
+	// goroutines that have already snapshotted the listener (one per live
+	// inbound connection at Close time). Flipping listenerDraining first
+	// short-circuits the wrapper inline so even the racing invocations
+	// become no-ops. SetListener(nil) is still called for cleanliness and
+	// to release the listener closure's reference to this Client.
+	c.listenerDraining.Store(true)
 	peerconn.SetListener(nil)
 
 	cancel()
