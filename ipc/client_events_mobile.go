@@ -9,6 +9,7 @@ import (
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -59,4 +60,38 @@ func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCap
 		return ctx.Err()
 	}
 	return c.dataCapStream(ctx, handler)
+}
+
+// PeerStatusEvents — see client_events_nonmobile.go for the full
+// docstring. Mobile builds may share a process with radiance (localOnly)
+// in which case events.SubscribeContext delivers directly; otherwise the
+// SSE retry loop matches the desktop path.
+func (c *Client) PeerStatusEvents(ctx context.Context, handler func(peer.StatusEvent)) error {
+	events.SubscribeContext(ctx, handler)
+	if c.localOnly {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.sseRetryLoop(ctx, peerStatusEventsEndpoint, func(data []byte) {
+		var evt peer.StatusEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
+}
+
+// PeerConnectionEvents — see client_events_nonmobile.go for the full
+// docstring. Same mobile dual-path as PeerStatusEvents.
+func (c *Client) PeerConnectionEvents(ctx context.Context, handler func(peer.ConnectionEvent)) error {
+	events.SubscribeContext(ctx, handler)
+	if c.localOnly {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.sseRetryLoop(ctx, peerConnectionEventsEndpoint, func(data []byte) {
+		var evt peer.ConnectionEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
 }
