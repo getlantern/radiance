@@ -28,6 +28,7 @@ package events
 
 import (
 	"context"
+	stdlog "log"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -120,9 +121,27 @@ func (e *Subscription[T]) Unsubscribe() {
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()
-	if subs, ok := subscriptions[reflect.TypeFor[T]()]; ok {
-		for _, cb := range subs {
-			go cb(evt)
-		}
+	key := reflect.TypeFor[T]()
+	subs, ok := subscriptions[key]
+	// Diagnostic: surfaces the subscriber count at emit time so a missing
+	// FlutterEvent on the consumer side is distinguishable from "no
+	// subscribers registered for this type" vs "subscribers registered
+	// but callback panics silently." Spam-friendly when traffic spikes,
+	// but we're investigating a zero-callback path so the noise is
+	// short-lived; remove (or downgrade to Debug) once the chain works.
+	emitDebugLogger(key, len(subs))
+	if !ok {
+		return
 	}
+	for _, cb := range subs {
+		go cb(evt)
+	}
+}
+
+// emitDebugLogger is a package-level var so tests can suppress the
+// per-emit log, and so prod can swap in slog. Default uses Go's stdlib
+// log so events package doesn't need to import slog (and avoid a cycle
+// with anything that imports events for its own log forwarding).
+var emitDebugLogger = func(key reflect.Type, subCount int) {
+	stdlog.Printf("events.Emit type=%s subscribers=%d", key, subCount)
 }
