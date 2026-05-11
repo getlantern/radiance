@@ -523,35 +523,97 @@ func TestAPIError_StringFormat(t *testing.T) {
 	assert.Contains(t, e.Error(), "could not connect")
 }
 
-// Subscribers (the IPC SSE handler in production) need both edges so the UI
-// can render fresh state without polling.
+// TestClient_StatusEventEmittedOnStartAndStop pins the full lifecycle
+// phase sequence: Start fires one StatusEvent per stage so the UI can
+// render granular progress (mapping port → registering → verifying →
+// serving) instead of a single active/inactive flip. Stop fires
+// stopping → idle on the way back down.
+//
+// Subscribers (the IPC SSE handler in production) need every edge so the
+// UI can render fresh state without polling.
 func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
 	fwd := &fakeForwarder{}
 	box := &fakeBoxService{}
 	srv := newStubServer(t)
 	c := newTestClient(t, fwd, box, srv)
 
-	got := make(chan StatusEvent, 4)
+	// Buffer must exceed total emit count (6 on Start: mapping → detecting
+	// → registering → starting_proxy → verifying → serving; 2 on Stop:
+	// stopping → idle) or the subscriber's send blocks and emits drop.
+	got := make(chan StatusEvent, 16)
 	sub := events.Subscribe(func(evt StatusEvent) {
 		got <- evt
 	})
 	defer sub.Unsubscribe()
 
 	require.NoError(t, c.Start(context.Background()))
-	select {
-	case evt := <-got:
-		assert.True(t, evt.Status.Active)
-		assert.NotEmpty(t, evt.Status.RouteID)
-	case <-time.After(time.Second):
-		t.Fatal("no Start status event within 1s")
+
+	wantStartPhases := []Phase{
+		PhaseMappingPort,
+		PhaseDetectingIP,
+		PhaseRegistering,
+		PhaseStartingBox,
+		PhaseVerifying,
+		PhaseServing,
+	}
+	for _, want := range wantStartPhases {
+		select {
+		case evt := <-got:
+			assert.Equal(t, want, evt.Status.Phase, "wrong phase in Start sequence")
+			if want == PhaseServing {
+				assert.True(t, evt.Status.Active, "active must be true on serving")
+				assert.NotEmpty(t, evt.Status.RouteID, "route_id must be set on serving")
+			} else {
+				assert.False(t, evt.Status.Active, "active must be false on intermediate phase %q", want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("no Start status event for phase %q within 1s", want)
+		}
 	}
 
 	require.NoError(t, c.Stop(context.Background()))
-	select {
-	case evt := <-got:
-		assert.False(t, evt.Status.Active)
-	case <-time.After(time.Second):
-		t.Fatal("no Stop status event within 1s")
+	for _, want := range []Phase{PhaseStopping, PhaseIdle} {
+		select {
+		case evt := <-got:
+			assert.Equal(t, want, evt.Status.Phase, "wrong phase in Stop sequence")
+			assert.False(t, evt.Status.Active, "active must be false during stop")
+		case <-time.After(time.Second):
+			t.Fatalf("no Stop status event for phase %q within 1s", want)
+		}
+	}
+}
+
+// TestClient_StatusEventOnStartError surfaces a Start failure to the UI
+// via PhaseError with the wrapped error message. Without this, a user
+// who clicks SmC-on and hits e.g. a UPnP failure sees the toggle silently
+// flip back without any diagnostic.
+func TestClient_StatusEventOnStartError(t *testing.T) {
+	fwd := &fakeForwarder{mapErr: errors.New("upnp gateway refused mapping")}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	c := newTestClient(t, fwd, box, srv)
+
+	got := make(chan StatusEvent, 16)
+	sub := events.Subscribe(func(evt StatusEvent) { got <- evt })
+	defer sub.Unsubscribe()
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+
+	var sawError bool
+	deadline := time.After(time.Second)
+	for !sawError {
+		select {
+		case evt := <-got:
+			if evt.Status.Phase == PhaseError {
+				sawError = true
+				assert.False(t, evt.Status.Active)
+				assert.Contains(t, evt.Status.Error, "upnp gateway refused mapping",
+					"error message must surface so the UI can render a real diagnostic")
+			}
+		case <-deadline:
+			t.Fatal("no PhaseError status event within 1s")
+		}
 	}
 }
 

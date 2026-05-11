@@ -63,7 +63,34 @@ type boxService interface {
 
 type boxFactory func(ctx context.Context, options string) (boxService, error)
 
+// Phase is the peer.Client lifecycle stage surfaced to the UI. Granular
+// enough that "Share My Connection" can render a real progress sequence
+// (mapping port → registering → verifying → serving) instead of a single
+// active/inactive boolean. Values are stable strings so Flutter / web
+// consumers can switch on them without depending on Go enum ordering.
+type Phase string
+
+const (
+	PhaseIdle        Phase = "idle"
+	PhaseMappingPort Phase = "mapping_port"
+	PhaseDetectingIP Phase = "detecting_ip"
+	PhaseRegistering Phase = "registering"
+	PhaseStartingBox Phase = "starting_proxy"
+	PhaseVerifying   Phase = "verifying"
+	PhaseServing     Phase = "serving"
+	PhaseStopping    Phase = "stopping"
+	PhaseError       Phase = "error"
+)
+
 type Status struct {
+	Phase Phase `json:"phase"`
+	// Error is the human-readable failure reason when Phase == PhaseError.
+	// Empty for every other phase; consumers should render this only when
+	// the UI is in the error state.
+	Error string `json:"error,omitempty"`
+	// Active is true only when Phase == PhaseServing. Kept distinct from
+	// Phase so subscribers that just want a boolean "is sharing?" don't
+	// have to switch on the phase enum.
 	Active       bool      `json:"active"`
 	SharingSince time.Time `json:"sharing_since,omitempty"`
 	ExternalIP   string    `json:"external_ip,omitempty"`
@@ -185,7 +212,7 @@ func NewClient(cfg Config) (*Client, error) {
 // Start opens the peer-proxy session. On success a background heartbeat
 // goroutine is running; on error any partial setup is torn down before
 // returning.
-func (c *Client) Start(ctx context.Context) error {
+func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.mu.Lock()
 	if c.active || c.starting {
 		c.mu.Unlock()
@@ -238,8 +265,20 @@ func (c *Client) Start(ctx context.Context) error {
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
 		}
+		// Surface the failure to the UI. Emitted AFTER cleanup so the UI
+		// sees the error phase as the terminal state of this Start attempt,
+		// not as a transient between phases. retErr carries whichever
+		// fmt.Errorf the failing branch returned, which is the most
+		// human-readable diagnostic we have ("map port %d: ...",
+		// "register with lantern-cloud: ...", etc.).
+		var errMsg string
+		if retErr != nil {
+			errMsg = retErr.Error()
+		}
+		c.emitPhase(PhaseError, errMsg)
 	}()
 
+	c.emitPhase(PhaseMappingPort, "")
 	fwd, err := c.cfg.NewForwarder(ctx)
 	if err != nil {
 		return fmt.Errorf("discover gateway: %w", err)
@@ -250,10 +289,13 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("map port %d: %w", internalPort, err)
 	}
 
+	c.emitPhase(PhaseDetectingIP, "")
 	externalIP, err := fwd.ExternalIP(ctx)
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
+
+	c.emitPhase(PhaseRegistering, "")
 	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
@@ -270,6 +312,7 @@ func (c *Client) Start(ctx context.Context) error {
 	// auto_detect_interface tells sing-box to bind outbound dials to the
 	// underlying physical interface rather than whatever the OS routing
 	// table picks (which would be the VPN TUN if the VPN is up).
+	c.emitPhase(PhaseStartingBox, "")
 	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
 	if err != nil {
 		return fmt.Errorf("patch sing-box options: %w", err)
@@ -289,6 +332,7 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
+	c.emitPhase(PhaseVerifying, "")
 	// Now that sing-box is listening with the just-built creds, ask the
 	// server to dial back through them. Splitting verify out of Register
 	// into this explicit follow-up avoids the chicken-and-egg where the
@@ -334,6 +378,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.cancelRun = cancelRun
 	c.runDone = runDone
 	c.status = Status{
+		Phase:        PhaseServing,
 		Active:       true,
 		SharingSince: time.Now(),
 		ExternalIP:   externalIP,
@@ -378,8 +423,10 @@ func (c *Client) Stop(ctx context.Context) error {
 	c.forwarder = nil
 	c.box = nil
 	c.routeID = ""
-	c.status = Status{}
+	c.status = Status{Phase: PhaseStopping}
+	stoppingSnapshot := c.status
 	c.mu.Unlock()
+	events.Emit(StatusEvent{Status: stoppingSnapshot})
 
 	// Suppress the connection listener BEFORE box.Close. peerconn.Notify
 	// reads its registered listener under an RLock and releases it before
@@ -413,7 +460,11 @@ func (c *Client) Stop(ctx context.Context) error {
 		slog.Warn("peer client unmap port failed", "err", err)
 	}
 	slog.Info("peer client stopped", "route_id", routeID)
-	events.Emit(StatusEvent{Status: Status{}})
+	c.mu.Lock()
+	c.status = Status{Phase: PhaseIdle}
+	idleSnapshot := c.status
+	c.mu.Unlock()
+	events.Emit(StatusEvent{Status: idleSnapshot})
 	return firstErr
 }
 
@@ -427,6 +478,22 @@ func (c *Client) CurrentStatus() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.status
+}
+
+// emitPhase updates c.status.Phase under the lock and emits a snapshot.
+// Used at each lifecycle boundary in Start / Stop so the UI sees progress
+// instead of a binary active/inactive flip. Active is recomputed here:
+// only PhaseServing implies active=true; every other phase clears it so
+// subscribers using just the Active flag don't see e.g. "active=true with
+// Phase=verifying" mid-Start.
+func (c *Client) emitPhase(p Phase, errMsg string) {
+	c.mu.Lock()
+	c.status.Phase = p
+	c.status.Error = errMsg
+	c.status.Active = (p == PhaseServing)
+	snapshot := c.status
+	c.mu.Unlock()
+	events.Emit(StatusEvent{Status: snapshot})
 }
 
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
