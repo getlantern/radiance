@@ -62,8 +62,9 @@ const (
 	settingsEndpoint = "/settings"
 
 	// Peer-share ("Share My Connection") endpoints
-	peerStatusEndpoint       = "/peer/status"
-	peerStatusEventsEndpoint = "/peer/status/events"
+	peerStatusEndpoint           = "/peer/status"
+	peerStatusEventsEndpoint     = "/peer/status/events"
+	peerConnectionEventsEndpoint = "/peer/connection/events"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -228,6 +229,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+peerStatusEndpoint, traced(s.peerStatusHandler))
 	// SSE skips the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+peerStatusEventsEndpoint, s.peerStatusEventsHandler)
+	mux.HandleFunc("GET "+peerConnectionEventsEndpoint, s.peerConnectionEventsHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -479,6 +481,55 @@ func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Reques
 		select {
 		case <-trigger:
 			send()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// peerConnectionEventsHandler streams peer.ConnectionEvent over SSE for
+// each accept/close on the local samizdat-in. Unlike peerStatusEventsHandler
+// (which always sends the live snapshot), each emit's captured value is
+// what the consumer needs here — the Source IP and +1/-1 state ARE the
+// payload, not a periodic poll. Out-of-order +1/-1 from events.Emit's
+// per-callback goroutine is fine: the consumer (lantern-core's globe-arc
+// renderer) keys arcs by source, so it handles re-orderings naturally.
+//
+// The events package lives in this process (lanternd); cross-process
+// consumers in Liblantern can only receive these via this SSE stream,
+// since events.Subscribe in the Liblantern process sees a different
+// (empty) subscriptions map.
+func (s *localapi) peerConnectionEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	// Buffered channel so a slow SSE consumer doesn't apply backpressure
+	// to events.Emit (which spawns a goroutine per subscriber but blocks
+	// nothing). 64 holds ~one second of accept/close pairs under heavy
+	// load; beyond that we drop to avoid unbounded memory growth.
+	queue := make(chan peer.ConnectionEvent, 64)
+	sub := events.Subscribe(func(evt peer.ConnectionEvent) {
+		select {
+		case queue <- evt:
+		default:
+			// queue full — drop. SSE consumer is too slow; better to
+			// lose this event than to back up the events.Emit goroutine.
+		}
+	})
+	defer sub.Unsubscribe()
+
+	for {
+		select {
+		case evt := <-queue:
+			data, err := json.Marshal(evt)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}
