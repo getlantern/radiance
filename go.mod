@@ -31,7 +31,7 @@ require (
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
 	github.com/getlantern/kindling v0.0.0-20260507163327-92a44d03bdc5
-	github.com/getlantern/lantern-box v0.0.79
+	github.com/getlantern/lantern-box v0.0.82
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
@@ -247,7 +247,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gofrs/uuid/v5 v5.3.2 // indirect
+	github.com/gofrs/uuid/v5 v5.3.2
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
