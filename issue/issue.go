@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	maxCompressedSize = 20 * 1024 * 1024 // 20 MB
+	maxCompressedSize = int64(19.5 * 1024 * 1024) // 19.5 MB - 20 MB is the max size so allow some buffer for overhead
 	tracerName        = "github.com/getlantern/radiance/issue"
 )
 
