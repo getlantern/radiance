@@ -12,6 +12,56 @@ import (
 	_ "github.com/getlantern/radiance/common/env"
 )
 
+func TestWindowsCrossDirCandidates(t *testing.T) {
+	t.Run("returns nil on non-Windows", func(t *testing.T) {
+		// On macOS/Linux the function must short-circuit regardless of
+		// %PUBLIC% being set — this is the implicit GOOS gate that keeps
+		// the cross-dir scan from misfiring elsewhere.
+		if runtime.GOOS == "windows" {
+			t.Skip("test only meaningful on non-Windows hosts")
+		}
+		t.Setenv("PUBLIC", t.TempDir())
+		assert.Nil(t, windowsCrossDirCandidates("/some/dir"))
+	})
+
+	t.Run("returns nil when %PUBLIC% is unset", func(t *testing.T) {
+		t.Setenv("PUBLIC", "")
+		assert.Nil(t, windowsCrossDirCandidates("/some/dir"))
+	})
+
+	t.Run("readWindowsCrossDirCandidates picks up local.json", func(t *testing.T) {
+		dir := t.TempDir()
+		body := []byte(`{"user_level":"pro","user_id":1}`)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), body, 0o644))
+
+		cs := readWindowsCrossDirCandidates(dir)
+		require.Len(t, cs, 1, "expected one candidate when only local.json exists")
+		assert.True(t, cs[0].exists)
+		assert.Equal(t, body, cs[0].contents)
+		assert.Contains(t, cs[0].label, "v9.0.x Windows", "label must identify the cross-dir source")
+	})
+
+	t.Run("readWindowsCrossDirCandidates picks up both local.json and settings.json", func(t *testing.T) {
+		dir := t.TempDir()
+		local := []byte(`{"user_level":"pro","user_id":1}`)
+		canon := []byte(`{"user_level":"expired","user_id":2}`)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), local, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, settingsFileName), canon, 0o644))
+
+		cs := readWindowsCrossDirCandidates(dir)
+		require.Len(t, cs, 2, "both filenames should be returned when both exist")
+		// local.json must come first — it's the actual v9.0.x name; the
+		// settings.json fallback is for users who got renamed by a
+		// partial earlier upgrade.
+		assert.Equal(t, local, cs[0].contents, "local.json must be first")
+		assert.Equal(t, canon, cs[1].contents, "settings.json fallback must be second")
+	})
+
+	t.Run("readWindowsCrossDirCandidates returns empty when dir is empty", func(t *testing.T) {
+		assert.Empty(t, readWindowsCrossDirCandidates(t.TempDir()))
+	})
+}
+
 func TestInitSettings(t *testing.T) {
 	t.Run("existing valid config file", func(t *testing.T) {
 		tempDir := t.TempDir()
@@ -41,6 +91,14 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 	prevYAMLPath := legacyYAMLPathFn
 	legacyYAMLPathFn = func(string) (string, string) { return "", "" }
 	t.Cleanup(func() { legacyYAMLPathFn = prevYAMLPath })
+
+	// Same treatment for the Windows v9.0.x cross-dir lookup: default
+	// to nothing so tests don't accidentally pick up a real
+	// %PUBLIC%\Lantern\data on a developer's Windows machine. Tests that
+	// exercise this path opt in.
+	prevWinCrossDir := windowsCrossDirCandidatesFn
+	windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
+	t.Cleanup(func() { windowsCrossDirCandidatesFn = prevWinCrossDir })
 
 	writeNested := func(t *testing.T, dir string, contents []byte) {
 		t.Helper()
@@ -269,6 +327,113 @@ Token: tok
 		require.NoError(t, err)
 		assert.Contains(t, string(got), `"user_id":7777`)
 		assert.Contains(t, string(got), `"device_id":"ios-device"`)
+	})
+
+	t.Run("Windows v9.0.x cross-dir local.json recovered when canonical/same-dir/nested all missing", func(t *testing.T) {
+		// FD #174606 / engineering#3460: PR #370 moved the Windows daemon
+		// from <PUBLIC>\Lantern\data (where v9.0.x Flutter+FFI wrote
+		// local.json) to <ProgramData>\Lantern. The same-dir scan can't
+		// see across that filesystem boundary, so cross-dir candidates
+		// are spliced in by windowsCrossDirCandidatesFn. Verify recovery.
+		tempDir := t.TempDir()
+		v90xDir := filepath.Join(tempDir, "windows-v90x")
+		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
+		want := []byte(`{"user_id": 195646669, "user_level": "pro", "token": "preserved"}`)
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName), want, 0o644))
+
+		windowsCrossDirCandidatesFn = func(string) []candidateSource {
+			return readWindowsCrossDirCandidates(v90xDir)
+		}
+		t.Cleanup(func() {
+			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
+		})
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "v9.0.x cross-dir local.json must be migrated to canonical")
+	})
+
+	t.Run("Windows v9.0.x cross-dir falls back to settings.json when local.json missing", func(t *testing.T) {
+		// Defensive case: a user whose v9.0.x file got renamed by an
+		// earlier partial upgrade attempt. The cross-dir scan should
+		// still pick up settings.json under ${PUBLIC}\Lantern\data.
+		tempDir := t.TempDir()
+		v90xDir := filepath.Join(tempDir, "windows-v90x")
+		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
+		want := []byte(`{"user_id": 42, "user_level": "pro"}`)
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, settingsFileName), want, 0o644))
+
+		windowsCrossDirCandidatesFn = func(string) []candidateSource {
+			return readWindowsCrossDirCandidates(v90xDir)
+		}
+		t.Cleanup(func() {
+			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
+		})
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "v9.0.x cross-dir settings.json must be migrated when local.json absent")
+	})
+
+	t.Run("Windows v9.0.x cross-dir loses to same-dir v9.0.x local.json", func(t *testing.T) {
+		// If both exist, same-dir wins — it's strictly more recent state.
+		// (Cross-dir is only a thing because Windows users skipped through
+		// the v9.0.x → v9.1.x transition; same-dir local.json means the
+		// daemon already migrated once and the cross-dir copy is stale.)
+		tempDir := t.TempDir()
+		v90xDir := filepath.Join(tempDir, "windows-v90x")
+		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName),
+			[]byte(`{"user_id": 999, "user_level": "pro"}`), 0o644))
+		sameDirPro := []byte(`{"user_id": 1, "user_level": "pro", "token": "same-dir"}`)
+		require.NoError(t, os.WriteFile(filepath.Join(tempDir, legacySettingsFileName), sameDirPro, 0o644))
+
+		windowsCrossDirCandidatesFn = func(string) []candidateSource {
+			return readWindowsCrossDirCandidates(v90xDir)
+		}
+		t.Cleanup(func() {
+			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
+		})
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, sameDirPro, got, "same-dir v9.0.x must outrank cross-dir v9.0.x")
+	})
+
+	t.Run("Windows v9.0.x cross-dir-pro beats v9.1.x nested-expired", func(t *testing.T) {
+		// The headline case: user upgrades from v9.0.x Windows (Pro state
+		// at ${PUBLIC}\Lantern\data\local.json) through a buggy v9.1.x
+		// build (which wrote an expired record at <ProgramData>\Lantern\data\settings.json)
+		// to the fix. The cross-dir Pro must win over the nested expired.
+		tempDir := t.TempDir()
+		v90xDir := filepath.Join(tempDir, "windows-v90x")
+		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
+		crossDirPro := []byte(`{"user_id": 195646669, "user_level": "pro"}`)
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName), crossDirPro, 0o644))
+		writeNested(t, tempDir, []byte(`{"user_id": 99, "user_level": "expired"}`))
+
+		windowsCrossDirCandidatesFn = func(string) []candidateSource {
+			return readWindowsCrossDirCandidates(v90xDir)
+		}
+		t.Cleanup(func() {
+			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
+		})
+
+		canonical := filepath.Join(tempDir, settingsFileName)
+		migrateLegacySettingsIfNeeded(tempDir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, crossDirPro, got, "cross-dir pro must beat nested expired (engineering#3460)")
 	})
 
 	t.Run("unreadable canonical (non-ENOENT) skips migration", func(t *testing.T) {

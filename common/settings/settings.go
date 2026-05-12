@@ -125,12 +125,14 @@ type candidateSource struct {
 // migrateLegacySettingsIfNeeded recovers persisted user state written
 // by older client versions. Candidates in priority order:
 //
-//  1. <fileDir>/settings.json       — canonical
-//  2. <fileDir>/local.json          — v9.0.x (renamed in #370)
-//  3. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
-//  4. <fileDir>/data/settings.json  — v9.1.x (bugged: #370's
-//                                     setupDirectories appended an
-//                                     unconditional "/data" suffix)
+//  1. <fileDir>/settings.json                 — canonical
+//  2. <fileDir>/local.json                    — v9.0.x (renamed in #370)
+//  3. Windows ${PUBLIC}\Lantern\data\*        — v9.0.x cross-dir (#3460);
+//                                               spliced in below, Windows only
+//  4. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
+//  5. <fileDir>/data/settings.json            — v9.1.x (bugged: #370's
+//                                               setupDirectories appended an
+//                                               unconditional "/data" suffix)
 //
 // Pick the highest-priority candidate with user_level=="pro"; if none
 // is pro, the highest-priority candidate that exists. Losing Pro is
@@ -167,6 +169,13 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 	// priority is canonical > local.json > pre-9.x > nested.
 	if yc := legacyYAMLCandidate(fileDir); yc.exists {
 		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
+	}
+	// Splice Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data)
+	// right after the v9.0.x same-dir local.json — they're the same
+	// generation of state, just stored under a different filesystem root.
+	// On every other GOOS / when the env is unset this is a no-op.
+	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {
+		candidates = append(candidates[:2], append(winExtras, candidates[2:]...)...)
 	}
 
 	// Pick: highest-priority file with user_level=="pro"; if none has pro,
