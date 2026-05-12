@@ -60,6 +60,31 @@ func TestWindowsCrossDirCandidates(t *testing.T) {
 	t.Run("readWindowsCrossDirCandidates returns empty when dir is empty", func(t *testing.T) {
 		assert.Empty(t, readWindowsCrossDirCandidates(t.TempDir()))
 	})
+
+	t.Run("samePathWindows is case-insensitive", func(t *testing.T) {
+		// This is the load-bearing property of the guard — NTFS is
+		// case-insensitive by default, so callers may supply equivalent
+		// paths with different casing. Portable across OSes.
+		assert.True(t, samePathWindows("/tmp/foo", "/tmp/FOO"))
+		assert.True(t, samePathWindows(`C:\Users\Public`, `c:\users\public`))
+		assert.False(t, samePathWindows("/tmp/foo", "/tmp/bar"))
+	})
+
+	t.Run("samePathWindows normalizes Windows separators (Windows only)", func(t *testing.T) {
+		// On Windows, filepath.Clean folds `\` and `/` into the native
+		// separator and strips trailing slashes. On Unix-style hosts
+		// these characters are treated literally, so the assertion is
+		// meaningless off-Windows. The function itself is only called
+		// from windowsCrossDirCandidates, which short-circuits unless
+		// GOOS=="windows" — i.e. the cases below only matter in the
+		// environment they're exercised.
+		if runtime.GOOS != "windows" {
+			t.Skip("Windows-only path-cleaning semantics")
+		}
+		assert.True(t, samePathWindows(`C:\Users\Public\Lantern\data`, `C:/Users/Public/Lantern/data`))
+		assert.True(t, samePathWindows(`C:\Users\Public\Lantern\data\`, `C:\Users\Public\Lantern\data`))
+		assert.False(t, samePathWindows(`C:\Users\Public\Lantern\data`, `C:\Users\Public\Lantern\other`))
+	})
 }
 
 func TestInitSettings(t *testing.T) {

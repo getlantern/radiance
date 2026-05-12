@@ -165,15 +165,26 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 			}
 		}
 	}
-	// Splice the pre-9.x YAML candidate before the v9.1.x nested file so
-	// priority is canonical > local.json > pre-9.x > nested.
+	// Splice optional candidates in. Each splice inserts at index 2 (right
+	// after canonical and same-dir local.json), so doing them in order
+	// from oldest-priority to newest-priority gives the final ordering:
+	//
+	//   canonical > same-dir local.json
+	//     > Windows cross-dir (newest of the optional candidates)
+	//       > pre-9.x YAML (older than v9.0.x)
+	//         > v9.1.x nested (always last, the bug-victim case)
+	//
+	// Insert pre-9.x YAML first, then Windows cross-dir, so the Windows
+	// candidate ends up *before* (higher priority than) the YAML.
 	if yc := legacyYAMLCandidate(fileDir); yc.exists {
 		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
 	}
-	// Splice Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data)
-	// right after the v9.0.x same-dir local.json — they're the same
-	// generation of state, just stored under a different filesystem root.
-	// On every other GOOS / when the env is unset this is a no-op.
+	// Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data) are the
+	// same generation of state as the same-dir local.json, just stored
+	// under a different filesystem root because PR #370 moved lanternd's
+	// data dir to ${ProgramData}\Lantern. On every other GOOS / when the
+	// env is unset windowsCrossDirCandidatesFn returns nil and this is a
+	// no-op.
 	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {
 		candidates = append(candidates[:2], append(winExtras, candidates[2:]...)...)
 	}
