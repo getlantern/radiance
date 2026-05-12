@@ -115,9 +115,9 @@ func baseOpts(basePath string) O.Options {
 					Address: []netip.Prefix{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
-					AutoRoute:   true,
-					StrictRoute: true,
-					MTU:         1500,
+					AutoRoute:              true,
+					StrictRoute:            true,
+					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
 				},
 			},
 			{
@@ -164,9 +164,11 @@ func baseOpts(basePath string) O.Options {
 				ExternalController: "", // intentionally left empty
 			},
 			CacheFile: &O.CacheFileOptions{
-				Enabled: true,
-				Path:    cacheFile,
-				CacheID: cacheID,
+				Enabled:     true,
+				Path:        cacheFile,
+				CacheID:     cacheID,
+				StoreFakeIP: true,
+				StoreRDRC:   true,
 			},
 		},
 	}
@@ -182,8 +184,8 @@ func baseRoutingRules() []O.Rule {
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Rules from config file (added in buildOptions)
-	// 7-9.  Group rules for auto, lantern, and user (added in buildOptions)
-	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 7,8.  Group rules for auto and manual selector modes (added in buildOptions).
+	// 9.    Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these

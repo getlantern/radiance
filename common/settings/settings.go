@@ -2,6 +2,7 @@
 package settings
 
 import (
+	jsonpkg "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -55,11 +56,32 @@ const (
 	AdBlockKey          _key = "ad_block"           // bool
 	AutoConnectKey      _key = "auto_connect"       // bool
 	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	// PeerManualPortKey is the TCP port number the user has manually
+	// forwarded on their router (single-port 1:1 NAT). When non-zero,
+	// peer.Client.Start uses portforward.ManualForwarder with this port
+	// instead of probing UPnP. Surfaced as an Advanced setting in the
+	// Share My Connection UI for users on networks where UPnP is
+	// disabled or unavailable.
+	PeerManualPortKey _key = "peer_manual_port" // int (0 = use UPnP)
+	// UnboundedKey is the local opt-in for the broflake / Unbounded
+	// widget proxy. When true AND the server-side Features[unbounded]
+	// flag is on AND the server provides UnboundedConfig (discovery
+	// + egress URLs), vpn.InitUnboundedSubscription starts the widget
+	// proxy. Surfaced as a "Basic mode" option in the Share My
+	// Connection UI for networks where UPnP isn't workable but the
+	// user still wants to contribute via the WebRTC-based donor path.
+	UnboundedKey _key = "unbounded" // bool
 	SelectedServerKey   _key = "selected_server"    // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
 
 	settingsFileName = "settings.json"
+	// legacySettingsFileName is what v9.0.x called the same file (it was
+	// renamed in radiance PR #370). On upgrade from v9.0.x, the user's
+	// persisted user_id / token / user_level live at <dataDir>/local.json;
+	// migrateLegacySettingsIfNeeded reads it from there so Pro state
+	// survives the rename.
+	legacySettingsFileName = "local.json"
 )
 
 var ErrNotExist = errors.New("key does not exist")
@@ -94,6 +116,7 @@ func InitSettings(fileDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
+	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
@@ -103,6 +126,121 @@ func InitSettings(fileDir string) error {
 	}
 	k.initialized = true
 	return nil
+}
+
+// candidateSource is one possible location of persisted user state.
+// contents is always canonical JSON — direct for v9.x, translated for
+// pre-9.x YAML.
+type candidateSource struct {
+	path     string
+	contents []byte
+	exists   bool
+	label    string
+}
+
+// migrateLegacySettingsIfNeeded recovers persisted user state written
+// by older client versions. Candidates in priority order:
+//
+//  1. <fileDir>/settings.json       — canonical
+//  2. <fileDir>/local.json          — v9.0.x (renamed in #370)
+//  3. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
+//  4. <fileDir>/data/settings.json  — v9.1.x (bugged: #370's
+//                                     setupDirectories appended an
+//                                     unconditional "/data" suffix)
+//
+// Pick the highest-priority candidate with user_level=="pro"; if none
+// is pro, the highest-priority candidate that exists. Losing Pro is
+// recoverable; losing the device registration creates server-side
+// orphans, so identifier continuity wins ties.
+func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
+	candidates := []candidateSource{
+		{path: canonicalPath, label: "canonical settings.json"},
+		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
+		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
+	}
+	for i := range candidates {
+		b, err := os.ReadFile(candidates[i].path)
+		switch {
+		case err == nil:
+			candidates[i].contents = b
+			candidates[i].exists = true
+		case errors.Is(err, fs.ErrNotExist):
+			// Expected — file just isn't there. Treat as not-present.
+		default:
+			// Permission / I/O error — log it but don't bail outright. If
+			// it's the canonical path that's unreadable for non-ENOENT
+			// reasons, skip migration entirely so we don't try to write
+			// over a file the OS is telling us we can't see; for legacy
+			// or nested paths, treat the same as not-present.
+			slog.Warn("legacy settings migration: read failed",
+				"path", candidates[i].path, "error", err)
+			if candidates[i].path == canonicalPath {
+				return
+			}
+		}
+	}
+	// Splice the pre-9.x YAML candidate before the v9.1.x nested file so
+	// priority is canonical > local.json > pre-9.x > nested.
+	if yc := legacyYAMLCandidate(fileDir); yc.exists {
+		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
+	}
+
+	// Pick: highest-priority file with user_level=="pro"; if none has pro,
+	// highest-priority file that exists at all (with non-empty contents).
+	pickIdx := -1
+	for i, c := range candidates {
+		if c.exists && userLevelInJSON(c.contents) == "pro" {
+			pickIdx = i
+			break
+		}
+	}
+	if pickIdx == -1 {
+		for i, c := range candidates {
+			if c.exists {
+				pickIdx = i
+				break
+			}
+		}
+	}
+	if pickIdx == -1 {
+		// Nothing on disk yet — fresh install, normal path. No-op.
+		return
+	}
+	if candidates[pickIdx].path == canonicalPath {
+		// Canonical already wins — no migration needed.
+		return
+	}
+	writeMigrated(canonicalPath, candidates[pickIdx].contents, candidates[pickIdx].label)
+}
+
+// writeMigrated overwrites the canonical settings file with the recovered
+// contents and logs the outcome. Uses atomicfile.WriteFile (the same
+// mechanism the normal save path uses) so a crash mid-write can't leave
+// a half-written settings.json on disk. Errors are logged-and-swallowed:
+// if the write fails the caller falls through to the fresh-install path,
+// which is a worse UX but not a corruption risk.
+func writeMigrated(canonicalPath string, contents []byte, source string) {
+	if err := atomicfile.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
+		slog.Warn("legacy settings migration: write failed",
+			"dst", canonicalPath, "source", source, "error", err)
+		return
+	}
+	slog.Info("legacy settings migration: recovered persisted state",
+		"dst", canonicalPath, "source", source, "bytes", len(contents))
+}
+
+// userLevelInJSON returns the value of the "user_level" key from a JSON
+// settings blob, or "" if the key is missing / the blob is malformed.
+// Lightweight extraction so the migration doesn't need to load the full
+// koanf state machine before we've decided which file to read.
+func userLevelInJSON(contents []byte) string {
+	var s struct {
+		UserLevel string `json:"user_level"`
+	}
+	if err := jsonpkg.Unmarshal(contents, &s); err != nil {
+		return ""
+	}
+	return s.UserLevel
 }
 
 func loadSettings(path string) error {

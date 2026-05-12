@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 # Serialize concurrent runs (cron + manual dispatch can race). cancel-in-progress
 # is false so a manual dispatch during a cron run still completes rather than
@@ -46,20 +47,20 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit and push
+      # Open a PR rather than pushing directly: main is protected by a
+      # "Changes must be made through a pull request" repo rule. The PR
+      # branch is reused day-to-day so a stale unmerged refresh gets
+      # superseded by the next one rather than piling up as separate PRs.
+      - name: Open / update refresh PR
         if: steps.diff.outputs.changed == 'true'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add kindling/fronted/fronted.yaml.gz
-          git commit -m "fronted: refresh embedded fronted.yaml.gz"
-          # Rebase-and-retry to survive concurrent commits to the target branch.
-          for attempt in 1 2 3; do
-            if git push; then
-              exit 0
-            fi
-            echo "Push attempt $attempt failed, rebasing on latest origin and retrying..."
-            git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)"
-          done
-          echo "Push failed after 3 attempts" >&2
-          exit 1
+        uses: peter-evans/create-pull-request@8a45c9a0f9071f4b1e4a0f3b660a1e9e3d9f0d7f # v7
+        with:
+          commit-message: "fronted: refresh embedded fronted.yaml.gz"
+          title: "fronted: refresh embedded fronted.yaml.gz"
+          body: |
+            Automated daily refresh of `kindling/fronted/fronted.yaml.gz`
+            from `getlantern/fronted@main`. Safe to merge once CI passes.
+          branch: chore/refresh-fronted-config
+          delete-branch: true
+          author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          committer: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"

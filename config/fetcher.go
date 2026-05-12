@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/getlantern/kindling"
 	"github.com/getlantern/lantern-box/protocol"
 
 	"github.com/getlantern/radiance/account"
@@ -153,6 +154,14 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
+	// /config-new is POST-shaped (request carries last-known etag/version
+	// + client metadata in the body) but is semantically a read-only
+	// fetch — no server-side state mutates. Tag it idempotent so kindling's
+	// raceTransport falls back to the next transport on transport-level
+	// errors and 5xx, the same way it does for GET/HEAD. Without this, a
+	// single fronting CDN returning 5xx (e.g., during a localized block)
+	// would fail the whole fetch instead of being routed around.
+	req.Header.Set(kindling.IdempotentHeader, "1")
 
 	if val := env.GetString(env.Country); val != "" {
 		slog.Info("Setting x-lantern-client-country header", "country", val)

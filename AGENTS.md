@@ -2,19 +2,37 @@
 
 ## Code Comments
 
-**Default: no comment.** Only add one if a specific *why* is load-bearing — invariant, concurrency guarantee, error condition, zero-value behavior, non-obvious caller contract, or a constraint that would surprise the reader. Aesthetic "this section is well-documented" comments are noise.
+**Language doc conventions take precedence.** When writing a doc comment that the language's tooling formats or renders (Go's `// Foo ...`, Python docstrings, JSDoc, rustdoc, etc.), follow that convention even if it conflicts with the "lead with the *why*" guidance — for Go that means start with the identifier's name. The *why* still belongs in the comment, just in the body after the conventional opening.
 
-Before writing any comment, run this checklist on the proposed text. If any answer is yes, delete or rewrite:
+- **Default: no comment.** Only comment when necessary to explain a non-obvious contract, invariant, rationale, or surprising behavior.
+- Comments must answer *why* something is done a particular way, not *what* is being done (which should be clear from the code and naming).
+- Before adding a comment, ask:
+  - Is this information not obvious from the code or naming?
+  - Does it document a constraint, invariant, concurrency guarantee, or error condition that would surprise a reader?
+  - Is it essential for future maintainers to understand the reasoning or risk behind this code?
+- **Do not add comments that:**
+  - Restate the identifier name (in-line only).
+  - Narrate the next line of code.
+  - Reference tickets, coworkers, or code locations (these belong in commit messages).
+  - Describe the mechanism instead of the contract.
+  - Are aesthetic or redundant ("well-documented").
+- Prefer documenting contracts at the declaration site. Use inline comments only for truly non-obvious lines.
+- Remove or update obsolete comments promptly.
+- **TODOs:** Must state both what needs to be done and why it isn’t done now. Remove or resolve unclear TODOs.
 
-1. Does it restate the identifier name or signature? (`// Foo does foo`, `// updateX manages X across Y`)
-2. Does it narrate what the visible next line does? (`// Cancel any existing listener` immediately above `cancel()`)
-3. Does it open with a generic lifecycle/management preamble before getting to the point? (`// manages the lifecycle of...`, `// handles the X for Y`)
-4. Does it reference tickets, coworkers, sibling files, commit SHAs, or other code locations? Those belong in the commit message / PR description — they rot in source.
-5. Does it describe the mechanism instead of the contract? (`authenticates via peer credentials over a Unix socket` vs. `authenticates each connection`)
+**Examples:**
 
-Lead with the *why*, not a summary of the function. If the only thing you can write is a summary, the comment isn't needed.
+```go
+// BAD: Restates what the code does
+// Cancel any in-flight requests.
+cancelRequests()
 
-Examples:
+// GOOD: Explains why this is necessary
+// Must cancel in-flight requests to avoid leaking goroutines on shutdown.
+cancelRequests()
+```
+
+---
 
 ```go
 // BAD — restates name, generic preamble, narrates the code
@@ -50,18 +68,60 @@ c.offlineTestCancel()
 // access is released before disk I/O so a slow write can't starve readers.
 ```
 
+```go
+// BAD — doc block enumerates every branch; only one branch has hidden why,
+// the rest restate cases the code already shows
+// mapStatusEvent maps a radiance VPN status event to the wire value sent
+// to Dart. Three cases deviate from a direct pass-through:
+//   - vpn.Restarting collapses into vpn.Connecting so the UI shows a
+//     transitional state during a tunnel restart.
+//   - A non-empty evt.Error always maps to vpn.ErrorStatus.
+//   - An unrecognized status falls back to Disconnected.
+func mapStatusEvent(evt vpn.StatusUpdateEvent) (vpn.VPNStatus, string) { ... }
+
+// GOOD — no doc block; inline comment on the only branch with hidden context
+func mapStatusEvent(evt vpn.StatusUpdateEvent) (vpn.VPNStatus, string) {
+	if evt.Error != "" {
+		return vpn.ErrorStatus, evt.Error
+	}
+	switch evt.Status {
+	case vpn.Connected, vpn.Connecting, vpn.Disconnecting, vpn.Disconnected, vpn.ErrorStatus:
+		return evt.Status, ""
+	case vpn.Restarting:
+		// Map to Connecting; Dart's parser falls back to Disconnected otherwise.
+		return vpn.Connecting, ""
+	default:
+		return vpn.Disconnected, ""
+	}
+}
+```
+
 Before writing an inline comment, consider whether a doc comment on the enclosing function or type would make it unnecessary. Prefer documenting contracts at the declaration over explaining implementation details inline.
 
+Conversely, before writing a multi-bullet doc block that enumerates branches or cases, check each bullet against the line that implements it. If only one bullet carries hidden *why* and the rest restate visible branches, drop the doc block and put a single inline comment on the surprising branch. Doc blocks belong on contracts that surprise as a whole, not on functions where one corner of the implementation is non-obvious. The bar is higher for unexported helpers: the Go doc convention targets exported API, and unexported functions should default to no comment unless the contract genuinely surprises.
+
 TODO comments must state *what* needs to happen and *why* it isn't done now. `TODO: ???` is not actionable — either resolve it or remove it.
+
+## Go Doc Comments
+
+- Use Go doc comments (`// Foo ...`) for exported identifiers and any unexported ones with non-obvious contracts.
+- Start with the identifier’s name and a concise summary: `// Foo does X.` The first sentence is shown by `go doc` and pkg.go.dev.
+- Follow with additional context or rationale as needed, especially if the *why* is not obvious.
+- Place the comment immediately above the declaration, with no blank line.
+- For package comments, place one above the `package` clause (typically in `doc.go`), starting with `// Package foo ...`.
+- Formatting:
+  - Use blank lines for paragraphs.
+  - Indent code blocks.
+  - Use lists and headings as supported by Go doc formatting.
+  - Avoid HTML and manual line wrapping; let gofmt handle formatting.
+- Use `// Deprecated: ...` on its own paragraph for deprecated identifiers.
+- Prefer `ExampleFoo` functions in `_test.go` for usage examples; these are rendered and tested by Go tooling.
+- Review doc comments regularly to keep them accurate and relevant.
+
+**Reference:** [Go doc comment guidelines](https://go.dev/doc/comment)
 
 ## Comment Verification
 
 After any edit that adds or modifies a comment, you MUST spawn a code-reviewer subagent with the diff before declaring the task done. The subagent applies the Code Comments checklist above and reports violations. Fix the violations and re-spawn until the subagent reports none.
 
 You MUST NOT skip this by self-reviewing the diff. The point of the subagent is to review without the generation bias of the Claude that wrote the comment — a self-review by the writer is a known failure mode and does not satisfy this step.
-
-## Go Doc Comments
-
-- When a doc comment is warranted on an exported identifier, start it with the identifier's name and use complete sentences: `// Foo does X.` The first sentence is the summary shown by `go doc` and pkg.go.dev.
-- Package comments: one per package, above the `package` clause (conventionally in `doc.go` for larger packages), starting with `// Package foo ...`.
-- Formatting (gofmt-aware since Go 1.19): blank lines separate paragraphs; indented lines render as code blocks; lines starting with `-`, `*`, or `1.` render as lists; `[Name]` links to other symbols; `# Heading` renders as a heading. Avoid HTML and manual wrapping.

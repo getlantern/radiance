@@ -129,6 +129,25 @@ func (c *Client) ActiveVPNConnections(ctx context.Context) ([]vpn.Connection, er
 	return conns, err
 }
 
+// VPNSessions returns recorded VPN sessions in descending order. A limit value of 0 returns all
+// sessions.
+func (c *Client) VPNSessions(ctx context.Context, limit int) ([]vpn.Session, error) {
+	endpoint := vpnSessionsEndpoint
+	if limit > 0 {
+		endpoint = fmt.Sprintf("%s?limit=%d", endpoint, limit)
+	}
+	var sessions []vpn.Session
+	err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &sessions)
+	return sessions, err
+}
+
+// VPNThroughput returns the most recent global and per-outbound throughput sample.
+func (c *Client) VPNThroughput(ctx context.Context) (vpn.ThroughputSnapshot, error) {
+	var s vpn.ThroughputSnapshot
+	err := c.doJSON(ctx, http.MethodGet, vpnThroughputEndpoint, nil, &s)
+	return s, err
+}
+
 // RunOfflineURLTests runs URL performance tests when offline (VPN disconnected) and caches the
 // results. This enables autoconnect to select the best server for the initial connection.
 func (c *Client) RunOfflineURLTests(ctx context.Context) error {
@@ -627,10 +646,18 @@ func (c *Client) VerifySubscription(ctx context.Context, service account.Subscri
 
 // ReportIssue submits an issue report. additionalAttachments is a list of file paths for additional
 // files to include. Logs, diagnostics, and the config response are included automatically and do
-// not need to be specified.
-func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string) error {
+// not need to be specified. attachments contains screenshot files sent as first-class multipart
+// attachments; callers may include up to [issue.MaxFirstClassAttachmentCount] files with a
+// combined size of [issue.MaxFirstClassAttachmentBytes] bytes.
+func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	_, err := c.do(ctx, http.MethodPost, issueEndpoint,
-		IssueReportRequest{IssueType: issueType, Description: description, Email: email, AdditionalAttachments: additionalAttachments})
+		IssueReportRequest{
+			IssueType:             issueType,
+			Description:           description,
+			Email:                 email,
+			AdditionalAttachments: additionalAttachments,
+			Attachments:           attachments,
+		})
 	return err
 }
 

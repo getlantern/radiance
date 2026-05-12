@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -36,8 +37,10 @@ const (
 	vpnDisconnectEndpoint   = "/vpn/disconnect"
 	vpnRestartEndpoint      = "/vpn/restart"
 	vpnConnectionsEndpoint  = "/vpn/connections"
+	vpnThroughputEndpoint   = "/vpn/throughput"
 	vpnOfflineTestsEndpoint = "/vpn/offline-tests"
 	vpnStatusEventsEndpoint = "/vpn/status/events"
+	vpnSessionsEndpoint     = "/vpn/sessions"
 
 	// Server selection endpoints
 	serverSelectedEndpoint           = "/server/selected"
@@ -62,8 +65,9 @@ const (
 	settingsEndpoint = "/settings"
 
 	// Peer-share ("Share My Connection") endpoints
-	peerStatusEndpoint       = "/peer/status"
-	peerStatusEventsEndpoint = "/peer/status/events"
+	peerStatusEndpoint           = "/peer/status"
+	peerStatusEventsEndpoint     = "/peer/status/events"
+	peerConnectionEventsEndpoint = "/peer/connection/events"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -199,7 +203,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+vpnDisconnectEndpoint, traced(s.vpnDisconnectHandler))
 	mux.HandleFunc("POST "+vpnRestartEndpoint, traced(s.vpnRestartHandler))
 	mux.HandleFunc("GET "+vpnConnectionsEndpoint, traced(s.vpnConnectionsHandler))
+	mux.HandleFunc("GET "+vpnThroughputEndpoint, traced(s.vpnThroughputHandler))
 	mux.HandleFunc("POST "+vpnOfflineTestsEndpoint, traced(s.vpnOfflineTestsHandler))
+	mux.HandleFunc("GET "+vpnSessionsEndpoint, traced(s.vpnSessionsHandler))
 
 	// SSE routes skip the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+vpnStatusEventsEndpoint, s.vpnStatusEventsHandler)
@@ -228,6 +234,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+peerStatusEndpoint, traced(s.peerStatusHandler))
 	// SSE skips the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+peerStatusEventsEndpoint, s.peerStatusEventsHandler)
+	mux.HandleFunc("GET "+peerConnectionEventsEndpoint, s.peerConnectionEventsHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -385,6 +392,30 @@ func (s *localapi) vpnConnectionsHandler(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, conns)
 }
 
+func (s *localapi) vpnThroughputHandler(w http.ResponseWriter, r *http.Request) {
+	tp, err := s.backend(r.Context()).VPNThroughput()
+	if err != nil {
+		// Disconnected has no traffic; a zero snapshot is the correct value, not an error.
+		if errors.Is(err, vpn.ErrTunnelNotConnected) {
+			writeJSON(w, http.StatusOK, vpn.ThroughputSnapshot{})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tp)
+}
+
+func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).Sessions(limit))
+}
+
 func (s *localapi) vpnOfflineTestsHandler(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend(r.Context()).RunOfflineURLTests(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -479,6 +510,55 @@ func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Reques
 		select {
 		case <-trigger:
 			send()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// peerConnectionEventsHandler streams peer.ConnectionEvent over SSE for
+// each accept/close on the local samizdat-in. Unlike peerStatusEventsHandler
+// (which always sends the live snapshot), each emit's captured value is
+// what the consumer needs here — the Source IP and +1/-1 state ARE the
+// payload, not a periodic poll. Out-of-order +1/-1 from events.Emit's
+// per-callback goroutine is fine: the consumer (lantern-core's globe-arc
+// renderer) keys arcs by source, so it handles re-orderings naturally.
+//
+// The events package lives in this process (lanternd); cross-process
+// consumers in Liblantern can only receive these via this SSE stream,
+// since events.Subscribe in the Liblantern process sees a different
+// (empty) subscriptions map.
+func (s *localapi) peerConnectionEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	// Buffered channel so a slow SSE consumer doesn't apply backpressure
+	// to events.Emit (which spawns a goroutine per subscriber but blocks
+	// nothing). 64 holds ~one second of accept/close pairs under heavy
+	// load; beyond that we drop to avoid unbounded memory growth.
+	queue := make(chan peer.ConnectionEvent, 64)
+	sub := events.Subscribe(func(evt peer.ConnectionEvent) {
+		select {
+		case queue <- evt:
+		default:
+			// queue full — drop. SSE consumer is too slow; better to
+			// lose this event than to back up the events.Emit goroutine.
+		}
+	})
+	defer sub.Unsubscribe()
+
+	for {
+		select {
+		case evt := <-queue:
+			data, err := json.Marshal(evt)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}
@@ -1154,7 +1234,7 @@ func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).ReportIssue(req.IssueType, req.Description, req.Email, req.AdditionalAttachments); err != nil {
+	if err := s.backend(r.Context()).ReportIssue(req.IssueType, req.Description, req.Email, req.AdditionalAttachments, req.Attachments); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
