@@ -569,15 +569,7 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 		removedTags = append(removedTags, srv.Tag)
 	}
 	if len(removedTags) > 0 {
-		var selected servers.Server
-		if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil {
-			if slices.Contains(removedTags, selected.Tag) {
-				// clear selected server from settings if it's being removed
-				if err := settings.Set(settings.SelectedServerKey, nil); err != nil {
-					slog.Warn("Failed to clear selected server from settings after it was removed", "error", err)
-				}
-			}
-		}
+		r.clearSelectedIfMissing()
 		if err := r.vpnClient.RemoveOutbounds(removedTags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 			return fmt.Errorf("failed to remove outbounds: %w", err)
 		}
@@ -593,7 +585,26 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 	if err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("Failed to update VPN outbounds after config change", "error", err)
 	}
+	r.clearSelectedIfMissing()
 	return nil
+}
+
+// clearSelectedIfMissing reverts the persisted selection to auto-select when
+// the selected server is no longer present in the manager.
+func (r *LocalBackend) clearSelectedIfMissing() {
+	var selected servers.Server
+	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
+		return
+	}
+	if _, found := r.srvManager.GetServerByTag(selected.Tag); found {
+		return
+	}
+	// Persist before notifying the VPN client so the auto-select choice
+	// survives even if the tunnel isn't running to accept the switch.
+	r.persistSelection(vpn.AutoSelectTag)
+	if err := r.vpnClient.SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		slog.Warn("Failed to switch to auto-select after selected server was removed", "error", err)
+	}
 }
 
 func (r *LocalBackend) AddServersByJSON(config string) ([]string, error) {
@@ -837,12 +848,6 @@ func (r *LocalBackend) ActiveVPNConnections() ([]vpn.Connection, error) {
 	return connections, nil
 }
 
-// TODO: handle case where selected server is no longer available (e.g. removed from manager) more
-// gracefully, currently we just return that the server is no longer available but maybe we should
-// also clear the selected server from settings and select a new server in the VPN client.
-// should we not remove a lantern server if it's currently selected in the VPN client and instead
-// mark it as unavailable in the manager until it's no longer selected in the VPN client?
-
 // SelectedServer returns the currently selected server and whether the server is still available.
 // The server may no longer be available if it was removed from the manager since it was selected.
 func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
@@ -855,7 +860,15 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 		return server, found, nil
 	}
 	if !settings.Exists(settings.SelectedServerKey) {
-		return nil, false, fmt.Errorf("no selected server")
+		tag, err := r.vpnClient.CurrentSelectedServer()
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to get current selected server: %w", err)
+		}
+		if tag == "" {
+			return nil, false, fmt.Errorf("no selected server")
+		}
+		server, found := r.srvManager.GetServerByTag(tag)
+		return server, found, nil
 	}
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {

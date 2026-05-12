@@ -418,6 +418,26 @@ func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	return outbound.(adapter.OutboundGroup).Now(), nil
 }
 
+// CurrentSelectedServer returns the tag of the currently selected outbound in
+// whichever selector mode (auto or manual) the tunnel is in. Returns an empty
+// string with a nil error when the tunnel is not running.
+func (c *VPNClient) CurrentSelectedServer() (string, error) {
+	if !c.isOpen() {
+		return "", nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return "", ErrTunnelNotConnected
+	}
+	mode := c.tunnel.clashServer.Mode()
+	outbound, loaded := c.tunnel.outboundMgr.Outbound(mode)
+	if !loaded {
+		return "", fmt.Errorf("%s group not found", mode)
+	}
+	return outbound.(adapter.OutboundGroup).Now(), nil
+}
+
 const (
 	rapidPollInterval  = 500 * time.Millisecond
 	rapidPollWindow    = 15 * time.Second

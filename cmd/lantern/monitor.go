@@ -51,6 +51,7 @@ type monitorSnapshot struct {
 	UserID           string                 `json:"user_id,omitempty"`
 	Pro              bool                   `json:"pro"`
 	Status           statusSnapshot         `json:"status"`
+	Mode             string                 `json:"mode"`
 	Throughput       vpn.ThroughputSnapshot `json:"throughput"`
 	DataCap          *account.DataCapInfo   `json:"data_cap,omitempty"`
 	DataCapStreaming bool                   `json:"data_cap_streaming"`
@@ -202,6 +203,7 @@ func fetchMonitor(ctx context.Context, c *ipc.Client, cmd *MonitorCmd, snap *mon
 		snap.DeviceID = fmt.Sprintf("%v", did)
 	}
 	snap.Pro = strings.EqualFold(fmt.Sprintf("%v", cfg[settings.UserLevelKey]), "pro")
+	snap.Mode = selectionMode(cfg)
 
 	if cmd.History > 0 {
 		h, err := c.VPNSessions(ctx, cmd.History)
@@ -264,6 +266,9 @@ func renderMonitor(w io.Writer, snap *monitorSnapshot, width int) {
 		status = strings.ToUpper(status[:1]) + status[1:]
 	}
 	fmt.Fprintf(w, "Status: %s%s", status, eol)
+	if snap.Mode != "" {
+		fmt.Fprintf(w, "  Mode: %s%s", snap.Mode, eol)
+	}
 	if snap.Status.Server != "" {
 		line := "  Server: " + formatTag(snap.Status.Server)
 		if snap.Status.Location != "" {

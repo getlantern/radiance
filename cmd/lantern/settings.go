@@ -145,6 +145,16 @@ func orString(v any) any {
 	return v
 }
 
+func selectionMode(s settings.Settings) string {
+	if toBool(s[settings.AutoConnectKey]) {
+		return "auto"
+	}
+	if s[settings.SelectedServerKey] != nil {
+		return "manual"
+	}
+	return "auto"
+}
+
 func toBool(v any) bool {
 	if v == nil {
 		return false
