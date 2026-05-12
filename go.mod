@@ -2,10 +2,6 @@ module github.com/getlantern/radiance
 
 go 1.26.2
 
-// Local while peerconn listener registry is in flight; remove once
-// lantern-box tags a release that includes tracker/peerconn.
-replace github.com/getlantern/lantern-box => ../lantern-box
-
 replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.12.22-lantern
@@ -35,7 +31,7 @@ require (
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
-	github.com/getlantern/kindling v0.0.0-20260428171407-6143132aaf40
+	github.com/getlantern/kindling v0.0.0-20260507163327-92a44d03bdc5
 	github.com/getlantern/lantern-box v0.0.78-0.20260511221021-3201d6aa113f
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
@@ -251,7 +247,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gofrs/uuid/v5 v5.3.2 // indirect
+	github.com/gofrs/uuid/v5 v5.3.2
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect

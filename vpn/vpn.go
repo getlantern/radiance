@@ -29,6 +29,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
+
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -357,6 +358,41 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 		connections = append(connections, newConnection(conn))
 	}
 	return connections, nil
+}
+
+// Bytes returns the cumulative up/down byte counters for the active tunnel. ok is false if the
+// tunnel is not connected; counters reset when a tunnel restarts.
+func (c *VPNClient) Bytes() (up, down int64, ok bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return 0, 0, false
+	}
+	up, down = c.tunnel.clashServer.TrafficManager().Total()
+	return up, down, true
+}
+
+// Throughput returns the most recent global and per-outbound throughput sample.
+// Returns ErrTunnelNotConnected if the tunnel is not connected.
+func (c *VPNClient) Throughput() (ThroughputSnapshot, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ThroughputSnapshot{}, ErrTunnelNotConnected
+	}
+	tt := c.tunnel.clashServer.ThroughputTracker()
+	tm := c.tunnel.clashServer.TrafficManager()
+	active := tm.Connections()
+	perOut := make(map[string]int, len(active))
+	for _, m := range active {
+		perOut[m.Outbound]++
+	}
+	return ThroughputSnapshot{
+		Global:            tt.Global(),
+		PerOutbound:       tt.PerOutbound(),
+		ActiveConnections: len(active),
+		ActivePerOutbound: perOut,
+	}, nil
 }
 
 // AutoSelectedEvent is emitted when the auto-selected server changes.

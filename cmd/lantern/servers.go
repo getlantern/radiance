@@ -13,68 +13,125 @@ import (
 )
 
 type ServersCmd struct {
-	Show           string `arg:"-s,--show" help:"display server by tag"`
-	AddJSON        string `arg:"--add-json" help:"add servers from JSON config"`
-	AddURL         string `arg:"--add-url" help:"add servers from comma-separated URLs"`
-	SkipCertVerify bool   `arg:"--skip-cert-verify" help:"skip cert verification (with --add-url)"`
-	Remove         string `arg:"--remove" help:"comma-separated list of servers to remove"`
-	List           bool   `arg:"-l,--list" help:"list servers"`
-	Latency        bool   `arg:"--latency" help:"include URL test latency results (with --list)"`
+	List          *ServersListCmd    `arg:"subcommand:list" help:"list servers"`
+	Show          *ServersShowCmd    `arg:"subcommand:show" help:"display server by tag"`
+	AddJSON       *ServersAddJSONCmd `arg:"subcommand:add-json" help:"add servers from JSON config"`
+	AddURL        *ServersAddURLCmd  `arg:"subcommand:add-url" help:"add servers from URLs"`
+	Remove        *ServersRemoveCmd  `arg:"subcommand:remove" help:"remove servers by tag"`
+	PrivateServer *PrivateServerCmd  `arg:"subcommand:private" help:"private server operations"`
+}
 
-	PrivateServer *PrivateServerCmd `arg:"subcommand:private" help:"private server operations"`
+type ServersListCmd struct {
+	Latency bool `arg:"--latency" help:"include URL test latency results"`
+	JSON    bool `arg:"--json" help:"output JSON"`
+}
+
+type ServersShowCmd struct {
+	Tag string `arg:"positional,required" help:"server tag"`
+}
+
+type ServersAddJSONCmd struct {
+	Config string `arg:"positional,required" help:"JSON config"`
+}
+
+type ServersAddURLCmd struct {
+	URLs           []string `arg:"positional,required" help:"server URLs"`
+	SkipCertVerify bool     `arg:"--skip-cert-verify" help:"skip cert verification"`
+}
+
+type ServersRemoveCmd struct {
+	Tags []string `arg:"positional,required" help:"server tags to remove"`
+}
+
+// ServerListEntry represents a server in the list output.
+type ServerListEntry struct {
+	Tag           string                 `json:"tag"`
+	Type          string                 `json:"type"`
+	Location      C.ServerLocation       `json:"location,omitempty"`
+	URLTestResult *servers.URLTestResult `json:"urlTestResult,omitempty"`
 }
 
 type PrivateServerCmd struct {
-	Add          string `arg:"-a,--add" help:"add private server with given tag"`
-	Invite       string `arg:"-i,--invite" help:"invite to private server"`
-	RevokeInvite string `arg:"-r,--revoke-invite" help:"revoke invite"`
-	IP           string `arg:"--ip" help:"server IP"`
-	Port         int    `arg:"--port" help:"server port"`
-	Token        string `arg:"--token" help:"access token"`
+	Add          *PrivateServerAddCmd          `arg:"subcommand:add" help:"add a private server"`
+	Invite       *PrivateServerInviteCmd       `arg:"subcommand:invite" help:"create an invite for a private server"`
+	RevokeInvite *PrivateServerRevokeInviteCmd `arg:"subcommand:revoke-invite" help:"revoke a private server invite"`
+}
+
+// PrivateServerConn holds connection parameters for a private server.
+type PrivateServerConn struct {
+	IP    string `arg:"--ip,required" help:"server IP"`
+	Port  int    `arg:"--port,required" help:"server port"`
+	Token string `arg:"--token,required" help:"access token"`
+}
+
+type PrivateServerAddCmd struct {
+	Tag string `arg:"positional,required" help:"tag to assign to the server"`
+	PrivateServerConn
+}
+
+type PrivateServerInviteCmd struct {
+	Name string `arg:"positional,required" help:"invitee name"`
+	PrivateServerConn
+}
+
+type PrivateServerRevokeInviteCmd struct {
+	Name string `arg:"positional,required" help:"invitee name to revoke"`
+	PrivateServerConn
 }
 
 func runServers(ctx context.Context, c *ipc.Client, cmd *ServersCmd) error {
 	switch {
-	case cmd.Show != "":
-		return serversGet(ctx, c, cmd.Show)
-	case cmd.AddJSON != "":
-		return printAddedServers(c.AddServersByJSON(ctx, cmd.AddJSON))
-	case cmd.AddURL != "":
-		urls := strings.Split(cmd.AddURL, ",")
-		return printAddedServers(c.AddServersByURL(ctx, urls, cmd.SkipCertVerify))
-	case cmd.Remove != "":
-		return serversRemove(ctx, c, cmd.Remove)
-	case cmd.List:
-		return serversList(ctx, c, cmd.Latency)
+	case cmd.Show != nil:
+		return serversGet(ctx, c, cmd.Show.Tag)
+	case cmd.AddJSON != nil:
+		return printAddedServers(c.AddServersByJSON(ctx, cmd.AddJSON.Config))
+	case cmd.AddURL != nil:
+		return printAddedServers(c.AddServersByURL(ctx, cmd.AddURL.URLs, cmd.AddURL.SkipCertVerify))
+	case cmd.Remove != nil:
+		return c.RemoveServers(ctx, cmd.Remove.Tags)
 	case cmd.PrivateServer != nil:
 		return runPrivateServer(ctx, c, cmd.PrivateServer)
+	case cmd.List != nil:
+		return serversList(ctx, c, cmd.List.Latency, cmd.List.JSON)
 	default:
-		return fmt.Errorf("must specify one of --get, --add-json, --add-url, --remove, or --list")
+		return serversList(ctx, c, false, false)
 	}
 }
 
 func runPrivateServer(ctx context.Context, c *ipc.Client, cmd *PrivateServerCmd) error {
 	switch {
-	case cmd.Add != "":
-		return c.AddPrivateServer(ctx, cmd.Add, cmd.IP, cmd.Port, cmd.Token)
-	case cmd.Invite != "":
-		code, err := c.InviteToPrivateServer(ctx, cmd.IP, cmd.Port, cmd.Token, cmd.Invite)
+	case cmd.Add != nil:
+		return c.AddPrivateServer(ctx, cmd.Add.Tag, cmd.Add.IP, cmd.Add.Port, cmd.Add.Token)
+	case cmd.Invite != nil:
+		code, err := c.InviteToPrivateServer(ctx, cmd.Invite.IP, cmd.Invite.Port, cmd.Invite.Token, cmd.Invite.Name)
 		if err != nil {
 			return err
 		}
 		fmt.Println(code)
 		return nil
-	case cmd.RevokeInvite != "":
-		return c.RevokePrivateServerInvite(ctx, cmd.IP, cmd.Port, cmd.Token, cmd.RevokeInvite)
+	case cmd.RevokeInvite != nil:
+		return c.RevokePrivateServerInvite(ctx, cmd.RevokeInvite.IP, cmd.RevokeInvite.Port, cmd.RevokeInvite.Token, cmd.RevokeInvite.Name)
 	default:
-		return fmt.Errorf("must specify one of --add, --invite, or --revoke-invite")
+		return fmt.Errorf("must specify one of: add, invite, revoke-invite")
 	}
 }
 
-func serversList(ctx context.Context, c *ipc.Client, showLatency bool) error {
+func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool) error {
 	srvs, err := c.Servers(ctx)
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		out := make([]ServerListEntry, 0, len(srvs))
+		for _, s := range srvs {
+			out = append(out, ServerListEntry{
+				Tag:           s.Tag,
+				Type:          s.Type,
+				Location:      s.Location,
+				URLTestResult: s.URLTestResult,
+			})
+		}
+		return printJSON(out)
 	}
 	if len(srvs) == 0 {
 		fmt.Println("No servers available")
@@ -147,9 +204,4 @@ func printAddedServers(tags []string, err error) error {
 	}
 	fmt.Printf("Added %d server(s): %s\n", len(tags), strings.Join(tags, ", "))
 	return nil
-}
-
-func serversRemove(ctx context.Context, c *ipc.Client, tags string) error {
-	tagList := strings.Split(tags, ",")
-	return c.RemoveServers(ctx, tagList)
 }

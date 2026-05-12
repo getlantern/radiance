@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,7 +18,13 @@ type ConnectCmd struct {
 
 type DisconnectCmd struct{}
 
-type StatusCmd struct{}
+type StatusCmd struct {
+	JSON bool `arg:"--json" help:"output JSON"`
+}
+
+type ThroughputCmd struct {
+	JSON bool `arg:"--json" help:"output JSON"`
+}
 
 func vpnConnect(ctx context.Context, c *ipc.Client, tag string, wait bool) error {
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
@@ -79,25 +86,127 @@ func waitForIPChange(ctx context.Context, current string, interval time.Duration
 	}
 }
 
-func vpnStatus(ctx context.Context, c *ipc.Client) error {
-	status, err := c.VPNStatus(ctx)
+func vpnThroughput(ctx context.Context, c *ipc.Client, cmd *ThroughputCmd) error {
+	s, err := c.VPNThroughput(ctx)
 	if err != nil {
 		return err
 	}
-	line := string(status)
-	line = strings.ToUpper(line[:1]) + line[1:] // capitalize first letter
+	if cmd.JSON {
+		return printJSON(s)
+	}
+	printThroughput(s)
+	return nil
+}
+
+func printThroughput(s vpn.ThroughputSnapshot) {
+	fmt.Printf("Global  ↓ %s   ↑ %s   (%d active)\r\n",
+		formatBitsPerSec(s.Global.Down), formatBitsPerSec(s.Global.Up), s.ActiveConnections)
+
+	tagSet := make(map[string]struct{}, len(s.PerOutbound)+len(s.ActivePerOutbound))
+	for tag := range s.PerOutbound {
+		tagSet[tag] = struct{}{}
+	}
+	for tag := range s.ActivePerOutbound {
+		tagSet[tag] = struct{}{}
+	}
+	if len(tagSet) == 0 {
+		return
+	}
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	fmt.Print("\r\n")
+	for _, tag := range tags {
+		sp := s.PerOutbound[tag]
+		name := tag
+		if name == "" {
+			name = "(unrouted)"
+		}
+		fmt.Printf("  %-32s ↓ %s   ↑ %s   (%d active)\r\n",
+			name, formatBitsPerSec(sp.Down), formatBitsPerSec(sp.Up), s.ActivePerOutbound[tag])
+	}
+}
+
+func formatBitsPerSec(bps int64) string {
+	const (
+		kbit = 1_000
+		mbit = 1_000_000
+		gbit = 1_000_000_000
+	)
+	switch {
+	case bps >= gbit:
+		return fmt.Sprintf("%6.2f Gbps", float64(bps)/gbit)
+	case bps >= mbit:
+		return fmt.Sprintf("%6.2f Mbps", float64(bps)/mbit)
+	case bps >= kbit:
+		return fmt.Sprintf("%6.2f Kbps", float64(bps)/kbit)
+	default:
+		return fmt.Sprintf("%6d bps ", bps)
+	}
+}
+
+func vpnStatus(ctx context.Context, c *ipc.Client, cmd *StatusCmd) error {
+	snap, err := fetchStatus(ctx, c)
+	if err != nil {
+		return err
+	}
+	return renderStatus(snap, cmd.JSON)
+}
+
+type statusSnapshot struct {
+	Status    vpn.VPNStatus `json:"status"`
+	Server    string        `json:"server,omitempty"`
+	Location  string        `json:"location,omitempty"`
+	LatencyMs uint16        `json:"latency_ms,omitempty"`
+	IP        string        `json:"ip,omitempty"`
+}
+
+func fetchStatus(ctx context.Context, c *ipc.Client) (statusSnapshot, error) {
+	status, err := c.VPNStatus(ctx)
+	if err != nil {
+		return statusSnapshot{}, err
+	}
+	snap := statusSnapshot{Status: status}
 	if status == vpn.Connected {
-		if sel, exists, err := c.SelectedServer(ctx); err == nil && exists {
-			line += "\nServer: " + sel.Tag
-		} else {
-			fmt.Printf("error getting selected server: err=%v, sel=%v, exists=%v\n", err, sel, exists)
+		if sel, exists, err := c.SelectedServer(ctx); err == nil && exists && sel != nil {
+			snap.Server = sel.Tag
+			snap.Location = joinNonEmpty(", ", sel.Location.City, sel.Location.Country)
+			if sel.URLTestResult != nil {
+				snap.LatencyMs = sel.URLTestResult.Delay
+			}
 		}
 	}
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
 	if ip, err := getPublicIP(tctx); err == nil {
-		line += "\nIP: " + ip
+		snap.IP = ip
 	}
 	tcancel()
-	fmt.Println(line)
+	return snap, nil
+}
+
+func renderStatus(snap statusSnapshot, asJSON bool) error {
+	if asJSON {
+		return printJSON(snap)
+	}
+	s := string(snap.Status)
+	if s != "" {
+		s = strings.ToUpper(s[:1]) + s[1:]
+	}
+	fmt.Println(s)
+	if snap.Server != "" {
+		line := "Server: " + snap.Server
+		if snap.Location != "" {
+			line += " (" + snap.Location + ")"
+		}
+		if snap.LatencyMs > 0 {
+			line += fmt.Sprintf(" — %dms", snap.LatencyMs)
+		}
+		fmt.Println(line)
+	}
+	if snap.IP != "" {
+		fmt.Println("IP: " + snap.IP)
+	}
 	return nil
 }
