@@ -141,8 +141,9 @@ type RestoreSubscriptionResponse struct {
 }
 
 // RestoreSubscription restores a previously purchased subscription for the given service.
-// For [GoogleService], data must contain "purchaseToken"; for [AppleService], it must contain
-// "receipt". Other services are rejected.
+// data should contain the fields required by the backend for the chosen service (e.g.
+// "purchaseToken" for Google, "receipt" for Apple); callers are responsible for populating
+// it. Services other than [GoogleService] and [AppleService] are rejected.
 func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionService, data map[string]string) (*RestoreSubscriptionResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "restore_subscription")
 	defer span.End()
