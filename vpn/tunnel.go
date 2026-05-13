@@ -521,28 +521,10 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 
 	// collect tags present in the current group but absent from the new config
 	newTags := list.Tags()
-	// Preserve the manual-selector's currently-selected outbound across
-	// config refreshes — but only when the user is actually in manual
-	// mode. The bandit re-picks routes on every /v1/config-new poll
-	// (60s..15min adaptive interval); without this preservation, a Pro
-	// user who manually selected a specific server would lose that
-	// outbound the moment the bandit's next pick excluded it and have to
-	// redial. Keeping the underlying outbound loaded in the outbound
-	// manager lets the manual selector stay pointing at the same TLS
-	// materials / keypair / masquerade origin the user is mid-session on.
-	//
-	// Gating on manual mode (rather than always preserving selector.Now())
-	// matters because the selector's Now() defaults to the first outbound
-	// in the group even when the user hasn't manually selected anything.
-	// Preserving that "default first" across refreshes when the user is
-	// in auto mode would slowly accumulate stale outbounds the bandit
-	// never asked for.
-	//
-	// Self-healing: if the underlying VPS is eventually destroyed by
-	// autoreplace, sing-box's dial fails and the tunnel's reconnect path
-	// surfaces the failure. The UI is expected to detect repeated
-	// connection failures on a manually selected server and prompt the
-	// user to re-select.
+	// In manual mode, keep the selected outbound alive across config
+	// refreshes so the user doesn't get redialed when the bandit excludes
+	// it. Gated on mode because selector.Now() defaults to the first
+	// outbound even with no manual selection.
 	var pinnedTag string
 	if t.clashServer != nil && t.clashServer.Mode() == ManualSelectTag {
 		pinnedTag = selector.Now()
