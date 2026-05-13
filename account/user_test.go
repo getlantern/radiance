@@ -217,6 +217,16 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		})
 	})
 
+	restoreHandler := func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(w, RestoreSubscriptionResponse{
+			Status:          "active",
+			ActualUserID:    1234,
+			ActualUserToken: "token",
+		})
+	}
+	mux.HandleFunc("/restore-googleplay-subscription", restoreHandler)
+	mux.HandleFunc("/restore-apple-subscription", restoreHandler)
+
 	mux.HandleFunc("/purchase", func(w http.ResponseWriter, r *http.Request) {
 		writeJSONResponse(w, PurchaseResponse{
 			BaseResponse:  &protos.BaseResponse{},

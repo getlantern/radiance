@@ -1132,3 +1132,7 @@ func (r *LocalBackend) SubscriptionPlans(ctx context.Context, channel string) (s
 func (r *LocalBackend) VerifySubscription(ctx context.Context, service account.SubscriptionService, data map[string]string) (string, error) {
 	return r.accountClient.VerifySubscription(ctx, service, data)
 }
+
+func (r *LocalBackend) RestoreSubscription(ctx context.Context, service account.SubscriptionService, data map[string]string) (*account.RestoreSubscriptionResponse, error) {
+	return r.accountClient.RestoreSubscription(ctx, service, data)
+}
