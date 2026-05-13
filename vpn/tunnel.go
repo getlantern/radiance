@@ -547,19 +547,9 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	if t.clashServer != nil && t.clashServer.Mode() == ManualSelectTag {
 		pinnedTag = selector.Now()
 	}
-	// pinnedStale: the pinned tag is currently loaded but the server's
-	// latest config doesn't include it. We keep the outbound itself
-	// loaded (and in the manual-selector group) but still want to remove
-	// it from the AutoSelectTag urltest pool — otherwise an outbound the
-	// server explicitly excluded this cycle would still be a candidate
-	// if the user switches to auto before the next refresh.
-	var pinnedStale bool
 	var toRemove []string
 	for _, tag := range selector.All() {
 		if tag == pinnedTag {
-			if !slices.Contains(newTags, tag) {
-				pinnedStale = true
-			}
 			continue
 		}
 		if !slices.Contains(newTags, tag) {
@@ -592,24 +582,6 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 			return err
 		} else if err != nil {
 			errs = append(errs, err)
-		}
-		// Auto-pool cleanup for a stale pinned tag: the underlying outbound
-		// stays loaded (so the manual selector keeps a live config) but it
-		// leaves the auto urltest group so the bandit's exclusion this
-		// cycle is honored if the user flips to auto. Gated on
-		// hasNewOutbound so we don't shrink the auto pool when all the
-		// bandit's new picks failed to load — in that branch the old pool
-		// is what's keeping the tunnel alive.
-		if pinnedStale {
-			if err := t.mutGrpMgr.RemoveFromGroup(AutoSelectTag, pinnedTag); errors.Is(err, groups.ErrIsClosed) {
-				return errLibboxClosed
-			} else if err != nil {
-				errs = append(errs, fmt.Errorf("removing pinned tag %q from auto group: %w", pinnedTag, err))
-			} else {
-				slog.Debug("Removed pinned tag from auto group; kept in manual",
-					"pinned_tag", pinnedTag,
-				)
-			}
 		}
 	} else {
 		slog.Warn("All new outbounds failed to load, keeping old outbounds",
