@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
+	sblog "github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing/service"
 
 	box "github.com/getlantern/lantern-box"
+	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
@@ -613,7 +616,17 @@ func pickInternalPort() uint16 {
 // here are scoped to this peer's box instance so the two coexist
 // without stomping on each other.
 func defaultBuildBoxService(_ context.Context, options string) (boxService, error) {
-	bs, err := libbox.NewServiceWithContext(box.BaseContext(), options, nil)
+	// Wire the peer's sing-box logger into radiance's slog so router /
+	// dial / outbound errors from this second box instance reach the
+	// same lantern.log as everything else. Without this the box's
+	// default stderr-only logger silently swallows the most useful
+	// signal — e.g. "why did api.iantem.io fail to dial?" during a
+	// peer-share verify failure — which made FD #174614 unnecessarily
+	// hard to triage. Mirrors vpn/tunnel.go's registration for the
+	// main tunnel's box.
+	ctx := box.BaseContext()
+	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
+	bs, err := libbox.NewServiceWithContext(ctx, options, nil)
 	if err != nil {
 		return nil, fmt.Errorf("libbox.NewServiceWithContext: %w", err)
 	}
