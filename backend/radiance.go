@@ -581,7 +581,10 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 	if err := r.srvManager.SetServers(list, isLantern); err != nil {
 		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
 	}
-	err := r.vpnClient.UpdateOutbounds(list)
+	// updateOutbounds evicts any outbound absent from the list; include all
+	// servers so user-added outbounds aren't removed on a Lantern config update.
+	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
+	err := r.vpnClient.UpdateOutbounds(allList)
 	if err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("Failed to update VPN outbounds after config change", "error", err)
 	}
