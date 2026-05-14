@@ -23,14 +23,15 @@ import (
 )
 
 const (
-	runStagingPaymentRedirectEnv  = "RADIANCE_RUN_STAGING_PAYMENT_REDIRECT"
-	paymentRedirectPlanIDEnv      = "RADIANCE_PAYMENT_REDIRECT_PLAN_ID"
-	paymentRedirectChannelEnv     = "RADIANCE_PAYMENT_REDIRECT_CHANNEL"
-	paymentRedirectProviderEnv    = "RADIANCE_PAYMENT_REDIRECT_PROVIDER"
-	paymentRedirectEmailEnv       = "RADIANCE_PAYMENT_REDIRECT_EMAIL"
-	paymentRedirectBillingTypeEnv = "RADIANCE_PAYMENT_REDIRECT_BILLING_TYPE"
-	paymentRedirectUserIDEnv      = "RADIANCE_PAYMENT_REDIRECT_USER_ID"
-	paymentRedirectTokenEnv       = "RADIANCE_PAYMENT_REDIRECT_TOKEN"
+	runStagingPaymentRedirectEnv           = "RADIANCE_RUN_STAGING_PAYMENT_REDIRECT"
+	paymentRedirectPlanIDEnv               = "RADIANCE_PAYMENT_REDIRECT_PLAN_ID"
+	paymentRedirectChannelEnv              = "RADIANCE_PAYMENT_REDIRECT_CHANNEL"
+	paymentRedirectProviderEnv             = "RADIANCE_PAYMENT_REDIRECT_PROVIDER"
+	subscriptionPaymentRedirectProviderEnv = "RADIANCE_SUBSCRIPTION_PAYMENT_REDIRECT_PROVIDER"
+	paymentRedirectEmailEnv                = "RADIANCE_PAYMENT_REDIRECT_EMAIL"
+	paymentRedirectBillingTypeEnv          = "RADIANCE_PAYMENT_REDIRECT_BILLING_TYPE"
+	paymentRedirectUserIDEnv               = "RADIANCE_PAYMENT_REDIRECT_USER_ID"
+	paymentRedirectTokenEnv                = "RADIANCE_PAYMENT_REDIRECT_TOKEN"
 )
 
 func TestStagingPaymentRedirectIdempotency(t *testing.T) {
@@ -50,7 +51,8 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 	ensureStagingPaymentRedirectUser(ctx, t, client)
 
 	planID := stagingPaymentRedirectPlanID(ctx, t, client)
-	provider := envOrDefault(paymentRedirectProviderEnv, "stripe")
+	paymentProvider := envOrDefault(paymentRedirectProviderEnv, "shepherd")
+	subscriptionProvider := envOrDefault(subscriptionPaymentRedirectProviderEnv, "stripe")
 	email := envOrDefault(
 		paymentRedirectEmailEnv,
 		fmt.Sprintf("radiance-payment-redirect-ci+%d@getlantern.org", time.Now().Unix()),
@@ -69,7 +71,7 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 			name: "payment_redirect",
 			call: client.PaymentRedirect,
 			data: PaymentRedirectData{
-				Provider:   provider,
+				Provider:   paymentProvider,
 				Plan:       planID,
 				DeviceName: deviceName,
 				Email:      email,
@@ -79,7 +81,7 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 			name: "subscription_payment_redirect_url",
 			call: client.SubscriptionPaymentRedirectURL,
 			data: PaymentRedirectData{
-				Provider:    provider,
+				Provider:    subscriptionProvider,
 				Plan:        planID,
 				DeviceName:  deviceName,
 				Email:       email,
@@ -105,7 +107,7 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 			require.NoError(t, err)
 			requireHTTPSRedirect(t, sameKeyURL)
 			if sameKeyURL != firstURL {
-				t.Fatalf("same idempotency key returned a different redirect URL")
+				t.Errorf("same idempotency key returned a different redirect URL")
 			}
 
 			differentKey := tt.data
@@ -114,7 +116,7 @@ func TestStagingPaymentRedirectIdempotency(t *testing.T) {
 			require.NoError(t, err)
 			requireHTTPSRedirect(t, differentKeyURL)
 			if differentKeyURL == firstURL {
-				t.Fatalf("different idempotency key returned the same redirect URL")
+				t.Errorf("different idempotency key returned the same redirect URL")
 			}
 		})
 	}
