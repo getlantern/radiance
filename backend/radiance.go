@@ -324,7 +324,8 @@ func (r *LocalBackend) startVPNStatusListeners() {
 		r.updateURLTestListener(evt.Status)
 	})
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
-		if evt.Status == vpn.Disconnected || evt.Status == vpn.ErrorStatus {
+		switch evt.Status {
+		case vpn.Disconnected, vpn.ErrorStatus, vpn.Restarting:
 			r.clearSelectedIfMissing()
 		}
 	})
