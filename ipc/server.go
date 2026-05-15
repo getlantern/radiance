@@ -123,9 +123,9 @@ type Server struct {
 // server authenticates each connection; when false, it accepts all connections.
 func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
 	svr := &http.Server{
-		Handler:     newLocalAPI(b, withAuth),
-		ReadTimeout: 5 * time.Second,
-		Protocols:   &protocols,
+		Handler:           newLocalAPI(b, withAuth),
+		ReadHeaderTimeout: 5 * time.Second,
+		Protocols:         &protocols,
 	}
 	if withAuth {
 		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
