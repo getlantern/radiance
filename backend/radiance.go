@@ -590,16 +590,6 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
-
-	var selected servers.Server
-	manual := settings.GetStruct(settings.SelectedServerKey, &selected) == nil && selected.Tag != ""
-	if manual && selected.IsLantern == isLantern && !slices.Contains(allList.Tags(), selected.Tag) {
-		// Keep the user's manually-chosen server alive in the tunnel pool
-		// even though it's gone from the manager, so the connection survives
-		// backend rotations until the user switches.
-		allList.Servers = append(allList.Servers, &selected)
-	}
-
 	if err := r.vpnClient.UpdateOutbounds(allList); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", err)
 	}

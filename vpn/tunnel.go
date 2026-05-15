@@ -519,9 +519,21 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 		return t.ctx.Err()
 	}
 
+	// collect tags present in the current group but absent from the new config
 	newTags := list.Tags()
+	// In manual mode, keep the selected outbound alive across config
+	// refreshes so the user doesn't get redialed when the bandit excludes
+	// it. Gated on mode because selector.Now() defaults to the first
+	// outbound even with no manual selection.
+	var pinnedTag string
+	if t.clashServer != nil && t.clashServer.Mode() == ManualSelectTag {
+		pinnedTag = selector.Now()
+	}
 	var toRemove []string
 	for _, tag := range selector.All() {
+		if tag == pinnedTag {
+			continue
+		}
 		if !slices.Contains(newTags, tag) {
 			toRemove = append(toRemove, tag)
 		}
