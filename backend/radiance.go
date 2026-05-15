@@ -183,6 +183,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
+	r.clearSelectedIfMissing()
 	return r, nil
 }
 
@@ -321,6 +322,12 @@ func (r *LocalBackend) startVPNStatusListeners() {
 	})
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		r.updateURLTestListener(evt.Status)
+	})
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		switch evt.Status {
+		case vpn.Disconnected, vpn.ErrorStatus, vpn.Restarting:
+			r.clearSelectedIfMissing()
+		}
 	})
 }
 
@@ -472,8 +479,7 @@ func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) {
 	_, smartRoutingChanged := updates[settings.SmartRoutingKey]
 	if (adBlockChanged || smartRoutingChanged) && r.vpnClient.Status() == vpn.Connected {
 		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
-		bOptions := r.getBoxOptions()
-		go r.vpnClient.Restart(bOptions)
+		go r.RestartVPN()
 	}
 }
 
@@ -581,11 +587,12 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 	if err := r.srvManager.SetServers(list, isLantern); err != nil {
 		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
 	}
-	err := r.vpnClient.UpdateOutbounds(list)
-	if err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		slog.Error("Failed to update VPN outbounds after config change", "error", err)
+	// updateOutbounds evicts any outbound absent from the list; include all
+	// servers so user-added outbounds aren't removed on a Lantern config update.
+	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
+	if err := r.vpnClient.UpdateOutbounds(allList); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to update VPN outbounds: %w", err)
 	}
-	r.clearSelectedIfMissing()
 	return nil
 }
 
