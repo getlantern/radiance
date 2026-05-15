@@ -1,4 +1,4 @@
-TAGS=with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack
+TAGS=with_gvisor,with_quic,with_wireguard,with_utls,with_grpc,with_conntrack
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)

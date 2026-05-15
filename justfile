@@ -1,4 +1,4 @@
-base_tags := "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack"
+base_tags := "with_gvisor,with_quic,with_wireguard,with_utls,with_grpc,with_conntrack"
 tags := if os() == "macos" { "standalone," + base_tags } else { base_tags }
 lanternd := if os() == "windows" { "lanternd.exe" } else { "lanternd" }
 lantern := if os() == "windows" { "lantern.exe" } else { "lantern" }

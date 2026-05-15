@@ -10,7 +10,7 @@ WORKDIR /src
 COPY . .
 
 ENV GOCACHE=/root/.cache/go-build
-RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api" -o /tester ./tester/...
+RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_grpc,with_conntrack" -o /tester ./tester/...
 
 FROM debian:bookworm-slim
 
