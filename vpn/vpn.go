@@ -29,6 +29,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/log"
@@ -543,6 +545,17 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
+	}
+	// Avoid mutating the caller's slice.
+	outbounds = append([]option.Outbound(nil), outbounds...)
+	for i := range outbounds {
+		// Seeding starts a long-lived BitTorrent client; disable it for this
+		// short-lived instance so instance.Close() returns promptly.
+		if waterOpts, ok := outbounds[i].Options.(*lbO.WATEROutboundOptions); outbounds[i].Type == lbC.TypeWATER && ok {
+			cp := *waterOpts
+			cp.SeedEnabled = false
+			outbounds[i].Options = &cp
+		}
 	}
 	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs))
 	options := option.Options{
