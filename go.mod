@@ -22,6 +22,7 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 
 require (
 	github.com/1Password/srp v0.2.0
+	github.com/Jigsaw-Code/outline-sdk v0.0.19
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
@@ -30,7 +31,7 @@ require (
 	github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
-	github.com/getlantern/kindling v0.0.0-20260507163327-92a44d03bdc5
+	github.com/getlantern/kindling v0.0.0-20260516120759-a9712f95df03
 	github.com/getlantern/lantern-box v0.0.82
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
@@ -59,7 +60,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/Jigsaw-Code/outline-sdk v0.0.19 // indirect
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.2 // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
