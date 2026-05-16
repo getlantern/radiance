@@ -193,6 +193,16 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
 	}
 
+	// Defence-in-depth: refuse to start the box if the server-supplied
+	// launch_cfg is missing the expected abuse-handling rules. A
+	// server-side regression that silently shipped an open-proxy config
+	// would otherwise turn every peer in the field into one until the
+	// next deploy. The peer prefers failing to share over sharing
+	// unsafely. See validate.go for the exact checks.
+	if err := validateAbuseRules(regResp.ServerConfig); err != nil {
+		return fmt.Errorf("launch_cfg failed abuse-rule sanity check: %w", err)
+	}
+
 	// The peer's outbound traffic must bypass any TUN device the user's own
 	// VPN may have installed — otherwise censored clients' traffic would
 	// egress through the local user's Lantern proxy instead of their
