@@ -25,11 +25,10 @@ func StreamDialer() transport.StreamDialer {
 }
 
 // halfCloseConn adapts a net.Conn to transport.StreamConn by adding
-// CloseRead / CloseWrite. The direct-fallback path returns *net.TCPConn,
-// which already implements both; the proxy path returns *bufferedConn,
-// which doesn't expose half-close through its method set. Full Close on
-// the half-close intent is a safe approximation — the smart strategy only
-// uses these to probe paths, not to enforce HTTP/1.1 EOF semantics.
+// CloseRead / CloseWrite. Underlying conns that already implement
+// half-close are used as-is; the rest fall back to full Close, which is
+// a safe approximation for the smart strategy's probe paths (it does not
+// enforce HTTP/1.1 EOF semantics on probe streams).
 type halfCloseConn struct {
 	net.Conn
 }
