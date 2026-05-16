@@ -159,7 +159,7 @@ func newStubServer(t *testing.T) *stubServer {
 		deregisterStatus: http.StatusOK,
 		registerResp: RegisterResponse{
 			RouteID:                  "00000000-0000-0000-0000-000000000123",
-			ServerConfig:             `{"inbounds": [{"type":"samizdat","tag":"samizdat-in"}]}`,
+			ServerConfig:             minimalValidLaunchCfg,
 			HeartbeatIntervalSeconds: 60,
 		},
 	}
