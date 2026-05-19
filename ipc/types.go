@@ -101,6 +101,11 @@ type VerifySubscriptionRequest struct {
 	Data    map[string]string           `json:"data"`
 }
 
+type RestoreSubscriptionRequest struct {
+	Service account.SubscriptionService `json:"service"`
+	Data    map[string]string           `json:"data"`
+}
+
 type IssueReportRequest struct {
 	IssueType             issue.IssueType     `json:"issueType"`
 	Description           string              `json:"description"`

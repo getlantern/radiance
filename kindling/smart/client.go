@@ -3,11 +3,10 @@
 package smart
 
 import (
-	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -22,6 +21,17 @@ import (
 
 const tracerName = "github.com/getlantern/radiance/kindling/smart"
 
+// DialerConfig is a copy of kindling's smart_dialer_config.yml with the
+// `system: {}` DNS entry removed. The outline-sdk smart strategy rejects
+// any base StreamDialer that isn't *transport.TCPDialer when the system
+// resolver is selected, which the bypass dialer can't satisfy. DoH entries
+// route every probe through the supplied StreamDialer instead, which is
+// what we want anyway — system DNS uses OS routing tables and would loop
+// back through the VPN TUN we're trying to bypass.
+//
+//go:embed smart_dialer_config.yml
+var DialerConfig []byte
+
 func NewHTTPClientWithSmartTransport(logWriter io.Writer, address string) (*http.Client, error) {
 	// Parse the domain from the URL.
 	u, err := url.Parse(address)
@@ -31,11 +41,10 @@ func NewHTTPClientWithSmartTransport(logWriter io.Writer, address string) (*http
 
 	// Extract the domain from the URL.
 	domain := u.Host
-	trans, err := kindling.NewSmartHTTPTransport(logWriter, domain)
+	trans, err := kindling.NewSmartHTTPTransportWithConfig(logWriter, DialerConfig, bypass.StreamDialer(), nil, domain)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
 	}
-	wrapTransportWithBypass(trans)
 	lz := &lazyDialingRoundTripper{
 		smartTransportMu: sync.Mutex{},
 		logWriter:        logWriter,
@@ -71,13 +80,12 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 
 	if lz.smartTransport == nil {
 		slog.Info("Smart transport is nil")
-		trans, err := kindling.NewSmartHTTPTransport(lz.logWriter, lz.domain)
+		trans, err := kindling.NewSmartHTTPTransportWithConfig(lz.logWriter, DialerConfig, bypass.StreamDialer(), nil, lz.domain)
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()
 			return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport -- offline? %v", err))
 		}
-		wrapTransportWithBypass(trans)
 		lz.smartTransport = trans
 	}
 
@@ -87,13 +95,4 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		traces.RecordError(ctx, err, trace.WithStackTrace(true))
 	}
 	return res, err
-}
-
-func wrapTransportWithBypass(trans *http.Transport) {
-	if trans == nil {
-		return
-	}
-	trans.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return bypass.DialContext(ctx, network, addr)
-	}
 }

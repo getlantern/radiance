@@ -640,6 +640,18 @@ func (c *Client) VerifySubscription(ctx context.Context, service account.Subscri
 	return resp.Result, err
 }
 
+// RestoreSubscription restores a previously purchased subscription.
+// For Apple and Google services, data must contain the appropriate purchase information.
+func (c *Client) RestoreSubscription(ctx context.Context, service account.SubscriptionService, data map[string]string) (*account.RestoreSubscriptionResponse, error) {
+	var resp account.RestoreSubscriptionResponse
+	err := c.doJSON(ctx, http.MethodPost, subscriptionRestoreEndpoint,
+		RestoreSubscriptionRequest{Service: service, Data: data}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 ///////////
 // Issue //
 ///////////

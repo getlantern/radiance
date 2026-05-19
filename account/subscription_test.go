@@ -90,6 +90,33 @@ func TestVerifySubscription(t *testing.T) {
 	assert.NotEmpty(t, resp)
 }
 
+func TestRestoreSubscription(t *testing.T) {
+	t.Run("apple", func(t *testing.T) {
+		ac, _ := newTestClient(t)
+		resp, err := ac.RestoreSubscription(context.Background(), AppleService, map[string]string{"receipt": "r"})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, "active", resp.Status)
+		assert.Equal(t, int64(1234), resp.ActualUserID)
+		assert.Equal(t, "token", resp.ActualUserToken)
+	})
+
+	t.Run("google", func(t *testing.T) {
+		ac, _ := newTestClient(t)
+		resp, err := ac.RestoreSubscription(context.Background(), GoogleService, map[string]string{"purchaseToken": "t"})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, "active", resp.Status)
+	})
+
+	t.Run("unsupported", func(t *testing.T) {
+		ac, _ := newTestClient(t)
+		resp, err := ac.RestoreSubscription(context.Background(), StripeService, nil)
+		require.Error(t, err)
+		assert.Nil(t, resp)
+	})
+}
+
 func TestPlans(t *testing.T) {
 	ac, _ := newTestClient(t)
 	resp, err := ac.SubscriptionPlans(context.Background(), "store")

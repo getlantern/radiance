@@ -89,6 +89,7 @@ const (
 	subscriptionPaymentRedirectURLEndpoint = "/subscription/payment-redirect-url"
 	subscriptionPlansEndpoint              = "/subscription/plans"
 	subscriptionVerifyEndpoint             = "/subscription/verify"
+	subscriptionRestoreEndpoint            = "/subscription/restore"
 
 	// Issue endpoint
 	issueEndpoint = "/issue"
@@ -252,6 +253,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+subscriptionPaymentRedirectURLEndpoint, traced(s.subscriptionPaymentRedirectURLHandler))
 	mux.HandleFunc("GET "+subscriptionPlansEndpoint, traced(s.subscriptionPlansHandler))
 	mux.HandleFunc("POST "+subscriptionVerifyEndpoint, traced(s.subscriptionVerifyHandler))
+	mux.HandleFunc("POST "+subscriptionRestoreEndpoint, traced(s.subscriptionRestoreHandler))
 
 	// Issue
 	mux.HandleFunc("POST "+issueEndpoint, traced(s.issueReportHandler))
@@ -1113,6 +1115,20 @@ func (s *localapi) subscriptionVerifyHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, ResultResponse{Result: result})
+}
+
+func (s *localapi) subscriptionRestoreHandler(w http.ResponseWriter, r *http.Request) {
+	var req RestoreSubscriptionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.backend(r.Context()).RestoreSubscription(r.Context(), req.Service, req.Data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 ///////////

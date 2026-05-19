@@ -15,11 +15,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
+	radiancesmart "github.com/getlantern/radiance/kindling/smart"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -108,6 +110,8 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		return kindling.NewKindling("radiance",
 			kindling.WithPanicListener(reporting.PanicListener),
 			kindling.WithLogWriter(logger),
+			kindling.WithStreamDialer(bypass.StreamDialer()),
+			kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
 			// "pro-server" calls still target api.getiantem.org; everything
 			// else uses df.iantem.io.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
@@ -118,6 +122,8 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 	kindlingOptions := []kindling.Option{
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
+		kindling.WithStreamDialer(bypass.StreamDialer()),
+		kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
 	}
 
 	updaterCtx, cancel := context.WithCancel(ctx)
