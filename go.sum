@@ -254,6 +254,8 @@ github.com/getlantern/lantern-box v0.0.83-0.20260519135005-ce3272ca1146 h1:9Sdzg
 github.com/getlantern/lantern-box v0.0.83-0.20260519135005-ce3272ca1146/go.mod h1:wJhPQKdnwD6qW/ghAfzsrj/IfHZbvFSAfr52+Tu6dbw=
 github.com/getlantern/lantern-box v0.0.83-0.20260519152417-04369351d6a8 h1:kSpbTNsZT7VFfCSFiQgGx1QkgOoQPlci7L5w+lul5y8=
 github.com/getlantern/lantern-box v0.0.83-0.20260519152417-04369351d6a8/go.mod h1:wJhPQKdnwD6qW/ghAfzsrj/IfHZbvFSAfr52+Tu6dbw=
+github.com/getlantern/lantern-box v0.0.83-0.20260519172753-f859f1d5a436 h1:wdF8PJcM8uARLH01z0rwhMBq4E7QtX7x6M3MSlCmjS8=
+github.com/getlantern/lantern-box v0.0.83-0.20260519172753-f859f1d5a436/go.mod h1:wJhPQKdnwD6qW/ghAfzsrj/IfHZbvFSAfr52+Tu6dbw=
 github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90 h1:P9JX1yAu2uq3b5YiT0sLtHkTrkZuttV8gPZh81nUuag=
 github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNiMhCu4bf60nqcIuQpTYb00Ezm1ag=
