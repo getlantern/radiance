@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -545,16 +544,12 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		tags = append(tags, ob.Tag)
 	}
 	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs))
+	// CacheFile must stay disabled: enabling it holds an exclusive flock on
+	// a file in the iOS App Group container, which the OS kills across
+	// suspend with 0xdead10cc.
 	options := option.Options{
 		Log:       &option.LogOptions{Disabled: true},
 		Outbounds: outbounds,
-		Experimental: &option.ExperimentalOptions{
-			CacheFile: &option.CacheFileOptions{
-				Enabled: true,
-				Path:    filepath.Join(basePath, cacheFileName),
-				CacheID: cacheID,
-			},
-		},
 	}
 
 	// create offlineed box instance. we just use the standard box since we don't need a
