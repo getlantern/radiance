@@ -43,17 +43,18 @@ func CloudFrontPrefixes() ([]netip.Prefix, error) {
 }
 
 // CloudFrontCandidates produces n probe candidates by pairing IPs sampled
-// from the embedded CloudFront IP range with outer SNIs randomly drawn
-// from snis.
+// from the embedded CloudFront IP range with masquerade domains randomly
+// drawn from snis (used post-handshake for cert verification, not as
+// outer SNI).
 //
-// Expect a hit rate below 100%: CloudFront edges serve a subset of
-// distributions per POP, so an arbitrary (IP, outer SNI) pair only
-// connects when that POP serves both the outer SNI's distribution and
-// the inner-Host distribution. The probe filters the survivors.
+// Outer SNI is left empty. CloudFront's strict SNI/Host enforcement
+// returns HTTP 421 when SNI and inner Host belong to different
+// distributions; sending no SNI extension at all sidesteps that check
+// (no SNI = nothing to mismatch) and lets the edge route by inner
+// Host alone. Matches the sni: "" pattern in fronted.yaml.gz.
 //
-// snis should list CloudFront-fronted hostnames known to be globally
-// served (Price Class All) — the masquerade domains in fronted.yaml.gz
-// are the natural source.
+// snis is used as the post-handshake VerifyHostname — the served cert
+// is expected to be valid for one of the listed masquerade domains.
 func CloudFrontCandidates(n int, snis []string, testURL, innerHost string) ([]Candidate, error) {
 	if n <= 0 {
 		return nil, nil
@@ -78,11 +79,17 @@ func CloudFrontCandidates(n int, snis []string, testURL, innerHost string) ([]Ca
 		}
 		sni := snis[sniIdx.Int64()]
 		out = append(out, Candidate{
-			Provider:       "cloudfront",
-			Domain:         sni,
+			Provider: "cloudfront",
+			Domain:   sni,
+			// VerifyHostname is the inner Host — when no SNI is sent,
+			// CloudFront serves either the *.cloudfront.net default
+			// cert (which covers the inner Host by wildcard) or a
+			// customer-specific cert pinned to this edge's distribution.
+			// Verifying against the inner Host filters to the former,
+			// which is the case where our cross-distribution Host
+			// header routing actually works.
 			IPAddress:      ip,
-			SNI:            sni,
-			VerifyHostname: sni,
+			VerifyHostname: innerHost,
 			TestURL:        testURL,
 			InnerHost:      innerHost,
 		})

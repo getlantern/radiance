@@ -78,8 +78,11 @@ func TestCloudFrontCandidates(t *testing.T) {
 		if !allowedSNI[c.Domain] {
 			t.Errorf("Domain = %q; not in input SNI list", c.Domain)
 		}
-		if c.Domain != c.VerifyHostname {
-			t.Errorf("VerifyHostname = %q; want = Domain %q", c.VerifyHostname, c.Domain)
+		if c.SNI != "" {
+			t.Errorf("SNI should be empty (no SNI sent); got %q", c.SNI)
+		}
+		if c.VerifyHostname != "api.iantem.io" {
+			t.Errorf("VerifyHostname = %q; want = InnerHost %q", c.VerifyHostname, "api.iantem.io")
 		}
 		if net.ParseIP(c.IPAddress) == nil {
 			t.Errorf("bad IP %q", c.IPAddress)
