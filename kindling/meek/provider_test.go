@@ -43,6 +43,40 @@ func TestResultsToFrontSpecs_PreservesOrderAndShape(t *testing.T) {
 	}
 }
 
+func TestBuildOutbound_EmptyFrontsReturnsFalse(t *testing.T) {
+	_, ok := BuildOutbound("meek", "https://meek.example/meek", nil)
+	if ok {
+		t.Errorf("expected ok=false when fronts is empty")
+	}
+}
+
+func TestBuildOutbound_ShapesOutbound(t *testing.T) {
+	fronts := []FrontSpec{
+		{IPAddress: "1.2.3.4", VerifyHostname: "a248.e.akamai.net"},
+		{IPAddress: "99.84.2.4", SNI: "aa1.awsstatic.com", VerifyHostname: "aa1.awsstatic.com"},
+	}
+	out, ok := BuildOutbound("meek-fronted", "https://meek.example/", fronts)
+	if !ok {
+		t.Fatalf("BuildOutbound returned ok=false")
+	}
+	if out.Type != "meek" {
+		t.Errorf("Type = %q; want meek", out.Type)
+	}
+	if out.Tag != "meek-fronted" {
+		t.Errorf("Tag = %q", out.Tag)
+	}
+	mo, isMeek := out.Options.(*MeekOutboundOptions)
+	if !isMeek {
+		t.Fatalf("Options is %T; want *MeekOutboundOptions", out.Options)
+	}
+	if mo.URL != "https://meek.example/" {
+		t.Errorf("URL = %q", mo.URL)
+	}
+	if len(mo.Fronts) != 2 {
+		t.Errorf("Fronts length = %d; want 2", len(mo.Fronts))
+	}
+}
+
 func TestResultsToFrontSpecs_LimitsToN(t *testing.T) {
 	working := []scanner.Result{
 		{Candidate: scanner.Candidate{IPAddress: "1.1.1.1"}, Status: 200},

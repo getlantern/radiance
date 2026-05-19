@@ -13,12 +13,59 @@ import (
 	"time"
 
 	"github.com/getlantern/domainfront"
+	sbo "github.com/sagernet/sing-box/option"
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/fronted/scanner"
 )
 
 var errNilConfig = errors.New("meek: ProviderConfig.Config is nil")
+
+// MeekOutboundOptions mirrors lantern-box/option.MeekOutboundOptions
+// kept local to avoid version-coupling radiance to lantern-box's release
+// cadence. The JSON tags are identical, so once lantern-box ships meek
+// and radiance bumps the dep, drop this copy and import the upstream
+// type directly.
+type MeekOutboundOptions struct {
+	sbo.DialerOptions
+
+	URL    string            `json:"url"`
+	Fronts []FrontSpec       `json:"fronts"`
+	Header map[string]string `json:"header,omitempty"`
+
+	PollIntervalMs int    `json:"poll_interval_ms,omitempty"`
+	MaxBodyBytes   int    `json:"max_body_bytes,omitempty"`
+	SessionIDLen   int    `json:"session_id_len,omitempty"`
+	ConnectTimeout string `json:"connect_timeout,omitempty"`
+	ReadTimeout    string `json:"read_timeout,omitempty"`
+}
+
+// MeekOutboundType is the sing-box outbound type string. Matches
+// lantern-box/constant.TypeMeek. Stringified so radiance doesn't have
+// to import a version of lantern-box that registers meek.
+const MeekOutboundType = "meek"
+
+// BuildOutbound returns a sing-box outbound for the meek transport with
+// the given tag, meek-server URL, and front pool. The returned Outbound
+// can be appended directly to O.Options.Outbounds; selector groups can
+// reference it by tag.
+//
+// Returns ok=false when fronts is empty — without at least one front,
+// the meek outbound has nothing to dial and would fail at first use.
+// Callers should skip injection in that case.
+func BuildOutbound(tag, url string, fronts []FrontSpec) (sbo.Outbound, bool) {
+	if len(fronts) == 0 {
+		return sbo.Outbound{}, false
+	}
+	return sbo.Outbound{
+		Type: MeekOutboundType,
+		Tag:  tag,
+		Options: &MeekOutboundOptions{
+			URL:    url,
+			Fronts: fronts,
+		},
+	}, true
+}
 
 // FrontSpec mirrors lantern-box/option.FrontSpec; kept local to avoid
 // version-coupling radiance's release cadence to lantern-box's.

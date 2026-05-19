@@ -83,6 +83,12 @@ type BoxOptions struct {
 	// prior latency results survive across tunnel close/open. Keyed by
 	// outbound/endpoint tag.
 	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
+	// MeekOutbound is an optional client-built outbound (typically the
+	// domain-fronted meek transport). When non-nil, buildOptions appends
+	// it to Outbounds and includes its Tag in the selector groups so it
+	// participates in auto/manual routing alongside API-supplied ones.
+	// Nil = no-op; safe to leave unset.
+	MeekOutbound *O.Outbound `json:"-"`
 }
 
 // baseOpts returns the minimum sing-box options required for the tunnel to
@@ -341,6 +347,11 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
+	if bOptions.MeekOutbound != nil && bOptions.MeekOutbound.Tag != "" {
+		opts.Outbounds = append(opts.Outbounds, *bOptions.MeekOutbound)
+		tags = append(tags, bOptions.MeekOutbound.Tag)
+		slog.Info("Injected meek outbound", slog.String("tag", bOptions.MeekOutbound.Tag))
+	}
 	initial := bOptions.InitialServer
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag

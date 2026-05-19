@@ -218,6 +218,56 @@ func testConfig(t *testing.T) config.Config {
 	return cfg
 }
 
+func TestBuildOptions_MeekInjection(t *testing.T) {
+	options, _ := testBoxOptions(t)
+
+	meek := &O.Outbound{
+		Type: "meek",
+		Tag:  "meek-fronted",
+	}
+	opts, err := buildOptions(BoxOptions{
+		BasePath:     t.TempDir(),
+		Options:      options,
+		MeekOutbound: meek,
+	})
+	require.NoError(t, err)
+
+	var foundMeek bool
+	for _, o := range opts.Outbounds {
+		if o.Tag == "meek-fronted" && o.Type == "meek" {
+			foundMeek = true
+			break
+		}
+	}
+	assert.True(t, foundMeek, "meek outbound should be present in Outbounds")
+
+	var autoSelector *O.Outbound
+	for i, o := range opts.Outbounds {
+		if o.Tag == AutoSelectTag {
+			autoSelector = &opts.Outbounds[i]
+			break
+		}
+	}
+	require.NotNil(t, autoSelector, "auto selector should exist")
+	autoOpts, ok := autoSelector.Options.(*lbO.MutableURLTestOutboundOptions)
+	require.True(t, ok, "auto selector Options should be MutableURLTestOutboundOptions")
+	assert.Contains(t, autoOpts.Outbounds, "meek-fronted", "auto selector should reference meek tag")
+}
+
+func TestBuildOptions_MeekOmittedWhenNil(t *testing.T) {
+	options, _ := testBoxOptions(t)
+
+	opts, err := buildOptions(BoxOptions{
+		BasePath: t.TempDir(),
+		Options:  options,
+	})
+	require.NoError(t, err)
+
+	for _, o := range opts.Outbounds {
+		assert.NotEqual(t, "meek", o.Type, "no meek outbound should be present when MeekOutbound is nil")
+	}
+}
+
 func testBoxOptions(t *testing.T) (O.Options, []string) {
 	cfg := testConfig(t)
 	var tags []string
