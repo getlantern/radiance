@@ -83,6 +83,7 @@ type Service struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
+	started  atomic.Bool
 }
 
 // NewService loads the on-disk cache if present and returns a Service
@@ -116,6 +117,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 // Start runs an initial refresh and the periodic loop. Returns when ctx
 // is canceled or Close is called. Safe to call once.
 func (s *Service) Start(ctx context.Context) {
+	s.started.Store(true)
 	defer close(s.done)
 	go s.refresh(ctx)
 
@@ -135,10 +137,14 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-// Close stops the background loop. Idempotent.
+// Close stops the background loop. Idempotent. Safe to call before
+// Start — in that case it just marks the Service stopped without
+// waiting on a loop that was never running.
 func (s *Service) Close() error {
 	s.stopOnce.Do(func() { close(s.stop) })
-	<-s.done
+	if s.started.Load() {
+		<-s.done
+	}
 	return nil
 }
 
