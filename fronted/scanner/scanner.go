@@ -192,6 +192,13 @@ func buildProbeRequest(ctx context.Context, c Candidate) (*http.Request, error) 
 	if err != nil {
 		return nil, fmt.Errorf("parse TestURL: %w", err)
 	}
+	// The outer connection is TLS on port 443 regardless of the
+	// TestURL scheme. http.Transport only routes via DialTLSContext
+	// (our pre-opened fronted TLS conn) for https URLs — if scheme
+	// stays http the request falls through to plain-text DNS + port
+	// 80, bypassing the front entirely. Some providers' testurls
+	// (CloudFront in fronted.yaml.gz) ship as http://.
+	u.Scheme = "https"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
