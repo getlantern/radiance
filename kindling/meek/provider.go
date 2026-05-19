@@ -32,6 +32,13 @@ type FrontSpec struct {
 // outbound. Defaults are tuned for IR usage: a 1h refresh interval is
 // short enough to react to CDN block churn, a 6h cache TTL means a
 // reboot loads the recent working list rather than re-scanning cold.
+//
+// Discovery is raw-range-primary by default: fresh IPs from the AWS
+// CloudFront prefix list and DNS-resolved Akamai edges produce
+// per-(ISP, location, time-of-day) candidates rather than the same
+// baked list every user sees. fronted.yaml.gz is consulted only for
+// outer-SNI pools, trusted CAs, and host-alias mappings (not its
+// pre-resolved IPs) unless KnownSample > 0.
 type ProviderConfig struct {
 	Config    *domainfront.Config
 	CacheFile string
@@ -46,14 +53,11 @@ type ProviderConfig struct {
 }
 
 func (c *ProviderConfig) defaults() {
-	if c.KnownSample == 0 {
-		c.KnownSample = 50
-	}
 	if c.CloudFrontSample == 0 {
-		c.CloudFrontSample = 10
+		c.CloudFrontSample = 30
 	}
 	if c.AkamaiSample == 0 {
-		c.AkamaiSample = 5
+		c.AkamaiSample = 3
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()

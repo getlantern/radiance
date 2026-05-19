@@ -37,16 +37,18 @@ func TestLive_TimeToFirstWorking(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	// Raw-range-primary defaults: no pre-resolved YAML IPs, just fresh
+	// per-scan IPs from AWS CloudFront prefixes + DNS-resolved Akamai
+	// edges.
 	pool, err := BuildPool(ctx, PoolOptions{
 		Config:           cfg,
-		KnownSample:      50,
-		CloudFrontSample: 10,
-		AkamaiSample:     5,
+		CloudFrontSample: 30,
+		AkamaiSample:     3,
 	})
 	if err != nil {
 		t.Fatalf("BuildPool: %v", err)
 	}
-	t.Logf("pool: %d candidates (50 known + Akamai-DNS-resolved + 10 CloudFront-random)", len(pool))
+	t.Logf("pool: %d candidates (30 CloudFront-raw + Akamai-DNS-resolved from 4 hostnames)", len(pool))
 
 	rootCAs, err := TrustedCAsPool(cfg)
 	if err != nil {

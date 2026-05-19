@@ -128,7 +128,7 @@ func TestBuildPool_KnownOnly(t *testing.T) {
 	}
 }
 
-func TestBuildPool_CloudFrontFeederNeedsSNIs(t *testing.T) {
+func TestBuildPool_CloudFrontRawRange(t *testing.T) {
 	cfg := &domainfront.Config{
 		Providers: map[string]*domainfront.Provider{
 			"cloudfront": {
@@ -146,8 +146,33 @@ func TestBuildPool_CloudFrontFeederNeedsSNIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPool: %v", err)
 	}
-	if len(got) != 6 {
-		t.Errorf("expected 1 known + 5 sampled = 6, got %d", len(got))
+	if len(got) != 5 {
+		t.Errorf("expected 5 raw-range samples (KnownSample=0 skips known), got %d", len(got))
+	}
+}
+
+func TestBuildPool_KnownOptedIn(t *testing.T) {
+	cfg := &domainfront.Config{
+		Providers: map[string]*domainfront.Provider{
+			"cloudfront": {
+				TestURL: "https://cf.test/ping",
+				Masquerades: []*domainfront.Masquerade{
+					{Domain: "aa1.awsstatic.com", IpAddress: "99.84.2.4"},
+					{Domain: "advertising.amazon.com", IpAddress: "3.164.130.9"},
+				},
+			},
+		},
+	}
+	got, err := BuildPool(context.Background(), PoolOptions{
+		Config:           cfg,
+		KnownSample:      10,
+		CloudFrontSample: 3,
+	})
+	if err != nil {
+		t.Fatalf("BuildPool: %v", err)
+	}
+	if len(got) != 5 {
+		t.Errorf("expected 2 known + 3 raw = 5, got %d", len(got))
 	}
 }
 

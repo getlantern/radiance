@@ -31,17 +31,28 @@ type PoolOptions struct {
 // > 0, the canonical AkamaiEdgeHostnames are always included alongside
 // the regex-generated draws — it's the highest-trust hostname in the
 // pool.
+//
+// The raw-range feeders (Akamai DNS + CloudFront prefixes) produce
+// per-scan-fresh IPs, which match Samim Mirhosseini's "different per
+// ISP, location, time of day" observation. The Known feeder (pre-
+// resolved IPs from fronted.yaml.gz) is opt-in via KnownSample > 0;
+// it's higher-hit-rate when the YAML is current but goes stale faster
+// than the raw range scans can self-heal.
 func BuildPool(ctx context.Context, opts PoolOptions) ([]Candidate, error) {
 	if opts.Config == nil {
 		return nil, errors.New("BuildPool: nil Config")
 	}
 
-	cands, err := CandidatesFromConfig(opts.Config)
-	if err != nil {
-		return nil, fmt.Errorf("known masquerades: %w", err)
-	}
-	if opts.KnownSample > 0 && opts.KnownSample < len(cands) {
-		cands = sampleN(cands, opts.KnownSample)
+	var cands []Candidate
+	if opts.KnownSample > 0 {
+		known, err := CandidatesFromConfig(opts.Config)
+		if err != nil {
+			return nil, fmt.Errorf("known masquerades: %w", err)
+		}
+		if opts.KnownSample < len(known) {
+			known = sampleN(known, opts.KnownSample)
+		}
+		cands = append(cands, known...)
 	}
 
 	akamaiProv := opts.Config.Providers["akamai"]
