@@ -22,6 +22,7 @@ import (
 	"time"
 
 	box "github.com/getlantern/lantern-box"
+	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/otel"
 
@@ -487,7 +488,7 @@ func (m *Manager) loadServers() error {
 		for _, srv := range loaded {
 			m.servers[srv.Tag] = srv
 		}
-		return nil
+		return m.migrateWATERDirs()
 	}
 
 	// Fall back to old format: map[string]Options and mirgrate to new format on save.
@@ -524,7 +525,10 @@ func (m *Manager) loadServers() error {
 			m.servers[ep.Tag] = srv
 		}
 	}
-	// Re-save in new format
+	// Re-save in new format (also fixes any stale water_dir values)
+	if err := m.migrateWATERDirs(); err != nil {
+		return err
+	}
 	return m.saveServers()
 }
 
@@ -624,6 +628,56 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 	return nil
 }
 
+// waterDir returns the writable directory where WATER outbounds should store
+// their WASM files. It is derived from the servers file path so that it always
+// points into the app's data directory regardless of platform.
+func (m *Manager) waterDir() string {
+	return filepath.Join(filepath.Dir(m.serversFile), "water")
+}
+
+// applyWATERDir unconditionally sets Dir on every WATER outbound to the
+// platform-appropriate writable path. This mirrors what setCustomProtocolOptions
+// in config/config.go does for server-fetched configs, ensuring user-added
+// servers also use a writable directory instead of a caller-supplied value
+// (e.g. /tmp from a Linux-targeting config) that may not exist on the device.
+func (m *Manager) applyWATERDir(outbounds []option.Outbound) {
+	dir := m.waterDir()
+	for _, ob := range outbounds {
+		if opts, ok := ob.Options.(*lbO.WATEROutboundOptions); ok {
+			opts.Dir = dir
+		}
+	}
+}
+
+// migrateWATERDirs fixes any loaded WATER server whose Dir field points to a
+// non-writable path (e.g. /tmp from a Linux-targeting config that was persisted
+// before applyWATERDir was in place). Returns nil when nothing needed fixing;
+// returns a save error only if a fix was applied but could not be persisted.
+func (m *Manager) migrateWATERDirs() error {
+	dir := m.waterDir()
+	fixed := false
+	for _, srv := range m.servers {
+		if srv.IsLantern {
+			continue
+		}
+		ob, ok := srv.Options.(option.Outbound)
+		if !ok {
+			continue
+		}
+		opts, ok := ob.Options.(*lbO.WATEROutboundOptions)
+		if !ok || opts.Dir == dir {
+			continue
+		}
+		m.logger.Info("Fixing stale water_dir", "tag", srv.Tag, "old", opts.Dir, "new", dir)
+		opts.Dir = dir
+		fixed = true
+	}
+	if !fixed {
+		return nil
+	}
+	return m.saveServers()
+}
+
 // AddServersByJSON adds any outbounds and endpoints defined in the provided sing-box JSON config.
 func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) ([]string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBySingboxJSON")
@@ -639,6 +693,7 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) ([]string
 	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
 		return nil, traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
+	m.applyWATERDir(cfg.Outbounds)
 	servers := make([]*Server, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
 	tags := make([]string, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
 	for _, out := range cfg.Outbounds {
