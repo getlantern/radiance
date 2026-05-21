@@ -34,7 +34,7 @@ require (
 	github.com/getlantern/kindling v0.0.0-20260516120759-a9712f95df03
 	github.com/getlantern/lantern-box v0.0.82
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
-	github.com/getlantern/publicip v0.0.0-20260519231935-95f344108356
+	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
 	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/goccy/go-yaml v1.19.0

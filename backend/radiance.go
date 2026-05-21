@@ -195,7 +195,7 @@ func (r *LocalBackend) Start() {
 		result, err := publicip.Detect(ctx, &publicip.Config{
 			Timeout:      2 * time.Second,
 			MinConsensus: 1,
-			Methods:      publicIPMethods(),
+			Methods:      publicip.DefaultMethods(),
 		})
 		cancel()
 		if err != nil {
@@ -1143,21 +1143,4 @@ func (r *LocalBackend) VerifySubscription(ctx context.Context, service account.S
 
 func (r *LocalBackend) RestoreSubscription(ctx context.Context, service account.SubscriptionService, data map[string]string) (*account.RestoreSubscriptionResponse, error) {
 	return r.accountClient.RestoreSubscription(ctx, service, data)
-}
-
-// publicIPMethods returns the publicip detection methods used at startup.
-// The default direct methods race in parallel with kindling-fronted variants
-// for the same HTTP endpoints; on unrestricted networks the direct ones
-// usually win (no fronting overhead), on networks where the endpoints are
-// blocked the fronted ones carry. CDN-fronting preserves source IP so the
-// detected address remains the user's real IP either way.
-func publicIPMethods() []publicip.Method {
-	methods := publicip.DefaultMethods()
-	frontedClient := kindling.HTTPClient()
-	methods = append(methods,
-		publicip.NewHTTPWithClient("https://icanhazip.com", publicip.FormatPlainText, frontedClient, "fronted"),
-		publicip.NewHTTPWithClient("https://ipinfo.io/json", publicip.FormatIPInfoJSON, frontedClient, "fronted"),
-		publicip.NewHTTPWithClient("https://checkip.amazonaws.com", publicip.FormatPlainText, frontedClient, "fronted"),
-	)
-	return methods
 }
