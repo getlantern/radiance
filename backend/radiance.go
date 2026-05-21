@@ -195,6 +195,7 @@ func (r *LocalBackend) Start() {
 		result, err := publicip.Detect(ctx, &publicip.Config{
 			Timeout:      2 * time.Second,
 			MinConsensus: 1,
+			Methods:      publicip.DefaultMethods(),
 		})
 		cancel()
 		if err != nil {
