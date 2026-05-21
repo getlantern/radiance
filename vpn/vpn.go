@@ -290,8 +290,8 @@ func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
 // AutoSelectTag or the empty string, the tunnel will switch to auto-select mode and automatically
 // choose the best server.
 func (c *VPNClient) SelectServer(tag string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.tunnel == nil || c.Status() != Connected {
 		return ErrTunnelNotConnected
 	}

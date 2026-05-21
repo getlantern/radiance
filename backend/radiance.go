@@ -467,20 +467,25 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[k]; ok {
 		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
 	}
-	r.maybeRestartVPN(diff)
-
-	return nil
+	return r.maybeRestartVPN(diff)
 }
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings
-// were changed and the VPN is currently connected.
-func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) {
+// were changed and the VPN is currently connected. Returns an error if the VPN restart fails;
+// otherwise returns nil.
+func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) error {
 	_, adBlockChanged := updates[settings.AdBlockKey]
 	_, smartRoutingChanged := updates[settings.SmartRoutingKey]
 	if (adBlockChanged || smartRoutingChanged) && r.vpnClient.Status() == vpn.Connected {
 		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
-		go r.RestartVPN()
+		if err := r.RestartVPN(); err != nil {
+			return fmt.Errorf(
+				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v): %w",
+				adBlockChanged, smartRoutingChanged, err,
+			)
+		}
 	}
+	return nil
 }
 
 /////////////////
