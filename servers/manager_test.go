@@ -13,6 +13,7 @@ import (
 
 	C "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
+	lbO "github.com/getlantern/lantern-box/option"
 
 	_ "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
@@ -265,6 +266,66 @@ func TestSaveServersConcurrent(t *testing.T) {
 		_, ok := mgr2.GetServerByTag(srv.Tag)
 		assert.True(t, ok, "server %q must survive save/reload", srv.Tag)
 	}
+}
+
+const waterTestConfig = `{
+	"outbounds": [
+		{
+			"tag": "water-out",
+			"type": "water",
+			"server": "127.0.0.1",
+			"server_port": 443,
+			"transport": "test",
+			"water_dir": "/tmp/stale",
+			"wasm_available_at": ["https://example.com/test.wasm"],
+			"hashsum": "deadbeef"
+		}
+	]
+}`
+
+func TestWATERDirAppliedOnAdd(t *testing.T) {
+	m := testManager(t)
+	_, err := m.AddServersByJSON(t.Context(), []byte(waterTestConfig))
+	require.NoError(t, err)
+	srv, exists := m.GetServerByTag("water-out")
+	require.True(t, exists)
+	ob := srv.Options.(option.Outbound)
+	opts, ok := ob.Options.(*lbO.WATEROutboundOptions)
+	require.True(t, ok, "expected WATEROutboundOptions")
+	assert.Equal(t, m.waterDir(), opts.Dir, "water_dir must be rewritten to the app data dir on add")
+}
+
+func TestMigrateWATERDirs(t *testing.T) {
+	m := testManager(t)
+	_, err := m.AddServersByJSON(t.Context(), []byte(waterTestConfig))
+	require.NoError(t, err)
+
+	srv, _ := m.GetServerByTag("water-out")
+	ob := srv.Options.(option.Outbound)
+	ob.Options.(*lbO.WATEROutboundOptions).Dir = "/tmp/stale"
+	require.NoError(t, m.saveServers())
+
+	m2 := testManager(t)
+	m2.serversFile = m.serversFile
+	require.NoError(t, m2.loadServers())
+
+	srv2, exists := m2.GetServerByTag("water-out")
+	require.True(t, exists)
+	ob2 := srv2.Options.(option.Outbound)
+	opts2, ok := ob2.Options.(*lbO.WATEROutboundOptions)
+	require.True(t, ok, "expected WATEROutboundOptions after reload")
+	assert.Equal(t, m2.waterDir(), opts2.Dir, "stale water_dir must be corrected on load")
+
+	m3 := testManager(t)
+	m3.serversFile = m.serversFile
+	require.NoError(t, m3.loadServers())
+
+	srv3, exists := m3.GetServerByTag("water-out")
+	require.True(t, exists)
+	ob3 := srv3.Options.(option.Outbound)
+	opts3, ok := ob3.Options.(*lbO.WATEROutboundOptions)
+	require.True(t, ok, "expected WATEROutboundOptions on second reload")
+	assert.Equal(t, m3.waterDir(), opts3.Dir, "migrated water_dir must survive a second reload")
 }
 
 func TestRetryableHTTPClient(t *testing.T) {
