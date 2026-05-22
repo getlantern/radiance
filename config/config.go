@@ -306,9 +306,9 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 	}
 }
 
-// Update immediately fetches the latest config. It returns [ErrConfigFetchDisabled]
+// Fetch immediately fetches the latest config. It returns [ErrConfigFetchDisabled]
 // if config fetching is disabled in settings.
-func (ch *ConfigHandler) Update() error {
+func (ch *ConfigHandler) Fetch() error {
 	if settings.GetBool(settings.ConfigFetchDisabledKey) {
 		return ErrConfigFetchDisabled
 	}

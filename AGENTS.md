@@ -36,7 +36,7 @@ cancelRequests()
 
 ```go
 // BAD — restates name, generic preamble, narrates the code
-// updateURLTestListener manages the lifecycle of the URL test result listener
+// updateSelectionHistoryListener manages the lifecycle of the selection history listener
 // across VPN status changes. Connected always re-attaches (canceling any
 // existing listener) so a stale event still leaves the listener bound to
 // the live storage.

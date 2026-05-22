@@ -15,7 +15,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/conntrack"
-	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -36,18 +35,19 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 )
 
 type tunnel struct {
-	ctx            context.Context
-	lbService      *libbox.BoxService
-	clashServer    *clashServer
-	urltestHistory adapter.URLTestHistoryStorage
-	urlTestSeed    map[string]adapter.URLTestHistory
-	logFactory     sblog.ObservableFactory
+	ctx                  context.Context
+	lbService            *libbox.BoxService
+	clashServer          *clashServer
+	selectionHistory     lbA.AutoSelectHistoryStorage
+	selectionHistorySeed map[string]lbA.TagHistory
+	logFactory           sblog.ObservableFactory
 
 	dataPath string
 
@@ -143,12 +143,13 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 
 	experimental.RegisterClashServerConstructor(newClashServer)
 
-	t.urltestHistory = urltest.NewHistoryStorage()
-	for tag, h := range t.urlTestSeed {
-		t.urltestHistory.StoreURLTestHistory(tag, &h)
+	t.selectionHistory = lbA.NewAutoSelectHistoryStorage()
+	for tag, h := range t.selectionHistorySeed {
+		entry := h
+		t.selectionHistory.Store(tag, &entry)
 	}
-	service.MustRegister[adapter.URLTestHistoryStorage](t.ctx, t.urltestHistory)
-	t.closers = append(t.closers, t.urltestHistory)
+	service.MustRegister[lbA.AutoSelectHistoryStorage](t.ctx, t.selectionHistory)
+	t.closers = append(t.closers, t.selectionHistory)
 
 	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
 	var lb *libbox.BoxService
@@ -271,8 +272,43 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 		closerFunc(func() error { mutGrpMgr.Close(); return nil }),
 	}, t.closers...)
 
+	t.subscribeExhaustionSignal()
+
 	slog.Info("Tunnel connection established")
 	return nil
+}
+
+// subscribeExhaustionSignal bridges the auto group's exhaustion
+// channel onto ExhaustionEvent so subscribers can react without the
+// tunnel knowing about them.
+func (t *tunnel) subscribeExhaustionSignal() {
+	g, ok := t.mutGrpMgr.OutboundGroup(AutoSelectTag)
+	if !ok {
+		slog.Warn("auto group not found; exhaustion events disabled",
+			"tag", AutoSelectTag)
+		return
+	}
+	signaler, ok := g.(lbA.ExhaustionSignaler)
+	if !ok {
+		slog.Warn("auto group does not implement ExhaustionSignaler; exhaustion events disabled",
+			"tag", AutoSelectTag)
+		return
+	}
+	go t.emitExhaustionEvents(signaler.ExhaustionSignal())
+}
+
+func (t *tunnel) emitExhaustionEvents(ch <-chan struct{}) {
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+			events.Emit(ExhaustionEvent{})
+		}
+	}
 }
 
 func (t *tunnel) selectMode(mode string) error {
@@ -439,20 +475,20 @@ func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
 	}
 
 	if len(list.URLOverrides) > 0 {
-		slog.Info("Applying bandit URL overrides to URL test group",
+		slog.Info("Applying bandit URL overrides to auto-select group",
 			"override_count", len(list.URLOverrides),
 		)
 	}
 	if err := t.mutGrpMgr.SetURLOverrides(AutoSelectTag, list.URLOverrides); err != nil {
 		slog.Warn("Failed to set URL overrides", "error", err)
 	} else if len(list.URLOverrides) > 0 {
-		// Trigger an immediate URL test cycle when we have bandit overrides so
+		// Trigger an immediate probe cycle when we have bandit overrides so
 		// callback probes are hit within seconds of config receipt rather than
 		// waiting for the next scheduled interval (3 min).
 		if err := t.mutGrpMgr.CheckOutbounds(AutoSelectTag); err != nil {
-			slog.Warn("Failed to trigger immediate URL test after bandit overrides", "error", err)
+			slog.Warn("Failed to trigger immediate probe cycle after bandit overrides", "error", err)
 		} else {
-			slog.Info("Triggered immediate URL test for bandit callbacks")
+			slog.Info("Triggered immediate probe cycle for bandit callbacks")
 		}
 	}
 
@@ -469,12 +505,11 @@ func (t *tunnel) removeOutbounds(tags []string) error {
 	for _, tag := range tags {
 		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
 			if _, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
-				continue // skip nested urltests
+				continue // skip nested groups
 			}
 		}
 		err := mutGrpMgr.RemoveFromGroup(ManualSelectTag, tag)
 		if err == nil {
-			// remove from urltest
 			err = mutGrpMgr.RemoveFromGroup(AutoSelectTag, tag)
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
@@ -509,10 +544,10 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	slog.Log(nil, rlog.LevelTrace, "Updating servers")
 
 	selector, selectorExists := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
-	_, urltestExists := t.mutGrpMgr.OutboundGroup(AutoSelectTag)
-	if !selectorExists || !urltestExists {
-		slog.Error("Selector or URL test group not found when updating outbounds")
-		return errors.New("selector or url test group not found")
+	_, autoSelectExists := t.mutGrpMgr.OutboundGroup(AutoSelectTag)
+	if !selectorExists || !autoSelectExists {
+		slog.Error("Selector or auto-select group not found when updating outbounds")
+		return errors.New("selector or auto-select group not found")
 	}
 
 	if contextDone(t.ctx) {

@@ -38,7 +38,7 @@ const (
 
 type MonitorCmd struct {
 	Interval         time.Duration `arg:"-i,--interval" default:"1s" help:"refresh interval"`
-	Pool             int           `arg:"--pool" default:"5" help:"number of fastest servers to list; 0 to omit pool summary"`
+	Pool             int           `arg:"--pool" default:"5" help:"number of pool servers to list (tested first, by ascending latency); 0 to omit pool summary"`
 	History          int           `arg:"--history" default:"3" help:"number of recent sessions to include; 0 to omit"`
 	Logs             int           `arg:"--logs" default:"5" help:"number of recent warn/error log entries to display (totals always shown); 0 hides entries"`
 	JSON             bool          `arg:"--json" help:"emit one JSON snapshot per refresh"`
@@ -71,15 +71,16 @@ type logCounts struct {
 type poolSummary struct {
 	Total   int             `json:"total"`
 	Tested  int             `json:"tested"`
-	Fastest []serverLatency `json:"fastest,omitempty"`
+	Servers []serverLatency `json:"servers,omitempty"`
 }
 
 type serverLatency struct {
-	Tag      string    `json:"tag"`
-	Type     string    `json:"type,omitempty"`
-	Location string    `json:"location,omitempty"`
-	DelayMs  uint16    `json:"delay_ms"`
-	TestedAt time.Time `json:"tested_at"`
+	Tag      string                    `json:"tag"`
+	Type     string                    `json:"type,omitempty"`
+	Location string                    `json:"location,omitempty"`
+	DelayMs  uint32                    `json:"delay_ms"`
+	TestedAt time.Time                 `json:"tested_at"`
+	History  *servers.SelectionHistory `json:"history,omitempty"`
 }
 
 type logEvent struct {
@@ -224,25 +225,38 @@ func fetchMonitor(ctx context.Context, c *ipc.Client, cmd *MonitorCmd, snap *mon
 
 func summarizePool(srvs []*servers.Server, top int) *poolSummary {
 	out := &poolSummary{Total: len(srvs)}
-	tested := make([]serverLatency, 0, len(srvs))
+	entries := make([]serverLatency, 0, len(srvs))
 	for _, s := range srvs {
-		if s == nil || s.URLTestResult == nil {
+		if s == nil {
 			continue
 		}
-		tested = append(tested, serverLatency{
+		e := serverLatency{
 			Tag:      s.Tag,
 			Type:     s.Type,
 			Location: joinNonEmpty(", ", s.Location.City, s.Location.Country),
-			DelayMs:  s.URLTestResult.Delay,
-			TestedAt: s.URLTestResult.Time,
-		})
+		}
+		if s.SelectionHistory != nil {
+			out.Tested++
+			e.DelayMs = s.SelectionHistory.LatestSuccessDelay()
+			e.TestedAt = s.SelectionHistory.LatestSuccessTime()
+			e.History = s.SelectionHistory
+		}
+		entries = append(entries, e)
 	}
-	out.Tested = len(tested)
-	sort.Slice(tested, func(i, j int) bool { return tested[i].DelayMs < tested[j].DelayMs })
-	if top > len(tested) {
-		top = len(tested)
+	sort.Slice(entries, func(i, j int) bool {
+		ti, tj := entries[i].History != nil, entries[j].History != nil
+		if ti != tj {
+			return ti
+		}
+		if ti {
+			return entries[i].DelayMs < entries[j].DelayMs
+		}
+		return entries[i].Tag < entries[j].Tag
+	})
+	if top > len(entries) {
+		top = len(entries)
 	}
-	out.Fastest = tested[:top]
+	out.Servers = entries[:top]
 	return out
 }
 
@@ -397,18 +411,45 @@ func renderServerPool(w io.Writer, p *poolSummary) {
 	}
 	fmt.Fprintf(w, "Server pool: %d total, %d with recent test%s", p.Total, p.Tested, eol)
 	now := time.Now()
-	for _, s := range p.Fastest {
+	for _, s := range p.Servers {
 		name := formatTag(s.Tag)
 		if s.Location != "" {
 			name = fmt.Sprintf("%s [%s]", name, s.Location)
 		}
-		age := "—"
-		if !s.TestedAt.IsZero() {
-			age = now.Sub(s.TestedAt).Truncate(time.Second).String() + " ago"
+		delay := "    n/a"
+		age := "untested"
+		if s.History != nil {
+			delay = fmt.Sprintf("%5dms", s.DelayMs)
+			age = "tested "
+			if s.TestedAt.IsZero() {
+				age += "—"
+			} else {
+				age += now.Sub(s.TestedAt).Truncate(time.Second).String() + " ago"
+			}
 		}
-		fmt.Fprintf(w, "  %5dms  %s  (tested %s)%s", s.DelayMs, name, age, eol)
+		fmt.Fprintf(w, "  %s  %s  (%s)%s", delay, name, age, eol)
+		if line := historyLine(s.History); line != "" {
+			fmt.Fprintf(w, "         %s%s", line, eol)
+		}
 	}
 	io.WriteString(w, eol)
+}
+
+func historyLine(h *servers.SelectionHistory) string {
+	if h == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if h.LastSuccessDelayMs > 0 {
+		parts = append(parts, fmt.Sprintf("last: %dms", h.LastSuccessDelayMs))
+	}
+	if h.ConsecutiveFailures > 0 {
+		parts = append(parts, fmt.Sprintf("consec: %d", h.ConsecutiveFailures))
+	}
+	if n := len(h.UserFailures); n > 0 {
+		parts = append(parts, fmt.Sprintf("user fail: %d", n))
+	}
+	return strings.Join(parts, "  ·  ")
 }
 
 func renderRecentLogs(w io.Writer, logs []logEvent, counts logCounts) {
@@ -592,10 +633,21 @@ func outboundTags(s vpn.ThroughputSnapshot) []string {
 	}
 	tags := make([]string, 0, len(set))
 	for tag := range set {
+		if isGroupTag(tag) {
+			continue
+		}
 		tags = append(tags, tag)
 	}
 	sort.Strings(tags)
 	return tags
+}
+
+// isGroupTag reports whether tag names a selector/auto-select group rather
+// than a leaf outbound. sing-box's clash tracker can attribute a connection
+// to the group tag in addition to the leaf, so groups must be filtered out
+// of per-outbound throughput tags to avoid phantom entries.
+func isGroupTag(tag string) bool {
+	return tag == vpn.AutoSelectTag || tag == vpn.ManualSelectTag
 }
 
 type monitorState struct {

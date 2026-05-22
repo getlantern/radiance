@@ -20,9 +20,9 @@ import (
 
 	lcommon "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
-	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -41,7 +41,7 @@ const (
 	AutoSelectTag   = "auto"
 	ManualSelectTag = "manual"
 
-	urlTestInterval    = 3 * time.Minute // must be less than urlTestIdleTimeout
+	urlTestInterval    = 3 * time.Minute
 	urlTestIdleTimeout = 15 * time.Minute
 
 	cacheID       = "lantern"
@@ -75,14 +75,12 @@ type BoxOptions struct {
 	InitialServer string `json:"initial_server,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
-	// default MutableURLTest URL for each specific outbound, allowing the
-	// server to detect which proxies successfully connected.
-	BanditURLOverrides  map[string]string `json:"bandit_url_overrides,omitempty"`
-	BanditThroughputURL string            `json:"bandit_throughput_url,omitempty"`
-	// URLTestSeed seeds the tunnel's URL test history storage at startup so
-	// prior latency results survive across tunnel close/open. Keyed by
-	// outbound/endpoint tag.
-	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
+	// default probe URL for each specific outbound, allowing the server to
+	// detect which proxies successfully connected.
+	BanditURLOverrides map[string]string `json:"bandit_url_overrides,omitempty"`
+	// SelectionHistorySeed seeds the tunnel's AutoSelectHistoryStorage
+	// at startup with the latest persisted snapshot per tag.
+	SelectionHistorySeed map[string]lbA.TagHistory `json:"tag_history"`
 }
 
 // baseOpts returns the minimum sing-box options required for the tunnel to
@@ -459,14 +457,13 @@ func normalizeAdBlockRules(rules lcommon.AdBlockRules) lcommon.AdBlockRules {
 
 func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {
 	return O.Outbound{
-		Type: lbC.TypeMutableURLTest,
+		Type: lbC.TypeMutableAutoSelect,
 		Tag:  tag,
-		Options: &lbO.MutableURLTestOutboundOptions{
-			Outbounds:    outbounds,
-			URL:          "https://google.com/generate_204",
-			URLOverrides: urlOverrides,
-			Interval:     badoption.Duration(urlTestInterval),
-			IdleTimeout:  badoption.Duration(urlTestIdleTimeout),
+		Options: &lbO.MutableAutoSelectOutboundOptions{
+			Outbounds:                 outbounds,
+			URL:                       "https://google.com/generate_204",
+			URLOverrides:              urlOverrides,
+			BackgroundIntervalSeconds: uint32(urlTestInterval / time.Second),
 		},
 	}
 }

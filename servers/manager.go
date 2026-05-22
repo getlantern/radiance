@@ -22,6 +22,7 @@ import (
 	"time"
 
 	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/otel"
 
@@ -85,37 +86,37 @@ type ServerCredentials struct {
 }
 
 type Server struct {
-	Tag           string             `json:"tag"`
-	Type          string             `json:"type"`
-	IsLantern     bool               `json:"isLantern"`
-	Options       any                `json:"options"`
-	Location      C.ServerLocation   `json:"location,omitempty"`
-	Credentials   *ServerCredentials `json:"credentials,omitempty"`
-	URLTestResult *URLTestResult     `json:"urlTestResult,omitempty"`
+	Tag              string             `json:"tag"`
+	Type             string             `json:"type"`
+	IsLantern        bool               `json:"isLantern"`
+	Options          any                `json:"options"`
+	Location         C.ServerLocation   `json:"location,omitempty"`
+	Credentials      *ServerCredentials `json:"credentials,omitempty"`
+	SelectionHistory *SelectionHistory  `json:"selection_history,omitempty"`
 }
 
 // serverJSON is the on-wire representation of a Server. The Options field is split into
 // explicit Outbound/Endpoint fields so that the sing-box context-aware JSON marshaler can
 // properly serialize/deserialize the typed options (e.g. SamizdatOutboundOptions).
 type serverJSON struct {
-	Tag           string             `json:"tag"`
-	Type          string             `json:"type"`
-	IsLantern     bool               `json:"isLantern"`
-	Outbound      *option.Outbound   `json:"outbound,omitempty"`
-	Endpoint      *option.Endpoint   `json:"endpoint,omitempty"`
-	Location      C.ServerLocation   `json:"location,omitempty"`
-	Credentials   *ServerCredentials `json:"credentials,omitempty"`
-	URLTestResult *URLTestResult     `json:"urlTestResult,omitempty"`
+	Tag              string             `json:"tag"`
+	Type             string             `json:"type"`
+	IsLantern        bool               `json:"isLantern"`
+	Outbound         *option.Outbound   `json:"outbound,omitempty"`
+	Endpoint         *option.Endpoint   `json:"endpoint,omitempty"`
+	Location         C.ServerLocation   `json:"location,omitempty"`
+	Credentials      *ServerCredentials `json:"credentials,omitempty"`
+	SelectionHistory *SelectionHistory  `json:"selection_history,omitempty"`
 }
 
 func (s Server) MarshalJSON() ([]byte, error) {
 	sj := serverJSON{
-		Tag:           s.Tag,
-		Type:          s.Type,
-		IsLantern:     s.IsLantern,
-		Location:      s.Location,
-		Credentials:   s.Credentials,
-		URLTestResult: s.URLTestResult,
+		Tag:              s.Tag,
+		Type:             s.Type,
+		IsLantern:        s.IsLantern,
+		Location:         s.Location,
+		Credentials:      s.Credentials,
+		SelectionHistory: s.SelectionHistory,
 	}
 	switch opts := s.Options.(type) {
 	case option.Outbound:
@@ -136,7 +137,7 @@ func (s *Server) UnmarshalJSON(data []byte) error {
 	s.IsLantern = sj.IsLantern
 	s.Location = sj.Location
 	s.Credentials = sj.Credentials
-	s.URLTestResult = sj.URLTestResult
+	s.SelectionHistory = sj.SelectionHistory
 	if sj.Outbound != nil {
 		s.Options = *sj.Outbound
 	} else if sj.Endpoint != nil {
@@ -252,22 +253,19 @@ func (m *Manager) AllServers() []*Server {
 	return result
 }
 
-// URLTestResult holds the result of a single URL test.
-type URLTestResult struct {
-	Delay uint16    `json:"delay"`
-	Time  time.Time `json:"time"`
-}
+// SelectionHistory is the on-disk shape for a server's selection history.
+type SelectionHistory = lbA.TagHistory
 
-// UpdateURLTestResults updates the URL test results for servers matching the
-// provided tags and persists the change to disk.
-func (m *Manager) UpdateURLTestResults(results map[string]URLTestResult) error {
+// UpdateSelectionHistory updates the selection history for servers
+// matching the provided tags and persists the change to disk.
+func (m *Manager) UpdateSelectionHistory(results map[string]SelectionHistory) error {
 	func() {
 		m.access.Lock()
 		defer m.access.Unlock()
 		for tag, result := range results {
 			if srv, exists := m.servers[tag]; exists {
 				r := result
-				srv.URLTestResult = &r
+				srv.SelectionHistory = &r
 			}
 		}
 	}()
