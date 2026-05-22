@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +147,22 @@ func (s *Server) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (s *Server) Clone() *Server {
+	cp := *s
+	if s.Credentials != nil {
+		c := *s.Credentials
+		cp.Credentials = &c
+	}
+	if cp.SelectionHistory != nil {
+		h := *cp.SelectionHistory
+		if len(h.UserFailures) > 0 {
+			h.UserFailures = slices.Clone(h.UserFailures)
+		}
+		cp.SelectionHistory = &h
+	}
+	return &cp
+}
+
 // ServerList is a batch of servers with optional URL overrides for bulk operations.
 type ServerList struct {
 	Servers      []*Server         `json:"servers"`
@@ -247,8 +264,7 @@ func (m *Manager) AllServers() []*Server {
 	warnIfReaderStarved("AllServers", wait)
 	result := make([]*Server, 0, len(m.servers))
 	for _, srv := range m.servers {
-		cp := *srv
-		result = append(result, &cp)
+		result = append(result, srv.Clone())
 	}
 	return result
 }
@@ -284,8 +300,7 @@ func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
 	if !exists {
 		return nil, false
 	}
-	cp := *s
-	return &cp, true
+	return s.Clone(), true
 }
 
 // warnIfReaderStarved logs a WARN with a goroutine stack dump when a reader
