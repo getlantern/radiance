@@ -45,6 +45,11 @@ type MeekOutboundOptions struct {
 // to import a version of lantern-box that registers meek.
 const MeekOutboundType = "meek"
 
+// DefaultURL is the inner Host header sent through the meek tunnel.
+// It is never resolved or dialed; callers supply the real SNI and dial
+// target via FrontSpec.
+const DefaultURL = "https://meek.dsa.akamai.getiantem.org/"
+
 // BuildOutbound returns a sing-box outbound for the meek transport with
 // the given tag, meek-server URL, and front pool. The returned Outbound
 // can be appended directly to O.Options.Outbounds; selector groups can
