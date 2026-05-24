@@ -716,7 +716,8 @@ func (r *LocalBackend) runURLTestListener(ctx context.Context, storage vpn.URLTe
 }
 
 func (r *LocalBackend) maybeStartMeek() {
-	if !iran.LikelyIran(settings.GetString(settings.MCCKey), iran.LocalTZName()) {
+	force := env.GetBool(env.ForceMeekOnly)
+	if !force && !iran.LikelyIran(settings.GetString(settings.MCCKey), iran.LocalTZName()) {
 		return
 	}
 	go func() {
@@ -737,7 +738,7 @@ func (r *LocalBackend) maybeStartMeek() {
 		p.Start(r.ctx)
 		r.meekProvider.Store(p)
 		r.shutdownFuncs = append(r.shutdownFuncs, func() error { return p.Close() })
-		slog.Info("meek: scanner started")
+		slog.Info("meek: scanner started", "forced", force)
 	}()
 }
 
@@ -782,6 +783,9 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 }
 
 func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
+	if env.GetBool(env.ForceMeekOnly) {
+		return r.meekOnlyBoxOptions()
+	}
 	// ignore error, we can still connect with default options if config is not available for some reason
 	cfg, _ := r.confHandler.GetConfig()
 	bOptions := vpn.BoxOptions{
@@ -823,6 +827,32 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			bOptions.MeekOutbound = &out
 		}
 	}
+	return bOptions
+}
+
+// meekOnlyBoxOptions returns a stripped-down config in which meek is
+// the sole outbound and InitialServer pins it. All API-provided
+// outbounds, bandit configuration, and selector arms are omitted —
+// VPN traffic must traverse meek or fail. Used when env.ForceMeekOnly
+// is set (local testing). When the scanner hasn't produced fronts
+// yet the meek outbound is absent; Connect will fail and the user
+// retries after a few seconds.
+func (r *LocalBackend) meekOnlyBoxOptions() vpn.BoxOptions {
+	bOptions := vpn.BoxOptions{
+		BasePath: settings.GetString(settings.DataPathKey),
+	}
+	p := r.meekProvider.Load()
+	if p == nil {
+		slog.Warn("meek-only mode: provider not yet ready, returning empty options")
+		return bOptions
+	}
+	out, ok := meek.BuildOutbound("meek-fronted", meek.DefaultURL, p.FrontSpecs(3))
+	if !ok {
+		slog.Warn("meek-only mode: scanner has no working fronts yet")
+		return bOptions
+	}
+	bOptions.MeekOutbound = &out
+	bOptions.InitialServer = out.Tag
 	return bOptions
 }
 
