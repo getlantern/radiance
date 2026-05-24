@@ -147,32 +147,22 @@ func run() error {
 	if _, err := conn.Write([]byte(httpReq)); err != nil {
 		return fmt.Errorf("write HTTP request: %w", err)
 	}
-	// Read in a goroutine — meek.Conn.Read doesn't honor SetReadDeadline
-	// (the condvar Wait isn't woken on deadline) so we time out from outside.
-	bodyCh := make(chan string, 1)
-	go func() {
-		var resp strings.Builder
-		buf := make([]byte, 4096)
-		for {
-			n, err := conn.Read(buf)
-			if n > 0 {
-				resp.Write(buf[:n])
-				if strings.Contains(resp.String(), expectedOrigin+"\"") {
-					break
-				}
-			}
-			if err != nil {
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+	var bodyBuf strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			bodyBuf.Write(buf[:n])
+			if strings.Contains(bodyBuf.String(), expectedOrigin+"\"") {
 				break
 			}
 		}
-		bodyCh <- resp.String()
-	}()
-	var body string
-	select {
-	case body = <-bodyCh:
-	case <-time.After(20 * time.Second):
-		return errors.New("read timeout: no HTTP body containing expected origin in 20s")
+		if err != nil {
+			break
+		}
 	}
+	body := bodyBuf.String()
 	slog.Info("✅ HTTP response received", "bytes", len(body))
 	fmt.Println("--- HTTP response ---")
 	fmt.Println(body)
