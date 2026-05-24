@@ -29,6 +29,11 @@ var (
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 	AppVersion       _key = "RADIANCE_VERSION"
+	// ForceMeekOnly, when truthy, makes radiance start the meek front
+	// scanner regardless of region detection and routes all traffic
+	// through meek as the sole outbound. For local testing; never set
+	// in shipped builds.
+	ForceMeekOnly _key = "RADIANCE_FORCE_MEEK_ONLY"
 
 	Testing _key = "RADIANCE_TESTING"
 

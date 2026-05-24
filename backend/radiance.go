@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"time"
 
@@ -34,6 +35,9 @@ import (
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
+	"github.com/getlantern/radiance/kindling/fronted"
+	"github.com/getlantern/radiance/kindling/iran"
+	"github.com/getlantern/radiance/kindling/meek"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
@@ -77,6 +81,13 @@ type LocalBackend struct {
 
 	stopURLTestListener context.CancelFunc
 	urlTestMu           sync.Mutex
+
+	// meekProvider is non-nil only when the device is classified as
+	// likely in Iran. getBoxOptions reads it atomically so a slow
+	// scanner startup can't block VPN connects: the meek outbound is
+	// absent from the first connect and present once the scanner
+	// populates it.
+	meekProvider atomic.Pointer[meek.Provider]
 }
 
 type Options struct {
@@ -87,6 +98,11 @@ type Options struct {
 	// this should be the platform device ID on mobile devices, desktop platforms will generate their
 	// own device ID and ignore this value
 	DeviceID string
+	// MCC is the network Mobile Country Code reported by the cellular
+	// stack (Android: first 3 chars of TelephonyManager.getNetworkOperator()).
+	// Empty on WiFi-only, between-tower, or platforms that don't expose it.
+	// Used to gate activation of the heavier meek transport.
+	MCC string
 	// User choice for telemetry consent
 	TelemetryConsent  bool
 	PlatformInterface vpn.PlatformInterface
@@ -135,6 +151,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	settings.Patch(settings.Settings{
 		settings.LocaleKey:              opts.Locale,
 		settings.DeviceIDKey:            platformDeviceID,
+		settings.MCCKey:                 opts.MCC,
 		settings.ConfigFetchDisabledKey: disableFetch,
 		settings.TelemetryKey:           opts.TelemetryConsent,
 	})
@@ -205,6 +222,8 @@ func (r *LocalBackend) Start() {
 			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
 		}
 	}()
+
+	r.maybeStartMeek()
 
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
@@ -702,6 +721,33 @@ func (r *LocalBackend) runURLTestListener(ctx context.Context, storage vpn.URLTe
 	}
 }
 
+func (r *LocalBackend) maybeStartMeek() {
+	force := env.GetBool(env.ForceMeekOnly)
+	if !force && !iran.LikelyIran(settings.GetString(settings.MCCKey), iran.LocalTZName()) {
+		return
+	}
+	go func() {
+		dataDir := settings.GetString(settings.DataPathKey)
+		cfg, err := fronted.LoadCachedConfig(dataDir)
+		if err != nil {
+			slog.Warn("meek: failed to load fronted config", "err", err)
+			return
+		}
+		p, err := meek.NewProvider(meek.ProviderConfig{
+			Config:    cfg,
+			CacheFile: filepath.Join(dataDir, "meek_fronts_cache.json"),
+		})
+		if err != nil {
+			slog.Warn("meek: NewProvider failed", "err", err)
+			return
+		}
+		p.Start(r.ctx)
+		r.meekProvider.Store(p)
+		r.shutdownFuncs = append(r.shutdownFuncs, func() error { return p.Close() })
+		slog.Info("meek: scanner started", "forced", force)
+	}()
+}
+
 func (r *LocalBackend) flushURLTestResults(storage vpn.URLTestHistoryStorage) {
 	results := make(map[string]servers.URLTestResult)
 	for _, srv := range r.srvManager.AllServers() {
@@ -743,6 +789,9 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 }
 
 func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
+	if env.GetBool(env.ForceMeekOnly) {
+		return r.meekOnlyBoxOptions()
+	}
 	// ignore error, we can still connect with default options if config is not available for some reason
 	cfg, _ := r.confHandler.GetConfig()
 	bOptions := vpn.BoxOptions{
@@ -779,6 +828,37 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	if len(seed) > 0 {
 		bOptions.URLTestSeed = seed
 	}
+	if p := r.meekProvider.Load(); p != nil {
+		if out, ok := meek.BuildOutbound("meek-fronted", meek.DefaultURL, p.FrontSpecs(3)); ok {
+			bOptions.MeekOutbound = &out
+		}
+	}
+	return bOptions
+}
+
+// meekOnlyBoxOptions returns a stripped-down config in which meek is
+// the sole outbound and InitialServer pins it. All API-provided
+// outbounds, bandit configuration, and selector arms are omitted —
+// VPN traffic must traverse meek or fail. Used when env.ForceMeekOnly
+// is set (local testing). When the scanner hasn't produced fronts
+// yet the meek outbound is absent; Connect will fail and the user
+// retries after a few seconds.
+func (r *LocalBackend) meekOnlyBoxOptions() vpn.BoxOptions {
+	bOptions := vpn.BoxOptions{
+		BasePath: settings.GetString(settings.DataPathKey),
+	}
+	p := r.meekProvider.Load()
+	if p == nil {
+		slog.Warn("meek-only mode: provider not yet ready, returning empty options")
+		return bOptions
+	}
+	out, ok := meek.BuildOutbound("meek-fronted", meek.DefaultURL, p.FrontSpecs(3))
+	if !ok {
+		slog.Warn("meek-only mode: scanner has no working fronts yet")
+		return bOptions
+	}
+	bOptions.MeekOutbound = &out
+	bOptions.InitialServer = out.Tag
 	return bOptions
 }
 

@@ -32,7 +32,7 @@ require (
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
 	github.com/getlantern/kindling v0.0.0-20260516120759-a9712f95df03
-	github.com/getlantern/lantern-box v0.0.82
+	github.com/getlantern/lantern-box v0.0.83-0.20260524155143-c467035b6497
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
@@ -44,6 +44,7 @@ require (
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
+	github.com/refraction-networking/utls v1.8.2
 	github.com/sagernet/sing v0.7.18
 	github.com/sagernet/sing-box v1.12.22
 	github.com/stretchr/testify v1.11.1
@@ -181,7 +182,6 @@ require (
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/protolambda/ctxlock v0.1.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
-	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/refraction-networking/water v0.7.1-alpha // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
