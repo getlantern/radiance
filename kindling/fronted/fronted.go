@@ -147,3 +147,11 @@ func loadCachedConfig(path string, fetchErr error) (*domainfront.Config, error) 
 	slog.Warn("using embedded fronted config", "fetch_err", fetchErr)
 	return cfg, nil
 }
+
+// LoadCachedConfig returns the *domainfront.Config from the on-disk
+// cache under dataDir, falling back to the embedded copy. Skips the
+// live fetch, for consumers that want the config without taking on a
+// full domainfront.Client lifecycle.
+func LoadCachedConfig(dataDir string) (*domainfront.Config, error) {
+	return loadCachedConfig(filepath.Join(dataDir, configCacheName), nil)
+}

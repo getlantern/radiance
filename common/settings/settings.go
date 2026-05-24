@@ -33,6 +33,7 @@ const (
 	CountryCodeKey _key = "country_code" // string
 	LocaleKey      _key = "locale"       // string
 	DeviceIDKey    _key = "device_id"    // string/int
+	MCCKey         _key = "mcc"          // string
 
 	// Application behavior related keys.
 	TelemetryKey           _key = "telemetry_enabled"     // bool
