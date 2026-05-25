@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	C "github.com/getlantern/common"
 	"github.com/stretchr/testify/assert"
@@ -164,6 +166,54 @@ func TestHandlerFetchConfig(t *testing.T) {
 	})
 }
 
+// TestFetchConfigCoalescesConcurrentRequest verifies that a fetchConfig call
+// arriving while another fetch is in flight returns immediately and causes
+// the in-flight fetch to re-run exactly once after it completes.
+func TestFetchConfigCoalescesConcurrentRequest(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, internal.ConfigFileName)
+
+	release := make(chan struct{})
+	bf := &BlockingFetcher{
+		response: []byte(`{"Servers":[{"Country":"US","City":"New York"}]}`),
+		entered:  make(chan struct{}, 2),
+		release:  release,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := &ConfigHandler{
+		configPath: configPath,
+		ftr:        bf,
+		wgKeyPath:  filepath.Join(tempDir, "wg.key"),
+		ctx:        ctx,
+		cancel:     cancel,
+		logger:     log.NoOpLogger(),
+	}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- ch.fetchConfig() }()
+
+	select {
+	case <-bf.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first fetch never started")
+	}
+
+	require.NoError(t, ch.fetchConfig(), "concurrent call should return nil while a fetch is in flight")
+
+	close(release)
+	require.NoError(t, <-firstDone, "first fetch should complete cleanly")
+
+	select {
+	case <-bf.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("coalesced follow-up fetch never started")
+	}
+
+	assert.Equal(t, int32(2), bf.calls.Load(), "expected exactly two fetches: original + coalesced follow-up")
+}
+
 // Make sure MockFetcher implements the Fetcher interface
 var _ Fetcher = (*MockFetcher)(nil)
 
@@ -176,3 +226,26 @@ type MockFetcher struct {
 func (mf *MockFetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
 	return mf.response, mf.err
 }
+
+var _ Fetcher = (*BlockingFetcher)(nil)
+
+// BlockingFetcher is a test Fetcher that signals entry into each fetchConfig
+// call and blocks until release is closed.
+type BlockingFetcher struct {
+	response []byte
+	err      error
+	entered  chan struct{}
+	release  <-chan struct{}
+	calls    atomic.Int32
+}
+
+func (bf *BlockingFetcher) fetchConfig(ctx context.Context, preferred C.ServerLocation, wgPublicKey string) ([]byte, error) {
+	bf.calls.Add(1)
+	select {
+	case bf.entered <- struct{}{}:
+	default:
+	}
+	<-bf.release
+	return bf.response, bf.err
+}
+

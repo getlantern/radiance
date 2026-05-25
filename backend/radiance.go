@@ -294,7 +294,7 @@ func (r *LocalBackend) Start() {
 			slog.Error("Failed to run offline URL tests after config update", "error", err)
 		}
 	})
-	go r.confHandler.Start()
+	r.confHandler.Start()
 }
 
 func (r *LocalBackend) Close() {
