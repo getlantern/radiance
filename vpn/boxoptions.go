@@ -273,6 +273,28 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
+		{ // Reject QUIC (UDP/443) to force HTTP/2-over-TCP fallback.
+			// Most of our outbounds (samizdat, reflex) are TCP-only and
+			// cannot carry UDP. Chrome and other modern browsers aggressively
+			// race QUIC to Google / Cloudflare / Meta hosts; without this
+			// rule, those UDP packets get captured by the TUN, routed to a
+			// TCP outbound, and silently dropped — leaving Chrome to wait
+			// out a multi-second QUIC timeout before falling back to TCP.
+			// Rejecting at the routing layer makes the fallback immediate.
+			// Standard pattern in TUN-mode sing-box clients (Hiddify,
+			// NekoBox, Clash Meta). Placed AFTER split tunnel so users
+			// who split a domain direct still get their normal QUIC.
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					Network: []string{"udp"},
+					Port:    []uint16{443},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeReject,
+				},
+			},
+		},
 	}
 	return rules
 }
