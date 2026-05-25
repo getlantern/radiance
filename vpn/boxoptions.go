@@ -86,9 +86,31 @@ type BoxOptions struct {
 	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
 }
 
+// isGlobalIPv6 reports whether ip is a globally-routable unicast IPv6
+// address (RFC 4291 2000::/3). Returns false for IPv4 (including v4-mapped
+// v6), link-local, ULA (fc00::/7), loopback, unspecified, multicast, and
+// the unassigned/reserved v6 ranges.
+//
+// We don't use net.IP.IsGlobalUnicast() because Go's stdlib also returns
+// true for ULA — an interface with only ULA addresses (e.g. Tailscale or
+// a corporate v6 VPN) doesn't indicate real v6 connectivity to the public
+// internet, and that's the signal we care about for the TUN's v6 routing.
+func isGlobalIPv6(ip net.IP) bool {
+	if ip.To4() != nil {
+		return false
+	}
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return false
+	}
+	// 2000::/3 — first three bits are 001; in the first byte that's
+	// the high three bits matching 0x20 with mask 0xe0.
+	return ip16[0]&0xe0 == 0x20
+}
+
 // hasGlobalIPv6 returns true if the system has at least one global unicast
-// IPv6 address (RFC 4291 2000::/3) on a non-loopback interface. Used to
-// decide whether to install an IPv6 ULA on the TUN inbound.
+// IPv6 address on a non-loopback interface. Used to decide whether to
+// install an IPv6 ULA on the TUN inbound.
 //
 // We need the v6 ULA on dual-stack networks so sing-box's auto_route can
 // install a v6 default route through the TUN — otherwise v6 traffic from
@@ -97,12 +119,6 @@ type BoxOptions struct {
 // break some configurations in ways we have not narrowed down. Detecting
 // presence of a real global v6 address before adding the ULA gates the
 // behavior to the case where it's needed.
-//
-// Specifically checks 2000::/3 (globally-routable unicast) rather than
-// IsGlobalUnicast() because Go's net.IP.IsGlobalUnicast() also returns
-// true for ULA (fc00::/7) — and an interface with only ULA addresses
-// (e.g. Tailscale-only) doesn't indicate real v6 connectivity to the
-// public internet.
 //
 // Pure local syscall; runs in microseconds. Not cached; called once per
 // tunnel start so a roaming user picks up network changes on reconnect.
@@ -124,13 +140,7 @@ func hasGlobalIPv6() bool {
 			if !ok {
 				continue
 			}
-			ip := ipnet.IP.To16()
-			if ip == nil || ipnet.IP.To4() != nil {
-				continue
-			}
-			// 2000::/3 — first three bits are 001; in the first byte that's
-			// the high three bits matching 0x20 with mask 0xe0.
-			if ip[0]&0xe0 == 0x20 {
+			if isGlobalIPv6(ipnet.IP) {
 				return true
 			}
 		}

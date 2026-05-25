@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"net"
 	"os"
 	"slices"
 	"testing"
@@ -228,6 +229,74 @@ func testBoxOptions(t *testing.T) (O.Options, []string) {
 		tags = append(tags, ep.Tag)
 	}
 	return cfg.Options, tags
+}
+
+func TestIsGlobalIPv6(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		// Globally-routable unicast (2000::/3): want true.
+		{"comcast global", "2603:8000:d0f0:5950::1", true},
+		{"google global", "2607:f8b0:4006:80b::200e", true},
+		{"cloudflare global", "2606:4700::1111", true},
+		{"v6 documentation range (still in 2000::/3)", "2001:db8::1", true},
+		{"6to4 (2002::/16, in 2000::/3)", "2002:c612:1::1", true},
+
+		// Inside the v6 unicast space but NOT 2000::/3: want false.
+		{"link-local", "fe80::1", false},
+		{"ULA fc", "fc00::1", false},
+		{"ULA fd", "fdfe:dcba:9876::1", false},
+		{"loopback", "::1", false},
+		{"unspecified", "::", false},
+		{"multicast", "ff02::1", false},
+
+		// IPv4 in any representation: want false.
+		{"ipv4 private", "192.168.1.1", false},
+		{"ipv4 public", "8.8.8.8", false},
+		{"v4-mapped v6", "::ffff:192.168.1.1", false},
+		{"v4-compatible v6 (deprecated)", "::192.168.1.1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip, "test input %q failed to parse", tt.ip)
+			assert.Equal(t, tt.want, isGlobalIPv6(ip), "isGlobalIPv6(%s)", tt.ip)
+		})
+	}
+}
+
+// TestBaseOpts_TunInet6Address asserts that the TUN inbound's Inet6Address
+// is consistent with hasGlobalIPv6() — present when the host has a real
+// global v6 address, absent when it doesn't. Pinning this behavior so
+// future refactors don't accidentally drop IPv6 routing support on
+// dual-stack networks or accidentally enable it on v4-only networks where
+// it's known to cause regressions.
+func TestBaseOpts_TunInet6Address(t *testing.T) {
+	opts := baseOpts(t.TempDir())
+	require.NotEmpty(t, opts.Inbounds, "expected inbounds in baseOpts output")
+
+	var tunOpts *O.TunInboundOptions
+	for _, in := range opts.Inbounds {
+		if in.Type == "tun" {
+			var ok bool
+			tunOpts, ok = in.Options.(*O.TunInboundOptions)
+			require.True(t, ok, "expected *TunInboundOptions for tun inbound")
+			break
+		}
+	}
+	require.NotNil(t, tunOpts, "expected a tun inbound")
+	require.Len(t, tunOpts.Address, 1, "expected exactly one v4 TUN address")
+	require.Equal(t, "10.10.1.1/30", tunOpts.Address[0].String())
+
+	if hasGlobalIPv6() {
+		require.Len(t, tunOpts.Inet6Address, 1, "expected v6 ULA on TUN when system has global v6")
+		assert.Equal(t, "fdfe:dcba:9876::1/126", tunOpts.Inet6Address[0].String(),
+			"v6 ULA prefix should be the ULA we picked")
+	} else {
+		assert.Empty(t, tunOpts.Inet6Address, "expected no v6 ULA on TUN when system has no global v6")
+	}
 }
 
 func TestKernelBelow(t *testing.T) {
