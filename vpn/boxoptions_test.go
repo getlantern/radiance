@@ -237,14 +237,18 @@ func TestIsGlobalIPv6(t *testing.T) {
 		ip   string
 		want bool
 	}{
-		// Globally-routable unicast (2000::/3): want true.
+		// Inside 2000::/3 — predicate returns true regardless of whether
+		// the specific sub-prefix is globally routable in practice.
+		// Real-world global unicast:
 		{"comcast global", "2603:8000:d0f0:5950::1", true},
 		{"google global", "2607:f8b0:4006:80b::200e", true},
 		{"cloudflare global", "2606:4700::1111", true},
-		{"v6 documentation range (still in 2000::/3)", "2001:db8::1", true},
-		{"6to4 (2002::/16, in 2000::/3)", "2002:c612:1::1", true},
+		// Reserved-but-in-range — predicate returns true; see isGlobalIPv6
+		// docstring for why we accept these.
+		{"documentation prefix (2001:db8::/32, reserved)", "2001:db8::1", true},
+		{"6to4 (2002::/16, deprecated)", "2002:c612:1::1", true},
 
-		// Inside the v6 unicast space but NOT 2000::/3: want false.
+		// Outside 2000::/3 — predicate returns false.
 		{"link-local", "fe80::1", false},
 		{"ULA fc", "fc00::1", false},
 		{"ULA fd", "fdfe:dcba:9876::1", false},
@@ -252,7 +256,7 @@ func TestIsGlobalIPv6(t *testing.T) {
 		{"unspecified", "::", false},
 		{"multicast", "ff02::1", false},
 
-		// IPv4 in any representation: want false.
+		// IPv4 in any representation — predicate returns false.
 		{"ipv4 private", "192.168.1.1", false},
 		{"ipv4 public", "8.8.8.8", false},
 		{"v4-mapped v6", "::ffff:192.168.1.1", false},

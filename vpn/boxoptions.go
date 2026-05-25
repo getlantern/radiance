@@ -86,15 +86,21 @@ type BoxOptions struct {
 	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
 }
 
-// isGlobalIPv6 reports whether ip is a globally-routable unicast IPv6
-// address (RFC 4291 2000::/3). Returns false for IPv4 (including v4-mapped
-// v6), link-local, ULA (fc00::/7), loopback, unspecified, multicast, and
-// the unassigned/reserved v6 ranges.
+// isGlobalIPv6 reports whether ip falls in the IPv6 global-unicast block
+// 2000::/3 (RFC 4291). Returns false for IPv4 (including v4-mapped v6),
+// link-local, ULA (fc00::/7), loopback, unspecified, multicast, and other
+// non-2000::/3 reserved ranges.
 //
 // We don't use net.IP.IsGlobalUnicast() because Go's stdlib also returns
 // true for ULA — an interface with only ULA addresses (e.g. Tailscale or
 // a corporate v6 VPN) doesn't indicate real v6 connectivity to the public
 // internet, and that's the signal we care about for the TUN's v6 routing.
+//
+// Note: this predicate is a 2000::/3 membership check, not a routability
+// check. It returns true for reserved-but-in-range prefixes like
+// 2001:db8::/32 (documentation) and 2002::/16 (6to4). In practice those
+// rarely appear on real interfaces, and when they do they still signal
+// "the system is configured for v6" which is the property we care about.
 func isGlobalIPv6(ip net.IP) bool {
 	if ip.To4() != nil {
 		return false
@@ -108,8 +114,8 @@ func isGlobalIPv6(ip net.IP) bool {
 	return ip16[0]&0xe0 == 0x20
 }
 
-// hasGlobalIPv6 returns true if the system has at least one global unicast
-// IPv6 address on a non-loopback interface. Used to decide whether to
+// hasGlobalIPv6 returns true if the system has at least one IPv6 address
+// in 2000::/3 on a non-loopback interface. Used to decide whether to
 // install an IPv6 ULA on the TUN inbound.
 //
 // We need the v6 ULA on dual-stack networks so sing-box's auto_route can
@@ -136,11 +142,19 @@ func hasGlobalIPv6() bool {
 			continue
 		}
 		for _, a := range addrs {
-			ipnet, ok := a.(*net.IPNet)
-			if !ok {
+			// Interface.Addrs() returns []net.Addr; the concrete type is
+			// usually *net.IPNet but on some platforms / configurations it
+			// can be *net.IPAddr (no netmask info). Handle both.
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			default:
 				continue
 			}
-			if isGlobalIPv6(ipnet.IP) {
+			if isGlobalIPv6(ip) {
 				return true
 			}
 		}
