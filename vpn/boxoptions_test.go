@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	box "github.com/getlantern/lantern-box"
+	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/config"
@@ -168,6 +170,37 @@ func TestBuildOptions_BanditURLOverrides(t *testing.T) {
 	require.IsType(t, &lbO.MutableURLTestOutboundOptions{}, out.Options, "auto-select outbound options should be MutableURLTestOutboundOptions")
 	mutOpts := out.Options.(*lbO.MutableURLTestOutboundOptions)
 	assert.Equal(t, overrides, mutOpts.URLOverrides, "URLOverrides should be wired from config")
+}
+
+func TestBuildOptions_WATERDirOverride(t *testing.T) {
+	cfg := testConfig(t)
+	basePath := t.TempDir()
+	waterOutbound := O.Outbound{
+		Tag:  "water-test",
+		Type: lbC.TypeWATER,
+		Options: &lbO.WATEROutboundOptions{
+			Dir: "/tmp/stale",
+		},
+	}
+	cfg.Options.Outbounds = append(cfg.Options.Outbounds, waterOutbound)
+	boxOptions := BoxOptions{
+		BasePath: basePath,
+		Options:  cfg.Options,
+	}
+
+	opts, err := buildOptions(boxOptions)
+	require.NoError(t, err)
+
+	out := findOutbound(opts.Outbounds, "water-test")
+	require.NotNil(t, out, "water-test outbound missing from built options")
+	waterOpts, ok := out.Options.(*lbO.WATEROutboundOptions)
+	require.True(t, ok, "expected *WATEROutboundOptions")
+	assert.Equal(t, filepath.Join(basePath, "water"), waterOpts.Dir,
+		"buildOptions must override Dir to the app-managed water directory")
+
+	// Original struct must not be mutated.
+	assert.Equal(t, "/tmp/stale", waterOutbound.Options.(*lbO.WATEROutboundOptions).Dir,
+		"buildOptions must not mutate the caller's WATEROutboundOptions")
 }
 
 func contains[S ~[]E, E any](t *testing.T, s S, e E) bool {

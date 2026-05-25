@@ -341,6 +341,21 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
+
+	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
+	// be writable on the device; always point WATER outbounds at the app's
+	// managed data directory instead.
+	waterDir := filepath.Join(bOptions.BasePath, "water")
+	for i := range opts.Outbounds {
+		if opts.Outbounds[i].Type == lbC.TypeWATER {
+			if waterOpts, ok := opts.Outbounds[i].Options.(*lbO.WATEROutboundOptions); ok {
+				cp := *waterOpts
+				cp.Dir = waterDir
+				opts.Outbounds[i].Options = &cp
+			}
+		}
+	}
+
 	initial := bOptions.InitialServer
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
