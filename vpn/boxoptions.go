@@ -114,6 +114,44 @@ func isGlobalIPv6(ip net.IP) bool {
 	return ip16[0]&0xe0 == 0x20
 }
 
+// ifaceSnapshot captures the bits hasGlobalIPv6 needs from each interface.
+// Decoupling from net.Interface (which has system-state-bound methods)
+// makes the detection logic deterministic-testable: a test can construct
+// a slice of snapshots representing a specific network configuration —
+// useful for pinning behavior on configurations the test machine can't
+// reproduce (Android wifi+cellular, v6-only cellular, etc.).
+type ifaceSnapshot struct {
+	name  string    // for logging / debugging only
+	flags net.Flags // need FlagUp / FlagLoopback
+	addrs []net.Addr
+}
+
+// snapshotInterfaces is the production interface-snapshot provider used by
+// hasGlobalIPv6 in production. Tests inject alternative providers via
+// hasGlobalIPv6Using.
+func snapshotInterfaces() ([]ifaceSnapshot, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("net.Interfaces: %w", err)
+	}
+	out := make([]ifaceSnapshot, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			// Per-interface Addrs() failures shouldn't kill the whole probe;
+			// record the interface with empty addrs and continue. This matches
+			// the previous behavior.
+			addrs = nil
+		}
+		out = append(out, ifaceSnapshot{
+			name:  iface.Name,
+			flags: iface.Flags,
+			addrs: addrs,
+		})
+	}
+	return out, nil
+}
+
 // hasGlobalIPv6 returns true if the system has at least one IPv6 address
 // in 2000::/3 on a non-loopback interface. Used to decide whether to
 // install an IPv6 ULA on the TUN inbound.
@@ -129,19 +167,23 @@ func isGlobalIPv6(ip net.IP) bool {
 // Pure local syscall; runs in microseconds. Not cached; called once per
 // tunnel start so a roaming user picks up network changes on reconnect.
 func hasGlobalIPv6() bool {
-	ifaces, err := net.Interfaces()
+	return hasGlobalIPv6Using(snapshotInterfaces)
+}
+
+// hasGlobalIPv6Using is the testable core of hasGlobalIPv6. Takes an
+// interface-snapshot provider so tests can simulate network configurations
+// the test machine can't otherwise produce (e.g., Android dual-network
+// states, v6-only cellular, lockdown-suppressed interface enumeration).
+func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
+	snaps, err := getSnapshots()
 	if err != nil {
 		return false
 	}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+	for _, s := range snaps {
+		if s.flags&net.FlagUp == 0 || s.flags&net.FlagLoopback != 0 {
 			continue
 		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
+		for _, a := range s.addrs {
 			// Interface.Addrs() returns []net.Addr; the concrete type is
 			// usually *net.IPNet but on some platforms / configurations it
 			// can be *net.IPAddr (no netmask info). Handle both.

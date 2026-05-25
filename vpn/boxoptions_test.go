@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"slices"
@@ -269,6 +270,185 @@ func TestIsGlobalIPv6(t *testing.T) {
 			assert.Equal(t, tt.want, isGlobalIPv6(ip), "isGlobalIPv6(%s)", tt.ip)
 		})
 	}
+}
+
+// TestHasGlobalIPv6Using pins the v6-detection logic across configurations
+// the local test machine cannot reproduce directly — particularly Android-
+// specific multi-interface and v6-only-cellular shapes that are the most
+// likely failure modes for the gate in production.
+//
+// Each subtest constructs a hand-rolled []ifaceSnapshot representing a
+// realistic Android (or other) network state and asserts what
+// hasGlobalIPv6Using returns. When the test's `want` value conflicts with
+// what's "intuitively correct" for the user's setup, the test name flags
+// the discrepancy with "(known overcount)" or similar so it surfaces in
+// review rather than being silently accepted.
+func TestHasGlobalIPv6Using(t *testing.T) {
+	v4 := func(s string) net.Addr {
+		return &net.IPNet{IP: net.ParseIP(s).To4(), Mask: net.CIDRMask(24, 32)}
+	}
+	v6 := func(s string) net.Addr {
+		return &net.IPNet{IP: net.ParseIP(s).To16(), Mask: net.CIDRMask(64, 128)}
+	}
+	v6Addr := func(s string) net.Addr {
+		// *net.IPAddr (no netmask) — what some platforms return from
+		// Interface.Addrs() instead of *net.IPNet.
+		return &net.IPAddr{IP: net.ParseIP(s).To16()}
+	}
+
+	const (
+		comcastV6  = "2603:8000:d0f0:5950::1"  // residential dual-stack
+		tmobileV6  = "2607:fb90:abcd:1234::1"  // cellular global (T-Mobile-shaped)
+		ulaLantern = "fdfe:dcba:9876::1"       // our own TUN ULA
+		ulaTail    = "fd7a:115c:a1e0::1"       // Tailscale ULA
+	)
+
+	tests := []struct {
+		name  string
+		snaps []ifaceSnapshot
+		want  bool
+	}{
+		// ─── macOS-shaped cases (already covered by TestBaseOpts_TunInet6Address;
+		// included here as baselines and to confirm the refactor is faithful) ───
+		{
+			name: "macOS dual-stack: en0 with v4 + Comcast v6",
+			snaps: []ifaceSnapshot{
+				{name: "en0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.1.50"), v6(comcastV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "macOS v4-only: en0 with v4 only",
+			snaps: []ifaceSnapshot{
+				{name: "en0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.1.50"),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Tailscale up but no other v6 (ULA shouldn't count)",
+			snaps: []ifaceSnapshot{
+				{name: "en0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.1.50"),
+				}},
+				{name: "utun7", flags: net.FlagUp, addrs: []net.Addr{
+					v6(ulaTail),
+				}},
+			},
+			want: false,
+		},
+
+		// ─── Android-shaped cases (the primary motivation for this refactor) ───
+		{
+			name: "Android wifi-only v4: wlan0 with v4 only",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Android wifi-only dual-stack: wlan0 with v4 + v6",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"), v6(comcastV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "Android cellular-only v6 (T-Mobile / v6 + NAT64)",
+			snaps: []ifaceSnapshot{
+				{name: "rmnet_data0", flags: net.FlagUp, addrs: []net.Addr{
+					v6(tmobileV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "Android wifi v4 active + cellular v6 idle (multi-interface false positive watch)",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"),
+				}},
+				{name: "rmnet_data0", flags: net.FlagUp, addrs: []net.Addr{
+					v6(tmobileV6),
+				}},
+			},
+			// Current behavior: returns true because any UP non-loopback v6 counts.
+			// This pins what we do today. If the v6-on-idle-cellular case proves
+			// problematic in field testing, refining the gate to consult the
+			// active default route is the next step.
+			want: true,
+		},
+		{
+			name: "Android with Lantern TUN ULA already up (own ULA must not count)",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"),
+				}},
+				{name: "tun0", flags: net.FlagUp, addrs: []net.Addr{
+					v6(ulaLantern), // ULA — must be filtered out
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Android *net.IPAddr (no netmask) variant — must still detect v6",
+			snaps: []ifaceSnapshot{
+				{name: "rmnet_data0", flags: net.FlagUp, addrs: []net.Addr{
+					v6Addr(tmobileV6),
+				}},
+			},
+			want: true,
+		},
+
+		// ─── Degenerate / lockdown cases ───
+		{
+			name: "loopback only (no usable interfaces)",
+			snaps: []ifaceSnapshot{
+				{name: "lo", flags: net.FlagUp | net.FlagLoopback, addrs: []net.Addr{
+					v6("::1"), v4("127.0.0.1"),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "interface down with v6 address (must be ignored)",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: 0 /* not Up */, addrs: []net.Addr{
+					v6(comcastV6),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Android lockdown: snapshot returns empty list",
+			snaps: []ifaceSnapshot{},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := func() ([]ifaceSnapshot, error) {
+				return tt.snaps, nil
+			}
+			assert.Equal(t, tt.want, hasGlobalIPv6Using(provider))
+		})
+	}
+
+	t.Run("snapshot provider returns error", func(t *testing.T) {
+		provider := func() ([]ifaceSnapshot, error) {
+			return nil, fmt.Errorf("simulated netlink failure / permission denied")
+		}
+		assert.False(t, hasGlobalIPv6Using(provider),
+			"errored snapshot should result in false (defensive default)")
+	})
 }
 
 // TestBaseRoutingRules_RejectsQUIC asserts that the base routing rules
