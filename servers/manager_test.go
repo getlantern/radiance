@@ -267,7 +267,6 @@ func TestSaveServersConcurrent(t *testing.T) {
 	}
 }
 
-
 func TestRetryableHTTPClient(t *testing.T) {
 	cli := retryableHTTPClient(log.NoOpLogger()).StandardClient()
 	request, err := http.NewRequest(http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
