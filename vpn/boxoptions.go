@@ -115,6 +115,16 @@ func baseOpts(basePath string) O.Options {
 					Address: []netip.Prefix{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
+					// IPv6 ULA address on the TUN so auto_route can install
+					// an IPv6 default route through it. Without this, on
+					// dual-stack networks (most US residential ISPs) where
+					// macOS prefers IPv6 via Happy Eyeballs, AAAA-resolving
+					// apps connect to FakeIP v6 addresses that have no route
+					// to the TUN — leaking past the VPN or silently failing.
+					// fdfe:dcba:9876::1/126 is a ULA (fc00::/7) address.
+					Inet6Address: []netip.Prefix{
+						netip.MustParsePrefix("fdfe:dcba:9876::1/126"),
+					},
 					AutoRoute:              true,
 					StrictRoute:            true,
 					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
