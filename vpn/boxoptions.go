@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -85,12 +86,73 @@ type BoxOptions struct {
 	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
 }
 
+// hasGlobalIPv6 returns true if the system has at least one global unicast
+// IPv6 address (RFC 4291 2000::/3) on a non-loopback interface. Used to
+// decide whether to install an IPv6 ULA on the TUN inbound.
+//
+// We need the v6 ULA on dual-stack networks so sing-box's auto_route can
+// install a v6 default route through the TUN — otherwise v6 traffic from
+// IPv6-preferring apps (everything Chrome talks to Google with) leaks past
+// the VPN. But adding the v6 ULA on a v4-only network has been observed to
+// break some configurations in ways we have not narrowed down. Detecting
+// presence of a real global v6 address before adding the ULA gates the
+// behavior to the case where it's needed.
+//
+// Specifically checks 2000::/3 (globally-routable unicast) rather than
+// IsGlobalUnicast() because Go's net.IP.IsGlobalUnicast() also returns
+// true for ULA (fc00::/7) — and an interface with only ULA addresses
+// (e.g. Tailscale-only) doesn't indicate real v6 connectivity to the
+// public internet.
+//
+// Pure local syscall; runs in microseconds. Not cached; called once per
+// tunnel start so a roaming user picks up network changes on reconnect.
+func hasGlobalIPv6() bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP.To16()
+			if ip == nil || ipnet.IP.To4() != nil {
+				continue
+			}
+			// 2000::/3 — first three bits are 001; in the first byte that's
+			// the high three bits matching 0x20 with mask 0xe0.
+			if ip[0]&0xe0 == 0x20 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // baseOpts returns the minimum sing-box options required for the tunnel to
 // function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
 	cacheFile := filepath.Join(basePath, cacheFileName)
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+
+	// IPv6 on the TUN is conditional. See hasGlobalIPv6 doc for rationale.
+	var tunInet6 []netip.Prefix
+	if hasGlobalIPv6() {
+		tunInet6 = []netip.Prefix{netip.MustParsePrefix("fdfe:dcba:9876::1/126")}
+		slog.Info("vpn: TUN configured with IPv6 ULA (system has global v6)")
+	} else {
+		slog.Info("vpn: TUN configured IPv4-only (system has no global v6)")
+	}
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -115,16 +177,9 @@ func baseOpts(basePath string) O.Options {
 					Address: []netip.Prefix{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
-					// IPv6 ULA address on the TUN so auto_route can install
-					// an IPv6 default route through it. Without this, on
-					// dual-stack networks (most US residential ISPs) where
-					// macOS prefers IPv6 via Happy Eyeballs, AAAA-resolving
-					// apps connect to FakeIP v6 addresses that have no route
-					// to the TUN — leaking past the VPN or silently failing.
-					// fdfe:dcba:9876::1/126 is a ULA (fc00::/7) address.
-					Inet6Address: []netip.Prefix{
-						netip.MustParsePrefix("fdfe:dcba:9876::1/126"),
-					},
+					// IPv6 ULA on the TUN — conditionally enabled when the
+					// system has a real global v6 address; see hasGlobalIPv6.
+					Inet6Address:           tunInet6,
 					AutoRoute:              true,
 					StrictRoute:            true,
 					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
