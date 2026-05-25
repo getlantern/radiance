@@ -26,7 +26,7 @@ func TestAkamaiCandidates_Dedup(t *testing.T) {
 	r := fakeResolver{answers: map[string][]string{
 		"a248.e.akamai.net": {"23.47.48.1", "23.47.48.2", "23.47.48.1"},
 	}}
-	cands, err := AkamaiCandidates(context.Background(), nil, r, "https://api.iantem.io/ping", "api.iantem.io")
+	cands, err := AkamaiCandidates(context.Background(), nil, nil, r, "https://api.iantem.io/ping", "api.iantem.io")
 	if err != nil {
 		t.Fatalf("AkamaiCandidates: %v", err)
 	}
@@ -43,13 +43,50 @@ func TestAkamaiCandidates_Dedup(t *testing.T) {
 	}
 }
 
+func TestAkamaiCandidates_MixesNamedSNIs(t *testing.T) {
+	r := fakeResolver{answers: map[string][]string{
+		"a248.e.akamai.net": {"23.47.48.1", "23.47.48.2"},
+	}}
+	snis := []string{"python.org", "pypi.org", "snapp.ir", "google.com", "aparat.com"}
+	cands, err := AkamaiCandidates(context.Background(), nil, snis, r, "https://api.iantem.io/ping", "api.iantem.io")
+	if err != nil {
+		t.Fatalf("AkamaiCandidates: %v", err)
+	}
+	if want := 2 * (1 + akamaiSNIsPerIP); len(cands) != want {
+		t.Errorf("len = %d; want %d", len(cands), want)
+	}
+
+	byIP := map[string][]Candidate{}
+	for _, c := range cands {
+		byIP[c.IPAddress] = append(byIP[c.IPAddress], c)
+		if c.VerifyHostname != AkamaiCertHostname {
+			t.Errorf("VerifyHostname = %q; want %s", c.VerifyHostname, AkamaiCertHostname)
+		}
+	}
+	for ip, group := range byIP {
+		if group[0].SNI != "" {
+			t.Errorf("IP %s: first candidate SNI = %q; want empty", ip, group[0].SNI)
+		}
+		seen := map[string]bool{}
+		for _, c := range group[1:] {
+			if c.SNI == "" {
+				t.Errorf("IP %s: named candidate has empty SNI", ip)
+			}
+			if seen[c.SNI] {
+				t.Errorf("IP %s: SNI %q appears twice — should be without replacement", ip, c.SNI)
+			}
+			seen[c.SNI] = true
+		}
+	}
+}
+
 func TestAkamaiCandidates_MultipleHostnames(t *testing.T) {
 	r := fakeResolver{answers: map[string][]string{
 		"a248.e.akamai.net": {"23.47.48.1"},
 		"a123.b.akamai.net": {"184.150.1.1"},
 	}}
 	hostnames := []string{"a248.e.akamai.net", "a123.b.akamai.net"}
-	cands, err := AkamaiCandidates(context.Background(), hostnames, r, "https://api.iantem.io/ping", "api.iantem.io")
+	cands, err := AkamaiCandidates(context.Background(), hostnames, nil, r, "https://api.iantem.io/ping", "api.iantem.io")
 	if err != nil {
 		t.Fatalf("AkamaiCandidates: %v", err)
 	}
@@ -69,7 +106,7 @@ func TestAkamaiCandidates_AllResolversFail(t *testing.T) {
 	r := fakeResolver{err: map[string]error{
 		"a248.e.akamai.net": errors.New("dns blocked"),
 	}}
-	_, err := AkamaiCandidates(context.Background(), nil, r, "https://api.iantem.io/ping", "api.iantem.io")
+	_, err := AkamaiCandidates(context.Background(), nil, nil, r, "https://api.iantem.io/ping", "api.iantem.io")
 	if err == nil {
 		t.Errorf("expected error when all lookups fail")
 	}
@@ -112,7 +149,7 @@ func TestAkamaiCandidates_PartialFailureStillReturns(t *testing.T) {
 		err:     map[string]error{"a999.z.akamai.net": errors.New("nxdomain")},
 	}
 	hostnames := []string{"a248.e.akamai.net", "a999.z.akamai.net"}
-	cands, err := AkamaiCandidates(context.Background(), hostnames, r, "https://api.iantem.io/ping", "api.iantem.io")
+	cands, err := AkamaiCandidates(context.Background(), hostnames, nil, r, "https://api.iantem.io/ping", "api.iantem.io")
 	if err != nil {
 		t.Fatalf("expected nil err when at least one lookup succeeded, got %v", err)
 	}

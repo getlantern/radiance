@@ -64,7 +64,8 @@ func BuildPool(ctx context.Context, opts PoolOptions) ([]Candidate, error) {
 			if err == nil {
 				hostnames = append(hostnames, more...)
 			}
-			akCands, err := AkamaiCandidates(ctx, hostnames, opts.Resolver, akamaiProv.TestURL, innerHost)
+			snis := SNIsForProvider(opts.Config, "akamai")
+			akCands, err := AkamaiCandidates(ctx, hostnames, snis, opts.Resolver, akamaiProv.TestURL, innerHost)
 			if err == nil {
 				cands = append(cands, akCands...)
 			}

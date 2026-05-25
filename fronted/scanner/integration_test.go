@@ -39,7 +39,7 @@ func TestLive_AkamaiSystemResolver(t *testing.T) {
 	}
 	hostnames = append(hostnames, AkamaiEdgeHostnames...)
 
-	cands, err := AkamaiCandidates(ctx, hostnames, SystemResolver{}, akamaiTestURL, "fronted-ping.dsa.akamai.getiantem.org")
+	cands, err := AkamaiCandidates(ctx, hostnames, nil, SystemResolver{}, akamaiTestURL, "fronted-ping.dsa.akamai.getiantem.org")
 	if err != nil {
 		t.Fatalf("AkamaiCandidates: %v", err)
 	}

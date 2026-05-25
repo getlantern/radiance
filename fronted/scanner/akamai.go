@@ -124,15 +124,23 @@ func pickInt(n int) (int, error) {
 // aren't in the served cert's SANs.
 const AkamaiCertHostname = "a248.e.akamai.net"
 
-// AkamaiCandidates resolves the supplied hostnames via resolver and
-// produces one Candidate per distinct resolved IPv4. SNI is left empty
-// (matches production: Akamai edges serve their default cert when SNI
-// is omitted). VerifyHostname is AkamaiCertHostname for every entry.
+// akamaiSNIsPerIP caps how many named-SNI candidates accompany each
+// empty-SNI candidate per Akamai IP. Bare-SNI is the dominant working
+// strategy in IR, so it stays as the first candidate per IP; named
+// SNIs provide DPI cover for the periods where bare gets blocked.
+const akamaiSNIsPerIP = 3
+
+// AkamaiCandidates resolves the supplied hostnames and emits, for each
+// distinct IPv4 returned, one Candidate with empty SNI plus up to
+// akamaiSNIsPerIP additional Candidates with SNIs drawn at random from
+// snis. VerifyHostname is AkamaiCertHostname for every entry — Akamai
+// edges serve the same default cert regardless of outer SNI, so named
+// SNIs are pure DPI cover.
 //
-// hostnames may be the canonical AkamaiEdgeHostnames (1 hostname,
-// stable IPs from the resolver), the MahsaNG-style regex hostnames
-// (varied hostnames, more IP diversity), or both mixed.
-func AkamaiCandidates(ctx context.Context, hostnames []string, resolver Resolver, testURL, innerHost string) ([]Candidate, error) {
+// hostnames may be the canonical AkamaiEdgeHostnames (stable resolver
+// IPs), MahsaNG-style regex hostnames (more IP diversity), or both.
+// snis may be empty, in which case only bare-SNI candidates are emitted.
+func AkamaiCandidates(ctx context.Context, hostnames, snis []string, resolver Resolver, testURL, innerHost string) ([]Candidate, error) {
 	if resolver == nil {
 		resolver = SystemResolver{}
 	}
@@ -164,10 +172,56 @@ func AkamaiCandidates(ctx context.Context, hostnames []string, resolver Resolver
 				TestURL:        testURL,
 				InnerHost:      innerHost,
 			})
+			picks, err := pickSNIs(snis, akamaiSNIsPerIP)
+			if err != nil {
+				return out, err
+			}
+			for _, s := range picks {
+				out = append(out, Candidate{
+					Provider:       "akamai",
+					Domain:         h,
+					IPAddress:      ip,
+					SNI:            s,
+					VerifyHostname: AkamaiCertHostname,
+					TestURL:        testURL,
+					InnerHost:      innerHost,
+				})
+			}
 		}
 	}
 	if len(out) == 0 && firstErr != nil {
 		return nil, firstErr
+	}
+	return out, nil
+}
+
+// pickSNIs draws up to n entries without replacement from snis.
+// Crypto-rand keeps the choice unpredictable so scans don't drift
+// toward the same SNI set across clients.
+func pickSNIs(snis []string, n int) ([]string, error) {
+	if n <= 0 || len(snis) == 0 {
+		return nil, nil
+	}
+	if n >= len(snis) {
+		out := make([]string, len(snis))
+		copy(out, snis)
+		return out, nil
+	}
+	indices := make([]int, len(snis))
+	for i := range indices {
+		indices[i] = i
+	}
+	for i := len(indices) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return nil, fmt.Errorf("rand: %w", err)
+		}
+		jj := int(j.Int64())
+		indices[i], indices[jj] = indices[jj], indices[i]
+	}
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = snis[indices[i]]
 	}
 	return out, nil
 }
