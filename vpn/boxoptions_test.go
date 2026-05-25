@@ -271,6 +271,28 @@ func TestIsGlobalIPv6(t *testing.T) {
 	}
 }
 
+// TestBaseRoutingRules_RejectsQUIC asserts that the base routing rules
+// include a UDP/443 reject. Forcing apps to fall back to HTTP/2-over-TCP
+// avoids the QUIC-over-TCP performance penalty when proxied traffic
+// traverses a TCP-based outbound; see comment on the rule for detail.
+// Pinning this so future refactors don't silently drop the reject.
+func TestBaseRoutingRules_RejectsQUIC(t *testing.T) {
+	var found bool
+	for _, r := range baseRoutingRules() {
+		opts := r.DefaultOptions
+		if opts.RuleAction.Action != "reject" {
+			continue
+		}
+		hasUDP := slices.Contains(opts.RawDefaultRule.Network, "udp")
+		hasPort443 := slices.Contains(opts.RawDefaultRule.Port, uint16(443))
+		if hasUDP && hasPort443 {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected base routing rules to include a UDP/443 reject rule")
+}
+
 // TestBaseOpts_TunInet6Address asserts that the TUN inbound's Inet6Address
 // is consistent with hasGlobalIPv6() — present when the host has a real
 // global v6 address, absent when it doesn't. Pinning this behavior so
