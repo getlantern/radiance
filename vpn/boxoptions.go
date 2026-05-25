@@ -86,21 +86,11 @@ type BoxOptions struct {
 	URLTestSeed map[string]adapter.URLTestHistory `json:"-"`
 }
 
-// isGlobalIPv6 reports whether ip falls in the IPv6 global-unicast block
-// 2000::/3 (RFC 4291). Returns false for IPv4 (including v4-mapped v6),
-// link-local, ULA (fc00::/7), loopback, unspecified, multicast, and other
-// non-2000::/3 reserved ranges.
-//
-// We don't use net.IP.IsGlobalUnicast() because Go's stdlib also returns
-// true for ULA — an interface with only ULA addresses (e.g. Tailscale or
-// a corporate v6 VPN) doesn't indicate real v6 connectivity to the public
-// internet, and that's the signal we care about for the TUN's v6 routing.
-//
-// Note: this predicate is a 2000::/3 membership check, not a routability
-// check. It returns true for reserved-but-in-range prefixes like
-// 2001:db8::/32 (documentation) and 2002::/16 (6to4). In practice those
-// rarely appear on real interfaces, and when they do they still signal
-// "the system is configured for v6" which is the property we care about.
+// isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
+// which also accepts ULA — ULA-only interfaces (Tailscale, corp VPNs) don't
+// indicate real public-v6 connectivity. Reserved-but-in-range prefixes like
+// 2001:db8::/32 (documentation) and 2002::/16 (6to4) still return true; their
+// presence on a real interface still signals "system is configured for v6".
 func isGlobalIPv6(ip net.IP) bool {
 	if ip.To4() != nil {
 		return false
@@ -109,26 +99,19 @@ func isGlobalIPv6(ip net.IP) bool {
 	if ip16 == nil {
 		return false
 	}
-	// 2000::/3 — first three bits are 001; in the first byte that's
-	// the high three bits matching 0x20 with mask 0xe0.
+	// 2000::/3: first three bits are 001, first-byte mask 0xe0 == 0x20.
 	return ip16[0]&0xe0 == 0x20
 }
 
-// ifaceSnapshot captures the bits hasGlobalIPv6 needs from each interface.
-// Decoupling from net.Interface (which has system-state-bound methods)
-// makes the detection logic deterministic-testable: a test can construct
-// a slice of snapshots representing a specific network configuration —
-// useful for pinning behavior on configurations the test machine can't
-// reproduce (Android wifi+cellular, v6-only cellular, etc.).
+// ifaceSnapshot is the test seam: the data hasGlobalIPv6 reads per interface,
+// decoupled from net.Interface so tests can simulate any network config.
 type ifaceSnapshot struct {
-	name  string    // for logging / debugging only
-	flags net.Flags // need FlagUp / FlagLoopback
+	name  string // logging only
+	flags net.Flags
 	addrs []net.Addr
 }
 
-// snapshotInterfaces is the production interface-snapshot provider used by
-// hasGlobalIPv6 in production. Tests inject alternative providers via
-// hasGlobalIPv6Using.
+// snapshotInterfaces is the production snapshot provider. Tests inject their own.
 func snapshotInterfaces() ([]ifaceSnapshot, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -138,42 +121,22 @@ func snapshotInterfaces() ([]ifaceSnapshot, error) {
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
-			// Per-interface Addrs() failures shouldn't kill the whole probe;
-			// record the interface with empty addrs and continue. This matches
-			// the previous behavior.
+			// Per-interface failure → empty addrs, keep going.
 			addrs = nil
 		}
-		out = append(out, ifaceSnapshot{
-			name:  iface.Name,
-			flags: iface.Flags,
-			addrs: addrs,
-		})
+		out = append(out, ifaceSnapshot{name: iface.Name, flags: iface.Flags, addrs: addrs})
 	}
 	return out, nil
 }
 
-// hasGlobalIPv6 returns true if the system has at least one IPv6 address
-// in 2000::/3 on a non-loopback interface. Used to decide whether to
-// install an IPv6 ULA on the TUN inbound.
-//
-// We need the v6 ULA on dual-stack networks so sing-box's auto_route can
-// install a v6 default route through the TUN — otherwise v6 traffic from
-// IPv6-preferring apps (everything Chrome talks to Google with) leaks past
-// the VPN. But adding the v6 ULA on a v4-only network has been observed to
-// break some configurations in ways we have not narrowed down. Detecting
-// presence of a real global v6 address before adding the ULA gates the
-// behavior to the case where it's needed.
-//
-// Pure local syscall; runs in microseconds. Not cached; called once per
-// tunnel start so a roaming user picks up network changes on reconnect.
+// hasGlobalIPv6 gates the TUN v6 ULA: enable when the system has real v6,
+// disable on v4-only networks where it's been observed to break things we
+// haven't narrowed down. Called per tunnel start; not cached.
 func hasGlobalIPv6() bool {
 	return hasGlobalIPv6Using(snapshotInterfaces)
 }
 
-// hasGlobalIPv6Using is the testable core of hasGlobalIPv6. Takes an
-// interface-snapshot provider so tests can simulate network configurations
-// the test machine can't otherwise produce (e.g., Android dual-network
-// states, v6-only cellular, lockdown-suppressed interface enumeration).
+// hasGlobalIPv6Using is the testable core; production wraps via snapshotInterfaces.
 func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 	snaps, err := getSnapshots()
 	if err != nil {
@@ -184,9 +147,7 @@ func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 			continue
 		}
 		for _, a := range s.addrs {
-			// Interface.Addrs() returns []net.Addr; the concrete type is
-			// usually *net.IPNet but on some platforms / configurations it
-			// can be *net.IPAddr (no netmask info). Handle both.
+			// Addrs() may return *net.IPNet or *net.IPAddr depending on platform.
 			var ip net.IP
 			switch v := a.(type) {
 			case *net.IPNet:
@@ -211,13 +172,13 @@ func baseOpts(basePath string) O.Options {
 	cacheFile := filepath.Join(basePath, cacheFileName)
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 
-	// IPv6 on the TUN is conditional. See hasGlobalIPv6 doc for rationale.
+	// v6 ULA conditional on system v6 — see hasGlobalIPv6.
 	var tunInet6 []netip.Prefix
 	if hasGlobalIPv6() {
 		tunInet6 = []netip.Prefix{netip.MustParsePrefix("fdfe:dcba:9876::1/126")}
-		slog.Info("vpn: TUN configured with IPv6 ULA (system has global v6)")
+		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
 	} else {
-		slog.Info("vpn: TUN configured IPv4-only (system has no global v6)")
+		slog.Info("vpn: TUN IPv4-only (no global v6 detected)")
 	}
 	return O.Options{
 		Log: &O.LogOptions{
@@ -243,9 +204,7 @@ func baseOpts(basePath string) O.Options {
 					Address: []netip.Prefix{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
-					// IPv6 ULA on the TUN — conditionally enabled when the
-					// system has a real global v6 address; see hasGlobalIPv6.
-					Inet6Address:           tunInet6,
+					Inet6Address:           tunInet6, // gated by hasGlobalIPv6
 					AutoRoute:              true,
 					StrictRoute:            true,
 					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
@@ -394,32 +353,13 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-		{ // Reject QUIC (UDP/443) to force HTTP/2-over-TCP fallback.
-			//
-			// QUIC tunneled over a TCP-based outbound (samizdat, reflex,
-			// shadowsocks, etc.) is strictly worse than HTTP/2 over the same
-			// TCP transport, because QUIC's loss-recovery and congestion
-			// control stack on top of TCP's — head-of-line blocking that
-			// QUIC was designed to avoid reappears at the TCP layer, and
-			// retransmission semantics double up. Chrome and modern browsers
-			// aggressively race QUIC to Google / Cloudflare / Meta endpoints
-			// where this performance penalty hits the most traffic.
-			//
-			// Rejecting at the routing layer makes Chrome's QUIC connect
-			// attempt fail fast (ICMP unreachable / immediate error) so it
-			// drops back to HTTP/2-over-TCP from the start, rather than
-			// proceeding with the inferior QUIC-over-TCP path.
-			//
-			// Standard pattern in TUN-mode sing-box clients (Hiddify,
-			// NekoBox, Clash Meta all ship it by default). Placed AFTER the
-			// split tunnel rule so users who split a domain to "direct" still
-			// get their normal QUIC for that domain — only proxied QUIC is
-			// rejected.
-			//
-			// Note: this rejects QUIC on the standard 443 port. WebRTC
-			// (random UDP ports) is unaffected. Hysteria2 outbound traffic
-			// (UDP, generated by sing-box itself) is also unaffected because
-			// it doesn't traverse this inbound routing pass.
+		{ // Reject QUIC (UDP/443) → force HTTP/2-over-TCP fallback.
+			// QUIC-over-TCP-outbound stacks two loss-recovery / congestion
+			// regimes — strictly worse than letting Chrome drop to HTTP/2.
+			// Standard pattern in TUN-mode sing-box clients (Hiddify, NekoBox,
+			// Clash Meta). After split-tunnel so split-direct domains keep
+			// their QUIC; only proxied QUIC is rejected. WebRTC (random UDP
+			// ports) and Hysteria2 outbound UDP are unaffected.
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
 				RawDefaultRule: O.RawDefaultRule{

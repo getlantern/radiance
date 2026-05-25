@@ -272,17 +272,10 @@ func TestIsGlobalIPv6(t *testing.T) {
 	}
 }
 
-// TestHasGlobalIPv6Using pins the v6-detection logic across configurations
-// the local test machine cannot reproduce directly — particularly Android-
-// specific multi-interface and v6-only-cellular shapes that are the most
-// likely failure modes for the gate in production.
-//
-// Each subtest constructs a hand-rolled []ifaceSnapshot representing a
-// realistic Android (or other) network state and asserts what
-// hasGlobalIPv6Using returns. When the test's `want` value conflicts with
-// what's "intuitively correct" for the user's setup, the test name flags
-// the discrepancy with "(known overcount)" or similar so it surfaces in
-// review rather than being silently accepted.
+// TestHasGlobalIPv6Using pins the gate's behavior on configs the local
+// machine can't reproduce — Android multi-interface and v6-only cellular
+// shapes especially. Test names flag known overcounts where the pinned
+// behavior is "current" rather than "obviously right."
 func TestHasGlobalIPv6Using(t *testing.T) {
 	v4 := func(s string) net.Addr {
 		return &net.IPNet{IP: net.ParseIP(s).To4(), Mask: net.CIDRMask(24, 32)}
@@ -290,9 +283,8 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 	v6 := func(s string) net.Addr {
 		return &net.IPNet{IP: net.ParseIP(s).To16(), Mask: net.CIDRMask(64, 128)}
 	}
+	// *net.IPAddr (no netmask) — what some platforms return instead of *net.IPNet.
 	v6Addr := func(s string) net.Addr {
-		// *net.IPAddr (no netmask) — what some platforms return from
-		// Interface.Addrs() instead of *net.IPNet.
 		return &net.IPAddr{IP: net.ParseIP(s).To16()}
 	}
 
@@ -308,8 +300,7 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 		snaps []ifaceSnapshot
 		want  bool
 	}{
-		// ─── macOS-shaped cases (already covered by TestBaseOpts_TunInet6Address;
-		// included here as baselines and to confirm the refactor is faithful) ───
+		// ─── macOS-shaped baselines (refactor-fidelity check) ───
 		{
 			name: "macOS dual-stack: en0 with v4 + Comcast v6",
 			snaps: []ifaceSnapshot{
@@ -341,7 +332,7 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 			want: false,
 		},
 
-		// ─── Android-shaped cases (the primary motivation for this refactor) ───
+		// ─── Android-shaped cases (the motivation for this refactor) ───
 		{
 			name: "Android wifi-only v4: wlan0 with v4 only",
 			snaps: []ifaceSnapshot{
@@ -370,7 +361,10 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "Android wifi v4 active + cellular v6 idle (multi-interface false positive watch)",
+			// Pins current behavior: any UP non-loopback v6 counts. If this
+			// proves problematic in the field, refine to check the active
+			// default route.
+			name: "Android wifi v4 active + cellular v6 idle (multi-interface overcount)",
 			snaps: []ifaceSnapshot{
 				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
 					v4("192.168.4.123"),
@@ -379,10 +373,6 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 					v6(tmobileV6),
 				}},
 			},
-			// Current behavior: returns true because any UP non-loopback v6 counts.
-			// This pins what we do today. If the v6-on-idle-cellular case proves
-			// problematic in field testing, refining the gate to consult the
-			// active default route is the next step.
 			want: true,
 		},
 		{
@@ -451,11 +441,8 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 	})
 }
 
-// TestBaseRoutingRules_RejectsQUIC asserts that the base routing rules
-// include a UDP/443 reject. Forcing apps to fall back to HTTP/2-over-TCP
-// avoids the QUIC-over-TCP performance penalty when proxied traffic
-// traverses a TCP-based outbound; see comment on the rule for detail.
-// Pinning this so future refactors don't silently drop the reject.
+// TestBaseRoutingRules_RejectsQUIC pins the UDP/443 reject so a refactor
+// can't silently drop it. See the rule comment for rationale.
 func TestBaseRoutingRules_RejectsQUIC(t *testing.T) {
 	var found bool
 	for _, r := range baseRoutingRules() {
@@ -473,12 +460,8 @@ func TestBaseRoutingRules_RejectsQUIC(t *testing.T) {
 	assert.True(t, found, "expected base routing rules to include a UDP/443 reject rule")
 }
 
-// TestBaseOpts_TunInet6Address asserts that the TUN inbound's Inet6Address
-// is consistent with hasGlobalIPv6() — present when the host has a real
-// global v6 address, absent when it doesn't. Pinning this behavior so
-// future refactors don't accidentally drop IPv6 routing support on
-// dual-stack networks or accidentally enable it on v4-only networks where
-// it's known to cause regressions.
+// TestBaseOpts_TunInet6Address pins that the TUN's Inet6Address tracks
+// hasGlobalIPv6() — both enabling on dual-stack and skipping on v4-only.
 func TestBaseOpts_TunInet6Address(t *testing.T) {
 	opts := baseOpts(t.TempDir())
 	require.NotEmpty(t, opts.Inbounds, "expected inbounds in baseOpts output")
