@@ -153,6 +153,7 @@ func (s *Server) Start() error {
 		if err := s.svr.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("IPC server error", "error", err)
 		}
+		slog.Info("IPC server closed")
 		s.closed.Store(true)
 	}()
 	return nil
