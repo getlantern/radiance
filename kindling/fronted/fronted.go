@@ -24,7 +24,7 @@ import (
 
 const (
 	tracerName       = "github.com/getlantern/radiance/kindling/fronted"
-	configURL        = "https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz"
+	configURL        = "https://raw.githubusercontent.com/getlantern/domainfront/refs/heads/main/fronted.yaml.gz"
 	initialFetchTime = 30 * time.Second
 	// configCacheName holds the last successfully fetched config so the next
 	// startup can bootstrap when configURL is unreachable.
