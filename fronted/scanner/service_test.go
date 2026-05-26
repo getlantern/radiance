@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,53 @@ func TestService_PickEmptyReturnsFalse(t *testing.T) {
 	_, ok := s.Pick()
 	if ok {
 		t.Errorf("Pick on empty list should return false")
+	}
+}
+
+func TestService_InsertSortedLockedMaintainsLatencyOrder(t *testing.T) {
+	s := newServiceWithWorking(t, nil)
+	for _, d := range []time.Duration{50, 10, 30, 20, 40} {
+		s.insertSortedLocked(Result{
+			Candidate: Candidate{IPAddress: d.String()},
+			Latency:   d * time.Millisecond,
+			Status:    200,
+		})
+	}
+	got := s.Working()
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Latency > got[i].Latency {
+			t.Errorf("not sorted at %d: %v > %v", i, got[i-1].Latency, got[i].Latency)
+		}
+	}
+	if len(got) != 5 {
+		t.Errorf("len = %d; want 5", len(got))
+	}
+}
+
+func TestScan_OnResultCalledPerCandidate(t *testing.T) {
+	// Unroutable TEST-NET-1 addresses fail the TCP dial fast, so every
+	// probe completes quickly; we only assert OnResult fires once each.
+	cands := []Candidate{
+		{Provider: "akamai", IPAddress: "192.0.2.1", TestURL: "https://x/ping", InnerHost: "x"},
+		{Provider: "akamai", IPAddress: "192.0.2.2", TestURL: "https://x/ping", InnerHost: "x"},
+		{Provider: "akamai", IPAddress: "192.0.2.3", TestURL: "https://x/ping", InnerHost: "x"},
+	}
+	var mu sync.Mutex
+	count := 0
+	results := Scan(context.Background(), cands, Options{
+		DialTimeout: 500 * time.Millisecond,
+		Concurrency: 3,
+		OnResult: func(Result) {
+			mu.Lock()
+			count++
+			mu.Unlock()
+		},
+	})
+	if len(results) != 3 {
+		t.Fatalf("results len = %d; want 3", len(results))
+	}
+	if count != 3 {
+		t.Errorf("OnResult called %d times; want 3 (once per candidate)", count)
 	}
 }
 

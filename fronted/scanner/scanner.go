@@ -81,6 +81,12 @@ type Options struct {
 	ClientHelloID tls.ClientHelloID
 	DialTimeout   time.Duration
 	Concurrency   int
+	// OnResult, when set, is called once per probe as it completes,
+	// from the probing goroutine. Multiple goroutines invoke it
+	// concurrently, so it must be safe for concurrent use. Lets callers
+	// consume working fronts as they're found rather than waiting for
+	// the whole scan.
+	OnResult func(Result)
 }
 
 func (o *Options) defaults() {
@@ -233,6 +239,9 @@ func Scan(ctx context.Context, candidates []Candidate, opts Options) []Result {
 				return
 			}
 			results[i] = Probe(ctx, c, opts)
+			if opts.OnResult != nil {
+				opts.OnResult(results[i])
+			}
 		}(i, c)
 	}
 	wg.Wait()

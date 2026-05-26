@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -232,12 +233,35 @@ func (s *Service) refresh(ctx context.Context) {
 
 	s.cfg.Logger.Info("scanner: scanning", slog.Int("candidates", len(cands)))
 	start := time.Now()
+
+	// Publish each working front as its probe completes so Working/Pick
+	// return early winners instead of blocking on the full scan. The
+	// first hit of this scan supersedes the previous cycle: a re-scan
+	// keeps serving the old list until the first new result lands, so
+	// it never drops to empty mid-scan.
+	firstHit := true
+	onResult := func(r Result) {
+		if !r.OK() {
+			return
+		}
+		s.mu.Lock()
+		if firstHit {
+			s.working = s.working[:0]
+			s.pickIdx = 0
+			s.failures = make(map[string]int)
+			firstHit = false
+		}
+		s.insertSortedLocked(r)
+		s.mu.Unlock()
+	}
+
 	results := Scan(ctx, cands, Options{
 		Dialer:        s.cfg.Probe.Dialer,
 		RootCAs:       s.cfg.Probe.RootCAs,
 		ClientHelloID: s.cfg.Probe.ClientHelloID,
 		DialTimeout:   s.cfg.Probe.DialTimeout,
 		Concurrency:   s.cfg.Probe.Concurrency,
+		OnResult:      onResult,
 	})
 	working := RankWorking(results)
 	elapsed := time.Since(start)
@@ -247,6 +271,9 @@ func (s *Service) refresh(ctx context.Context) {
 		slog.Duration("elapsed", elapsed),
 	)
 
+	// If no probe succeeded, firstHit never fired and the stale list is
+	// still live, so assigning here clears it to the (empty) canonical
+	// result.
 	s.mu.Lock()
 	s.working = working
 	s.pickIdx = 0
@@ -270,6 +297,18 @@ func (s *Service) removeLocked(c Candidate) {
 		filtered = append(filtered, r)
 	}
 	s.working = filtered
+}
+
+// insertSortedLocked inserts r into s.working keeping ascending-latency
+// order, matching RankWorking so incremental publishing and the final
+// bulk assign yield the same ordering.
+func (s *Service) insertSortedLocked(r Result) {
+	i := sort.Search(len(s.working), func(i int) bool {
+		return s.working[i].Latency > r.Latency
+	})
+	s.working = append(s.working, Result{})
+	copy(s.working[i+1:], s.working[i:])
+	s.working[i] = r
 }
 
 func failureKey(c Candidate) string {
