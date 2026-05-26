@@ -234,8 +234,8 @@ github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wd
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
 github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d h1:TrauJ2jdJqOAHyQB5wIL0kWN/dipqKagERE1I/TRVSY=
 github.com/getlantern/dnstt v0.0.0-20260112160750-05100563bd0d/go.mod h1:LA7cwZQtgXxBJdSJDj2ZgQNo/UY3Qa7nxNxzOuMMIyw=
-github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4 h1:/Q9FJvKPyuXfH6tfA+C+t9/AbvGWs3Yp9iqI74FYvb4=
-github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4/go.mod h1:nsdIvgenGUqPKnRFjkssbfxnV/WYWyC0c/t15qGym/A=
+github.com/getlantern/domainfront v0.0.0-20260526181805-9687c4606538 h1:dYyou3MwHJUgT4IFlvdhOCvoZNOWOnIKlocakE41Hzs=
+github.com/getlantern/domainfront v0.0.0-20260526181805-9687c4606538/go.mod h1:nsdIvgenGUqPKnRFjkssbfxnV/WYWyC0c/t15qGym/A=
 github.com/getlantern/errors v1.0.4 h1:i2iR1M9GKj4WuingpNqJ+XQEw6i6dnAgKAmLj6ZB3X0=
 github.com/getlantern/errors v1.0.4/go.mod h1:/Foq8jtSDGP8GOXzAjeslsC4Ar/3kB+UiQH+WyV4pzY=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 h1:NlQedYmPI3pRAXJb+hLVVDGqfvvXGRPV8vp7XOjKAZ0=
