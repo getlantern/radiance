@@ -2,8 +2,9 @@ name: Refresh embedded fronted.yaml.gz
 
 # kindling/fronted/fronted.yaml.gz is the last-resort fallback config used
 # when both the live fetch and on-disk cache miss. The canonical copy lives
-# in getlantern/fronted and is updated daily by an external pipeline. Mirror
-# that here so a fresh install bootstrap doesn't fall back to a stale copy.
+# in getlantern/domainfront (getlantern/fronted is deprecated) and is
+# updated daily by an external pipeline. Mirror that here so a fresh
+# install bootstrap doesn't fall back to a stale copy.
 
 on:
   schedule:
@@ -32,7 +33,7 @@ jobs:
         run: |
           curl -fsSL \
             -o kindling/fronted/fronted.yaml.gz.new \
-            https://raw.githubusercontent.com/getlantern/fronted/refs/heads/main/fronted.yaml.gz
+            https://raw.githubusercontent.com/getlantern/domainfront/refs/heads/main/fronted.yaml.gz
           gzip -t kindling/fronted/fronted.yaml.gz.new
           test -s kindling/fronted/fronted.yaml.gz.new
 
@@ -59,7 +60,7 @@ jobs:
           title: "fronted: refresh embedded fronted.yaml.gz"
           body: |
             Automated daily refresh of `kindling/fronted/fronted.yaml.gz`
-            from `getlantern/fronted@main`. Safe to merge once CI passes.
+            from `getlantern/domainfront@main`. Safe to merge once CI passes.
           branch: chore/refresh-fronted-config
           delete-branch: true
           author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"

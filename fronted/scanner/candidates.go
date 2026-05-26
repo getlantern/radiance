@@ -72,10 +72,13 @@ func innerHostFromTestURL(testURL string) (string, error) {
 	return u.Hostname(), nil
 }
 
-// SNIsForProvider returns the distinct, non-empty masquerade domains for
-// the named provider in cfg. Used as the outer-SNI pool for
-// CloudFrontCandidates (and an equivalent Akamai discovery flow when
-// regex-generated hostnames aren't desired).
+// SNIsForProvider returns the distinct, non-empty outer-SNI candidates
+// for the named provider in cfg.
+//
+// Both FrontingSNIs.ArbitrarySNIs and Masquerade.Domain are included:
+// FrontingSNIs entries are manually curated and survive the scanner's
+// daily Masquerade rebuild, so they must be probed alongside the
+// rebuilt Masquerade pool.
 func SNIsForProvider(cfg *domainfront.Config, provider string) []string {
 	if cfg == nil {
 		return nil
@@ -86,6 +89,18 @@ func SNIsForProvider(cfg *domainfront.Config, provider string) []string {
 	}
 	seen := make(map[string]bool, len(p.Masquerades))
 	var out []string
+	for _, sniCfg := range p.FrontingSNIs {
+		if sniCfg == nil || !sniCfg.UseArbitrarySNIs {
+			continue
+		}
+		for _, s := range sniCfg.ArbitrarySNIs {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
 	for _, m := range p.Masquerades {
 		if m == nil || m.Domain == "" {
 			continue

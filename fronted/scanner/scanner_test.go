@@ -233,6 +233,48 @@ func TestSNIsForProvider_MissingProvider(t *testing.T) {
 	}
 }
 
+func TestSNIsForProvider_ReadsFrontingSNIs(t *testing.T) {
+	cfg := &domainfront.Config{
+		Providers: map[string]*domainfront.Provider{
+			"akamai": {
+				FrontingSNIs: map[string]*domainfront.SNIConfig{
+					"default": {
+						UseArbitrarySNIs: true,
+						ArbitrarySNIs:    []string{"crunchbase.com", "brightspace.com"},
+					},
+					"ir": {
+						UseArbitrarySNIs: true,
+						ArbitrarySNIs:    []string{"snapp.ir", "pypi.org"},
+					},
+					"cn": {
+						UseArbitrarySNIs: false,
+						ArbitrarySNIs:    []string{"01ny.cn"},
+					},
+				},
+				Masquerades: []*domainfront.Masquerade{
+					{Domain: "a248.e.akamai.net", IpAddress: "23.x.x.x"},
+				},
+			},
+		},
+	}
+	got := SNIsForProvider(cfg, "akamai")
+	want := map[string]bool{
+		"crunchbase.com":    true,
+		"brightspace.com":   true,
+		"snapp.ir":          true,
+		"pypi.org":          true,
+		"a248.e.akamai.net": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d SNIs, want %d (%v)", len(got), len(want), got)
+	}
+	for _, s := range got {
+		if !want[s] {
+			t.Errorf("unexpected SNI %q (cn group with use_arbitrary=false should be excluded)", s)
+		}
+	}
+}
+
 // --- helpers ---
 
 func newTLSEchoServer(t *testing.T, dnsName string, status int) (*httptest.Server, *x509.CertPool) {
