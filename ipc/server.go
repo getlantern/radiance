@@ -264,12 +264,13 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Env (dev/testing)
 	mux.HandleFunc(envEndpoint, traced(s.envHandler))
 
-	// Build the middleware chain: log -> (optional auth) -> mux
+	// Build the middleware chain: panic recovery -> log -> (optional auth) -> mux
 	var handler http.Handler = mux
 	if withAuth {
 		handler = authPeer(handler)
 	}
 	handler = logger(handler)
+	handler = panicRecovery(handler)
 	s.handler = handler
 
 	return s
