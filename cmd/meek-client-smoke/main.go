@@ -64,12 +64,16 @@ func run() error {
 	// Only sample Akamai fronts — our meek property is on Akamai, so
 	// CloudFront IPs would dial a CDN that doesn't host the meek server
 	// and the poll-response loop would hang on miss-routed requests.
+	// AkamaiSample matches the production meek provider default; a larger
+	// sample multiplied by the FrontingSNIs cover pool produces hundreds
+	// of candidates that the 8-way Service scan can't clear inside the
+	// 30s readiness window below.
 	provider, err := rmeek.NewProvider(rmeek.ProviderConfig{
 		Config:           cfg,
 		CacheFile:        filepath.Join(dataDir, "meek_fronts_cache.json"),
 		KnownSample:      0,
 		CloudFrontSample: 0,
-		AkamaiSample:     50,
+		AkamaiSample:     3,
 	})
 	if err != nil {
 		return fmt.Errorf("new provider: %w", err)
