@@ -117,13 +117,15 @@ var (
 type Server struct {
 	svr    *http.Server
 	closed atomic.Bool
+	api    *localapi
 }
 
 // NewServer returns an IPC server backed by b. When withAuth is true, the
 // server authenticates each connection; when false, it accepts all connections.
 func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
+	api := newLocalAPI(b, withAuth)
 	svr := &http.Server{
-		Handler:     newLocalAPI(b, withAuth),
+		Handler:     api,
 		ReadTimeout: 5 * time.Second,
 		Protocols:   &protocols,
 	}
@@ -136,7 +138,7 @@ func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
 			return contextWithUsr(ctx, peer)
 		}
 	}
-	return &Server{svr: svr}
+	return &Server{svr: svr, api: api}
 }
 
 // Start begins listening for incoming IPC requests.
@@ -147,6 +149,9 @@ func (s *Server) Start() error {
 	l, err := listen()
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
+	}
+	if be := s.api.be.Load(); be != nil {
+		be.StartMemDiagnostics()
 	}
 	go func() {
 		slog.Info("IPC server started", "address", l.Addr().String())

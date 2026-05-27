@@ -193,13 +193,6 @@ func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
 
-	profileDir := filepath.Join(settings.GetString(settings.DataPathKey), "pprof")
-	if err := os.MkdirAll(profileDir, 0700); err != nil {
-		slog.Warn("Failed to create heap profile dir, disabling heap profiling", "error", err, "dir", profileDir)
-		profileDir = ""
-	}
-	r.profileDir = profileDir
-	go logMemStats(r.ctx, slog.Default().With("service", "memstats"), memStatsInterval, profileDir)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		result, err := publicip.Detect(ctx, &publicip.Config{

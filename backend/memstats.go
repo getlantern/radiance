@@ -10,6 +10,8 @@ import (
 	"runtime/pprof"
 	"time"
 
+	"github.com/getlantern/radiance/common/settings"
+
 	"github.com/sagernet/sing/common/memory"
 )
 
@@ -43,6 +45,20 @@ const memStatsInterval = 30 * time.Second
 // maxHeapProfiles bounds the rotating set of heap profiles so periodic capture
 // can't fill the disk on a long-running client.
 const maxHeapProfiles = 20
+
+// StartMemDiagnostics begins periodic memory-stats logging and heap profiling for
+// the lifetime of the backend. It is called from the IPC server start so only the
+// daemon / system extension profiles, not the in-process backend the mobile app
+// spins up as an IPC fallback. See the heap-profiling note above for usage.
+func (r *LocalBackend) StartMemDiagnostics() {
+	profileDir := filepath.Join(settings.GetString(settings.DataPathKey), "pprof")
+	if err := os.MkdirAll(profileDir, 0700); err != nil {
+		slog.Warn("Failed to create heap profile dir, disabling heap profiling", "error", err, "dir", profileDir)
+		profileDir = ""
+	}
+	r.profileDir = profileDir
+	go logMemStats(r.ctx, slog.Default().With("service", "memstats"), memStatsInterval, profileDir)
+}
 
 // logMemStats logs runtime memory statistics on an interval until ctx is cancelled.
 // When profileDir is non-empty it also writes a rotating heap profile on each tick.
