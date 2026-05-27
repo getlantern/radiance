@@ -248,10 +248,10 @@ github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694 h1:iLWm6S/4
 github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694/go.mod h1:ag5g9aWUw2FJcX5RVRpJ9EBQBy5yJuy2WXDouIn/m4w=
 github.com/getlantern/kindling v0.0.0-20260516120759-a9712f95df03 h1:dUTN7mnTTBcSvsURNs1rTlyKrD1uXUEPqxEZDfl+hb4=
 github.com/getlantern/kindling v0.0.0-20260516120759-a9712f95df03/go.mod h1:TGTxpoNVwc8Be4qkBNtf5oj2psJaEIZEq47GOPS7zkA=
-github.com/getlantern/lantern-box v0.0.83-0.20260527005603-fde10e5a52fb h1:qBeCCwX4JzQT6hzuLs6TwCfCvoyMCdjT8w4Qpiw3Yzo=
-github.com/getlantern/lantern-box v0.0.83-0.20260527005603-fde10e5a52fb/go.mod h1:wJhPQKdnwD6qW/ghAfzsrj/IfHZbvFSAfr52+Tu6dbw=
-github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90 h1:P9JX1yAu2uq3b5YiT0sLtHkTrkZuttV8gPZh81nUuag=
-github.com/getlantern/lantern-water v0.0.0-20260317143726-e0ee64a11d90/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
+github.com/getlantern/lantern-box v0.0.85-0.20260527152021-a60ff51dfb2b h1:XNFF4/MbiVHw4z58FMYWht1k1t5Uv59CKFKuavicRtg=
+github.com/getlantern/lantern-box v0.0.85-0.20260527152021-a60ff51dfb2b/go.mod h1:6SO1p22tAq9y8JLjNnAbr4/GZ4VjmlcQGYn0qF4aD/k=
+github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 h1:grfGavAUp2E9w9ZoJuM3FyWyQ0sCJ64V4ZMKtZKRqTc=
+github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNiMhCu4bf60nqcIuQpTYb00Ezm1ag=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534/go.mod h1:ZsLfOY6gKQOTyEcPYNA9ws5/XHZQFroxqCOhHjGcs9Y=
 github.com/getlantern/osversion v0.0.0-20240418205916-2e84a4a4e175 h1:JWH5BB2o0eAeGs0tZnFPpQGx+nMIo/WmxKnj2hnGjgE=

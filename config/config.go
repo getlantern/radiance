@@ -68,15 +68,24 @@ type Options struct {
 // to the most recent configuration.
 type ConfigHandler struct {
 	// config holds a configResult.
-	config   atomic.Pointer[Config]
-	ftr      Fetcher
-	started  atomic.Bool
-	fetching atomic.Bool
-	logger   *slog.Logger
-	options  Options
+	config  atomic.Pointer[Config]
+	ftr     Fetcher
+	logger  *slog.Logger
+	options Options
 
-	ctx          context.Context
-	cancel       context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	started atomic.Bool
+
+	// fetchMu guards fetching/pending. A caller arriving while a fetch is
+	// in flight sets pending; the in-flight fetch re-runs once to pick up
+	// state that changed mid-fetch (e.g. a user identity refreshed by an
+	// email login that completed after the request was already on the wire).
+	fetchMu  sync.Mutex
+	fetching bool
+	pending  bool
+
 	pollInterval time.Duration
 	configPath   string
 	wgKeyPath    string
@@ -152,12 +161,32 @@ func (ch *ConfigHandler) fetchConfig() error {
 	if ch.isClosed() {
 		return fmt.Errorf("config handler is closed")
 	}
-	if !ch.fetching.CompareAndSwap(false, true) {
-		ch.logger.Info("config fetch already in flight, skipping")
+
+	ch.fetchMu.Lock()
+	if ch.fetching {
+		ch.pending = true
+		ch.fetchMu.Unlock()
+		ch.logger.Info("config fetch already in flight, scheduling another after it completes")
 		return nil
 	}
-	defer ch.fetching.Store(false)
+	ch.fetching = true
+	ch.fetchMu.Unlock()
 
+	var lastErr error
+	for {
+		lastErr = ch.doFetchConfig()
+		ch.fetchMu.Lock()
+		if !ch.pending {
+			ch.fetching = false
+			ch.fetchMu.Unlock()
+			return lastErr
+		}
+		ch.pending = false
+		ch.fetchMu.Unlock()
+	}
+}
+
+func (ch *ConfigHandler) doFetchConfig() error {
 	privateKey, err := ch.loadWGKey()
 	if err != nil && !errors.Is(err, ErrNoWGKey) {
 		return fmt.Errorf("loading wg key: %w", err)
