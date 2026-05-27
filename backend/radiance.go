@@ -77,6 +77,8 @@ type LocalBackend struct {
 
 	stopURLTestListener context.CancelFunc
 	urlTestMu           sync.Mutex
+
+	profileDir string
 }
 
 type Options struct {
@@ -190,6 +192,14 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
+
+	profileDir := filepath.Join(settings.GetString(settings.DataPathKey), "pprof")
+	if err := os.MkdirAll(profileDir, 0700); err != nil {
+		slog.Warn("Failed to create heap profile dir, disabling heap profiling", "error", err, "dir", profileDir)
+		profileDir = ""
+	}
+	r.profileDir = profileDir
+	go logMemStats(r.ctx, slog.Default().With("service", "memstats"), memStatsInterval, profileDir)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		result, err := publicip.Detect(ctx, &publicip.Config{
@@ -374,6 +384,19 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		attachmentPaths = append(attachmentPaths, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
 	}
 	attachmentPaths = append(attachmentPaths, additionalAttachments...)
+
+	// add heap profiles
+	files, err := os.ReadDir(r.profileDir)
+	if err != nil {
+		slog.Warn("Failed to read profile directory for issue attachments", "error", err, "dir", r.profileDir)
+	}
+	if len(files) > 0 {
+		for _, f := range files {
+			if strings.HasSuffix(f.Name(), ".pprof") {
+				attachmentPaths = append(attachmentPaths, filepath.Join(r.profileDir, f.Name()))
+			}
+		}
+	}
 
 	report := issue.IssueReport{
 		Type:                  issueType,
