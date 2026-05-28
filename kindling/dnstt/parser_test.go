@@ -132,7 +132,7 @@ func TestDNSTTOptions(t *testing.T) {
 
 		tr, ok := dnst.(*multipleDNSTTTransport)
 		require.True(t, ok)
-		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.GreaterOrEqual(t, len(tr.configs), 1)
 		assert.NoError(t, dnst.Close())
 	})
 
@@ -147,7 +147,7 @@ func TestDNSTTOptions(t *testing.T) {
 
 		tr, ok := dnst.(*multipleDNSTTTransport)
 		require.True(t, ok)
-		assert.Len(t, tr.options, 1)
+		assert.Len(t, tr.configs, 1)
 		assert.NoError(t, dnst.Close())
 	})
 
@@ -164,7 +164,7 @@ func TestDNSTTOptions(t *testing.T) {
 
 		tr, ok := dnst.(*multipleDNSTTTransport)
 		require.True(t, ok)
-		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.GreaterOrEqual(t, len(tr.configs), 1)
 		assert.NoError(t, dnst.Close())
 	})
 
@@ -175,7 +175,7 @@ func TestDNSTTOptions(t *testing.T) {
 		assert.NoError(t, err)
 		tr, ok := dnst.(*multipleDNSTTTransport)
 		require.True(t, ok)
-		assert.GreaterOrEqual(t, len(tr.options), 1)
+		assert.GreaterOrEqual(t, len(tr.configs), 1)
 		assert.NoError(t, dnst.Close())
 	})
 }

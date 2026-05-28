@@ -30,6 +30,10 @@ import (
 	"github.com/getlantern/radiance/traces"
 )
 
+// DNSTT is an alias for the upstream transport interface, re-exported so
+// callers can type variables without importing github.com/getlantern/dnstt directly.
+type DNSTT = dnstt.DNSTT
+
 type dnsttConfig struct {
 	Domain           string  `yaml:"domain"`    // DNS tunnel domain, e.g., "t.iantem.io"
 	PublicKey        string  `yaml:"publicKey"` // DNSTT server public key
@@ -81,21 +85,10 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 			slog.Warn("failed to read local dnstt config file", slog.Any("error", err), slog.String("filepath", localConfigFilepath))
 		}
 	}
-	tunnels := make([]*dnsTunnel, 0)
-	for _, opt := range options {
-		dnst, err := newDNSTT(opt)
-		if err != nil {
-			slog.Warn("failed to build dnstt", slog.Any("error", err))
-			continue
-		}
-
-		tunnels = append(tunnels, &dnsTunnel{DNSTT: dnst})
-	}
-
 	m := &multipleDNSTTTransport{
 		tunChan:  make(chan *dnsTunnel, 400),
 		stopChan: make(chan struct{}),
-		options:  tunnels,
+		configs:  options,
 	}
 	m.crawlOnce.Do(func() {
 		go func() {
@@ -247,7 +240,7 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnsttConfig, error) {
 	return cfgs, nil
 }
 
-var waitFor = 30 * time.Second
+var waitFor = 2 * time.Minute
 
 func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 	// trying all dns tunnels available
@@ -264,36 +257,46 @@ func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 }
 
 func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
-	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(m.options)))
+	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(m.configs)))
 
-	if len(m.options) == 0 {
+	if len(m.configs) == 0 {
 		slog.Debug("no dns tunnel options available")
 		return
 	}
 
 	pondCtx, cancel := context.WithTimeout(context.Background(), waitFor)
+	m.probeCancelMx.Lock()
+	m.probeCancelFn = cancel
+	m.probeCancelMx.Unlock()
 	defer cancel()
 
-	// Limit concurrency to something reasonable
 	poolSize := 10
-	if len(m.options) < poolSize {
-		poolSize = len(m.options)
+	if len(m.configs) < poolSize {
+		poolSize = len(m.configs)
 	}
 
 	pool := pond.New(poolSize, 10, pond.Context(pondCtx))
-	for _, dnst := range m.options {
+	for _, cfg := range m.configs {
+		cfg := cfg
 		pool.Submit(func() {
 			if m.closed.Load() {
 				slog.Debug("closed, stop testing")
-				dnst.markFailed()
-				go dnst.Close()
 				return
 			}
-			rt, err := dnst.NewRoundTripper(pondCtx, "")
+
+			// Instances are created here, not at startup, so only poolSize DNSTT
+			// instances (and their goroutines) are active at any one time.
+			dnstImpl, err := newDNSTT(cfg)
+			if err != nil {
+				slog.Debug("failed to create dnstt instance", slog.Any("error", err))
+				return
+			}
+			tun := &dnsTunnel{DNSTT: dnstImpl}
+
+			rt, err := tun.NewRoundTripper(pondCtx, "")
 			if err != nil {
 				slog.Debug("failed to create round tripper", slog.Any("error", err))
-				dnst.markFailed()
-				go dnst.Close()
+				go tun.Close()
 				return
 			}
 
@@ -305,39 +308,37 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 			req, err := http.NewRequestWithContext(pondCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 			if err != nil {
 				slog.Debug("failed to create request", slog.Any("error", err))
-				dnst.markFailed()
-				go dnst.Close()
+				go tun.Close()
 				return
 			}
 
 			resp, err := client.Do(req)
 			if err != nil {
 				slog.Debug("dnstt test request failed", slog.Any("error", err))
-				dnst.markFailed()
-				go dnst.Close()
+				go tun.Close()
 				return
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				slog.Debug("dnstt test returned non-2xx", slog.Int("status", resp.StatusCode))
-				dnst.markFailed()
-				go dnst.Close()
+				go tun.Close()
 				return
 			}
 
 			if m.closed.Load() {
 				slog.Debug("closed, stop testing")
-				dnst.markFailed()
-				go dnst.Close()
+				go tun.Close()
 				return
 			}
 
-			// Successful tunnel
 			slog.Debug("adding successful tun to channel")
-			dnst.markSucceeded()
+			tun.setProbeRT(rt)
+			tun.markSucceeded()
 			if !m.closed.Load() {
-				m.tunChan <- dnst
+				m.tunChan <- tun
+			} else {
+				go tun.Close()
 			}
 		})
 	}
@@ -350,14 +351,42 @@ type multipleDNSTTTransport struct {
 	stopChan     chan struct{}
 	stopChanOnce sync.Once
 	closed       atomic.Bool
-	options      []*dnsTunnel
+	configs      []dnsttConfig
+
+	// probeCancelFn cancels the pondCtx for the in-progress tryAllDNSTunnels
+	// call. Stored so Close() can abort probe workers promptly, preventing
+	// their DoH goroutines from competing with a subsequent transport's probe.
+	probeCancelFn context.CancelFunc
+	probeCancelMx sync.Mutex
 }
 
 type dnsTunnel struct {
 	dnstt.DNSTT
-	// lastSucceeded: the most recent time at which this DNS tunnel succeeded
 	lastSucceeded time.Time
 	mx            sync.RWMutex
+
+	// probeRT caches the round tripper established during the probe.
+	// Reusing it avoids opening a second CONNECT tunnel on the same smux
+	// session, which fails with 502 when the server limits concurrent
+	// outbound connections per session.
+	probeRT   http.RoundTripper
+	probeRTMx sync.Mutex
+}
+
+func (t *dnsTunnel) setProbeRT(rt http.RoundTripper) {
+	t.probeRTMx.Lock()
+	defer t.probeRTMx.Unlock()
+	t.probeRT = rt
+}
+
+func (t *dnsTunnel) getRoundTripper(ctx context.Context, addr string) (http.RoundTripper, error) {
+	t.probeRTMx.Lock()
+	rt := t.probeRT
+	t.probeRTMx.Unlock()
+	if rt != nil {
+		return rt, nil
+	}
+	return t.NewRoundTripper(ctx, addr)
 }
 
 func (t *dnsTunnel) markSucceeded() {
@@ -410,7 +439,7 @@ type connectedRoundtripper struct {
 }
 
 func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	rt, err := c.t.NewRoundTripper(c.ctx, c.addr)
+	rt, err := c.t.getRoundTripper(c.ctx, c.addr)
 	if err != nil {
 		slog.DebugContext(c.ctx, "failed to create dnstt round tripper", slog.Any("error", err))
 		c.t.markFailed()
@@ -434,12 +463,22 @@ func (m *multipleDNSTTTransport) Close() error {
 	m.stopChanOnce.Do(func() {
 		close(m.stopChan)
 	})
-	for _, dnst := range m.options {
-		go func() {
-			if err := dnst.Close(); err != nil {
-				slog.Error("failed to close dns tunnel", slog.Any("error", err))
-			}
-		}()
+	m.probeCancelMx.Lock()
+	if m.probeCancelFn != nil {
+		m.probeCancelFn()
 	}
-	return nil
+	m.probeCancelMx.Unlock()
+	// Probe workers close their own instances on failure, so only successful tunnels land here.
+	for {
+		select {
+		case tun := <-m.tunChan:
+			go func() {
+				if err := tun.Close(); err != nil {
+					slog.Error("failed to close dns tunnel", slog.Any("error", err))
+				}
+			}()
+		default:
+			return nil
+		}
+	}
 }
