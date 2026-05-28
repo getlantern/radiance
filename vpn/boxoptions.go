@@ -273,9 +273,12 @@ func baseRoutingRules() []O.Rule {
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
-	// 6.    Rules from config file (added in buildOptions)
-	// 7,8.  Group rules for auto and manual selector modes (added in buildOptions).
-	// 9.    Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
+	// 7.    Reject QUIC (UDP/443) for any UDP/443 not already matched above; placed
+	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
+	//       their QUIC. Added in buildOptions.
+	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
+	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -353,26 +356,30 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-		{ // Reject QUIC (UDP/443) → force HTTP/2-over-TCP fallback.
-			// QUIC-over-TCP-outbound stacks two loss-recovery / congestion
-			// regimes — strictly worse than letting Chrome drop to HTTP/2.
-			// Standard pattern in TUN-mode sing-box clients (Hiddify, NekoBox,
-			// Clash Meta). After split-tunnel so split-direct domains keep
-			// their QUIC; only proxied QUIC is rejected. WebRTC (random UDP
-			// ports) and Hysteria2 outbound UDP are unaffected.
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{
-					Network: []string{"udp"},
-					Port:    []uint16{443},
-				},
-				RuleAction: O.RuleAction{
-					Action: C.RuleActionTypeReject,
-				},
+	}
+	return rules
+}
+
+// rejectQUICRule rejects UDP/443 to force HTTP/2-over-TCP fallback. Standard
+// pattern in TUN-mode sing-box clients (Hiddify, NekoBox, Clash Meta) because
+// QUIC-over-TCP-outbound stacks two loss-recovery/congestion regimes — strictly
+// worse than letting Chrome drop to HTTP/2. Caller is responsible for placing
+// this AFTER all rules that may route to direct (split tunnel, smart routing,
+// config file) so direct-routed domains keep their QUIC, and BEFORE the
+// proxy selectors so QUIC bound for a proxy is rejected.
+func rejectQUICRule() O.Rule {
+	return O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				Network: []string{"udp"},
+				Port:    []uint16{443},
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
 			},
 		},
 	}
-	return rules
 }
 
 // buildOptions builds the box options using the config options and user servers.
@@ -461,6 +468,8 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		tags[0], tags[i] = tags[i], tags[0]
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
+
+	opts.Route.Rules = append(opts.Route.Rules, rejectQUICRule())
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))

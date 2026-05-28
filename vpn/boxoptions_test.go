@@ -441,23 +441,50 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 	})
 }
 
-// TestBaseRoutingRules_RejectsQUIC pins the UDP/443 reject so a refactor
-// can't silently drop it. See the rule comment for rationale.
-func TestBaseRoutingRules_RejectsQUIC(t *testing.T) {
-	var found bool
-	for _, r := range baseRoutingRules() {
+// TestBuildOptions_RejectsQUICAfterDirectRules pins the placement of the QUIC
+// reject: it must follow the split-tunnel and smart-routing rules (so a
+// direct-routed domain keeps its QUIC) and precede the selector rules (so
+// QUIC bound for the proxy is rejected).
+func TestBuildOptions_RejectsQUICAfterDirectRules(t *testing.T) {
+	cfg := testConfig(t)
+	opts, err := buildOptions(BoxOptions{
+		BasePath:     t.TempDir(),
+		Options:      cfg.Options,
+		SmartRouting: cfg.SmartRouting,
+		AdBlock:      cfg.AdBlock,
+	})
+	require.NoError(t, err)
+
+	isQUICReject := func(r O.Rule) bool {
 		opts := r.DefaultOptions
-		if opts.RuleAction.Action != "reject" {
-			continue
-		}
-		hasUDP := slices.Contains(opts.RawDefaultRule.Network, "udp")
-		hasPort443 := slices.Contains(opts.RawDefaultRule.Port, uint16(443))
-		if hasUDP && hasPort443 {
-			found = true
-			break
+		return opts.RuleAction.Action == "reject" &&
+			slices.Contains(opts.RawDefaultRule.Network, "udp") &&
+			slices.Contains(opts.RawDefaultRule.Port, uint16(443))
+	}
+	isSplitTunnel := func(r O.Rule) bool {
+		return slices.Contains(r.DefaultOptions.RawDefaultRule.RuleSet, splitTunnelTag)
+	}
+	isSelector := func(r O.Rule) bool {
+		mode := r.DefaultOptions.RawDefaultRule.ClashMode
+		return mode == AutoSelectTag || mode == ManualSelectTag
+	}
+
+	quicIdx, splitIdx, selectorIdx := -1, -1, -1
+	for i, r := range opts.Route.Rules {
+		switch {
+		case isQUICReject(r):
+			quicIdx = i
+		case isSplitTunnel(r):
+			splitIdx = i
+		case isSelector(r) && selectorIdx == -1:
+			selectorIdx = i
 		}
 	}
-	assert.True(t, found, "expected base routing rules to include a UDP/443 reject rule")
+	require.NotEqual(t, -1, quicIdx, "expected UDP/443 reject rule in built options")
+	require.NotEqual(t, -1, splitIdx, "expected split-tunnel rule in built options")
+	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
+	assert.Greater(t, quicIdx, splitIdx, "QUIC reject must come after split-tunnel rule so split-direct domains keep QUIC")
+	assert.Less(t, quicIdx, selectorIdx, "QUIC reject must come before selector rules so proxied QUIC is rejected")
 }
 
 // TestBaseOpts_TunInet6Address pins that the TUN's Inet6Address tracks
