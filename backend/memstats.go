@@ -8,9 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 	"time"
-
-	"github.com/getlantern/radiance/common/settings"
 
 	"github.com/sagernet/sing/common/memory"
 )
@@ -19,13 +18,14 @@ import (
 // memory kill (the OS terminates the extension once its phys_footprint exceeds a
 // hard cap). It is not meant for production telemetry.
 //
-// Each tick, logMemStats writes a heap profile to <DataPath>/pprof/heap-NN.pprof,
-// rotating across maxHeapProfiles files (identify the latest by mtime), and emits
-// a "memory stats" log line whose heap_profile attr names the file written that
-// tick. The same line carries mem_total (on darwin the phys_footprint the OS kills
-// on), heap_alloc, and num_gc, so a profile can be tied to the footprint at that
-// moment; heap_idle minus heap_released is memory the runtime holds but is not
-// using (e.g. sync.Pool retention).
+// Each tick, logMemStats writes a heap profile to <DataPath>/pprof/heap-NN.pprof
+// and a goroutine profile to goroutine-NN.txt at the same index, rotating across
+// maxHeapProfiles files (identify the latest by mtime). The "memory stats" log
+// line names both files in its heap_profile and goroutine_profile attrs, alongside
+// mem_total (on darwin the phys_footprint the OS kills on), heap_alloc, and
+// num_gc, so a profile can be tied to the footprint at that moment; heap_idle
+// minus heap_released is memory the runtime holds but is not using (e.g. sync.Pool
+// retention).
 //
 // To analyze, pull the pprof/ dir off-device and run:
 //
@@ -39,6 +39,12 @@ import (
 // pprof only sees the Go heap. If mem_total climbs while the profiles stay flat,
 // the growth is off-heap (cgo, tun/netstack buffers) and the profile correctly
 // shows nothing growing, which is itself the answer.
+//
+// The goroutine profile is debug=2 text and includes each live goroutine's
+// "created by" stack. Use it when a leak of goroutines spawned via `go func()`
+// needs to be attributed to its spawn site — the heap profile can't cross that
+// `go` boundary. grep the file for the watcher function to count and locate
+// instances.
 
 const memStatsInterval = 30 * time.Second
 
@@ -51,13 +57,7 @@ const maxHeapProfiles = 20
 // daemon / system extension profiles, not the in-process backend the mobile app
 // spins up as an IPC fallback. See the heap-profiling note above for usage.
 func (r *LocalBackend) StartMemDiagnostics() {
-	profileDir := filepath.Join(settings.GetString(settings.DataPathKey), "pprof")
-	if err := os.MkdirAll(profileDir, 0700); err != nil {
-		slog.Warn("Failed to create heap profile dir, disabling heap profiling", "error", err, "dir", profileDir)
-		profileDir = ""
-	}
-	r.profileDir = profileDir
-	go logMemStats(r.ctx, slog.Default().With("service", "memstats"), memStatsInterval, profileDir)
+	go logMemStats(r.ctx, slog.Default().With("service", "memstats"), memStatsInterval, r.profileDir)
 }
 
 // logMemStats logs runtime memory statistics on an interval until ctx is cancelled.
@@ -87,13 +87,19 @@ func logMemStats(ctx context.Context, logger *slog.Logger, interval time.Duratio
 				"num_gc", m.NumGC,
 			}
 			if profileDir != "" {
-				path := filepath.Join(profileDir, fmt.Sprintf("heap-%02d.pprof", profileIdx))
-				if err := writeHeapProfile(path); err != nil {
-					logger.Warn("failed to write heap profile", "error", err, "path", path)
+				heapPath := filepath.Join(profileDir, fmt.Sprintf("heap-%02d.pprof", profileIdx))
+				if err := writeHeapProfile(heapPath); err != nil {
+					logger.Warn("failed to write heap profile", "error", err, "path", heapPath)
 				} else {
-					attrs = append(attrs, "heap_profile", path)
-					profileIdx = (profileIdx + 1) % maxHeapProfiles
+					attrs = append(attrs, "heap_profile", heapPath)
 				}
+				goroutinePath := filepath.Join(profileDir, fmt.Sprintf("goroutine-%02d.txt", profileIdx))
+				if err := writeGoroutineProfile(goroutinePath); err != nil {
+					logger.Warn("failed to write goroutine profile", "error", err, "path", goroutinePath)
+				} else {
+					attrs = append(attrs, "goroutine_profile", goroutinePath)
+				}
+				profileIdx = (profileIdx + 1) % maxHeapProfiles
 			}
 			logger.Debug("memory stats", attrs...)
 		}
@@ -110,4 +116,36 @@ func writeHeapProfile(path string) error {
 	defer f.Close()
 	runtime.GC()
 	return pprof.WriteHeapProfile(f)
+}
+
+// writeGoroutineProfile writes the live goroutine profile in debug=2 text format
+// so each entry includes the "created by" stack — the spawn-site attribution the
+// heap profile loses across the `go` boundary.
+func writeGoroutineProfile(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return pprof.Lookup("goroutine").WriteTo(f, 2)
+}
+
+func isProfileFile(filename string) bool {
+	return (strings.HasPrefix(filename, "heap-") && strings.HasSuffix(filename, ".pprof")) ||
+		strings.HasPrefix(filename, "goroutine-") && strings.HasSuffix(filename, ".txt")
+}
+
+func collectProfileAttachments(profileDir string) []string {
+	files, err := os.ReadDir(profileDir)
+	if err != nil {
+		slog.Warn("Failed to read profile directory for issue attachments", "error", err, "dir", profileDir)
+		return nil
+	}
+	var paths []string
+	for _, f := range files {
+		if isProfileFile(f.Name()) {
+			paths = append(paths, filepath.Join(profileDir, f.Name()))
+		}
+	}
+	return paths
 }

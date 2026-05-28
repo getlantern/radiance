@@ -166,6 +166,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		HTTPClient:    kindling.HTTPClient(),
 		Logger:        slog.Default().With("service", "config_handler"),
 	}
+
+	profileDir := filepath.Join(settings.GetString(settings.DataPathKey), "pprof")
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
+		slog.Warn("Failed to create heap profile dir", "error", err, "dir", profileDir)
+	}
 	r := &LocalBackend{
 		ctx:            ctx,
 		cancel:         cancel,
@@ -178,10 +183,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
-		stopChan:  make(chan struct{}),
-		closeOnce: sync.Once{},
-		deviceID:  platformDeviceID,
-		dataCapCh: make(chan *account.DataCapInfo, 1),
+		stopChan:   make(chan struct{}),
+		closeOnce:  sync.Once{},
+		deviceID:   platformDeviceID,
+		dataCapCh:  make(chan *account.DataCapInfo, 1),
+		profileDir: profileDir,
 	}
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
@@ -378,18 +384,7 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 	}
 	attachmentPaths = append(attachmentPaths, additionalAttachments...)
 
-	// add heap profiles
-	files, err := os.ReadDir(r.profileDir)
-	if err != nil {
-		slog.Warn("Failed to read profile directory for issue attachments", "error", err, "dir", r.profileDir)
-	}
-	if len(files) > 0 {
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), ".pprof") {
-				attachmentPaths = append(attachmentPaths, filepath.Join(r.profileDir, f.Name()))
-			}
-		}
-	}
+	attachmentPaths = append(attachmentPaths, collectProfileAttachments(r.profileDir)...)
 
 	report := issue.IssueReport{
 		Type:                  issueType,

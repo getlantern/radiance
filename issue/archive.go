@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // buildIssueArchive creates a zip archive containing all .log files found in
@@ -17,6 +19,15 @@ import (
 // maxSize bytes.
 func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) ([]byte, error) {
 	logFiles := globLogFiles(logDir)
+
+	// dedup additionalFiles against logFiles and itself
+	deduped := make(map[string]struct{})
+	for _, name := range additionalFiles {
+		if !slices.Contains(logFiles, name) {
+			deduped[name] = struct{}{}
+		}
+	}
+	additionalFiles = slices.Collect(maps.Keys(deduped))
 
 	var primaryLogData []byte
 	var secondaryLogs []extraFile
