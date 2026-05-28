@@ -33,7 +33,7 @@ var (
 	// EnabledTransports gates which transports NewKindling wires up. Intended for tests; not a
 	// production toggle.
 	EnabledTransports = map[kindling.TransportName]bool{
-		kindling.TransportDNSTunnel:   false,
+		kindling.TransportDNSTunnel:   true,
 		kindling.TransportAMP:         true,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
