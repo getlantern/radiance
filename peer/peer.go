@@ -15,9 +15,14 @@ import (
 	"github.com/getlantern/radiance/portforward"
 )
 
-// Lower bound avoids well-known/registered ports; upper bound stays below the
-// typical OS ephemeral range so the OS isn't likely to assign the same port
-// to another local process.
+// Port range chosen to minimize collision risk on the typical home network,
+// not to guarantee one. 30000–50000 sits above the well-known/system range
+// (0–1023) and above the ports most services use by default (web/dev/dbs
+// usually <30000). It overlaps both the IANA registered range (1024–49151)
+// and the OS ephemeral range on some platforms (Linux's default
+// net.ipv4.ip_local_port_range starts at 32768, Windows uses 49152+), so
+// a collision is still possible. AddPortMapping surfaces the conflict and
+// the peer.Client caller can retry with a fresh pick.
 const (
 	internalPortMin = 30000
 	internalPortMax = 50000
@@ -209,10 +214,16 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
+	// HeartbeatIntervalSeconds is server-driven so lantern-cloud can dial up
+	// the cadence on registrations it wants to expire faster. Honor any
+	// positive value verbatim — clamping short intervals up would defeat
+	// that and risk the server reaping the route between our heartbeats.
+	// A non-positive value means the field was unset (e.g., older server,
+	// JSON omitted); fall back to a sane default.
 	heartbeat := c.cfg.HeartbeatInterval
 	if heartbeat == 0 {
 		heartbeat = time.Duration(regResp.HeartbeatIntervalSeconds) * time.Second
-		if heartbeat < time.Minute {
+		if heartbeat <= 0 {
 			heartbeat = 5 * time.Minute
 		}
 	}

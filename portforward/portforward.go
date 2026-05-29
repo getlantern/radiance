@@ -152,9 +152,14 @@ func (f *Forwarder) UnmapPort(ctx context.Context) error {
 }
 
 // StartRenewal launches a goroutine that re-issues AddPortMapping at half
-// the lease duration (minimum 1 minute) until ctx is cancelled or UnmapPort
-// is called. Routers that ignored the requested lease and assigned their
-// own short TTL would otherwise drop the mapping mid-session.
+// the requested lease duration (minimum 1 minute) until ctx is cancelled
+// or UnmapPort is called. The cadence is keyed off what we *requested*
+// (mapping.LeaseDuration) — UPnP IGD has no API to query what the router
+// actually assigned, so a router that ignored the request and silently
+// applied a shorter TTL can still drop the mapping between renewal ticks.
+// The peer's heartbeat path will surface that failure and auto-Stop the
+// session; routine 30-minute refresh of an hour-long requested lease
+// handles the common case where the router honors the requested duration.
 func (f *Forwarder) StartRenewal(ctx context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
