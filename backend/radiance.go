@@ -213,7 +213,11 @@ func (r *LocalBackend) Start() {
 			slog.Warn("Failed to get public IP", "error", err)
 		} else {
 			common.SetPublicIP(result.IP.String())
-			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+			// IP intentionally omitted — Lantern users in censored regions
+			// can't safely have their public IP in routinely-collected
+			// client logs. Confidence + sources are enough for operator
+			// triage; the actual IP is correlated server-side via traces.
+			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
 		}
 	}()
 

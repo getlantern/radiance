@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -139,15 +140,19 @@ type stubServer struct {
 	server             *httptest.Server
 	registerStatus     int
 	registerResp       RegisterResponse
+	verifyStatus       int
 	heartbeatStatus    int
 	deregisterStatus   int
 	registerCount      atomic.Int64
+	verifyCount        atomic.Int64
 	heartbeatCount     atomic.Int64
 	deregisterCount    atomic.Int64
 	registerDeviceID   atomic.Value // string
+	verifyDeviceID     atomic.Value // string
 	heartbeatDeviceID  atomic.Value // string
 	deregisterDeviceID atomic.Value // string
 	lastRegisterReq    atomic.Value // RegisterRequest
+	lastVerifyReq      atomic.Value // LifecycleRequest
 }
 
 func newStubServer(t *testing.T) *stubServer {
@@ -155,6 +160,7 @@ func newStubServer(t *testing.T) *stubServer {
 	s := &stubServer{
 		t:                t,
 		registerStatus:   http.StatusOK,
+		verifyStatus:     http.StatusOK,
 		heartbeatStatus:  http.StatusOK,
 		deregisterStatus: http.StatusOK,
 		registerResp: RegisterResponse{
@@ -163,6 +169,10 @@ func newStubServer(t *testing.T) *stubServer {
 			HeartbeatIntervalSeconds: 60,
 		},
 	}
+	// Mount handlers under /v1 so the test mirrors production's versioned
+	// baseURL (common.GetBaseURL returns a URL ending in /v1 or /api/v1).
+	// Without this prefix, a regression that accidentally re-adds the
+	// version segment when composing endpoint URLs would still pass.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/peer/register", func(w http.ResponseWriter, r *http.Request) {
 		s.registerCount.Add(1)
@@ -175,6 +185,18 @@ func newStubServer(t *testing.T) *stubServer {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(s.registerResp)
+	})
+	mux.HandleFunc("/v1/peer/verify", func(w http.ResponseWriter, r *http.Request) {
+		s.verifyCount.Add(1)
+		s.verifyDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
+		var req LifecycleRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		s.lastVerifyReq.Store(req)
+		if s.verifyStatus != http.StatusOK {
+			http.Error(w, "verify failed", s.verifyStatus)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/v1/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatCount.Add(1)
@@ -205,7 +227,10 @@ func newStubServer(t *testing.T) *stubServer {
 func newTestClient(t *testing.T, fwd portForwarder, box *fakeBoxService, srv *stubServer, opts ...func(*Config)) *Client {
 	t.Helper()
 	cfg := Config{
-		API: NewAPI(srv.server.Client(), srv.server.URL, "test-device"),
+		// Production baseURL always includes a version segment. Mirror that
+		// here so the test catches any future regression in how endpoint
+		// URLs are composed from baseURL.
+		API: NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device"),
 		NewForwarder: func(_ context.Context) (portForwarder, error) {
 			return fwd, nil
 		},
@@ -243,10 +268,42 @@ func TestClient_Start_HappyPath(t *testing.T) {
 	assert.NotZero(t, req.ExternalPort)
 	assert.NotZero(t, req.InternalPort)
 
+	// Start must call /peer/verify exactly once after bringing sing-box up,
+	// with the route_id returned from Register. Without this the server
+	// never confirms the peer is actually reachable from the public side.
+	assert.Equal(t, int64(1), srv.verifyCount.Load(), "Start must invoke /peer/verify")
+	assert.Equal(t, "test-device", srv.verifyDeviceID.Load())
+	verifyReq := srv.lastVerifyReq.Load().(LifecycleRequest)
+	assert.Equal(t, "00000000-0000-0000-0000-000000000123", verifyReq.RouteID,
+		"/peer/verify must echo the route_id from Register")
+
 	status := c.CurrentStatus()
 	assert.True(t, status.Active)
 	assert.Equal(t, "203.0.113.42", status.ExternalIP)
 	assert.Equal(t, "00000000-0000-0000-0000-000000000123", status.RouteID)
+}
+
+// A server-side Verify failure means the listener we just brought up isn't
+// reachable through the routed external endpoint. Start must unwind every
+// resource it set up so we don't leave a registered route + open box +
+// router mapping behind in that bad state.
+func TestClient_Start_VerifyFailureUnwinds(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	srv.verifyStatus = http.StatusInternalServerError
+	c := newTestClient(t, fwd, box, srv)
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "verify")
+
+	assert.False(t, c.IsActive())
+	assert.True(t, fwd.wasUnmapped(), "Verify failure must unmap the port forward")
+	assert.True(t, box.closed.Load(), "Verify failure must close the sing-box service")
+	assert.Equal(t, int64(1), srv.deregisterCount.Load(),
+		"Verify failure must deregister the route we just registered")
+	assert.Equal(t, int64(1), srv.verifyCount.Load(), "Verify was attempted exactly once")
 }
 
 func TestClient_Start_DoubleStartIsError(t *testing.T) {
@@ -570,6 +627,58 @@ func TestPickInternalPort_InRange(t *testing.T) {
 	}
 }
 
+// manualPort parses the RADIANCE_PEER_EXTERNAL_PORT env var. Unset, empty,
+// non-numeric, and out-of-range values all collapse to 0, which the
+// NewClient default factory treats as "no override → use UPnP discovery".
+// Only a 1..65535 value selects the manual path.
+func TestManualPort(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want uint16
+	}{
+		{"unset", "", 0},
+		{"valid mid-range", "5698", 5698},
+		{"valid low boundary", "1", 1},
+		{"valid high boundary", "65535", 65535},
+		{"non-numeric", "abc", 0},
+		{"zero", "0", 0},
+		{"negative", "-5", 0},
+		{"above uint16", "65536", 0},
+		{"way above uint16", "99999", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RADIANCE_PEER_EXTERNAL_PORT", tc.env)
+			assert.Equal(t, tc.want, manualPort())
+		})
+	}
+}
+
+// manualPortForwarder must satisfy the portForwarder contract: MapPort
+// returns a Mapping using the configured port for both internal and
+// external (no rewrite — that's the user's responsibility), UnmapPort
+// and StartRenewal are no-ops, and ExternalIP returns "" so the server
+// substitutes the IP it observed on the request.
+func TestManualPortForwarder(t *testing.T) {
+	f := &manualPortForwarder{port: 5698}
+
+	m, err := f.MapPort(context.Background(), 30001, "ignored")
+	require.NoError(t, err)
+	assert.Equal(t, uint16(5698), m.ExternalPort)
+	assert.Equal(t, uint16(5698), m.InternalPort, "external==internal — user mapped them themselves")
+	assert.Equal(t, "manual-env", m.Method)
+
+	require.NoError(t, f.UnmapPort(context.Background()), "UnmapPort is a no-op for manual forwarders")
+
+	// StartRenewal must not panic or block.
+	f.StartRenewal(context.Background())
+
+	ip, err := f.ExternalIP(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, ip, "empty ip signals server to use observed source address")
+}
+
 func TestAPIError_StringFormat(t *testing.T) {
 	e := &APIError{Status: 422, Body: "could not connect to peer port"}
 	assert.Contains(t, e.Error(), "422")
@@ -610,3 +719,126 @@ func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
 
 var _ portForwarder = (*fakeForwarder)(nil)
 var _ boxService = (*fakeBoxService)(nil)
+
+// TestDefaultBuildBoxService_DecodesSamizdatInbound is the regression net
+// for the "missing inbound fields registry in context" failure that bit
+// us live: defaultBuildBoxService used to call libbox.NewServiceWithContext
+// with a fresh ctx that didn't have the lantern-box protocol registries
+// (samizdat, reflex, …) plumbed in, so the JSON decoder couldn't resolve
+// inbounds[0].type="samizdat" → libbox.NewServiceWithContext returned an
+// error → applyPeerShare rolled the toggle back. The integration tests
+// stub BuildBoxService entirely, so neither the libbox setup nor the
+// samizdat decoder were exercised in CI.
+//
+// Calling defaultBuildBoxService directly with a minimal samizdat-inbound
+// options JSON walks the actual decode path. If the registry is missing
+// in the ctx that defaultBuildBoxService produces, libbox returns the
+// "missing inbound fields registry" error and this test fails before any
+// of the runtime cycle (rebuild, redeploy, toggle UI, dial-back) — what
+// used to take a 5-minute round-trip is now a 0.1s test failure.
+func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
+	// Minimal but complete samizdat inbound — every field that
+	// option.SamizdatInboundOptions's json tags require to round-trip.
+	// Values are placeholders; we don't run the box, just decode.
+	const opts = `{
+		"inbounds": [{
+			"type": "samizdat",
+			"tag": "samizdat-in",
+			"listen": "127.0.0.1",
+			"listen_port": 5698,
+			"private_key": "0000000000000000000000000000000000000000000000000000000000000000",
+			"short_ids": ["0000000000000000"],
+			"cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgIQCHOFXAcuEzPfyHK6LdwxwzAKBggqhkjOPQQDAjATMREw\nDwYDVQQKEwhJbnRlcm5ldDAeFw0yNjA1MDYwMDAwMDBaFw0yNzA1MDYwMDAwMDBa\nMBMxETAPBgNVBAoTCEludGVybmV0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\nb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyDUwmfVTZiQ+wR\nkQXjrkAwsOWK99JsM3R2bqNIMEYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwEQYDVR0RBAowCIIGdGVzdC5xMAoGCCqG\nSM49BAMCA0kAMEYCIQCqhyaQaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaIh\nAOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n-----END CERTIFICATE-----\n",
+			"key_pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaoAoGCCqGSM49\nAwEHoUQDQgAEb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyD\nUwmfVTZiQ+wRkQXjrkAwsOWK99JsM3R2bg==\n-----END EC PRIVATE KEY-----\n",
+			"masquerade_domain": "example.com"
+		}]
+	}`
+
+	bs, err := defaultBuildBoxService(context.Background(), opts)
+	require.NoError(t, err, "defaultBuildBoxService must decode a samizdat inbound — "+
+		"the lantern-box protocol registries have to be in ctx")
+	require.NotNil(t, bs)
+	// We never call Start; just verifying the decode path. Close drops
+	// any background structures libbox might have stood up.
+	_ = bs.Close()
+}
+
+// All four peer endpoints must carry the same standard header set as
+// /config-new (X-Lantern-Config-Client-IP in particular). The server's
+// util.ClientIPWithAddr prefers that header over X-Forwarded-For and
+// RemoteAddr; without it, register/verify resolve a different IP than
+// radiance has detected, and the server's verifier dials an address the
+// peer's listener isn't bound to.
+func TestAPI_ForwardsCommonHeaders(t *testing.T) {
+	const fakePublicIP = "198.51.100.7"
+	common.SetPublicIP(fakePublicIP)
+	t.Cleanup(func() { common.SetPublicIP("") })
+
+	type capture struct {
+		clientIP  string
+		deviceID  string
+		platform  string
+		appName   string
+		userAgent string
+	}
+	captured := make(map[string]capture)
+	var mu sync.Mutex
+	record := func(path string, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		captured[path] = capture{
+			clientIP:  r.Header.Get(common.ClientIPHeader),
+			deviceID:  r.Header.Get(common.DeviceIDHeader),
+			platform:  r.Header.Get(common.PlatformHeader),
+			appName:   r.Header.Get(common.AppNameHeader),
+			userAgent: r.Header.Get("User-Agent"),
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/register", r)
+		_ = json.NewEncoder(w).Encode(RegisterResponse{
+			RouteID:                  "00000000-0000-0000-0000-000000000123",
+			ServerConfig:             `{}`,
+			HeartbeatIntervalSeconds: 60,
+		})
+	})
+	mux.HandleFunc("/peer/verify", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/verify", r)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/heartbeat", r)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
+		record("/peer/deregister", r)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	api := NewAPI(srv.Client(), srv.URL, "test-device-id")
+	ctx := context.Background()
+
+	_, err := api.Register(ctx, RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698, InternalPort: 35698})
+	require.NoError(t, err)
+	require.NoError(t, api.Verify(ctx, "00000000-0000-0000-0000-000000000123"))
+	require.NoError(t, api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123"))
+	require.NoError(t, api.Deregister(ctx, "00000000-0000-0000-0000-000000000123"))
+
+	for _, path := range []string{"/peer/register", "/peer/verify", "/peer/heartbeat", "/peer/deregister"} {
+		mu.Lock()
+		c, ok := captured[path]
+		mu.Unlock()
+		require.True(t, ok, "no request captured for %s", path)
+		assert.Equal(t, fakePublicIP, c.clientIP,
+			"%s must forward radiance's detected public IP via %s "+
+				"so server-side ClientIPWithAddr resolves the same IP it does for /config-new",
+			path, common.ClientIPHeader)
+		assert.Equal(t, "test-device-id", c.deviceID, "%s must carry %s", path, common.DeviceIDHeader)
+		assert.NotEmpty(t, c.platform, "%s must carry %s", path, common.PlatformHeader)
+		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
+	}
+}
