@@ -1,6 +1,8 @@
 package vpn
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -261,6 +263,289 @@ func testBoxOptions(t *testing.T) (O.Options, []string) {
 		tags = append(tags, ep.Tag)
 	}
 	return cfg.Options, tags
+}
+
+func TestIsGlobalIPv6(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		// Inside 2000::/3 — predicate returns true regardless of whether
+		// the specific sub-prefix is globally routable in practice.
+		// Real-world global unicast:
+		{"comcast global", "2603:8000:d0f0:5950::1", true},
+		{"google global", "2607:f8b0:4006:80b::200e", true},
+		{"cloudflare global", "2606:4700::1111", true},
+		// Reserved-but-in-range — predicate returns true; see isGlobalIPv6
+		// docstring for why we accept these.
+		{"documentation prefix (2001:db8::/32, reserved)", "2001:db8::1", true},
+		{"6to4 (2002::/16, deprecated)", "2002:c612:1::1", true},
+
+		// Outside 2000::/3 — predicate returns false.
+		{"link-local", "fe80::1", false},
+		{"ULA fc", "fc00::1", false},
+		{"ULA fd", "fdfe:dcba:9876::1", false},
+		{"loopback", "::1", false},
+		{"unspecified", "::", false},
+		{"multicast", "ff02::1", false},
+
+		// IPv4 in any representation — predicate returns false.
+		{"ipv4 private", "192.168.1.1", false},
+		{"ipv4 public", "8.8.8.8", false},
+		{"v4-mapped v6", "::ffff:192.168.1.1", false},
+		{"v4-compatible v6 (deprecated)", "::192.168.1.1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			require.NotNil(t, ip, "test input %q failed to parse", tt.ip)
+			assert.Equal(t, tt.want, isGlobalIPv6(ip), "isGlobalIPv6(%s)", tt.ip)
+		})
+	}
+}
+
+// TestHasGlobalIPv6Using pins the gate's behavior on configs the local
+// machine can't reproduce — Android multi-interface and v6-only cellular
+// shapes especially. Test names flag known overcounts where the pinned
+// behavior is "current" rather than "obviously right."
+func TestHasGlobalIPv6Using(t *testing.T) {
+	v4 := func(s string) net.Addr {
+		return &net.IPNet{IP: net.ParseIP(s).To4(), Mask: net.CIDRMask(24, 32)}
+	}
+	v6 := func(s string) net.Addr {
+		return &net.IPNet{IP: net.ParseIP(s).To16(), Mask: net.CIDRMask(64, 128)}
+	}
+	// *net.IPAddr (no netmask) — what some platforms return instead of *net.IPNet.
+	v6Addr := func(s string) net.Addr {
+		return &net.IPAddr{IP: net.ParseIP(s).To16()}
+	}
+
+	const (
+		comcastV6  = "2603:8000:d0f0:5950::1"  // residential dual-stack
+		tmobileV6  = "2607:fb90:abcd:1234::1"  // cellular global (T-Mobile-shaped)
+		ulaLantern = "fdfe:dcba:9876::1"       // our own TUN ULA
+		ulaTail    = "fd7a:115c:a1e0::1"       // Tailscale ULA
+	)
+
+	tests := []struct {
+		name  string
+		snaps []ifaceSnapshot
+		want  bool
+	}{
+		// ─── macOS-shaped baselines (refactor-fidelity check) ───
+		{
+			name: "macOS dual-stack: en0 with v4 + Comcast v6",
+			snaps: []ifaceSnapshot{
+				{name: "en0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.1.50"), v6(comcastV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "macOS v4-only: en0 with v4 only",
+			snaps: []ifaceSnapshot{
+				{name: "en0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.1.50"),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Tailscale up but no other v6 (ULA shouldn't count)",
+			snaps: []ifaceSnapshot{
+				{name: "en0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.1.50"),
+				}},
+				{name: "utun7", flags: net.FlagUp, addrs: []net.Addr{
+					v6(ulaTail),
+				}},
+			},
+			want: false,
+		},
+
+		// ─── Android-shaped cases (the motivation for this refactor) ───
+		{
+			name: "Android wifi-only v4: wlan0 with v4 only",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Android wifi-only dual-stack: wlan0 with v4 + v6",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"), v6(comcastV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "Android cellular-only v6 (T-Mobile / v6 + NAT64)",
+			snaps: []ifaceSnapshot{
+				{name: "rmnet_data0", flags: net.FlagUp, addrs: []net.Addr{
+					v6(tmobileV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			// Pins current behavior: any UP non-loopback v6 counts. If this
+			// proves problematic in the field, refine to check the active
+			// default route.
+			name: "Android wifi v4 active + cellular v6 idle (multi-interface overcount)",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"),
+				}},
+				{name: "rmnet_data0", flags: net.FlagUp, addrs: []net.Addr{
+					v6(tmobileV6),
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "Android with Lantern TUN ULA already up (own ULA must not count)",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{
+					v4("192.168.4.123"),
+				}},
+				{name: "tun0", flags: net.FlagUp, addrs: []net.Addr{
+					v6(ulaLantern), // ULA — must be filtered out
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Android *net.IPAddr (no netmask) variant — must still detect v6",
+			snaps: []ifaceSnapshot{
+				{name: "rmnet_data0", flags: net.FlagUp, addrs: []net.Addr{
+					v6Addr(tmobileV6),
+				}},
+			},
+			want: true,
+		},
+
+		// ─── Degenerate / lockdown cases ───
+		{
+			name: "loopback only (no usable interfaces)",
+			snaps: []ifaceSnapshot{
+				{name: "lo", flags: net.FlagUp | net.FlagLoopback, addrs: []net.Addr{
+					v6("::1"), v4("127.0.0.1"),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "interface down with v6 address (must be ignored)",
+			snaps: []ifaceSnapshot{
+				{name: "wlan0", flags: 0 /* not Up */, addrs: []net.Addr{
+					v6(comcastV6),
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Android lockdown: snapshot returns empty list",
+			snaps: []ifaceSnapshot{},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := func() ([]ifaceSnapshot, error) {
+				return tt.snaps, nil
+			}
+			assert.Equal(t, tt.want, hasGlobalIPv6Using(provider))
+		})
+	}
+
+	t.Run("snapshot provider returns error", func(t *testing.T) {
+		provider := func() ([]ifaceSnapshot, error) {
+			return nil, fmt.Errorf("simulated netlink failure / permission denied")
+		}
+		assert.False(t, hasGlobalIPv6Using(provider),
+			"errored snapshot should result in false (defensive default)")
+	})
+}
+
+// TestBuildOptions_RejectsQUICAfterDirectRules pins the placement of the QUIC
+// reject: it must follow the split-tunnel and smart-routing rules (so a
+// direct-routed domain keeps its QUIC) and precede the selector rules (so
+// QUIC bound for the proxy is rejected).
+func TestBuildOptions_RejectsQUICAfterDirectRules(t *testing.T) {
+	cfg := testConfig(t)
+	opts, err := buildOptions(BoxOptions{
+		BasePath:     t.TempDir(),
+		Options:      cfg.Options,
+		SmartRouting: cfg.SmartRouting,
+		AdBlock:      cfg.AdBlock,
+	})
+	require.NoError(t, err)
+
+	isQUICReject := func(r O.Rule) bool {
+		opts := r.DefaultOptions
+		return opts.RuleAction.Action == "reject" &&
+			slices.Contains(opts.RawDefaultRule.Network, "udp") &&
+			slices.Contains(opts.RawDefaultRule.Port, uint16(443))
+	}
+	isSplitTunnel := func(r O.Rule) bool {
+		return slices.Contains(r.DefaultOptions.RawDefaultRule.RuleSet, splitTunnelTag)
+	}
+	isSelector := func(r O.Rule) bool {
+		mode := r.DefaultOptions.RawDefaultRule.ClashMode
+		return mode == AutoSelectTag || mode == ManualSelectTag
+	}
+
+	quicIdx, splitIdx, selectorIdx := -1, -1, -1
+	for i, r := range opts.Route.Rules {
+		switch {
+		case isQUICReject(r):
+			quicIdx = i
+		case isSplitTunnel(r):
+			splitIdx = i
+		case isSelector(r) && selectorIdx == -1:
+			selectorIdx = i
+		}
+	}
+	require.NotEqual(t, -1, quicIdx, "expected UDP/443 reject rule in built options")
+	require.NotEqual(t, -1, splitIdx, "expected split-tunnel rule in built options")
+	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
+	assert.Greater(t, quicIdx, splitIdx, "QUIC reject must come after split-tunnel rule so split-direct domains keep QUIC")
+	assert.Less(t, quicIdx, selectorIdx, "QUIC reject must come before selector rules so proxied QUIC is rejected")
+}
+
+// TestBaseOpts_TunInet6Address pins that the TUN's Inet6Address tracks
+// hasGlobalIPv6() — both enabling on dual-stack and skipping on v4-only.
+func TestBaseOpts_TunInet6Address(t *testing.T) {
+	opts := baseOpts(t.TempDir())
+	require.NotEmpty(t, opts.Inbounds, "expected inbounds in baseOpts output")
+
+	var tunOpts *O.TunInboundOptions
+	for _, in := range opts.Inbounds {
+		if in.Type == "tun" {
+			var ok bool
+			tunOpts, ok = in.Options.(*O.TunInboundOptions)
+			require.True(t, ok, "expected *TunInboundOptions for tun inbound")
+			break
+		}
+	}
+	require.NotNil(t, tunOpts, "expected a tun inbound")
+	require.Len(t, tunOpts.Address, 1, "expected exactly one v4 TUN address")
+	require.Equal(t, "10.10.1.1/30", tunOpts.Address[0].String())
+
+	if hasGlobalIPv6() {
+		require.Len(t, tunOpts.Inet6Address, 1, "expected v6 ULA on TUN when system has global v6")
+		assert.Equal(t, "fdfe:dcba:9876::1/126", tunOpts.Inet6Address[0].String(),
+			"v6 ULA prefix should be the ULA we picked")
+	} else {
+		assert.Empty(t, tunOpts.Inet6Address, "expected no v6 ULA on TUN when system has no global v6")
+	}
 }
 
 func TestKernelBelow(t *testing.T) {

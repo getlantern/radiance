@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -83,12 +84,100 @@ type BoxOptions struct {
 	SelectionHistorySeed map[string]lbA.TagHistory `json:"tag_history"`
 }
 
+// isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
+// which also accepts ULA — ULA-only interfaces (Tailscale, corp VPNs) don't
+// indicate real public-v6 connectivity. Reserved-but-in-range prefixes like
+// 2001:db8::/32 (documentation) and 2002::/16 (6to4) still return true; their
+// presence on a real interface still signals "system is configured for v6".
+func isGlobalIPv6(ip net.IP) bool {
+	if ip.To4() != nil {
+		return false
+	}
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return false
+	}
+	// 2000::/3: first three bits are 001, first-byte mask 0xe0 == 0x20.
+	return ip16[0]&0xe0 == 0x20
+}
+
+// ifaceSnapshot is the test seam: the data hasGlobalIPv6 reads per interface,
+// decoupled from net.Interface so tests can simulate any network config.
+type ifaceSnapshot struct {
+	name  string // logging only
+	flags net.Flags
+	addrs []net.Addr
+}
+
+// snapshotInterfaces is the production snapshot provider. Tests inject their own.
+func snapshotInterfaces() ([]ifaceSnapshot, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("net.Interfaces: %w", err)
+	}
+	out := make([]ifaceSnapshot, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			// Per-interface failure → empty addrs, keep going.
+			addrs = nil
+		}
+		out = append(out, ifaceSnapshot{name: iface.Name, flags: iface.Flags, addrs: addrs})
+	}
+	return out, nil
+}
+
+// hasGlobalIPv6 gates the TUN v6 ULA: enable when the system has real v6,
+// disable on v4-only networks where it's been observed to break things we
+// haven't narrowed down. Called per tunnel start; not cached.
+func hasGlobalIPv6() bool {
+	return hasGlobalIPv6Using(snapshotInterfaces)
+}
+
+// hasGlobalIPv6Using is the testable core; production wraps via snapshotInterfaces.
+func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
+	snaps, err := getSnapshots()
+	if err != nil {
+		return false
+	}
+	for _, s := range snaps {
+		if s.flags&net.FlagUp == 0 || s.flags&net.FlagLoopback != 0 {
+			continue
+		}
+		for _, a := range s.addrs {
+			// Addrs() may return *net.IPNet or *net.IPAddr depending on platform.
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			default:
+				continue
+			}
+			if isGlobalIPv6(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // baseOpts returns the minimum sing-box options required for the tunnel to
 // function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
 	cacheFile := filepath.Join(basePath, cacheFileName)
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+
+	// v6 ULA conditional on system v6 — see hasGlobalIPv6.
+	var tunInet6 []netip.Prefix
+	if hasGlobalIPv6() {
+		tunInet6 = []netip.Prefix{netip.MustParsePrefix("fdfe:dcba:9876::1/126")}
+		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
+	} else {
+		slog.Info("vpn: TUN IPv4-only (no global v6 detected)")
+	}
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -113,6 +202,7 @@ func baseOpts(basePath string) O.Options {
 					Address: []netip.Prefix{
 						netip.MustParsePrefix("10.10.1.1/30"),
 					},
+					Inet6Address:           tunInet6, // gated by hasGlobalIPv6
 					AutoRoute:              true,
 					StrictRoute:            true,
 					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
@@ -181,9 +271,12 @@ func baseRoutingRules() []O.Rule {
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
-	// 6.    Rules from config file (added in buildOptions)
-	// 7,8.  Group rules for auto and manual selector modes (added in buildOptions).
-	// 9.    Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
+	// 7.    Reject QUIC (UDP/443) for any UDP/443 not already matched above; placed
+	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
+	//       their QUIC. Added in buildOptions.
+	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
+	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -263,6 +356,28 @@ func baseRoutingRules() []O.Rule {
 		},
 	}
 	return rules
+}
+
+// rejectQUICRule rejects UDP/443 to force HTTP/2-over-TCP fallback. Standard
+// pattern in TUN-mode sing-box clients (Hiddify, NekoBox, Clash Meta) because
+// QUIC-over-TCP-outbound stacks two loss-recovery/congestion regimes — strictly
+// worse than letting Chrome drop to HTTP/2. Caller is responsible for placing
+// this AFTER all rules that may route to direct (split tunnel, smart routing,
+// config file) so direct-routed domains keep their QUIC, and BEFORE the
+// proxy selectors so QUIC bound for a proxy is rejected.
+func rejectQUICRule() O.Rule {
+	return O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				Network: []string{"udp"},
+				Port:    []uint16{443},
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
+			},
+		},
+	}
 }
 
 // buildOptions builds the box options using the config options and user servers.
@@ -366,6 +481,8 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		tags[0], tags[i] = tags[i], tags[0]
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
+
+	opts.Route.Rules = append(opts.Route.Rules, rejectQUICRule())
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))

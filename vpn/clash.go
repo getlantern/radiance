@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
@@ -66,7 +65,7 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options option
 		outbound:          service.FromContext[adapter.OutboundManager](ctx),
 		endpoint:          service.FromContext[adapter.EndpointManager](ctx),
 		trafficManager:    trafficManager,
-		throughputTracker: newThroughputTracker(trafficManager, time.Second),
+		throughputTracker: newThroughputTracker(trafficManager, 0),
 		modeList:          modeList,
 		mode:              initial,
 	}, nil
