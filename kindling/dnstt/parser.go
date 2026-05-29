@@ -23,6 +23,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"go.opentelemetry.io/otel"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/events"
@@ -221,6 +222,11 @@ func newDNSTT(cfg dnsttConfig) (dnstt.DNSTT, error) {
 	if cfg.UTLSDistribution != nil {
 		opts = append(opts, dnstt.WithUTLSDistribution(*cfg.UTLSDistribution))
 	}
+
+	// DNSTT is the last-resort transport, expected to work when the VPN is up
+	// but every other transport is blocked. Dialing through bypass keeps its
+	// DoH/DoT connections off the TUN so they don't loop back through the tunnel.
+	opts = append(opts, dnstt.WithDialer(bypass.DialContext))
 
 	d, err := dnstt.NewDNSTT(opts...)
 	if err != nil {

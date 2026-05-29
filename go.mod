@@ -12,6 +12,8 @@ replace github.com/tetratelabs/wazero => github.com/getlantern/wazero v1.11.0-wa
 
 replace github.com/refraction-networking/water => github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa
 
+replace github.com/getlantern/dnstt => ../dnstt
+
 // replace github.com/getlantern/common => ../common
 
 // replace github.com/sagernet/sing => ../sing
