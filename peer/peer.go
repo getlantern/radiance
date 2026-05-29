@@ -65,6 +65,11 @@ type Client struct {
 	cfg Config
 
 	mu sync.Mutex
+	// startingDone is created when Start sets starting=true and closed when
+	// the same Start clears it (success or fail). Stop callers that arrive
+	// mid-Start block on this channel rather than racing the in-flight
+	// setup. Nil whenever no Start is in flight.
+	startingDone chan struct{}
 	// starting and active together serialize Start: starting is true while a
 	// Start call is in flight, active is true once it succeeds. Without
 	// starting, two concurrent Start calls could both pass the !active check
@@ -115,6 +120,7 @@ func (c *Client) Start(ctx context.Context) error {
 		return errors.New("peer client already active")
 	}
 	c.starting = true
+	c.startingDone = make(chan struct{})
 	c.mu.Unlock()
 
 	var (
@@ -128,7 +134,10 @@ func (c *Client) Start(ctx context.Context) error {
 	defer func() {
 		c.mu.Lock()
 		c.starting = false
+		done := c.startingDone
+		c.startingDone = nil
 		c.mu.Unlock()
+		close(done) // unblocks any Stop call that arrived mid-Start
 		if success {
 			return
 		}
@@ -242,8 +251,25 @@ func (c *Client) Start(ctx context.Context) error {
 
 // Stop tears down an active session. Idempotent. Blocks until the heartbeat
 // goroutine has exited and all teardown calls have completed (or timed out).
+//
+// If a Start is in flight when Stop is called, Stop waits for that Start to
+// finish (success or fail) before proceeding. Without this, a Stop arriving
+// while starting=true would return nil and let the racing Start leave the
+// client active afterward — exactly the orphaned-session shape Start's own
+// rollback path is designed to prevent. The wait honors ctx so a cancellable
+// caller still has an exit door if Start hangs.
 func (c *Client) Stop(ctx context.Context) error {
 	c.mu.Lock()
+	for c.starting {
+		done := c.startingDone
+		c.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		c.mu.Lock()
+	}
 	if !c.active {
 		c.mu.Unlock()
 		return nil

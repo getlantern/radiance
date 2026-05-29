@@ -53,12 +53,20 @@ type Forwarder struct {
 // NewForwarder discovers the local gateway and returns a Forwarder bound to
 // it. Callers should pick a 5-10s timeout on ctx — UPnP discovery is M-SEARCH
 // multicast and waits for replies.
+//
+// Returns ErrNoPortForwarding only when discovery completes without finding
+// a usable gateway. If ctx was canceled or its deadline expired during
+// discovery, the ctx error is returned verbatim so callers can distinguish
+// "this network can't host a peer" from "we ran out of time, retry later".
 func NewForwarder(ctx context.Context) (*Forwarder, error) {
 	if c, err := discoverIGDv2(ctx); err == nil && c != nil {
 		return &Forwarder{client: c, method: "upnp-igd2"}, nil
 	}
 	if c, err := discoverIGDv1(ctx); err == nil && c != nil {
 		return &Forwarder{client: c, method: "upnp-igd1"}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return nil, ErrNoPortForwarding
 }
@@ -90,7 +98,16 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 		return client.AddPortMapping("", externalPort, "TCP", internalPort, internalIP, true, description, requestedLease)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("add port mapping: %w", err)
+		// Propagate ctx cancellation/deadline verbatim so callers can retry
+		// rather than treating it as a permanent "this network won't work".
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("add port mapping: %w", ctxErr)
+		}
+		// Per the ErrNoPortForwarding docstring, a gateway refusing to map a
+		// port is the "this network can't host a peer" case. Join the
+		// sentinel so callers can detect it via errors.Is while still
+		// surfacing the underlying router-specific reason for diagnostics.
+		return nil, fmt.Errorf("add port mapping: %w", errors.Join(ErrNoPortForwarding, err))
 	}
 
 	f.mapping = &Mapping{
@@ -208,9 +225,22 @@ func (f *Forwarder) ExternalIP(ctx context.Context) (string, error) {
 	return ip, nil
 }
 
-// localIP dials an external UDP "no-op" address and inspects the source IP
-// the OS would have chosen — no packets are actually sent.
+// localIP returns the LAN address the OS would use to reach the gateway.
+//
+// First tries the UDP-noop trick (let the kernel pick a route to a known
+// public address) — fastest and most accurate when the host has a working
+// default route. Falls back to scanning interfaces for a private IPv4 if
+// that fails, which covers networks that block 8.8.8.8 outbound or use
+// non-default IPv4 routing tables. UPnP IGD itself is IPv4 in IGDv1 and
+// almost always IPv4 in IGDv2, so we only consider IPv4 addresses.
 func localIP() (string, error) {
+	if ip, err := localIPByDial(); err == nil {
+		return ip, nil
+	}
+	return localIPByInterfaceScan()
+}
+
+func localIPByDial() (string, error) {
 	conn, err := net.Dial("udp", "8.8.8.8:53")
 	if err != nil {
 		return "", fmt.Errorf("dial udp for local ip: %w", err)
@@ -221,6 +251,34 @@ func localIP() (string, error) {
 		return "", fmt.Errorf("unexpected local addr type %T", conn.LocalAddr())
 	}
 	return addr.IP.String(), nil
+}
+
+func localIPByInterfaceScan() (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("list interfaces: %w", err)
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || ipnet.IP.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			ip4 := ipnet.IP.To4()
+			if ip4 == nil || !ip4.IsPrivate() {
+				continue
+			}
+			return ip4.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no usable private ipv4 found on any interface")
 }
 
 func LocalIP() (string, error) { return localIP() }
@@ -257,15 +315,22 @@ func discoverIGDv2(ctx context.Context) (igdClient, error) {
 	return wanIPv2Wrapper{c: clients[0]}, nil
 }
 
+// discoverIGDv1 looks for both WANIPConnection and WANPPPConnection gateways.
+// Cable/fiber CPE routers typically expose UPnP via WANIPConnection; DSL and
+// other PPPoE-terminated CPEs typically expose it via WANPPPConnection.
+// Probing only one would miss large swaths of consumer hardware.
 func discoverIGDv1(ctx context.Context) (igdClient, error) {
-	clients, _, err := internetgateway1.NewWANIPConnection1ClientsCtx(ctx)
+	if clients, _, err := internetgateway1.NewWANIPConnection1ClientsCtx(ctx); err == nil && len(clients) > 0 {
+		return wanIPv1Wrapper{c: clients[0]}, nil
+	}
+	clients, _, err := internetgateway1.NewWANPPPConnection1ClientsCtx(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if len(clients) == 0 {
 		return nil, nil
 	}
-	return wanIPv1Wrapper{c: clients[0]}, nil
+	return wanPPPv1Wrapper{c: clients[0]}, nil
 }
 
 // IGDv1 and IGDv2's generated clients have slightly different method
@@ -295,7 +360,20 @@ func (w wanIPv1Wrapper) GetExternalIPAddress() (string, error) {
 	return w.c.GetExternalIPAddress()
 }
 
+type wanPPPv1Wrapper struct{ c *internetgateway1.WANPPPConnection1 }
+
+func (w wanPPPv1Wrapper) AddPortMapping(remoteHost string, externalPort uint16, protocol string, internalPort uint16, internalClient string, enabled bool, description string, leaseDuration uint32) error {
+	return w.c.AddPortMapping(remoteHost, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration)
+}
+func (w wanPPPv1Wrapper) DeletePortMapping(remoteHost string, externalPort uint16, protocol string) error {
+	return w.c.DeletePortMapping(remoteHost, externalPort, protocol)
+}
+func (w wanPPPv1Wrapper) GetExternalIPAddress() (string, error) {
+	return w.c.GetExternalIPAddress()
+}
+
 var (
 	_ igdClient = wanIPv2Wrapper{}
 	_ igdClient = wanIPv1Wrapper{}
+	_ igdClient = wanPPPv1Wrapper{}
 )

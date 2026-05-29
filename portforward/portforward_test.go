@@ -232,3 +232,28 @@ func TestLocalIP(t *testing.T) {
 	}
 	assert.NotEmpty(t, ip)
 }
+
+// The interface-scan fallback covers networks where the UDP-noop trick
+// fails (IPv6-only host, kernel rejects 8.8.8.8, etc.). Skip if the dev
+// machine genuinely lacks a private IPv4 — running this on a CI worker
+// without a LAN address shouldn't fail the build.
+func TestLocalIPByInterfaceScan(t *testing.T) {
+	ip, err := localIPByInterfaceScan()
+	if err != nil {
+		t.Skipf("no private ipv4 interface available: %v", err)
+	}
+	assert.NotEmpty(t, ip)
+}
+
+// MapPort's gateway-refused path must surface ErrNoPortForwarding via
+// errors.Is so callers can distinguish "this network won't work" from
+// "something else broke", per the package-level docstring.
+func TestForwarder_MapPort_GatewayErrorWrapsErrNoPortForwarding(t *testing.T) {
+	c := &fakeIGD{addErr: errors.New("ConflictInMappingEntry")}
+	f := newTestForwarder(t, c)
+
+	_, err := f.MapPort(context.Background(), 30001, "test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoPortForwarding, "callers must be able to detect via errors.Is")
+	assert.ErrorContains(t, err, "ConflictInMappingEntry", "underlying gateway error must survive for diagnostics")
+}

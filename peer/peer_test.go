@@ -298,6 +298,73 @@ func TestClient_Start_ConcurrentStartsAreSerialized(t *testing.T) {
 	assert.Equal(t, int64(1), srv.registerCount.Load())
 }
 
+// A Stop that arrives while Start is still in flight must wait for that
+// Start to finish — otherwise it returns nil and the racing Start happily
+// leaves the client active afterward, which produces the exact orphaned-
+// session shape Start's own rollback path is designed to prevent.
+func TestClient_Stop_WaitsForInflightStart(t *testing.T) {
+	fwd := &slowMapForwarder{
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}, 1),
+	}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	c := newTestClient(t, fwd, box, srv)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- c.Start(context.Background()) }()
+
+	// Wait until Start is blocked inside MapPort (starting=true, active=false).
+	<-fwd.entered
+
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- c.Stop(context.Background()) }()
+
+	// Stop must not return while Start is still in flight.
+	select {
+	case <-stopErr:
+		t.Fatal("Stop returned before Start finished — would orphan the session")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Let Start complete. Stop should unblock and tear down what Start set up.
+	close(fwd.gate)
+
+	require.NoError(t, <-startErr)
+	require.NoError(t, <-stopErr)
+
+	// Client must be in clean post-Stop state — not active and ready to be
+	// Started again.
+	assert.False(t, c.IsActive())
+	assert.Equal(t, int64(1), srv.registerCount.Load(), "Start completed once")
+	assert.Equal(t, int64(1), srv.deregisterCount.Load(), "Stop tore down what Start set up")
+}
+
+// A Stop with an already-canceled ctx that races a slow Start should give
+// up promptly rather than wait forever.
+func TestClient_Stop_RespectsCtxWhileWaitingForStart(t *testing.T) {
+	fwd := &slowMapForwarder{
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}, 1),
+	}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	c := newTestClient(t, fwd, box, srv)
+	t.Cleanup(func() {
+		close(fwd.gate)
+		// Drain the in-flight Start so the test goroutines don't leak.
+		_ = c.Stop(context.Background())
+	})
+
+	go func() { _ = c.Start(context.Background()) }()
+	<-fwd.entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := c.Stop(ctx)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestClient_Start_PortForwardFailureUnwinds(t *testing.T) {
 	fwd := &fakeForwarder{mapErr: portforward.ErrNoPortForwarding}
 	box := &fakeBoxService{}
