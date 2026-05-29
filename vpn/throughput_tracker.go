@@ -7,6 +7,8 @@ import (
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
+
+	"github.com/getlantern/radiance/common"
 )
 
 // Throughput reports network throughput in bits per second.
@@ -15,7 +17,15 @@ type Throughput struct {
 	Down int64 `json:"down"`
 }
 
-const defaultThroughputSampleInterval = time.Second
+// defaultThroughputSampleInterval is longer on mobile because each tick allocates
+// a snapshot slice of every live and recently-closed connection via the upstream
+// trafficontrol API; at 1s on a phone this dominates GC churn under heavy traffic.
+var defaultThroughputSampleInterval = func() time.Duration {
+	if common.IsMobile() {
+		return 3 * time.Second
+	}
+	return time.Second
+}()
 
 type byteTotals struct {
 	up   int64
@@ -36,17 +46,27 @@ type throughputTracker struct {
 	seen       map[uuid.UUID]byteTotals
 	lastGlobal byteTotals
 	lastTickAt time.Time
+
+	// Scratch maps reused across ticks to avoid excessive allocations
+	nextSeen        map[uuid.UUID]byteTotals
+	nextPerOutbound map[string]Throughput
+	deltas          map[string]byteTotals
 }
 
+// newThroughputTracker returns a tracker sampling at interval; a non-positive
+// interval selects defaultThroughputSampleInterval.
 func newThroughputTracker(manager *trafficontrol.Manager, interval time.Duration) *throughputTracker {
 	if interval <= 0 {
 		interval = defaultThroughputSampleInterval
 	}
 	return &throughputTracker{
-		manager:     manager,
-		interval:    interval,
-		perOutbound: make(map[string]Throughput),
-		seen:        make(map[uuid.UUID]byteTotals),
+		manager:         manager,
+		interval:        interval,
+		perOutbound:     make(map[string]Throughput),
+		seen:            make(map[uuid.UUID]byteTotals),
+		nextSeen:        make(map[uuid.UUID]byteTotals),
+		nextPerOutbound: make(map[string]Throughput),
+		deltas:          make(map[string]byteTotals),
 	}
 }
 
@@ -101,17 +121,17 @@ func (s *throughputTracker) sample(now time.Time) {
 	}
 	s.lastTickAt = now
 
-	deltas := make(map[string]byteTotals)
-	nextSeen := make(map[uuid.UUID]byteTotals, len(s.seen))
+	clear(s.deltas)
+	clear(s.nextSeen)
 	visit := func(m trafficontrol.TrackerMetadata) {
 		up := m.Upload.Load()
 		down := m.Download.Load()
 		prev := s.seen[m.ID]
-		d := deltas[m.Outbound]
+		d := s.deltas[m.Outbound]
 		d.up += up - prev.up
 		d.down += down - prev.down
-		deltas[m.Outbound] = d
-		nextSeen[m.ID] = byteTotals{up: up, down: down}
+		s.deltas[m.Outbound] = d
+		s.nextSeen[m.ID] = byteTotals{up: up, down: down}
 	}
 	for _, m := range s.manager.Connections() {
 		visit(m)
@@ -119,11 +139,11 @@ func (s *throughputTracker) sample(now time.Time) {
 	for _, m := range s.manager.ClosedConnections() {
 		visit(m)
 	}
-	s.seen = nextSeen
+	s.seen, s.nextSeen = s.nextSeen, s.seen
 
-	perOutbound := make(map[string]Throughput, len(deltas))
-	for tag, d := range deltas {
-		perOutbound[tag] = Throughput{
+	clear(s.nextPerOutbound)
+	for tag, d := range s.deltas {
+		s.nextPerOutbound[tag] = Throughput{
 			Up:   int64(float64(d.up*8) / elapsed),
 			Down: int64(float64(d.down*8) / elapsed),
 		}
@@ -137,7 +157,7 @@ func (s *throughputTracker) sample(now time.Time) {
 	s.lastGlobal = byteTotals{up: gUp, down: gDown}
 
 	s.mu.Lock()
-	s.perOutbound = perOutbound
+	s.perOutbound, s.nextPerOutbound = s.nextPerOutbound, s.perOutbound
 	s.globalThroughput = globalThroughput
 	s.mu.Unlock()
 }
