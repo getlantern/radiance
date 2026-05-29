@@ -61,6 +61,10 @@ type LocalBackend struct {
 	splitTunnelMgr *vpn.SplitTunnel
 	sessionHistory *vpn.SessionHistory
 
+	peerClient   peerController
+	peerToggleMu sync.Mutex
+	peerWG       sync.WaitGroup
+
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
 	stopChan      chan struct{}
@@ -156,6 +160,12 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+
+	peerClient, err := newPeerClient(platformDeviceID)
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
@@ -173,6 +183,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		srvManager:     svrMgr,
 		vpnClient:      vpnClient,
 		splitTunnelMgr: splitTunnelMgr,
+		peerClient:     peerClient,
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
@@ -214,6 +225,8 @@ func (r *LocalBackend) Start() {
 	r.startVPNStatusListeners()
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
+
+	r.resumePeerShareIfEnabled()
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
@@ -300,8 +313,15 @@ func (r *LocalBackend) Start() {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
-		if err := r.DisconnectVPN(); err != nil {
-			slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+		r.closePeerClient()
+		// vpnClient is always set in production via NewLocalBackend, but
+		// peer-focused unit tests construct partial LocalBackends without
+		// one. Guard the call so Close stays robust under those paths
+		// rather than panicking in DisconnectVPN.
+		if r.vpnClient != nil {
+			if err := r.DisconnectVPN(); err != nil {
+				slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+			}
 		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		close(r.stopChan)
@@ -468,7 +488,17 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[k]; ok {
 		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
 	}
-	return r.maybeRestartVPN(diff)
+	if err := r.maybeRestartVPN(diff); err != nil {
+		return err
+	}
+
+	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
+		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings

@@ -12,8 +12,16 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
+
+// StatusEvent fires whenever the Client's session state changes — successful
+// Start, user Stop, or auto-Stop on a 404 heartbeat.
+type StatusEvent struct {
+	events.Event
+	Status Status `json:"status"`
+}
 
 // Port range chosen to minimize collision risk on the typical home network,
 // not to guarantee one. 30000–50000 sits above the well-known/system range
@@ -103,7 +111,18 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			return portforward.NewForwarder(ctx)
+			// Explicitly return a nil interface on error — `return
+			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
+			// pair into a typed-nil interface on failure, which then panics
+			// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
+			// because the nil-check passes (interface has a type) but the
+			// receiver is nil. Surfacing the underlying error here lets the
+			// caller see ErrNoPortForwarding instead of a runtime panic.
+			fwd, err := portforward.NewForwarder(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return fwd, nil
 		}
 	}
 	if cfg.BuildBoxService == nil {
@@ -243,6 +262,7 @@ func (c *Client) Start(ctx context.Context) error {
 		ExternalPort: mapping.ExternalPort,
 		RouteID:      regResp.RouteID,
 	}
+	statusSnapshot := c.status
 	c.mu.Unlock()
 
 	fwd.StartRenewal(runCtx)
@@ -257,6 +277,7 @@ func (c *Client) Start(ctx context.Context) error {
 		"heartbeat", heartbeat,
 	)
 	success = true
+	events.Emit(StatusEvent{Status: statusSnapshot})
 	return nil
 }
 
@@ -320,6 +341,7 @@ func (c *Client) Stop(ctx context.Context) error {
 		slog.Warn("peer client unmap port failed", "err", err)
 	}
 	slog.Info("peer client stopped", "route_id", routeID)
+	events.Emit(StatusEvent{Status: Status{}})
 	return firstErr
 }
 
