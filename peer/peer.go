@@ -33,8 +33,9 @@ func (m *manualPortForwarder) MapPort(_ context.Context, _ uint16, _ string) (*p
 func (m *manualPortForwarder) UnmapPort(_ context.Context) error { return nil }
 func (m *manualPortForwarder) StartRenewal(_ context.Context)    {}
 func (m *manualPortForwarder) ExternalIP(_ context.Context) (string, error) {
-	// Empty lets the server fill the observed IP in from r.RemoteAddr,
-	// matching peer_handler's "external_ip empty → use observed" path.
+	// An empty external IP signals the server to use the address it
+	// observed on the inbound request — when the user has supplied a
+	// manual port but no WAN IP, the server's view is the right answer.
 	return "", nil
 }
 
@@ -148,8 +149,6 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			// Manual override short-circuits UPnP discovery entirely; see
-			// env.PeerExternalPort.
 			if p := manualPort(); p != 0 {
 				slog.Info("peer client using manual port forward",
 					"port", p, "env", env.PeerExternalPort.String())
@@ -512,10 +511,10 @@ func pickInternalPort() uint16 {
 // ctx cancel propagates to box internals) AND can still resolve the
 // registry values from box.BaseContext via Value lookups.
 //
-// This runs in the same process as the user's VPN tunnel (vpn/tunnel.go),
-// which calls libbox.Setup once at process start; the registries set
-// here are scoped to this peer's box instance so the two coexist
-// without stomping on each other.
+// Lives in the same process as the user's main VPN tunnel, which has
+// already invoked libbox.Setup at process start. The registries set
+// here are scoped to this peer's box instance via context values, so
+// the two coexist without stomping on each other.
 func defaultBuildBoxService(ctx context.Context, options string) (boxService, error) {
 	bs, err := libbox.NewServiceWithContext(boxRegistryCtx{ctx}, options, nil)
 	if err != nil {

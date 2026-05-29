@@ -170,9 +170,9 @@ func newStubServer(t *testing.T) *stubServer {
 		},
 	}
 	// Mount handlers under /v1 so the test mirrors production's versioned
-	// baseURL (common.GetBaseURL returns ".../v1" or ".../api/v1"). Without
-	// this prefix, a regression in peer/api.go that accidentally re-adds
-	// a version segment would still pass the tests.
+	// baseURL (common.GetBaseURL returns a URL ending in /v1 or /api/v1).
+	// Without this prefix, a regression that accidentally re-adds the
+	// version segment when composing endpoint URLs would still pass.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/peer/register", func(w http.ResponseWriter, r *http.Request) {
 		s.registerCount.Add(1)
@@ -228,8 +228,8 @@ func newTestClient(t *testing.T, fwd portForwarder, box *fakeBoxService, srv *st
 	t.Helper()
 	cfg := Config{
 		// Production baseURL always includes a version segment. Mirror that
-		// here so the test catches any future regression in how peer/api.go
-		// composes endpoint URLs from baseURL.
+		// here so the test catches any future regression in how endpoint
+		// URLs are composed from baseURL.
 		API: NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device"),
 		NewForwarder: func(_ context.Context) (portForwarder, error) {
 			return fwd, nil
@@ -625,6 +625,58 @@ func TestPickInternalPort_InRange(t *testing.T) {
 		assert.GreaterOrEqual(t, int(p), internalPortMin)
 		assert.Less(t, int(p), internalPortMax)
 	}
+}
+
+// manualPort parses the RADIANCE_PEER_EXTERNAL_PORT env var. Unset, empty,
+// non-numeric, and out-of-range values all collapse to 0, which the
+// NewClient default factory treats as "no override → use UPnP discovery".
+// Only a 1..65535 value selects the manual path.
+func TestManualPort(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want uint16
+	}{
+		{"unset", "", 0},
+		{"valid mid-range", "5698", 5698},
+		{"valid low boundary", "1", 1},
+		{"valid high boundary", "65535", 65535},
+		{"non-numeric", "abc", 0},
+		{"zero", "0", 0},
+		{"negative", "-5", 0},
+		{"above uint16", "65536", 0},
+		{"way above uint16", "99999", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RADIANCE_PEER_EXTERNAL_PORT", tc.env)
+			assert.Equal(t, tc.want, manualPort())
+		})
+	}
+}
+
+// manualPortForwarder must satisfy the portForwarder contract: MapPort
+// returns a Mapping using the configured port for both internal and
+// external (no rewrite — that's the user's responsibility), UnmapPort
+// and StartRenewal are no-ops, and ExternalIP returns "" so the server
+// substitutes the IP it observed on the request.
+func TestManualPortForwarder(t *testing.T) {
+	f := &manualPortForwarder{port: 5698}
+
+	m, err := f.MapPort(context.Background(), 30001, "ignored")
+	require.NoError(t, err)
+	assert.Equal(t, uint16(5698), m.ExternalPort)
+	assert.Equal(t, uint16(5698), m.InternalPort, "external==internal — user mapped them themselves")
+	assert.Equal(t, "manual-env", m.Method)
+
+	require.NoError(t, f.UnmapPort(context.Background()), "UnmapPort is a no-op for manual forwarders")
+
+	// StartRenewal must not panic or block.
+	f.StartRenewal(context.Background())
+
+	ip, err := f.ExternalIP(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, ip, "empty ip signals server to use observed source address")
 }
 
 func TestAPIError_StringFormat(t *testing.T) {

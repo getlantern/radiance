@@ -49,11 +49,10 @@ type API struct {
 }
 
 // NewAPI constructs the client. baseURL must already include the API
-// version path segment — common.GetBaseURL() returns ".../v1" (stage:
-// api.staging.iantem.io/v1) or ".../api/v1" (prod: api.iantem.io/api/v1),
-// depending on env. Per-endpoint paths are appended to baseURL without
-// re-adding any version segment, mirroring every other radiance caller
-// of common.GetBaseURL (config/fetcher.go, issue/issue.go, etc.).
+// version path segment — common.GetBaseURL() returns an env-specific URL
+// suffixed with either ".../v1" or ".../api/v1". Per-endpoint paths are
+// appended to baseURL without re-adding any version segment, matching
+// how every other radiance caller of common.GetBaseURL composes URLs.
 func NewAPI(httpClient *http.Client, baseURL, deviceID string) *API {
 	return &API{httpClient: httpClient, baseURL: baseURL, deviceID: deviceID}
 }
