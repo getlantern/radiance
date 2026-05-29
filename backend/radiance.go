@@ -336,8 +336,14 @@ func (r *LocalBackend) Close() {
 				cancel()
 			}
 		}
-		if err := r.DisconnectVPN(); err != nil {
-			slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+		// vpnClient is always set in production via NewLocalBackend, but
+		// peer-focused unit tests construct partial LocalBackends without
+		// one. Guard the call so Close stays robust under those paths
+		// rather than panicking in DisconnectVPN.
+		if r.vpnClient != nil {
+			if err := r.DisconnectVPN(); err != nil {
+				slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+			}
 		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		close(r.stopChan)
