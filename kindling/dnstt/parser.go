@@ -194,6 +194,16 @@ func onNewDNSTTConfig(configFilepath string, gzippedYML []byte) error {
 	return atomicfile.WriteFile(configFilepath, gzippedYML, fileperm.File)
 }
 
+func cfgResolver(cfg dnsttConfig) string {
+	if cfg.DoHResolver != nil {
+		return *cfg.DoHResolver
+	}
+	if cfg.DoTResolver != nil {
+		return *cfg.DoTResolver
+	}
+	return ""
+}
+
 func newDNSTT(cfg dnsttConfig) (dnstt.DNSTT, error) {
 	opts := make([]dnstt.Option, 0)
 	if cfg.Domain != "" {
@@ -240,7 +250,7 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnsttConfig, error) {
 	return cfgs, nil
 }
 
-var waitFor = 2 * time.Minute
+var waitFor = 5 * time.Minute
 
 func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 	// trying all dns tunnels available
@@ -286,59 +296,59 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 
 			// Instances are created here, not at startup, so only poolSize DNSTT
 			// instances (and their goroutines) are active at any one time.
+			resolver := cfgResolver(cfg)
 			dnstImpl, err := newDNSTT(cfg)
 			if err != nil {
-				slog.Debug("failed to create dnstt instance", slog.Any("error", err))
+				slog.Debug("failed to create dnstt instance", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Any("error", err))
 				return
 			}
 			tun := &dnsTunnel{DNSTT: dnstImpl}
 
 			rt, err := tun.NewRoundTripper(pondCtx, "")
 			if err != nil {
-				slog.Debug("failed to create round tripper", slog.Any("error", err))
-				go tun.Close()
+				slog.Debug("failed to create round tripper", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Any("error", err))
+				tun.Close()
 				return
 			}
 
-			client := &http.Client{
-				Transport: rt,
-				Timeout:   15 * time.Second,
-			}
+			// 60 s covers DNSTT session establishment (~20-60 s over DoH) while
+			// still failing fast enough for unreachable resolvers (TCP timeout ≈30 s).
+			client := &http.Client{Transport: rt, Timeout: 60 * time.Second}
 
 			req, err := http.NewRequestWithContext(pondCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
 			if err != nil {
-				slog.Debug("failed to create request", slog.Any("error", err))
-				go tun.Close()
+				slog.Debug("failed to create request", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Any("error", err))
+				tun.Close()
 				return
 			}
 
 			resp, err := client.Do(req)
 			if err != nil {
-				slog.Debug("dnstt test request failed", slog.Any("error", err))
-				go tun.Close()
+				slog.Debug("dnstt probe failed", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Any("error", err))
+				tun.Close()
 				return
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				slog.Debug("dnstt test returned non-2xx", slog.Int("status", resp.StatusCode))
-				go tun.Close()
+				slog.Debug("dnstt probe returned non-2xx", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Int("status", resp.StatusCode))
+				tun.Close()
 				return
 			}
 
 			if m.closed.Load() {
 				slog.Debug("closed, stop testing")
-				go tun.Close()
+				tun.Close()
 				return
 			}
 
-			slog.Debug("adding successful tun to channel")
+			slog.Debug("dnstt tunnel ready", slog.String("domain", cfg.Domain), slog.String("resolver", resolver))
 			tun.setProbeRT(rt)
 			tun.markSucceeded()
 			if !m.closed.Load() {
 				m.tunChan <- tun
 			} else {
-				go tun.Close()
+				tun.Close()
 			}
 		})
 	}
@@ -468,7 +478,7 @@ func (m *multipleDNSTTTransport) Close() error {
 		m.probeCancelFn()
 	}
 	m.probeCancelMx.Unlock()
-	// Probe workers close their own instances on failure, so only successful tunnels land here.
+	// Probe workers close their own failed instances synchronously, so only successful tunnels land here.
 	for {
 		select {
 		case tun := <-m.tunChan:
