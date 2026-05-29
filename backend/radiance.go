@@ -116,6 +116,19 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize common components: %w", err)
 	}
+	// Apply the buffer-pool retention cap now that EnvOverrides are in place but
+	// before any tunnel relay starts, so the swap stays race-free. An explicit
+	// limit wins; otherwise autotune applies the cap a prior run recorded to disk.
+	bufLimit := env.GetInt(env.BufPoolLimit)
+	if bufLimit == 0 {
+		env.Set(env.BufPoolAutotune.String(), "true")
+		if t, ok := readBufPoolTuning(bufPoolTuningPath(settings.GetString(settings.DataPathKey))); ok {
+			bufLimit = t.RecommendedLimit
+		}
+	} else {
+		env.Set(env.BufPoolAutotune.String(), "false")
+	}
+	bufPool.SetLimit(bufLimit)
 	if opts.Locale == "" {
 		if tag, err := locale.Detect(); err != nil {
 			opts.Locale = "en-US"

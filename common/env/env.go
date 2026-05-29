@@ -29,6 +29,8 @@ var (
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 	AppVersion       _key = "RADIANCE_VERSION"
+	BufPoolLimit     _key = "RADIANCE_BUF_POOL_LIMIT"
+	BufPoolAutotune  _key = "RADIANCE_BUF_POOL_AUTOTUNE"
 
 	Testing _key = "RADIANCE_TESTING"
 

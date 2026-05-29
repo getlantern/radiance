@@ -373,6 +373,17 @@ func (c *VPNClient) Bytes() (up, down int64, ok bool) {
 	return up, down, true
 }
 
+// LiveConnectionCount returns the number of active tracked connections. ok is
+// false if the tunnel is not connected.
+func (c *VPNClient) LiveConnectionCount() (count int, ok bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil || c.tunnel.clashServer == nil {
+		return 0, false
+	}
+	return c.tunnel.clashServer.TrafficManager().ConnectionsLen(), true
+}
+
 // Throughput returns the most recent global and per-outbound throughput sample.
 // Returns ErrTunnelNotConnected if the tunnel is not connected.
 func (c *VPNClient) Throughput() (ThroughputSnapshot, error) {
