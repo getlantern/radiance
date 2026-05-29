@@ -508,14 +508,34 @@ func pickInternalPort() uint16 {
 // Without it the user's ctx is missing InboundOptionsRegistry and
 // libbox returns "missing inbound fields registry in context".
 //
+// We wrap so libbox sees the caller's Deadline/Done (so a Stop-induced
+// ctx cancel propagates to box internals) AND can still resolve the
+// registry values from box.BaseContext via Value lookups.
+//
 // This runs in the same process as the user's VPN tunnel (vpn/tunnel.go),
 // which calls libbox.Setup once at process start; the registries set
 // here are scoped to this peer's box instance so the two coexist
 // without stomping on each other.
-func defaultBuildBoxService(_ context.Context, options string) (boxService, error) {
-	bs, err := libbox.NewServiceWithContext(box.BaseContext(), options, nil)
+func defaultBuildBoxService(ctx context.Context, options string) (boxService, error) {
+	bs, err := libbox.NewServiceWithContext(boxRegistryCtx{ctx}, options, nil)
 	if err != nil {
 		return nil, fmt.Errorf("libbox.NewServiceWithContext: %w", err)
 	}
 	return bs, nil
+}
+
+// boxRegistryCtx is a context wrapper that delegates Value() lookups to
+// box.BaseContext() (where lantern-box's protocol registries live) while
+// keeping the caller's Deadline/Done/Err for cancellation. Without this,
+// passing box.BaseContext() directly to libbox would discard the
+// caller's runCtx, leaving libbox internals running past Stop.
+type boxRegistryCtx struct {
+	context.Context
+}
+
+func (c boxRegistryCtx) Value(key any) any {
+	if v := c.Context.Value(key); v != nil {
+		return v
+	}
+	return box.BaseContext().Value(key)
 }

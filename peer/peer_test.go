@@ -152,6 +152,7 @@ type stubServer struct {
 	heartbeatDeviceID  atomic.Value // string
 	deregisterDeviceID atomic.Value // string
 	lastRegisterReq    atomic.Value // RegisterRequest
+	lastVerifyReq      atomic.Value // LifecycleRequest
 }
 
 func newStubServer(t *testing.T) *stubServer {
@@ -168,8 +169,12 @@ func newStubServer(t *testing.T) *stubServer {
 			HeartbeatIntervalSeconds: 60,
 		},
 	}
+	// Mount handlers under /v1 so the test mirrors production's versioned
+	// baseURL (common.GetBaseURL returns ".../v1" or ".../api/v1"). Without
+	// this prefix, a regression in peer/api.go that accidentally re-adds
+	// a version segment would still pass the tests.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/peer/register", func(w http.ResponseWriter, r *http.Request) {
 		s.registerCount.Add(1)
 		s.registerDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		var req RegisterRequest
@@ -181,16 +186,19 @@ func newStubServer(t *testing.T) *stubServer {
 		}
 		_ = json.NewEncoder(w).Encode(s.registerResp)
 	})
-	mux.HandleFunc("/peer/verify", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/peer/verify", func(w http.ResponseWriter, r *http.Request) {
 		s.verifyCount.Add(1)
 		s.verifyDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
+		var req LifecycleRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		s.lastVerifyReq.Store(req)
 		if s.verifyStatus != http.StatusOK {
 			http.Error(w, "verify failed", s.verifyStatus)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatCount.Add(1)
 		s.heartbeatDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		if s.heartbeatStatus != http.StatusOK {
@@ -199,7 +207,7 @@ func newStubServer(t *testing.T) *stubServer {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
 		s.deregisterCount.Add(1)
 		s.deregisterDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		if s.deregisterStatus != http.StatusOK {
@@ -219,7 +227,10 @@ func newStubServer(t *testing.T) *stubServer {
 func newTestClient(t *testing.T, fwd portForwarder, box *fakeBoxService, srv *stubServer, opts ...func(*Config)) *Client {
 	t.Helper()
 	cfg := Config{
-		API: NewAPI(srv.server.Client(), srv.server.URL, "test-device"),
+		// Production baseURL always includes a version segment. Mirror that
+		// here so the test catches any future regression in how peer/api.go
+		// composes endpoint URLs from baseURL.
+		API: NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device"),
 		NewForwarder: func(_ context.Context) (portForwarder, error) {
 			return fwd, nil
 		},
@@ -257,10 +268,42 @@ func TestClient_Start_HappyPath(t *testing.T) {
 	assert.NotZero(t, req.ExternalPort)
 	assert.NotZero(t, req.InternalPort)
 
+	// Start must call /peer/verify exactly once after bringing sing-box up,
+	// with the route_id returned from Register. Without this the server
+	// never confirms the peer is actually reachable from the public side.
+	assert.Equal(t, int64(1), srv.verifyCount.Load(), "Start must invoke /peer/verify")
+	assert.Equal(t, "test-device", srv.verifyDeviceID.Load())
+	verifyReq := srv.lastVerifyReq.Load().(LifecycleRequest)
+	assert.Equal(t, "00000000-0000-0000-0000-000000000123", verifyReq.RouteID,
+		"/peer/verify must echo the route_id from Register")
+
 	status := c.CurrentStatus()
 	assert.True(t, status.Active)
 	assert.Equal(t, "203.0.113.42", status.ExternalIP)
 	assert.Equal(t, "00000000-0000-0000-0000-000000000123", status.RouteID)
+}
+
+// A server-side Verify failure means the listener we just brought up isn't
+// reachable through the routed external endpoint. Start must unwind every
+// resource it set up so we don't leave a registered route + open box +
+// router mapping behind in that bad state.
+func TestClient_Start_VerifyFailureUnwinds(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	srv.verifyStatus = http.StatusInternalServerError
+	c := newTestClient(t, fwd, box, srv)
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "verify")
+
+	assert.False(t, c.IsActive())
+	assert.True(t, fwd.wasUnmapped(), "Verify failure must unmap the port forward")
+	assert.True(t, box.closed.Load(), "Verify failure must close the sing-box service")
+	assert.Equal(t, int64(1), srv.deregisterCount.Load(),
+		"Verify failure must deregister the route we just registered")
+	assert.Equal(t, int64(1), srv.verifyCount.Load(), "Verify was attempted exactly once")
 }
 
 func TestClient_Start_DoubleStartIsError(t *testing.T) {

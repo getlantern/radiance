@@ -58,10 +58,10 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 			// Surface the underlying Start error so operators can see it
 			// in the daemon log (UPnP failure, registration 4xx, etc.)
 			// rather than only via the IPC HTTP response.
-			slog.Error("peer share start failed", "err", err)
+			slog.Error("peer share start failed", "error", err)
 			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
 				slog.Error("peer share rollback failed after Start error",
-					"start_err", err, "rollback_err", rbErr)
+					"start_error", err, "rollback_error", rbErr)
 			}
 			return fmt.Errorf("start peer share: %w", err)
 		}
@@ -69,7 +69,7 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 		return nil
 	}
 	if err := r.peerClient.Stop(toggleCtx); err != nil {
-		slog.Warn("peer share stop returned error (toggle still off)", "err", err)
+		slog.Warn("peer share stop returned error (toggle still off)", "error", err)
 	}
 	return nil
 }
@@ -90,7 +90,7 @@ func (r *LocalBackend) resumePeerShareIfEnabled() {
 			return
 		}
 		if err := r.applyPeerShare(true); err != nil {
-			slog.Warn("peer share auto-resume failed", "err", err)
+			slog.Warn("peer share auto-resume failed", "error", err)
 		}
 	}()
 }
@@ -115,7 +115,7 @@ func (r *LocalBackend) closePeerClient() {
 	stopCtx, cancel := context.WithTimeout(context.Background(), peerToggleTimeout)
 	defer cancel()
 	if err := r.peerClient.Stop(stopCtx); err != nil {
-		slog.Warn("peer share stop on backend close returned error", "err", err)
+		slog.Warn("peer share stop on backend close returned error", "error", err)
 	}
 }
 
