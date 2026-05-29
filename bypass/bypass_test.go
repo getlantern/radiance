@@ -118,6 +118,17 @@ func TestDialContext_FallbackWhenProxyDown(t *testing.T) {
 	assert.Equal(t, string(msg), string(buf[:n]))
 }
 
+func TestStreamDialer_DirectReturnsTCPConn(t *testing.T) {
+	echoAddr := newEchoServer(t)
+
+	conn, err := StreamDialer().DialStream(context.Background(), echoAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, ok := conn.(*net.TCPConn)
+	assert.True(t, ok, "direct dial should return *net.TCPConn so disorder strategy can type-assert it")
+}
+
 func TestDialContext_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
