@@ -53,6 +53,8 @@ type throughputTracker struct {
 	deltas          map[string]byteTotals
 }
 
+// newThroughputTracker returns a tracker sampling at interval; a non-positive
+// interval selects defaultThroughputSampleInterval.
 func newThroughputTracker(manager *trafficontrol.Manager, interval time.Duration) *throughputTracker {
 	if interval <= 0 {
 		interval = defaultThroughputSampleInterval
