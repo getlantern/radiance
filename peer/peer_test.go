@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -624,6 +625,55 @@ func TestPickInternalPort_InRange(t *testing.T) {
 		p := pickInternalPort()
 		assert.GreaterOrEqual(t, int(p), internalPortMin)
 		assert.Less(t, int(p), internalPortMax)
+	}
+}
+
+// pickManualForwarder is the default-NewForwarder factory's first
+// branch: setting → env-var → nil (= caller falls through to UPnP).
+// Tests each resolution path and the out-of-range / unparseable
+// fallthrough behavior. Out-of-range setting + unset env returns nil
+// — peer.NewClient's caller treats that as "use UPnP discovery."
+func TestPickManualForwarder(t *testing.T) {
+	tests := []struct {
+		name       string
+		setting    int    // 0 means unset
+		envVar     string // "" means unset
+		wantManual bool
+		wantPort   uint16
+	}{
+		{"setting takes precedence over env", 5698, "1234", true, 5698},
+		{"setting only", 5698, "", true, 5698},
+		{"env only", 0, "5698", true, 5698},
+		{"both unset → fall through", 0, "", false, 0},
+		{"setting out of range, env unset → fall through", 70000, "", false, 0},
+		{"setting negative, env unset → fall through", -5, "", false, 0},
+		{"setting out of range, env valid → env wins", 70000, "5698", true, 5698},
+		{"setting unset, env unparseable → fall through", 0, "abc", false, 0},
+		{"setting valid low boundary", 1, "", true, 1},
+		{"setting valid high boundary", 65535, "", true, 65535},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, settings.InitSettings(t.TempDir()))
+			t.Cleanup(settings.Reset)
+			if tc.setting != 0 {
+				require.NoError(t, settings.Set(settings.PeerManualPortKey, tc.setting))
+			}
+			t.Setenv("RADIANCE_PEER_EXTERNAL_PORT", tc.envVar)
+
+			fwd := pickManualForwarder()
+			if !tc.wantManual {
+				assert.Nil(t, fwd, "expected fall-through (nil) but got a forwarder")
+				return
+			}
+			require.NotNil(t, fwd, "expected manual forwarder, got nil")
+			// Verify the chosen port via the public MapPort surface —
+			// ManualForwarder.port is unexported, MapPort echoes it.
+			mapping, err := fwd.MapPort(context.Background(), 0, "")
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPort, mapping.ExternalPort)
+			assert.Equal(t, tc.wantPort, mapping.InternalPort)
+		})
 	}
 }
 

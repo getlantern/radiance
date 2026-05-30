@@ -8,9 +8,11 @@ import (
 
 // ManualForwarder exposes the same Map/Unmap/StartRenewal/ExternalIP
 // surface as Forwarder but does no UPnP work. The user is expected to
-// have configured a port forward on their router by hand (single-port
-// 1:1 NAT — every consumer router exposes port forwarding as a single
-// port number) and supplied the port number out-of-band.
+// have configured a port forward on their router by hand and supplied
+// the port number out-of-band. This implementation reports the same
+// value for both the external and internal port — callers needing
+// distinct external/internal ports should use the UPnP-based Forwarder
+// (which can negotiate them) or build their own portForwarder.
 //
 // Use case: networks where UPnP is disabled or unavailable (router has
 // UPnP off for security, ISP-provided gateways without IGD, networks
