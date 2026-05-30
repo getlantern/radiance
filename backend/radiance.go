@@ -523,11 +523,14 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 
 	// Drive the Unbounded widget proxy off the toggle change immediately
 	// rather than waiting for the next NewConfigEvent to re-evaluate.
-	// SetEnabled is internally idempotent and checks the cached server
-	// feature flag + config before actually starting the worker.
+	// settings.Patch above has already persisted the new value, so go
+	// straight to Apply() — SetEnabled would short-circuit on the
+	// already-matching persisted value and never re-evaluate the
+	// manager. Apply re-checks the three-condition predicate against
+	// the cached server-side state and starts or stops accordingly.
 	if _, ok := diff[settings.UnboundedKey]; ok {
-		if err := unbounded.SetEnabled(settings.GetBool(settings.UnboundedKey)); err != nil {
-			slog.Warn("unbounded toggle failed", "error", err)
+		if err := unbounded.Apply(); err != nil {
+			slog.Warn("unbounded apply failed", "error", err)
 		}
 	}
 

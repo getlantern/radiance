@@ -47,13 +47,18 @@ import (
 //   Source    consumer's IP if broflake exposes it, otherwise empty
 //   Timestamp emit time in Unix milliseconds
 //
-// Shape is identical to radiance/peer.ConnectionEvent so a single
-// subscriber can handle both the SmC-via-samizdat stream and the
-// Unbounded-via-broflake stream as one. Broflake's internal worker-
-// slot identifier is not surfaced — a consumer that needs to pair
-// accept/close events for the same arc keys off Source (or the
-// event's arrival sequence within a single connection lifetime,
-// which is what the globe currently does).
+// JSON shape is identical to radiance/peer.ConnectionEvent so a
+// consumer reading both streams over IPC SSE can deserialize each
+// frame with the same struct. In-process subscribers, however,
+// receive these events on a separate channel — events.Subscribe is
+// keyed by concrete Go type, so Subscribe[peer.ConnectionEvent] and
+// Subscribe[unbounded.ConnectionEvent] are independent. The IPC
+// bridge in ipc/server.go fans the two SSE endpoints into the
+// unified peer-connection-events stream that the Flutter globe
+// consumes. Broflake's internal worker-slot identifier is not
+// surfaced — a consumer that needs to pair accept/close events for
+// the same arc keys off Source (or arrival sequence within a single
+// connection lifetime).
 type ConnectionEvent struct {
 	events.Event
 	State     int    `json:"state"`
@@ -66,6 +71,13 @@ var manager = &unboundedManager{}
 type unboundedManager struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	// done is closed by the worker goroutine when it actually exits
+	// (after NewBroflake returns and ui.Stop runs). Stop callers wait
+	// on this so backend shutdown blocks until the broflake widget is
+	// actually torn down — without it, Stop returns as soon as the
+	// cancel signal is queued and the rest of LocalBackend.Close can
+	// race the still-running worker. Nil when nothing is running.
+	done chan struct{}
 	// lastCfg + lastFeatureOn cache the server-side half of the
 	// three-condition predicate so SetEnabled can re-evaluate
 	// immediately when the local toggle flips, without waiting for
@@ -87,20 +99,35 @@ func Enabled() bool {
 	return settings.GetBool(settings.UnboundedKey)
 }
 
-// SetEnabled flips the local opt-in. When enabling, the proxy starts
-// immediately if all three start conditions hold (local toggle + server
-// feature flag + server config cached); otherwise it stays stopped and
-// the next NewConfigEvent will reevaluate. When disabling, the proxy
-// stops. Idempotent — calling with the current value is a no-op.
+// SetEnabled persists the local opt-in (if it differs from the current
+// persisted value) and re-evaluates the manager. Use this from direct
+// callers (FFI, programmatic use) where the new toggle value hasn't
+// been written to settings yet.
+//
+// PatchSettings persists settings itself before calling into the
+// unbounded package, so it should use Apply() directly instead of
+// going through SetEnabled — otherwise SetEnabled's no-change short-
+// circuit (Enabled() == enable) returns before Apply runs and the
+// manager never re-evaluates.
 func SetEnabled(enable bool) error {
-	if Enabled() == enable {
-		return nil
+	if Enabled() != enable {
+		if err := settings.Set(settings.UnboundedKey, enable); err != nil {
+			return err
+		}
+		slog.Info("Unbounded widget proxy local opt-in changed", "enabled", enable)
 	}
-	if err := settings.Set(settings.UnboundedKey, enable); err != nil {
-		return err
-	}
-	slog.Info("Unbounded widget proxy local opt-in changed", "enabled", enable)
-	if !enable {
+	return Apply()
+}
+
+// Apply re-evaluates the three-condition predicate (local toggle +
+// server feature flag + server config cached) against the currently
+// persisted setting and starts or stops the manager accordingly. Used
+// by PatchSettings (which already persisted UnboundedKey itself) and
+// by SetEnabled (after its persist step). Safe to call when nothing
+// has changed — start is a no-op if the worker is already running and
+// stop is a no-op if it isn't.
+func Apply() error {
+	if !Enabled() {
 		manager.stop()
 		return nil
 	}
@@ -108,9 +135,12 @@ func SetEnabled(enable bool) error {
 	shouldStart := manager.shouldStart()
 	cfg := manager.lastCfg
 	feature := manager.lastFeatureOn
+	running := manager.cancel != nil
 	manager.mu.Unlock()
 	if shouldStart {
-		manager.start(cfg)
+		if !running {
+			manager.start(cfg)
+		}
 		return nil
 	}
 	switch {
@@ -156,12 +186,31 @@ func InitSubscription() {
 
 var initOnce sync.Once
 
-// Stop tears down a running widget proxy. Idempotent. Used as a
-// LocalBackend shutdown hook so the broflake goroutines don't outlive
-// the radiance process during a graceful exit.
-func Stop(_ context.Context) error {
+// Stop tears down a running widget proxy and waits for the worker
+// goroutine to actually exit (or the supplied ctx to expire). Used
+// as a LocalBackend shutdown hook — without the wait, Close would
+// return as soon as the cancel signal was queued and the broflake
+// goroutine could still be inside NewBroflake or ui.Stop when the
+// rest of the process tears down.
+//
+// Idempotent: no-op if no worker is running. Returns ctx.Err() if
+// the wait deadline expires before the worker exits — in that case
+// the worker has been signalled to cancel and will exit on its own
+// schedule, but the caller has given up waiting.
+func Stop(ctx context.Context) error {
+	manager.mu.Lock()
+	done := manager.done
+	manager.mu.Unlock()
 	manager.stop()
-	return nil
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
@@ -172,9 +221,12 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	m.cancel = cancel
+	m.done = done
 
 	go func() {
+		defer close(done)
 		slog.Info("Unbounded: starting broflake widget proxy")
 
 		bfOpt := clientcore.NewDefaultBroflakeOptions()
@@ -234,6 +286,7 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 			cancel()
 			m.mu.Lock()
 			m.cancel = nil
+			m.done = nil
 			m.mu.Unlock()
 			return
 		}
@@ -244,6 +297,7 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 		ui.Stop()
 		m.mu.Lock()
 		m.cancel = nil
+		m.done = nil
 		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy stopped")
 	}()
