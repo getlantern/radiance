@@ -159,7 +159,7 @@ func newStubServer(t *testing.T) *stubServer {
 		deregisterStatus: http.StatusOK,
 		registerResp: RegisterResponse{
 			RouteID:                  "00000000-0000-0000-0000-000000000123",
-			ServerConfig:             `{"inbounds": [{"type":"samizdat","tag":"samizdat-in"}]}`,
+			ServerConfig:             minimalValidLaunchCfg,
 			HeartbeatIntervalSeconds: 60,
 		},
 	}
@@ -419,6 +419,32 @@ func TestClient_Start_BoxStartFailureUnwinds(t *testing.T) {
 	assert.True(t, fwd.wasUnmapped())
 	assert.True(t, box.closed.Load())
 	assert.Equal(t, int64(1), srv.deregisterCount.Load())
+}
+
+// A launch_cfg that fails the abuse-rule sanity check must unwind
+// every resource Start has taken so far — port forward, registration
+// — without ever building or starting the box. This is the
+// defence-in-depth gate that keeps a server-side regression from
+// turning every peer into an open proxy.
+func TestClient_Start_AbuseRuleValidationFailureUnwinds(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	// Strip the abuse rules from the launch_cfg the stub returns —
+	// just the inbound, no route block. validateAbuseRules will reject
+	// this as "missing route block".
+	srv.registerResp.ServerConfig = `{"inbounds":[{"type":"samizdat","tag":"samizdat-in"}]}`
+	c := newTestClient(t, fwd, box, srv)
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "abuse-rule sanity check")
+
+	assert.False(t, c.IsActive())
+	assert.True(t, fwd.wasUnmapped(), "validation failure must unmap the port forward")
+	assert.False(t, box.started.Load(), "validation must run before box.Start")
+	assert.False(t, box.closed.Load(), "box was never started, nothing to close")
+	assert.Equal(t, int64(1), srv.deregisterCount.Load(), "validation failure must deregister the route we just registered")
 }
 
 func TestClient_Stop_HappyPath(t *testing.T) {
