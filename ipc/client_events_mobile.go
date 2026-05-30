@@ -10,6 +10,7 @@ import (
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -90,6 +91,24 @@ func (c *Client) PeerConnectionEvents(ctx context.Context, handler func(peer.Con
 	}
 	return c.sseRetryLoop(ctx, peerConnectionEventsEndpoint, func(data []byte) {
 		var evt peer.ConnectionEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
+}
+
+// UnboundedConnectionEvents — see client_events_nonmobile.go for the
+// full docstring. Same mobile dual-path: localOnly subscribes directly
+// to the in-process event bus, otherwise the SSE retry loop matches
+// the desktop path.
+func (c *Client) UnboundedConnectionEvents(ctx context.Context, handler func(unbounded.ConnectionEvent)) error {
+	events.SubscribeContext(ctx, handler)
+	if c.localOnly {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.sseRetryLoop(ctx, unboundedConnectionEventsEndpoint, func(data []byte) {
+		var evt unbounded.ConnectionEvent
 		if err := json.Unmarshal(data, &evt); err == nil {
 			handler(evt)
 		}

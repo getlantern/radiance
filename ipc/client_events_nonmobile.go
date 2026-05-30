@@ -8,6 +8,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -69,6 +70,22 @@ func (c *Client) PeerStatusEvents(ctx context.Context, handler func(peer.StatusE
 func (c *Client) PeerConnectionEvents(ctx context.Context, handler func(peer.ConnectionEvent)) error {
 	return c.sseRetryLoop(ctx, peerConnectionEventsEndpoint, func(data []byte) {
 		var evt peer.ConnectionEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
+}
+
+// UnboundedConnectionEvents streams accept/close events for the
+// local broflake widget proxy ("Unbounded" / Basic mode). The JSON
+// shape matches peer.ConnectionEvent but the Go type is distinct —
+// in-process subscribers must subscribe to both event types separately
+// to see all peer activity. State is +1 on consumer accept, -1 on
+// close; Source is the consumer's IP if broflake exposes it,
+// otherwise empty. Blocks until ctx is cancelled.
+func (c *Client) UnboundedConnectionEvents(ctx context.Context, handler func(unbounded.ConnectionEvent)) error {
+	return c.sseRetryLoop(ctx, unboundedConnectionEventsEndpoint, func(data []byte) {
+		var evt unbounded.ConnectionEvent
 		if err := json.Unmarshal(data, &evt); err == nil {
 			handler(evt)
 		}

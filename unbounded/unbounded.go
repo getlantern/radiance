@@ -47,18 +47,17 @@ import (
 //   Source    consumer's IP if broflake exposes it, otherwise empty
 //   Timestamp emit time in Unix milliseconds
 //
-// JSON shape is identical to radiance/peer.ConnectionEvent so a
-// consumer reading both streams over IPC SSE can deserialize each
-// frame with the same struct. In-process subscribers, however,
-// receive these events on a separate channel — events.Subscribe is
-// keyed by concrete Go type, so Subscribe[peer.ConnectionEvent] and
-// Subscribe[unbounded.ConnectionEvent] are independent. The IPC
-// bridge in ipc/server.go fans the two SSE endpoints into the
-// unified peer-connection-events stream that the Flutter globe
-// consumes. Broflake's internal worker-slot identifier is not
-// surfaced — a consumer that needs to pair accept/close events for
-// the same arc keys off Source (or arrival sequence within a single
-// connection lifetime).
+// JSON shape is identical to peer.ConnectionEvent so a consumer
+// reading both SSE streams can deserialize each frame with the
+// same struct. The in-process event bus, however, keys
+// subscriptions by concrete Go type, so subscribing to
+// peer.ConnectionEvent does NOT also deliver unbounded
+// ConnectionEvents — in-process consumers that want a unified
+// view of all peer activity must subscribe to both. Broflake's
+// internal worker-slot identifier is not surfaced; a consumer
+// that needs to pair accept/close events for the same arc keys
+// off Source (or arrival sequence within a single connection
+// lifetime).
 type ConnectionEvent struct {
 	events.Event
 	State     int    `json:"state"`
@@ -69,14 +68,25 @@ type ConnectionEvent struct {
 var manager = &unboundedManager{}
 
 type unboundedManager struct {
+	// transitionMu serializes start/stop. It's held for the full
+	// duration of a stop (including the wait for the worker goroutine
+	// to actually exit) and for the full duration of a start. Without
+	// it, stop's signal-then-return path could race a concurrent start
+	// — the worker is still running ui.Stop while cancel/done get
+	// re-armed under a fresh worker, leaving two broflake widgets
+	// alive simultaneously.
+	transitionMu sync.Mutex
+
+	// mu protects the fields below. Held only for the brief window of
+	// reading or mutating manager state; never held across the wait on
+	// done or any broflake call.
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	// done is closed by the worker goroutine when it actually exits
-	// (after NewBroflake returns and ui.Stop runs). Stop callers wait
-	// on this so backend shutdown blocks until the broflake widget is
-	// actually torn down — without it, Stop returns as soon as the
-	// cancel signal is queued and the rest of LocalBackend.Close can
-	// race the still-running worker. Nil when nothing is running.
+	// (after NewBroflake returns and ui.Stop runs). stop and Stop wait
+	// on this under transitionMu so backend shutdown blocks until the
+	// broflake widget is actually torn down. Nil when nothing is
+	// running.
 	done chan struct{}
 	// lastCfg + lastFeatureOn cache the server-side half of the
 	// three-condition predicate so SetEnabled can re-evaluate
@@ -198,13 +208,16 @@ var initOnce sync.Once
 // the worker has been signalled to cancel and will exit on its own
 // schedule, but the caller has given up waiting.
 func Stop(ctx context.Context) error {
+	manager.transitionMu.Lock()
+	defer manager.transitionMu.Unlock()
 	manager.mu.Lock()
+	cancel := manager.cancel
 	done := manager.done
 	manager.mu.Unlock()
-	manager.stop()
-	if done == nil {
+	if cancel == nil {
 		return nil
 	}
+	cancel()
 	select {
 	case <-done:
 		return nil
@@ -214,16 +227,19 @@ func Stop(ctx context.Context) error {
 }
 
 func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.cancel != nil {
-		return // already running
-	}
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
 
+	m.mu.Lock()
+	if m.cancel != nil {
+		m.mu.Unlock()
+		return // already running; transitionMu prevents overlap with stop
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.done = done
+	m.mu.Unlock()
 
 	go func() {
 		defer close(done)
@@ -303,11 +319,20 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 	}()
 }
 
+// stop signals the worker to exit and blocks until it does. Held
+// under transitionMu so the worker fully unwinds (ui.Stop completes,
+// m.cancel/m.done are cleared) before any other transition can
+// observe state.
 func (m *unboundedManager) stop() {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
+	cancel := m.cancel
+	done := m.done
+	m.mu.Unlock()
+	if cancel == nil {
+		return
 	}
+	cancel()
+	<-done
 }
