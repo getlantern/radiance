@@ -129,12 +129,37 @@ type unboundedManager struct {
 	// new config arrives.
 	lastCfg       *C.UnboundedConfig
 	lastFeatureOn bool
+
+	// runningCfg is the snapshot of UnboundedConfig the live worker
+	// was started with. broflake consumes its discovery/egress
+	// options once in clientcore.NewBroflake, so a server-side config
+	// change while the worker is alive would otherwise leave it
+	// running on stale parameters. applyConfig compares this against
+	// the freshly-cached lastCfg and triggers stop+start when they
+	// differ, with the predicate still otherwise satisfied. Nil
+	// whenever cancel is nil.
+	runningCfg *C.UnboundedConfig
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
 // must hold m.mu.
 func (m *unboundedManager) shouldStart() bool {
 	return settings.GetBool(settings.UnboundedKey) && m.lastFeatureOn && m.lastCfg != nil
+}
+
+// cfgEqual reports whether two UnboundedConfig pointers refer to
+// configurations broflake would consume identically. UnboundedConfig
+// is a flat struct of strings and ints, so value equality is well-
+// defined. Nil pointers compare equal to themselves and unequal to
+// any non-nil pointer.
+func cfgEqual(a, b *C.UnboundedConfig) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 // Enabled reports whether the local opt-in is set. Doesn't say whether
@@ -255,10 +280,20 @@ func applyConfig(cfg config.Config) {
 	shouldRun := manager.shouldStart()
 	running := manager.cancel != nil
 	ucfg := manager.lastCfg
+	cfgChanged := running && !cfgEqual(manager.runningCfg, ucfg)
 	manager.mu.Unlock()
 
 	switch {
 	case shouldRun && !running:
+		manager.start(ucfg)
+	case shouldRun && cfgChanged:
+		// Broflake consumed its options at construction time and has
+		// no live-reconfigure API; the only way to pick up new
+		// discovery/egress endpoints or table sizes is to tear the
+		// worker down and bring it back up with the new config.
+		// stop blocks until the prior worker fully exits, so start
+		// always sees a clean slate.
+		manager.stop()
 		manager.start(ucfg)
 	case !shouldRun && running:
 		manager.stop()
@@ -327,6 +362,12 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.done = done
+	// Snapshot the config the worker is being started with so a
+	// later applyConfig can detect parameter changes and restart.
+	// Pointer-stored (not value-stored) because the upstream
+	// lastCfg is also a pointer and equality is value-based via
+	// cfgEqual.
+	m.runningCfg = ucfg
 	m.mu.Unlock()
 
 	go func() {
@@ -388,6 +429,7 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 			m.mu.Lock()
 			m.cancel = nil
 			m.done = nil
+			m.runningCfg = nil
 			m.mu.Unlock()
 			return
 		}
@@ -399,6 +441,7 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 		m.mu.Lock()
 		m.cancel = nil
 		m.done = nil
+		m.runningCfg = nil
 		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy stopped")
 	}()

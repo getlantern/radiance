@@ -251,16 +251,16 @@ func TestStop_WaitsForWorker(t *testing.T) {
 	assert.Equal(t, int32(1), fw.stopCalled.Load())
 }
 
-// TestStartDuringStop_NoOverlap: regression guard for the round-2
-// race. Round-2's stop() cleared m.cancel immediately after
-// cancel(); while the worker was still inside ui.Stop, a concurrent
-// start() could see m.cancel == nil and spin up a second widget.
-//
-// We exercise the manager directly (skipping Apply's predicate
-// check) so the test pins the exact transitionMu invariant: at any
-// instant, at most one widget is between newWidget and Stop's
-// return. Two widgets alive simultaneously means transitionMu
-// failed to serialize.
+// TestStartDuringStop_NoOverlap pins the transitionMu invariant: at
+// any instant, at most one broflake widget is between newWidget and
+// Stop's return. If stop() merely signalled cancel and returned
+// (without holding transitionMu through the wait on done), a
+// concurrent start() could observe m.cancel == nil and bring up a
+// second widget while the first is still inside ui.Stop. The test
+// exercises the manager directly (skipping Apply's predicate check)
+// because the property being verified is local to start/stop
+// serialization — two widgets alive simultaneously means
+// transitionMu failed to serialize.
 func TestStartDuringStop_NoOverlap(t *testing.T) {
 	var (
 		liveCount atomic.Int32
@@ -392,18 +392,63 @@ func TestInitSubscription_FutureEventStillFires(t *testing.T) {
 	waitForRunning(t, manager, false, 1*time.Second)
 }
 
-// TestStopDisarmsManager: round-4 regression guard. After public
-// Stop returns, NO subsequent start path may revive the widget — not
-// Apply, not applyConfig from a late config event, not manager.start
-// directly. The armed gate enforces this; transitionMu alone is not
-// enough because it just serializes transitions, it doesn't decide
-// whether a queued one should still proceed after a shutdown.
-//
-// Without this guard, a config event firing during Stop's wait-for-
-// worker window would block at transitionMu, then start a fresh
-// widget the moment Stop's caller has already returned from
-// LocalBackend.Close — silently keeping broflake alive past the
-// documented shutdown contract.
+// TestApplyConfig_RestartsOnParamChange: broflake consumes its
+// options once in clientcore.NewBroflake. A server-side config
+// change while the widget is alive must therefore tear down the
+// current worker and bring up a new one — otherwise the running
+// proxy stays on stale discovery/egress endpoints. applyConfig
+// compares the new cfg against runningCfg (the snapshot the worker
+// was started with) and triggers stop+start when they differ,
+// provided the three-condition predicate still holds.
+func TestApplyConfig_RestartsOnParamChange(t *testing.T) {
+	starts := atomic.Int32{}
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		starts.Add(1)
+		return &fakeWidget{}, nil
+	})
+
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	// First config — bring up widget #1.
+	applyConfig(config.Config{
+		Features:  map[string]bool{C.UNBOUNDED: true},
+		Unbounded: &C.UnboundedConfig{DiscoverySrv: "https://a.example/"},
+	})
+	waitForRunning(t, manager, true, 1*time.Second)
+	waitForCount(t, &starts, 1, 1*time.Second)
+
+	// Same config — no restart.
+	applyConfig(config.Config{
+		Features:  map[string]bool{C.UNBOUNDED: true},
+		Unbounded: &C.UnboundedConfig{DiscoverySrv: "https://a.example/"},
+	})
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), starts.Load(), "identical config must not restart")
+
+	// Changed config — restart with new params.
+	applyConfig(config.Config{
+		Features:  map[string]bool{C.UNBOUNDED: true},
+		Unbounded: &C.UnboundedConfig{DiscoverySrv: "https://b.example/"},
+	})
+	waitForCount(t, &starts, 2, 2*time.Second)
+
+	// Cleanup.
+	require.NoError(t, settings.Set(settings.UnboundedKey, false))
+	require.NoError(t, Apply())
+	waitForRunning(t, manager, false, 1*time.Second)
+}
+
+// TestStopDisarmsManager verifies the public-Stop shutdown
+// contract: after Stop returns, NO subsequent start path may revive
+// the widget — not Apply, not applyConfig from a late config event,
+// not manager.start directly. The armed gate enforces this;
+// transitionMu alone is not enough because it just serializes
+// transitions, it doesn't decide whether a queued one should still
+// proceed after a shutdown. Without this gate, a config event
+// firing during Stop's wait-for-worker window would block at
+// transitionMu and then start a fresh widget the moment Stop's
+// caller returned from LocalBackend.Close, silently keeping
+// broflake alive past the documented shutdown contract.
 func TestStopDisarmsManager(t *testing.T) {
 	starts := atomic.Int32{}
 	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
