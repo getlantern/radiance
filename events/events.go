@@ -28,7 +28,6 @@ package events
 
 import (
 	"context"
-	stdlog "log"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -120,15 +119,13 @@ func (e *Subscription[T]) Unsubscribe() {
 // asynchronously in separate goroutines.
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
-	defer subscriptionsMu.RUnlock()
 	key := reflect.TypeFor[T]()
 	subs, ok := subscriptions[key]
-	// Diagnostic: surfaces the subscriber count at emit time so a missing
-	// FlutterEvent on the consumer side is distinguishable from "no
-	// subscribers registered for this type" vs "subscribers registered
-	// but callback panics silently." Spam-friendly when traffic spikes,
-	// but we're investigating a zero-callback path so the noise is
-	// short-lived; remove (or downgrade to Debug) once the chain works.
+	subscriptionsMu.RUnlock()
+	// Diagnostic hook; default no-op so high-frequency event types don't
+	// flood logs in prod. Tests / debugging swap in a real logger via
+	// SetEmitDebugLogger. Called after releasing subscriptionsMu so a
+	// blocking logger can't amplify lock contention on hot event types.
 	emitDebugLogger(key, len(subs))
 	if !ok {
 		return
@@ -138,10 +135,19 @@ func Emit[T Event](evt T) {
 	}
 }
 
-// emitDebugLogger is a package-level var so tests can suppress the
-// per-emit log, and so prod can swap in slog. Default uses Go's stdlib
-// log so events package doesn't need to import slog (and avoid a cycle
-// with anything that imports events for its own log forwarding).
-var emitDebugLogger = func(key reflect.Type, subCount int) {
-	stdlog.Printf("events.Emit type=%s subscribers=%d", key, subCount)
+// emitDebugLogger is invoked once per Emit with the event type and
+// current subscriber count. Default is a no-op; callers (tests,
+// diagnostic builds) swap in a real logger via SetEmitDebugLogger.
+var emitDebugLogger = func(reflect.Type, int) {}
+
+// SetEmitDebugLogger replaces the no-op diagnostic hook for the
+// duration of an investigation (e.g., tracking "events vanish" paths).
+// Pass nil to restore the no-op default. Safe to call from main /
+// init; not safe to call concurrently with Emit on the hot path.
+func SetEmitDebugLogger(fn func(eventType reflect.Type, subscriberCount int)) {
+	if fn == nil {
+		emitDebugLogger = func(reflect.Type, int) {}
+		return
+	}
+	emitDebugLogger = fn
 }

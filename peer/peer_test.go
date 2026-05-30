@@ -710,39 +710,75 @@ func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
 
 	require.NoError(t, c.Start(context.Background()))
 
-	wantStartPhases := []Phase{
-		PhaseMappingPort,
-		PhaseDetectingIP,
-		PhaseRegistering,
-		PhaseStartingBox,
-		PhaseVerifying,
-		PhaseServing,
+	// events.Emit dispatches each callback in a separate goroutine, so
+	// the order events land on the channel isn't deterministic — assert
+	// set-membership of the expected phases + the final-state contract
+	// (the only state observers actually care about) rather than the
+	// sequence.
+	wantStartPhases := map[Phase]bool{
+		PhaseMappingPort: true,
+		PhaseDetectingIP: true,
+		PhaseRegistering: true,
+		PhaseStartingBox: true,
+		PhaseVerifying:   true,
+		PhaseServing:     true,
 	}
-	for _, want := range wantStartPhases {
-		select {
-		case evt := <-got:
-			assert.Equal(t, want, evt.Status.Phase, "wrong phase in Start sequence")
-			if want == PhaseServing {
-				assert.True(t, evt.Status.Active, "active must be true on serving")
-				assert.NotEmpty(t, evt.Status.RouteID, "route_id must be set on serving")
-			} else {
-				assert.False(t, evt.Status.Active, "active must be false on intermediate phase %q", want)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("no Start status event for phase %q within 1s", want)
+	startEvents := drainPhases(t, got, len(wantStartPhases))
+	for want := range wantStartPhases {
+		assert.Contains(t, startEvents, want, "Start sequence missing phase %q", want)
+	}
+	servingEvt, ok := startEvents[PhaseServing]
+	require.True(t, ok, "Start sequence must reach PhaseServing")
+	assert.True(t, servingEvt.Status.Active, "active must be true on serving")
+	assert.NotEmpty(t, servingEvt.Status.RouteID, "route_id must be set on serving")
+	for phase, evt := range startEvents {
+		if phase == PhaseServing {
+			continue
 		}
+		assert.False(t, evt.Status.Active, "active must be false on intermediate phase %q", phase)
 	}
 
 	require.NoError(t, c.Stop(context.Background()))
-	for _, want := range []Phase{PhaseStopping, PhaseIdle} {
+	wantStopPhases := map[Phase]bool{
+		PhaseStopping: true,
+		PhaseIdle:     true,
+	}
+	stopEvents := drainPhases(t, got, len(wantStopPhases))
+	for want := range wantStopPhases {
+		assert.Contains(t, stopEvents, want, "Stop sequence missing phase %q", want)
+	}
+	for phase, evt := range stopEvents {
+		assert.False(t, evt.Status.Active, "active must be false during stop (phase %q)", phase)
+	}
+}
+
+// drainPhases reads up to n StatusEvents from got and returns them
+// keyed by Phase (last event per phase wins). Used by tests that need
+// set-membership semantics rather than strict ordering because
+// events.Emit's per-callback goroutines deliver out of order under
+// the runtime's scheduling.
+func drainPhases(t *testing.T, got <-chan StatusEvent, n int) map[Phase]StatusEvent {
+	t.Helper()
+	out := make(map[Phase]StatusEvent, n)
+	deadline := time.After(2 * time.Second)
+	for i := 0; i < n; i++ {
 		select {
 		case evt := <-got:
-			assert.Equal(t, want, evt.Status.Phase, "wrong phase in Stop sequence")
-			assert.False(t, evt.Status.Active, "active must be false during stop")
-		case <-time.After(time.Second):
-			t.Fatalf("no Stop status event for phase %q within 1s", want)
+			out[evt.Status.Phase] = evt
+		case <-deadline:
+			t.Fatalf("received only %d/%d status events within 2s; got phases: %v",
+				i, n, mapKeys(out))
 		}
 	}
+	return out
+}
+
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // TestClient_StatusEventOnStartError surfaces a Start failure to the UI

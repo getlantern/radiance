@@ -66,14 +66,19 @@ type StatusEvent struct {
 // ConnectionEvent fires every time a remote client opens or closes a
 // samizdat session against the local peer's inbound. Source carries the
 // remote "ip:port" string; consumers (the globe view, abuse aggregation)
-// extract the IP for geo-lookup or rate-limit attribution.
+// extract the IP for geo-lookup or rate-limit attribution. Timestamp
+// is the emit time in Unix millis; consumers that aggregate across a
+// time window or that need to order events when the underlying
+// dispatch is async can compare it directly.
 //
-//   State  +1 on accept, -1 on close
-//   Source remote peer "ip:port"
+//   State     +1 on accept, -1 on close
+//   Source    remote peer "ip:port"
+//   Timestamp emit time in Unix milliseconds
 type ConnectionEvent struct {
 	events.Event
-	State  int    `json:"state"`
-	Source string `json:"source"`
+	State     int    `json:"state"`
+	Source    string `json:"source"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // Port range chosen to minimize collision risk on the typical home network,
@@ -389,13 +394,17 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 				"state", state, "source", source)
 			return
 		}
-		// One-line breadcrumb per accept/close so we can correlate samizdat-in
-		// activity with peer-connection FlutterEvents on the consumer side
-		// — without this, "no globe arcs despite samizdat traffic" is
-		// indistinguishable from "events fire but the bridge swallows them."
-		slog.Info("peer listener: forwarding connection event",
+		// Per-connection breadcrumb correlates samizdat-in activity with
+		// peer-connection FlutterEvents on the consumer side. Debug-level
+		// so prod logs aren't flooded under real traffic and so the
+		// remote ip:port doesn't land in routinely-collected client logs;
+		// operators investigating "no globe arcs despite samizdat traffic"
+		// can flip the level. The listener-registration line below stays
+		// at Info — that's a once-per-session lifecycle event, not a
+		// per-connection breadcrumb.
+		slog.Debug("peer listener: forwarding connection event",
 			"state", state, "source", source)
-		events.Emit(ConnectionEvent{State: state, Source: source})
+		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
 
