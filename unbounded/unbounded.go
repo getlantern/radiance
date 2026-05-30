@@ -102,7 +102,19 @@ type unboundedManager struct {
 	// mu protects the fields below. Held only for the brief window of
 	// reading or mutating manager state; never held across the wait on
 	// done or any broflake call.
-	mu     sync.Mutex
+	mu sync.Mutex
+	// armed gates every start path. InitSubscription flips it true;
+	// public Stop flips it false. Without this gate, a config event
+	// (or any other applyConfig caller) racing the public Stop's
+	// transitionMu hold could observe cancel==nil after Stop's wait,
+	// pile up at transitionMu, and start a new widget *after* the
+	// shutdown caller has already returned — the LocalBackend.Close
+	// docstring is explicit that Stop is the final teardown, so a
+	// post-Stop revival breaks that contract. start() and applyConfig
+	// re-check armed under mu (inside transitionMu for start) so a
+	// concurrent flip is honored even when the caller has been queued
+	// at transitionMu the whole time.
+	armed  bool
 	cancel context.CancelFunc
 	// done is closed by the worker goroutine when it actually exits
 	// (after NewBroflake returns and ui.Stop runs). stop and Stop wait
@@ -158,17 +170,25 @@ func SetEnabled(enable bool) error {
 // by SetEnabled (after its persist step). Safe to call when nothing
 // has changed — start is a no-op if the worker is already running and
 // stop is a no-op if it isn't.
+//
+// No-op once Stop has disarmed the manager (post-shutdown): the
+// armed gate is also checked inside start, so even a queued
+// transition stays a no-op after Stop.
 func Apply() error {
 	if !Enabled() {
 		manager.stop()
 		return nil
 	}
 	manager.mu.Lock()
+	armed := manager.armed
 	shouldStart := manager.shouldStart()
 	cfg := manager.lastCfg
 	feature := manager.lastFeatureOn
 	running := manager.cancel != nil
 	manager.mu.Unlock()
+	if !armed {
+		return nil
+	}
 	if shouldStart {
 		if !running {
 			manager.start(cfg)
@@ -186,8 +206,10 @@ func Apply() error {
 
 // InitSubscription wires the manager into radiance's config event bus
 // and applies any already-cached config. Called once at LocalBackend
-// startup; the subscription lives for the process lifetime, so repeated
-// calls would leak goroutines — hence the sync.Once guard.
+// startup; the underlying subscription lives for the process lifetime
+// (sync.Once-guarded), but the armed flag is set on every call so a
+// Start-after-Close re-enables the manager that public Stop had
+// disarmed.
 //
 // initial is the config that ConfigHandler has already loaded by the
 // time Start reaches this line — typically the previously-persisted
@@ -204,18 +226,27 @@ func InitSubscription(initial *config.Config) {
 			}
 			applyConfig(*evt.New)
 		})
-		if initial != nil {
-			applyConfig(*initial)
-		}
 	})
+	manager.mu.Lock()
+	manager.armed = true
+	manager.mu.Unlock()
+	if initial != nil {
+		applyConfig(*initial)
+	}
 }
 
 // applyConfig caches the server-side half of the start predicate and
 // transitions the manager start/stop accordingly. Shared by
 // InitSubscription's NewConfigEvent handler and the initial-config
 // seeding path so cached and live configs follow identical logic.
+// No-op when the manager is disarmed (post-Stop) so a late event
+// arriving after backend shutdown doesn't revive the widget.
 func applyConfig(cfg config.Config) {
 	manager.mu.Lock()
+	if !manager.armed {
+		manager.mu.Unlock()
+		return
+	}
 	// config.Config is a type alias for C.ConfigResponse on the
 	// current radiance branch — no nested .ConfigResponse field,
 	// just dereference and use directly.
@@ -243,6 +274,14 @@ var initOnce sync.Once
 // goroutine could still be inside NewBroflake or ui.Stop when the
 // rest of the process tears down.
 //
+// Stop also disarms the manager: any subsequent start path (Apply,
+// applyConfig from a config event, manager.start directly) becomes
+// a no-op until InitSubscription re-arms. The config subscription
+// callback stays installed but short-circuits via the armed gate,
+// so a late config event arriving during or after Stop can't
+// revive the widget. Future Start (after Close) re-arms via
+// InitSubscription.
+//
 // Idempotent: no-op if no worker is running. Returns ctx.Err() if
 // the wait deadline expires before the worker exits — in that case
 // the worker has been signalled to cancel and will exit on its own
@@ -251,6 +290,7 @@ func Stop(ctx context.Context) error {
 	manager.transitionMu.Lock()
 	defer manager.transitionMu.Unlock()
 	manager.mu.Lock()
+	manager.armed = false
 	cancel := manager.cancel
 	done := manager.done
 	manager.mu.Unlock()
@@ -271,6 +311,14 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 	defer m.transitionMu.Unlock()
 
 	m.mu.Lock()
+	if !m.armed {
+		// Disarmed by public Stop. Re-check inside transitionMu so a
+		// start that got queued at transitionMu while Stop was waiting
+		// for the worker still bails out instead of reviving the widget
+		// after Stop's caller has returned.
+		m.mu.Unlock()
+		return
+	}
 	if m.cancel != nil {
 		m.mu.Unlock()
 		return // already running; transitionMu prevents overlap with stop

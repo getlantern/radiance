@@ -24,16 +24,23 @@ import (
 // t.TempDir() leaves the settings layer pointing at a directory the
 // testing infra has already cleaned up by the time the second test
 // runs — every subsequent settings.Set then fails with ENOENT.
+//
+// os.Exit bypasses deferred calls, so the tmp-dir cleanup is done
+// explicitly: capture m.Run's exit code, RemoveAll, then exit with
+// that code. A naked defer + os.Exit would silently leak a directory
+// per test invocation.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "radiance-unbounded-settings-*")
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(dir)
 	if err := settings.InitSettings(dir); err != nil {
+		os.RemoveAll(dir)
 		panic(err)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // fakeWidget is a stand-in for the live broflake UI. stopBlock, if
@@ -61,7 +68,10 @@ func resetManager(t *testing.T, build func(*clientcore.BroflakeOptions, *clientc
 	prevManager := manager
 	prevWidget := newWidget
 	prevInit := initOnce
-	manager = &unboundedManager{}
+	// armed: true so direct manager.start calls in tests don't bail on
+	// the disarmed gate. Tests that exercise Stop's disarm behavior
+	// (TestStopDisarmsManager) flip it explicitly.
+	manager = &unboundedManager{armed: true}
 	newWidget = build
 	initOnce = sync.Once{}
 	t.Cleanup(func() {
@@ -380,6 +390,126 @@ func TestInitSubscription_FutureEventStillFires(t *testing.T) {
 	require.NoError(t, settings.Set(settings.UnboundedKey, false))
 	require.NoError(t, Apply())
 	waitForRunning(t, manager, false, 1*time.Second)
+}
+
+// TestStopDisarmsManager: round-4 regression guard. After public
+// Stop returns, NO subsequent start path may revive the widget — not
+// Apply, not applyConfig from a late config event, not manager.start
+// directly. The armed gate enforces this; transitionMu alone is not
+// enough because it just serializes transitions, it doesn't decide
+// whether a queued one should still proceed after a shutdown.
+//
+// Without this guard, a config event firing during Stop's wait-for-
+// worker window would block at transitionMu, then start a fresh
+// widget the moment Stop's caller has already returned from
+// LocalBackend.Close — silently keeping broflake alive past the
+// documented shutdown contract.
+func TestStopDisarmsManager(t *testing.T) {
+	starts := atomic.Int32{}
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		starts.Add(1)
+		return &fakeWidget{}, nil
+	})
+
+	// Bring up a widget so Stop has something to tear down.
+	manager.start(&C.UnboundedConfig{})
+	waitForCount(t, &starts, 1, 1*time.Second)
+
+	require.NoError(t, Stop(context.Background()))
+	manager.mu.Lock()
+	armed := manager.armed
+	manager.mu.Unlock()
+	require.False(t, armed, "Stop must disarm the manager")
+
+	// All three start paths must be no-ops now.
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	manager.mu.Lock()
+	manager.lastFeatureOn = true
+	manager.lastCfg = &C.UnboundedConfig{}
+	manager.mu.Unlock()
+
+	require.NoError(t, Apply())
+	applyConfig(config.Config{
+		Features:  map[string]bool{C.UNBOUNDED: true},
+		Unbounded: &C.UnboundedConfig{},
+	})
+	manager.start(&C.UnboundedConfig{})
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), starts.Load(), "no start path may revive the widget post-Stop")
+
+	// A fresh InitSubscription re-arms — Start-after-Close path.
+	initOnce = sync.Once{} // simulate re-arm path; InitSubscription's once guards re-subscription
+	InitSubscription(&config.Config{
+		Features:  map[string]bool{C.UNBOUNDED: true},
+		Unbounded: &C.UnboundedConfig{},
+	})
+	waitForCount(t, &starts, 2, 1*time.Second)
+
+	// Cleanup.
+	require.NoError(t, Stop(context.Background()))
+}
+
+// TestStartAfterStopWaiting_NoRevival: pin Stop in its <-done wait
+// (worker can't exit because its Stop is blocked), then race a
+// config-event-driven start against the disarm. Confirms that even a
+// start queued at transitionMu while Stop is waiting bails out after
+// transitionMu releases — the armed re-check inside start catches it.
+func TestStartAfterStopWaiting_NoRevival(t *testing.T) {
+	block := make(chan struct{})
+	starts := atomic.Int32{}
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		starts.Add(1)
+		return &fakeWidget{stopBlock: block}, nil
+	})
+
+	manager.start(&C.UnboundedConfig{})
+	waitForCount(t, &starts, 1, 1*time.Second)
+
+	// Stop in a goroutine — it'll set armed=false, signal cancel,
+	// then block on <-done waiting for the worker, which is in turn
+	// pinned by stopBlock.
+	stopDone := make(chan struct{})
+	go func() {
+		_ = Stop(context.Background())
+		close(stopDone)
+	}()
+
+	// Give Stop a beat to acquire transitionMu and disarm.
+	time.Sleep(50 * time.Millisecond)
+	manager.mu.Lock()
+	armed := manager.armed
+	manager.mu.Unlock()
+	require.False(t, armed, "Stop must disarm before waiting on done")
+
+	// Now race a start. It blocks at transitionMu until Stop returns.
+	startDone := make(chan struct{})
+	go func() {
+		manager.start(&C.UnboundedConfig{})
+		close(startDone)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-startDone:
+		t.Fatal("start completed before Stop unblocked")
+	default:
+	}
+
+	// Release the worker so Stop returns.
+	close(block)
+	select {
+	case <-stopDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Stop did not return after worker released")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("start did not return after Stop returned")
+	}
+
+	// Critically: starts must still be 1 — the queued start saw
+	// armed=false and bailed.
+	assert.Equal(t, int32(1), starts.Load(), "start queued during Stop must not revive the widget")
 }
 
 // TestStopCtx_TimesOut: Stop(ctx) returns ctx.Err() when the worker
