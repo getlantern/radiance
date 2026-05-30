@@ -184,10 +184,13 @@ func NewClient(cfg Config) (*Client, error) {
 			// case every consumer router exposes).
 			//
 			// Resolution order:
-			//   1. settings.PeerManualPortKey (Advanced UI)
+			//   1. "peer_manual_port" setting (Advanced UI)
 			//   2. RADIANCE_PEER_EXTERNAL_PORT env var (developer /
 			//      power-user override)
 			//   3. fall through to UPnP discovery
+			//
+			// Persisted names are quoted so the comment stays accurate
+			// if Go identifiers move or rename.
 			//
 			// Range-check the setting before casting to uint16 — a raw
 			// uint16 cast silently wraps negative values (-5 → 65531)

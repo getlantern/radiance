@@ -6,15 +6,16 @@ import (
 	"strconv"
 )
 
-// ManualForwarder satisfies the portForwarder contract without talking
-// to a UPnP gateway. The user is expected to have configured a port
-// forward on their router by hand (single-port 1:1 NAT — every consumer
-// router exposes port forwarding as a single port number) and pointed
-// peer.Client at it via setting or env var.
+// ManualForwarder exposes the same Map/Unmap/StartRenewal/ExternalIP
+// surface as Forwarder but does no UPnP work. The user is expected to
+// have configured a port forward on their router by hand (single-port
+// 1:1 NAT — every consumer router exposes port forwarding as a single
+// port number) and supplied the port number out-of-band.
 //
 // Use case: networks where UPnP is disabled or unavailable (router has
 // UPnP off for security, ISP-provided gateways without IGD, networks
-// behind double-NAT). UPnP-based Forwarder fails in those environments.
+// behind double-NAT). The UPnP-based Forwarder fails in those
+// environments; this type lets callers bypass discovery entirely.
 type ManualForwarder struct {
 	port uint16
 }
