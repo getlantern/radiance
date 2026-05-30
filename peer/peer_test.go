@@ -647,9 +647,15 @@ func TestClient_RotatesCredentialsAtInterval(t *testing.T) {
 		srv.registerCount.Load())
 
 	// Each rotation deregisters the prior route — N rotations =>
-	// N deregisters (initial register is not preceded by one).
+	// N deregisters (initial register is not preceded by one). Wait
+	// briefly for the deregister to catch up to the most recent
+	// rotation; rotation issues the deregister after the swap-lock
+	// completes, so there's a small race window between observing the
+	// new register and the corresponding deregister landing.
 	rotations := srv.registerCount.Load() - 1
-	assert.GreaterOrEqual(t, srv.deregisterCount.Load(), rotations-1,
+	require.Eventually(t, func() bool {
+		return srv.deregisterCount.Load() >= rotations
+	}, 500*time.Millisecond, 25*time.Millisecond,
 		"each rotation should deregister the prior route_id (got %d deregs vs %d rotations)",
 		srv.deregisterCount.Load(), rotations)
 

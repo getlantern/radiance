@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -430,6 +431,20 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				// later heartbeat as a 404.
 				slog.Warn("peer heartbeat failed", "err", err, "route_id", routeID)
 				if isNotRegistered(err) {
+					// Re-check current routeID under lock. If credRotationLoop
+					// swapped routeID + deregistered the prior route between
+					// our heartbeat-prepare and heartbeat-response, the 404
+					// applies to a stale route and is expected, not a reason
+					// to stop. Skip the auto-Stop and let the next tick
+					// heartbeat the new route.
+					c.mu.Lock()
+					currentRouteID := c.routeID
+					c.mu.Unlock()
+					if currentRouteID != routeID {
+						slog.Info("peer heartbeat 404 on stale route_id; rotation in flight, continuing",
+							"stale_route_id", routeID, "current_route_id", currentRouteID)
+						continue
+					}
 					slog.Info("peer route no longer registered server-side, stopping client")
 					// Stop runs in a separate goroutine to avoid the cyclic
 					// Stop → cancelRun → loop-exit deadlock.
@@ -465,6 +480,14 @@ func isNotRegistered(err error) bool {
 // failures are non-fatal (log + retry next tick), so there's nothing
 // the Stop path needs to wait on from this goroutine.
 func (c *Client) credRotationLoop(ctx context.Context, interval time.Duration) {
+	// Non-positive interval would panic time.NewTicker. Treat it the same
+	// as the zero case Start handles when CredRotationInterval is unset:
+	// fall back to the default cap rather than disabling rotation
+	// silently (an unset value still wants rotation; a negative value is
+	// almost certainly a test/config bug).
+	if interval <= 0 {
+		interval = peerCredRotationInterval
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -472,12 +495,28 @@ func (c *Client) credRotationLoop(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := c.rotateCreds(ctx); err != nil {
-				// Don't kill the loop on a single failure — current
-				// box / route is still serving. Try again next tick.
-				slog.Warn("peer cred rotation failed; current creds remain in use", "err", err)
-			}
+			c.runRotation(ctx)
 		}
+	}
+}
+
+// runRotation wraps rotateCreds with a panic recover. libbox.Start can
+// panic (see the recover in vpn/tunnel.go's tunnel-start path); an
+// unrecovered panic here would crash the host process during a
+// background rotation, taking the user's main VPN with it. Treat a
+// panic the same as any other rotation failure: log, keep the existing
+// box serving, try again next tick.
+func (c *Client) runRotation(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("peer cred rotation panicked; current creds remain in use",
+				"panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	if err := c.rotateCreds(ctx); err != nil {
+		// Don't kill the loop on a single failure — current
+		// box / route is still serving. Try again next tick.
+		slog.Warn("peer cred rotation failed; current creds remain in use", "err", err)
 	}
 }
 
@@ -532,8 +571,24 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
 	}
+	// From here on, any error path must deregister regResp.RouteID —
+	// otherwise the newly-created server-side row leaks until TTL expiry
+	// and the bandit catalog may briefly hand out creds for a route
+	// whose box never came up.
+	cleanupNewRoute := func(reason error) {
+		// Use a fresh ctx so a cancelled rotation ctx doesn't skip the
+		// cleanup we just made necessary.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
+		defer cancel()
+		if dErr := c.cfg.API.Deregister(cleanupCtx, regResp.RouteID); dErr != nil {
+			slog.Warn("deregister orphan route after rotation failure",
+				"reason", reason, "err", dErr, "orphan_route_id", regResp.RouteID)
+		}
+	}
+
 	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
 	if err != nil {
+		cleanupNewRoute(err)
 		return fmt.Errorf("patch sing-box options: %w", err)
 	}
 
@@ -542,34 +597,54 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.mu.Unlock()
 	if runCtx == nil {
 		// Stop happened between the unlock above and here. Skip the
-		// build to avoid spinning up a libbox tied to a torn-down ctx.
-		// The new register row is harmless — server-side reaper will
-		// deprecate it after TTL since no heartbeat will arrive.
+		// build to avoid spinning up a libbox tied to a torn-down ctx,
+		// and clean up the just-created route so it doesn't linger.
+		cleanupNewRoute(errors.New("client stopped during rotation"))
 		return errors.New("client stopped during rotation")
 	}
 	newBox, err := c.cfg.BuildBoxService(runCtx, options)
 	if err != nil {
+		cleanupNewRoute(err)
 		return fmt.Errorf("build new sing-box: %w", err)
 	}
 
 	// Close old, start new. Order matters — both want the same port.
-	// If newBox.Start fails after oldBox.Close, we lost the listener
-	// and the next heartbeat / rotation tick is the recovery point.
+	// If newBox.Start fails after oldBox.Close, retry briefly to absorb
+	// router-side TIME_WAIT / EADDRINUSE windows before giving up.
 	if closeErr := oldBox.Close(); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
-	if err := newBox.Start(); err != nil {
+	if err := startNewBoxWithRetry(ctx, newBox); err != nil {
 		// Catastrophic: port is now unbound. Leave c.box pointing at
 		// oldBox so a future Stop tries to close it (idempotent on
-		// already-closed); the next rotation tick will try again.
+		// already-closed); the next rotation tick will try again. Also
+		// deregister the now-orphan new route so the bandit doesn't
+		// hand its creds out for a non-listening port.
+		cleanupNewRoute(err)
 		return fmt.Errorf("start new sing-box: %w", err)
 	}
 
+	// Final swap under lock. Re-check active so a Stop racing us between
+	// runCtx-check above and now doesn't get resurrected by overwriting
+	// the cleared state Stop just set up.
 	c.mu.Lock()
+	if !c.active {
+		c.mu.Unlock()
+		// Stop already cleared c.box / c.routeID. Close the new box we
+		// just brought up (Stop has no reference to it) and deregister
+		// the new route. The old route Stop already deregistered as
+		// part of its own teardown.
+		if err := newBox.Close(); err != nil {
+			slog.Warn("close new box after Stop raced rotation", "err", err)
+		}
+		cleanupNewRoute(errors.New("client stopped during rotation swap"))
+		return errors.New("client stopped during rotation")
+	}
 	c.box = newBox
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.status.RouteID = regResp.RouteID
+	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
 
 	// Deregister the prior route so the bandit stops handing the old
@@ -586,6 +661,32 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		"old_route_id", oldRouteID,
 	)
 	return nil
+}
+
+// startNewBoxWithRetry retries newBox.Start a handful of times with a
+// short backoff to absorb router-side TIME_WAIT / EADDRINUSE between
+// oldBox.Close releasing the port and newBox.Start re-binding it. Total
+// wait is bounded under 1s so a healthy rotation isn't delayed
+// noticeably; the alternative is leaving the peer's listener down for
+// the full rotation interval (default 1h) on a transient bind failure.
+func startNewBoxWithRetry(ctx context.Context, newBox boxService) error {
+	const attempts = 5
+	backoff := 50 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if err := newBox.Start(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("start new sing-box (ctx cancelled after %d attempts): %w", i+1, lastErr)
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return fmt.Errorf("start new sing-box (%d attempts): %w", attempts, lastErr)
 }
 
 // ensurePeerOutboundsBypassVPN guarantees the peer sing-box's outbound dials
