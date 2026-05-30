@@ -67,6 +67,28 @@ type ConnectionEvent struct {
 
 var manager = &unboundedManager{}
 
+// widget is the minimum interface the manager needs from a running
+// broflake instance. Defined locally (vs using clientcore.UI) so
+// tests can supply a tiny fake without implementing the full
+// clientcore.UI surface area.
+type widget interface {
+	Stop()
+}
+
+// newWidget builds the live broflake widget. Package var so unit
+// tests can swap it for a fake that records start/stop calls
+// without spinning up real WebRTC.
+var newWidget = func(bfOpt *clientcore.BroflakeOptions, rtcOpt *clientcore.WebRTCOptions, egOpt *clientcore.EgressOptions) (widget, error) {
+	// BroflakeConn is for clients routing traffic *through* the mesh.
+	// A widget proxy only donates bandwidth, so the conn is unused —
+	// discard it.
+	_, ui, err := clientcore.NewBroflake(bfOpt, rtcOpt, egOpt)
+	if err != nil {
+		return nil, err
+	}
+	return ui, nil
+}
+
 type unboundedManager struct {
 	// transitionMu serializes start/stop. It's held for the full
 	// duration of a stop (including the wait for the worker goroutine
@@ -162,36 +184,54 @@ func Apply() error {
 	return nil
 }
 
-// InitSubscription wires the manager into radiance's config event bus.
-// Called once at LocalBackend startup; the subscription lives for the
-// process lifetime, so repeated calls would leak goroutines — hence
-// the package-level guard.
-func InitSubscription() {
+// InitSubscription wires the manager into radiance's config event bus
+// and applies any already-cached config. Called once at LocalBackend
+// startup; the subscription lives for the process lifetime, so repeated
+// calls would leak goroutines — hence the sync.Once guard.
+//
+// initial is the config that ConfigHandler has already loaded by the
+// time Start reaches this line — typically the previously-persisted
+// config from disk. Without seeding the manager state from it, the
+// three-condition predicate stays stuck at lastCfg=nil/lastFeatureOn=
+// false until the next config refresh arrives, and an already-opted-in
+// user wouldn't auto-start the widget proxy until then. Pass nil if
+// no config is available yet.
+func InitSubscription(initial *config.Config) {
 	initOnce.Do(func() {
 		events.Subscribe(func(evt config.NewConfigEvent) {
 			if evt.New == nil {
 				return
 			}
-			// config.Config is a type alias for C.ConfigResponse on
-			// the current radiance branch — no nested .ConfigResponse
-			// field, just dereference and use directly.
-			cfg := *evt.New
-			manager.mu.Lock()
-			manager.lastCfg = cfg.Unbounded
-			manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
-			shouldRun := manager.shouldStart()
-			running := manager.cancel != nil
-			ucfg := manager.lastCfg
-			manager.mu.Unlock()
-
-			switch {
-			case shouldRun && !running:
-				manager.start(ucfg)
-			case !shouldRun && running:
-				manager.stop()
-			}
+			applyConfig(*evt.New)
 		})
+		if initial != nil {
+			applyConfig(*initial)
+		}
 	})
+}
+
+// applyConfig caches the server-side half of the start predicate and
+// transitions the manager start/stop accordingly. Shared by
+// InitSubscription's NewConfigEvent handler and the initial-config
+// seeding path so cached and live configs follow identical logic.
+func applyConfig(cfg config.Config) {
+	manager.mu.Lock()
+	// config.Config is a type alias for C.ConfigResponse on the
+	// current radiance branch — no nested .ConfigResponse field,
+	// just dereference and use directly.
+	manager.lastCfg = cfg.Unbounded
+	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
+	shouldRun := manager.shouldStart()
+	running := manager.cancel != nil
+	ucfg := manager.lastCfg
+	manager.mu.Unlock()
+
+	switch {
+	case shouldRun && !running:
+		manager.start(ucfg)
+	case !shouldRun && running:
+		manager.stop()
+	}
 }
 
 var initOnce sync.Once
@@ -293,10 +333,7 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 			}
 		}
 
-		// BroflakeConn is for clients routing traffic *through* the
-		// mesh. A widget proxy only donates bandwidth, so the conn
-		// is unused — discard it.
-		_, ui, err := clientcore.NewBroflake(bfOpt, rtcOpt, egOpt)
+		ui, err := newWidget(bfOpt, rtcOpt, egOpt)
 		if err != nil {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
 			cancel()

@@ -238,7 +238,12 @@ func (r *LocalBackend) Start() {
 	// triggers (local toggle, server feature flag, server-supplied
 	// config); InitSubscription is sync.Once-guarded so a future Start
 	// retry after Close won't double-subscribe.
-	unbounded.InitSubscription()
+	//
+	// Seed with the already-cached config (loaded from disk before
+	// Start runs) so an opted-in user auto-starts the widget on
+	// launch instead of waiting for the next config refresh.
+	cachedCfg, _ := r.confHandler.GetConfig()
+	unbounded.InitSubscription(cachedCfg)
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
