@@ -118,11 +118,42 @@ func (e *Subscription[T]) Unsubscribe() {
 // Emit notifies all subscribers of the event, passing event data. Callbacks are invoked
 // asynchronously in separate goroutines.
 func Emit[T Event](evt T) {
+	key := reflect.TypeFor[T]()
+	// Snapshot the callbacks into a slice under the RLock, then drop
+	// the lock before doing anything that could block (the diagnostic
+	// log, the per-callback goroutine spawn). Iterating the underlying
+	// map after releasing the lock would race against Unsubscribe's
+	// write lock — `concurrent map iteration and map write` panic
+	// territory under load.
 	subscriptionsMu.RLock()
-	defer subscriptionsMu.RUnlock()
-	if subs, ok := subscriptions[reflect.TypeFor[T]()]; ok {
-		for _, cb := range subs {
-			go cb(evt)
-		}
+	subsMap := subscriptions[key]
+	cbs := make([]func(any), 0, len(subsMap))
+	for _, cb := range subsMap {
+		cbs = append(cbs, cb)
 	}
+	subscriptionsMu.RUnlock()
+	// Diagnostic hook; default no-op so high-frequency event types
+	// don't flood logs in prod. Tests / debugging swap in a real
+	// logger via SetEmitDebugLogger.
+	emitDebugLogger(key, len(cbs))
+	for _, cb := range cbs {
+		go cb(evt)
+	}
+}
+
+// emitDebugLogger is invoked once per Emit with the event type and
+// current subscriber count. Default is a no-op; callers (tests,
+// diagnostic builds) swap in a real logger via SetEmitDebugLogger.
+var emitDebugLogger = func(reflect.Type, int) {}
+
+// SetEmitDebugLogger replaces the no-op diagnostic hook for the
+// duration of an investigation (e.g., tracking "events vanish" paths).
+// Pass nil to restore the no-op default. Safe to call from main /
+// init; not safe to call concurrently with Emit on the hot path.
+func SetEmitDebugLogger(fn func(eventType reflect.Type, subscriberCount int)) {
+	if fn == nil {
+		emitDebugLogger = func(reflect.Type, int) {}
+		return
+	}
+	emitDebugLogger = fn
 }

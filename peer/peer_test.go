@@ -685,35 +685,133 @@ func TestAPIError_StringFormat(t *testing.T) {
 	assert.Contains(t, e.Error(), "could not connect")
 }
 
-// Subscribers (the IPC SSE handler in production) need both edges so the UI
-// can render fresh state without polling.
+// TestClient_StatusEventEmittedOnStartAndStop pins the full lifecycle
+// phase sequence: Start fires one StatusEvent per stage so the UI can
+// render granular progress (mapping port → registering → verifying →
+// serving) instead of a single active/inactive flip. Stop fires
+// stopping → idle on the way back down.
+//
+// Subscribers (the IPC SSE handler in production) need every edge so the
+// UI can render fresh state without polling.
 func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
 	fwd := &fakeForwarder{}
 	box := &fakeBoxService{}
 	srv := newStubServer(t)
 	c := newTestClient(t, fwd, box, srv)
 
-	got := make(chan StatusEvent, 4)
+	// Buffer must exceed total emit count (6 on Start: mapping → detecting
+	// → registering → starting_proxy → verifying → serving; 2 on Stop:
+	// stopping → idle) or the subscriber's send blocks and emits drop.
+	got := make(chan StatusEvent, 16)
 	sub := events.Subscribe(func(evt StatusEvent) {
 		got <- evt
 	})
 	defer sub.Unsubscribe()
 
 	require.NoError(t, c.Start(context.Background()))
-	select {
-	case evt := <-got:
-		assert.True(t, evt.Status.Active)
-		assert.NotEmpty(t, evt.Status.RouteID)
-	case <-time.After(time.Second):
-		t.Fatal("no Start status event within 1s")
+
+	// events.Emit dispatches each callback in a separate goroutine, so
+	// the order events land on the channel isn't deterministic — assert
+	// set-membership of the expected phases + the final-state contract
+	// (the only state observers actually care about) rather than the
+	// sequence.
+	wantStartPhases := map[Phase]bool{
+		PhaseMappingPort: true,
+		PhaseDetectingIP: true,
+		PhaseRegistering: true,
+		PhaseStartingBox: true,
+		PhaseVerifying:   true,
+		PhaseServing:     true,
+	}
+	startEvents := drainPhases(t, got, len(wantStartPhases))
+	for want := range wantStartPhases {
+		assert.Contains(t, startEvents, want, "Start sequence missing phase %q", want)
+	}
+	servingEvt, ok := startEvents[PhaseServing]
+	require.True(t, ok, "Start sequence must reach PhaseServing")
+	assert.True(t, servingEvt.Status.Active, "active must be true on serving")
+	assert.NotEmpty(t, servingEvt.Status.RouteID, "route_id must be set on serving")
+	for phase, evt := range startEvents {
+		if phase == PhaseServing {
+			continue
+		}
+		assert.False(t, evt.Status.Active, "active must be false on intermediate phase %q", phase)
 	}
 
 	require.NoError(t, c.Stop(context.Background()))
-	select {
-	case evt := <-got:
-		assert.False(t, evt.Status.Active)
-	case <-time.After(time.Second):
-		t.Fatal("no Stop status event within 1s")
+	wantStopPhases := map[Phase]bool{
+		PhaseStopping: true,
+		PhaseIdle:     true,
+	}
+	stopEvents := drainPhases(t, got, len(wantStopPhases))
+	for want := range wantStopPhases {
+		assert.Contains(t, stopEvents, want, "Stop sequence missing phase %q", want)
+	}
+	for phase, evt := range stopEvents {
+		assert.False(t, evt.Status.Active, "active must be false during stop (phase %q)", phase)
+	}
+}
+
+// drainPhases reads up to n StatusEvents from got and returns them
+// keyed by Phase (last event per phase wins). Used by tests that need
+// set-membership semantics rather than strict ordering because
+// events.Emit's per-callback goroutines deliver out of order under
+// the runtime's scheduling.
+func drainPhases(t *testing.T, got <-chan StatusEvent, n int) map[Phase]StatusEvent {
+	t.Helper()
+	out := make(map[Phase]StatusEvent, n)
+	deadline := time.After(2 * time.Second)
+	for i := 0; i < n; i++ {
+		select {
+		case evt := <-got:
+			out[evt.Status.Phase] = evt
+		case <-deadline:
+			t.Fatalf("received only %d/%d status events within 2s; got phases: %v",
+				i, n, mapKeys(out))
+		}
+	}
+	return out
+}
+
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestClient_StatusEventOnStartError surfaces a Start failure to the UI
+// via PhaseError with the wrapped error message. Without this, a user
+// who clicks SmC-on and hits e.g. a UPnP failure sees the toggle silently
+// flip back without any diagnostic.
+func TestClient_StatusEventOnStartError(t *testing.T) {
+	fwd := &fakeForwarder{mapErr: errors.New("upnp gateway refused mapping")}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	c := newTestClient(t, fwd, box, srv)
+
+	got := make(chan StatusEvent, 16)
+	sub := events.Subscribe(func(evt StatusEvent) { got <- evt })
+	defer sub.Unsubscribe()
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+
+	var sawError bool
+	deadline := time.After(time.Second)
+	for !sawError {
+		select {
+		case evt := <-got:
+			if evt.Status.Phase == PhaseError {
+				sawError = true
+				assert.False(t, evt.Status.Active)
+				assert.Contains(t, evt.Status.Error, "upnp gateway refused mapping",
+					"error message must surface so the UI can render a real diagnostic")
+			}
+		case <-deadline:
+			t.Fatal("no PhaseError status event within 1s")
+		}
 	}
 }
 

@@ -9,11 +9,13 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
 
 	box "github.com/getlantern/lantern-box"
+	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
@@ -61,6 +63,24 @@ type StatusEvent struct {
 	Status Status `json:"status"`
 }
 
+// ConnectionEvent fires every time a remote client opens or closes a
+// samizdat session against the local peer's inbound. Source carries the
+// remote "ip:port" string; consumers (the globe view, abuse aggregation)
+// extract the IP for geo-lookup or rate-limit attribution. Timestamp
+// is the emit time in Unix millis; consumers that aggregate across a
+// time window or that need to order events when the underlying
+// dispatch is async can compare it directly.
+//
+//   State     +1 on accept, -1 on close
+//   Source    remote peer "ip:port"
+//   Timestamp emit time in Unix milliseconds
+type ConnectionEvent struct {
+	events.Event
+	State     int    `json:"state"`
+	Source    string `json:"source"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // Port range chosen to minimize collision risk on the typical home network,
 // not to guarantee one. 30000–50000 sits above the well-known/system range
 // (0–1023) and above the ports most services use by default (web/dev/dbs
@@ -88,7 +108,34 @@ type boxService interface {
 
 type boxFactory func(ctx context.Context, options string) (boxService, error)
 
+// Phase is the peer.Client lifecycle stage surfaced to the UI. Granular
+// enough that "Share My Connection" can render a real progress sequence
+// (mapping port → registering → verifying → serving) instead of a single
+// active/inactive boolean. Values are stable strings so Flutter / web
+// consumers can switch on them without depending on Go enum ordering.
+type Phase string
+
+const (
+	PhaseIdle        Phase = "idle"
+	PhaseMappingPort Phase = "mapping_port"
+	PhaseDetectingIP Phase = "detecting_ip"
+	PhaseRegistering Phase = "registering"
+	PhaseStartingBox Phase = "starting_proxy"
+	PhaseVerifying   Phase = "verifying"
+	PhaseServing     Phase = "serving"
+	PhaseStopping    Phase = "stopping"
+	PhaseError       Phase = "error"
+)
+
 type Status struct {
+	Phase Phase `json:"phase"`
+	// Error is the human-readable failure reason when Phase == PhaseError.
+	// Empty for every other phase; consumers should render this only when
+	// the UI is in the error state.
+	Error string `json:"error,omitempty"`
+	// Active is true only when Phase == PhaseServing. Kept distinct from
+	// Phase so subscribers that just want a boolean "is sharing?" don't
+	// have to switch on the phase enum.
 	Active       bool      `json:"active"`
 	SharingSince time.Time `json:"sharing_since,omitempty"`
 	ExternalIP   string    `json:"external_ip,omitempty"`
@@ -135,6 +182,19 @@ type Client struct {
 	forwarder portForwarder
 	box       boxService
 	routeID   string
+
+	// listenerDraining short-circuits the peerconn listener wrapper while
+	// box.Close is firing per-connection disconnect callbacks. peerconn.Notify
+	// reads its registered listener under an RLock and then releases the lock
+	// before invoking it, so SetListener(nil) alone races against in-flight
+	// Notify calls — under load (real client traffic), Close fires N disconnect
+	// callbacks from N goroutines that have already snapshotted the listener,
+	// each then events.Emit spawns one more goroutine per subscriber. The
+	// Flutter-side subscriber posts main-thread tasks per event, and a
+	// hundred-task flood against a Flutter engine that's simultaneously
+	// processing the SmC-off state change is the Flutter mutex crash we hit.
+	// Setting this flag before box.Close drops the cascade inline.
+	listenerDraining atomic.Bool
 }
 
 // peerCleanupTimeout caps how long Start's rollback path waits for
@@ -180,7 +240,7 @@ func NewClient(cfg Config) (*Client, error) {
 // Start opens the peer-proxy session. On success a background heartbeat
 // goroutine is running; on error any partial setup is torn down before
 // returning.
-func (c *Client) Start(ctx context.Context) error {
+func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.mu.Lock()
 	if c.active || c.starting {
 		c.mu.Unlock()
@@ -189,6 +249,11 @@ func (c *Client) Start(ctx context.Context) error {
 	c.starting = true
 	c.startingDone = make(chan struct{})
 	c.mu.Unlock()
+
+	// Re-arm the listener wrapper. Stop / rollback flips this to true to
+	// silence the disconnect cascade during box.Close; if we don't reset
+	// here, a Stop→Start cycle would leave the wrapper permanently muted.
+	c.listenerDraining.Store(false)
 
 	var (
 		success   bool
@@ -213,6 +278,13 @@ func (c *Client) Start(ctx context.Context) error {
 		// registered route + router rule.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
+		// Always clear the connection listener on rollback. The listener is
+		// only Set on the success path, so this is a no-op if Start failed
+		// before reaching it — but cheap insurance against a future re-order
+		// that registers earlier. Drain-flag first so any in-flight Notify
+		// callbacks short-circuit even if SetListener races (see Stop).
+		c.listenerDraining.Store(true)
+		peerconn.SetListener(nil)
 		if box != nil {
 			_ = box.Close()
 		}
@@ -225,8 +297,20 @@ func (c *Client) Start(ctx context.Context) error {
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
 		}
+		// Surface the failure to the UI. Emitted AFTER cleanup so the UI
+		// sees the error phase as the terminal state of this Start attempt,
+		// not as a transient between phases. retErr carries whichever
+		// fmt.Errorf the failing branch returned, which is the most
+		// human-readable diagnostic we have ("map port %d: ...",
+		// "register with lantern-cloud: ...", etc.).
+		var errMsg string
+		if retErr != nil {
+			errMsg = retErr.Error()
+		}
+		c.emitPhase(PhaseError, errMsg)
 	}()
 
+	c.emitPhase(PhaseMappingPort, "")
 	fwd, err := c.cfg.NewForwarder(ctx)
 	if err != nil {
 		return fmt.Errorf("discover gateway: %w", err)
@@ -237,10 +321,13 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("map port %d: %w", internalPort, err)
 	}
 
+	c.emitPhase(PhaseDetectingIP, "")
 	externalIP, err := fwd.ExternalIP(ctx)
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
+
+	c.emitPhase(PhaseRegistering, "")
 	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
@@ -257,6 +344,7 @@ func (c *Client) Start(ctx context.Context) error {
 	// auto_detect_interface tells sing-box to bind outbound dials to the
 	// underlying physical interface rather than whatever the OS routing
 	// table picks (which would be the VPN TUN if the VPN is up).
+	c.emitPhase(PhaseStartingBox, "")
 	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
 	if err != nil {
 		return fmt.Errorf("patch sing-box options: %w", err)
@@ -276,6 +364,7 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
+	c.emitPhase(PhaseVerifying, "")
 	// Now that sing-box is listening with the just-built creds, ask the
 	// server to dial back through them. Splitting verify out of Register
 	// into this explicit follow-up avoids the chicken-and-egg where the
@@ -286,6 +375,38 @@ func (c *Client) Start(ctx context.Context) error {
 	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
 		return fmt.Errorf("verify with lantern-cloud: %w", err)
 	}
+
+	// Forward inbound accept/close events from lantern-box's samizdat
+	// inbound to the radiance event bus. Consumers (lantern-core's
+	// FlutterEventEmitter, future abuse aggregation) subscribe via
+	// events.Subscribe[ConnectionEvent]. Listener is process-wide
+	// single-active; cleared on Stop and in the rollback defer so
+	// post-teardown accept-loop callbacks land on a no-op rather than
+	// emit events to a torn-down consumer. Must run AFTER box.Start so
+	// the accept loop is serving when notifications start flowing.
+	peerconn.SetListener(func(state int, source string) {
+		if c.listenerDraining.Load() {
+			// Diagnostic: if Notify reaches this point but we drop because
+			// the drain flag is set, that's the post-Stop racing-Notify case
+			// the flag was added to silence. Logging makes its frequency
+			// observable instead of "events silently vanish."
+			slog.Debug("peer listener: dropping post-Stop Notify",
+				"state", state, "source", source)
+			return
+		}
+		// Per-connection breadcrumb correlates samizdat-in activity with
+		// peer-connection FlutterEvents on the consumer side. Debug-level
+		// so prod logs aren't flooded under real traffic and so the
+		// remote ip:port doesn't land in routinely-collected client logs;
+		// operators investigating "no globe arcs despite samizdat traffic"
+		// can flip the level. The listener-registration line below stays
+		// at Info — that's a once-per-session lifecycle event, not a
+		// per-connection breadcrumb.
+		slog.Debug("peer listener: forwarding connection event",
+			"state", state, "source", source)
+		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
+	})
+	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
 
 	// HeartbeatIntervalSeconds is server-driven so lantern-cloud can dial up
 	// the cadence on registrations it wants to expire faster. Honor any
@@ -310,6 +431,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.cancelRun = cancelRun
 	c.runDone = runDone
 	c.status = Status{
+		Phase:        PhaseServing,
 		Active:       true,
 		SharingSince: time.Now(),
 		ExternalIP:   externalIP,
@@ -371,8 +493,21 @@ func (c *Client) Stop(ctx context.Context) error {
 	c.forwarder = nil
 	c.box = nil
 	c.routeID = ""
-	c.status = Status{}
+	c.status = Status{Phase: PhaseStopping}
+	stoppingSnapshot := c.status
 	c.mu.Unlock()
+	events.Emit(StatusEvent{Status: stoppingSnapshot})
+
+	// Suppress the connection listener BEFORE box.Close. peerconn.Notify
+	// reads its registered listener under an RLock and releases it before
+	// invoking — SetListener(nil) alone races against in-flight Notify
+	// goroutines that have already snapshotted the listener (one per live
+	// inbound connection at Close time). Flipping listenerDraining first
+	// short-circuits the wrapper inline so even the racing invocations
+	// become no-ops. SetListener(nil) is still called for cleanliness and
+	// to release the listener closure's reference to this Client.
+	c.listenerDraining.Store(true)
+	peerconn.SetListener(nil)
 
 	cancel()
 	<-done
@@ -395,7 +530,11 @@ func (c *Client) Stop(ctx context.Context) error {
 		slog.Warn("peer client unmap port failed", "err", err)
 	}
 	slog.Info("peer client stopped", "route_id", routeID)
-	events.Emit(StatusEvent{Status: Status{}})
+	c.mu.Lock()
+	c.status = Status{Phase: PhaseIdle}
+	idleSnapshot := c.status
+	c.mu.Unlock()
+	events.Emit(StatusEvent{Status: idleSnapshot})
 	return firstErr
 }
 
@@ -409,6 +548,22 @@ func (c *Client) CurrentStatus() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.status
+}
+
+// emitPhase updates c.status.Phase under the lock and emits a snapshot.
+// Used at each lifecycle boundary in Start / Stop so the UI sees progress
+// instead of a binary active/inactive flip. Active is recomputed here:
+// only PhaseServing implies active=true; every other phase clears it so
+// subscribers using just the Active flag don't see e.g. "active=true with
+// Phase=verifying" mid-Start.
+func (c *Client) emitPhase(p Phase, errMsg string) {
+	c.mu.Lock()
+	c.status.Phase = p
+	c.status.Error = errMsg
+	c.status.Active = (p == PhaseServing)
+	snapshot := c.status
+	c.mu.Unlock()
+	events.Emit(StatusEvent{Status: snapshot})
 }
 
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
@@ -505,7 +660,10 @@ func pickInternalPort() uint16 {
 // (samizdat, reflex, etc.) into the ctx so libbox can decode the
 // inbounds[0].type="samizdat" stanza coming back from /peer/register.
 // Without it the user's ctx is missing InboundOptionsRegistry and
-// libbox returns "missing inbound fields registry in context".
+// libbox returns "missing inbound fields registry in context" — the
+// failure mode is silent in CI because the integration tests stub
+// BuildBoxService entirely; only TestDefaultBuildBoxService_DecodesSamizdatInbound
+// exercises the real decode path.
 //
 // We wrap so libbox sees the caller's Deadline/Done (so a Stop-induced
 // ctx cancel propagates to box internals) AND can still resolve the
