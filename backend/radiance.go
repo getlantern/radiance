@@ -326,6 +326,17 @@ func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
 		r.closePeerClient()
+		// unbounded.start spawns its worker on a context.Background-
+		// derived ctx (it has to outlive any single NewConfigEvent),
+		// so Close has to explicitly tell it to shut down — otherwise
+		// the broflake widget goroutine survives backend close and
+		// leaks until process exit. Use a fresh ctx so a cancelled
+		// shutdown path doesn't skip the Stop.
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := unbounded.Stop(stopCtx); err != nil {
+			slog.Warn("unbounded stop on backend close returned error", "error", err)
+		}
+		cancel()
 		// vpnClient is always set in production via NewLocalBackend, but
 		// peer-focused unit tests construct partial LocalBackends without
 		// one. Guard the call so Close stays robust under those paths
@@ -507,6 +518,16 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
 		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
 			return err
+		}
+	}
+
+	// Drive the Unbounded widget proxy off the toggle change immediately
+	// rather than waiting for the next NewConfigEvent to re-evaluate.
+	// SetEnabled is internally idempotent and checks the cached server
+	// feature flag + config before actually starting the worker.
+	if _, ok := diff[settings.UnboundedKey]; ok {
+		if err := unbounded.SetEnabled(settings.GetBool(settings.UnboundedKey)); err != nil {
+			slog.Warn("unbounded toggle failed", "error", err)
 		}
 	}
 

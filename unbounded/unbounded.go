@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	C "github.com/getlantern/common"
 
@@ -40,28 +41,44 @@ import (
 
 // ConnectionEvent fires every time a consumer (i.e. a censored client
 // being routed through this widget proxy) connects or disconnects via
-// the broflake mesh. State: +1 on accept, -1 on close. WorkerIdx is
-// broflake's internal worker slot identifier — used by the Flutter
-// globe to pair connect/disconnect events for the same arc. Addr is
-// the remote consumer's IP if broflake exposes it, otherwise empty.
+// the broflake mesh.
 //
-// Shape mirrors radiance/peer.ConnectionEvent so consumers (lantern-
-// core's listenPeerConnectionEvents in particular) can subscribe with
-// a single discriminator and feed both the SmC and Unbounded streams
-// into the same globe view.
+//   State     +1 on accept, -1 on close
+//   Source    consumer's IP if broflake exposes it, otherwise empty
+//   Timestamp emit time in Unix milliseconds
+//
+// Shape is identical to radiance/peer.ConnectionEvent so a single
+// subscriber can handle both the SmC-via-samizdat stream and the
+// Unbounded-via-broflake stream as one. Broflake's internal worker-
+// slot identifier is not surfaced — a consumer that needs to pair
+// accept/close events for the same arc keys off Source (or the
+// event's arrival sequence within a single connection lifetime,
+// which is what the globe currently does).
 type ConnectionEvent struct {
 	events.Event
 	State     int    `json:"state"`
-	WorkerIdx int    `json:"workerIdx"`
-	Addr      string `json:"addr"`
+	Source    string `json:"source"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 var manager = &unboundedManager{}
 
 type unboundedManager struct {
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	lastCfg *C.UnboundedConfig // most recent server-supplied config
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	// lastCfg + lastFeatureOn cache the server-side half of the
+	// three-condition predicate so SetEnabled can re-evaluate
+	// immediately when the local toggle flips, without waiting for
+	// the next NewConfigEvent. Both are updated atomically when a
+	// new config arrives.
+	lastCfg       *C.UnboundedConfig
+	lastFeatureOn bool
+}
+
+// shouldStart reports whether all three start conditions hold. Caller
+// must hold m.mu.
+func (m *unboundedManager) shouldStart() bool {
+	return settings.GetBool(settings.UnboundedKey) && m.lastFeatureOn && m.lastCfg != nil
 }
 
 // Enabled reports whether the local opt-in is set. Doesn't say whether
@@ -71,9 +88,10 @@ func Enabled() bool {
 }
 
 // SetEnabled flips the local opt-in. When enabling, the proxy starts
-// immediately if a server config is already cached; otherwise it
-// starts on the next config event. When disabling, the proxy stops.
-// Idempotent — calling with the current value is a no-op.
+// immediately if all three start conditions hold (local toggle + server
+// feature flag + server config cached); otherwise it stays stopped and
+// the next NewConfigEvent will reevaluate. When disabling, the proxy
+// stops. Idempotent — calling with the current value is a no-op.
 func SetEnabled(enable bool) error {
 	if Enabled() == enable {
 		return nil
@@ -82,17 +100,24 @@ func SetEnabled(enable bool) error {
 		return err
 	}
 	slog.Info("Unbounded widget proxy local opt-in changed", "enabled", enable)
-	if enable {
-		manager.mu.Lock()
-		cfg := manager.lastCfg
-		manager.mu.Unlock()
-		if cfg != nil {
-			manager.start(cfg)
-		} else {
-			slog.Info("Unbounded: enabled locally, will start when server config arrives")
-		}
-	} else {
+	if !enable {
 		manager.stop()
+		return nil
+	}
+	manager.mu.Lock()
+	shouldStart := manager.shouldStart()
+	cfg := manager.lastCfg
+	feature := manager.lastFeatureOn
+	manager.mu.Unlock()
+	if shouldStart {
+		manager.start(cfg)
+		return nil
+	}
+	switch {
+	case cfg == nil:
+		slog.Info("Unbounded: enabled locally, waiting for server config")
+	case !feature:
+		slog.Info("Unbounded: enabled locally, but server feature flag is off")
 	}
 	return nil
 }
@@ -113,13 +138,15 @@ func InitSubscription() {
 			cfg := *evt.New
 			manager.mu.Lock()
 			manager.lastCfg = cfg.Unbounded
+			manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
+			shouldRun := manager.shouldStart()
 			running := manager.cancel != nil
+			ucfg := manager.lastCfg
 			manager.mu.Unlock()
 
-			shouldRun := shouldRunUnbounded(cfg)
 			switch {
 			case shouldRun && !running:
-				manager.start(cfg.Unbounded)
+				manager.start(ucfg)
 			case !shouldRun && running:
 				manager.stop()
 			}
@@ -135,19 +162,6 @@ var initOnce sync.Once
 func Stop(_ context.Context) error {
 	manager.stop()
 	return nil
-}
-
-func shouldRunUnbounded(cfg C.ConfigResponse) bool {
-	if !settings.GetBool(settings.UnboundedKey) {
-		return false
-	}
-	if !cfg.Features[C.UNBOUNDED] {
-		return false
-	}
-	if cfg.Unbounded == nil {
-		return false
-	}
-	return true
 }
 
 func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
@@ -183,11 +197,11 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 				addrStr = addr.String()
 			}
 			slog.Debug("Unbounded: consumer connection change",
-				"state", state, "workerIdx", workerIdx, "addr", addrStr)
+				"state", state, "workerIdx", workerIdx, "source", addrStr)
 			events.Emit(ConnectionEvent{
 				State:     state,
-				WorkerIdx: workerIdx,
-				Addr:      addrStr,
+				Source:    addrStr,
+				Timestamp: time.Now().UnixMilli(),
 			})
 		}
 
