@@ -660,10 +660,11 @@ func TestClient_RotatesCredentialsAtInterval(t *testing.T) {
 		srv.deregisterCount.Load(), rotations)
 
 	// RouteID exposed via Status should reflect the latest rotation.
-	c.mu.Lock()
-	currentRouteID := c.routeID
-	c.mu.Unlock()
-	assert.NotEqual(t, "00000000-0000-0000-0000-000000000001", currentRouteID,
+	// Asserting against CurrentStatus() rather than the internal field
+	// pins the observable contract: a future change that updates the
+	// route used by heartbeats but forgets to mirror it into
+	// Status.RouteID would fail this assertion.
+	assert.NotEqual(t, "00000000-0000-0000-0000-000000000001", c.CurrentStatus().RouteID,
 		"current route_id should have advanced past the initial register")
 
 	// Multiple boxes built; first one closed.

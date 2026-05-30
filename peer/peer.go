@@ -524,9 +524,21 @@ func (c *Client) runRotation(ctx context.Context) {
 // success: a fresh route_id and keypair are in use, the libbox inbound
 // has been rebuilt against the new options, the prior route is
 // deregistered server-side, and the FlutterEvent stream sees no gap.
-// On failure: the prior creds and box continue serving — rotation is
-// best-effort. The router-side port mapping is preserved across the
-// rotation; only the in-process samizdat state changes.
+//
+// On failure, behavior depends on where rotation aborted:
+//   - Before oldBox.Close (Register, options patch, BuildBoxService,
+//     stop-raced-rotation paths) — the prior box keeps serving with
+//     its existing creds; the newly-registered route (if any) is
+//     deregistered via cleanupNewRoute.
+//   - After oldBox.Close (startNewBoxWithRetry exhausts retries or
+//     panics) — the listener is down until the next rotation tick
+//     successfully rebinds. The router-side port mapping survives;
+//     only the in-process listener is gone. The new route is
+//     deregistered so the bandit doesn't hand its creds out for a
+//     non-listening port.
+//
+// In both cases the router-side port mapping is preserved; only the
+// in-process samizdat state changes.
 //
 // Sequence:
 //  1. Re-register with the same (externalIP, externalPort) as Start.
