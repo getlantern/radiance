@@ -57,12 +57,14 @@ const (
 	AutoConnectKey      _key = "auto_connect"       // bool
 	PeerShareEnabledKey _key = "peer_share_enabled" // bool
 	// PeerManualPortKey is the TCP port number the user has manually
-	// forwarded on their router (single-port 1:1 NAT). When non-zero,
-	// peer.Client.Start uses portforward.ManualForwarder with this port
-	// instead of probing UPnP. Surfaced as an Advanced setting in the
-	// Share My Connection UI for users on networks where UPnP is
-	// disabled or unavailable.
-	PeerManualPortKey _key = "peer_manual_port" // int (0 = use UPnP)
+	// forwarded on their router for the peer-proxy inbound (single-
+	// port 1:1 NAT). Valid range is 1..65535; 0 means unset, in which
+	// case the peer falls back to UPnP discovery. Out-of-range values
+	// (negative, > 65535) are logged on read and treated as unset
+	// rather than silently wrapping to a wrong port. Surfaced as an
+	// Advanced setting in the Share My Connection UI for users on
+	// networks where UPnP is disabled or unavailable.
+	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
 	SelectedServerKey   _key = "selected_server"    // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]

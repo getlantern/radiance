@@ -19,10 +19,9 @@ type ManualForwarder struct {
 	port uint16
 }
 
-// NewManualForwarder builds a ManualForwarder for a pre-configured router
-// port forward. port must be a valid TCP port; callers should obtain it
-// from ParseManualPort (env-var path) or from a setting that already
-// constrains the value to uint16.
+// NewManualForwarder builds a ManualForwarder for a pre-configured
+// router port forward. port must be in 1..65535; the caller is
+// responsible for validating its input before calling.
 func NewManualForwarder(port uint16) *ManualForwarder {
 	return &ManualForwarder{port: port}
 }
