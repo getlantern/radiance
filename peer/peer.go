@@ -647,7 +647,7 @@ func pickManualForwarder() portForwarder {
 		port, err := portforward.ParseManualPort(raw)
 		if err != nil {
 			slog.Warn("ignoring invalid "+env.PeerExternalPort.String(),
-				"value", raw, "error", err)
+				"value", raw, "err", err)
 		} else {
 			slog.Info("peer client using manual port forward",
 				"port", port, "source", env.PeerExternalPort.String())

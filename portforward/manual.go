@@ -45,11 +45,22 @@ func ParseManualPort(s string) (uint16, error) {
 
 // MapPort reports the configured port as both external and internal. The
 // router-side rule is already in place; nothing to do at the protocol
-// layer.
+// layer. Returns an error if the forwarder was constructed with port==0
+// (not a valid listen/registration port) so callers can fall through to
+// UPnP rather than register a port no peer will listen on.
+//
+// Protocol is set to "TCP" to match the UPnP-based Forwarder, which
+// hard-codes the same value. Samizdat-in inbound traffic is TCP-only;
+// when UDP support is added the two forwarders should be widened
+// together.
 func (m *ManualForwarder) MapPort(_ context.Context, _ uint16, _ string) (*Mapping, error) {
+	if m.port == 0 {
+		return nil, fmt.Errorf("manual forwarder constructed with port=0")
+	}
 	return &Mapping{
 		ExternalPort: m.port,
 		InternalPort: m.port,
+		Protocol:     "TCP",
 		Method:       "manual",
 	}, nil
 }
