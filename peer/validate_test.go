@@ -6,11 +6,11 @@ import (
 )
 
 // minimalValidLaunchCfg returns a launch_cfg JSON that passes
-// validateAbuseRules: the four abuse rule_set tags from
-// lantern-cloud's samizdat.go (each as a "remote" rule_set + a
-// matching reject rule), plus one RFC1918 and one SMTP canary in
-// reject rules. Shared by peer_test.go's stubServer so the existing
-// Start-path tests do not regress on the new check.
+// validateAbuseRules: the four abuse rule_set tags (each as a
+// "remote" rule_set + a matching unconditional reject rule), plus
+// one RFC1918 and one SMTP canary in reject rules. Shared by the
+// stub server used in Start-path tests so the existing tests do not
+// regress on the new check.
 const minimalValidLaunchCfg = `{
 	"inbounds":[{"type":"samizdat","tag":"samizdat-in"}],
 	"route":{
@@ -179,5 +179,148 @@ func TestValidateAbuseRules_BadJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse launch_cfg JSON") {
 		t.Errorf("error should mention JSON parse failure, got: %v", err)
+	}
+}
+
+// sing-box accepts both `"rule_set": "tag"` (scalar) and
+// `"rule_set": ["tag"]` (array) — the validator must too, otherwise
+// a perfectly valid launch_cfg that happens to use the scalar form
+// would be flagged as missing the tag.
+func TestValidateAbuseRules_AcceptsScalarRuleSet(t *testing.T) {
+	cfg := `{
+		"route":{
+			"rule_set":[
+				{"type":"remote","tag":"geosite-malware"},
+				{"type":"remote","tag":"geoip-malware"},
+				{"type":"remote","tag":"geosite-phishing"},
+				{"type":"remote","tag":"geosite-cryptominers"}
+			],
+			"rules":[
+				{"action":"reject","rule_set":"geosite-malware"},
+				{"action":"reject","rule_set":"geoip-malware"},
+				{"action":"reject","rule_set":"geosite-phishing"},
+				{"action":"reject","rule_set":"geosite-cryptominers"},
+				{"action":"reject","ip_cidr":"10.0.0.0/8"},
+				{"action":"reject","port":25}
+			]
+		}}`
+	if err := validateAbuseRules(cfg); err != nil {
+		t.Fatalf("scalar rule_set / ip_cidr / port should be valid, got: %v", err)
+	}
+}
+
+// A reject rule with invert=true rejects everything EXCEPT the
+// listed match — the opposite of what an abuse-block rule should do.
+// It must not satisfy the abuse-tag check.
+func TestValidateAbuseRules_RejectsInverted(t *testing.T) {
+	cfg := `{
+		"route":{
+			"rule_set":[
+				{"type":"remote","tag":"geosite-malware"},
+				{"type":"remote","tag":"geoip-malware"},
+				{"type":"remote","tag":"geosite-phishing"},
+				{"type":"remote","tag":"geosite-cryptominers"}
+			],
+			"rules":[
+				{"action":"reject","rule_set":["geosite-malware"],"invert":true},
+				{"action":"reject","rule_set":["geoip-malware"]},
+				{"action":"reject","rule_set":["geosite-phishing"]},
+				{"action":"reject","rule_set":["geosite-cryptominers"]},
+				{"action":"reject","ip_cidr":["10.0.0.0/8"]},
+				{"action":"reject","port":[25]}
+			]
+		}}`
+	err := validateAbuseRules(cfg)
+	if err == nil {
+		t.Fatal("inverted reject must not satisfy the abuse-tag check")
+	}
+	if !strings.Contains(err.Error(), "geosite-malware") {
+		t.Errorf("error should call out the inverted tag, got: %v", err)
+	}
+}
+
+// A reject rule that ANDs the abuse rule_set with another constraint
+// (port, domain, source IP, etc.) only fires for the intersection —
+// most abuse-list traffic still passes. Must not count as covering
+// the tag.
+func TestValidateAbuseRules_RejectsExtraConstraint(t *testing.T) {
+	cfg := `{
+		"route":{
+			"rule_set":[
+				{"type":"remote","tag":"geosite-malware"},
+				{"type":"remote","tag":"geoip-malware"},
+				{"type":"remote","tag":"geosite-phishing"},
+				{"type":"remote","tag":"geosite-cryptominers"}
+			],
+			"rules":[
+				{"action":"reject","rule_set":["geosite-malware"],"port":[80]},
+				{"action":"reject","rule_set":["geoip-malware"]},
+				{"action":"reject","rule_set":["geosite-phishing"]},
+				{"action":"reject","rule_set":["geosite-cryptominers"]},
+				{"action":"reject","ip_cidr":["10.0.0.0/8"]},
+				{"action":"reject","port":[25]}
+			]
+		}}`
+	err := validateAbuseRules(cfg)
+	if err == nil {
+		t.Fatal("reject with extra constraint must not satisfy the abuse-tag check")
+	}
+	if !strings.Contains(err.Error(), "geosite-malware") {
+		t.Errorf("error should call out the constrained tag, got: %v", err)
+	}
+}
+
+// Same predicate-narrowing concern applies to the static canary
+// reject rules. An ip_cidr reject ANDed with a port no longer
+// covers all RFC1918 traffic and must not count as the canary.
+func TestValidateAbuseRules_RejectsStaticCanaryWithExtraConstraint(t *testing.T) {
+	cfg := `{
+		"route":{
+			"rule_set":[
+				{"type":"remote","tag":"geosite-malware"},
+				{"type":"remote","tag":"geoip-malware"},
+				{"type":"remote","tag":"geosite-phishing"},
+				{"type":"remote","tag":"geosite-cryptominers"}
+			],
+			"rules":[
+				{"action":"reject","rule_set":["geosite-malware"]},
+				{"action":"reject","rule_set":["geoip-malware"]},
+				{"action":"reject","rule_set":["geosite-phishing"]},
+				{"action":"reject","rule_set":["geosite-cryptominers"]},
+				{"action":"reject","ip_cidr":["10.0.0.0/8"],"port":[80]},
+				{"action":"reject","port":[25]}
+			]
+		}}`
+	err := validateAbuseRules(cfg)
+	if err == nil {
+		t.Fatal("RFC1918 canary ANDed with port must not satisfy the static-block check")
+	}
+	if !strings.Contains(err.Error(), "RFC1918") {
+		t.Errorf("error should call out the missing RFC1918 canary, got: %v", err)
+	}
+}
+
+// Explicit invert=false should be treated as the canonical no-op
+// (sing-box's default is false) and still credit the rule.
+func TestValidateAbuseRules_AcceptsExplicitInvertFalse(t *testing.T) {
+	cfg := `{
+		"route":{
+			"rule_set":[
+				{"type":"remote","tag":"geosite-malware"},
+				{"type":"remote","tag":"geoip-malware"},
+				{"type":"remote","tag":"geosite-phishing"},
+				{"type":"remote","tag":"geosite-cryptominers"}
+			],
+			"rules":[
+				{"action":"reject","rule_set":["geosite-malware"],"invert":false},
+				{"action":"reject","rule_set":["geoip-malware"]},
+				{"action":"reject","rule_set":["geosite-phishing"]},
+				{"action":"reject","rule_set":["geosite-cryptominers"]},
+				{"action":"reject","ip_cidr":["10.0.0.0/8"]},
+				{"action":"reject","port":[25]}
+			]
+		}}`
+	if err := validateAbuseRules(cfg); err != nil {
+		t.Fatalf("explicit invert=false should be treated as a pure reject, got: %v", err)
 	}
 }
