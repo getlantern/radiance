@@ -188,10 +188,24 @@ func NewClient(cfg Config) (*Client, error) {
 			//   2. RADIANCE_PEER_EXTERNAL_PORT env var (developer /
 			//      power-user override)
 			//   3. fall through to UPnP discovery
-			if port := uint16(settings.GetInt(settings.PeerManualPortKey)); port != 0 {
-				slog.Info("peer client using manual port forward",
-					"port", port, "source", "setting")
-				return portforward.NewManualForwarder(port), nil
+			//
+			// Range-check the setting before casting to uint16 — a raw
+			// uint16 cast silently wraps negative values (-5 → 65531)
+			// and values above the port space (70000 → 4464), which
+			// would register a port we don't listen on (or, worse, one
+			// we do listen on for a different service). Out-of-range
+			// values fall through to env-var and then UPnP as if the
+			// setting were unset.
+			if raw := settings.GetInt(settings.PeerManualPortKey); raw != 0 {
+				if raw < 1 || raw > 65535 {
+					slog.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
+						"value", raw)
+				} else {
+					port := uint16(raw)
+					slog.Info("peer client using manual port forward",
+						"port", port, "source", "setting")
+					return portforward.NewManualForwarder(port), nil
+				}
 			}
 			if raw := env.GetString(env.PeerExternalPort); raw != "" {
 				port, err := portforward.ParseManualPort(raw)
