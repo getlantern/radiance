@@ -585,10 +585,10 @@ func TestAPIError_StringFormat(t *testing.T) {
 	assert.Contains(t, e.Error(), "could not connect")
 }
 
-// TestClient_RotatesCredentialsAtInterval pins the C2 fix from
-// engineering#3437: the peer client must re-register and rebuild its
-// libbox inbound on a schedule so a leaked credential's blast radius is
-// bounded by CredRotationInterval rather than peer process lifetime.
+// TestClient_RotatesCredentialsAtInterval pins the rotation invariant:
+// the peer client must re-register and rebuild its libbox inbound on
+// a schedule so a leaked credential's blast radius is bounded by
+// CredRotationInterval rather than peer process lifetime.
 //
 // Drives a short rotation interval (50ms) and asserts:
 //   1. Multiple registers happen (start + ≥2 rotations within 250ms).

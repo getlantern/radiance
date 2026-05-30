@@ -121,8 +121,8 @@ type Client struct {
 // lantern-cloud (new route_id, new keypair, new shortID), rebuilds the
 // libbox service against the new options, and deregisters the prior
 // route. Caps blast radius from credential leakage (logs, telemetry,
-// memory dumps, the H2 leakage path in engineering#3440) to ~1h
-// regardless of peer process lifetime.
+// memory dumps, H2 leakage paths) to ~1h regardless of peer process
+// lifetime.
 //
 // Cost per rotation: one API.Register + Deregister round trip, one
 // libbox build + start + close cycle. Brief (~hundreds-of-ms) port-
@@ -501,11 +501,11 @@ func (c *Client) credRotationLoop(ctx context.Context, interval time.Duration) {
 }
 
 // runRotation wraps rotateCreds with a panic recover. libbox.Start can
-// panic (see the recover in vpn/tunnel.go's tunnel-start path); an
-// unrecovered panic here would crash the host process during a
-// background rotation, taking the user's main VPN with it. Treat a
-// panic the same as any other rotation failure: log, keep the existing
-// box serving, try again next tick.
+// panic — the main tunnel start path already wraps it with recover for
+// the same reason — and an unrecovered panic here would crash the host
+// process during a background rotation, taking the user's main VPN
+// with it. Treat a panic the same as any other rotation failure: log,
+// keep the existing box serving, try again next tick.
 func (c *Client) runRotation(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -553,6 +553,14 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	intPort := c.internalPort
 	oldRouteID := c.routeID
 	oldBox := c.box
+	// Capture sessionRunCtx upfront so the final swap can detect a
+	// Stop→Start cycle that happened mid-rotation. Just checking
+	// c.active at the swap isn't enough: Stop clears active, then a
+	// new Start can set it back to true before this rotation reaches
+	// the swap, and the old rotation would clobber the new session's
+	// state. The runCtx is unique per session, so a pointer-identity
+	// check at the swap is sufficient.
+	sessionRunCtx := c.runCtx
 	c.mu.Unlock()
 
 	if fwd == nil || oldBox == nil {
@@ -593,16 +601,17 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	runCtx := c.runCtx
+	currentRunCtx := c.runCtx
 	c.mu.Unlock()
-	if runCtx == nil {
-		// Stop happened between the unlock above and here. Skip the
-		// build to avoid spinning up a libbox tied to a torn-down ctx,
-		// and clean up the just-created route so it doesn't linger.
+	if currentRunCtx == nil || currentRunCtx != sessionRunCtx {
+		// Stop ran (runCtx==nil), or a Stop→Start cycle replaced the
+		// session (runCtx pointer differs from the one captured at the
+		// top). Either way the build below would tie a libbox to the
+		// wrong session; skip it and clean up the just-created route.
 		cleanupNewRoute(errors.New("client stopped during rotation"))
 		return errors.New("client stopped during rotation")
 	}
-	newBox, err := c.cfg.BuildBoxService(runCtx, options)
+	newBox, err := c.cfg.BuildBoxService(sessionRunCtx, options)
 	if err != nil {
 		cleanupNewRoute(err)
 		return fmt.Errorf("build new sing-box: %w", err)
@@ -624,21 +633,26 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		return fmt.Errorf("start new sing-box: %w", err)
 	}
 
-	// Final swap under lock. Re-check active so a Stop racing us between
-	// runCtx-check above and now doesn't get resurrected by overwriting
-	// the cleared state Stop just set up.
+	// Final swap under lock. Re-check that the session is still the
+	// one we started against. Per-session runCtx identity is a stricter
+	// check than c.active alone: a Stop→Start cycle between the
+	// runCtx-check above and now would have cleared active AND set it
+	// back true, but the new session's runCtx differs from sessionRunCtx
+	// — so we'd otherwise resurrect old-session state into the new one.
 	c.mu.Lock()
-	if !c.active {
+	if !c.active || c.runCtx != sessionRunCtx {
 		c.mu.Unlock()
-		// Stop already cleared c.box / c.routeID. Close the new box we
-		// just brought up (Stop has no reference to it) and deregister
-		// the new route. The old route Stop already deregistered as
-		// part of its own teardown.
+		// Either Stop cleared state, or Stop→Start replaced the session.
+		// Close the new box we just brought up (the current session has
+		// no reference to it) and deregister the new route. Don't touch
+		// the prior route: in the Stop-only case, Stop already
+		// deregistered it; in the Stop→Start case, deregistering it
+		// would defeat the rotation point of cutting off the old creds.
 		if err := newBox.Close(); err != nil {
-			slog.Warn("close new box after Stop raced rotation", "err", err)
+			slog.Warn("close new box after session changed during rotation", "err", err)
 		}
-		cleanupNewRoute(errors.New("client stopped during rotation swap"))
-		return errors.New("client stopped during rotation")
+		cleanupNewRoute(errors.New("session changed during rotation swap"))
+		return errors.New("session changed during rotation")
 	}
 	c.box = newBox
 	c.routeID = regResp.RouteID
@@ -648,13 +662,17 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.mu.Unlock()
 
 	// Deregister the prior route so the bandit stops handing the old
-	// (now-invalid) creds to clients. Best-effort: the prior row will
-	// expire from its TTL anyway, but explicit deregister cuts the
-	// stale-creds window from up-to-TTL down to ~immediately.
-	if err := c.cfg.API.Deregister(ctx, oldRouteID); err != nil {
+	// (now-invalid) creds to clients. Use a fresh ctx so a Stop that
+	// races us between the swap above and the deregister doesn't cancel
+	// the cleanup — leaving the old (now-invalid-locally) route in the
+	// server catalog until TTL would defeat the rotation's stale-cred
+	// cap, which is the whole point of the feature.
+	deregCtx, cancelDereg := context.WithTimeout(context.Background(), peerCleanupTimeout)
+	if err := c.cfg.API.Deregister(deregCtx, oldRouteID); err != nil {
 		slog.Warn("deregister prior route after rotation",
 			"err", err, "old_route_id", oldRouteID)
 	}
+	cancelDereg()
 
 	slog.Info("peer cred rotation succeeded",
 		"new_route_id", regResp.RouteID,
@@ -665,11 +683,25 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 
 // startNewBoxWithRetry retries newBox.Start a handful of times with a
 // short backoff to absorb router-side TIME_WAIT / EADDRINUSE between
-// oldBox.Close releasing the port and newBox.Start re-binding it. Total
-// wait is bounded under 1s so a healthy rotation isn't delayed
-// noticeably; the alternative is leaving the peer's listener down for
-// the full rotation interval (default 1h) on a transient bind failure.
-func startNewBoxWithRetry(ctx context.Context, newBox boxService) error {
+// oldBox.Close releasing the port and newBox.Start re-binding it.
+// Inter-attempt backoff totals 750ms (50+100+200+400 across 4 sleeps;
+// no sleep after the final attempt) so a healthy rotation isn't
+// delayed noticeably; the alternative is leaving the peer's listener
+// down for the full rotation interval (default 1h) on a transient
+// bind failure.
+//
+// libbox.Start can panic; convert that to an error here rather than
+// letting it propagate. Without this, the recover in runRotation would
+// catch the panic but only after rotateCreds' cleanupNewRoute path
+// has been skipped — leaving the freshly-registered route orphaned
+// and the port unbound until next rotation. Returning the panic as
+// an error lets rotateCreds' deferred cleanup deregister the orphan.
+func startNewBoxWithRetry(ctx context.Context, newBox boxService) (retErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			retErr = fmt.Errorf("start new sing-box panicked: %v", r)
+		}
+	}()
 	const attempts = 5
 	backoff := 50 * time.Millisecond
 	var lastErr error
@@ -678,6 +710,12 @@ func startNewBoxWithRetry(ctx context.Context, newBox boxService) error {
 			return nil
 		} else {
 			lastErr = err
+		}
+		// Skip the sleep on the final attempt — we won't try again,
+		// so the wait is pure latency that would push total backoff
+		// above the documented sub-1s budget.
+		if i == attempts-1 {
+			break
 		}
 		select {
 		case <-ctx.Done():
