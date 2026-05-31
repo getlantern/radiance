@@ -219,11 +219,11 @@ func TestPatchSettings_PeerShareDispatches(t *testing.T) {
 }
 
 // Verify PatchSettings routes UnboundedKey to unbounded.Apply via the
-// SetApplyHookForTest hook. Companion to TestPatchSettings_PeerShareDispatches —
-// a typo on the diff key or a removal of the Apply call would silently
-// leave the Unbounded toggle persisted but inert. The hook fires
-// regardless of the Enabled() gate inside Apply, so this catches the
-// dispatch even though we don't prime the rest of the manager state.
+// SetApplyHookForTest hook. A typo on the diff key or a removal of
+// the Apply call would silently leave the Unbounded toggle persisted
+// but inert. The hook fires regardless of the Enabled() gate inside
+// Apply, so this catches the dispatch even though we don't prime the
+// rest of the manager state.
 func TestPatchSettings_UnboundedDispatches(t *testing.T) {
 	r := newPeerTestBackend(t, &fakePeerController{})
 

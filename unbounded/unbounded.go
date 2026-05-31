@@ -483,14 +483,13 @@ func (m *unboundedManager) start() {
 		// Cancellation drain: broflake's per-worker connection-change
 		// goroutines can fire callbacks concurrently with ui.Stop, and
 		// the broflake API doesn't promise no-callbacks-after-Stop.
-		// Check ctx.Err() at the top so callbacks delivered after
-		// stop signals cancel — but before broflake's internal
-		// teardown drained — short-circuit instead of pushing a stale
-		// connection event onto the bus after the consumer thinks
-		// Unbounded is off. Mirrors the peer.go listenerDraining
-		// pattern (peer wraps its peerconn listener; broflake doesn't
-		// expose an equivalent registration point, so the ctx check
-		// inside the closure is the next-best place).
+		// Check ctx.Err() at the top so callbacks delivered after stop
+		// signals cancel — but before broflake's internal teardown
+		// drained — short-circuit instead of pushing a stale connection
+		// event onto the bus after the consumer thinks Unbounded is
+		// off. broflake exposes no registration point we could
+		// disarm directly (the callback IS the registration), so the
+		// inline ctx check is the next-best place.
 		bfOpt.OnConnectionChangeFunc = func(state int, workerIdx int, addr net.IP) {
 			if ctx.Err() != nil {
 				return
