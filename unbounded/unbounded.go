@@ -200,6 +200,9 @@ func SetEnabled(enable bool) error {
 // armed gate is also checked inside start, so even a queued
 // transition stays a no-op after Stop.
 func Apply() error {
+	if h := applyHook; h != nil {
+		h()
+	}
 	if !Enabled() {
 		manager.stop()
 		return nil
@@ -336,6 +339,23 @@ func Stop(ctx context.Context) error {
 // suite. Production code reads this on every call, so the override
 // applies for the duration of the test.
 var internalStopTimeout = 5 * time.Second
+
+// applyHook is invoked at the top of Apply, before any state check
+// or transition. nil in production; backend tests install a counter
+// or assertion to verify that PatchSettings actually dispatches the
+// UnboundedKey diff to this package. Keep this minimal — exposing
+// the manager's internals across packages just for test wiring
+// would be a much bigger surface.
+var applyHook func()
+
+// SetApplyHookForTest installs h to be invoked at the start of
+// every Apply call. Pass nil to remove. Test-only; production code
+// must not call this. The hook fires regardless of the Enabled()
+// gate so callers can verify dispatch happened even when no
+// transition results.
+func SetApplyHookForTest(h func()) {
+	applyHook = h
+}
 
 // stopCtx is the shared implementation for both the public Stop
 // (disarm=true) and internal manager.stop (disarm=false). Holds
