@@ -320,15 +320,40 @@ var initOnce sync.Once
 // Idempotent: no-op if no worker is running. Returns ctx.Err() if
 // the wait deadline expires before the worker exits — in that case
 // the worker has been signalled to cancel and will exit on its own
-// schedule, but the caller has given up waiting.
+// schedule, but the caller has given up waiting. m.cancel and
+// m.done stay set until the worker eventually clears them, so a
+// subsequent start observes "already running" and is a no-op.
 func Stop(ctx context.Context) error {
-	manager.transitionMu.Lock()
-	defer manager.transitionMu.Unlock()
-	manager.mu.Lock()
-	manager.armed = false
-	cancel := manager.cancel
-	done := manager.done
-	manager.mu.Unlock()
+	return manager.stopCtx(ctx, true)
+}
+
+// internalStopTimeout bounds how long Apply / applyConfig wait for
+// the worker to exit after signalling cancel. broflake's ui.Stop
+// should drain in well under this; a longer-than-expected ui.Stop
+// must not block a settings PATCH or a config-event handler
+// indefinitely. Variable (not const) so tests can install a short
+// timeout to exercise the timeout path without holding up the
+// suite. Production code reads this on every call, so the override
+// applies for the duration of the test.
+var internalStopTimeout = 5 * time.Second
+
+// stopCtx is the shared implementation for both the public Stop
+// (disarm=true) and internal manager.stop (disarm=false). Holds
+// transitionMu for the entire signal+wait so a concurrent start
+// cannot interleave. On ctx expiration the cancel signal has been
+// delivered and the worker will exit on its own schedule; manager
+// state is left intact so future transitions see "already running"
+// until the worker clears it.
+func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	m.mu.Lock()
+	if disarm {
+		m.armed = false
+	}
+	cancel := m.cancel
+	done := m.done
+	m.mu.Unlock()
 	if cancel == nil {
 		return nil
 	}
@@ -472,20 +497,17 @@ func (m *unboundedManager) start() {
 	}()
 }
 
-// stop signals the worker to exit and blocks until it does. Held
-// under transitionMu so the worker fully unwinds (ui.Stop completes,
-// m.cancel/m.done are cleared) before any other transition can
-// observe state.
+// stop is the internal (no-arg) variant called by Apply and
+// applyConfig. It wraps stopCtx with a default timeout so a hung
+// ui.Stop doesn't block settings PATCHes or config-event handling
+// indefinitely. The timeout error is logged because the call site
+// has no useful action to take; subsequent transitions observe
+// "already running" until the worker eventually exits.
 func (m *unboundedManager) stop() {
-	m.transitionMu.Lock()
-	defer m.transitionMu.Unlock()
-	m.mu.Lock()
-	cancel := m.cancel
-	done := m.done
-	m.mu.Unlock()
-	if cancel == nil {
-		return
+	ctx, cancel := context.WithTimeout(context.Background(), internalStopTimeout)
+	defer cancel()
+	if err := m.stopCtx(ctx, false); err != nil {
+		slog.Warn("Unbounded: internal stop timed out before worker exited",
+			"error", err, "timeout", internalStopTimeout)
 	}
-	cancel()
-	<-done
 }

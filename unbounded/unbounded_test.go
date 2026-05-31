@@ -671,3 +671,44 @@ func TestConnectionEventBridge(t *testing.T) {
 	// Cleanup.
 	require.NoError(t, Stop(context.Background()))
 }
+
+// TestInternalStop_TimesOut: internal stop (called by Apply and
+// applyConfig) must not block forever when ui.Stop hangs. If it
+// did, toggling Unbounded off via PatchSettings or a disabling
+// config event would block the caller indefinitely while holding
+// transitionMu. Pin ui.Stop with stopBlock past a short
+// internalStopTimeout and confirm Apply returns within a sane
+// budget.
+func TestInternalStop_TimesOut(t *testing.T) {
+	prevTimeout := internalStopTimeout
+	internalStopTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { internalStopTimeout = prevTimeout })
+
+	block := make(chan struct{})
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return &fakeWidget{stopBlock: block}, nil
+	})
+
+	primeManager(t, nil)
+	require.NoError(t, Apply())
+	waitForRunning(t, manager, true, 1*time.Second)
+
+	// Flip toggle off so Apply's !Enabled branch calls manager.stop.
+	// With the worker pinned by stopBlock, internal stop must time
+	// out rather than hang. Apply itself returns nil — the timeout
+	// is logged but not propagated.
+	require.NoError(t, settings.Set(settings.UnboundedKey, false))
+	applyReturned := make(chan struct{})
+	go func() {
+		_ = Apply()
+		close(applyReturned)
+	}()
+	select {
+	case <-applyReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Apply blocked past timeout — internal stop is not context-bounded")
+	}
+
+	// Release the worker so the test's cleanup wait completes.
+	close(block)
+}
