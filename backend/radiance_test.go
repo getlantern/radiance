@@ -13,6 +13,7 @@ import (
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/unbounded"
 )
 
 func TestBackend(t *testing.T) {}
@@ -215,4 +216,29 @@ func TestPatchSettings_PeerShareDispatches(t *testing.T) {
 	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}))
 	assert.Equal(t, int64(1), fake.stopCalls.Load())
 	assert.False(t, fake.IsActive())
+}
+
+// Verify PatchSettings routes UnboundedKey to unbounded.Apply via the
+// SetApplyHookForTest hook. A typo on the diff key or a removal of
+// the Apply call would silently leave the Unbounded toggle persisted
+// but inert. The hook fires regardless of the Enabled() gate inside
+// Apply, so this catches the dispatch even though we don't prime the
+// rest of the manager state.
+func TestPatchSettings_UnboundedDispatches(t *testing.T) {
+	r := newPeerTestBackend(t, &fakePeerController{})
+
+	var applyCalls atomic.Int32
+	unbounded.SetApplyHookForTest(func() { applyCalls.Add(1) })
+	t.Cleanup(func() { unbounded.SetApplyHookForTest(nil) })
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.UnboundedKey: true}))
+	assert.Equal(t, int32(1), applyCalls.Load(), "PatchSettings({UnboundedKey: true}) must dispatch to unbounded.Apply")
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.UnboundedKey: false}))
+	assert.Equal(t, int32(2), applyCalls.Load(), "PatchSettings({UnboundedKey: false}) must dispatch to unbounded.Apply")
+
+	// A PATCH without UnboundedKey must NOT trigger Apply — confirms
+	// the diff check is in place rather than always firing.
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}))
+	assert.Equal(t, int32(2), applyCalls.Load(), "PatchSettings without UnboundedKey must not dispatch to unbounded.Apply")
 }

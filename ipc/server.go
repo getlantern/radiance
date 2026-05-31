@@ -23,6 +23,7 @@ import (
 	"github.com/getlantern/radiance/events"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 
 	sjson "github.com/sagernet/sing/common/json"
@@ -68,6 +69,11 @@ const (
 	peerStatusEndpoint           = "/peer/status"
 	peerStatusEventsEndpoint     = "/peer/status/events"
 	peerConnectionEventsEndpoint = "/peer/connection/events"
+
+	// Unbounded ("Basic mode") endpoints. Connection events have the same
+	// JSON shape as /peer/connection/events but are emitted from a
+	// different in-process event type, so they need their own SSE bridge.
+	unboundedConnectionEventsEndpoint = "/unbounded/connection/events"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -236,6 +242,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// SSE skips the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+peerStatusEventsEndpoint, s.peerStatusEventsHandler)
 	mux.HandleFunc("GET "+peerConnectionEventsEndpoint, s.peerConnectionEventsHandler)
+	mux.HandleFunc("GET "+unboundedConnectionEventsEndpoint, s.unboundedConnectionEventsHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -546,6 +553,45 @@ func (s *localapi) peerConnectionEventsHandler(w http.ResponseWriter, r *http.Re
 		default:
 			// queue full — drop. SSE consumer is too slow; better to
 			// lose this event than to back up the events.Emit goroutine.
+		}
+	})
+	defer sub.Unsubscribe()
+
+	for {
+		select {
+		case evt := <-queue:
+			data, err := json.Marshal(evt)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// unboundedConnectionEventsHandler streams unbounded.ConnectionEvent over SSE
+// for each consumer accept/disconnect on the broflake widget proxy. Mirrors
+// peerConnectionEventsHandler — the JSON shape is identical, but events.Emit
+// dispatches by concrete Go type so the two streams need separate
+// subscriptions. Cross-process consumers (Flutter via Liblantern) merge the
+// two SSE endpoints client-side into one peer-connection feed for the globe.
+func (s *localapi) unboundedConnectionEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	queue := make(chan unbounded.ConnectionEvent, 64)
+	sub := events.Subscribe(func(evt unbounded.ConnectionEvent) {
+		select {
+		case queue <- evt:
+		default:
+			// queue full — drop. Same rationale as the peer handler:
+			// better to lose this event than back up events.Emit.
 		}
 	})
 	defer sub.Unsubscribe()

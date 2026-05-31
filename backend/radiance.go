@@ -38,6 +38,7 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -232,6 +233,18 @@ func (r *LocalBackend) Start() {
 
 	r.resumePeerShareIfEnabled()
 
+	// Wire the broflake / Unbounded widget proxy lifecycle to config
+	// updates. This single subscription handles all three start/stop
+	// triggers (local toggle, server feature flag, server-supplied
+	// config); InitSubscription is sync.Once-guarded so a future Start
+	// retry after Close won't double-subscribe.
+	//
+	// Seed with the already-cached config (loaded from disk before
+	// Start runs) so an opted-in user auto-starts the widget on
+	// launch instead of waiting for the next config refresh.
+	cachedCfg, _ := r.confHandler.GetConfig()
+	unbounded.InitSubscription(cachedCfg)
+
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		if env.GetString(env.Country) != "" {
@@ -318,6 +331,17 @@ func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
 		r.closePeerClient()
+		// unbounded.start spawns its worker on a context.Background-
+		// derived ctx (it has to outlive any single NewConfigEvent),
+		// so Close has to explicitly tell it to shut down — otherwise
+		// the broflake widget goroutine survives backend close and
+		// leaks until process exit. Use a fresh ctx so a cancelled
+		// shutdown path doesn't skip the Stop.
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := unbounded.Stop(stopCtx); err != nil {
+			slog.Warn("unbounded stop on backend close returned error", "error", err)
+		}
+		cancel()
 		// vpnClient is always set in production via NewLocalBackend, but
 		// peer-focused unit tests construct partial LocalBackends without
 		// one. Guard the call so Close stays robust under those paths
@@ -499,6 +523,19 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
 		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
 			return err
+		}
+	}
+
+	// Drive the Unbounded widget proxy off the toggle change immediately
+	// rather than waiting for the next NewConfigEvent to re-evaluate.
+	// settings.Patch above has already persisted the new value, so go
+	// straight to Apply() — SetEnabled would short-circuit on the
+	// already-matching persisted value and never re-evaluate the
+	// manager. Apply re-checks the three-condition predicate against
+	// the cached server-side state and starts or stops accordingly.
+	if _, ok := diff[settings.UnboundedKey]; ok {
+		if err := unbounded.Apply(); err != nil {
+			slog.Warn("unbounded apply failed", "error", err)
 		}
 	}
 
