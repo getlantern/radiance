@@ -216,7 +216,7 @@ func Apply() error {
 	}
 	if shouldStart {
 		if !running {
-			manager.start(cfg)
+			manager.start()
 		}
 		return nil
 	}
@@ -285,7 +285,7 @@ func applyConfig(cfg config.Config) {
 
 	switch {
 	case shouldRun && !running:
-		manager.start(ucfg)
+		manager.start()
 	case shouldRun && cfgChanged:
 		// Broflake consumed its options at construction time and has
 		// no live-reconfigure API; the only way to pick up new
@@ -294,7 +294,7 @@ func applyConfig(cfg config.Config) {
 		// stop blocks until the prior worker fully exits, so start
 		// always sees a clean slate.
 		manager.stop()
-		manager.start(ucfg)
+		manager.start()
 	case !shouldRun && running:
 		manager.stop()
 	}
@@ -341,7 +341,22 @@ func Stop(ctx context.Context) error {
 	}
 }
 
-func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
+// start brings up the broflake worker if all preconditions hold at
+// the moment it acquires the locks: manager armed, no worker already
+// running, and the three-condition predicate (toggle + feature flag +
+// cached config) still satisfied. Every check is done INSIDE
+// transitionMu so a caller queued behind a stop or another start
+// observes the freshest state rather than a snapshot from when it
+// decided to start — a concurrent SetEnabled(false) or config update
+// between the caller's predicate read and start's lock acquisition
+// is honored.
+//
+// The config used by the worker is the LIVE m.lastCfg, not a snapshot
+// captured by the caller. applyConfig updates m.lastCfg before
+// calling start, so this gives identical behavior for the normal
+// path; for the race case (config updated after caller decided to
+// start), the worker comes up with the latest parameters.
+func (m *unboundedManager) start() {
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
 
@@ -358,6 +373,16 @@ func (m *unboundedManager) start(ucfg *C.UnboundedConfig) {
 		m.mu.Unlock()
 		return // already running; transitionMu prevents overlap with stop
 	}
+	if !m.shouldStart() {
+		// Predicate flipped while we were queued at transitionMu — a
+		// SetEnabled(false), a config event that cleared the feature
+		// flag or unset the cfg, or any other concurrent change. Bail
+		// rather than start a worker that's already been decided
+		// against.
+		m.mu.Unlock()
+		return
+	}
+	ucfg := m.lastCfg
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.cancel = cancel

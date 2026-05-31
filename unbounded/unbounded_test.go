@@ -2,6 +2,7 @@ package unbounded
 
 import (
 	"context"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -97,6 +98,24 @@ func resetManager(t *testing.T, build func(*clientcore.BroflakeOptions, *clientc
 }
 
 // waitForRunning polls m.cancel under m.mu until it matches expected,
+// primeManager seeds the predicate fields so a direct manager.start()
+// in a test will satisfy the shouldStart() check inside the lock: the
+// UnboundedKey setting goes true, manager.lastFeatureOn = true, and
+// manager.lastCfg = the supplied cfg (or a zero-value
+// UnboundedConfig if nil). Tests that exercise the start path
+// directly call this once after resetManager.
+func primeManager(t *testing.T, cfg *C.UnboundedConfig) {
+	t.Helper()
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	if cfg == nil {
+		cfg = &C.UnboundedConfig{}
+	}
+	manager.mu.Lock()
+	manager.lastFeatureOn = true
+	manager.lastCfg = cfg
+	manager.mu.Unlock()
+}
+
 // or the deadline expires. The start goroutine sets m.cancel under
 // m.mu before kicking off the worker, so this is a sufficient signal
 // that a transition has been requested — note that for "true" the
@@ -278,8 +297,10 @@ func TestStartDuringStop_NoOverlap(t *testing.T) {
 		}}, nil
 	})
 
-	// Start the first widget directly via manager.start.
-	manager.start(&C.UnboundedConfig{})
+	// Prime predicate so direct manager.start calls satisfy
+	// shouldStart() inside the lock, then start the first widget.
+	primeManager(t, nil)
+	manager.start()
 	waitForCount(t, &liveCount, 1, 1*time.Second)
 
 	// Kick off a stop — it'll block on stopGate inside the fake's
@@ -296,7 +317,7 @@ func TestStartDuringStop_NoOverlap(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	startDone := make(chan struct{})
 	go func() {
-		manager.start(&C.UnboundedConfig{})
+		manager.start()
 		close(startDone)
 	}()
 
@@ -457,7 +478,8 @@ func TestStopDisarmsManager(t *testing.T) {
 	})
 
 	// Bring up a widget so Stop has something to tear down.
-	manager.start(&C.UnboundedConfig{})
+	primeManager(t, nil)
+	manager.start()
 	waitForCount(t, &starts, 1, 1*time.Second)
 
 	require.NoError(t, Stop(context.Background()))
@@ -466,19 +488,16 @@ func TestStopDisarmsManager(t *testing.T) {
 	manager.mu.Unlock()
 	require.False(t, armed, "Stop must disarm the manager")
 
-	// All three start paths must be no-ops now.
-	require.NoError(t, settings.Set(settings.UnboundedKey, true))
-	manager.mu.Lock()
-	manager.lastFeatureOn = true
-	manager.lastCfg = &C.UnboundedConfig{}
-	manager.mu.Unlock()
+	// All three start paths must be no-ops now. Predicate is still
+	// satisfied (toggle, feature, cfg) — only armed gates the start.
+	primeManager(t, nil)
 
 	require.NoError(t, Apply())
 	applyConfig(config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
 		Unbounded: &C.UnboundedConfig{},
 	})
-	manager.start(&C.UnboundedConfig{})
+	manager.start()
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), starts.Load(), "no start path may revive the widget post-Stop")
 
@@ -507,7 +526,8 @@ func TestStartAfterStopWaiting_NoRevival(t *testing.T) {
 		return &fakeWidget{stopBlock: block}, nil
 	})
 
-	manager.start(&C.UnboundedConfig{})
+	primeManager(t, nil)
+	manager.start()
 	waitForCount(t, &starts, 1, 1*time.Second)
 
 	// Stop in a goroutine — it'll set armed=false, signal cancel,
@@ -529,7 +549,7 @@ func TestStartAfterStopWaiting_NoRevival(t *testing.T) {
 	// Now race a start. It blocks at transitionMu until Stop returns.
 	startDone := make(chan struct{})
 	go func() {
-		manager.start(&C.UnboundedConfig{})
+		manager.start()
 		close(startDone)
 	}()
 	time.Sleep(20 * time.Millisecond)
@@ -582,4 +602,72 @@ func TestStopCtx_TimesOut(t *testing.T) {
 
 	// Release the worker so the test exits cleanly.
 	close(block)
+}
+
+// TestConnectionEventBridge pins the observable API this package
+// adds: broflake's OnConnectionChangeFunc callback must translate
+// (state, workerIdx, addr) into a ConnectionEvent with the matching
+// State, the addr.String() Source (empty when addr is nil), and a
+// freshly-stamped Timestamp. Capture the callback that start
+// installs on bfOpt via a fake newWidget, invoke it with both nil
+// and non-nil addrs, then assert the events arriving via
+// events.Subscribe.
+func TestConnectionEventBridge(t *testing.T) {
+	var captured atomic.Pointer[clientcore.ConnectionChangeFunc]
+	resetManager(t, func(bfOpt *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		cb := bfOpt.OnConnectionChangeFunc
+		captured.Store(&cb)
+		return &fakeWidget{}, nil
+	})
+
+	primeManager(t, nil)
+	manager.start()
+	// Worker may still be inside the goroutine setup when start
+	// returns; wait until newWidget has been called and the callback
+	// captured.
+	deadline := time.Now().Add(1 * time.Second)
+	for captured.Load() == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.NotNil(t, captured.Load(), "newWidget was never invoked")
+	cb := *captured.Load()
+	require.NotNil(t, cb, "OnConnectionChangeFunc must be installed on bfOpt")
+
+	// Buffered enough that events.Emit's per-callback goroutines
+	// can deposit before the test reads.
+	ch := make(chan ConnectionEvent, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events.SubscribeContext(ctx, func(evt ConnectionEvent) { ch <- evt })
+
+	before := time.Now().UnixMilli()
+	cb(1, 7, net.ParseIP("198.51.100.42"))
+	cb(-1, 7, nil)
+	after := time.Now().UnixMilli()
+
+	// events.Emit dispatches each subscriber on a per-callback
+	// goroutine, so the two events can arrive in either order.
+	// Assert set-membership keyed by State (unique in this test)
+	// rather than positional equality.
+	byState := make(map[int]ConnectionEvent, 2)
+	for i := 0; i < 2; i++ {
+		select {
+		case evt := <-ch:
+			byState[evt.State] = evt
+		case <-time.After(1 * time.Second):
+			t.Fatalf("timed out waiting for ConnectionEvent #%d", i+1)
+		}
+	}
+
+	require.Contains(t, byState, 1, "expected an accept event (State=+1)")
+	require.Contains(t, byState, -1, "expected a close event (State=-1)")
+	assert.Equal(t, "198.51.100.42", byState[1].Source, "accept Source")
+	assert.Equal(t, "", byState[-1].Source, "close Source (nil addr -> empty string)")
+	for state, evt := range byState {
+		assert.GreaterOrEqual(t, evt.Timestamp, before, "State=%d Timestamp not before emit", state)
+		assert.LessOrEqual(t, evt.Timestamp, after, "State=%d Timestamp not after emit", state)
+	}
+
+	// Cleanup.
+	require.NoError(t, Stop(context.Background()))
 }
