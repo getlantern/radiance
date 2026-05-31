@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,44 +16,10 @@ import (
 	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
-
-// manualPortForwarder satisfies the portForwarder interface without doing
-// any UPnP work. Used when env.PeerExternalPort is set.
-type manualPortForwarder struct{ port uint16 }
-
-func (m *manualPortForwarder) MapPort(_ context.Context, _ uint16, _ string) (*portforward.Mapping, error) {
-	return &portforward.Mapping{
-		ExternalPort: m.port,
-		InternalPort: m.port,
-		Method:       "manual-env",
-	}, nil
-}
-func (m *manualPortForwarder) UnmapPort(_ context.Context) error { return nil }
-func (m *manualPortForwarder) StartRenewal(_ context.Context)    {}
-func (m *manualPortForwarder) ExternalIP(_ context.Context) (string, error) {
-	// An empty external IP signals the server to use the address it
-	// observed on the inbound request — when the user has supplied a
-	// manual port but no WAN IP, the server's view is the right answer.
-	return "", nil
-}
-
-// manualPort returns the parsed env.PeerExternalPort value, or 0 if unset
-// or invalid.
-func manualPort() uint16 {
-	raw := env.GetString(env.PeerExternalPort)
-	if raw == "" {
-		return 0
-	}
-	p, err := strconv.Atoi(raw)
-	if err != nil || p < 1 || p > 65535 {
-		slog.Warn("ignoring invalid "+env.PeerExternalPort.String(), "value", raw)
-		return 0
-	}
-	return uint16(p)
-}
 
 // StatusEvent fires whenever the Client's session state changes — successful
 // Start, user Stop, or auto-Stop on a 404 heartbeat.
@@ -209,10 +174,8 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			if p := manualPort(); p != 0 {
-				slog.Info("peer client using manual port forward",
-					"port", p, "env", env.PeerExternalPort.String())
-				return &manualPortForwarder{port: p}, nil
+			if fwd := pickManualForwarder(); fwd != nil {
+				return fwd, nil
 			}
 			// Explicitly return a nil interface on error — `return
 			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
@@ -645,6 +608,53 @@ func ensurePeerOutboundsBypassVPN(options string) (string, error) {
 		return "", fmt.Errorf("encode options: %w", err)
 	}
 	return string(out), nil
+}
+
+// pickManualForwarder resolves the manual port override against the
+// two configured sources and returns a ManualForwarder, or nil if
+// neither source supplies a valid port. The default NewForwarder
+// factory in NewClient calls this first; nil means "fall through to
+// UPnP discovery."
+//
+// Resolution order:
+//
+//  1. "peer_manual_port" setting (Advanced UI)
+//  2. RADIANCE_PEER_EXTERNAL_PORT env var (developer / power-user)
+//  3. nil — caller falls through to UPnP
+//
+// Persisted names are quoted so the comment stays accurate if Go
+// identifiers move or rename.
+//
+// The setting is range-checked before casting to uint16 — a raw cast
+// silently wraps negative values (-5 → 65531) and values above the
+// port space (70000 → 4464), which would register a port the peer
+// doesn't listen on (or, worse, one it does listen on for another
+// service). Out-of-range / unparseable values are logged at Warn and
+// the resolution falls through to the next source as if unset.
+func pickManualForwarder() portForwarder {
+	if raw := settings.GetInt(settings.PeerManualPortKey); raw != 0 {
+		if raw < 1 || raw > 65535 {
+			slog.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
+				"value", raw)
+		} else {
+			port := uint16(raw)
+			slog.Info("peer client using manual port forward",
+				"port", port, "source", "setting")
+			return portforward.NewManualForwarder(port)
+		}
+	}
+	if raw := env.GetString(env.PeerExternalPort); raw != "" {
+		port, err := portforward.ParseManualPort(raw)
+		if err != nil {
+			slog.Warn("ignoring invalid "+env.PeerExternalPort.String(),
+				"value", raw, "err", err)
+		} else {
+			slog.Info("peer client using manual port forward",
+				"port", port, "source", env.PeerExternalPort.String())
+			return portforward.NewManualForwarder(port)
+		}
+	}
+	return nil
 }
 
 func pickInternalPort() uint16 {

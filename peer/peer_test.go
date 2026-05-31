@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/portforward"
 )
@@ -627,56 +628,53 @@ func TestPickInternalPort_InRange(t *testing.T) {
 	}
 }
 
-// manualPort parses the RADIANCE_PEER_EXTERNAL_PORT env var. Unset, empty,
-// non-numeric, and out-of-range values all collapse to 0, which the
-// NewClient default factory treats as "no override → use UPnP discovery".
-// Only a 1..65535 value selects the manual path.
-func TestManualPort(t *testing.T) {
+// pickManualForwarder is the default-NewForwarder factory's first
+// branch: setting → env-var → nil (= caller falls through to UPnP).
+// Tests each resolution path and the out-of-range / unparseable
+// fallthrough behavior. Out-of-range setting + unset env returns nil
+// — peer.NewClient's caller treats that as "use UPnP discovery."
+func TestPickManualForwarder(t *testing.T) {
 	tests := []struct {
-		name string
-		env  string
-		want uint16
+		name       string
+		setting    int    // 0 means unset
+		envVar     string // "" means unset
+		wantManual bool
+		wantPort   uint16
 	}{
-		{"unset", "", 0},
-		{"valid mid-range", "5698", 5698},
-		{"valid low boundary", "1", 1},
-		{"valid high boundary", "65535", 65535},
-		{"non-numeric", "abc", 0},
-		{"zero", "0", 0},
-		{"negative", "-5", 0},
-		{"above uint16", "65536", 0},
-		{"way above uint16", "99999", 0},
+		{"setting takes precedence over env", 5698, "1234", true, 5698},
+		{"setting only", 5698, "", true, 5698},
+		{"env only", 0, "5698", true, 5698},
+		{"both unset → fall through", 0, "", false, 0},
+		{"setting out of range, env unset → fall through", 70000, "", false, 0},
+		{"setting negative, env unset → fall through", -5, "", false, 0},
+		{"setting out of range, env valid → env wins", 70000, "5698", true, 5698},
+		{"setting unset, env unparseable → fall through", 0, "abc", false, 0},
+		{"setting valid low boundary", 1, "", true, 1},
+		{"setting valid high boundary", 65535, "", true, 65535},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("RADIANCE_PEER_EXTERNAL_PORT", tc.env)
-			assert.Equal(t, tc.want, manualPort())
+			require.NoError(t, settings.InitSettings(t.TempDir()))
+			t.Cleanup(settings.Reset)
+			if tc.setting != 0 {
+				require.NoError(t, settings.Set(settings.PeerManualPortKey, tc.setting))
+			}
+			t.Setenv("RADIANCE_PEER_EXTERNAL_PORT", tc.envVar)
+
+			fwd := pickManualForwarder()
+			if !tc.wantManual {
+				assert.Nil(t, fwd, "expected fall-through (nil) but got a forwarder")
+				return
+			}
+			require.NotNil(t, fwd, "expected manual forwarder, got nil")
+			// Verify the chosen port via the public MapPort surface —
+			// ManualForwarder.port is unexported, MapPort echoes it.
+			mapping, err := fwd.MapPort(context.Background(), 0, "")
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPort, mapping.ExternalPort)
+			assert.Equal(t, tc.wantPort, mapping.InternalPort)
 		})
 	}
-}
-
-// manualPortForwarder must satisfy the portForwarder contract: MapPort
-// returns a Mapping using the configured port for both internal and
-// external (no rewrite — that's the user's responsibility), UnmapPort
-// and StartRenewal are no-ops, and ExternalIP returns "" so the server
-// substitutes the IP it observed on the request.
-func TestManualPortForwarder(t *testing.T) {
-	f := &manualPortForwarder{port: 5698}
-
-	m, err := f.MapPort(context.Background(), 30001, "ignored")
-	require.NoError(t, err)
-	assert.Equal(t, uint16(5698), m.ExternalPort)
-	assert.Equal(t, uint16(5698), m.InternalPort, "external==internal — user mapped them themselves")
-	assert.Equal(t, "manual-env", m.Method)
-
-	require.NoError(t, f.UnmapPort(context.Background()), "UnmapPort is a no-op for manual forwarders")
-
-	// StartRenewal must not panic or block.
-	f.StartRenewal(context.Background())
-
-	ip, err := f.ExternalIP(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, ip, "empty ip signals server to use observed source address")
 }
 
 func TestAPIError_StringFormat(t *testing.T) {

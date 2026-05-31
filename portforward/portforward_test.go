@@ -107,6 +107,24 @@ func TestForwarder_MapPort_PropagatesGatewayError(t *testing.T) {
 	assert.ErrorContains(t, err, "add port mapping")
 }
 
+// ProbeUPnP wraps NewForwarder and returns false on any error, including
+// ctx cancellation / deadline expiration. A successful probe requires a
+// real IGD on the test host's network, which CI doesn't have — but the
+// negative-path contract (cancelled ctx → false within the cancel
+// window, no leaked goroutines) is what callers actually depend on for
+// timely UI feedback when UPnP is unavailable.
+func TestProbeUPnP_CancelledContextReturnsFalse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	got := ProbeUPnP(ctx)
+	elapsed := time.Since(start)
+
+	assert.False(t, got, "cancelled ctx must yield false")
+	assert.Less(t, elapsed, 2*time.Second, "probe should bail fast on a cancelled ctx, not wait for M-SEARCH")
+}
+
 // MapPort must respect the caller's context — a hung router shouldn't tie up
 // Start past its deadline.
 func TestForwarder_MapPort_RespectsContextCancellation(t *testing.T) {
