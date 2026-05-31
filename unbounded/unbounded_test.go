@@ -101,19 +101,34 @@ func resetManager(t *testing.T, build func(*clientcore.BroflakeOptions, *clientc
 // primeManager seeds the predicate fields so a direct manager.start()
 // in a test will satisfy the shouldStart() check inside the lock: the
 // UnboundedKey setting goes true, manager.lastFeatureOn = true, and
-// manager.lastCfg = the supplied cfg (or a zero-value
-// UnboundedConfig if nil). Tests that exercise the start path
-// directly call this once after resetManager.
+// manager.lastCfg = the supplied cfg (or testCfg if nil). Tests that
+// exercise the start path directly call this once after resetManager.
+//
+// The default test cfg populates all four required URL fields so
+// cfgUsable passes — a zero-value UnboundedConfig would fail the
+// "all fields supplied" gate and start() would bail.
 func primeManager(t *testing.T, cfg *C.UnboundedConfig) {
 	t.Helper()
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	if cfg == nil {
-		cfg = &C.UnboundedConfig{}
+		cfg = testCfg()
 	}
 	manager.mu.Lock()
 	manager.lastFeatureOn = true
 	manager.lastCfg = cfg
 	manager.mu.Unlock()
+}
+
+// testCfg returns a UnboundedConfig that passes cfgUsable. Use this
+// instead of a bare `&C.UnboundedConfig{}` literal in tests; the
+// zero-value literal would now fail the runnable predicate.
+func testCfg() *C.UnboundedConfig {
+	return &C.UnboundedConfig{
+		DiscoverySrv:      "https://discovery.test.example",
+		DiscoveryEndpoint: "/v1/disco",
+		EgressAddr:        "https://egress.test.example",
+		EgressEndpoint:    "/v1/egress",
+	}
 }
 
 // or the deadline expires. The start goroutine sets m.cancel under
@@ -164,10 +179,19 @@ func TestShouldStart(t *testing.T) {
 	}{
 		{"all off", false, false, nil, false},
 		{"toggle only", true, false, nil, false},
-		{"feature+cfg, no toggle", false, true, &C.UnboundedConfig{}, false},
+		{"feature+cfg, no toggle", false, true, testCfg(), false},
 		{"toggle+feature, no cfg", true, true, nil, false},
-		{"toggle+cfg, no feature", true, false, &C.UnboundedConfig{}, false},
-		{"all three", true, true, &C.UnboundedConfig{}, true},
+		{"toggle+cfg, no feature", true, false, testCfg(), false},
+		{"all three", true, true, testCfg(), true},
+		// Partial cfg (missing required URLs) treated as not-yet-ready
+		// — broflake's client defaults would otherwise route real
+		// traffic through upstream-maintainer infra, bypassing the
+		// server's per-environment endpoint selection.
+		{"partial cfg, no egress", true, true,
+			&C.UnboundedConfig{
+				DiscoverySrv:      "https://d.example",
+				DiscoveryEndpoint: "/v1/disco",
+			}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -193,7 +217,7 @@ func TestApply_DisabledIsNoop(t *testing.T) {
 
 	manager.mu.Lock()
 	manager.lastFeatureOn = true
-	manager.lastCfg = &C.UnboundedConfig{}
+	manager.lastCfg = testCfg()
 	manager.mu.Unlock()
 	require.NoError(t, Apply())
 
@@ -215,7 +239,7 @@ func TestApply_StartsWhenAllConditionsHold(t *testing.T) {
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	manager.mu.Lock()
 	manager.lastFeatureOn = true
-	manager.lastCfg = &C.UnboundedConfig{}
+	manager.lastCfg = testCfg()
 	manager.mu.Unlock()
 	require.NoError(t, Apply())
 
@@ -246,7 +270,7 @@ func TestStop_WaitsForWorker(t *testing.T) {
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	manager.mu.Lock()
 	manager.lastFeatureOn = true
-	manager.lastCfg = &C.UnboundedConfig{}
+	manager.lastCfg = testCfg()
 	manager.mu.Unlock()
 	require.NoError(t, Apply())
 	waitForRunning(t, manager, true, 1*time.Second)
@@ -370,7 +394,7 @@ func TestInitSubscription_SeedsCachedConfig(t *testing.T) {
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	cfg := &config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{},
+		Unbounded: testCfg(),
 	}
 	InitSubscription(cfg)
 
@@ -401,7 +425,7 @@ func TestInitSubscription_FutureEventStillFires(t *testing.T) {
 	// Fire a NewConfigEvent with all three conditions satisfied.
 	cfg := config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{},
+		Unbounded: testCfg(),
 	}
 	events.Emit(config.NewConfigEvent{New: &cfg})
 	waitForRunning(t, manager, true, 1*time.Second)
@@ -430,10 +454,14 @@ func TestApplyConfig_RestartsOnParamChange(t *testing.T) {
 
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 
+	cfgA := testCfg()
+	cfgB := testCfg()
+	cfgB.DiscoverySrv = "https://b.example/"
+
 	// First config — bring up widget #1.
 	applyConfig(config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{DiscoverySrv: "https://a.example/"},
+		Unbounded: cfgA,
 	})
 	waitForRunning(t, manager, true, 1*time.Second)
 	waitForCount(t, &starts, 1, 1*time.Second)
@@ -441,7 +469,7 @@ func TestApplyConfig_RestartsOnParamChange(t *testing.T) {
 	// Same config — no restart.
 	applyConfig(config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{DiscoverySrv: "https://a.example/"},
+		Unbounded: testCfg(), // value-equal to cfgA
 	})
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), starts.Load(), "identical config must not restart")
@@ -449,7 +477,7 @@ func TestApplyConfig_RestartsOnParamChange(t *testing.T) {
 	// Changed config — restart with new params.
 	applyConfig(config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{DiscoverySrv: "https://b.example/"},
+		Unbounded: cfgB,
 	})
 	waitForCount(t, &starts, 2, 2*time.Second)
 
@@ -495,7 +523,7 @@ func TestStopDisarmsManager(t *testing.T) {
 	require.NoError(t, Apply())
 	applyConfig(config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{},
+		Unbounded: testCfg(),
 	})
 	manager.start()
 	time.Sleep(50 * time.Millisecond)
@@ -505,7 +533,7 @@ func TestStopDisarmsManager(t *testing.T) {
 	initOnce = sync.Once{} // simulate re-arm path; InitSubscription's once guards re-subscription
 	InitSubscription(&config.Config{
 		Features:  map[string]bool{C.UNBOUNDED: true},
-		Unbounded: &C.UnboundedConfig{},
+		Unbounded: testCfg(),
 	})
 	waitForCount(t, &starts, 2, 1*time.Second)
 
@@ -590,7 +618,7 @@ func TestStopCtx_TimesOut(t *testing.T) {
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	manager.mu.Lock()
 	manager.lastFeatureOn = true
-	manager.lastCfg = &C.UnboundedConfig{}
+	manager.lastCfg = testCfg()
 	manager.mu.Unlock()
 	require.NoError(t, Apply())
 	waitForRunning(t, manager, true, 1*time.Second)

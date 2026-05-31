@@ -144,7 +144,28 @@ type unboundedManager struct {
 // shouldStart reports whether all three start conditions hold. Caller
 // must hold m.mu.
 func (m *unboundedManager) shouldStart() bool {
-	return settings.GetBool(settings.UnboundedKey) && m.lastFeatureOn && m.lastCfg != nil
+	return settings.GetBool(settings.UnboundedKey) && m.lastFeatureOn && cfgUsable(m.lastCfg)
+}
+
+// cfgUsable reports whether the cached UnboundedConfig supplies the
+// minimum fields broflake needs to route real consumer traffic:
+// discovery (server + endpoint) and egress (address + endpoint). The
+// server contract is that all four are required; broflake's
+// clientcore defaults exist for unit-test convenience and point at
+// the upstream maintainer's infra — running them in a Lantern build
+// would bypass the server's per-environment endpoint selection and
+// the "is this user opted in?" feature-flag gate, so a partially-
+// populated config is treated as "not yet ready to start" rather
+// than "fall back to defaults".
+//
+// CTableSize / PTableSize are not required; defaults are reasonable
+// and the server sends them only when it wants to override.
+func cfgUsable(cfg *C.UnboundedConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.DiscoverySrv != "" && cfg.DiscoveryEndpoint != "" &&
+		cfg.EgressAddr != "" && cfg.EgressEndpoint != ""
 }
 
 // cfgEqual reports whether two UnboundedConfig pointers refer to
@@ -458,7 +479,22 @@ func (m *unboundedManager) start() {
 		// Wire the broflake connection callback into the radiance event
 		// bus so the Flutter globe (and any future abuse aggregation)
 		// sees consumer connect/disconnect.
+		//
+		// Cancellation drain: broflake's per-worker connection-change
+		// goroutines can fire callbacks concurrently with ui.Stop, and
+		// the broflake API doesn't promise no-callbacks-after-Stop.
+		// Check ctx.Err() at the top so callbacks delivered after
+		// stop signals cancel — but before broflake's internal
+		// teardown drained — short-circuit instead of pushing a stale
+		// connection event onto the bus after the consumer thinks
+		// Unbounded is off. Mirrors the peer.go listenerDraining
+		// pattern (peer wraps its peerconn listener; broflake doesn't
+		// expose an equivalent registration point, so the ctx check
+		// inside the closure is the next-best place).
 		bfOpt.OnConnectionChangeFunc = func(state int, workerIdx int, addr net.IP) {
+			if ctx.Err() != nil {
+				return
+			}
 			addrStr := ""
 			if addr != nil {
 				addrStr = addr.String()
