@@ -50,6 +50,28 @@ type Forwarder struct {
 	cancel  context.CancelFunc
 }
 
+// ProbeUPnP reports whether IGD discovery on the local network turns up a
+// gateway that could host a port mapping. No port is actually mapped — this
+// is the "would Share My Connection's residential-proxy mode work on this
+// network?" pre-flight check that UI flows show before committing to the
+// long-lived SmC path.
+//
+// True means discovery succeeded; false means either no gateway was found
+// (ErrNoPortForwarding) or ctx expired before discovery completed. Callers
+// generally treat both as "not available" — distinguishing them requires
+// returning the underlying error, which most UI surfaces don't have a
+// productive use for.
+//
+// Pick a 5-10s timeout on ctx: M-SEARCH multicast waits for replies and a
+// fast bail leaves slower gateways unmatched. The discovered forwarder is
+// discarded after the probe; it holds no goroutines or sockets that need
+// explicit cleanup, so a subsequent NewForwarder call can re-discover
+// without coordination.
+func ProbeUPnP(ctx context.Context) bool {
+	_, err := NewForwarder(ctx)
+	return err == nil
+}
+
 // NewForwarder discovers the local gateway and returns a Forwarder bound to
 // it. Callers should pick a 5-10s timeout on ctx — UPnP discovery is M-SEARCH
 // multicast and waits for replies.
