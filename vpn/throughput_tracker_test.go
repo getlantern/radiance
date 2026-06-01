@@ -129,3 +129,11 @@ func TestThroughputTracker_OutboundUnknownTag(t *testing.T) {
 	tr := newThroughputTracker(trafficontrol.NewManager(), time.Second)
 	assert.Equal(t, Throughput{}, tr.Outbound("missing"))
 }
+
+func TestThroughputTracker_NonPositiveIntervalUsesDefault(t *testing.T) {
+	mgr := trafficontrol.NewManager()
+	for _, interval := range []time.Duration{0, -time.Second} {
+		tr := newThroughputTracker(mgr, interval)
+		assert.Equal(t, defaultThroughputSampleInterval, tr.interval)
+	}
+}

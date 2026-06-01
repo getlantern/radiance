@@ -20,6 +20,13 @@ func StreamDialer() transport.StreamDialer {
 		if err != nil {
 			return nil, err
 		}
+		// Preserve *net.TCPConn identity so strategies that require it (e.g. disorder,
+		// which sets per-packet TTL via socket options) can type-assert it back.
+		// The proxy path returns a bufferedConn to the local proxy—not the target—so
+		// unwrapping it would expose the wrong socket; fall through to halfCloseConn.
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			return tcpConn, nil
+		}
 		return halfCloseConn{Conn: conn}, nil
 	})
 }

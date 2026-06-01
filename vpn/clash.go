@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
@@ -61,16 +60,16 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options option
 	runCtx, cancel := context.WithCancel(ctx)
 	trafficManager := trafficontrol.NewManager()
 	return &clashServer{
-		ctx:            runCtx,
-		cancel:         cancel,
-		dnsRouter:      service.FromContext[adapter.DNSRouter](ctx),
-		outbound:       service.FromContext[adapter.OutboundManager](ctx),
-		endpoint:       service.FromContext[adapter.EndpointManager](ctx),
-		urlTestHistory: service.FromContext[adapter.URLTestHistoryStorage](ctx),
+		ctx:               runCtx,
+		cancel:            cancel,
+		dnsRouter:         service.FromContext[adapter.DNSRouter](ctx),
+		outbound:          service.FromContext[adapter.OutboundManager](ctx),
+		endpoint:          service.FromContext[adapter.EndpointManager](ctx),
+		urlTestHistory:    service.FromContext[adapter.URLTestHistoryStorage](ctx),
 		trafficManager:    trafficManager,
-		throughputTracker: newThroughputTracker(trafficManager, time.Second),
-		modeList:       modeList,
-		mode:           initial,
+		throughputTracker: newThroughputTracker(trafficManager, 0),
+		modeList:          modeList,
+		mode:              initial,
 	}, nil
 }
 
