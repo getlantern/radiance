@@ -164,6 +164,7 @@ func (c *VPNClient) Disconnect() error {
 }
 
 func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool, urlTestSeed map[string]adapter.URLTestHistory) error {
+	configureBufPool()
 	c.logger.Debug("Starting tunnel", "options", options)
 	c.setStatus(Connecting, nil)
 	t := tunnel{dataPath: path, urlTestSeed: urlTestSeed}
