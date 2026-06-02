@@ -375,6 +375,14 @@ func (m *multipleDNSTTTransport) RequestTimeout() time.Duration {
 	return 5 * time.Minute
 }
 
+// MaxLength returns the maximum request body size this transport supports.
+// DNS tunnels have a 135-byte MTU — a 10 KB body requires ~75 DNS queries
+// which already pushes the RequestTimeout budget. Larger bodies are routed
+// to a different transport.
+func (m *multipleDNSTTTransport) MaxLength() int {
+	return 10_000
+}
+
 type multipleDNSTTTransport struct {
 	crawlOnce    sync.Once
 	tunChan      chan *dnsTunnel
