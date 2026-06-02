@@ -169,9 +169,9 @@ func TestBuildOptions_BanditURLOverrides(t *testing.T) {
 	out := findOutbound(opts.Outbounds, AutoSelectTag)
 	require.NotNil(t, out, "missing auto-select outbound")
 
-	require.IsType(t, &lbO.MutableURLTestOutboundOptions{}, out.Options, "auto-select outbound options should be MutableURLTestOutboundOptions")
-	mutOpts := out.Options.(*lbO.MutableURLTestOutboundOptions)
-	assert.Equal(t, overrides, mutOpts.URLOverrides, "URLOverrides should be wired from config")
+	require.IsType(t, &lbO.MutableAutoSelectOutboundOptions{}, out.Options, "auto outbound options should be MutableAutoSelectOutboundOptions")
+	autoOpts := out.Options.(*lbO.MutableAutoSelectOutboundOptions)
+	assert.Equal(t, overrides, autoOpts.URLOverrides, "URLOverrides should be wired from config")
 }
 
 func TestBuildOptions_WATERDirOverride(t *testing.T) {

@@ -4,17 +4,26 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 
+	lbA "github.com/getlantern/lantern-box/adapter"
+
 	"github.com/getlantern/radiance/events"
 )
 
-// URLTestHistoryStorage is an alias for the sing-box adapter interface.
-type URLTestHistoryStorage = adapter.URLTestHistoryStorage
+// AutoSelectHistoryStorage is an alias for the lantern-box adapter
+// interface used by MutableAutoSelect for per-tag history persistence.
+type AutoSelectHistoryStorage = lbA.AutoSelectHistoryStorage
 
 // StatusUpdateEvent is emitted when the VPN status changes.
 type StatusUpdateEvent struct {
 	events.Event
 	Status VPNStatus `json:"status"`
 	Error  string    `json:"error,omitempty"`
+}
+
+// ExhaustionEvent is emitted when the MutableAutoSelect group's reconnection loop has exhausted
+// all outbounds with no working candidate.
+type ExhaustionEvent struct {
+	events.Event
 }
 
 // Selector is helper interface to check if an outbound is a selector or wrapper of selector.

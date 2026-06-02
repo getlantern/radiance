@@ -70,13 +70,13 @@ type SessionHistory struct {
 	livePolledUp   int64
 	livePolledDown int64
 
-	mu           sync.Mutex
-	current      *Session
-	stored       []Session
-	pollCancel   context.CancelFunc
-	pollDone     chan struct{}
-	pruneCancel  context.CancelFunc
-	pruneDone    chan struct{}
+	mu          sync.Mutex
+	current     *Session
+	stored      []Session
+	pollCancel  context.CancelFunc
+	pollDone    chan struct{}
+	pruneCancel context.CancelFunc
+	pruneDone   chan struct{}
 }
 
 // NewSessionHistory creates a SessionHistory subscribed to VPN status events. Call Close to
