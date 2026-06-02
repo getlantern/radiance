@@ -367,6 +367,15 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 
 const probeInterval = 5 * time.Minute
 
+// RequestTimeout returns the maximum time the race transport should wait for
+// a single request through this DNSTT transport. DNSTT sessions are slow
+// (DNS-tunneled, 135-byte MTU) — a single TLS handshake over the tunnel
+// can take tens of seconds, so this budget is significantly longer than
+// the race transport default.
+func (m *multipleDNSTTTransport) RequestTimeout() time.Duration {
+	return 5 * time.Minute
+}
+
 type multipleDNSTTTransport struct {
 	crawlOnce    sync.Once
 	tunChan      chan *dnsTunnel
