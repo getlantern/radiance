@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"math/bits"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -169,8 +170,10 @@ func configureBufPool() {
 	// tunnel must not re-run it against live relay buffers.
 	bufBudgetOnce.Do(func() {
 		budget := defaultBufPoolBudget()
-		if v := env.GetInt(env.BufPoolBudgetMB); v != 0 {
-			budget = v * 1024 * 1024
+		if v, ok := env.Get(env.BufPoolBudgetMB); ok {
+			mb, _ := strconv.Atoi(v)
+			mb = max(0, mb)
+			budget = mb * 1024 * 1024
 		}
 		bufPool.setByteBudget(budget)
 	})
