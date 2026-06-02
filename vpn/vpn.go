@@ -163,6 +163,7 @@ func (c *VPNClient) Disconnect() error {
 }
 
 func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options string, isRestart bool) error {
+	configureBufPool()
 	c.logger.Debug("Starting tunnel", "options", options)
 	c.setStatus(Connecting, nil)
 	t := tunnel{
