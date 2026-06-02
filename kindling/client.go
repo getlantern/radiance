@@ -150,6 +150,12 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		}
 	}
 
+	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
+		// "pro-server" calls still target api.getiantem.org; everything
+		// else uses df.iantem.io.
+		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
+	}
+
 	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled {
 		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 		if err != nil {
@@ -160,12 +166,6 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 			closeTransports = append(closeTransports, dnsttOptions.Close)
 			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 		}
-	}
-
-	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
-		// "pro-server" calls still target api.getiantem.org; everything
-		// else uses df.iantem.io.
-		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
 	}
 
 	stopUpdater = cancel
