@@ -14,7 +14,7 @@ var Version = "dev"
 const (
 	Name = "lantern"
 
-	DefaultHTTPTimeout = (60 * time.Second)
+	DefaultHTTPTimeout = (360 * time.Second)
 
 	// API URLs
 	ProServerURL      = "https://api.getiantem.org"
