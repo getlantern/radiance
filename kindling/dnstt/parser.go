@@ -440,8 +440,9 @@ func (t *dnsTunnel) isSucceeding() bool {
 	return t.lastSucceeded.After(time.Time{}) && t.consecutiveFailures < maxTunnelFailures
 }
 
-// NewRoundTripper creates a new HTTP round tripper for the given address.
-// It manages session creation and reuse.
+// NewRoundTripper creates a pre-connected HTTP round tripper for the given
+// address. It blocks until a KCP session and smux stream are established so
+// that the race transport can fairly compare connection latencies.
 func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr string) (http.RoundTripper, error) {
 	for range 6 {
 		select {
@@ -451,47 +452,42 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 			return nil, errors.New("dnstt stopped")
 		case tun := <-m.tunChan:
 			if !tun.isSucceeding() {
-				// Permanently dead — close and remove.
 				tun.Close()
 				continue
 			}
+			rt, err := tun.NewRoundTripper(ctx, addr)
+			if err != nil {
+				tun.recordFailure()
+				slog.WarnContext(ctx, "dnstt roundtripper creation failed during connect",
+					"domain", tun.domain, "resolver", tun.resolver, "error", err)
+				continue
+			}
 			m.tunChan <- tun
-			return &connectedRoundtripper{t: tun, ctx: ctx, addr: addr}, nil
+			return &connectedRoundtripper{t: tun, rt: rt}, nil
 		}
 	}
-	// Exhausted the probe pool — request a fresh probe cycle so
-	// callers don't block for minutes until the next scheduled run.
 	select {
 	case m.probeCh <- struct{}{}:
 	default:
 	}
-	return nil, fmt.Errorf("could not connect to any dns tunnel")
+	return nil, errors.New("no working dnstt tunnels available")
 }
 
 type connectedRoundtripper struct {
-	t    *dnsTunnel
-	ctx  context.Context
-	addr string
+	t  *dnsTunnel
+	rt http.RoundTripper
 }
 
 func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	rt, err := c.t.NewRoundTripper(c.ctx, c.addr)
-	if err != nil {
-		slog.WarnContext(c.ctx, "dnstt roundtripper creation failed",
-			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
-		c.t.recordFailure()
-		return nil, err
-	}
-
-	resp, err := rt.RoundTrip(req)
+	resp, err := c.rt.RoundTrip(req)
 	if err != nil {
 		c.t.recordFailure()
-		slog.WarnContext(c.ctx, "dnstt roundtripper failed",
+		slog.WarnContext(req.Context(), "dnstt roundtripper failed",
 			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
 		return nil, err
 	}
 
-	slog.DebugContext(c.ctx, "dnstt roundtripper succeeded",
+	slog.DebugContext(req.Context(), "dnstt roundtripper succeeded",
 		"domain", c.t.domain, "resolver", c.t.resolver)
 	c.t.markSucceeded()
 	return resp, nil
