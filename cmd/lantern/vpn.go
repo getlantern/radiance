@@ -109,12 +109,15 @@ func printThroughput(s vpn.ThroughputSnapshot) {
 	for tag := range s.ActivePerOutbound {
 		tagSet[tag] = struct{}{}
 	}
-	if len(tagSet) == 0 {
-		return
-	}
 	tags := make([]string, 0, len(tagSet))
 	for tag := range tagSet {
+		if isGroupTag(tag) {
+			continue
+		}
 		tags = append(tags, tag)
+	}
+	if len(tags) == 0 {
+		return
 	}
 	sort.Strings(tags)
 	fmt.Print("\r\n")
@@ -159,7 +162,7 @@ type statusSnapshot struct {
 	Status    vpn.VPNStatus `json:"status"`
 	Server    string        `json:"server,omitempty"`
 	Location  string        `json:"location,omitempty"`
-	LatencyMs uint16        `json:"latency_ms,omitempty"`
+	LatencyMs uint32        `json:"latency_ms,omitempty"`
 	IP        string        `json:"ip,omitempty"`
 }
 
@@ -173,9 +176,7 @@ func fetchStatus(ctx context.Context, c *ipc.Client) (statusSnapshot, error) {
 		if sel, exists, err := c.SelectedServer(ctx); err == nil && exists && sel != nil {
 			snap.Server = sel.Tag
 			snap.Location = joinNonEmpty(", ", sel.Location.City, sel.Location.Country)
-			if sel.URLTestResult != nil {
-				snap.LatencyMs = sel.URLTestResult.Delay
-			}
+			snap.LatencyMs = sel.SelectionHistory.LatestSuccessDelay()
 		}
 	}
 	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)

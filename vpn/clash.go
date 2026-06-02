@@ -34,7 +34,6 @@ type clashServer struct {
 	outbound  adapter.OutboundManager
 	endpoint  adapter.EndpointManager
 
-	urlTestHistory    adapter.URLTestHistoryStorage
 	trafficManager    *trafficontrol.Manager
 	throughputTracker *throughputTracker
 	trackerDone       chan struct{}
@@ -65,7 +64,6 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options option
 		dnsRouter:         service.FromContext[adapter.DNSRouter](ctx),
 		outbound:          service.FromContext[adapter.OutboundManager](ctx),
 		endpoint:          service.FromContext[adapter.EndpointManager](ctx),
-		urlTestHistory:    service.FromContext[adapter.URLTestHistoryStorage](ctx),
 		trafficManager:    trafficManager,
 		throughputTracker: newThroughputTracker(trafficManager, 0),
 		modeList:          modeList,
@@ -122,10 +120,10 @@ func (s *clashServer) Close() error {
 	return nil
 }
 
+// HistoryStorage always returns nil. [adapter.URLTestHistoryStorage] is not used by [clashServer]
+// so this is to satisfy [adapter.ClashServer].
 func (s *clashServer) HistoryStorage() adapter.URLTestHistoryStorage {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.urlTestHistory
+	return nil
 }
 
 func (s *clashServer) TrafficManager() *trafficontrol.Manager {

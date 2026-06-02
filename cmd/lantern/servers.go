@@ -22,7 +22,7 @@ type ServersCmd struct {
 }
 
 type ServersListCmd struct {
-	Latency bool `arg:"--latency" help:"include URL test latency results"`
+	Latency bool `arg:"--latency" help:"include latest latency from selection history"`
 	JSON    bool `arg:"--json" help:"output JSON"`
 }
 
@@ -45,10 +45,10 @@ type ServersRemoveCmd struct {
 
 // ServerListEntry represents a server in the list output.
 type ServerListEntry struct {
-	Tag           string                 `json:"tag"`
-	Type          string                 `json:"type"`
-	Location      C.ServerLocation       `json:"location,omitempty"`
-	URLTestResult *servers.URLTestResult `json:"urlTestResult,omitempty"`
+	Tag              string                    `json:"tag"`
+	Type             string                    `json:"type"`
+	Location         C.ServerLocation          `json:"location,omitempty"`
+	SelectionHistory *servers.SelectionHistory `json:"selection_history,omitempty"`
 }
 
 type PrivateServerCmd struct {
@@ -125,10 +125,10 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool) e
 		out := make([]ServerListEntry, 0, len(srvs))
 		for _, s := range srvs {
 			out = append(out, ServerListEntry{
-				Tag:           s.Tag,
-				Type:          s.Type,
-				Location:      s.Location,
-				URLTestResult: s.URLTestResult,
+				Tag:              s.Tag,
+				Type:             s.Type,
+				Location:         s.Location,
+				SelectionHistory: s.SelectionHistory,
 			})
 		}
 		return printJSON(out)
@@ -152,8 +152,8 @@ func printServerEntry(s *servers.Server, showLatency bool) {
 		fmt.Println()
 		return
 	}
-	if s.URLTestResult != nil {
-		fmt.Printf(" (%dms)\n", s.URLTestResult.Delay)
+	if d := s.SelectionHistory.LatestSuccessDelay(); d > 0 {
+		fmt.Printf(" (%dms)\n", d)
 	} else {
 		fmt.Println(" (n/a)")
 	}
