@@ -16,7 +16,6 @@ import (
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/common/urltest"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
@@ -147,7 +146,7 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	return traces.RecordError(ctx, c.start(ctx, boxOptions.BasePath, string(opts), false, boxOptions.URLTestSeed))
+	return traces.RecordError(ctx, c.start(ctx, boxOptions, string(opts), false))
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -163,10 +162,13 @@ func (c *VPNClient) Disconnect() error {
 	return traces.RecordError(ctx, c.close())
 }
 
-func (c *VPNClient) start(ctx context.Context, path, options string, isRestart bool, urlTestSeed map[string]adapter.URLTestHistory) error {
+func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options string, isRestart bool) error {
 	c.logger.Debug("Starting tunnel", "options", options)
 	c.setStatus(Connecting, nil)
-	t := tunnel{dataPath: path, urlTestSeed: urlTestSeed}
+	t := tunnel{
+		dataPath:             boxOptions.BasePath,
+		selectionHistorySeed: boxOptions.SelectionHistorySeed,
+	}
 	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
 		c.setStatus(ErrorStatus, err)
 		return err
@@ -238,7 +240,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 		c.setStatus(ErrorStatus, err)
 		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
 	}
-	if err := c.start(ctx, boxOptions.BasePath, string(opts), true, boxOptions.URLTestSeed); err != nil {
+	if err := c.start(ctx, boxOptions, string(opts), true); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
 		// c.start already set ErrorStatus; the guard lets Restarting→ErrorStatus through.
 		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
@@ -278,14 +280,15 @@ func (c *VPNClient) setStatus(s VPNStatus, err error) {
 	events.Emit(evt)
 }
 
-// HistoryStorage returns the tunnel's URL test history storage or nil if the tunnel is not connected.
-func (c *VPNClient) HistoryStorage() adapter.URLTestHistoryStorage {
+// HistoryStorage returns the tunnel's auto-select history storage, or
+// nil if the tunnel is not connected.
+func (c *VPNClient) HistoryStorage() AutoSelectHistoryStorage {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return nil
 	}
-	return c.tunnel.urltestHistory
+	return c.tunnel.selectionHistory
 }
 
 // SelectServer changes the currently selected server to the one specified by tag. If tag is
@@ -568,9 +571,6 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	// create offlineed box instance. we just use the standard box since we don't need a
 	// platform interface for testing.
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
-	urlTestHistoryStorage := urltest.NewHistoryStorage()
-	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
-	service.MustRegister[adapter.URLTestHistoryStorage](ctx, urlTestHistoryStorage) // for good measure
 
 	ctx, cancel = context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
 	defer cancel()
@@ -592,9 +592,14 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	if err := instance.PreStart(); err != nil {
 		return nil, fmt.Errorf("failed to start sing-box instance: %w", err)
 	}
-	outbound, _ := instance.Outbound().Outbound("offline-test")
-	tester, _ := outbound.(adapter.URLTestGroup)
-	// run URL tests
+	outbound, found := instance.Outbound().Outbound("offline-test")
+	if !found {
+		return nil, errors.New("offline-test outbound not registered")
+	}
+	tester, ok := outbound.(adapter.URLTestGroup)
+	if !ok {
+		return nil, fmt.Errorf("offline-test outbound (type %q) does not implement URLTestGroup", outbound.Type())
+	}
 	results, err := tester.URLTest(ctx)
 	if err != nil {
 		c.logger.Error("offline URL test failed", "error", err)
