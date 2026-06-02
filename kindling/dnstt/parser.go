@@ -413,6 +413,7 @@ type dnsTunnel struct {
 	dnstt.DNSTT
 	domain   string
 	resolver string
+
 	lastSucceeded       time.Time
 	consecutiveFailures int
 	mx                  sync.RWMutex
@@ -458,6 +459,7 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 			rt, err := tun.NewRoundTripper(ctx, addr)
 			if err != nil {
 				tun.recordFailure()
+				tun.Close()
 				slog.WarnContext(ctx, "dnstt roundtripper creation failed during connect",
 					"domain", tun.domain, "resolver", tun.resolver, "error", err)
 				continue
