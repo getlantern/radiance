@@ -87,8 +87,9 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		}
 	}
 	m := &multipleDNSTTTransport{
-		tunChan:  make(chan *dnsTunnel, 400),
+		tunChan: make(chan *dnsTunnel, 400),
 		stopChan: make(chan struct{}),
+		probeCh:  make(chan struct{}, 1),
 		configs:  options,
 	}
 	m.crawlOnce.Do(func() {
@@ -259,14 +260,17 @@ func parseDNSTTConfigs(gzipyml []byte) ([]dnsttConfig, error) {
 var waitFor = 5 * time.Minute
 
 func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
-	// trying all dns tunnels available
 	go m.tryAllDNSTunnels()
+	ticker := time.NewTicker(probeInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-m.stopChan:
 			slog.Debug("stopping parallel dialing dns tunnels")
 			return
-		case <-time.After(30 * time.Minute):
+		case <-ticker.C:
+			m.tryAllDNSTunnels()
+		case <-m.probeCh:
 			m.tryAllDNSTunnels()
 		}
 	}
@@ -308,7 +312,7 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 				slog.Debug("failed to create dnstt instance", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Any("error", err))
 				return
 			}
-			tun := &dnsTunnel{DNSTT: dnstImpl}
+			tun := &dnsTunnel{DNSTT: dnstImpl, domain: cfg.Domain, resolver: resolver}
 
 			rt, err := tun.NewRoundTripper(pondCtx, "")
 			if err != nil {
@@ -317,11 +321,11 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 				return
 			}
 
-			// 60 s covers DNSTT session establishment (~20-60 s over DoH) while
-			// still failing fast enough for unreachable resolvers (TCP timeout ≈30 s).
-			client := &http.Client{Transport: rt, Timeout: 60 * time.Second}
+			// 180 s covers DNSTT session establishment (~20-60 s over DoH) and
+			// TLS handshake through 135-byte MTU tunnel (multiple round trips).
+			client := &http.Client{Transport: rt, Timeout: 180 * time.Second}
 
-			req, err := http.NewRequestWithContext(pondCtx, http.MethodGet, "https://www.gstatic.com/generate_204", http.NoBody)
+			req, err := http.NewRequestWithContext(pondCtx, http.MethodGet, "http://www.gstatic.com/generate_204", http.NoBody)
 			if err != nil {
 				slog.Debug("failed to create request", slog.String("domain", cfg.Domain), slog.String("resolver", resolver), slog.Any("error", err))
 				tun.Close()
@@ -361,6 +365,8 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 	pool.StopAndWaitFor(waitFor)
 }
 
+const probeInterval = 5 * time.Minute
+
 type multipleDNSTTTransport struct {
 	crawlOnce    sync.Once
 	tunChan      chan *dnsTunnel
@@ -369,6 +375,11 @@ type multipleDNSTTTransport struct {
 	closed       atomic.Bool
 	configs      []dnsttConfig
 
+	// probeCh triggers an on-demand probe cycle when NewRoundTripper
+	// exhausts all available tunnels. Buffered (1) so a trigger is
+	// never lost but spurious duplicate triggers are dropped.
+	probeCh chan struct{}
+
 	// probeCancelFn cancels the pondCtx for the in-progress tryAllDNSTunnels
 	// call. Stored so Close() can abort probe workers promptly, preventing
 	// their DoH goroutines from competing with a subsequent transport's probe.
@@ -376,15 +387,24 @@ type multipleDNSTTTransport struct {
 	probeCancelMx sync.Mutex
 }
 
+// maxTunnelFailures is the number of consecutive failures after which a
+// tunnel is permanently discarded.  A single failure is often transient
+// (e.g. TLS handshake timeout through the slow DNS tunnel), so we give
+// the tunnel several chances before giving up.
+const maxTunnelFailures = 5
+
 type dnsTunnel struct {
 	dnstt.DNSTT
+	domain   string
+	resolver string
 	lastSucceeded time.Time
-	mx            sync.RWMutex
+	consecutiveFailures int
+	mx                  sync.RWMutex
 
 	// probeRT caches the round tripper established during the probe.
-	// Reusing it avoids opening a second CONNECT tunnel on the same smux
-	// session, which fails with 502 when the server limits concurrent
-	// outbound connections per session.
+	// It is cleared when the tunnel enters a retry so a fresh round
+	// tripper (with a fresh smux stream) is created for the real
+	// transport.
 	probeRT   http.RoundTripper
 	probeRTMx sync.Mutex
 }
@@ -409,18 +429,30 @@ func (t *dnsTunnel) markSucceeded() {
 	t.mx.Lock()
 	defer t.mx.Unlock()
 	t.lastSucceeded = time.Now()
+	t.consecutiveFailures = 0
 }
 
-func (t *dnsTunnel) markFailed() {
+func (t *dnsTunnel) recordFailure() {
 	t.mx.Lock()
 	defer t.mx.Unlock()
-	t.lastSucceeded = time.Time{}
+	t.consecutiveFailures++
+	if t.consecutiveFailures >= maxTunnelFailures {
+		t.lastSucceeded = time.Time{}
+	}
+}
+
+// clearProbeRT invalidates the cached probe round tripper so the next
+// call to getRoundTripper creates a fresh one with a new smux stream.
+func (t *dnsTunnel) clearProbeRT() {
+	t.probeRTMx.Lock()
+	t.probeRT = nil
+	t.probeRTMx.Unlock()
 }
 
 func (t *dnsTunnel) isSucceeding() bool {
 	t.mx.RLock()
 	defer t.mx.RUnlock()
-	return t.lastSucceeded.After(time.Time{})
+	return t.lastSucceeded.After(time.Time{}) && t.consecutiveFailures < maxTunnelFailures
 }
 
 // NewRoundTripper creates a new HTTP round tripper for the given address.
@@ -430,20 +462,23 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		// Add a case for the stop channel being called
 		case <-m.stopChan:
 			return nil, errors.New("dnstt stopped")
 		case tun := <-m.tunChan:
-			// The tun may have stopped succeeding since we last checked,
-			// so only return it if it's still succeeding.
 			if !tun.isSucceeding() {
+				// Permanently dead — close and remove.
+				tun.Close()
 				continue
 			}
-
-			// Add the tun back to the channel.
 			m.tunChan <- tun
 			return &connectedRoundtripper{t: tun, ctx: ctx, addr: addr}, nil
 		}
+	}
+	// Exhausted the probe pool — request a fresh probe cycle so
+	// callers don't block for minutes until the next scheduled run.
+	select {
+	case m.probeCh <- struct{}{}:
+	default:
 	}
 	return nil, fmt.Errorf("could not connect to any dns tunnel")
 }
@@ -457,18 +492,29 @@ type connectedRoundtripper struct {
 func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	rt, err := c.t.getRoundTripper(c.ctx, c.addr)
 	if err != nil {
-		slog.DebugContext(c.ctx, "failed to create dnstt round tripper", slog.Any("error", err))
-		c.t.markFailed()
+		slog.WarnContext(c.ctx, "dnstt roundtripper creation failed",
+			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
+		c.t.clearProbeRT()
+		c.t.recordFailure()
 		return nil, err
 	}
 
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
-		slog.WarnContext(c.ctx, "dnstt roundtripper failed", slog.Any("error", err))
-		c.t.markFailed()
+		// A failure is often transient (e.g. TLS handshake timeout).  Don't
+		// kill the tunnel — clear the cached probe round tripper so the next
+		// attempt gets a fresh smux stream, and record the failure.  The
+		// tunnel is discarded only after maxTunnelFailures consecutive
+		// failures.
+		c.t.clearProbeRT()
+		c.t.recordFailure()
+		slog.WarnContext(c.ctx, "dnstt roundtripper failed",
+			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
 		return nil, err
 	}
 
+	slog.DebugContext(c.ctx, "dnstt roundtripper succeeded",
+		"domain", c.t.domain, "resolver", c.t.resolver)
 	c.t.markSucceeded()
 	return resp, nil
 }
