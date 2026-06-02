@@ -352,14 +352,13 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 				return
 			}
 
-			slog.Debug("dnstt tunnel ready", slog.String("domain", cfg.Domain), slog.String("resolver", resolver))
-			tun.setProbeRT(rt)
-			tun.markSucceeded()
-			if !m.closed.Load() {
-				m.tunChan <- tun
-			} else {
-				tun.Close()
-			}
+		slog.Debug("dnstt tunnel ready", slog.String("domain", cfg.Domain), slog.String("resolver", resolver))
+		tun.markSucceeded()
+		if !m.closed.Load() {
+			m.tunChan <- tun
+		} else {
+			tun.Close()
+		}
 		})
 	}
 	pool.StopAndWaitFor(waitFor)
@@ -406,32 +405,9 @@ type dnsTunnel struct {
 	dnstt.DNSTT
 	domain   string
 	resolver string
-	lastSucceeded time.Time
+	lastSucceeded       time.Time
 	consecutiveFailures int
 	mx                  sync.RWMutex
-
-	// probeRT caches the round tripper established during the probe.
-	// It is cleared when the tunnel enters a retry so a fresh round
-	// tripper (with a fresh smux stream) is created for the real
-	// transport.
-	probeRT   http.RoundTripper
-	probeRTMx sync.Mutex
-}
-
-func (t *dnsTunnel) setProbeRT(rt http.RoundTripper) {
-	t.probeRTMx.Lock()
-	defer t.probeRTMx.Unlock()
-	t.probeRT = rt
-}
-
-func (t *dnsTunnel) getRoundTripper(ctx context.Context, addr string) (http.RoundTripper, error) {
-	t.probeRTMx.Lock()
-	rt := t.probeRT
-	t.probeRTMx.Unlock()
-	if rt != nil {
-		return rt, nil
-	}
-	return t.NewRoundTripper(ctx, addr)
 }
 
 func (t *dnsTunnel) markSucceeded() {
@@ -448,14 +424,6 @@ func (t *dnsTunnel) recordFailure() {
 	if t.consecutiveFailures >= maxTunnelFailures {
 		t.lastSucceeded = time.Time{}
 	}
-}
-
-// clearProbeRT invalidates the cached probe round tripper so the next
-// call to getRoundTripper creates a fresh one with a new smux stream.
-func (t *dnsTunnel) clearProbeRT() {
-	t.probeRTMx.Lock()
-	t.probeRT = nil
-	t.probeRTMx.Unlock()
 }
 
 func (t *dnsTunnel) isSucceeding() bool {
@@ -499,23 +467,16 @@ type connectedRoundtripper struct {
 }
 
 func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	rt, err := c.t.getRoundTripper(c.ctx, c.addr)
+	rt, err := c.t.NewRoundTripper(c.ctx, c.addr)
 	if err != nil {
 		slog.WarnContext(c.ctx, "dnstt roundtripper creation failed",
 			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
-		c.t.clearProbeRT()
 		c.t.recordFailure()
 		return nil, err
 	}
 
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
-		// A failure is often transient (e.g. TLS handshake timeout).  Don't
-		// kill the tunnel — clear the cached probe round tripper so the next
-		// attempt gets a fresh smux stream, and record the failure.  The
-		// tunnel is discarded only after maxTunnelFailures consecutive
-		// failures.
-		c.t.clearProbeRT()
 		c.t.recordFailure()
 		slog.WarnContext(c.ctx, "dnstt roundtripper failed",
 			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
