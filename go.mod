@@ -32,10 +32,10 @@ require (
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260305201851-782bc8045e58
 	github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46
-	github.com/getlantern/dnstt v0.0.0-20260511153124-dec6f436f3e5
+	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
 	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
-	github.com/getlantern/kindling v0.0.0-20260529141244-21f8b144afab
+	github.com/getlantern/kindling v0.0.0-20260603191740-3bab85a3e48f
 	github.com/getlantern/lantern-box v0.0.88
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
