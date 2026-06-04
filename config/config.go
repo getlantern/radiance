@@ -127,7 +127,7 @@ func (ch *ConfigHandler) Start() {
 		ch.ftr = newFetcher(ch.options.Locale, ch.options.AccountClient, ch.options.HTTPClient)
 		ch.started.Store(true)
 		go ch.fetchLoop(ch.pollInterval)
-		events.Subscribe(func(evt account.UserChangeEvent) {
+		events.SubscribeContext(ch.ctx, func(evt account.UserChangeEvent) {
 			ch.logger.Debug("User change detected that requires config refetch")
 			if err := ch.fetchConfig(); err != nil {
 				ch.logger.Error("Failed to fetch config", "error", err)

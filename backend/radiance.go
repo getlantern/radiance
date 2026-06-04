@@ -63,7 +63,6 @@ type LocalBackend struct {
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
-	stopChan      chan struct{}
 
 	deviceID string
 
@@ -178,7 +177,6 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
-		stopChan:  make(chan struct{}),
 		closeOnce: sync.Once{},
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
@@ -306,14 +304,12 @@ func (r *LocalBackend) Close() {
 			slog.Error("Failed to disconnect VPN on shutdown", "error", err)
 		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
-		close(r.stopChan)
 		for _, shutdown := range r.shutdownFuncs {
 			if err := shutdown(); err != nil {
 				slog.Error("Failed to shutdown", "error", err)
 			}
 		}
 	})
-	<-r.stopChan
 }
 
 func (r *LocalBackend) startVPNStatusListeners() {
@@ -921,18 +917,20 @@ func (r *LocalBackend) startAutoSelectedListener() {
 	var (
 		mu     sync.Mutex
 		cancel context.CancelFunc
+		done   <-chan struct{}
 	)
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 		if cancel != nil {
 			cancel()
+			<-done
 			cancel = nil
 		}
 		if evt.Status == vpn.Connected {
 			var ctx context.Context
 			ctx, cancel = context.WithCancel(r.ctx)
-			r.vpnClient.AutoSelectedChangeListener(ctx)
+			done = r.vpnClient.AutoSelectedChangeListener(ctx)
 		}
 	})
 }
