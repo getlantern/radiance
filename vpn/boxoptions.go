@@ -205,7 +205,8 @@ func baseOpts(basePath string) O.Options {
 					Inet6Address:           tunInet6, // gated by hasGlobalIPv6
 					AutoRoute:              true,
 					StrictRoute:            true,
-					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
+					EndpointIndependentNat: true,     // needed for QUIC migration and hole-punching
+					Stack:                  "system", // fallback to gvisor on older Android kernels in buildOptions
 				},
 			},
 			{
