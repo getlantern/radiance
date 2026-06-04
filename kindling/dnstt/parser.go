@@ -476,9 +476,9 @@ func (t *dnsTunnel) isSucceeding() bool {
 	return t.lastSucceeded.After(time.Time{}) && t.consecutiveFailures < maxTunnelFailures
 }
 
-// NewRoundTripper creates a pre-connected HTTP round tripper for the given
-// address. It blocks until a KCP session and smux stream are established so
-// that the race transport can fairly compare connection latencies.
+// NewRoundTripper returns an HTTP round tripper backed by a working tunnel
+// drawn from the pool of probed tunnels. The KCP session and smux stream are
+// established lazily on the tunnel's first request, not here.
 func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr string) (http.RoundTripper, error) {
 	for range 6 {
 		select {
