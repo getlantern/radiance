@@ -33,6 +33,7 @@ func performKindlingPing(urlToHit string, runID string, deviceID string, userID 
 		slog.Error("failed to initialize kindling", slog.Any("error", err))
 	}
 	if newK != nil {
+		defer newK.Close()
 		kindling.SetKindling(newK)
 	}
 	defer kindling.Close()

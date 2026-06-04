@@ -4,6 +4,7 @@ package kindling
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -26,10 +27,9 @@ import (
 )
 
 var (
-	k               kindling.Kindling
-	initOnce        sync.Once
-	stopUpdater     func()
-	closeTransports []func() error
+	mu          sync.Mutex
+	initialized bool
+	k           *Client
 	// EnabledTransports gates which transports NewKindling wires up. Intended for tests; not a
 	// production toggle.
 	EnabledTransports = map[kindling.TransportName]bool{
@@ -58,7 +58,17 @@ func initKindling() {
 }
 
 func Init() {
-	go initOnce.Do(initKindling)
+	go ensureInit()
+}
+
+func ensureInit() http.RoundTripper {
+	mu.Lock()
+	defer mu.Unlock()
+	if !initialized {
+		initKindling()
+		initialized = true
+	}
+	return transport
 }
 
 // HTTPClient returns an HTTP client whose transport blocks on first use
@@ -73,28 +83,57 @@ func HTTPClient() *http.Client {
 type readyTransport struct{}
 
 func (readyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	initOnce.Do(initKindling)
-	return transport.RoundTrip(req)
+	return ensureInit().RoundTrip(req)
 }
 
-// Close stops any in-flight config fetches and releases kindling transports.
+// Close stops any in-flight config fetches, releases kindling transports, and
+// re-arms the package so the next Init or HTTPClient use rebuilds the stack.
 func Close() error {
-	if stopUpdater != nil {
-		stopUpdater()
-	}
-	for _, c := range closeTransports {
-		if err := c(); err != nil {
-			slog.Error("failed to close kindling transport", slog.Any("error", err))
+	// Mobile constructs a new LocalBackend in the same process after the system
+	// extension stops, so Close must not be terminal.
+	mu.Lock()
+	defer mu.Unlock()
+	if k != nil {
+		if err := k.Close(); err != nil {
+			slog.Error("failed to close kindling transports", slog.Any("error", err))
 		}
+		k = nil
 	}
+	transport = nil
+	initialized = false
 	return nil
 }
 
 const tracerName = "github.com/getlantern/radiance/kindling"
 
-// NewKindling builds a kindling client and registers package-level cleanup
-// hooks; call [Close] to release them.
-func NewKindling(dataDir string) (kindling.Kindling, error) {
+// Client is a kindling instance together with the transport resources its
+// construction created (config updaters, fronted/dnstt state).
+type Client struct {
+	kindling.Kindling
+	cancel    context.CancelFunc
+	closers   []func() error
+	closeOnce sync.Once
+}
+
+// Close cancels the transports' config updaters and releases their resources.
+func (c *Client) Close() error {
+	var err error
+	c.closeOnce.Do(func() {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		var errs []error
+		for _, cl := range c.closers {
+			errs = append(errs, cl())
+		}
+		err = errors.Join(errs...)
+	})
+	return err
+}
+
+// NewKindling builds a kindling client. On error, any partially built
+// transport state is released before returning.
+func NewKindling(dataDir string) (*Client, error) {
 	logger := &slogWriter{Logger: slog.Default()}
 
 	ctx, span := otel.Tracer(tracerName).Start(
@@ -107,7 +146,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 	if common.Stage() {
 		// Staging runs proxyless-only; fronted client failures against staging
 		// hosts otherwise obscure the backend behavior we want to test.
-		return kindling.NewKindling("radiance",
+		newK, err := kindling.NewKindling("radiance",
 			kindling.WithPanicListener(reporting.PanicListener),
 			kindling.WithLogWriter(logger),
 			kindling.WithStreamDialer(bypass.StreamDialer()),
@@ -116,9 +155,13 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 			// else uses df.iantem.io.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
 		)
+		if err != nil {
+			return nil, err
+		}
+		return &Client{Kindling: newK}, nil
 	}
 
-	closeTransports = []func() error{}
+	var closers []func() error
 	kindlingOptions := []kindling.Option{
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
@@ -134,7 +177,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 			span.RecordError(err)
 		}
 		if f != nil {
-			closeTransports = append(closeTransports, func() error { f.Close(); return nil })
+			closers = append(closers, func() error { f.Close(); return nil })
 			kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
 		}
 	}
@@ -157,7 +200,7 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 			span.RecordError(err)
 		}
 		if dnsttOptions != nil {
-			closeTransports = append(closeTransports, dnsttOptions.Close)
+			closers = append(closers, dnsttOptions.Close)
 			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 		}
 	}
@@ -168,8 +211,16 @@ func NewKindling(dataDir string) (kindling.Kindling, error) {
 		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
 	}
 
-	stopUpdater = cancel
-	return kindling.NewKindling("radiance", kindlingOptions...)
+	newK, err := kindling.NewKindling("radiance", kindlingOptions...)
+	if err != nil {
+		errs := []error{err}
+		cancel()
+		for _, cl := range closers {
+			errs = append(errs, cl())
+		}
+		return nil, errors.Join(errs...)
+	}
+	return &Client{Kindling: newK, cancel: cancel, closers: closers}, nil
 }
 
 type slogWriter struct {
@@ -182,16 +233,21 @@ func (w *slogWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// SetKindling installs a test-supplied kindling instance and consumes
-// initOnce, so it must be called before any Init or HTTPClient use or it
-// will silently no-op.
-func SetKindling(a kindling.Kindling) {
-	initOnce.Do(func() {
-		k = a
-		if a != nil {
-			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(a.NewHTTPClient().Transport))
-		} else {
-			transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
-		}
-	})
+// SetKindling installs a test-supplied kindling instance and claims
+// initialization — call it before Init or the first request through
+// HTTPClient, or it will silently no-op. The package Close closes the
+// installed instance.
+func SetKindling(c *Client) {
+	mu.Lock()
+	defer mu.Unlock()
+	if initialized {
+		return
+	}
+	k = c
+	if c != nil {
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(c.NewHTTPClient().Transport))
+	} else {
+		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(defaultTransportClone))
+	}
+	initialized = true
 }

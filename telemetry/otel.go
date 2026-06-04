@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"runtime"
 	"sync"
 	"time"
@@ -30,7 +29,6 @@ import (
 
 	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 )
 
@@ -53,20 +51,6 @@ type Attributes struct {
 	OSVersion      string
 	Timezone       string
 	Pro            bool
-}
-
-// OnNewConfig handles OpenTelemetry re-initialization when the configuration changes.
-func OnNewConfig(oldConfig, newConfig *config.Config, deviceID string) error {
-	// Check if the old OTEL configuration is the same as the new one.
-	if oldConfig != nil && reflect.DeepEqual(oldConfig.OTEL, newConfig.OTEL) {
-		slog.Debug("OpenTelemetry configuration has not changed, skipping initialization")
-		return nil
-	}
-	if err := Initialize(deviceID, *newConfig, settings.IsPro()); err != nil {
-		slog.Error("Failed to initialize OpenTelemetry", "error", err)
-		return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
-	}
-	return nil
 }
 
 func Initialize(deviceID string, configResponse config.Config, pro bool) error {

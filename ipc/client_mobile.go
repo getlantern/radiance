@@ -40,6 +40,8 @@ func NewClient(ctx context.Context, opts backend.Options) (*Client, error) {
 // NewLoopbackClient creates a Client that serves all requests in-process
 // through the given LocalBackend without attempting IPC socket connections.
 // The backend is NOT owned by this client — Close will not shut it down.
+// Event streams are not consumed on a loopback client; their localOnly
+// branches are defensive.
 func NewLoopbackClient(b *backend.LocalBackend) *Client {
 	c := newClient()
 	c.localapi = newLocalAPI(b, false)
