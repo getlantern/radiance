@@ -87,7 +87,7 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		}
 	}
 	m := &multipleDNSTTTransport{
-		tunChan: make(chan *dnsTunnel, 400),
+		tunChan:  make(chan *dnsTunnel, maxWorkingTunnels),
 		stopChan: make(chan struct{}),
 		probeCh:  make(chan struct{}, 1),
 		configs:  options,
@@ -283,12 +283,16 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 	}
 	defer m.probing.Store(false)
 
-	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(m.configs)))
-
 	if len(m.configs) == 0 {
 		slog.Debug("no dns tunnel options available")
 		return
 	}
+	if len(m.tunChan) >= maxWorkingTunnels {
+		slog.Debug("enough working dns tunnels, skipping probe", slog.Int("working", len(m.tunChan)))
+		return
+	}
+
+	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(m.configs)))
 
 	pondCtx, cancel := context.WithTimeout(context.Background(), waitFor)
 	m.probeCancelMx.Lock()
@@ -302,10 +306,16 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 	}
 
 	pool := pond.New(poolSize, 10, pond.Context(pondCtx))
-	for _, cfg := range m.configs {
+	start := m.probeCursor
+	tested := 0
+	for i := range m.configs {
+		if len(m.tunChan) >= maxWorkingTunnels {
+			break
+		}
+		cfg := m.configs[(start+i)%len(m.configs)]
+		tested++
 		pool.Submit(func() {
-			if m.closed.Load() {
-				slog.Debug("closed, stop testing")
+			if m.closed.Load() || len(m.tunChan) >= maxWorkingTunnels {
 				return
 			}
 
@@ -351,21 +361,16 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 				return
 			}
 
-			if m.closed.Load() {
-				slog.Debug("closed, stop testing")
+			slog.Debug("dnstt tunnel ready", slog.String("domain", cfg.Domain), slog.String("resolver", resolver))
+			tun.markSucceeded()
+			select {
+			case m.tunChan <- tun:
+			default:
 				tun.Close()
-				return
 			}
-
-		slog.Debug("dnstt tunnel ready", slog.String("domain", cfg.Domain), slog.String("resolver", resolver))
-		tun.markSucceeded()
-		if !m.closed.Load() {
-			m.tunChan <- tun
-		} else {
-			tun.Close()
-		}
 		})
 	}
+	m.probeCursor = (start + tested) % len(m.configs)
 	pool.StopAndWaitFor(waitFor)
 }
 
@@ -412,7 +417,17 @@ type multipleDNSTTTransport struct {
 	// would overwrite probeCancelFn and leave the first run's workers
 	// uncancellable.
 	probing atomic.Bool
+
+	// probeCursor is the config index the next probe cycle resumes from, so
+	// successive cycles spread probing across all configs instead of always
+	// re-testing the same prefix. Guarded by probing.
+	probeCursor int
 }
+
+// maxWorkingTunnels caps how many established tunnels tunChan retains. Once
+// reached, probing stops and resumes only to replace tunnels that drop out,
+// keeping the number of open DNSTT sessions (and their goroutines) bounded.
+const maxWorkingTunnels = 5
 
 // maxTunnelFailures is the number of consecutive failures after which a
 // tunnel is permanently discarded.  A single failure is often transient
@@ -475,7 +490,10 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 					"domain", tun.domain, "resolver", tun.resolver, "error", err)
 				continue
 			}
-			m.tunChan <- tun
+			select {
+			case m.tunChan <- tun:
+			default:
+			}
 			return &connectedRoundtripper{t: tun, rt: rt}, nil
 		}
 	}
