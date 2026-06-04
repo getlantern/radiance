@@ -297,7 +297,6 @@ func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 
 	pool := pond.New(poolSize, 10, pond.Context(pondCtx))
 	for _, cfg := range m.configs {
-		cfg := cfg
 		pool.Submit(func() {
 			if m.closed.Load() {
 				slog.Debug("closed, stop testing")
