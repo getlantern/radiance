@@ -276,6 +276,15 @@ func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 	}
 }
 
+// tryAllDNSTunnels probes configs until tunChan holds maxWorkingTunnels
+// established tunnels, then stops. Each probe sends a plain HTTP request
+// (not HTTPS) to a known endpoint: this both verifies the tunnel works and
+// eagerly establishes a DNSTT session that later requests reuse. HTTPS is
+// avoided because the TLS handshake routinely times out over the slow,
+// small-MTU tunnel, which would reject otherwise-working tunnels.
+//
+// It is single-flighted: concurrent triggers (timer, probeCh, initial crawl)
+// are dropped while a cycle is in progress.
 func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
 	if !m.probing.CompareAndSwap(false, true) {
 		slog.Debug("dnstt probe already in progress, skipping")
