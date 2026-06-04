@@ -65,7 +65,7 @@ func Init() {
 // until kindling is initialized.
 func HTTPClient() *http.Client {
 	return &http.Client{
-		Timeout:   common.DefaultHTTPTimeout,
+		Timeout:   common.DNSTTHTTPTimeout,
 		Transport: readyTransport{},
 	}
 }
