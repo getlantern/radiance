@@ -482,12 +482,10 @@ func (m *multipleDNSTTTransport) NewRoundTripper(ctx context.Context, addr strin
 				tun.Close()
 				continue
 			}
+			// Any error here means the tunnel is unusable, so drop it and try
+			// the next rather than closing it again or recording a failure.
 			rt, err := tun.NewRoundTripper(ctx, addr)
 			if err != nil {
-				tun.recordFailure()
-				tun.Close()
-				slog.WarnContext(ctx, "dnstt roundtripper creation failed during connect",
-					"domain", tun.domain, "resolver", tun.resolver, "error", err)
 				continue
 			}
 			select {
