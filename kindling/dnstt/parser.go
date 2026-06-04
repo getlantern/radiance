@@ -277,6 +277,12 @@ func (m *multipleDNSTTTransport) findWorkingDNSTunnels() {
 }
 
 func (m *multipleDNSTTTransport) tryAllDNSTunnels() {
+	if !m.probing.CompareAndSwap(false, true) {
+		slog.Debug("dnstt probe already in progress, skipping")
+		return
+	}
+	defer m.probing.Store(false)
+
 	slog.Debug("selecting dnstt options with active probing", slog.Int("options", len(m.configs)))
 
 	if len(m.configs) == 0 {
@@ -400,6 +406,12 @@ type multipleDNSTTTransport struct {
 	// their DoH goroutines from competing with a subsequent transport's probe.
 	probeCancelFn context.CancelFunc
 	probeCancelMx sync.Mutex
+
+	// probing single-flights tryAllDNSTunnels. The timer, probeCh, and the
+	// initial crawl can all fire it concurrently; without this a second run
+	// would overwrite probeCancelFn and leave the first run's workers
+	// uncancellable.
+	probing atomic.Bool
 }
 
 // maxTunnelFailures is the number of consecutive failures after which a
