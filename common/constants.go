@@ -16,6 +16,12 @@ const (
 
 	DefaultHTTPTimeout = (60 * time.Second)
 
+	// DNSTTHTTPTimeout bounds requests made through the kindling client, which
+	// can fall back to the DNSTT transport. DNSTT is DNS-tunneled over a
+	// 135-byte MTU, so a single request (session setup plus TLS handshake)
+	// can take minutes — far longer than DefaultHTTPTimeout allows.
+	DNSTTHTTPTimeout = (360 * time.Second)
+
 	// API URLs
 	ProServerURL      = "https://api.getiantem.org"
 	StageProServerURL = "https://api.staging.iantem.io/pro-server"

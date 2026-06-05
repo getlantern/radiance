@@ -33,7 +33,7 @@ var (
 	// EnabledTransports gates which transports NewKindling wires up. Intended for tests; not a
 	// production toggle.
 	EnabledTransports = map[kindling.TransportName]bool{
-		kindling.TransportDNSTunnel:   false,
+		kindling.TransportDNSTunnel:   true,
 		kindling.TransportAMP:         true,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
@@ -75,7 +75,7 @@ func ensureInit() http.RoundTripper {
 // until kindling is initialized.
 func HTTPClient() *http.Client {
 	return &http.Client{
-		Timeout:   common.DefaultHTTPTimeout,
+		Timeout:   common.DNSTTHTTPTimeout,
 		Transport: readyTransport{},
 	}
 }
@@ -193,6 +193,12 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 	}
 
+	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
+		// "pro-server" calls still target api.getiantem.org; everything
+		// else uses df.iantem.io.
+		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
+	}
+
 	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled {
 		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 		if err != nil {
@@ -203,12 +209,6 @@ func NewKindling(dataDir string) (*Client, error) {
 			closers = append(closers, dnsttOptions.Close)
 			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
 		}
-	}
-
-	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
-		// "pro-server" calls still target api.getiantem.org; everything
-		// else uses df.iantem.io.
-		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
 	}
 
 	newK, err := kindling.NewKindling("radiance", kindlingOptions...)
