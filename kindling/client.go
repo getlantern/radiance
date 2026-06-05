@@ -211,12 +211,6 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 	}
 
-	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
-		// "pro-server" calls still target api.getiantem.org; everything
-		// else uses df.iantem.io.
-		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
-	}
-
 	newK, err := kindling.NewKindling("radiance", kindlingOptions...)
 	if err != nil {
 		errs := []error{err}
