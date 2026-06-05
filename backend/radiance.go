@@ -935,6 +935,14 @@ func (r *LocalBackend) startAutoSelectedListener() {
 	})
 }
 
+// ClearTunnelCache removes the tunnel cache from the configured data directory.
+// When force is true, an active tunnel is disconnected first; otherwise clearing
+// a connected tunnel's cache returns an error. ClearTunnelCache will not reopen
+// the tunnel if it had to close it.
+func (r *LocalBackend) ClearTunnelCache(force bool) error {
+	return r.vpnClient.ClearTunnelCache(settings.GetString(settings.DataPathKey), force)
+}
+
 func (r *LocalBackend) RunOfflineURLTests() error {
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {

@@ -31,15 +31,16 @@ const (
 	tracerName = "github.com/getlantern/radiance/ipc"
 
 	// VPN endpoints
-	vpnStatusEndpoint       = "/vpn/status"
-	vpnConnectEndpoint      = "/vpn/connect"
-	vpnDisconnectEndpoint   = "/vpn/disconnect"
-	vpnRestartEndpoint      = "/vpn/restart"
-	vpnConnectionsEndpoint  = "/vpn/connections"
-	vpnThroughputEndpoint   = "/vpn/throughput"
-	vpnOfflineTestsEndpoint = "/vpn/offline-tests"
-	vpnStatusEventsEndpoint = "/vpn/status/events"
-	vpnSessionsEndpoint     = "/vpn/sessions"
+	vpnStatusEndpoint           = "/vpn/status"
+	vpnConnectEndpoint          = "/vpn/connect"
+	vpnDisconnectEndpoint       = "/vpn/disconnect"
+	vpnRestartEndpoint          = "/vpn/restart"
+	vpnConnectionsEndpoint      = "/vpn/connections"
+	vpnThroughputEndpoint       = "/vpn/throughput"
+	vpnOfflineTestsEndpoint     = "/vpn/offline-tests"
+	vpnStatusEventsEndpoint     = "/vpn/status/events"
+	vpnSessionsEndpoint         = "/vpn/sessions"
+	vpnClearTunnelCacheEndpoint = "/vpn/cache/clear"
 
 	// Server selection endpoints
 	serverSelectedEndpoint           = "/server/selected"
@@ -201,6 +202,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+vpnThroughputEndpoint, traced(s.vpnThroughputHandler))
 	mux.HandleFunc("POST "+vpnOfflineTestsEndpoint, traced(s.vpnOfflineTestsHandler))
 	mux.HandleFunc("GET "+vpnSessionsEndpoint, traced(s.vpnSessionsHandler))
+	mux.HandleFunc("POST "+vpnClearTunnelCacheEndpoint, traced(s.vpnClearTunnelCacheHandler))
 
 	// SSE routes skip the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+vpnStatusEventsEndpoint, s.vpnStatusEventsHandler)
@@ -404,6 +406,14 @@ func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).Sessions(limit))
+}
+
+func (s *localapi) vpnClearTunnelCacheHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend(r.Context()).ClearTunnelCache(true); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *localapi) vpnOfflineTestsHandler(w http.ResponseWriter, r *http.Request) {

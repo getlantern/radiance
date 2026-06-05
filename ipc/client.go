@@ -141,6 +141,13 @@ func (c *Client) VPNSessions(ctx context.Context, limit int) ([]vpn.Session, err
 	return sessions, err
 }
 
+// ClearTunnelCache removes the tunnel cache, disconnecting an active tunnel first
+// if one is connected. ClearTunnelCache will not reopen the tunnel.
+func (c *Client) ClearTunnelCache(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, vpnClearTunnelCacheEndpoint, nil)
+	return err
+}
+
 // VPNThroughput returns the most recent global and per-outbound throughput sample.
 func (c *Client) VPNThroughput(ctx context.Context) (vpn.ThroughputSnapshot, error) {
 	var s vpn.ThroughputSnapshot
