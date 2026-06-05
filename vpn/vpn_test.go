@@ -2,7 +2,9 @@ package vpn
 
 import (
 	"errors"
+	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"testing"
 
@@ -241,4 +243,52 @@ func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
 
 	_, err := c.RunOfflineURLTests("", nil, nil)
 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
+}
+
+func TestClearTunnelCache(t *testing.T) {
+	newClient := func(t *testing.T, s VPNStatus, tun *tunnel, dir string) (*VPNClient, string) {
+		t.Helper()
+		path := cacheFilePath(dir)
+		require.NoError(t, os.WriteFile(path, []byte("cache"), 0o600))
+		c := NewVPNClient(dir, rlog.NoOpLogger(), nil)
+		c.status.Store(s)
+		c.tunnel = tun
+		return c, path
+	}
+
+	t.Run("disconnected", func(t *testing.T) {
+		dir := t.TempDir()
+		c, path := newClient(t, Disconnected, nil, dir)
+
+		assert.NoError(t, c.ClearTunnelCache(dir, false))
+		assert.NoFileExists(t, path)
+	})
+
+	t.Run("connected without force", func(t *testing.T) {
+		dir := t.TempDir()
+		c, path := newClient(t, Connected, &tunnel{}, dir)
+
+		assert.Error(t, c.ClearTunnelCache(dir, false))
+		assert.FileExists(t, path)
+		assert.NotNil(t, c.tunnel)
+	})
+
+	t.Run("connected with force", func(t *testing.T) {
+		dir := t.TempDir()
+		c, path := newClient(t, Connected, &tunnel{}, dir)
+
+		assert.NoError(t, c.ClearTunnelCache(dir, true))
+		assert.NoFileExists(t, path)
+		assert.Nil(t, c.tunnel)
+		assert.Equal(t, Disconnected, c.Status())
+	})
+
+	t.Run("connected with force error", func(t *testing.T) {
+		dir := t.TempDir()
+		tun := &tunnel{closers: []io.Closer{closerFunc(func() error { return assert.AnError })}}
+		c, path := newClient(t, Connected, tun, dir)
+
+		assert.Error(t, c.ClearTunnelCache(dir, true))
+		assert.NoFileExists(t, path)
+	})
 }
