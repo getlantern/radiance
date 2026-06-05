@@ -166,7 +166,9 @@ func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 // baseOpts returns the minimum sing-box options required for the tunnel to
 // function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
-	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
+	// ensure split tunnel file exists
+	splitTunnelPath := newSplitTunnel(basePath, slog.Default()).ruleFile
+
 	cacheFile := filepath.Join(basePath, cacheFileName)
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 

@@ -362,7 +362,7 @@ func (m *Manager) AddServers(list ServerList, force bool) error {
 			}
 		}
 		for _, srv := range list.Servers {
-			m.servers[srv.Tag] = srv
+			m.servers[srv.Tag] = srv.Clone()
 		}
 		return nil
 	}(); err != nil {
@@ -638,7 +638,7 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 }
 
 // AddServersByJSON adds any outbounds and endpoints defined in the provided sing-box JSON config.
-func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) ([]string, error) {
+func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerList, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBySingboxJSON")
 	defer span.End()
 	type singboxConfig struct {
@@ -653,29 +653,27 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) ([]string
 		return nil, traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
 	servers := make([]*Server, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
-	tags := make([]string, 0, len(cfg.Outbounds)+len(cfg.Endpoints))
 	for _, out := range cfg.Outbounds {
 		if out.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("outbound missing tag"))
 		}
 		servers = append(servers, &Server{Tag: out.Tag, Type: out.Type, Options: out})
-		tags = append(tags, out.Tag)
 	}
 	for _, ep := range cfg.Endpoints {
 		if ep.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("endpoint missing tag"))
 		}
 		servers = append(servers, &Server{Tag: ep.Tag, Type: ep.Type, Options: ep})
-		tags = append(tags, ep.Tag)
 	}
-	if err := m.AddServers(ServerList{Servers: servers}, false); err != nil {
+	list := ServerList{Servers: servers}
+	if err := m.AddServers(list, false); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
 	}
-	return tags, nil
+	return &list, nil
 }
 
 // AddServersByURL adds a server(s) by downloading and parsing the config from a list of URLs.
-func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) ([]string, error) {
+func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) (*ServerList, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURLs")
 	defer span.End()
 	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))

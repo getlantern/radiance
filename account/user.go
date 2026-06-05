@@ -700,11 +700,13 @@ func (a *Client) setData(data *UserData) {
 }
 
 func (a *Client) ClearUser() {
-	settings.Clear(settings.UserIDKey)
-	settings.Clear(settings.TokenKey)
-	settings.Clear(settings.UserLevelKey)
-	settings.Clear(settings.EmailKey)
-	settings.Clear(settings.DevicesKey)
-	settings.Clear(settings.JwtTokenKey)
-	settings.Clear(settings.UserDataKey)
+	settings.Clear(
+		settings.UserIDKey,
+		settings.TokenKey,
+		settings.UserLevelKey,
+		settings.EmailKey,
+		settings.DevicesKey,
+		settings.JwtTokenKey,
+		settings.UserDataKey,
+	)
 }

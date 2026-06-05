@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 
 	"time"
@@ -233,38 +232,21 @@ func (r *LocalBackend) Start() {
 			return
 		}
 		cfg := evt.New
-		locs := make(map[string]C.ServerLocation, len(cfg.OutboundLocations))
-		// Track which cities are already covered by active outbounds.
-		coveredCities := make(map[string]bool, len(cfg.OutboundLocations))
-		for k, v := range cfg.OutboundLocations {
-			if v == nil {
-				slog.Warn("Server location is nil, skipping", "tag", k)
-				continue
-			}
-			locs[k] = *v
-			coveredCities[v.City+"|"+v.CountryCode] = true
-		}
-		// Include available server locations not already covered by active
-		// outbounds so the client's location picker shows every location.
-		for _, sl := range cfg.Servers {
-			if coveredCities[sl.City+"|"+sl.CountryCode] {
-				continue
-			}
-			key := strings.ToLower(strings.ReplaceAll(sl.City, " ", "-") + "-" + sl.CountryCode)
-			locs[key] = sl
-		}
 		var srvs []*servers.Server
+		addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
+			s := &servers.Server{
+				Tag: tag, Type: typ, IsLantern: true, Options: opts,
+			}
+			if loc != nil {
+				s.Location = *loc
+			}
+			srvs = append(srvs, s)
+		}
 		for _, out := range cfg.Options.Outbounds {
-			srvs = append(srvs, &servers.Server{
-				Tag: out.Tag, Type: out.Type, IsLantern: true,
-				Options: out, Location: locs[out.Tag],
-			})
+			addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
 		}
 		for _, ep := range cfg.Options.Endpoints {
-			srvs = append(srvs, &servers.Server{
-				Tag: ep.Tag, Type: ep.Type, IsLantern: true,
-				Options: ep, Location: locs[ep.Tag],
-			})
+			addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
 		}
 		list := servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
 		if len(cfg.BanditURLOverrides) > 0 {
@@ -562,16 +544,6 @@ func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
 	return r.srvManager.GetServerByTag(tag)
 }
 
-func (r *LocalBackend) AddServers(list servers.ServerList) error {
-	if err := r.srvManager.AddServers(list, false); err != nil {
-		return fmt.Errorf("failed to add servers to ServerManager: %w", err)
-	}
-	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		return fmt.Errorf("failed to add outbounds to VPN client: %w", err)
-	}
-	return nil
-}
-
 func (r *LocalBackend) RemoveServers(tags []string) error {
 	removed, err := r.srvManager.RemoveServers(tags)
 	if err != nil {
@@ -590,6 +562,50 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	return nil
 }
 
+func (r *LocalBackend) AddServers(list servers.ServerList) error {
+	if err := r.srvManager.AddServers(list, false); err != nil {
+		return fmt.Errorf("failed to add servers to ServerManager: %w", err)
+	}
+	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to add outbounds to VPN client: %w", err)
+	}
+	return nil
+}
+
+func (r *LocalBackend) AddServersByJSON(config string) ([]string, error) {
+	list, err := r.srvManager.AddServersByJSON(r.ctx, []byte(config))
+	if err != nil {
+		return nil, fmt.Errorf("failed to add servers by JSON: %w", err)
+	}
+	if err := r.vpnClient.AddOutbounds(*list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return nil, fmt.Errorf("failed to add outbounds to VPN client: %w", err)
+	}
+	return list.Tags(), nil
+}
+
+func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool) ([]string, error) {
+	list, err := r.srvManager.AddServersByURL(r.ctx, urls, skipCertVerification)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add servers by URL: %w", err)
+	}
+	if err := r.vpnClient.AddOutbounds(*list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return nil, fmt.Errorf("failed to add outbounds to VPN client: %w", err)
+	}
+	return list.Tags(), nil
+}
+
+func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
+	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined)
+}
+
+func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
+	return r.srvManager.InviteToPrivateServer(ip, port, accessToken, inviteName)
+}
+
+func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string) error {
+	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
+}
+
 func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error {
 	if err := r.srvManager.SetServers(list, isLantern); err != nil {
 		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
@@ -599,6 +615,9 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
 	if err := r.vpnClient.UpdateOutbounds(allList); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", err)
+	}
+	if r.vpnClient.Status() != vpn.Connected {
+		r.clearSelectedIfMissing()
 	}
 	return nil
 }
@@ -619,26 +638,6 @@ func (r *LocalBackend) clearSelectedIfMissing() {
 	if err := r.vpnClient.SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Warn("Failed to switch to auto-select after selected server was removed", "error", err)
 	}
-}
-
-func (r *LocalBackend) AddServersByJSON(config string) ([]string, error) {
-	return r.srvManager.AddServersByJSON(context.Background(), []byte(config))
-}
-
-func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool) ([]string, error) {
-	return r.srvManager.AddServersByURL(context.Background(), urls, skipCertVerification)
-}
-
-func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
-	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined)
-}
-
-func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
-	return r.srvManager.InviteToPrivateServer(ip, port, accessToken, inviteName)
-}
-
-func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string) error {
-	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
 const selectionHistoryFlushInterval = 5 * time.Second

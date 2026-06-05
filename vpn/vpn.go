@@ -95,7 +95,6 @@ func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInt
 	if logger == nil {
 		logger = slog.Default()
 	}
-	_ = newSplitTunnel(dataPath, logger)
 	done := make(chan struct{})
 	close(done)
 	c := &VPNClient{
