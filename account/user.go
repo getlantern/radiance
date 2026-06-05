@@ -700,11 +700,16 @@ func (a *Client) setData(data *UserData) {
 }
 
 func (a *Client) ClearUser() {
-	settings.Clear(settings.UserIDKey)
-	settings.Clear(settings.TokenKey)
-	settings.Clear(settings.UserLevelKey)
-	settings.Clear(settings.EmailKey)
-	settings.Clear(settings.DevicesKey)
-	settings.Clear(settings.JwtTokenKey)
-	settings.Clear(settings.UserDataKey)
+	err := settings.Clear(
+		settings.UserIDKey,
+		settings.TokenKey,
+		settings.UserLevelKey,
+		settings.EmailKey,
+		settings.DevicesKey,
+		settings.JwtTokenKey,
+		settings.UserDataKey,
+	)
+	if err != nil {
+		slog.Warn("failed to clear user info", "error", err)
+	}
 }

@@ -128,11 +128,11 @@ type candidateSource struct {
 //  1. <fileDir>/settings.json                 — canonical
 //  2. <fileDir>/local.json                    — v9.0.x (renamed in #370)
 //  3. Windows ${PUBLIC}\Lantern\data\*        — v9.0.x cross-dir (#3460);
-//                                               spliced in below, Windows only
+//     spliced in below, Windows only
 //  4. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
 //  5. <fileDir>/data/settings.json            — v9.1.x (bugged: #370's
-//                                               setupDirectories appended an
-//                                               unconditional "/data" suffix)
+//     setupDirectories appended an
+//     unconditional "/data" suffix)
 //
 // Pick the highest-priority candidate with user_level=="pro"; if none
 // is pro, the highest-priority candidate that exists. Losing Pro is
@@ -315,6 +315,10 @@ func Exists(key _key) bool {
 }
 
 func Set(key _key, value any) error {
+	// take lock for the entire duration of the Set + save sequence to prevent multiple Set
+	// calls from interleaving and leaving the file in an inconsistent state until the next write.
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	err := k.k.Set(key.String(), value)
 	if err != nil {
 		return fmt.Errorf("could not set key %s: %w", key, err)
@@ -322,8 +326,14 @@ func Set(key _key, value any) error {
 	return save()
 }
 
-func Clear(key _key) {
-	k.k.Delete(key.String())
+func Clear(keys ..._key) error {
+	// take lock for the entire duration. See [Set] for explanation.
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, key := range keys {
+		k.k.Delete(key.String())
+	}
+	return save()
 }
 
 type Settings map[_key]any
@@ -359,6 +369,9 @@ func GetAllFor(keys ..._key) Settings {
 
 // Patch takes a map of settings to update and applies them all at once.
 func Patch(updates Settings) error {
+	// take lock for the entire duration. See [Set] for explanation.
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	for key, value := range updates {
 		if err := k.k.Set(_key(key).String(), value); err != nil {
 			return fmt.Errorf("could not set key %s: %w", key, err)

@@ -157,9 +157,9 @@ func TestAddServersByJSON(t *testing.T) {
 			Options:   cfg.Outbounds[0],
 		}
 		m := testManager(t)
-		tags, err := m.AddServersByJSON(t.Context(), testConfig)
+		list, err := m.AddServersByJSON(t.Context(), testConfig)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"out"}, tags)
+		assert.Equal(t, []string{"out"}, list.Tags())
 		got, exists := m.GetServerByTag("out")
 		assert.True(t, exists, "server was not added")
 		assert.Equal(t, want.Tag, got.Tag)
@@ -181,9 +181,9 @@ func TestAddServersByURL(t *testing.T) {
 	}
 	t.Run("valid urls", func(t *testing.T) {
 		m := testManager(t)
-		tags, err := m.AddServersByURL(t.Context(), urls, false)
+		list, err := m.AddServersByURL(t.Context(), urls, false)
 		require.NoError(t, err)
-		assert.Len(t, tags, 2)
+		assert.Len(t, list.Tags(), 2)
 		_, exists := m.GetServerByTag("VLESS+over+WS+with+TLS")
 		assert.True(t, exists, "VLESS server should be added")
 		_, exists = m.GetServerByTag("Trojan+with+TLS")
