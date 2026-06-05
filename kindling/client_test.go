@@ -2,7 +2,6 @@ package kindling
 
 import (
 	"net/http"
-	"sync"
 	"testing"
 
 	"github.com/getlantern/kindling"
@@ -25,21 +24,14 @@ func TestNewClient(t *testing.T) {
 			EnabledTransports[kindling.TransportDNSTunnel] = false
 			EnabledTransports[tr] = true
 
-			initOnce = sync.Once{}
-			k = nil
-			transport = nil
-			closeTransports = nil
+			Close()
 
 			newK, err := NewKindling(t.TempDir())
 			require.NoError(t, err)
 			require.NotNil(t, newK)
 			SetKindling(newK)
 
-			t.Cleanup(func() {
-				Close()
-				k = nil
-				initOnce = sync.Once{}
-			})
+			t.Cleanup(func() { Close() })
 
 			cli := HTTPClient()
 			require.NotNil(t, cli)

@@ -205,7 +205,8 @@ func baseOpts(basePath string) O.Options {
 					Inet6Address:           tunInet6, // gated by hasGlobalIPv6
 					AutoRoute:              true,
 					StrictRoute:            true,
-					EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
+					EndpointIndependentNat: true,     // needed for QUIC migration and hole-punching
+					Stack:                  "system", // fallback to gvisor on older Android kernels in buildOptions
 				},
 			},
 			{
@@ -243,6 +244,9 @@ func baseOpts(basePath string) O.Options {
 					},
 					Format: C.RuleSetFormatSource,
 				},
+			},
+			DefaultDomainResolver: &O.DomainResolveOptions{
+				Server: "dns_local",
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
@@ -533,6 +537,7 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	if src.Route != nil {
 		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
 		dst.Route.RuleSet = append(dst.Route.RuleSet, src.Route.RuleSet...)
+		dst.Route.DefaultDomainResolver = src.Route.DefaultDomainResolver
 	}
 	// overwrite base DNS options with config from src (server)
 	if src.DNS != nil {

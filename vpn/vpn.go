@@ -163,6 +163,7 @@ func (c *VPNClient) Disconnect() error {
 }
 
 func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options string, isRestart bool) error {
+	configureBufPool()
 	c.logger.Debug("Starting tunnel", "options", options)
 	c.setStatus(Connecting, nil)
 	t := tunnel{
@@ -452,7 +453,8 @@ const (
 // AutoSelectedEvent whenever the selection differs from the previous value.
 // It performs an initial rapid poll to catch the first selection soon after
 // tunnel connect, then settles into a slower steady-state interval.
-func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) {
+func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
 		var prev string
 
@@ -460,7 +462,10 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) {
 		initialDeadline := time.NewTimer(rapidPollWindow)
 		defer initialDeadline.Stop()
 		tick := time.NewTimer(rapidPollInterval)
-		defer tick.Stop()
+		defer func() {
+			tick.Stop()
+			close(done)
+		}()
 	initial:
 		for {
 			select {
@@ -513,6 +518,7 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) {
 			}
 		}
 	}()
+	return done
 }
 
 // RunOfflineURLTests will run URL tests for all outbounds if the tunnel is not currently connected.

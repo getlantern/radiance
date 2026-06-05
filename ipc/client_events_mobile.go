@@ -14,6 +14,8 @@ import (
 
 // AutoSelectedEvents streams auto-selection changes. Blocks until ctx is cancelled.
 func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSelectedEvent)) error {
+	// The bus subscription is not redundant with SSE: when the tunnel process is down,
+	// the client's fallback LocalBackend emits these events on the in-process bus.
 	events.SubscribeContext(ctx, handler)
 	if c.localOnly {
 		<-ctx.Done()
@@ -30,6 +32,8 @@ func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSe
 // ConfigEvents streams config-updated notifications. Payloads are empty — callers should treat each
 // call as a "refresh" signal. Blocks until ctx is cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
+	// The bus subscription is not redundant with SSE: when the tunnel process is down,
+	// the client's fallback LocalBackend emits NewConfigEvents on the in-process bus.
 	events.SubscribeContext(ctx, func(config.NewConfigEvent) { handler() })
 	if c.localOnly {
 		<-ctx.Done()
