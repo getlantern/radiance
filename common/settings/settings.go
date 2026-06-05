@@ -315,8 +315,8 @@ func Exists(key _key) bool {
 }
 
 func Set(key _key, value any) error {
-	// take lock for the entire duration of the Set + save sequence to prevent mutltiple Set
-	// calls from interleaving and leaving the file in an inconsistent state until next write.
+	// take lock for the entire duration of the Set + save sequence to prevent multiple Set
+	// calls from interleaving and leaving the file in an inconsistent state until the next write.
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	err := k.k.Set(key.String(), value)
@@ -327,7 +327,7 @@ func Set(key _key, value any) error {
 }
 
 func Clear(keys ..._key) error {
-	// take lock for the entire duration. See [Set] for explaination.
+	// take lock for the entire duration. See [Set] for explanation.
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	for _, key := range keys {
@@ -369,7 +369,7 @@ func GetAllFor(keys ..._key) Settings {
 
 // Patch takes a map of settings to update and applies them all at once.
 func Patch(updates Settings) error {
-	// take lock for the entire duration. See [Set] for explaination.
+	// take lock for the entire duration. See [Set] for explanation.
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	for key, value := range updates {
