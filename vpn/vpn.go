@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -363,6 +365,26 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 		connections = append(connections, newConnection(conn))
 	}
 	return connections, nil
+}
+
+// ClearTunnelCache removes the tunnel cache file at dataPath. The tunnel must be closed before
+// the cache file can be deleted. Setting force to true will close the tunnel if it's open.
+// ClearTunnelCache will not reopen the tunnel if it closed it.
+func (c *VPNClient) ClearTunnelCache(dataPath string, force bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tunnel != nil {
+		if !force {
+			return errors.New("cannot clear cache while tunnel is currently connected")
+		}
+		if err := c.close(); err != nil {
+			c.logger.Error("closing tunnel while clearing cache. Attempting anyway", "error", err)
+		}
+	}
+	if err := os.Remove(cacheFilePath(dataPath)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("failed to remove cache file: %w", err)
+	}
+	return nil
 }
 
 // Bytes returns the cumulative up/down byte counters for the active tunnel. ok is false if the

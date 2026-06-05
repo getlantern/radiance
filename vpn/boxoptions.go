@@ -167,7 +167,7 @@ func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 // function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
 	splitTunnelPath := filepath.Join(basePath, splitTunnelFile)
-	cacheFile := filepath.Join(basePath, cacheFileName)
+	cacheFile := cacheFilePath(basePath)
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 
 	// v6 ULA conditional on system v6 — see hasGlobalIPv6.
@@ -360,6 +360,10 @@ func baseRoutingRules() []O.Rule {
 		},
 	}
 	return rules
+}
+
+func cacheFilePath(basePath string) string {
+	return filepath.Join(basePath, cacheFileName)
 }
 
 // rejectQUICRule rejects UDP/443 to force HTTP/2-over-TCP fallback. Standard
