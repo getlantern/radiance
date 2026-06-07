@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	C "github.com/getlantern/common"
 	"github.com/getlantern/broflake/clientcore"
+	C "github.com/getlantern/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -635,10 +635,13 @@ func TestStopCtx_TimesOut(t *testing.T) {
 // TestConnectionEventBridge pins the observable API this package
 // adds: broflake's OnConnectionChangeFunc callback must translate
 // (state, workerIdx, addr) into a ConnectionEvent with the matching
-// State, the addr.String() Source (empty when addr is nil), and a
-// freshly-stamped Timestamp. Capture the callback that start
-// installs on bfOpt via a fake newWidget, invoke it with both nil
-// and non-nil addrs, then assert the events arriving via
+// State, the consumer Source, and a freshly-stamped Timestamp.
+// broflake hands the callback a nil addr on close, so the close's
+// Source is backfilled from the addr its accept carried (see
+// connSources) — otherwise downstream consumers (the Flutter globe +
+// helped counter) couldn't match the close to its accept. Capture the
+// callback that start installs on bfOpt via a fake newWidget, invoke
+// accept-then-close on one slot, then assert the events arriving via
 // events.Subscribe.
 func TestConnectionEventBridge(t *testing.T) {
 	var captured atomic.Pointer[clientcore.ConnectionChangeFunc]
@@ -690,7 +693,8 @@ func TestConnectionEventBridge(t *testing.T) {
 	require.Contains(t, byState, 1, "expected an accept event (State=+1)")
 	require.Contains(t, byState, -1, "expected a close event (State=-1)")
 	assert.Equal(t, "198.51.100.42", byState[1].Source, "accept Source")
-	assert.Equal(t, "", byState[-1].Source, "close Source (nil addr -> empty string)")
+	assert.Equal(t, "198.51.100.42", byState[-1].Source,
+		"close Source is backfilled from the accept (broflake delivers a nil addr on close)")
 	for state, evt := range byState {
 		assert.GreaterOrEqual(t, evt.Timestamp, before, "State=%d Timestamp not before emit", state)
 		assert.LessOrEqual(t, evt.Timestamp, after, "State=%d Timestamp not after emit", state)

@@ -43,9 +43,9 @@ import (
 // being routed through this widget proxy) connects or disconnects via
 // the broflake mesh.
 //
-//   State     +1 on accept, -1 on close
-//   Source    consumer's IP if broflake exposes it, otherwise empty
-//   Timestamp emit time in Unix milliseconds
+//	State     +1 on accept, -1 on close
+//	Source    consumer's IP if broflake exposes it, otherwise empty
+//	Timestamp emit time in Unix milliseconds
 //
 // JSON shape is identical to peer.ConnectionEvent so a consumer
 // reading both SSE streams can deserialize each frame with the
@@ -63,6 +63,45 @@ type ConnectionEvent struct {
 	State     int    `json:"state"`
 	Source    string `json:"source"`
 	Timestamp int64  `json:"timestamp"`
+}
+
+// connSources tracks the source addr of each live consumer slot so a close
+// event — which broflake delivers with a nil addr — can be re-tagged with the
+// addr its accept carried. Keyed by broflake's workerIdx (the consumer slot),
+// stable across a single connection's accept→close. Without this, a close
+// carries an empty Source, downstream consumers (the Flutter globe + helped
+// counter) can't match it to the accept, and the connection's arc/count leaks.
+// Concurrency-safe: broflake fires connection-change callbacks from per-worker
+// goroutines.
+type connSources struct {
+	mu    sync.Mutex
+	addrs map[int]string
+}
+
+func newConnSources() *connSources {
+	return &connSources{addrs: make(map[int]string)}
+}
+
+// resolve records the addr on accept (state > 0) or restores it on close
+// (state < 0, where broflake's addr is nil), returning the Source the
+// ConnectionEvent should carry. An accept with an empty addr is left
+// untracked, so its close stays empty too — neither is counted, which is the
+// right behavior when broflake can't surface the consumer IP at all.
+func (c *connSources) resolve(state, workerIdx int, addrStr string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case state > 0:
+		if addrStr != "" {
+			c.addrs[workerIdx] = addrStr
+		}
+	case state < 0:
+		if addrStr == "" {
+			addrStr = c.addrs[workerIdx]
+		}
+		delete(c.addrs, workerIdx)
+	}
+	return addrStr
 }
 
 var manager = &unboundedManager{}
@@ -490,6 +529,16 @@ func (m *unboundedManager) start() {
 		// off. broflake exposes no registration point we could
 		// disarm directly (the callback IS the registration), so the
 		// inline ctx check is the next-best place.
+		// broflake hands us the consumer's addr on accept but a nil addr on
+		// close (the WebRTC session is already torn down, so the remote IP is
+		// gone). Consumers of ConnectionEvent identify a connection by its
+		// Source: the Flutter globe matches a close to the arc it should
+		// remove by source IP, and decrements its "people helped" counter the
+		// same way. A close with an empty Source can't be matched, so the arc
+		// orphans and the counter never comes back down. sources remembers
+		// each slot's addr on accept and restores it on close so every -1
+		// carries the same Source its +1 did.
+		sources := newConnSources()
 		bfOpt.OnConnectionChangeFunc = func(state int, workerIdx int, addr net.IP) {
 			if ctx.Err() != nil {
 				return
@@ -498,6 +547,7 @@ func (m *unboundedManager) start() {
 			if addr != nil {
 				addrStr = addr.String()
 			}
+			addrStr = sources.resolve(state, workerIdx, addrStr)
 			slog.Debug("Unbounded: consumer connection change",
 				"state", state, "workerIdx", workerIdx, "source", addrStr)
 			events.Emit(ConnectionEvent{
