@@ -190,7 +190,7 @@ func (r *LocalBackend) Start() {
 	// Opt-in pprof server (RADIANCE_PPROF_ADDR); no-op unless set. See
 	// startDebugServer — the only on-device hook for profiling the client,
 	// e.g. the broflake/Unbounded WebRTC relay's CPU.
-	startDebugServer()
+	r.startDebugServer()
 
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()

@@ -3,6 +3,7 @@ package backend
 import (
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -25,11 +26,17 @@ const pprofAddrEnv = "RADIANCE_PPROF_ADDR"
 //	RADIANCE_PPROF_ADDR=localhost:6060 <app>
 //	go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
 //
-// Bind only to loopback: the pprof endpoints expose goroutine stacks and
-// can force expensive profiles, so they must never be reachable off-device.
-func startDebugServer() {
+// Non-loopback addresses are refused outright rather than trusted to the
+// caller: the pprof endpoints expose goroutine stacks and can be driven to
+// consume CPU, so they must never be reachable off-device.
+func (r *LocalBackend) startDebugServer() {
 	addr := os.Getenv(pprofAddrEnv)
 	if addr == "" {
+		return
+	}
+	if !isLoopbackAddr(addr) {
+		slog.Error("Refusing to start pprof server on a non-loopback address",
+			"addr", addr, "env", pprofAddrEnv)
 		return
 	}
 
@@ -48,10 +55,32 @@ func startDebugServer() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// Tie the server to Close() so a Start/Close cycle (re-init, tests,
+	// in-process clients) doesn't leak the goroutine or leave the port
+	// bound — which would fail the next Start with "address already in
+	// use". srv.Close aborts in-flight profile requests immediately, which
+	// is what we want on shutdown.
+	r.shutdownFuncs = append(r.shutdownFuncs, srv.Close)
 	slog.Warn("Starting radiance pprof server (debug only)", "addr", addr)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("radiance pprof server stopped", "error", err)
 		}
 	}()
+}
+
+// isLoopbackAddr reports whether addr (a "host:port") binds only to the
+// loopback interface. The empty host (e.g. ":6060") binds every interface
+// and is rejected; "localhost" and explicit loopback IPs (127.0.0.0/8,
+// ::1) are accepted.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
