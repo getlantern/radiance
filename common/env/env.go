@@ -31,6 +31,13 @@ var (
 	AppVersion       _key = "RADIANCE_VERSION"
 	BufPoolBudgetMB  _key = "RADIANCE_BUF_POOL_BUDGET_MB"
 
+	// Pprof, set to a loopback address (e.g. localhost:6060), starts an
+	// on-device pprof/HTTP server for profiling the running client. Off
+	// unless set. See backend.startDebugServer. Read through this package
+	// so a .env file or runtime Set works on sandboxed system extensions
+	// that don't inherit the launching shell's environment.
+	Pprof _key = "RADIANCE_PPROF_ADDR"
+
 	Testing _key = "RADIANCE_TESTING"
 
 	mu     sync.RWMutex
