@@ -34,7 +34,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20260326210434-cb69537aaf46
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260419161617-0bff0b2169f4
-	github.com/getlantern/keepcurrent v0.0.0-20260422161259-54a4d9a93694
+	github.com/getlantern/keepcurrent v0.0.0-20260608000050-6b50f5857840
 	github.com/getlantern/kindling v0.0.0-20260607234336-5372ea728050
 	github.com/getlantern/lantern-box v0.0.88
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
