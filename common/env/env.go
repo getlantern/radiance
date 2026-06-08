@@ -34,6 +34,13 @@ var (
 	// on the user's router (handy for eero / ISP CPE that don't expose UPnP).
 	PeerExternalPort _key = "RADIANCE_PEER_EXTERNAL_PORT"
 
+	// Pprof, set to a loopback address (e.g. localhost:6060), starts an
+	// on-device pprof/HTTP server for profiling the running client. Off
+	// unless set. See backend.startDebugServer. Read through this package
+	// so a .env file or runtime Set works on sandboxed system extensions
+	// that don't inherit the launching shell's environment.
+	Pprof _key = "RADIANCE_PPROF_ADDR"
+
 	Testing _key = "RADIANCE_TESTING"
 
 	mu     sync.RWMutex
