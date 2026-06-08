@@ -3,11 +3,13 @@ package vpn
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
@@ -322,10 +324,10 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 	}
 
 	const (
-		comcastV6  = "2603:8000:d0f0:5950::1"  // residential dual-stack
-		tmobileV6  = "2607:fb90:abcd:1234::1"  // cellular global (T-Mobile-shaped)
-		ulaLantern = "fdfe:dcba:9876::1"       // our own TUN ULA
-		ulaTail    = "fd7a:115c:a1e0::1"       // Tailscale ULA
+		comcastV6  = "2603:8000:d0f0:5950::1" // residential dual-stack
+		tmobileV6  = "2607:fb90:abcd:1234::1" // cellular global (T-Mobile-shaped)
+		ulaLantern = "fdfe:dcba:9876::1"      // our own TUN ULA
+		ulaTail    = "fd7a:115c:a1e0::1"      // Tailscale ULA
 	)
 
 	tests := []struct {
@@ -450,7 +452,7 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "Android lockdown: snapshot returns empty list",
+			name:  "Android lockdown: snapshot returns empty list",
 			snaps: []ifaceSnapshot{},
 			want:  false,
 		},
@@ -546,6 +548,68 @@ func TestBaseOpts_TunInet6Address(t *testing.T) {
 	} else {
 		assert.Empty(t, tunOpts.Inet6Address, "expected no v6 ULA on TUN when system has no global v6")
 	}
+}
+
+func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
+	cfg := testConfig(t)
+	opts, err := buildOptions(BoxOptions{
+		BasePath:     t.TempDir(),
+		Options:      cfg.Options,
+		SmartRouting: cfg.SmartRouting,
+		AdBlock:      cfg.AdBlock,
+	})
+	require.NoError(t, err)
+
+	isIPv6Reject := func(r O.Rule) bool {
+		o := r.DefaultOptions
+		return o.RuleAction.Action == "reject" && slices.Contains(o.RawDefaultRule.IPCIDR, "::/0")
+	}
+	rejectIdx := slices.IndexFunc(opts.Route.Rules, isIPv6Reject)
+
+	if !tunHasIPv6(opts) {
+		require.Equal(t, -1, rejectIdx, "no ::/0 reject expected when the TUN has no IPv6 address")
+		return
+	}
+
+	isSplitTunnel := func(r O.Rule) bool {
+		return slices.Contains(r.DefaultOptions.RawDefaultRule.RuleSet, splitTunnelTag)
+	}
+	isSelector := func(r O.Rule) bool {
+		mode := r.DefaultOptions.RawDefaultRule.ClashMode
+		return mode == AutoSelectTag || mode == ManualSelectTag
+	}
+	splitIdx := slices.IndexFunc(opts.Route.Rules, isSplitTunnel)
+	selectorIdx := slices.IndexFunc(opts.Route.Rules, isSelector)
+
+	require.NotEqual(t, -1, splitIdx, "expected split-tunnel rule in built options")
+	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
+	assert.Greater(t, rejectIdx, splitIdx, "IPv6 reject must come after split-tunnel so split-direct v6 keeps flowing")
+	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so proxied v6 is rejected")
+}
+
+func TestRejectIPv6Rule(t *testing.T) {
+	r := rejectIPv6Rule()
+	assert.Equal(t, "reject", r.DefaultOptions.RuleAction.Action)
+	assert.Equal(t, []string{"::/0"}, []string(r.DefaultOptions.RawDefaultRule.IPCIDR))
+	assert.NotEqual(t, C.RuleActionRejectMethodDrop, r.DefaultOptions.RuleAction.RejectOptions.Method,
+		"must not use the drop method — a silent blackhole stalls instead of failing over to IPv4")
+}
+
+func TestTunHasIPv6(t *testing.T) {
+	tun := func(addrs ...string) O.Options {
+		prefixes := make([]netip.Prefix, len(addrs))
+		for i, a := range addrs {
+			prefixes[i] = netip.MustParsePrefix(a)
+		}
+		return O.Options{Inbounds: []O.Inbound{{
+			Type:    "tun",
+			Options: &O.TunInboundOptions{Address: prefixes},
+		}}}
+	}
+	assert.True(t, tunHasIPv6(tun("10.10.1.1/30", "fdfe:dcba:9876::1/126")),
+		"TUN with a v6 address captures IPv6")
+	assert.False(t, tunHasIPv6(tun("10.10.1.1/30")), "v4-only TUN does not capture IPv6")
+	assert.False(t, tunHasIPv6(O.Options{}), "no inbounds means no IPv6 capture")
 }
 
 func TestKernelBelow(t *testing.T) {

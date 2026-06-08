@@ -111,10 +111,12 @@ func normalizeLocale(locale string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(locale), "-", ""), "_", "")
 }
 
-// buildDNSRules adds a DNS rule for fake ip.
+// buildDNSRules routes A queries to the fake-IP server and suppresses AAAA so
+// applications fall back to IPv4.
 func buildDNSRules() []option.DNSRule {
-	dnsRules := make([]option.DNSRule, 0)
+	dnsRules := make([]option.DNSRule, 0, 2)
 	dnsRules = addFakeIP(dnsRules)
+	dnsRules = append(dnsRules, suppressAAAARule())
 	return dnsRules
 }
 
@@ -123,7 +125,7 @@ func addFakeIP(dnsRules []option.DNSRule) []option.DNSRule {
 		Type: constant.RuleTypeDefault,
 		DefaultOptions: option.DefaultDNSRule{
 			RawDefaultDNSRule: option.RawDefaultDNSRule{
-				QueryType: badoption.Listable[option.DNSQueryType]{option.DNSQueryType(dns.TypeA), option.DNSQueryType(dns.TypeAAAA)},
+				QueryType: badoption.Listable[option.DNSQueryType]{option.DNSQueryType(dns.TypeA)},
 			},
 			DNSRuleAction: option.DNSRuleAction{
 				Action: constant.RuleActionTypeRoute,
@@ -133,4 +135,22 @@ func addFakeIP(dnsRules []option.DNSRule) []option.DNSRule {
 			},
 		},
 	})
+}
+
+// suppressAAAARule answers AAAA queries with NODATA (NOERROR and no records) so
+// applications see no IPv6 address and connect over IPv4.
+func suppressAAAARule() option.DNSRule {
+	noError := option.DNSRCode(dns.RcodeSuccess)
+	return option.DNSRule{
+		Type: constant.RuleTypeDefault,
+		DefaultOptions: option.DefaultDNSRule{
+			RawDefaultDNSRule: option.RawDefaultDNSRule{
+				QueryType: badoption.Listable[option.DNSQueryType]{option.DNSQueryType(dns.TypeAAAA)},
+			},
+			DNSRuleAction: option.DNSRuleAction{
+				Action:            constant.RuleActionTypePredefined,
+				PredefinedOptions: option.DNSRouteActionPredefined{Rcode: &noError},
+			},
+		},
+	}
 }
