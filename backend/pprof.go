@@ -6,37 +6,42 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"os"
 	"time"
+
+	"github.com/getlantern/radiance/common/env"
 )
 
-// pprofAddrEnv names the environment variable that opts a build into the
-// on-device pprof server. Off by default: with the variable unset nothing
-// is registered and no port is opened, so this is safe to ship in release
-// builds. Set it to a loopback address (e.g. "localhost:6060") to profile.
-const pprofAddrEnv = "RADIANCE_PPROF_ADDR"
-
-// startDebugServer starts a loopback pprof/HTTP server when pprofAddrEnv is
-// set. Radiance is compiled into the host app via gomobile, so there is no
+// startDebugServer starts a loopback pprof/HTTP server when env.Pprof
+// (RADIANCE_PPROF_ADDR) resolves to a non-empty address. Off by default:
+// with nothing set, no handler is registered and no port is opened, so it
+// ships safely in release builds.
+//
+// The address is read through the radiance env package, so it honours an
+// OS env var, a .env file in the working dir, or a runtime env.Set (e.g.
+// via the IPC SetEnv path). The latter two matter on sandboxed macOS/iOS
+// system extensions, which don't inherit the launching shell's
+// environment. Example:
+//
+//	echo 'RADIANCE_PPROF_ADDR=localhost:6060' >> .env   # or OS env / env.Set
+//	go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+//
+// Radiance is compiled into the host app via gomobile, so there is no
 // process to attach a profiler to and no other on-device profiling hook —
 // this is the way to capture a CPU/heap profile of the running client,
 // notably the broflake / Unbounded WebRTC relay, whose cost is otherwise
-// invisible. Example:
-//
-//	RADIANCE_PPROF_ADDR=localhost:6060 <app>
-//	go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+// invisible.
 //
 // Non-loopback addresses are refused outright rather than trusted to the
 // caller: the pprof endpoints expose goroutine stacks and can be driven to
 // consume CPU, so they must never be reachable off-device.
 func (r *LocalBackend) startDebugServer() {
-	addr := os.Getenv(pprofAddrEnv)
+	addr := env.GetString(env.Pprof)
 	if addr == "" {
 		return
 	}
 	if !isLoopbackAddr(addr) {
 		slog.Error("Refusing to start pprof server on a non-loopback address",
-			"addr", addr, "env", pprofAddrEnv)
+			"addr", addr, "env", env.Pprof.String())
 		return
 	}
 
