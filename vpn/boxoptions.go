@@ -436,6 +436,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 				slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
 			}
 			slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
+		case "ios":
+			opts.Inbounds[0].Options.(*O.TunInboundOptions).Stack = ""
+			slog.Debug("iOS platform detected, using default TUN stack with no override")
 		case "linux":
 			opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
 			slog.Debug("Linux platform detected, AutoRedirect set to true")
