@@ -522,9 +522,7 @@ func TestBuildOptions_RejectsQUICAfterDirectRules(t *testing.T) {
 	assert.Less(t, quicIdx, selectorIdx, "QUIC reject must come before selector rules so proxied QUIC is rejected")
 }
 
-// TestBaseOpts_TunInet6Address pins that the TUN's Inet6Address tracks
-// hasGlobalIPv6() — both enabling on dual-stack and skipping on v4-only.
-func TestBaseOpts_TunInet6Address(t *testing.T) {
+func TestBaseOpts_TunIPv6Address(t *testing.T) {
 	opts := baseOpts(t.TempDir())
 	require.NotEmpty(t, opts.Inbounds, "expected inbounds in baseOpts output")
 
@@ -538,15 +536,15 @@ func TestBaseOpts_TunInet6Address(t *testing.T) {
 		}
 	}
 	require.NotNil(t, tunOpts, "expected a tun inbound")
-	require.Len(t, tunOpts.Address, 1, "expected exactly one v4 TUN address")
-	require.Equal(t, "10.10.1.1/30", tunOpts.Address[0].String())
+	require.NotEmpty(t, tunOpts.Address, "expected at least the v4 TUN address")
+	assert.Equal(t, "10.10.1.1/30", tunOpts.Address[0].String(), "first TUN address should be the v4 prefix")
 
 	if hasGlobalIPv6() {
-		require.Len(t, tunOpts.Inet6Address, 1, "expected v6 ULA on TUN when system has global v6")
-		assert.Equal(t, "fdfe:dcba:9876::1/126", tunOpts.Inet6Address[0].String(),
-			"v6 ULA prefix should be the ULA we picked")
+		require.Len(t, tunOpts.Address, 2, "expected v4 + v6 ULA on TUN when system has global v6")
+		assert.Equal(t, "fdfe:dcba:9876::1/126", tunOpts.Address[1].String(),
+			"v6 ULA should be appended after the v4 address")
 	} else {
-		assert.Empty(t, tunOpts.Inet6Address, "expected no v6 ULA on TUN when system has no global v6")
+		require.Len(t, tunOpts.Address, 1, "expected v4-only TUN when system has no global v6")
 	}
 }
 
