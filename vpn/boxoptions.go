@@ -592,6 +592,9 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	// overwrite base DNS options with config from src (server)
 	if src.DNS != nil {
 		dns := *src.DNS
+		if dns.Rules != nil {
+			dns.Rules = append(dns.Rules, suppressAAAARule())
+		}
 		dst.DNS = &dns
 	}
 
