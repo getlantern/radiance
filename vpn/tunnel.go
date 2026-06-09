@@ -185,11 +185,11 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 // Memory tuning for mobile devices, which have more constrained resources. iOS will silently
 // kill the extension if it exceeds a hard cap (≈50 MB).
 const (
-	// mobileGCPercent trades heap headroom for fewer collections; GC churn under load,
-	// not heap size, was the cost.
+	// mobileGCPercent is the soft cap for triggering the GC. This is higher than sing-box's
+	// default of 30 to allow more memory headroom for the Go side before hitting the iOS hard cap.
 	mobileGCPercent = 50
 	// mobileMemoryLimit is the GOMEMLIMIT soft cap. This needs to be below the iOS hard cap
-	// to leave room for the non-Go side (swift, CGo, etc.).
+	// to leave room for the non-Go side (Swift, cgo, etc.).
 	mobileMemoryLimit = 40 * 1024 * 1024 // 40 MB
 	// mobileConntrackLimit is the footprint at which the conntrack killer closes all
 	// connections and frees OS memory — the last resort before the OS kills the
