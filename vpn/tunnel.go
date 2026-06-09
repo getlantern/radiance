@@ -174,16 +174,37 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	// set memory limit for Android and iOS
-	switch common.Platform {
-	case "android", "ios":
-		slog.Debug("Setting memory limit for mobile platform", "platform", common.Platform)
-		libbox.SetMemoryLimit(true)
-	default:
+	if common.IsMobile() {
+		setMobileMemoryLimits()
 	}
 
 	slog.Info("Tunnel initializated")
 	return nil
+}
+
+// Memory tuning for mobile devices, which have more constrained resources. iOS will silently
+// kill the extension if it exceeds a hard cap (≈50 MB).
+const (
+	// mobileGCPercent trades heap headroom for fewer collections; GC churn under load,
+	// not heap size, was the cost.
+	mobileGCPercent = 50
+	// mobileMemoryLimit is the GOMEMLIMIT soft cap. This needs to be below the iOS hard cap
+	// to leave room for the non-Go side (swift, CGo, etc.).
+	mobileMemoryLimit = 40 * 1024 * 1024 // 40 MB
+	// mobileConntrackLimit is the footprint at which the conntrack killer closes all
+	// connections and frees OS memory — the last resort before the OS kills the
+	// extension. It sits above GOMEMLIMIT so Go GC reacts first.
+	mobileConntrackLimit = 45 * 1024 * 1024 // 45 MB
+)
+
+func setMobileMemoryLimits() {
+	slog.Debug("Setting memory limits for mobile platform", "platform", common.Platform,
+		"gc_percent", mobileGCPercent, "go_mem_limit", mobileMemoryLimit, "conntrack_limit", mobileConntrackLimit,
+	)
+	runtimeDebug.SetGCPercent(mobileGCPercent)
+	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
+	conntrack.KillerEnabled = true
+	conntrack.MemoryLimit = mobileConntrackLimit
 }
 
 func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
