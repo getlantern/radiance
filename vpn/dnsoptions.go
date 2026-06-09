@@ -114,14 +114,24 @@ func normalizeLocale(locale string) string {
 // buildDNSRules routes A queries to the fake-IP server and suppresses AAAA so
 // applications fall back to IPv4.
 func buildDNSRules() []option.DNSRule {
-	dnsRules := make([]option.DNSRule, 0, 2)
-	dnsRules = addFakeIP(dnsRules)
-	dnsRules = append(dnsRules, suppressAAAARule())
-	return dnsRules
+	return []option.DNSRule{suppressAAAARule(), fakeipRule()}
+
 }
 
-func addFakeIP(dnsRules []option.DNSRule) []option.DNSRule {
-	return append(dnsRules, option.DNSRule{
+func fakeipServer() option.DNSServerOptions {
+	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
+	return option.DNSServerOptions{
+		Tag:  "dns_fakeip",
+		Type: constant.DNSTypeFakeIP,
+		Options: &option.FakeIPDNSServerOptions{
+			Inet4Range: &ipv4Prefix,
+		},
+	}
+
+}
+
+func fakeipRule() option.DNSRule {
+	return option.DNSRule{
 		Type: constant.RuleTypeDefault,
 		DefaultOptions: option.DefaultDNSRule{
 			RawDefaultDNSRule: option.RawDefaultDNSRule{
@@ -134,7 +144,7 @@ func addFakeIP(dnsRules []option.DNSRule) []option.DNSRule {
 				},
 			},
 		},
-	})
+	}
 }
 
 // suppressAAAARule answers AAAA queries with NODATA (NOERROR and no records) so
