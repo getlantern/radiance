@@ -593,7 +593,8 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	if src.DNS != nil {
 		dns := *src.DNS
 		if dns.Rules != nil {
-			dns.Rules = append(dns.Rules, suppressAAAARule())
+			// prepend the AAAA suppression rule to ensure it fails over quickly.
+			dns.Rules = append([]O.DNSRule{suppressAAAARule()}, dns.Rules...)
 		}
 		dst.DNS = &dns
 	}
