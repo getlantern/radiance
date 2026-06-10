@@ -94,6 +94,11 @@ func (a *Client) sendRequest(
 		url = a.baseURL() + url
 	}
 
+	// Bound the request with a timeout to prevent hanging indefinitely due to network issues or 512 bad gateway loops.
+	// This allows the error to flow through the existing error handling path and surface to the UI, instead of leaving the client stuck (e.g. an endless email-verification spinner).
+	timeoutCtx, cancel := context.WithTimeout(ctx, common.DefaultHTTPTimeout)
+	defer cancel()
+
 	var bodyReader io.Reader
 	contentType := ""
 	if body != nil {
@@ -113,7 +118,7 @@ func (a *Client) sendRequest(
 			contentType = "application/json"
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(timeoutCtx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
