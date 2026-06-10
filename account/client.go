@@ -94,8 +94,7 @@ func (a *Client) sendRequest(
 		url = a.baseURL() + url
 	}
 
-	// Bound the request with a timeout to prevent hanging indefinitely due to network issues or 512 bad gateway loops.
-	// This allows the error to flow through the existing error handling path and surface to the UI, instead of leaving the client stuck (e.g. an endless email-verification spinner).
+	// Bound the request with a timeout to prevent hanging indefinitely due to network issues or 502 Bad Gateway loops.
 	timeoutCtx, cancel := context.WithTimeout(ctx, common.DefaultHTTPTimeout)
 	defer cancel()
 
