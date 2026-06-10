@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -366,27 +365,26 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	return connections, nil
 }
 
-// ClearTunnelCache removes the tunnel cache file at dataPath. The tunnel must be closed before
-// the cache file can be deleted. Setting force to true will close the tunnel if it's open.
-// ClearTunnelCache will not reopen the tunnel if it closed it.
-func (c *VPNClient) ClearTunnelCache(dataPath string, force bool) error {
+// ClearTunnelCache removes the tunnel cache file at dataPath. If the tunnel is
+// active, or if another process owns the cache file, it records a marker so the
+// next tunnel start can retry the deletion. The returned flag reports whether
+// the caller should restart the tunnel now to apply a deferred clear.
+func (c *VPNClient) ClearTunnelCache(dataPath string) (shouldRestart bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var errs error
+
 	if c.tunnel != nil {
-		if !force {
-			return errors.New("cannot clear cache while tunnel is currently connected")
-		}
-		// Don't return early and don't swallow the close error: the cache must
-		// still be removed, but a failed disconnect must not be reported as success.
-		if err := c.close(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("closing tunnel while clearing cache: %w", err))
-		}
+		return true, writeCacheClearMarker(dataPath)
 	}
-	if err := os.Remove(cacheFilePath(dataPath)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		errs = errors.Join(errs, fmt.Errorf("removing cache file: %w", err))
+
+	if err := removeCacheFile(dataPath); err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return false, writeCacheClearMarker(dataPath)
+		}
+		return false, err
 	}
-	return errs
+
+	return false, nil
 }
 
 // Bytes returns the cumulative up/down byte counters for the active tunnel. ok is false if the

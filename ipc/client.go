@@ -141,8 +141,9 @@ func (c *Client) VPNSessions(ctx context.Context, limit int) ([]vpn.Session, err
 	return sessions, err
 }
 
-// ClearTunnelCache removes the tunnel cache, disconnecting an active tunnel first
-// if one is connected. ClearTunnelCache will not reopen the tunnel.
+// ClearTunnelCache removes the tunnel cache. If the tunnel is connected, the
+// backend restarts it to apply the removal, since the cache cannot be deleted
+// while in use.
 func (c *Client) ClearTunnelCache(ctx context.Context) error {
 	_, err := c.do(ctx, http.MethodPost, vpnClearTunnelCacheEndpoint, nil)
 	return err
