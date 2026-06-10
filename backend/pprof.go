@@ -6,10 +6,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"sync"
 	"time"
 
 	"github.com/getlantern/radiance/common/env"
 )
+
+// debugServerOnce scopes the pprof server to the process. A LocalBackend is
+// created and Closed on every VPN (re)connect, so tying the server to Close()
+// left it bound only for the seconds between a connect and the next teardown.
+var debugServerOnce sync.Once
 
 // startDebugServer starts a loopback pprof/HTTP server when env.Pprof
 // (RADIANCE_PPROF_ADDR) resolves to a non-empty address. Off by default:
@@ -45,33 +51,32 @@ func (r *LocalBackend) startDebugServer() {
 		return
 	}
 
-	// Dedicated mux rather than http.DefaultServeMux, so importing
-	// net/http/pprof here can't accidentally surface these handlers on any
-	// other server in the process that happens to serve DefaultServeMux.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	// Validate addr before consuming the Once: an early Start() before the
+	// env override is applied must not permanently disable the server.
+	debugServerOnce.Do(func() {
+		// Dedicated mux rather than http.DefaultServeMux, so importing
+		// net/http/pprof here can't accidentally surface these handlers on any
+		// other server in the process that happens to serve DefaultServeMux.
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	// Tie the server to Close() so a Start/Close cycle (re-init, tests,
-	// in-process clients) doesn't leak the goroutine or leave the port
-	// bound — which would fail the next Start with "address already in
-	// use". srv.Close aborts in-flight profile requests immediately, which
-	// is what we want on shutdown.
-	r.shutdownFuncs = append(r.shutdownFuncs, srv.Close)
-	slog.Warn("Starting radiance pprof server (debug only)", "addr", addr)
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("radiance pprof server stopped", "error", err)
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
 		}
-	}()
+		slog.Info("Starting radiance pprof server (debug only)", "addr", addr)
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("radiance pprof server stopped", "error", err)
+			}
+			slog.Warn("pprof server stopped")
+		}()
+	})
 }
 
 // isLoopbackAddr reports whether addr (a "host:port") binds only to the
