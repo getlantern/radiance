@@ -365,9 +365,8 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	return connections, nil
 }
 
-// ClearTunnelCache removes the tunnel cache file at dataPath. If the tunnel is
-// active, or if another process owns the cache file, it records a marker so the
-// next tunnel start can retry the deletion. The returned flag reports whether
+// ClearTunnelCache removes the tunnel cache file at dataPath. If the tunnel is active it records
+// a marker so the next tunnel start can retry the deletion. The returned flag reports whether
 // the caller should restart the tunnel now to apply a deferred clear.
 func (c *VPNClient) ClearTunnelCache(dataPath string) (shouldRestart bool, err error) {
 	c.mu.Lock()

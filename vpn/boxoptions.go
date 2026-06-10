@@ -410,9 +410,7 @@ func consumeCacheClearMarker(basePath string) error {
 	if err := removeCacheFile(basePath); err != nil {
 		return err
 	}
-	if err := os.Remove(marker); err != nil {
-		return fmt.Errorf("removing cache clear marker: %w", err)
-	}
+	os.Remove(marker) // we can safely ignore errors here
 	return nil
 }
 
