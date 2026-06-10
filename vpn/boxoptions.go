@@ -173,9 +173,11 @@ func baseOpts(basePath string) O.Options {
 	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 
 	// v6 ULA conditional on system v6 — see hasGlobalIPv6.
-	var tunInet6 []netip.Prefix
+	tunAddress := []netip.Prefix{
+		netip.MustParsePrefix("10.10.1.1/30"),
+	}
 	if hasGlobalIPv6() {
-		tunInet6 = []netip.Prefix{netip.MustParsePrefix("fdfe:dcba:9876::1/126")}
+		tunAddress = append(tunAddress, netip.MustParsePrefix("fdfe:dcba:9876::1/126"))
 		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
 	} else {
 		slog.Info("vpn: TUN IPv4-only (no global v6 detected)")
@@ -200,11 +202,8 @@ func baseOpts(basePath string) O.Options {
 				Type: "tun",
 				Tag:  "tun-in",
 				Options: &O.TunInboundOptions{
-					InterfaceName: "utun225",
-					Address: []netip.Prefix{
-						netip.MustParsePrefix("10.10.1.1/30"),
-					},
-					Inet6Address:           tunInet6, // gated by hasGlobalIPv6
+					InterfaceName:          "utun225",
+					Address:                tunAddress,
 					AutoRoute:              true,
 					StrictRoute:            true,
 					EndpointIndependentNat: true,     // needed for QUIC migration and hole-punching
@@ -281,8 +280,11 @@ func baseRoutingRules() []O.Rule {
 	// 7.    Reject QUIC (UDP/443) for any UDP/443 not already matched above; placed
 	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
 	//       their QUIC. Added in buildOptions.
-	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
-	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 8.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
+	//       so direct-routed v6 is preserved while proxied v6 fails over to IPv4. Added
+	//	      in buildOptions.
+	// 9,10. Group rules for auto and manual selector modes (added in buildOptions).
+	// 11.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -388,6 +390,42 @@ func rejectQUICRule() O.Rule {
 			},
 		},
 	}
+}
+
+// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
+// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
+// hints, apps using their own DNS). The default reject method (ICMP unreachable /
+// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
+// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
+func rejectIPv6Rule() O.Rule {
+	return O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				IPCIDR: []string{"::/0"},
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
+			},
+		},
+	}
+}
+
+// tunHasIPv6 reports whether a TUN inbound was given an IPv6 address, meaning v6
+// is captured into the tunnel and must be rejected rather than left to bypass.
+func tunHasIPv6(opts O.Options) bool {
+	for _, in := range opts.Inbounds {
+		t, ok := in.Options.(*O.TunInboundOptions)
+		if !ok {
+			continue
+		}
+		for _, addr := range t.Address {
+			if addr.Addr().Is6() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildOptions builds the box options using the config options and user servers.
@@ -496,6 +534,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	opts.Route.Rules = append(opts.Route.Rules, rejectQUICRule())
+	if tunHasIPv6(opts) {
+		opts.Route.Rules = append(opts.Route.Rules, rejectIPv6Rule())
+	}
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
@@ -551,6 +592,8 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	// overwrite base DNS options with config from src (server)
 	if src.DNS != nil {
 		dns := *src.DNS
+		// prepend the AAAA suppression rule to ensure it fails over quickly.
+		dns.Rules = append([]O.DNSRule{suppressAAAARule()}, dns.Rules...)
 		dst.DNS = &dns
 	}
 

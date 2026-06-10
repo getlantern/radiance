@@ -1,9 +1,14 @@
 package vpn
 
 import (
+	"slices"
 	"testing"
 
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common/settings"
 )
@@ -141,4 +146,29 @@ func TestLocalDNSIP(t *testing.T) {
 			assert.Equalf(t, tt.expected, result, "localDNSIP() with locale %q should return %q", tt.locale, tt.expected)
 		})
 	}
+}
+
+func TestBuildDNSRules_SuppressesAAAA(t *testing.T) {
+	rules := buildDNSRules()
+
+	var fakeIP, aaaa *option.DefaultDNSRule
+	for i := range rules {
+		d := &rules[i].DefaultOptions
+		switch {
+		case d.Action == constant.RuleActionTypeRoute && d.RouteOptions.Server == "dns_fakeip":
+			fakeIP = d
+		case slices.Contains(d.QueryType, option.DNSQueryType(dns.TypeAAAA)):
+			aaaa = d
+		}
+	}
+
+	require.NotNil(t, fakeIP, "expected a fake-IP route rule")
+	assert.Contains(t, fakeIP.QueryType, option.DNSQueryType(dns.TypeA), "fake-IP rule should handle A queries")
+	assert.NotContains(t, fakeIP.QueryType, option.DNSQueryType(dns.TypeAAAA), "fake-IP rule must not handle AAAA — AAAA is suppressed")
+
+	require.NotNil(t, aaaa, "expected an AAAA suppression rule")
+	assert.Equal(t, constant.RuleActionTypePredefined, aaaa.Action, "AAAA rule should use the predefined action")
+	require.NotNil(t, aaaa.PredefinedOptions.Rcode, "AAAA predefined rule must set an rcode")
+	assert.Equal(t, dns.RcodeSuccess, int(*aaaa.PredefinedOptions.Rcode), "AAAA suppression must return NODATA (NOERROR), not NXDOMAIN")
+	assert.Empty(t, aaaa.PredefinedOptions.Answer, "AAAA suppression must return no answer records (NODATA)")
 }
