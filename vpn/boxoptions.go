@@ -393,7 +393,10 @@ func removeCacheFile(basePath string) error {
 // tunnel start.
 func writeCacheClearMarker(basePath string) error {
 	slog.Debug("writing cache clear marker", "path", cacheClearMarkerPath(basePath))
-	return atomicfile.WriteFile(cacheClearMarkerPath(basePath), nil, fileperm.File)
+	if err := atomicfile.WriteFile(cacheClearMarkerPath(basePath), nil, fileperm.File); err != nil {
+		return fmt.Errorf("writing cache clear marker: %w", err)
+	}
+	return nil
 }
 
 // consumeCacheClearMarker applies a deferred cache clear during tunnel start
