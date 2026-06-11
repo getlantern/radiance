@@ -4,6 +4,10 @@ import (
 	"sync"
 )
 
+const defaultPublisherRingSize = 30
+
+var defaultPublisher = newPublisher(defaultPublisherRingSize)
+
 // LogEntry is a formatted log line streamed to clients.
 type LogEntry = string
 
@@ -13,8 +17,6 @@ type LogEntry = string
 func Subscribe() (chan LogEntry, func()) {
 	return defaultPublisher.subscribe()
 }
-
-var defaultPublisher = newPublisher(200)
 
 // Publisher returns the default log publisher. Include it in the handler's
 // writer chain so published entries share the same format.
@@ -26,8 +28,10 @@ func Publisher() *publisher {
 // so it can be included in the handler's writer chain. It maintains a ring buffer
 // of recent entries so new subscribers get immediate context.
 type publisher struct {
-	clients  map[chan LogEntry]struct{}
-	ring     []LogEntry
+	clients map[chan LogEntry]struct{}
+	// ring retains the last ringSize entries as reused byte buffers, so the
+	// backlog avoids a per-line allocation once warm.
+	ring     [][]byte
 	ringSize int
 	ringIdx  int
 	mu       sync.RWMutex
@@ -36,27 +40,31 @@ type publisher struct {
 func newPublisher(ringSize int) *publisher {
 	return &publisher{
 		clients:  make(map[chan LogEntry]struct{}),
-		ring:     make([]LogEntry, ringSize),
+		ring:     make([][]byte, ringSize),
 		ringSize: ringSize,
 	}
 }
 
 // Write implements io.Writer. Each call is treated as a single log line.
-func (lb *publisher) Write(b []byte) (int, error) {
-	entry := string(b)
-	lb.publish(entry)
+func (p *publisher) Write(b []byte) (int, error) {
+	p.publish(b)
 	return len(b), nil
 }
 
-func (lb *publisher) publish(entry LogEntry) {
-	lb.mu.Lock()
-	lb.ring[lb.ringIdx%lb.ringSize] = entry
-	lb.ringIdx++
-	lb.mu.Unlock()
+// publish always records b in the ring so a later subscriber still gets backlog.
+func (p *publisher) publish(b []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-	for ch := range lb.clients {
+	slot := p.ringIdx % p.ringSize
+	p.ring[slot] = append(p.ring[slot][:0], b...)
+	p.ringIdx++
+
+	if len(p.clients) == 0 {
+		return
+	}
+	entry := string(b)
+	for ch := range p.clients {
 		select {
 		case ch <- entry:
 		default: // drop if client is slow
@@ -64,23 +72,22 @@ func (lb *publisher) publish(entry LogEntry) {
 	}
 }
 
-func (lb *publisher) subscribe() (chan LogEntry, func()) {
-	ch := make(chan LogEntry, lb.ringSize)
-	lb.mu.Lock()
-	start := max(0, lb.ringIdx-lb.ringSize)
-	for i := start; i < lb.ringIdx; i++ {
-		entry := lb.ring[i%lb.ringSize]
-		if entry != "" {
-			ch <- entry
+func (p *publisher) subscribe() (chan LogEntry, func()) {
+	ch := make(chan LogEntry, p.ringSize)
+	p.mu.Lock()
+	start := max(0, p.ringIdx-p.ringSize)
+	for i := start; i < p.ringIdx; i++ {
+		if slot := p.ring[i%p.ringSize]; len(slot) > 0 {
+			ch <- string(slot)
 		}
 	}
-	lb.clients[ch] = struct{}{}
-	lb.mu.Unlock()
+	p.clients[ch] = struct{}{}
+	p.mu.Unlock()
 
 	unsub := func() {
-		lb.mu.Lock()
-		delete(lb.clients, ch)
-		lb.mu.Unlock()
+		p.mu.Lock()
+		delete(p.clients, ch)
+		p.mu.Unlock()
 	}
 	return ch, unsub
 }
