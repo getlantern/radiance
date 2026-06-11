@@ -39,6 +39,7 @@ import (
 	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/telemetry/procmetrics"
 )
 
 type tunnel struct {
@@ -119,6 +120,7 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
 	startPprofServer()
+	procmetrics.Start()
 
 	// setup libbox service
 	dataPath := t.dataPath
