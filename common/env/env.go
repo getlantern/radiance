@@ -33,9 +33,10 @@ var (
 
 	// Pprof, set to a loopback address (e.g. localhost:6060), starts an
 	// on-device pprof/HTTP server for profiling the running client. Off
-	// unless set. See backend.startDebugServer. Read through this package
-	// so a .env file or runtime Set works on sandboxed system extensions
-	// that don't inherit the launching shell's environment.
+	// unless set. Started from the tunnel so it binds in the process that
+	// hosts sing-box; read through this package so a .env file or runtime
+	// Set works on sandboxed system extensions that don't inherit the
+	// launching shell's environment.
 	Pprof _key = "RADIANCE_PPROF_ADDR"
 
 	Testing _key = "RADIANCE_TESTING"

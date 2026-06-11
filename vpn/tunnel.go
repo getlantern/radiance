@@ -118,6 +118,8 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
+	startPprofServer()
+
 	// setup libbox service
 	dataPath := t.dataPath
 	setupOpts := &libbox.SetupOptions{
