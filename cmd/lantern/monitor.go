@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -99,8 +100,11 @@ func runMonitor(ctx context.Context, c *ipc.Client, cmd *MonitorCmd) error {
 		interval = time.Second
 	}
 
-	ctx, cleanup := quitOnKey(ctx)
-	defer cleanup()
+	if !cmd.JSON {
+		var cleanup func()
+		ctx, cleanup = quitOnKey(ctx)
+		defer cleanup()
+	}
 
 	tty := !cmd.JSON && stdoutIsTTY()
 	if tty {
@@ -125,7 +129,7 @@ func runMonitor(ctx context.Context, c *ipc.Client, cmd *MonitorCmd) error {
 		}
 		state.fillSnapshot(&snap, cmd.Logs)
 		if cmd.JSON {
-			return printJSON(snap)
+			return json.NewEncoder(os.Stdout).Encode(snap)
 		}
 		width, height := 0, 0
 		if tty {

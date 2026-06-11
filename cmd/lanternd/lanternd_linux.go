@@ -27,10 +27,11 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart={{.ExePath}} run --data-path {{.DataPath}} --log-path {{.LogPath}} --log-level {{.LogLevel}}
+ExecStart={{.ExePath}} run --data-path {{.DataPath}} --log-path {{.LogPath}} --log-level {{.LogLevel}}{{if .PprofAddr}} --pprof-addr {{.PprofAddr}}{{end}}
 Restart=on-failure
 RestartSec=5s
-
+{{if .PprofAddr}}Environment=GODEBUG=gctrace=1,scavtrace=1
+{{end}}
 RuntimeDirectory=lantern
 RuntimeDirectoryMode=0755
 StateDirectory=lantern
@@ -41,7 +42,7 @@ LogsDirectory=lantern
 WantedBy=multi-user.target
 `))
 
-func install(dataPath, logPath, logLevel string) error {
+func install(dataPath, logPath, logLevel, pprofAddr string) error {
 	slog.Info("Installing systemd service..", "version", common.Version)
 
 	// Remove any existing service so we can recreate it cleanly.
@@ -62,8 +63,8 @@ func install(dataPath, logPath, logLevel string) error {
 	defer f.Close()
 
 	err = systemdUnitTmpl.Execute(f, struct {
-		ExePath, DataPath, LogPath, LogLevel string
-	}{exe, dataPath, logPath, logLevel})
+		ExePath, DataPath, LogPath, LogLevel, PprofAddr string
+	}{exe, dataPath, logPath, logLevel, pprofAddr})
 	if err != nil {
 		return fmt.Errorf("failed to write unit file: %w", err)
 	}

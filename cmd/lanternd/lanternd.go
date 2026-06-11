@@ -8,6 +8,9 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,15 +29,17 @@ import (
 )
 
 type runCmd struct {
-	DataPath string `arg:"--data-path" help:"path to store data"`
-	LogPath  string `arg:"--log-path" help:"path to store logs"`
-	LogLevel string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	DataPath  string `arg:"--data-path" help:"path to store data"`
+	LogPath   string `arg:"--log-path" help:"path to store logs"`
+	LogLevel  string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	PprofAddr string `arg:"--pprof-addr" help:"if set, serve net/http/pprof on this loopback address (e.g. 127.0.0.1:6060); dev only"`
 }
 
 type installCmd struct {
-	DataPath string `arg:"--data-path" help:"path to store data"`
-	LogPath  string `arg:"--log-path" help:"path to store logs"`
-	LogLevel string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	DataPath  string `arg:"--data-path" help:"path to store data"`
+	LogPath   string `arg:"--log-path" help:"path to store logs"`
+	LogLevel  string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	PprofAddr string `arg:"--pprof-addr" help:"if set, serve net/http/pprof on this loopback address (e.g. 127.0.0.1:6060); dev only"`
 }
 
 type uninstallCmd struct{}
@@ -93,12 +98,13 @@ func main() {
 			// Restore default signal behavior so a second signal terminates immediately.
 			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		}()
-		err = runDaemon(ctx, dataPath, logPath, a.Run.LogLevel)
+		err = runDaemon(ctx, dataPath, logPath, a.Run.LogLevel, a.Run.PprofAddr)
 	case a.Install != nil:
 		err = install(
 			os.ExpandEnv(withDefault(a.Install.DataPath, defaultDataPath)),
 			os.ExpandEnv(withDefault(a.Install.LogPath, defaultLogPath)),
 			a.Install.LogLevel,
+			a.Install.PprofAddr,
 		)
 	case a.Uninstall != nil:
 		err = uninstall()
@@ -199,7 +205,7 @@ func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProces
 	go func() {
 		defer stdoutPipe.Close()
 		var w io.Writer = os.Stdout
-		if h, ok := logger.Handler().(rlog.Handler); ok {
+		if h, ok := logger.Handler().(*rlog.Handler); ok {
 			w = h.Writer()
 		}
 		scanner := bufio.NewScanner(stdoutPipe)
@@ -319,9 +325,54 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	}
 }
 
-func runDaemon(ctx context.Context, dataPath, logPath, logLevel string) error {
+// startPprof serves net/http/pprof on addr until ctx is canceled. addr is rejected
+// unless it binds a loopback host: the endpoint exposes heap contents and goroutine
+// stacks, so reaching a non-loopback interface would publish the daemon's full
+// runtime state to the network.
+func startPprof(ctx context.Context, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid pprof-addr %q: %w", addr, err)
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("pprof-addr must bind loopback (127.0.0.1, ::1, or localhost), got %q", addr)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("pprof listen on %s: %w", addr, err)
+	}
+
+	srv := &http.Server{Handler: mux}
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("pprof server exited", "error", err)
+		}
+	}()
+	slog.Warn("pprof endpoint enabled", "addr", ln.Addr().String())
+	return nil
+}
+
+func runDaemon(ctx context.Context, dataPath, logPath, logLevel, pprofAddr string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	if pprofAddr != "" {
+		if err := startPprof(ctx, pprofAddr); err != nil {
+			return err
+		}
+	}
 
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
 	be, err := backend.NewLocalBackend(ctx, backend.Options{
