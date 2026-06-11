@@ -142,6 +142,11 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
+	// Must run before NewServiceWithContext, which acquires the cache flock.
+	if err := consumeCacheClearMarker(dataPath); err != nil {
+		slog.Warn("Failed to apply deferred tunnel cache clear", "path", dataPath, "error", err)
+	}
+
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 

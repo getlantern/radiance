@@ -6,9 +6,11 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -45,8 +47,9 @@ const (
 	urlTestInterval    = 3 * time.Minute
 	urlTestIdleTimeout = 15 * time.Minute
 
-	cacheID       = "lantern"
-	cacheFileName = "lantern.cache"
+	cacheID              = "lantern"
+	cacheFileName        = "lantern.cache"
+	cacheClearMarkerName = "lantern.cache.clear"
 	// minAndroidSystemStackKernel is the minimum Linux kernel version (major.minor) required
 	// for the system TUN stack to work reliably on Android only. Devices running a
 	// kernel below this version fall back to gvisor. This constant has no effect on
@@ -368,6 +371,50 @@ func baseRoutingRules() []O.Rule {
 
 func cacheFilePath(basePath string) string {
 	return filepath.Join(basePath, cacheFileName)
+}
+
+func cacheClearMarkerPath(basePath string) string {
+	return filepath.Join(basePath, cacheClearMarkerName)
+}
+
+// removeCacheFile deletes the tunnel cache if it exists.
+func removeCacheFile(basePath string) error {
+	err := os.Remove(cacheFilePath(basePath))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing cache file: %w", err)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		slog.Info("removed cache file", "path", cacheFilePath(basePath))
+	}
+	return nil
+}
+
+// writeCacheClearMarker records that cache removal must be retried on the next
+// tunnel start.
+func writeCacheClearMarker(basePath string) error {
+	slog.Debug("writing cache clear marker", "path", cacheClearMarkerPath(basePath))
+	if err := atomicfile.WriteFile(cacheClearMarkerPath(basePath), nil, fileperm.File); err != nil {
+		return fmt.Errorf("writing cache clear marker: %w", err)
+	}
+	return nil
+}
+
+// consumeCacheClearMarker applies a deferred cache clear during tunnel start
+// and removes the marker after a successful cache deletion.
+func consumeCacheClearMarker(basePath string) error {
+	marker := cacheClearMarkerPath(basePath)
+	if _, err := os.Stat(marker); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	if err := removeCacheFile(basePath); err != nil {
+		return err
+	}
+	os.Remove(marker) // we can safely ignore errors here
+	return nil
 }
 
 // rejectQUICRule rejects UDP/443 to force HTTP/2-over-TCP fallback. Standard

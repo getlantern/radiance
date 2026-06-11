@@ -18,6 +18,8 @@ type ConnectCmd struct {
 
 type DisconnectCmd struct{}
 
+type ClearTunnelCacheCmd struct{}
+
 type StatusCmd struct {
 	JSON bool `arg:"--json" help:"output JSON"`
 }
@@ -66,6 +68,14 @@ func vpnConnect(ctx context.Context, c *ipc.Client, tag string, wait bool) error
 	} else {
 		fmt.Printf("\rIP change not detected after %v\n", time.Since(start).Truncate(time.Second))
 	}
+	return nil
+}
+
+func runClearTunnelCache(ctx context.Context, c *ipc.Client) error {
+	if err := c.ClearTunnelCache(ctx); err != nil {
+		return err
+	}
+	fmt.Println("Tunnel cache cleared")
 	return nil
 }
 
