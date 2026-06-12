@@ -1,63 +1,46 @@
 package vpn
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
-	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type fakeTracker struct {
-	md trafficontrol.TrackerMetadata
-}
-
-func (f *fakeTracker) Metadata() trafficontrol.TrackerMetadata { return f.md }
-func (f *fakeTracker) Close() error                            { return nil }
-
-func newFakeTracker(outbound string) *fakeTracker {
+func newRec(outbound string) *record {
 	id, err := uuid.NewV4()
 	if err != nil {
 		panic(err)
 	}
-	return &fakeTracker{
-		md: trafficontrol.TrackerMetadata{
-			ID:        id,
-			CreatedAt: time.Now(),
-			Upload:    new(atomic.Int64),
-			Download:  new(atomic.Int64),
-			Outbound:  outbound,
-		},
-	}
+	return &record{id: id, createdAt: time.Now(), outbound: outbound}
 }
 
-// addBytes keeps the fake tracker and manager totals in sync; updating only one side
-// produces phantom throughput in the next sample.
-func addBytes(mgr *trafficontrol.Manager, t *fakeTracker, up, down int64) {
-	t.md.Upload.Add(up)
-	t.md.Download.Add(down)
-	mgr.PushUploaded(up)
-	mgr.PushDownloaded(down)
+// addBytes keeps the record's per-conn counters and the tracker's global totals in sync; updating
+// only one side produces phantom throughput in the next sample.
+func addBytes(ct *connTracker, r *record, up, down int64) {
+	r.upload.Add(up)
+	r.download.Add(down)
+	ct.pushUploaded(up)
+	ct.pushDownloaded(down)
 }
 
 func TestThroughputTracker_Sample(t *testing.T) {
 	tests := []struct {
 		name       string
-		run        func(mgr *trafficontrol.Manager, tr *throughputTracker, t0 time.Time)
+		run        func(ct *connTracker, tr *throughputTracker, t0 time.Time)
 		wantPer    map[string]Throughput
 		wantGlobal Throughput
 	}{
 		{
 			name: "computes per-outbound and global bps from byte deltas",
-			run: func(mgr *trafficontrol.Manager, tr *throughputTracker, t0 time.Time) {
-				a, b := newFakeTracker("vpn-a"), newFakeTracker("vpn-b")
-				mgr.Join(a)
-				mgr.Join(b)
-				addBytes(mgr, a, 125, 250)
-				addBytes(mgr, b, 500, 1000)
+			run: func(ct *connTracker, tr *throughputTracker, t0 time.Time) {
+				a, b := newRec("vpn-a"), newRec("vpn-b")
+				ct.join(a)
+				ct.join(b)
+				addBytes(ct, a, 125, 250)
+				addBytes(ct, b, 500, 1000)
 				tr.sample(t0.Add(time.Second))
 			},
 			wantPer: map[string]Throughput{
@@ -68,27 +51,39 @@ func TestThroughputTracker_Sample(t *testing.T) {
 		},
 		{
 			name: "includes bytes from connections closed during the window",
-			run: func(mgr *trafficontrol.Manager, tr *throughputTracker, t0 time.Time) {
-				live, closing := newFakeTracker("vpn-a"), newFakeTracker("vpn-a")
-				mgr.Join(live)
-				mgr.Join(closing)
-				addBytes(mgr, live, 100, 0)
-				addBytes(mgr, closing, 400, 0)
-				mgr.Leave(closing)
+			run: func(ct *connTracker, tr *throughputTracker, t0 time.Time) {
+				live, closing := newRec("vpn-a"), newRec("vpn-a")
+				ct.join(live)
+				ct.join(closing)
+				addBytes(ct, live, 100, 0)
+				addBytes(ct, closing, 400, 0)
+				ct.leave(closing)
 				tr.sample(t0.Add(time.Second))
 			},
 			wantPer:    map[string]Throughput{"vpn-a": {Up: 500 * 8}},
 			wantGlobal: Throughput{Up: 500 * 8},
 		},
 		{
+			name: "counts a connection that opens and closes within one window",
+			run: func(ct *connTracker, tr *throughputTracker, t0 time.Time) {
+				c := newRec("vpn-a")
+				ct.join(c)
+				addBytes(ct, c, 300, 100)
+				ct.leave(c)
+				tr.sample(t0.Add(time.Second))
+			},
+			wantPer:    map[string]Throughput{"vpn-a": {Up: 300 * 8, Down: 100 * 8}},
+			wantGlobal: Throughput{Up: 300 * 8, Down: 100 * 8},
+		},
+		{
 			name: "non-positive elapsed leaves baselines untouched for the next tick",
-			run: func(mgr *trafficontrol.Manager, tr *throughputTracker, t0 time.Time) {
-				a := newFakeTracker("vpn-a")
-				mgr.Join(a)
-				addBytes(mgr, a, 100, 200)
+			run: func(ct *connTracker, tr *throughputTracker, t0 time.Time) {
+				a := newRec("vpn-a")
+				ct.join(a)
+				addBytes(ct, a, 100, 200)
 				tr.sample(t0)
 
-				addBytes(mgr, a, 50, 50)
+				addBytes(ct, a, 50, 50)
 				tr.sample(t0.Add(time.Second))
 			},
 			wantPer:    map[string]Throughput{"vpn-a": {Up: 150 * 8, Down: 250 * 8}},
@@ -97,11 +92,12 @@ func TestThroughputTracker_Sample(t *testing.T) {
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := trafficontrol.NewManager()
-			tr := newThroughputTracker(mgr, time.Second)
+			ct := newConnTracker()
+			tr := newThroughputTracker(ct, time.Second)
+			ct.tp = tr
 			t0 := time.Unix(int64(1000+i), 0)
 			tr.lastTickAt = t0
-			tt.run(mgr, tr, t0)
+			tt.run(ct, tr, t0)
 			assert.Equal(t, tt.wantPer, tr.PerOutbound())
 			assert.Equal(t, tt.wantGlobal, tr.Global())
 		})
@@ -109,11 +105,12 @@ func TestThroughputTracker_Sample(t *testing.T) {
 }
 
 func TestThroughputTracker_PerOutboundIsIsolatedCopy(t *testing.T) {
-	mgr := trafficontrol.NewManager()
-	tr := newThroughputTracker(mgr, time.Second)
-	a := newFakeTracker("vpn-a")
-	mgr.Join(a)
-	addBytes(mgr, a, 10, 10)
+	ct := newConnTracker()
+	tr := newThroughputTracker(ct, time.Second)
+	ct.tp = tr
+	a := newRec("vpn-a")
+	ct.join(a)
+	addBytes(ct, a, 10, 10)
 
 	t0 := time.Unix(4000, 0)
 	tr.lastTickAt = t0
@@ -126,14 +123,14 @@ func TestThroughputTracker_PerOutboundIsIsolatedCopy(t *testing.T) {
 }
 
 func TestThroughputTracker_OutboundUnknownTag(t *testing.T) {
-	tr := newThroughputTracker(trafficontrol.NewManager(), time.Second)
+	tr := newThroughputTracker(newConnTracker(), time.Second)
 	assert.Equal(t, Throughput{}, tr.Outbound("missing"))
 }
 
 func TestThroughputTracker_NonPositiveIntervalUsesDefault(t *testing.T) {
-	mgr := trafficontrol.NewManager()
+	ct := newConnTracker()
 	for _, interval := range []time.Duration{0, -time.Second} {
-		tr := newThroughputTracker(mgr, interval)
+		tr := newThroughputTracker(ct, interval)
 		assert.Equal(t, defaultThroughputSampleInterval, tr.interval)
 	}
 }

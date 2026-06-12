@@ -366,17 +366,8 @@ func (s *localapi) vpnRestartHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// vpnConnectionsHandler handles GET /vpn/connections/ (all) and GET /vpn/connections/active.
 func (s *localapi) vpnConnectionsHandler(w http.ResponseWriter, r *http.Request) {
-	var (
-		conns []vpn.Connection
-		err   error
-	)
-	if r.URL.Query().Get("active") == "true" {
-		conns, err = s.backend(r.Context()).ActiveVPNConnections()
-	} else {
-		conns, err = s.backend(r.Context()).VPNConnections()
-	}
+	conns, err := s.backend(r.Context()).VPNConnections()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

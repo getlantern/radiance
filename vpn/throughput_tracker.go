@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid/v5"
-	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 
 	"github.com/getlantern/radiance/common"
 )
@@ -17,9 +16,8 @@ type Throughput struct {
 	Down int64 `json:"down"`
 }
 
-// defaultThroughputSampleInterval is longer on mobile because each tick allocates
-// a snapshot slice of every live and recently-closed connection via the upstream
-// trafficontrol API; at 1s on a phone this dominates GC churn under heavy traffic.
+// defaultThroughputSampleInterval is longer on mobile because each tick iterates every active
+// connection to compute its byte delta; at 1s on a phone this adds up under heavy traffic.
 var defaultThroughputSampleInterval = func() time.Duration {
 	if common.IsMobile() {
 		return 3 * time.Second
@@ -32,11 +30,20 @@ type byteTotals struct {
 	down int64
 }
 
+// closedDelta carries the final byte counts of a connection that closed since the last sample, so
+// its bytes still count toward its outbound's rate for the window in which it closed.
+type closedDelta struct {
+	id       uuid.UUID
+	outbound string
+	up       int64
+	down     int64
+}
+
 // throughputTracker reports network throughput, globally and per outbound tag.
 // Throughput is sampled at a fixed interval; readers see the most recent
 // completed sample.
 type throughputTracker struct {
-	manager  *trafficontrol.Manager
+	manager  *connTracker
 	interval time.Duration
 
 	mu               sync.RWMutex
@@ -47,6 +54,11 @@ type throughputTracker struct {
 	lastGlobal byteTotals
 	lastTickAt time.Time
 
+	// pending holds the final byte counts of connections closed since the last sample. The
+	// connTracker pushes here on close; sample drains it.
+	pendingMu sync.Mutex
+	pending   []closedDelta
+
 	// Scratch maps reused across ticks to avoid excessive allocations
 	nextSeen        map[uuid.UUID]byteTotals
 	nextPerOutbound map[string]Throughput
@@ -55,7 +67,7 @@ type throughputTracker struct {
 
 // newThroughputTracker returns a tracker sampling at interval; a non-positive
 // interval selects defaultThroughputSampleInterval.
-func newThroughputTracker(manager *trafficontrol.Manager, interval time.Duration) *throughputTracker {
+func newThroughputTracker(manager *connTracker, interval time.Duration) *throughputTracker {
 	if interval <= 0 {
 		interval = defaultThroughputSampleInterval
 	}
@@ -112,32 +124,54 @@ func (s *throughputTracker) PerOutbound() map[string]Throughput {
 	return out
 }
 
+// recordClosed is called by the connTracker when a connection closes, handing off its final byte
+// counts so the next sample can attribute them to the connection's outbound.
+func (s *throughputTracker) recordClosed(id uuid.UUID, outbound string, up, down int64) {
+	s.pendingMu.Lock()
+	s.pending = append(s.pending, closedDelta{id: id, outbound: outbound, up: up, down: down})
+	s.pendingMu.Unlock()
+}
+
+func (s *throughputTracker) applyDelta(id uuid.UUID, outbound string, up, down int64) {
+	previous := s.seen[id]
+
+	delta := s.deltas[outbound]
+	delta.up += up - previous.up
+	delta.down += down - previous.down
+	s.deltas[outbound] = delta
+}
+
 func (s *throughputTracker) sample(now time.Time) {
 	elapsed := now.Sub(s.lastTickAt).Seconds()
 	// Skip on clock jumps or coalesced ticks: leaving lastTickAt and the byte baselines
-	// untouched means the next sample's elapsed and deltas span the same window.
+	// untouched means the next sample's elapsed and deltas span the same window. Pending
+	// closed records are left for the next real tick to drain.
 	if elapsed <= 0 {
 		return
 	}
 	s.lastTickAt = now
 
+	s.pendingMu.Lock()
+	pending := s.pending
+	s.pending = s.pending[:0]
+	s.pendingMu.Unlock()
+
 	clear(s.deltas)
 	clear(s.nextSeen)
-	visit := func(m trafficontrol.TrackerMetadata) {
-		up := m.Upload.Load()
-		down := m.Download.Load()
-		prev := s.seen[m.ID]
-		d := s.deltas[m.Outbound]
-		d.up += up - prev.up
-		d.down += down - prev.down
-		s.deltas[m.Outbound] = d
-		s.nextSeen[m.ID] = byteTotals{up: up, down: down}
+	for id, rec := range s.manager.conns.Iter() {
+		up := rec.upload.Load()
+		down := rec.download.Load()
+
+		s.applyDelta(id, rec.outbound, up, down)
+		s.nextSeen[id] = byteTotals{up: up, down: down}
 	}
-	for _, m := range s.manager.Connections() {
-		visit(m)
-	}
-	for _, m := range s.manager.ClosedConnections() {
-		visit(m)
+	for _, closed := range pending {
+		// A connection still present in the active set this tick was already counted above; skip
+		// it so a close racing with the active walk cannot double-count.
+		if _, counted := s.nextSeen[closed.id]; counted {
+			continue
+		}
+		s.applyDelta(closed.id, closed.outbound, closed.up, closed.down)
 	}
 	s.seen, s.nextSeen = s.nextSeen, s.seen
 

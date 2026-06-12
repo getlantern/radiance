@@ -59,6 +59,10 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
+	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
+	// connection open/close pushes for telemetry.
+	connObserver ConnObserver
+
 	cancel  context.CancelFunc
 	closers []io.Closer
 }
@@ -275,12 +279,13 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashServer)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
+	t.clashServer.connTracker.SetObserver(t.connObserver)
 
 	var mutGrpMgr *groups.MutableGroupManager
 	if err := traceSpan(ctx, "newMutableGroupManager", func() error {
 		var err error
 		mutGrpMgr, err = newMutableGroupManager(
-			t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.TrafficManager(),
+			t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.connTracker,
 		)
 		return err
 	}); err != nil {

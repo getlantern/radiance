@@ -115,17 +115,10 @@ func (c *Client) RestartVPN(ctx context.Context) error {
 	return err
 }
 
-// VPNConnections returns all VPN connections (active and recently closed).
+// VPNConnections returns the active VPN connections.
 func (c *Client) VPNConnections(ctx context.Context) ([]vpn.Connection, error) {
 	var conns []vpn.Connection
 	err := c.doJSON(ctx, http.MethodGet, vpnConnectionsEndpoint, nil, &conns)
-	return conns, err
-}
-
-// ActiveVPNConnections returns currently active VPN connections.
-func (c *Client) ActiveVPNConnections(ctx context.Context) ([]vpn.Connection, error) {
-	var conns []vpn.Connection
-	err := c.doJSON(ctx, http.MethodGet, vpnConnectionsEndpoint+"?active=true", nil, &conns)
 	return conns, err
 }
 
