@@ -522,7 +522,7 @@ func (r *LocalBackend) updateConnMetrics(status vpn.VPNStatus) {
 			return // already running
 		}
 		ctx, cancel := context.WithCancel(r.ctx)
-		observer, err := telemetry.StartConnectionMetrics(ctx)
+		observer, err := telemetry.StartConnectionMetrics(ctx, r.vpnClient.ActiveConnectionCount)
 		if err != nil {
 			cancel()
 			slog.Warn("Failed to start connection metrics collection", "error", err)

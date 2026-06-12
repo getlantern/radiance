@@ -361,6 +361,17 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	return c.tunnel.clashServer.connTracker.activeConnections(), nil
 }
 
+// ActiveConnectionCount returns the number of active connections, or 0 if the tunnel is not
+// connected. It is cheap enough to back an observable metric gauge.
+func (c *VPNClient) ActiveConnectionCount() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return 0
+	}
+	return c.tunnel.clashServer.connTracker.activeConnectionCount()
+}
+
 // ClearTunnelCache removes the tunnel cache file at dataPath. The tunnel must be closed before
 // the cache file can be deleted. Setting force to true will close the tunnel if it's open.
 // ClearTunnelCache will not reopen the tunnel if it closed it.
@@ -414,7 +425,7 @@ func (c *VPNClient) Throughput() (ThroughputSnapshot, error) {
 	}, nil
 }
 
-// SetConnObserver sets the observer notified as connections open and close, or nil to detach. It is
+// SetConnObserver sets the observer notified when connections close, or nil to detach. It is
 // retained across tunnels and attached to the live tunnel's tracker if one is connected.
 func (c *VPNClient) SetConnObserver(observer ConnObserver) {
 	c.mu.Lock()

@@ -70,7 +70,7 @@ func (r *record) trackerMetadata() trafficontrol.TrackerMetadata {
 	}
 }
 
-// ConnAttrs is the attribute set describing a connection, pushed to a ConnObserver at open and close.
+// ConnAttrs is the attribute set describing a connection, carried on each ConnClose push.
 type ConnAttrs struct {
 	ID           string
 	FromOutbound string
@@ -91,10 +91,9 @@ type ConnClose struct {
 	Downlink        int64
 }
 
-// ConnObserver receives push notifications as connections open and close. Implementations must not
+// ConnObserver receives a push notification when a connection closes. Implementations must not
 // block: OnClose runs on the connection's close goroutine.
 type ConnObserver interface {
-	OnOpen(ConnAttrs)
 	OnClose(ConnClose)
 }
 
@@ -105,7 +104,8 @@ type connTracker struct {
 	upTotal   atomic.Int64
 	downTotal atomic.Int64
 
-	conns lsync.TypedMap[uuid.UUID, *record]
+	conns       lsync.TypedMap[uuid.UUID, *record]
+	activeCount atomic.Int64
 
 	tp *throughputTracker // wired after construction
 
@@ -114,15 +114,6 @@ type connTracker struct {
 }
 
 func newConnTracker() *connTracker { return &connTracker{} }
-
-func (m *connTracker) pushUploaded(n int64)   { m.upTotal.Add(n) }
-func (m *connTracker) pushDownloaded(n int64) { m.downTotal.Add(n) }
-
-// Total returns the cumulative up/down byte counters across all connections, including those already
-// closed (counting happens on the data path, independent of the active set).
-func (m *connTracker) Total() (up, down int64) {
-	return m.upTotal.Load(), m.downTotal.Load()
-}
 
 // SetObserver sets the telemetry observer, or nil to detach. It is re-set on each tunnel connect
 // because the tracker is recreated per tunnel while the observer outlives it.
@@ -138,11 +129,18 @@ func (m *connTracker) currentObserver() ConnObserver {
 	return m.observer
 }
 
+func (m *connTracker) pushUploaded(n int64)   { m.upTotal.Add(n) }
+func (m *connTracker) pushDownloaded(n int64) { m.downTotal.Add(n) }
+
+// Total returns the cumulative up/down byte counters across all connections, including those already
+// closed (counting happens on the data path, independent of the active set).
+func (m *connTracker) Total() (up, down int64) {
+	return m.upTotal.Load(), m.downTotal.Load()
+}
+
 func (m *connTracker) join(r *record) {
 	m.conns.Store(r.id, r)
-	if o := m.currentObserver(); o != nil {
-		o.OnOpen(r.attrs())
-	}
+	m.activeCount.Add(1)
 }
 
 // leave folds the connection's final accounting exactly once. Close may fire more than once (half
@@ -152,7 +150,8 @@ func (m *connTracker) leave(r *record) {
 	if _, loaded := m.conns.LoadAndDelete(r.id); !loaded {
 		return
 	}
-	closedMs := time.Now().UnixMilli()
+	m.activeCount.Add(-1)
+
 	up, down := r.upload.Load(), r.download.Load()
 	if m.tp != nil {
 		m.tp.recordClosed(r.id, r.outbound, up, down)
@@ -160,7 +159,7 @@ func (m *connTracker) leave(r *record) {
 	if o := m.currentObserver(); o != nil {
 		o.OnClose(ConnClose{
 			ConnAttrs:       r.attrs(),
-			DurationSeconds: float64(closedMs-r.createdAt.UnixMilli()) / 1000,
+			DurationSeconds: time.Since(r.createdAt).Seconds(),
 			Uplink:          up,
 			Downlink:        down,
 		})
@@ -194,6 +193,10 @@ func (m *connTracker) activeStats() (count int, perOutbound map[string]int) {
 		perOutbound[r.outbound]++
 	}
 	return count, perOutbound
+}
+
+func (m *connTracker) activeConnectionCount() int64 {
+	return m.activeCount.Load()
 }
 
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let

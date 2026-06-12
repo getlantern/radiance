@@ -11,42 +11,29 @@ import (
 	"github.com/getlantern/radiance/vpn"
 )
 
-// connEventBuffer sizes the channel between the data-path push and the single recording goroutine.
-// Sends are non-blocking; on overflow the event is dropped and counted rather than stalling a
-// connection's open or close.
+// connEventBuffer sizes the channel used for buffered ConnClose events.
+// Sends are non-blocking; on overflow the event is dropped and counted rather than stalling
+// a connection close.
 const connEventBuffer = 4096
 
-type connEventKind uint8
-
-const (
-	connOpened connEventKind = iota
-	connClosed
-)
-
-type connEvent struct {
-	kind  connEventKind
-	attrs vpn.ConnAttrs
-	close vpn.ConnClose
-}
-
-// connObserver records connection metrics from open/close pushes. OnOpen/OnClose run on the
-// connection's own goroutine and only enqueue; a single run goroutine does the OpenTelemetry work.
 type connObserver struct {
-	events chan connEvent
+	events chan vpn.ConnClose
 
-	activeConnections  metric.Int64UpDownCounter
 	connectionDuration metric.Float64Histogram
 	downlinkBytes      metric.Int64Counter
 	uplinkBytes        metric.Int64Counter
 	droppedEvents      metric.Int64Counter
+
+	activeConnectionsReg metric.Registration
 }
 
 // StartConnectionMetrics builds the connection metric instruments and starts the goroutine that
-// records them, returning an observer to attach to the VPN client. Recording stops when ctx is
-// canceled.
-func StartConnectionMetrics(ctx context.Context) (vpn.ConnObserver, error) {
+// records them, returning an observer to attach to the VPN client. Recording stops when ctx
+// is canceled.
+func StartConnectionMetrics(ctx context.Context, activeConnections func() int64) (vpn.ConnObserver, error) {
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
-	active, err := meter.Int64UpDownCounter(
+
+	active, err := meter.Int64ObservableGauge(
 		"current_active_connections",
 		metric.WithDescription("Current number of active connections"),
 	)
@@ -84,29 +71,30 @@ func StartConnectionMetrics(ctx context.Context) (vpn.ConnObserver, error) {
 	if err != nil {
 		return nil, err
 	}
+	activeReg, err := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		o.ObserveInt64(active, activeConnections())
+		return nil
+	}, active)
+	if err != nil {
+		return nil, err
+	}
+
 	observer := &connObserver{
-		events:             make(chan connEvent, connEventBuffer),
-		activeConnections:  active,
-		connectionDuration: dur,
-		downlinkBytes:      down,
-		uplinkBytes:        up,
-		droppedEvents:      dropped,
+		events:               make(chan vpn.ConnClose, connEventBuffer),
+		connectionDuration:   dur,
+		downlinkBytes:        down,
+		uplinkBytes:          up,
+		droppedEvents:        dropped,
+		activeConnectionsReg: activeReg,
 	}
 	go observer.run(ctx)
+
 	return observer, nil
 }
 
-func (o *connObserver) OnOpen(attrs vpn.ConnAttrs) {
-	o.enqueue(connEvent{kind: connOpened, attrs: attrs})
-}
-
 func (o *connObserver) OnClose(closeEvent vpn.ConnClose) {
-	o.enqueue(connEvent{kind: connClosed, close: closeEvent})
-}
-
-func (o *connObserver) enqueue(event connEvent) {
 	select {
-	case o.events <- event:
+	case o.events <- closeEvent:
 	default:
 		o.droppedEvents.Add(context.Background(), 1)
 	}
@@ -116,11 +104,14 @@ func (o *connObserver) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			if err := o.activeConnectionsReg.Unregister(); err != nil {
+				slog.Debug("Failed to unregister active-connections gauge", "error", err)
+			}
 			o.drain(context.Background())
 			slog.Debug("Stopped connection metrics recording")
 			return
-		case event := <-o.events:
-			o.record(ctx, event)
+		case closeEvent := <-o.events:
+			o.record(ctx, closeEvent)
 		}
 	}
 }
@@ -136,22 +127,13 @@ func (o *connObserver) drain(ctx context.Context) {
 	}
 }
 
-func (o *connObserver) record(ctx context.Context, event connEvent) {
-	switch event.kind {
-	case connOpened:
-		attrs := metric.WithAttributeSet(newConnAttributeSet(event.attrs))
-		o.activeConnections.Add(ctx, 1, attrs)
-
-	case connClosed:
-		attrs := metric.WithAttributeSet(newConnAttributeSet(event.close.ConnAttrs))
-		o.activeConnections.Add(ctx, -1, attrs)
-
-		if event.close.DurationSeconds > 0 {
-			o.connectionDuration.Record(ctx, event.close.DurationSeconds, attrs)
-		}
-		o.downlinkBytes.Add(ctx, event.close.Downlink, attrs)
-		o.uplinkBytes.Add(ctx, event.close.Uplink, attrs)
+func (o *connObserver) record(ctx context.Context, closeEvent vpn.ConnClose) {
+	attrs := metric.WithAttributeSet(newConnAttributeSet(closeEvent.ConnAttrs))
+	if closeEvent.DurationSeconds > 0 {
+		o.connectionDuration.Record(ctx, closeEvent.DurationSeconds, attrs)
 	}
+	o.downlinkBytes.Add(ctx, closeEvent.Downlink, attrs)
+	o.uplinkBytes.Add(ctx, closeEvent.Uplink, attrs)
 }
 
 func newConnAttributeSet(attrs vpn.ConnAttrs) attribute.Set {

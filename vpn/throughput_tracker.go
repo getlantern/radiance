@@ -151,11 +151,6 @@ func (s *throughputTracker) sample(now time.Time) {
 	}
 	s.lastTickAt = now
 
-	s.pendingMu.Lock()
-	pending := s.pending
-	s.pending = s.pending[:0]
-	s.pendingMu.Unlock()
-
 	clear(s.deltas)
 	clear(s.nextSeen)
 	for id, rec := range s.manager.conns.Iter() {
@@ -165,6 +160,13 @@ func (s *throughputTracker) sample(now time.Time) {
 		s.applyDelta(id, rec.outbound, up, down)
 		s.nextSeen[id] = byteTotals{up: up, down: down}
 	}
+
+	// Drain pending after the active walk: a connection that closes during the walk is either still
+	// seen as active above or captured here, never dropped to the next window.
+	s.pendingMu.Lock()
+	pending := s.pending
+	s.pending = s.pending[:0]
+	s.pendingMu.Unlock()
 	for _, closed := range pending {
 		// A connection still present in the active set this tick was already counted above; skip
 		// it so a close racing with the active walk cannot double-count.

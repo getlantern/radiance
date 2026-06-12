@@ -15,14 +15,7 @@ import (
 
 type recordingObserver struct {
 	mu     sync.Mutex
-	opens  []ConnAttrs
 	closes []ConnClose
-}
-
-func (o *recordingObserver) OnOpen(a ConnAttrs) {
-	o.mu.Lock()
-	o.opens = append(o.opens, a)
-	o.mu.Unlock()
 }
 
 func (o *recordingObserver) OnClose(c ConnClose) {
@@ -67,7 +60,7 @@ func TestConnTracker_LeaveFoldsOnce(t *testing.T) {
 	assert.Equal(t, closedDelta{id: r.id, outbound: "out", up: 100, down: 50}, tr.pending[0])
 }
 
-func TestConnTracker_ObserverOpenClose(t *testing.T) {
+func TestConnTracker_ObserverOnClose(t *testing.T) {
 	ct := newConnTracker()
 	obs := &recordingObserver{}
 	ct.SetObserver(obs)
@@ -81,11 +74,10 @@ func TestConnTracker_ObserverOpenClose(t *testing.T) {
 	addBytes(ct, r, 300, 120)
 	ct.leave(r)
 
-	require.Len(t, obs.opens, 1)
 	require.Len(t, obs.closes, 1)
-	assert.Equal(t, "vmess/vpn-a", obs.opens[0].Outbound)
-	assert.Equal(t, "tun/tun-in", obs.opens[0].Inbound)
 	c := obs.closes[0]
+	assert.Equal(t, "vmess/vpn-a", c.Outbound)
+	assert.Equal(t, "tun/tun-in", c.Inbound)
 	assert.Equal(t, int64(300), c.Uplink)
 	assert.Equal(t, int64(120), c.Downlink)
 	assert.InDelta(t, 2.0, c.DurationSeconds, 0.5)

@@ -171,6 +171,9 @@ func (s *clashServer) resolveChain(matchOutbound adapter.Outbound) (outbound, ou
 	for next != "" {
 		detour, loaded := s.outbound.Outbound(next)
 		if !loaded {
+			if outbound == "" {
+				outbound = next
+			}
 			break
 		}
 
