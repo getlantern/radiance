@@ -189,7 +189,8 @@ grab_profile() { # url, dest, what
 # only one CPU profile at a time, so callers must wait_cpu before the next phase
 # starts one; phases are sequential, so awaiting at phase end suffices.
 grab_cpu() { # seconds, label
-  local secs=$1 L=$2 dest="$OUTDIR/cpu.$L.pprof"
+  local secs=$1 L=$2
+  local dest="$OUTDIR/cpu.$L.pprof"
   (
     if curl -fsS --max-time "$((secs + 30))" "http://$PPROF_ADDR/debug/pprof/profile?seconds=$secs" -o "$dest.tmp" 2>/dev/null && [ -s "$dest.tmp" ]; then
       mv "$dest.tmp" "$dest"
