@@ -51,7 +51,10 @@ func (p *publisher) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// publish always records b in the ring so a later subscriber still gets backlog.
+// publish records b in the ring and fans it out to live subscribers under one
+// exclusive lock. Ring insertion and broadcast must stay atomic with respect to
+// subscribe so a client subscribing concurrently observes b either in its
+// backlog replay or on its live channel, never both and never neither.
 func (p *publisher) publish(b []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

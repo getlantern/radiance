@@ -216,9 +216,14 @@ func formatSource(function, file string, line int) slog.Attr {
 	)
 }
 
-// parseSourceFunction handles symbols like:
-//   - github.com/org/repo/pkg.Func
-//   - github.com/org/repo/pkg.(*Type).Method
+// parseSourceFunction splits a runtime function symbol into a package label and
+// a function name. The label is the symbol's third slash-separated segment, so
+// for a github.com/org/repo/leaf path it is the repo name, not the leaf package:
+//
+//   - "github.com/org/repo/leaf.Func"           → "repo", "Func"
+//   - "github.com/org/repo/leaf.(*Type).Method" → "repo", "(*Type).Method"
+//
+// ok is false when the symbol has fewer than three segments.
 func parseSourceFunction(symbol string) (pkg string, fn string, ok bool) {
 	pathParts := strings.SplitN(symbol, "/", 4)
 
