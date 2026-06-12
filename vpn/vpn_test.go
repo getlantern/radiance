@@ -2,7 +2,6 @@ package vpn
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -256,39 +255,46 @@ func TestClearTunnelCache(t *testing.T) {
 		return c, path
 	}
 
-	t.Run("disconnected", func(t *testing.T) {
+	t.Run("disconnected deletes in place", func(t *testing.T) {
 		dir := t.TempDir()
 		c, path := newClient(t, Disconnected, nil, dir)
 
-		assert.NoError(t, c.ClearTunnelCache(dir, false))
+		restart, err := c.ClearTunnelCache(dir)
+		assert.NoError(t, err)
+		assert.False(t, restart)
 		assert.NoFileExists(t, path)
+		assert.NoFileExists(t, cacheClearMarkerPath(dir))
 	})
 
-	t.Run("connected without force", func(t *testing.T) {
+	t.Run("connected defers via marker and requests restart", func(t *testing.T) {
 		dir := t.TempDir()
 		c, path := newClient(t, Connected, &tunnel{}, dir)
 
-		assert.Error(t, c.ClearTunnelCache(dir, false))
+		restart, err := c.ClearTunnelCache(dir)
+		assert.NoError(t, err)
+		assert.True(t, restart)
 		assert.FileExists(t, path)
+		assert.FileExists(t, cacheClearMarkerPath(dir))
 		assert.NotNil(t, c.tunnel)
 	})
+}
 
-	t.Run("connected with force", func(t *testing.T) {
+func TestConsumeCacheClearMarker(t *testing.T) {
+	t.Run("marker present deletes cache and marker", func(t *testing.T) {
 		dir := t.TempDir()
-		c, path := newClient(t, Connected, &tunnel{}, dir)
+		require.NoError(t, os.WriteFile(cacheFilePath(dir), []byte("cache"), 0o600))
+		require.NoError(t, writeCacheClearMarker(dir))
 
-		assert.NoError(t, c.ClearTunnelCache(dir, true))
-		assert.NoFileExists(t, path)
-		assert.Nil(t, c.tunnel)
-		assert.Equal(t, Disconnected, c.Status())
+		assert.NoError(t, consumeCacheClearMarker(dir))
+		assert.NoFileExists(t, cacheFilePath(dir))
+		assert.NoFileExists(t, cacheClearMarkerPath(dir))
 	})
 
-	t.Run("connected with force error", func(t *testing.T) {
+	t.Run("no marker leaves cache untouched", func(t *testing.T) {
 		dir := t.TempDir()
-		tun := &tunnel{closers: []io.Closer{closerFunc(func() error { return assert.AnError })}}
-		c, path := newClient(t, Connected, tun, dir)
+		require.NoError(t, os.WriteFile(cacheFilePath(dir), []byte("cache"), 0o600))
 
-		assert.Error(t, c.ClearTunnelCache(dir, true))
-		assert.NoFileExists(t, path)
+		assert.NoError(t, consumeCacheClearMarker(dir))
+		assert.FileExists(t, cacheFilePath(dir))
 	})
 }

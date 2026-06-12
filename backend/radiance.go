@@ -935,11 +935,19 @@ func (r *LocalBackend) startAutoSelectedListener() {
 }
 
 // ClearTunnelCache removes the tunnel cache from the configured data directory.
-// When force is true, an active tunnel is disconnected first; otherwise clearing
-// a connected tunnel's cache returns an error. ClearTunnelCache will not reopen
-// the tunnel if it had to close it.
-func (r *LocalBackend) ClearTunnelCache(force bool) error {
-	return r.vpnClient.ClearTunnelCache(settings.GetString(settings.DataPathKey), force)
+// If removal was deferred because the tunnel was active, it restarts the tunnel
+// to apply the clear immediately.
+func (r *LocalBackend) ClearTunnelCache() error {
+	shouldRestart, err := r.vpnClient.ClearTunnelCache(settings.GetString(settings.DataPathKey))
+	if err != nil || !shouldRestart {
+		return err
+	}
+
+	err = r.RestartVPN()
+	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return nil
+	}
+	return err
 }
 
 func (r *LocalBackend) RunOfflineURLTests() error {

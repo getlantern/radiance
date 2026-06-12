@@ -23,23 +23,24 @@ import (
 )
 
 type args struct {
-	Connect      *ConnectCmd      `arg:"subcommand:connect" help:"connect to VPN"`
-	Disconnect   *DisconnectCmd   `arg:"subcommand:disconnect" help:"disconnect VPN"`
-	Status       *StatusCmd       `arg:"subcommand:status" help:"show VPN status"`
-	Servers      *ServersCmd      `arg:"subcommand:servers" help:"manage servers"`
-	Set          *SetCmd          `arg:"subcommand:set" help:"update one or more settings"`
-	Get          *GetCmd          `arg:"subcommand:get" help:"show one or all settings"`
-	SplitTunnel  *SplitTunnelCmd  `arg:"subcommand:split-tunnel" help:"split-tunnel filter management"`
-	Features     *FeaturesCmd     `arg:"subcommand:features" help:"list available features and their status"`
-	Account      *AccountCmd      `arg:"subcommand:account" help:"login, signup, user data, devices, recovery"`
-	Subscription *SubscriptionCmd `arg:"subcommand:subscription" help:"plans, payments, and billing"`
-	ReportIssue  *ReportIssueCmd  `arg:"subcommand:report-issue" help:"report an issue"`
-	Throughput   *ThroughputCmd   `arg:"subcommand:throughput" help:"show throughput, globally and per outbound"`
-	Monitor      *MonitorCmd      `arg:"subcommand:monitor" help:"watch status, throughput, settings, recent history and errors; press q or Ctrl-C to quit"`
-	Logs         *LogsCmd         `arg:"subcommand:logs" help:"tail daemon logs; press q or Ctrl-C to quit"`
-	UpdateConfig *UpdateConfigCmd `arg:"subcommand:update-config" help:"force an immediate config fetch"`
-	IP           *IPCmd           `arg:"subcommand:ip" help:"show public IP address"`
-	Version      *VersionCmd      `arg:"subcommand:version" help:"print version"`
+	Connect          *ConnectCmd          `arg:"subcommand:connect" help:"connect to VPN"`
+	Disconnect       *DisconnectCmd       `arg:"subcommand:disconnect" help:"disconnect VPN"`
+	ClearTunnelCache *ClearTunnelCacheCmd `arg:"subcommand:clear-cache" help:"clear the tunnel cache"`
+	Status           *StatusCmd           `arg:"subcommand:status" help:"show VPN status"`
+	Servers          *ServersCmd          `arg:"subcommand:servers" help:"manage servers"`
+	Set              *SetCmd              `arg:"subcommand:set" help:"update one or more settings"`
+	Get              *GetCmd              `arg:"subcommand:get" help:"show one or all settings"`
+	SplitTunnel      *SplitTunnelCmd      `arg:"subcommand:split-tunnel" help:"split-tunnel filter management"`
+	Features         *FeaturesCmd         `arg:"subcommand:features" help:"list available features and their status"`
+	Account          *AccountCmd          `arg:"subcommand:account" help:"login, signup, user data, devices, recovery"`
+	Subscription     *SubscriptionCmd     `arg:"subcommand:subscription" help:"plans, payments, and billing"`
+	ReportIssue      *ReportIssueCmd      `arg:"subcommand:report-issue" help:"report an issue"`
+	Throughput       *ThroughputCmd       `arg:"subcommand:throughput" help:"show throughput, globally and per outbound"`
+	Monitor          *MonitorCmd          `arg:"subcommand:monitor" help:"watch status, throughput, settings, recent history and errors; press q or Ctrl-C to quit"`
+	Logs             *LogsCmd             `arg:"subcommand:logs" help:"tail daemon logs; press q or Ctrl-C to quit"`
+	UpdateConfig     *UpdateConfigCmd     `arg:"subcommand:update-config" help:"force an immediate config fetch"`
+	IP               *IPCmd               `arg:"subcommand:ip" help:"show public IP address"`
+	Version          *VersionCmd          `arg:"subcommand:version" help:"print version"`
 }
 
 func (args) Description() string {
@@ -182,6 +183,8 @@ func run(ctx context.Context, c *ipc.Client, a *args) error {
 		return vpnConnect(ctx, c, a.Connect.Name, a.Connect.Wait)
 	case a.Disconnect != nil:
 		return c.DisconnectVPN(ctx)
+	case a.ClearTunnelCache != nil:
+		return runClearTunnelCache(ctx, c)
 	case a.Status != nil:
 		return vpnStatus(ctx, c, a.Status)
 	case a.Throughput != nil:
