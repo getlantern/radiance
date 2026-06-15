@@ -54,10 +54,13 @@ type throughputTracker struct {
 	lastGlobal byteTotals
 	lastTickAt time.Time
 
-	// pending holds the final byte counts of connections closed since the last sample. The
-	// connTracker pushes here on close; sample drains it.
+	// pending holds the final byte counts of connections closed since the last sample; connTracker
+	// appends here on close. pending and draining are swapped under pendingMu so producers only ever
+	// touch pending: a post-swap append lands in the fresh buffer and never races sample's unlocked
+	// read of draining. Both are reused across ticks, growing to the high-water mark.
 	pendingMu sync.Mutex
 	pending   []closedDelta
+	draining  []closedDelta
 
 	// Scratch maps reused across ticks to avoid excessive allocations
 	nextSeen        map[uuid.UUID]byteTotals
@@ -132,13 +135,26 @@ func (s *throughputTracker) recordClosed(id uuid.UUID, outbound string, up, down
 	s.pendingMu.Unlock()
 }
 
+func (s *throughputTracker) addDelta(outbound string, up, down int64) {
+	delta := s.deltas[outbound]
+	delta.up += up
+	delta.down += down
+	s.deltas[outbound] = delta
+}
+
 func (s *throughputTracker) applyDelta(id uuid.UUID, outbound string, up, down int64) {
 	previous := s.seen[id]
+	s.addDelta(outbound, up-previous.up, down-previous.down)
+}
 
-	delta := s.deltas[outbound]
-	delta.up += up - previous.up
-	delta.down += down - previous.down
-	s.deltas[outbound] = delta
+func (s *throughputTracker) applyClosedDelta(closed closedDelta) {
+	if sampled, counted := s.nextSeen[closed.id]; counted {
+		s.addDelta(closed.outbound, max(0, closed.up-sampled.up), max(0, closed.down-sampled.down))
+		delete(s.nextSeen, closed.id)
+		return
+	}
+
+	s.applyDelta(closed.id, closed.outbound, closed.up, closed.down)
 }
 
 func (s *throughputTracker) sample(now time.Time) {
@@ -161,19 +177,14 @@ func (s *throughputTracker) sample(now time.Time) {
 		s.nextSeen[id] = byteTotals{up: up, down: down}
 	}
 
-	// Drain pending after the active walk: a connection that closes during the walk is either still
-	// seen as active above or captured here, never dropped to the next window.
+	// Drain pending after the active walk. A connection that closes during the walk may already
+	// have contributed bytes via its active snapshot above; if so, attribute only the bytes accrued
+	// after that snapshot and remove its baseline so it does not survive into the next tick.
 	s.pendingMu.Lock()
-	pending := s.pending
-	s.pending = s.pending[:0]
+	s.pending, s.draining = s.draining[:0], s.pending
 	s.pendingMu.Unlock()
-	for _, closed := range pending {
-		// A connection still present in the active set this tick was already counted above; skip
-		// it so a close racing with the active walk cannot double-count.
-		if _, counted := s.nextSeen[closed.id]; counted {
-			continue
-		}
-		s.applyDelta(closed.id, closed.outbound, closed.up, closed.down)
+	for _, closed := range s.draining {
+		s.applyClosedDelta(closed)
 	}
 	s.seen, s.nextSeen = s.nextSeen, s.seen
 

@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -126,6 +127,103 @@ func TestThroughputTracker_OutboundUnknownTag(t *testing.T) {
 	tr := newThroughputTracker(newConnTracker(), time.Second)
 	assert.Equal(t, Throughput{}, tr.Outbound("missing"))
 }
+
+func TestThroughputTracker_ClosedAfterActiveSnapshotAddsOnlyPostSnapshotBytes(t *testing.T) {
+	ct := newConnTracker()
+	tr := newThroughputTracker(ct, time.Second)
+	ct.tp = tr
+
+	r := newRec("vpn-a")
+	ct.join(r)
+	addBytes(ct, r, 50, 25)
+
+	t0 := time.Unix(5000, 0)
+	tr.lastTickAt = t0
+	tr.sample(t0.Add(time.Second))
+	require.Equal(t, Throughput{Up: 50 * 8, Down: 25 * 8}, tr.Outbound("vpn-a"))
+
+	clear(tr.deltas)
+	clear(tr.nextSeen)
+	for id, rec := range tr.manager.conns.Iter() {
+		up := rec.upload.Load()
+		down := rec.download.Load()
+
+		tr.applyDelta(id, rec.outbound, up, down)
+		tr.nextSeen[id] = byteTotals{up: up, down: down}
+	}
+
+	addBytes(ct, r, 20, 10)
+	ct.leave(r)
+
+	tr.pendingMu.Lock()
+	pending := append([]closedDelta(nil), tr.pending...)
+	tr.pending = tr.pending[:0]
+	tr.pendingMu.Unlock()
+	for _, closed := range pending {
+		tr.applyClosedDelta(closed)
+	}
+
+	require.Equal(t, byteTotals{up: 20, down: 10}, tr.deltas["vpn-a"])
+	_, stillTracked := tr.nextSeen[r.id]
+	assert.False(t, stillTracked, "closed connection baseline should not survive into the next tick")
+}
+
+// Run with -race: regression guard for the buffer-aliasing bug where sample's drained slice aliased
+// recordClosed's live append target.
+func TestThroughputTracker_ConcurrentSampleAndClose(t *testing.T) {
+	ct := newConnTracker()
+	tr := newThroughputTracker(ct, time.Second)
+	ct.tp = tr
+
+	t0 := time.Unix(6000, 0)
+	tr.lastTickAt = t0
+
+	const (
+		producers   = 8
+		perProducer = 500
+	)
+
+	var prod sync.WaitGroup
+	prod.Add(producers)
+	for p := 0; p < producers; p++ {
+		go func() {
+			defer prod.Done()
+			for i := 0; i < perProducer; i++ {
+				r := newRec("vpn-a")
+				ct.join(r)
+				addBytes(ct, r, 10, 5)
+				ct.leave(r)
+			}
+		}()
+	}
+
+	stop := make(chan struct{})
+	var sampler sync.WaitGroup
+	sampler.Add(1)
+	go func() {
+		defer sampler.Done()
+		tick := t0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			tick = tick.Add(time.Millisecond)
+			tr.sample(tick)
+		}
+	}()
+
+	prod.Wait()
+	close(stop)
+	sampler.Wait()
+
+	up, down := ct.Total()
+	assert.Equal(t, int64(producers*perProducer*10), up)
+	assert.Equal(t, int64(producers*perProducer*5), down)
+}
+
+
 
 func TestThroughputTracker_NonPositiveIntervalUsesDefault(t *testing.T) {
 	ct := newConnTracker()

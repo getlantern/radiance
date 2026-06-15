@@ -23,6 +23,10 @@ type record struct {
 	upload    atomic.Int64
 	download  atomic.Int64
 
+	// closed is the exactly-once gate for leave: Close may fire more than once (half-close,
+	// error/abort, ctx-cancel then explicit close), but the accounting must fold only once.
+	closed atomic.Bool
+
 	outbound     string // raw leaf outbound tag: per-outbound bucket key and group-manager shim
 	outboundType string
 	chain        []string
@@ -143,19 +147,23 @@ func (m *connTracker) join(r *record) {
 	m.activeCount.Add(1)
 }
 
-// leave folds the connection's final accounting exactly once. Close may fire more than once (half
-// close, error/abort, ctx cancel then explicit close); LoadAndDelete gates everything after it so a
-// repeat close is a no-op.
+// leave folds the connection's final accounting exactly once, gated by record.closed.
 func (m *connTracker) leave(r *record) {
-	if _, loaded := m.conns.LoadAndDelete(r.id); !loaded {
+	if !r.closed.CompareAndSwap(false, true) {
 		return
 	}
-	m.activeCount.Add(-1)
 
 	up, down := r.upload.Load(), r.download.Load()
+	// Hand the close to the sampler before removing the connection from the active set: a sample
+	// tick that misses the connection in its active walk must then find it in the pending drain,
+	// never in neither. Were it absent from both, the tick would evict the connection's byte
+	// baseline and the next tick would recount its lifetime bytes against a zero baseline.
 	if m.tp != nil {
 		m.tp.recordClosed(r.id, r.outbound, up, down)
 	}
+	m.conns.Delete(r.id)
+	m.activeCount.Add(-1)
+
 	if o := m.currentObserver(); o != nil {
 		o.OnClose(ConnClose{
 			ConnAttrs:       r.attrs(),
@@ -176,9 +184,10 @@ func (m *connTracker) Connections() []trafficontrol.TrackerMetadata {
 	return out
 }
 
-// activeConnections returns the current active connections as IPC Connection values.
+// activeConnections returns the current active connections as IPC Connection values. An empty
+// slice is returned if there are no active connections.
 func (m *connTracker) activeConnections() []Connection {
-	var out []Connection
+	out := make([]Connection, 0)
 	for _, r := range m.conns.Iter() {
 		out = append(out, newConnection(r))
 	}
@@ -200,8 +209,9 @@ func (m *connTracker) activeConnectionCount() int64 {
 }
 
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
-// bufio unwrap to the underlying conn for its vectorised and read-waiter fast paths, and Close folds
-// the connection out of the tracker before closing the wrapped conn.
+// bufio unwrap to the underlying conn for its vectorised and read-waiter fast paths. Close first
+// closes the wrapped conn, then folds the connection out of the tracker so the final accounting
+// snapshot includes any bytes counted by in-flight I/O that completes as close races it.
 type tcpConn struct {
 	N.ExtendedConn
 	rec *record
@@ -209,8 +219,9 @@ type tcpConn struct {
 }
 
 func (c *tcpConn) Close() error {
+	err := c.ExtendedConn.Close()
 	c.ct.leave(c.rec)
-	return c.ExtendedConn.Close()
+	return err
 }
 
 func (c *tcpConn) Upstream() any           { return c.ExtendedConn }
@@ -224,8 +235,9 @@ type udpConn struct {
 }
 
 func (c *udpConn) Close() error {
+	err := c.PacketConn.Close()
 	c.ct.leave(c.rec)
-	return c.PacketConn.Close()
+	return err
 }
 
 func (c *udpConn) Upstream() any           { return c.PacketConn }

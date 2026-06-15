@@ -24,6 +24,50 @@ func (o *recordingObserver) OnClose(c ConnClose) {
 	o.mu.Unlock()
 }
 
+// closeWaitsForWriteConn forces tcpConn.Close's fold to observe an in-flight Write's byte count:
+// Close blocks on writeAccounted, which the test signals only after tcpConn.Write returns (after
+// CounterConn counts). Without that gate the close-before-fold contract could only be checked on a
+// timing race.
+type closeWaitsForWriteConn struct {
+	writeStarted   chan struct{}
+	releaseWrite   chan struct{}
+	writeAccounted chan struct{}
+	closeOnce      sync.Once
+}
+
+func newCloseWaitsForWriteConn() *closeWaitsForWriteConn {
+	return &closeWaitsForWriteConn{
+		writeStarted:   make(chan struct{}),
+		releaseWrite:   make(chan struct{}),
+		writeAccounted: make(chan struct{}),
+	}
+}
+
+func (c *closeWaitsForWriteConn) Read(_ []byte) (int, error) { return 0, io.EOF }
+
+func (c *closeWaitsForWriteConn) Write(p []byte) (int, error) {
+	close(c.writeStarted)
+	<-c.releaseWrite
+	return len(p), nil
+}
+
+func (c *closeWaitsForWriteConn) Close() error {
+	c.closeOnce.Do(func() { close(c.releaseWrite) })
+	<-c.writeAccounted
+	return nil
+}
+
+func (c *closeWaitsForWriteConn) LocalAddr() net.Addr                { return dummyAddr("local") }
+func (c *closeWaitsForWriteConn) RemoteAddr() net.Addr               { return dummyAddr("remote") }
+func (c *closeWaitsForWriteConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *closeWaitsForWriteConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *closeWaitsForWriteConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+type dummyAddr string
+
+func (a dummyAddr) Network() string { return string(a) }
+func (a dummyAddr) String() string  { return string(a) }
+
 // wrapTCP mirrors clashServer.RoutedConnection's counter wiring so byte counting can be exercised
 // without a full tunnel.
 func wrapTCP(ct *connTracker, r *record, conn net.Conn) *tcpConn {
@@ -181,4 +225,35 @@ func TestConnTracker_ConcurrentJoinLeave(t *testing.T) {
 	up, down := ct.Total()
 	assert.Equal(t, int64(n), up)
 	assert.Equal(t, int64(n), down)
+}
+
+func TestConnTracker_CloseWaitsForInFlightWriteAccounting(t *testing.T) {
+	ct := newConnTracker()
+	tr := newThroughputTracker(ct, time.Second)
+	ct.tp = tr
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+
+	r := newRec("out")
+	inner := newCloseWaitsForWriteConn()
+	tc := wrapTCP(ct, r, inner)
+	msg := []byte("late bytes")
+
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := tc.Write(msg)
+		close(inner.writeAccounted) // unblocks inner.Close only after CounterConn has counted msg
+		writeErr <- err
+	}()
+	<-inner.writeStarted
+
+	require.NoError(t, tc.Close())
+	require.NoError(t, <-writeErr)
+
+	_, ok := ct.conns.Load(r.id)
+	assert.False(t, ok)
+	require.Len(t, tr.pending, 1)
+	assert.Equal(t, int64(len(msg)), tr.pending[0].down)
+	require.Len(t, obs.closes, 1)
+	assert.Equal(t, int64(len(msg)), obs.closes[0].Downlink)
 }
