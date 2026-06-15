@@ -2,7 +2,11 @@
 
 package vpn
 
-import "github.com/getlantern/radiance/common/env"
+import (
+	"os"
+
+	"github.com/getlantern/radiance/common/env"
+)
 
 // socksOnlyEnforced forces SOCKS-proxy mode for the novpn build, which has no TUN
 // device. A missing RADIANCE_SOCKS_ADDRESS is unrecoverable misconfiguration for
@@ -12,6 +16,8 @@ func socksOnlyEnforced() bool {
 	if addr, ok := env.Get(env.SocksAddress); !ok || addr == "" {
 		panic("novpn build requires " + env.SocksAddress.String() + " to be set")
 	}
-	env.Set(env.UseSocks.String(), "true")
+	if err := os.Setenv(env.UseSocks.String(), "true"); err != nil {
+		panic("novpn build failed to set " + env.UseSocks.String() + ": " + err.Error())
+	}
 	return true
 }

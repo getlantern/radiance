@@ -9,16 +9,16 @@ import "log/slog"
 // preserves the exported surface while doing nothing.
 type SplitTunnel struct{}
 
-func NewSplitTunnelHandler(dataPath string, logger *slog.Logger) (*SplitTunnel, error) {
+func NewSplitTunnelHandler(_ string, _ *slog.Logger) (*SplitTunnel, error) {
 	return &SplitTunnel{}, nil
 }
 
 func (s *SplitTunnel) IsEnabled() bool { return false }
 
-func (s *SplitTunnel) SetEnabled(bool) error { return nil }
+func (s *SplitTunnel) SetEnabled(_ bool) error { return nil }
 
 func (s *SplitTunnel) Filters() SplitTunnelFilter { return SplitTunnelFilter{} }
 
-func (s *SplitTunnel) AddItems(SplitTunnelFilter) error { return nil }
+func (s *SplitTunnel) AddItems(_ SplitTunnelFilter) error { return nil }
 
-func (s *SplitTunnel) RemoveItems(SplitTunnelFilter) error { return nil }
+func (s *SplitTunnel) RemoveItems(_ SplitTunnelFilter) error { return nil }

@@ -432,7 +432,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	if socksOnlyEnforced() || env.GetBool(env.UseSocks) {
 		socksAddr, _ := env.Get(env.SocksAddress)
-		slog.Info("Using SOCKS proxy for inbound as per environment variable", "socksAddr", socksAddr)
+		slog.Info("Using SOCKS proxy for inbound", "socksAddr", socksAddr)
 		addrPort, err := netip.ParseAddrPort(socksAddr)
 		if err != nil {
 			return O.Options{}, fmt.Errorf("invalid SOCKS address: %w", err)
