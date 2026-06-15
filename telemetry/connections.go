@@ -3,6 +3,8 @@ package telemetry
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -16,6 +18,10 @@ import (
 // a connection close.
 const connEventBuffer = 4096
 
+// droppedFlushInterval is how often run folds the dropped-event count into its metric. The overflow
+// path only touches an atomic, so the metric trails by at most one interval.
+const droppedFlushInterval = 10 * time.Second
+
 type connObserver struct {
 	events chan vpn.ConnClose
 
@@ -23,6 +29,10 @@ type connObserver struct {
 	downlinkBytes      metric.Int64Counter
 	uplinkBytes        metric.Int64Counter
 	droppedEvents      metric.Int64Counter
+
+	// dropped counts events shed on buffer overflow. OnClose runs on the connection close goroutine
+	// and must not touch the OTel SDK, so it bumps this atomic; run folds it into droppedEvents.
+	dropped atomic.Int64
 
 	activeConnectionsReg metric.Registration
 }
@@ -96,11 +106,13 @@ func (o *connObserver) OnClose(closeEvent vpn.ConnClose) {
 	select {
 	case o.events <- closeEvent:
 	default:
-		o.droppedEvents.Add(context.Background(), 1)
+		o.dropped.Add(1)
 	}
 }
 
 func (o *connObserver) run(ctx context.Context) {
+	ticker := time.NewTicker(droppedFlushInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -108,11 +120,20 @@ func (o *connObserver) run(ctx context.Context) {
 				slog.Debug("Failed to unregister active-connections gauge", "error", err)
 			}
 			o.drain(context.Background())
+			o.flushDropped(context.Background())
 			slog.Debug("Stopped connection metrics recording")
 			return
+		case <-ticker.C:
+			o.flushDropped(ctx)
 		case closeEvent := <-o.events:
 			o.record(ctx, closeEvent)
 		}
+	}
+}
+
+func (o *connObserver) flushDropped(ctx context.Context) {
+	if n := o.dropped.Swap(0); n > 0 {
+		o.droppedEvents.Add(ctx, n)
 	}
 }
 
