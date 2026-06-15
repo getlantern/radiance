@@ -60,7 +60,7 @@ type tunnel struct {
 	clientContextTracker *clientcontext.ClientContextInjector
 
 	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
-	// connection open/close pushes for telemetry.
+	// connection-close pushes for telemetry.
 	connObserver ConnObserver
 
 	cancel  context.CancelFunc

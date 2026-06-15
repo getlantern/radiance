@@ -75,7 +75,7 @@ type VPNClient struct {
 
 	status atomic.Value // VPNStatus
 
-	// connObserver, if set, receives connection open/close pushes. It outlives individual tunnels
+	// connObserver, if set, receives connection-close pushes. It outlives individual tunnels
 	// and is re-attached to each tunnel's tracker at connect.
 	connObserver ConnObserver
 
