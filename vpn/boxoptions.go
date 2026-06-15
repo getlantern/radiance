@@ -169,22 +169,8 @@ func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 // baseOpts returns the minimum sing-box options required for the tunnel to
 // function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
-	// ensure split tunnel file exists
-	splitTunnelPath := newSplitTunnel(basePath, slog.Default()).ruleFile
-
 	cacheFile := cacheFilePath(basePath)
-	loopbackAddr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 
-	// v6 ULA conditional on system v6 — see hasGlobalIPv6.
-	tunAddress := []netip.Prefix{
-		netip.MustParsePrefix("10.10.1.1/30"),
-	}
-	if hasGlobalIPv6() {
-		tunAddress = append(tunAddress, netip.MustParsePrefix("fdfe:dcba:9876::1/126"))
-		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
-	} else {
-		slog.Info("vpn: TUN IPv4-only (no global v6 detected)")
-	}
 	return O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
@@ -200,30 +186,7 @@ func baseOpts(basePath string) O.Options {
 				Final: "dns_local",
 			},
 		},
-		Inbounds: []O.Inbound{
-			{
-				Type: "tun",
-				Tag:  "tun-in",
-				Options: &O.TunInboundOptions{
-					InterfaceName:          "utun225",
-					Address:                tunAddress,
-					AutoRoute:              true,
-					StrictRoute:            true,
-					EndpointIndependentNat: true,     // needed for QUIC migration and hole-punching
-					Stack:                  "system", // fallback to gvisor on older Android kernels in buildOptions
-				},
-			},
-			{
-				Type: C.TypeMixed,
-				Tag:  bypass.BypassInboundTag,
-				Options: &O.HTTPMixedInboundOptions{
-					ListenOptions: O.ListenOptions{
-						Listen:     &loopbackAddr,
-						ListenPort: bypass.ProxyPort,
-					},
-				},
-			},
-		},
+		Inbounds: baseInbounds(),
 		Outbounds: []O.Outbound{
 			{
 				Type:    C.TypeDirect,
@@ -239,16 +202,7 @@ func baseOpts(basePath string) O.Options {
 		Route: &O.RouteOptions{
 			AutoDetectInterface: true,
 			Rules:               baseRoutingRules(),
-			RuleSet: []O.RuleSet{
-				{
-					Type: C.RuleSetTypeLocal,
-					Tag:  splitTunnelTag,
-					LocalOptions: O.LocalRuleSet{
-						Path: splitTunnelPath,
-					},
-					Format: C.RuleSetFormatSource,
-				},
-			},
+			RuleSet:             splitTunnelRuleSet(basePath),
 			DefaultDomainResolver: &O.DomainResolveOptions{
 				Server: "dns_local",
 			},
@@ -351,21 +305,8 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-		{ // split tunnel rule
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{
-					RuleSet: []string{splitTunnelTag},
-				},
-				RuleAction: O.RuleAction{
-					Action: C.RuleActionTypeRoute,
-					RouteOptions: O.RouteActionOptions{
-						Outbound: "direct",
-					},
-				},
-			},
-		},
 	}
+	rules = append(rules, splitTunnelRoutingRules()...)
 	return rules
 }
 
@@ -489,7 +430,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	opts := baseOpts(bOptions.BasePath)
 	slog.Debug("Base options initialized")
 
-	if env.GetBool(env.UseSocks) {
+	if socksOnlyEnforced() || env.GetBool(env.UseSocks) {
 		socksAddr, _ := env.Get(env.SocksAddress)
 		slog.Info("Using SOCKS proxy for inbound as per environment variable", "socksAddr", socksAddr)
 		addrPort, err := netip.ParseAddrPort(socksAddr)
@@ -509,25 +450,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		}
 		opts.Inbounds = []O.Inbound{socksIn}
 	} else {
-		switch common.Platform {
-		case "android":
-			opts.Route.OverrideAndroidVPN = true
-			kv := kernelVersion()
-			slog.Debug("detected kernel version", "kernel", kv)
-			if kv == "" {
-				slog.Warn("kernel version unknown, keeping default TUN stack")
-			} else if kernelBelow(kv, minAndroidSystemStackKernel) {
-				opts.Inbounds[0].Options.(*O.TunInboundOptions).Stack = "gvisor"
-				slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
-			}
-			slog.Debug("Android platform detected, OverrideAndroidVPN set to true")
-		case "ios":
-			opts.Inbounds[0].Options.(*O.TunInboundOptions).Stack = ""
-			slog.Debug("iOS platform detected, using default TUN stack with no override")
-		case "linux":
-			opts.Inbounds[0].Options.(*O.TunInboundOptions).AutoRedirect = true
-			slog.Debug("Linux platform detected, AutoRedirect set to true")
-		}
+		applyPlatformTunnelOptions(&opts)
 	}
 
 	// add smart routing and ad block rules
