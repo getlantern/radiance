@@ -1,6 +1,7 @@
 package log
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,8 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
+
+	lsync "github.com/getlantern/common/sync"
 )
 
 const (
@@ -104,8 +107,7 @@ func NewLogger(cfg Config) *slog.Logger {
 		logWriter = io.MultiWriter(logWriter, Publisher())
 	}
 	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     leveler,
+		Level: leveler,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {
 			case slog.TimeKey:
@@ -113,40 +115,6 @@ func NewLogger(cfg Config) *slog.Logger {
 					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
 				}
 				return a
-			case slog.SourceKey:
-				source, ok := a.Value.Any().(*slog.Source)
-				if !ok {
-					return a
-				}
-				// remove github.com/<username> to get pkg name
-				var pkg, fn string
-				fields := strings.SplitN(source.Function, "/", 4)
-				switch len(fields) {
-				case 0, 1, 2:
-					file := filepath.Base(source.File)
-					a.Value = slog.StringValue(fmt.Sprintf("%s:%d", file, source.Line))
-					return a
-				case 3:
-					pf := strings.SplitN(fields[2], ".", 2)
-					pkg, fn = pf[0], pf[1]
-				default:
-					pkg = fields[2]
-					fn = strings.SplitN(fields[3], ".", 2)[1]
-				}
-
-				_, file, fnd := strings.Cut(source.File, pkg+"/")
-				if !fnd {
-					file = filepath.Base(source.File)
-				}
-				src := slog.GroupValue(
-					slog.String("func", fn),
-					slog.String("file", fmt.Sprintf("%s:%d", file, source.Line)),
-				)
-				a.Value = slog.GroupValue(
-					slog.String("pkg", pkg),
-					slog.Any("source", src),
-				)
-				a.Key = ""
 			case slog.LevelKey:
 				// format the log level to account for the custom levels defined in internal/util.go, i.e. trace
 				// otherwise, slog will print as "DEBUG-4" (trace) or similar
@@ -156,6 +124,7 @@ func NewLogger(cfg Config) *slog.Logger {
 			return a
 		},
 	})
+	handler = newSourceHandler(handler)
 	handler = &Handler{Handler: handler, w: logWriter}
 	logger := slog.New(handler)
 	if !loggingToStdOut {
@@ -177,6 +146,109 @@ type Handler struct {
 
 func (h *Handler) Writer() io.Writer {
 	return h.w
+}
+
+// sourceHandler adds a cached, human-readable source attribute derived from the
+// record PC. This keeps source formatting out of ReplaceAttr and avoids
+// recomputing it for repeated call sites.
+type sourceHandler struct {
+	slog.Handler
+	cache *lsync.TypedMap[uintptr, slog.Attr]
+}
+
+func newSourceHandler(next slog.Handler) slog.Handler {
+	return &sourceHandler{
+		Handler: next,
+		cache:   new(lsync.TypedMap[uintptr, slog.Attr]),
+	}
+}
+
+func (h *sourceHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.PC == 0 {
+		return h.Handler.Handle(ctx, r)
+	}
+
+	r = r.Clone()
+	r.AddAttrs(h.sourceAttr(r.PC))
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h *sourceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h.withHandler(h.Handler.WithAttrs(attrs))
+}
+
+func (h *sourceHandler) WithGroup(name string) slog.Handler {
+	return h.withHandler(h.Handler.WithGroup(name))
+}
+
+func (h *sourceHandler) withHandler(next slog.Handler) slog.Handler {
+	return &sourceHandler{
+		Handler: next,
+		cache:   h.cache,
+	}
+}
+
+func (h *sourceHandler) sourceAttr(pc uintptr) slog.Attr {
+	if attr, ok := h.cache.Load(pc); ok {
+		return attr
+	}
+
+	pcs := [1]uintptr{pc}
+	frame, _ := runtime.CallersFrames(pcs[:]).Next()
+
+	attr := formatSource(frame.Function, frame.File, frame.Line)
+	h.cache.Store(pc, attr)
+	return attr
+}
+
+func formatSource(function, file string, line int) slog.Attr {
+	pkg, fn, ok := parseSourceFunction(function)
+	if !ok {
+		return slog.String(slog.SourceKey, fmt.Sprintf("%s:%d", filepath.Base(file), line))
+	}
+
+	return slog.Group("",
+		slog.String("pkg", pkg),
+		slog.Group("source",
+			slog.String("func", fn),
+			slog.String("file", fmt.Sprintf("%s:%d", trimSourceFile(file, pkg), line)),
+		),
+	)
+}
+
+// parseSourceFunction splits a runtime function symbol into a package label and
+// a function name. The label is the symbol's third slash-separated segment, so
+// for a github.com/org/repo/leaf path it is the repo name, not the leaf package:
+//
+//   - "github.com/org/repo/leaf.Func"           → "repo", "Func"
+//   - "github.com/org/repo/leaf.(*Type).Method" → "repo", "(*Type).Method"
+//
+// ok is false when the symbol has fewer than three segments.
+func parseSourceFunction(symbol string) (pkg string, fn string, ok bool) {
+	pathParts := strings.SplitN(symbol, "/", 4)
+
+	switch len(pathParts) {
+	case 3:
+		pkg, fn, ok = strings.Cut(pathParts[2], ".")
+		return pkg, fn, ok && pkg != "" && fn != ""
+	case 4:
+		pkg = pathParts[2]
+		if pkg == "" {
+			return "", "", false
+		}
+
+		_, fn, ok = strings.Cut(pathParts[3], ".")
+		return pkg, fn, ok && fn != ""
+	default:
+		return "", "", false
+	}
+}
+
+func trimSourceFile(file, pkg string) string {
+	if _, after, found := strings.Cut(file, pkg+"/"); found && after != "" {
+		return after
+	}
+	return filepath.Base(file)
 }
 
 // settingsLeveler reads the current log level from settings on each call,
