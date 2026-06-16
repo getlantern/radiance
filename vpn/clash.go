@@ -9,14 +9,18 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+
+	"github.com/gofrs/uuid/v5"
 )
 
 var _ adapter.ClashServer = (*clashServer)(nil)
@@ -34,7 +38,7 @@ type clashServer struct {
 	outbound  adapter.OutboundManager
 	endpoint  adapter.EndpointManager
 
-	trafficManager    *trafficontrol.Manager
+	connTracker       *connTracker
 	throughputTracker *throughputTracker
 	trackerDone       chan struct{}
 
@@ -57,15 +61,17 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options option
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	trafficManager := trafficontrol.NewManager()
+	ct := newConnTracker()
+	tp := newThroughputTracker(ct, 0)
+	ct.tp = tp
 	return &clashServer{
 		ctx:               runCtx,
 		cancel:            cancel,
 		dnsRouter:         service.FromContext[adapter.DNSRouter](ctx),
 		outbound:          service.FromContext[adapter.OutboundManager](ctx),
 		endpoint:          service.FromContext[adapter.EndpointManager](ctx),
-		trafficManager:    trafficManager,
-		throughputTracker: newThroughputTracker(trafficManager, 0),
+		connTracker:       ct,
+		throughputTracker: tp,
 		modeList:          modeList,
 		mode:              initial,
 	}, nil
@@ -126,22 +132,114 @@ func (s *clashServer) HistoryStorage() adapter.URLTestHistoryStorage {
 	return nil
 }
 
-func (s *clashServer) TrafficManager() *trafficontrol.Manager {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.trafficManager
-}
-
 func (s *clashServer) ThroughputTracker() *throughputTracker {
 	return s.throughputTracker
 }
 
+// newRecord builds a lean record for a routed connection, copying the scalars radiance reads out of
+// metadata and resolving the outbound chain.
+func (s *clashServer) newRecord(metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) *record {
+	id, _ := uuid.NewV4()
+	outbound, outboundType, chain := s.resolveChain(matchOutbound)
+	return &record{
+		id:           id,
+		createdAt:    time.Now(),
+		outbound:     outbound,
+		outboundType: outboundType,
+		chain:        chain,
+		inboundType:  metadata.InboundType,
+		inboundName:  metadata.Inbound,
+		ipVersion:    metadata.IPVersion,
+		network:      metadata.Network,
+		source:       metadata.Source.String(),
+		destination:  metadata.Destination.String(),
+		domain:       metadata.Domain,
+		protocol:     metadata.Protocol,
+		fromOutbound: metadata.Outbound,
+		ruleStr:      formatRule(matchedRule),
+	}
+}
+
+func (s *clashServer) resolveChain(matchOutbound adapter.Outbound) (outbound, outboundType string, chain []string) {
+	var next string
+	if matchOutbound != nil {
+		next = matchOutbound.Tag()
+	} else {
+		next = s.outbound.Default().Tag()
+	}
+
+	for next != "" {
+		detour, loaded := s.outbound.Outbound(next)
+		if !loaded {
+			if outbound == "" {
+				outbound = next
+			}
+			break
+		}
+
+		chain = append(chain, next)
+		outbound = detour.Tag()
+		outboundType = detour.Type()
+
+		group, isGroup := detour.(adapter.OutboundGroup)
+		if !isGroup {
+			break
+		}
+		next = group.Now()
+	}
+
+	return outbound, outboundType, common.Reverse(chain)
+}
+
+func formatRule(rule adapter.Rule) string {
+	if rule == nil {
+		return ""
+	}
+	return rule.String() + " => " + rule.Action().String()
+}
+
+func (s *clashServer) uploadCounter(r *record) N.CountFunc {
+	return func(n int64) {
+		r.upload.Add(n)
+		s.connTracker.pushUploaded(n)
+	}
+}
+
+func (s *clashServer) downloadCounter(r *record) N.CountFunc {
+	return func(n int64) {
+		r.download.Add(n)
+		s.connTracker.pushDownloaded(n)
+	}
+}
+
 func (s *clashServer) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) net.Conn {
-	return trafficontrol.NewTCPTracker(conn, s.trafficManager, metadata, s.outbound, matchedRule, matchOutbound)
+	r := s.newRecord(metadata, matchedRule, matchOutbound)
+	c := &tcpConn{
+		ExtendedConn: bufio.NewCounterConn(
+			conn,
+			[]N.CountFunc{s.uploadCounter(r)},
+			[]N.CountFunc{s.downloadCounter(r)},
+		),
+		rec: r,
+		ct:  s.connTracker,
+	}
+	s.connTracker.join(r)
+	return c
 }
 
 func (s *clashServer) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) N.PacketConn {
-	return trafficontrol.NewUDPTracker(conn, s.trafficManager, metadata, s.outbound, matchedRule, matchOutbound)
+	r := s.newRecord(metadata, matchedRule, matchOutbound)
+	c := &udpConn{
+		PacketConn: bufio.NewCounterPacketConn(
+			conn,
+			[]N.CountFunc{s.uploadCounter(r)},
+			[]N.CountFunc{s.downloadCounter(r)},
+		),
+		rec: r,
+		ct:  s.connTracker,
+	}
+	s.connTracker.join(r)
+	return c
 }
 
 func (s *clashServer) Name() string {

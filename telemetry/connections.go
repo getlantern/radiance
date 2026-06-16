@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -12,98 +13,159 @@ import (
 	"github.com/getlantern/radiance/vpn"
 )
 
-// ConnectionSource provides access to the current VPN connections for metrics collection.
-type ConnectionSource interface {
-	Connections() ([]vpn.Connection, error)
+// connEventBuffer sizes the channel used for buffered ConnClose events.
+// Sends are non-blocking; on overflow the event is dropped and counted rather than stalling
+// a connection close.
+const connEventBuffer = 4096
+
+// droppedFlushInterval is how often run folds the dropped-event count into its metric. The overflow
+// path only touches an atomic, so the metric trails by at most one interval.
+const droppedFlushInterval = 10 * time.Second
+
+type connObserver struct {
+	events chan vpn.ConnClose
+
+	connectionDuration metric.Float64Histogram
+	downlinkBytes      metric.Int64Counter
+	uplinkBytes        metric.Int64Counter
+	droppedEvents      metric.Int64Counter
+
+	// dropped counts events shed on buffer overflow. OnClose runs on the connection close goroutine
+	// and must not touch the OTel SDK, so it bumps this atomic; run folds it into droppedEvents.
+	dropped atomic.Int64
+
+	activeConnectionsReg metric.Registration
 }
 
-// StartConnectionMetrics periodically polls the number of active connections and their total
-// upload and download bytes, setting the corresponding OpenTelemetry metrics. It runs until the
-// provided context is canceled.
-func StartConnectionMetrics(ctx context.Context, src ConnectionSource, pollInterval time.Duration) {
-	ticker := time.NewTicker(pollInterval)
+// StartConnectionMetrics builds the connection metric instruments and starts the goroutine that
+// records them, returning an observer to attach to the VPN client. Recording stops when ctx
+// is canceled.
+func StartConnectionMetrics(ctx context.Context, activeConnections func() int64) (vpn.ConnObserver, error) {
 	meter := otel.Meter("github.com/getlantern/radiance/metrics")
-	currentActiveConnections, err := meter.Int64Counter("current_active_connections", metric.WithDescription("Current number of active connections"))
+
+	active, err := meter.Int64ObservableGauge(
+		"current_active_connections",
+		metric.WithDescription("Current number of active connections"),
+	)
 	if err != nil {
-		slog.Warn("failed to create current_active_connections metric", slog.Any("error", err))
-		return
+		return nil, err
 	}
-	connectionDuration, err := meter.Float64Histogram("connection_duration_seconds", metric.WithDescription("Duration of connections in seconds"), metric.WithUnit("s"))
+	dur, err := meter.Float64Histogram(
+		"connection_duration_seconds",
+		metric.WithDescription("Duration of connections in seconds"),
+		metric.WithUnit("s"),
+	)
 	if err != nil {
-		slog.Warn("failed to create connection_duration_seconds metric", slog.Any("error", err))
-		return
+		return nil, err
 	}
-	downlinkBytes, err := meter.Int64Counter("downlink_bytes", metric.WithDescription("Total downlink bytes across all connections"), metric.WithUnit("By"))
+	down, err := meter.Int64Counter(
+		"downlink_bytes",
+		metric.WithDescription("Total downlink bytes across all connections"),
+		metric.WithUnit("By"),
+	)
 	if err != nil {
-		slog.Warn("failed to create downlink_bytes metric", slog.Any("error", err))
-		return
+		return nil, err
 	}
-	uplinkBytes, err := meter.Int64Counter("uplink_bytes", metric.WithDescription("Total uplink bytes across all connections"), metric.WithUnit("By"))
+	up, err := meter.Int64Counter(
+		"uplink_bytes",
+		metric.WithDescription("Total uplink bytes across all connections"),
+		metric.WithUnit("By"),
+	)
 	if err != nil {
-		slog.Warn("failed to create uplink_bytes metric", slog.Any("error", err))
-		return
+		return nil, err
 	}
-	go func() {
-		seenConnections := make(map[string]bool)
-		for {
-			select {
-			case <-ctx.Done():
-				ticker.Stop()
-				return
-			case <-ticker.C:
-				slog.Debug("polling connections for metrics", slog.Int("seen_connections", len(seenConnections)), slog.Duration("poll_interval", pollInterval))
-				conns, err := src.Connections()
-				if err != nil {
-					slog.Debug("failed to retrieve connections for metrics", slog.Any("error", err))
-					continue
-				}
+	dropped, err := meter.Int64Counter(
+		"connection_metric_events_dropped",
+		metric.WithDescription("Connection metric events dropped because the recording buffer was full"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	activeReg, err := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		o.ObserveInt64(active, activeConnections())
+		return nil
+	}, active)
+	if err != nil {
+		return nil, err
+	}
 
-				// Track which connections are still reported so we can prune stale entries.
-				currentIDs := make(map[string]struct{}, len(conns))
-				for _, c := range conns {
-					currentIDs[c.ID] = struct{}{}
-					attributes := attribute.NewSet(
-						attribute.String("from_outbound", c.FromOutbound),
-						attribute.String("outbound_name", c.Outbound),
-						attribute.String("inbound", c.Inbound),
-						attribute.String("network", c.Network),
-						attribute.String("protocol", c.Protocol),
-						attribute.Int("ip_version", c.IPVersion),
-						attribute.String("rule", c.Rule),
-						attribute.StringSlice("chain_list", c.ChainList),
-					)
+	observer := &connObserver{
+		events:               make(chan vpn.ConnClose, connEventBuffer),
+		connectionDuration:   dur,
+		downlinkBytes:        down,
+		uplinkBytes:          up,
+		droppedEvents:        dropped,
+		activeConnectionsReg: activeReg,
+	}
+	go observer.run(ctx)
 
-					active, seen := seenConnections[c.ID]
+	return observer, nil
+}
 
-					// not collecting duration of active connections
-					if c.ClosedAt == 0 && !seen {
-						seenConnections[c.ID] = true
-						currentActiveConnections.Add(ctx, 1, metric.WithAttributeSet(attributes))
-						continue
-					}
+func (o *connObserver) OnClose(closeEvent vpn.ConnClose) {
+	select {
+	case o.events <- closeEvent:
+	default:
+		o.dropped.Add(1)
+	}
+}
 
-					// already registered this closed connection
-					if seen && !active {
-						continue
-					}
-
-					seenConnections[c.ID] = false
-					duration := float64(c.ClosedAt - c.CreatedAt)
-					if duration > 0 {
-						connectionDuration.Record(ctx, duration/1000, metric.WithAttributeSet(attributes))
-					}
-
-					downlinkBytes.Add(ctx, c.Downlink, metric.WithAttributeSet(attributes))
-					uplinkBytes.Add(ctx, c.Uplink, metric.WithAttributeSet(attributes))
-				}
-
-				// Remove entries for connections no longer reported by the source.
-				for id := range seenConnections {
-					if _, ok := currentIDs[id]; !ok {
-						delete(seenConnections, id)
-					}
-				}
+func (o *connObserver) run(ctx context.Context) {
+	ticker := time.NewTicker(droppedFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if err := o.activeConnectionsReg.Unregister(); err != nil {
+				slog.Debug("Failed to unregister active-connections gauge", "error", err)
 			}
+			o.drain(context.Background())
+			o.flushDropped(context.Background())
+			slog.Debug("Stopped connection metrics recording")
+			return
+		case <-ticker.C:
+			o.flushDropped(ctx)
+		case closeEvent := <-o.events:
+			o.record(ctx, closeEvent)
 		}
-	}()
+	}
+}
+
+func (o *connObserver) flushDropped(ctx context.Context) {
+	if n := o.dropped.Swap(0); n > 0 {
+		o.droppedEvents.Add(ctx, n)
+	}
+}
+
+func (o *connObserver) drain(ctx context.Context) {
+	for {
+		select {
+		case event := <-o.events:
+			o.record(ctx, event)
+		default:
+			return
+		}
+	}
+}
+
+func (o *connObserver) record(ctx context.Context, closeEvent vpn.ConnClose) {
+	attrs := metric.WithAttributeSet(newConnAttributeSet(closeEvent.ConnAttrs))
+	if closeEvent.DurationSeconds > 0 {
+		o.connectionDuration.Record(ctx, closeEvent.DurationSeconds, attrs)
+	}
+	o.downlinkBytes.Add(ctx, closeEvent.Downlink, attrs)
+	o.uplinkBytes.Add(ctx, closeEvent.Uplink, attrs)
+}
+
+func newConnAttributeSet(attrs vpn.ConnAttrs) attribute.Set {
+	return attribute.NewSet(
+		attribute.String("from_outbound", attrs.FromOutbound),
+		attribute.String("outbound_name", attrs.Outbound),
+		attribute.String("inbound", attrs.Inbound),
+		attribute.String("network", attrs.Network),
+		attribute.String("protocol", attrs.Protocol),
+		attribute.Int("ip_version", attrs.IPVersion),
+		attribute.String("rule", attrs.Rule),
+		attribute.StringSlice("chain_list", attrs.ChainList),
+	)
 }

@@ -2,7 +2,6 @@ package vpn
 
 import (
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
 
@@ -71,33 +70,24 @@ type Connection struct {
 	ChainList    []string `json:"chain,omitempty"`
 }
 
-// NewConnection creates a Connection from tracker metadata.
-func newConnection(metadata trafficontrol.TrackerMetadata) Connection {
-	var rule string
-	if metadata.Rule != nil {
-		rule = metadata.Rule.String() + " => " + metadata.Rule.Action().String()
-	}
-	var closedAt int64
-	if !metadata.ClosedAt.IsZero() {
-		closedAt = metadata.ClosedAt.UnixMilli()
-	}
-	md := metadata.Metadata
+// newConnection creates a Connection from a tracker record. Only active records are exposed, so
+// ClosedAt is always zero.
+func newConnection(r *record) Connection {
 	return Connection{
-		ID:           metadata.ID.String(),
-		Inbound:      md.InboundType + "/" + md.Inbound,
-		IPVersion:    int(md.IPVersion),
-		Network:      md.Network,
-		Source:       md.Source.String(),
-		Destination:  md.Destination.String(),
-		Domain:       md.Domain,
-		Protocol:     md.Protocol,
-		FromOutbound: md.Outbound,
-		CreatedAt:    metadata.CreatedAt.UnixMilli(),
-		ClosedAt:     closedAt,
-		Uplink:       metadata.Upload.Load(),
-		Downlink:     metadata.Download.Load(),
-		Rule:         rule,
-		Outbound:     metadata.OutboundType + "/" + metadata.Outbound,
-		ChainList:    metadata.Chain,
+		ID:           r.id.String(),
+		Inbound:      r.inboundType + "/" + r.inboundName,
+		IPVersion:    int(r.ipVersion),
+		Network:      r.network,
+		Source:       r.source,
+		Destination:  r.destination,
+		Domain:       r.domain,
+		Protocol:     r.protocol,
+		FromOutbound: r.fromOutbound,
+		CreatedAt:    r.createdAt.UnixMilli(),
+		Uplink:       r.upload.Load(),
+		Downlink:     r.download.Load(),
+		Rule:         r.ruleStr,
+		Outbound:     r.outboundType + "/" + r.outbound,
+		ChainList:    r.chain,
 	}
 }

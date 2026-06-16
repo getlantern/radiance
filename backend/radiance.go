@@ -522,10 +522,17 @@ func (r *LocalBackend) updateConnMetrics(status vpn.VPNStatus) {
 			return // already running
 		}
 		ctx, cancel := context.WithCancel(r.ctx)
-		telemetry.StartConnectionMetrics(ctx, r.vpnClient, 1*time.Minute)
+		observer, err := telemetry.StartConnectionMetrics(ctx, r.vpnClient.ActiveConnectionCount)
+		if err != nil {
+			cancel()
+			slog.Warn("Failed to start connection metrics collection", "error", err)
+			return
+		}
+		r.vpnClient.SetConnObserver(observer)
 		r.stopConnMetrics = cancel
 		slog.Debug("Started connection metrics collection")
 	} else if r.stopConnMetrics != nil {
+		r.vpnClient.SetConnObserver(nil)
 		r.stopConnMetrics()
 		r.stopConnMetrics = nil
 		slog.Debug("Stopped connection metrics collection")
@@ -833,29 +840,14 @@ func (r *LocalBackend) persistSelection(tag string) {
 	slog.Info("Selected server", "tag", tag, "type", server.Type)
 }
 
-// VPNConnections returns a list of all connections, both active and recently closed. If there are no
-// connections and the tunnel is open, an empty slice is returned without an error.
+// VPNConnections returns a list of the active connections. If there are no connections and the
+// tunnel is open, an empty slice is returned without an error.
 func (r *LocalBackend) VPNConnections() ([]vpn.Connection, error) {
 	return r.vpnClient.Connections()
 }
 
 func (r *LocalBackend) VPNThroughput() (vpn.ThroughputSnapshot, error) {
 	return r.vpnClient.Throughput()
-}
-
-// ActiveVPNConnections returns a list of currently active connections, ordered from newest to oldest.
-func (r *LocalBackend) ActiveVPNConnections() ([]vpn.Connection, error) {
-	connections, err := r.vpnClient.Connections()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get VPN connections: %w", err)
-	}
-	connections = slices.DeleteFunc(connections, func(conn vpn.Connection) bool {
-		return conn.ClosedAt != 0
-	})
-	slices.SortFunc(connections, func(a, b vpn.Connection) int {
-		return int(b.CreatedAt - a.CreatedAt)
-	})
-	return connections, nil
 }
 
 // SelectedServer returns the currently selected server and whether the server is still available.
