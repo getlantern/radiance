@@ -38,7 +38,8 @@ import (
 )
 
 const (
-	tracerName = "github.com/getlantern/radiance/vpn"
+	tracerName            = "github.com/getlantern/radiance/vpn"
+	offlineURLTestTimeout = 30 * time.Second
 )
 
 var (
@@ -589,7 +590,7 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	// Extract bandit trace context for distributed tracing
 	traceCtx, hasTrace := traces.ExtractBanditTraceContext(banditURLs)
 
-	c.logger.Info("Performing offline URL tests")
+	c.logger.Info("Performing offline URL tests", "outbound_count", len(outbounds), "timeout", offlineURLTestTimeout)
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
@@ -618,7 +619,9 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 	// platform interface for testing.
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 
-	ctx, cancel = context.WithTimeout(ctx, 5*time.Second) // enough time for tests to complete or fail
+	// MutableAutoSelect probes outbounds with bounded concurrency, so the
+	// offline pre-warm needs enough total budget for multiple probe waves.
+	ctx, cancel = context.WithTimeout(ctx, offlineURLTestTimeout)
 	defer cancel()
 	instance, err := sbox.New(sbox.Options{
 		Context: ctx,
