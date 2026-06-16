@@ -16,7 +16,7 @@ func TestPublisher(t *testing.T) {
 	defer unsub()
 
 	entry := "time=2025-01-01T00:00:00.000Z level=INFO msg=hello\n"
-	p.publish(entry)
+	p.publish([]byte(entry))
 
 	select {
 	case got := <-ch:
@@ -54,7 +54,7 @@ func TestMultipleSubscribers(t *testing.T) {
 	defer unsub2()
 
 	entry := "time=2025-01-01T00:00:00.000Z level=DEBUG msg=multi\n"
-	p.publish(entry)
+	p.publish([]byte(entry))
 
 	for _, ch := range []chan LogEntry{ch1, ch2} {
 		select {
@@ -72,7 +72,7 @@ func TestUnsubscribe(t *testing.T) {
 	ch, unsub := p.subscribe()
 	unsub()
 
-	p.publish("time=2025-01-01T00:00:00.000Z level=INFO msg=\"after unsub\"\n")
+	p.publish([]byte("time=2025-01-01T00:00:00.000Z level=INFO msg=\"after unsub\"\n"))
 
 	select {
 	case <-ch:
@@ -87,7 +87,7 @@ func TestRingBuffer(t *testing.T) {
 
 	// Fill the ring buffer with 5 entries, so only the last 3 should be available.
 	for i := range 5 {
-		p.publish(string(rune('a'+i)) + "\n")
+		p.publish([]byte(string(rune('a'+i)) + "\n"))
 	}
 
 	ch, unsub := p.subscribe()
@@ -117,7 +117,7 @@ func TestConcurrentBroadcast(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			p.publish("msg\n")
+			p.publish([]byte("msg\n"))
 		}(i)
 	}
 	wg.Wait()

@@ -75,6 +75,10 @@ type VPNClient struct {
 
 	status atomic.Value // VPNStatus
 
+	// connObserver, if set, receives connection-close pushes. It outlives individual tunnels
+	// and is re-attached to each tunnel's tracker at connect.
+	connObserver ConnObserver
+
 	mu sync.RWMutex
 }
 
@@ -170,6 +174,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options st
 	t := tunnel{
 		dataPath:             boxOptions.BasePath,
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
+		connObserver:         c.connObserver,
 	}
 	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
 		c.setStatus(ErrorStatus, err)
@@ -342,7 +347,7 @@ func (c *VPNClient) RemoveOutbounds(tags []string) error {
 	return c.tunnel.removeOutbounds(tags)
 }
 
-// Connections returns a list of all connections, both active and recently closed. A non-nil error
+// Connections returns a list of the active connections. A non-nil error
 // is only returned if there was an error retrieving the connections, or if the tunnel is closed.
 // If there are no connections and the tunnel is open, an empty slice is returned without an error.
 func (c *VPNClient) Connections() ([]Connection, error) {
@@ -353,17 +358,18 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	if c.tunnel == nil {
 		return nil, fmt.Errorf("failed to get connections: %w", ErrTunnelNotConnected)
 	}
-	tm := c.tunnel.clashServer.TrafficManager()
-	activeConns := tm.Connections()
-	closedConns := tm.ClosedConnections()
-	connections := make([]Connection, 0, len(activeConns)+len(closedConns))
-	for _, conn := range activeConns {
-		connections = append(connections, newConnection(conn))
+	return c.tunnel.clashServer.connTracker.activeConnections(), nil
+}
+
+// ActiveConnectionCount returns the number of active connections, or 0 if the tunnel is not
+// connected. It is cheap enough to back an observable metric gauge.
+func (c *VPNClient) ActiveConnectionCount() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return 0
 	}
-	for _, conn := range closedConns {
-		connections = append(connections, newConnection(conn))
-	}
-	return connections, nil
+	return c.tunnel.clashServer.connTracker.activeConnectionCount()
 }
 
 // ClearTunnelCache removes the tunnel cache file at dataPath. If the tunnel is active it records
@@ -395,7 +401,7 @@ func (c *VPNClient) Bytes() (up, down int64, ok bool) {
 	if c.tunnel == nil {
 		return 0, 0, false
 	}
-	up, down = c.tunnel.clashServer.TrafficManager().Total()
+	up, down = c.tunnel.clashServer.connTracker.Total()
 	return up, down, true
 }
 
@@ -408,18 +414,31 @@ func (c *VPNClient) Throughput() (ThroughputSnapshot, error) {
 		return ThroughputSnapshot{}, ErrTunnelNotConnected
 	}
 	tt := c.tunnel.clashServer.ThroughputTracker()
-	tm := c.tunnel.clashServer.TrafficManager()
-	active := tm.Connections()
-	perOut := make(map[string]int, len(active))
-	for _, m := range active {
-		perOut[m.Outbound]++
-	}
+	active, perOut := c.tunnel.clashServer.connTracker.activeStats()
 	return ThroughputSnapshot{
 		Global:            tt.Global(),
 		PerOutbound:       tt.PerOutbound(),
-		ActiveConnections: len(active),
+		ActiveConnections: active,
 		ActivePerOutbound: perOut,
 	}, nil
+}
+
+// SetConnObserver sets the observer notified when connections close, or nil to detach. It is
+// retained across tunnels and attached to the live tunnel's tracker if one is connected.
+func (c *VPNClient) SetConnObserver(observer ConnObserver) {
+	c.mu.Lock()
+	c.connObserver = observer
+
+	var tracker *connTracker
+	if c.tunnel != nil && c.tunnel.clashServer != nil {
+		tracker = c.tunnel.clashServer.connTracker
+	}
+
+	c.mu.Unlock()
+
+	if tracker != nil {
+		tracker.SetObserver(observer)
+	}
 }
 
 // AutoSelectedEvent is emitted when the auto-selected server changes.

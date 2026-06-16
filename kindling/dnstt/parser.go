@@ -521,14 +521,32 @@ func (c *connectedRoundtripper) RoundTrip(req *http.Request) (*http.Response, er
 	if err != nil {
 		c.t.recordFailure()
 		slog.WarnContext(req.Context(), "dnstt roundtripper failed",
-			"domain", c.t.domain, "resolver", c.t.resolver, "error", err)
+			"domain", c.t.domain, "resolver", c.t.resolver, "host", req.URL.Host, "error", err)
 		return nil, err
 	}
 
+	// A gateway 5xx (502/503/504) comes from the tunnel's DoH/intermediary path,
+	// not the origin, so count it as a tunnel-health failure: otherwise a tunnel
+	// that keeps returning 502 is re-marked healthy and never leaves the pool.
+	if isGatewayError(resp.StatusCode) {
+		c.t.recordFailure()
+		slog.WarnContext(req.Context(), "dnstt roundtripper got gateway error",
+			"domain", c.t.domain, "resolver", c.t.resolver, "host", req.URL.Host, "status", resp.StatusCode)
+		return resp, nil
+	}
+
 	slog.DebugContext(req.Context(), "dnstt roundtripper succeeded",
-		"domain", c.t.domain, "resolver", c.t.resolver)
+		"domain", c.t.domain, "resolver", c.t.resolver, "host", req.URL.Host, "status", resp.StatusCode)
 	c.t.markSucceeded()
 	return resp, nil
+}
+
+// isGatewayError reports whether status is a gateway-level 5xx — the failure a
+// DNS tunnel's DoH/intermediary path produces, not an origin-generated error.
+func isGatewayError(status int) bool {
+	return status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout
 }
 
 // Close releases resources and closes active sessions.
