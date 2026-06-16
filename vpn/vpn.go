@@ -451,9 +451,9 @@ const (
 	URLTestSourceOnline  = "online"
 )
 
-// URLTestCompleteEvent is emitted when a URL test run produces usable latency
-// results. Source distinguishes the offline pre-warm run from the live
-// auto-select probe; Count is the number of outbounds with a usable result.
+// URLTestCompleteEvent signals usable latency results are available; treat it as a
+// cue to re-read state. Count is the outbounds with a usable result at emit time and
+// differs by Source: offline = just-succeeded this run, online = all stored so far.
 type URLTestCompleteEvent struct {
 	events.Event
 	Source string `json:"source"`
