@@ -446,6 +446,20 @@ type AutoSelectedEvent struct {
 	Selected string `json:"selected"`
 }
 
+const (
+	URLTestSourceOffline = "offline"
+	URLTestSourceOnline  = "online"
+)
+
+// URLTestCompleteEvent is emitted when a URL test run produces usable latency
+// results. Source distinguishes the offline pre-warm run from the live
+// auto-select probe; Count is the number of outbounds with a usable result.
+type URLTestCompleteEvent struct {
+	events.Event
+	Source string `json:"source"`
+	Count  int    `json:"count"`
+}
+
 func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")

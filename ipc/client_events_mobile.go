@@ -29,6 +29,25 @@ func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSe
 	})
 }
 
+// URLTestEvents streams URL-test completion notifications. An event is sent
+// only when a test run produced usable latency results, for either the offline
+// pre-warm run or the live auto-select probe. Blocks until ctx is cancelled.
+func (c *Client) URLTestEvents(ctx context.Context, handler func(vpn.URLTestCompleteEvent)) error {
+	// The bus subscription is not redundant with SSE: when the tunnel process is down,
+	// the client's fallback LocalBackend emits these events on the in-process bus.
+	events.SubscribeContext(ctx, handler)
+	if c.localOnly {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.sseRetryLoop(ctx, serverURLTestEventsEndpoint, func(data []byte) {
+		var evt vpn.URLTestCompleteEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
+}
+
 // ConfigEvents streams config-updated notifications. Payloads are empty — callers should treat each
 // call as a "refresh" signal. Blocks until ctx is cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
