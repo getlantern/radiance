@@ -9,11 +9,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,12 +27,9 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/common/json/badoption"
 
-	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
@@ -50,11 +45,6 @@ const (
 	cacheID              = "lantern"
 	cacheFileName        = "lantern.cache"
 	cacheClearMarkerName = "lantern.cache.clear"
-	// minAndroidSystemStackKernel is the minimum Linux kernel version (major.minor) required
-	// for the system TUN stack to work reliably on Android only. Devices running a
-	// kernel below this version fall back to gvisor. This constant has no effect on
-	// other platforms.
-	minAndroidSystemStackKernel = "5.10"
 )
 
 var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
@@ -170,8 +160,9 @@ func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 // function. Do not modify without understanding the downstream effects.
 func baseOpts(basePath string) O.Options {
 	cacheFile := cacheFilePath(basePath)
+	inbounds := baseInbounds()
 
-	return O.Options{
+	opts := O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
 			Output:       "lantern-box.log",
@@ -186,7 +177,7 @@ func baseOpts(basePath string) O.Options {
 				Final: "dns_local",
 			},
 		},
-		Inbounds: baseInbounds(),
+		Inbounds: inbounds,
 		Outbounds: []O.Outbound{
 			{
 				Type:    C.TypeDirect,
@@ -222,6 +213,22 @@ func baseOpts(basePath string) O.Options {
 			},
 		},
 	}
+
+	// OverrideAndroidVPN is meaningless without a TUN inbound, so gate on its
+	// presence — the novpn build has none.
+	if common.Platform == "android" && hasTunInbound(inbounds) {
+		opts.Route.OverrideAndroidVPN = true
+	}
+	return opts
+}
+
+func hasTunInbound(inbounds []O.Inbound) bool {
+	for _, in := range inbounds {
+		if in.Type == "tun" {
+			return true
+		}
+	}
+	return false
 }
 
 func baseRoutingRules() []O.Rule {
@@ -277,35 +284,22 @@ func baseRoutingRules() []O.Rule {
 				},
 			},
 		},
-		{ // Route bypass proxy traffic directly (for kindling connections)
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{
-					Inbound: []string{bypass.BypassInboundTag},
-				},
-				RuleAction: O.RuleAction{
-					Action: C.RuleActionTypeRoute,
-					RouteOptions: O.RouteActionOptions{
-						Outbound: "direct",
-					},
-				},
-			},
-		},
-		{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{
-					IPIsPrivate: true,
-				},
-				RuleAction: O.RuleAction{
-					Action: C.RuleActionTypeRoute,
-					RouteOptions: O.RouteActionOptions{
-						Outbound: "direct",
-					},
-				},
-			},
-		},
 	}
+	rules = append(rules, bypassRoutingRules()...)
+	rules = append(rules, O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{
+				IPIsPrivate: true,
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeRoute,
+				RouteOptions: O.RouteActionOptions{
+					Outbound: "direct",
+				},
+			},
+		},
+	})
 	rules = append(rules, splitTunnelRoutingRules()...)
 	return rules
 }
@@ -429,29 +423,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	opts := baseOpts(bOptions.BasePath)
 	slog.Debug("Base options initialized")
-
-	if socksOnlyEnforced() || env.GetBool(env.UseSocks) {
-		socksAddr, _ := env.Get(env.SocksAddress)
-		slog.Info("Using SOCKS proxy for inbound", "socksAddr", socksAddr)
-		addrPort, err := netip.ParseAddrPort(socksAddr)
-		if err != nil {
-			return O.Options{}, fmt.Errorf("invalid SOCKS address: %w", err)
-		}
-		addr := badoption.Addr(addrPort.Addr())
-		socksIn := O.Inbound{
-			Type: C.TypeMixed,
-			Tag:  "http-socks-in",
-			Options: &O.HTTPMixedInboundOptions{
-				ListenOptions: O.ListenOptions{
-					Listen:     &addr,
-					ListenPort: addrPort.Port(),
-				},
-			},
-		}
-		opts.Inbounds = []O.Inbound{socksIn}
-	} else {
-		applyPlatformTunnelOptions(&opts)
-	}
 
 	// add smart routing and ad block rules
 	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
@@ -652,47 +623,6 @@ func selectModeRule(mode string) O.Rule {
 			},
 		},
 	}
-}
-
-// kernelBelow reports whether the kernel version string v is below min.
-// Only the first two components (major.minor) are compared, e.g. "5.10" or "4.19.0-android13".
-// Returns false if either version string cannot be parsed.
-func kernelBelow(v, min string) bool {
-	parseKernelMajorMinor := func(s string) (int, int, bool) {
-		p := strings.SplitN(s, ".", 3)
-		if len(p) < 2 {
-			return 0, 0, false
-		}
-		// Strip non-numeric suffixes (e.g. "19" from "19-android13")
-		numericPrefix := func(part string) string {
-			for i, r := range part {
-				if r < '0' || r > '9' {
-					return part[:i]
-				}
-			}
-			return part
-		}
-		majorStr := numericPrefix(p[0])
-		minorStr := numericPrefix(p[1])
-		if majorStr == "" || minorStr == "" {
-			return 0, 0, false
-		}
-		major, err := strconv.Atoi(majorStr)
-		if err != nil {
-			return 0, 0, false
-		}
-		minor, err := strconv.Atoi(minorStr)
-		if err != nil {
-			return 0, 0, false
-		}
-		return major, minor, true
-	}
-	vMaj, vMin, vok := parseKernelMajorMinor(v)
-	mMaj, mMin, mok := parseKernelMajorMinor(min)
-	if !vok || !mok {
-		return false
-	}
-	return vMaj < mMaj || (vMaj == mMaj && vMin < mMin)
 }
 
 func catchAllBlockerRule() O.Rule {
