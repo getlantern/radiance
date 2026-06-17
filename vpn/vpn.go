@@ -447,14 +447,10 @@ type AutoSelectedEvent struct {
 	Selected string `json:"selected"`
 }
 
-const (
-	URLTestSourceOffline = "offline"
-	URLTestSourceOnline  = "online"
-)
+const URLTestSourceOffline = "offline"
 
 // URLTestCompleteEvent signals usable latency results are available; treat it as a
-// cue to re-read state. Count is the outbounds with a usable result at emit time and
-// differs by Source: offline = just-succeeded this run, online = all stored so far.
+// cue to re-read state. Count is the number of outbounds that just succeeded this run.
 type URLTestCompleteEvent struct {
 	events.Event
 	Source string `json:"source"`

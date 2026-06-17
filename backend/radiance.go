@@ -691,29 +691,26 @@ func (r *LocalBackend) updateSelectionHistoryListener(status vpn.VPNStatus) {
 func (r *LocalBackend) runSelectionHistoryListener(ctx context.Context, storage vpn.AutoSelectHistoryStorage, hook <-chan struct{}) {
 	ticker := time.NewTicker(selectionHistoryFlushInterval)
 	defer ticker.Stop()
-	dirty := true   // start dirty so a seed/result present before the listener started still gets persisted
-	probed := false // that seed flush is not a probe outcome; emit only after a real probe write
+	dirty := true // start dirty so a seed/result present before the listener started still gets persisted
 	for {
 		select {
 		case <-ctx.Done():
 			if dirty {
-				r.flushSelectionHistory(storage, probed)
+				r.flushSelectionHistory(storage)
 			}
 			return
 		case <-hook:
 			dirty = true
-			probed = true
 		case <-ticker.C:
 			if dirty {
-				r.flushSelectionHistory(storage, probed)
+				r.flushSelectionHistory(storage)
 				dirty = false
-				probed = false
 			}
 		}
 	}
 }
 
-func (r *LocalBackend) flushSelectionHistory(storage vpn.AutoSelectHistoryStorage, emit bool) {
+func (r *LocalBackend) flushSelectionHistory(storage vpn.AutoSelectHistoryStorage) {
 	results := make(map[string]servers.SelectionHistory)
 	for _, srv := range r.srvManager.AllServers() {
 		if h := storage.Load(srv.Tag); h != nil {
@@ -723,9 +720,6 @@ func (r *LocalBackend) flushSelectionHistory(storage vpn.AutoSelectHistoryStorag
 	if len(results) > 0 {
 		if err := r.srvManager.UpdateSelectionHistory(results); err != nil {
 			slog.Warn("Failed to persist selection history", "error", err)
-		}
-		if emit {
-			events.Emit(vpn.URLTestCompleteEvent{Source: vpn.URLTestSourceOnline, Count: len(results)})
 		}
 	}
 }
