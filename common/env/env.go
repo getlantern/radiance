@@ -24,7 +24,6 @@ var (
 	PrintCurl        _key = "RADIANCE_PRINT_CURL"
 	DisableStdout    _key = "RADIANCE_DISABLE_STDOUT_LOG"
 	ENV              _key = "RADIANCE_ENV"
-	UseSocks         _key = "RADIANCE_USE_SOCKS_PROXY"
 	SocksAddress     _key = "RADIANCE_SOCKS_ADDRESS"
 	Country          _key = "RADIANCE_COUNTRY"
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
