@@ -8,6 +8,9 @@ ldflags := if version != "" { "-ldflags \"-X 'github.com/getlantern/radiance/com
 cli_tags := if os() == "macos" { "standalone" } else { "" }
 cli_tags_flag := if cli_tags != "" { "-tags " + cli_tags } else { "" }
 
+novpn_tags := tags + ",novpn"
+cli_novpn_tags := if os() == "macos" { "standalone,novpn" } else { "novpn" }
+
 build-daemon:
     go build -tags "{{tags}}" {{ldflags}} -o bin/{{lanternd}} ./cmd/lanternd
 
@@ -19,6 +22,17 @@ build-cli:
 
 build: build-daemon build-cli
 
+build-daemon-novpn:
+    go build -tags "{{novpn_tags}}" {{ldflags}} -o bin/{{lanternd}} ./cmd/lanternd
+
+run-daemon-novpn *args:
+    go run -tags={{novpn_tags}} ./cmd/lanternd run {{args}}
+
+build-cli-novpn:
+    go build -tags "{{cli_novpn_tags}}" {{ldflags}} -o bin/{{lantern}} ./cmd/lantern
+
+build-novpn: build-daemon-novpn build-cli-novpn
+
 # install* recipes compile binaries into $GOBIN. They do NOT register
 # lanternd as a system service — use `lanternd install` for that.
 install-daemon:
@@ -28,6 +42,14 @@ install-cli:
     go install {{cli_tags_flag}} {{ldflags}} ./cmd/lantern
 
 install: install-daemon install-cli
+
+install-daemon-novpn:
+    go install -tags "{{novpn_tags}}" {{ldflags}} ./cmd/lanternd
+
+install-cli-novpn:
+    go install -tags "{{cli_novpn_tags}}" {{ldflags}} ./cmd/lantern
+
+install-novpn: install-daemon-novpn install-cli-novpn
 
 proto:
     go build -o build/protoc-gen-go google.golang.org/protobuf/cmd/protoc-gen-go
