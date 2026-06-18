@@ -449,12 +449,13 @@ type AutoSelectedEvent struct {
 
 const URLTestSourceOffline = "offline"
 
-// URLTestCompleteEvent signals usable latency results are available; treat it as a
-// cue to re-read state. Count is the number of outbounds that just succeeded this run.
+// URLTestCompleteEvent signals usable latency results are available. Count is the
+// number of outbounds that succeeded; Results maps each tag to its latency in ms.
 type URLTestCompleteEvent struct {
 	events.Event
-	Source string `json:"source"`
-	Count  int    `json:"count"`
+	Source  string            `json:"source"`
+	Count   int               `json:"count"`
+	Results map[string]uint16 `json:"results"`
 }
 
 func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {

@@ -974,7 +974,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 		if err := r.srvManager.UpdateSelectionHistory(histories); err != nil {
 			slog.Warn("Failed to persist offline selection history", "error", err)
 		}
-		events.Emit(vpn.URLTestCompleteEvent{Source: vpn.URLTestSourceOffline, Count: len(histories)})
+		events.Emit(vpn.URLTestCompleteEvent{Source: vpn.URLTestSourceOffline, Count: len(histories), Results: results})
 		selected, err := r.vpnClient.CurrentAutoSelectedServer()
 		if err != nil {
 			slog.Warn("Failed to get current auto-selected server after URL tests", "error", err)
