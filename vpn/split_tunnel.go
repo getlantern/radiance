@@ -1,3 +1,5 @@
+//go:build !novpn
+
 package vpn
 
 import (
@@ -9,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -23,19 +24,7 @@ import (
 	"github.com/getlantern/radiance/log"
 )
 
-const (
-	splitTunnelTag  = "split-tunnel"
-	splitTunnelFile = internal.SplitTunnelFileName
-
-	TypeDomain           = "domain"
-	TypeDomainSuffix     = "domainSuffix"
-	TypeDomainKeyword    = "domainKeyword"
-	TypeDomainRegex      = "domainRegex"
-	TypeProcessName      = "processName"
-	TypeProcessPath      = "processPath"
-	TypeProcessPathRegex = "processPathRegex"
-	TypePackageName      = "packageName"
-)
+const splitTunnelFile = internal.SplitTunnelFileName
 
 // SplitTunnel manages the split tunneling feature, allowing users to specify which domains,
 // processes, or packages should bypass the VPN tunnel.
@@ -149,46 +138,6 @@ func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
 	s.updateFilters(items, remove)
 	s.logger.Debug("removed items from filter", "items", items.String())
 	return s.saveToFile()
-}
-
-type SplitTunnelFilter struct {
-	Domain           []string
-	DomainSuffix     []string
-	DomainKeyword    []string
-	DomainRegex      []string
-	ProcessName      []string
-	ProcessPath      []string
-	ProcessPathRegex []string
-	PackageName      []string
-}
-
-func (f SplitTunnelFilter) String() string {
-	var str []string
-	if len(f.Domain) > 0 {
-		str = append(str, fmt.Sprintf("domain: %v", f.Domain))
-	}
-	if len(f.DomainSuffix) > 0 {
-		str = append(str, fmt.Sprintf("domainSuffix: %v", f.DomainSuffix))
-	}
-	if len(f.DomainKeyword) > 0 {
-		str = append(str, fmt.Sprintf("domainKeyword: %v", f.DomainKeyword))
-	}
-	if len(f.DomainRegex) > 0 {
-		str = append(str, fmt.Sprintf("domainRegex: %v", f.DomainRegex))
-	}
-	if len(f.ProcessName) > 0 {
-		str = append(str, fmt.Sprintf("processName: %v", f.ProcessName))
-	}
-	if len(f.ProcessPath) > 0 {
-		str = append(str, fmt.Sprintf("processPath: %v", f.ProcessPath))
-	}
-	if len(f.ProcessPathRegex) > 0 {
-		str = append(str, fmt.Sprintf("processPathRegex: %v", f.ProcessPathRegex))
-	}
-	if len(f.PackageName) > 0 {
-		str = append(str, fmt.Sprintf("packageName: %v", f.PackageName))
-	}
-	return "{" + strings.Join(str, ", ") + "}"
 }
 
 type actionFn func(slice []string, items []string) []string
