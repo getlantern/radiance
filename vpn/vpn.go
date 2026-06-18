@@ -447,6 +447,17 @@ type AutoSelectedEvent struct {
 	Selected string `json:"selected"`
 }
 
+const URLTestSourceOffline = "offline"
+
+// URLTestCompleteEvent signals usable latency results are available. Count is the
+// number of outbounds that succeeded; Results maps each tag to its latency in ms.
+type URLTestCompleteEvent struct {
+	events.Event
+	Source  string            `json:"source"`
+	Count   int               `json:"count"`
+	Results map[string]uint16 `json:"results"`
+}
+
 func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")

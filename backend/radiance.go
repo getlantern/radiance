@@ -691,7 +691,7 @@ func (r *LocalBackend) updateSelectionHistoryListener(status vpn.VPNStatus) {
 func (r *LocalBackend) runSelectionHistoryListener(ctx context.Context, storage vpn.AutoSelectHistoryStorage, hook <-chan struct{}) {
 	ticker := time.NewTicker(selectionHistoryFlushInterval)
 	defer ticker.Stop()
-	dirty := true // start dirty so we persist any results that arrived before the listener started
+	dirty := true // start dirty so a seed/result present before the listener started still gets persisted
 	for {
 		select {
 		case <-ctx.Done():
@@ -974,6 +974,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 		if err := r.srvManager.UpdateSelectionHistory(histories); err != nil {
 			slog.Warn("Failed to persist offline selection history", "error", err)
 		}
+		events.Emit(vpn.URLTestCompleteEvent{Source: vpn.URLTestSourceOffline, Count: len(histories), Results: results})
 		selected, err := r.vpnClient.CurrentAutoSelectedServer()
 		if err != nil {
 			slog.Warn("Failed to get current auto-selected server after URL tests", "error", err)
