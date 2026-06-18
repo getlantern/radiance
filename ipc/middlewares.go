@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 
+	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel/trace"
 
 	rlog "github.com/getlantern/radiance/log"
@@ -68,6 +69,18 @@ func (r *statusRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+func panicRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("IPC handler panic", "panic", rec, "stack", string(debug.Stack()))
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func authPeer(next http.Handler) http.Handler {
