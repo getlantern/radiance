@@ -139,9 +139,15 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool, l
 		fmt.Println("No servers available")
 		return nil
 	}
+	latestDelay := func(s *servers.Server) uint32 {
+		if s.SelectionHistory != nil {
+			return s.SelectionHistory.LatestSuccessDelay()
+		}
+		return 0
+	}
 	slices.SortFunc(srvs, func(a, b *servers.Server) int {
-		ad := a.SelectionHistory.LatestSuccessDelay()
-		bd := b.SelectionHistory.LatestSuccessDelay()
+		ad := latestDelay(a)
+		bd := latestDelay(b)
 
 		switch {
 		case ad == 0 && bd == 0:
@@ -164,7 +170,7 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool, l
 		}
 		printServerEntry(s, showLatency)
 	}
-	fmt.Printf("%d server(s)\n", len(srvs))
+	fmt.Printf("%d total server(s)\n", len(srvs))
 	return nil
 }
 

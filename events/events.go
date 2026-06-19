@@ -28,7 +28,6 @@ package events
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"reflect"
 	"sync"
@@ -122,13 +121,13 @@ func (e *Subscription[T]) Unsubscribe() {
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()
-	if subs, ok := subscriptions[reflect.TypeFor[T]()]; ok {
+	evtType := reflect.TypeFor[T]()
+	if subs, ok := subscriptions[evtType]; ok {
 		for _, cb := range subs {
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						evtStr := fmt.Sprintf("%T{%+v}", evt, evt)
-						slog.Error("Panic in event callback", "error", r, "event", evtStr)
+						slog.Error("Panic in event callback", "error", r, "event", evtType.String())
 					}
 				}()
 				cb(evt)

@@ -39,24 +39,15 @@ func newTestServer(tag string, isLantern, hardDemoted bool, updatedAt time.Time)
 	return srv
 }
 
-func tagSet(tags ...string) map[string]struct{} {
-	set := make(map[string]struct{}, len(tags))
-	for _, tag := range tags {
-		set[tag] = struct{}{}
-	}
-	return set
-}
-
 func TestLanternServersToEvict(t *testing.T) {
 	baseTime := time.Unix(0, 0).UTC()
 
 	tests := []struct {
-		name         string
-		existing     []*servers.Server
-		incomingTags map[string]struct{}
-		incoming     int
-		limit        int
-		want         []string
+		name     string
+		existing []*servers.Server
+		incoming int
+		limit    int
+		want     []string
 	}{
 		{
 			name: "evicts only hard-demoted lantern servers",
@@ -69,13 +60,13 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:  []string{"demoted"},
 		},
 		{
-			name: "refreshed tag is left for AddServers even if hard-demoted",
+			name: "hard-demoted lantern server is evicted regardless of incoming config",
 			existing: []*servers.Server{
 				newTestServer("demoted", true, true, baseTime),
 			},
-			incomingTags: tagSet("demoted"),
-			incoming:     1,
-			limit:        60,
+			incoming: 1,
+			limit:    60,
+			want:     []string{"demoted"},
 		},
 		{
 			name: "under the limit nothing is evicted",
@@ -122,7 +113,7 @@ func TestLanternServersToEvict(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := lanternServersToEvict(tt.existing, tt.incomingTags, tt.incoming, tt.limit)
+			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}

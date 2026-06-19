@@ -618,14 +618,16 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 const maxRetainedLanternServers = 60
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
-	incomingTags := serverTagSet(list.Servers)
 	existing := r.srvManager.AllServers()
-	tagsToEvict := lanternServersToEvict(
-		existing,
-		incomingTags,
-		len(list.Servers),
-		maxRetainedLanternServers,
-	)
+	// prune any servers from the incoming list that already exists to avoid deleting
+	// selection history results and closing existing connections
+	existingTags := serverTagSet(existing)
+	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
+		_, exists := existingTags[srv.Tag]
+		return exists
+	})
+
+	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers)
 
 	if len(tagsToEvict) > 0 {
 		slog.Debug(
@@ -637,14 +639,6 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 			return fmt.Errorf("remove retained Lantern servers: %w", err)
 		}
 	}
-
-	// prune any servers from the incoming list that already exists to avoid deleting
-	// selection history results and closing existing connections
-	existingTags := serverTagSet(existing)
-	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
-		_, exists := existingTags[srv.Tag]
-		return exists
-	})
 
 	slog.Debug(
 		"Adding new Lantern servers from config update",
@@ -675,20 +669,18 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 }
 
 // lanternServersToEvict returns the Lantern server tags to remove before the
-// next config batch is added. Refreshed tags are skipped so AddServers can
-// update them in place. Hard-demoted servers are removed first. Remaining
+// next config batch is added. Hard-demoted servers are removed first. Remaining
 // candidates are evicted oldest-first by SelectionHistory.UpdatedAt; missing
 // history sorts oldest.
 func lanternServersToEvict(
 	existing []*servers.Server,
-	incomingTags map[string]struct{},
 	incomingCount, limit int,
 ) []string {
 	tagsToEvict := make([]string, 0)
 	retentionCandidates := make([]*servers.Server, 0, len(existing))
 
 	for _, srv := range existing {
-		if !isRetainedLanternServer(srv, incomingTags) {
+		if !srv.IsLantern {
 			continue
 		}
 		if isHardDemoted(srv) {
@@ -711,14 +703,6 @@ func lanternServersToEvict(
 	}
 
 	return tagsToEvict
-}
-
-func isRetainedLanternServer(srv *servers.Server, incomingTags map[string]struct{}) bool {
-	if !srv.IsLantern {
-		return false
-	}
-	_, refreshed := incomingTags[srv.Tag]
-	return !refreshed
 }
 
 func isHardDemoted(srv *servers.Server) bool {

@@ -199,9 +199,12 @@ func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProces
 	go func() {
 		defer stdoutPipe.Close()
 		var w io.Writer = os.Stdout
-		if h, ok := logger.Handler().(rlog.Handler); ok {
-			w = h.Writer()
-		}
+		// TODO: the child process outputs to both stdout and the file logger, so we end up with
+		// 	duplicate log lines. we'll come back to this later and fix it, but for now just
+		// 	write to stdout to avoid the duplication.
+		// if h, ok := logger.Handler().(*rlog.Handler); ok {
+		// 	w = h.Writer()
+		// }
 		scanner := bufio.NewScanner(stdoutPipe)
 		for scanner.Scan() {
 			if s := scanner.Text(); s != "" {
