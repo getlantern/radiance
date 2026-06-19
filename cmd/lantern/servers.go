@@ -123,22 +123,8 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool, l
 	if err != nil {
 		return err
 	}
-	if asJSON {
-		out := make([]ServerListEntry, 0, len(srvs))
-		for _, s := range srvs {
-			out = append(out, ServerListEntry{
-				Tag:              s.Tag,
-				Type:             s.Type,
-				Location:         s.Location,
-				SelectionHistory: s.SelectionHistory,
-			})
-		}
-		return printJSON(out)
-	}
-	if len(srvs) == 0 {
-		fmt.Println("No servers available")
-		return nil
-	}
+	total := len(srvs)
+
 	latestDelay := func(s *servers.Server) uint32 {
 		if s.SelectionHistory != nil {
 			return s.SelectionHistory.LatestSuccessDelay()
@@ -164,13 +150,30 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool, l
 			return 0
 		}
 	})
-	for i, s := range srvs {
-		if limit > 0 && i >= limit {
-			break
+	if limit > 0 && limit < len(srvs) {
+		srvs = srvs[:limit]
+	}
+
+	if asJSON {
+		out := make([]ServerListEntry, 0, len(srvs))
+		for _, s := range srvs {
+			out = append(out, ServerListEntry{
+				Tag:              s.Tag,
+				Type:             s.Type,
+				Location:         s.Location,
+				SelectionHistory: s.SelectionHistory,
+			})
 		}
+		return printJSON(out)
+	}
+	if total == 0 {
+		fmt.Println("No servers available")
+		return nil
+	}
+	for _, s := range srvs {
 		printServerEntry(s, showLatency)
 	}
-	fmt.Printf("%d total server(s)\n", len(srvs))
+	fmt.Printf("%d total server(s)\n", total)
 	return nil
 }
 
@@ -183,11 +186,13 @@ func printServerEntry(s *servers.Server, showLatency bool) {
 		fmt.Println()
 		return
 	}
-	if d := s.SelectionHistory.LatestSuccessDelay(); d > 0 {
-		fmt.Printf(" (%dms)\n", d)
-	} else {
-		fmt.Println(" (n/a)")
+	if s.SelectionHistory != nil {
+		if d := s.SelectionHistory.LatestSuccessDelay(); d > 0 {
+			fmt.Printf(" (%dms)\n", d)
+			return
+		}
 	}
+	fmt.Println(" (n/a)")
 }
 
 func serversGet(ctx context.Context, c *ipc.Client, tag string) error {

@@ -263,7 +263,7 @@ func (r *LocalBackend) Start() {
 			}
 		}
 		if err := r.updateServers(list); err != nil {
-			slog.Error("setting servers in manager", "error", err)
+			slog.Error("updating servers in manager", "error", err)
 		}
 		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
 			// ErrTunnelAlreadyConnected is the expected, non-error case while
