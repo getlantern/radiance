@@ -266,13 +266,11 @@ func (r *LocalBackend) Start() {
 			slog.Error("updating servers in manager", "error", err)
 		}
 		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
-			// ErrTunnelAlreadyConnected is the expected, non-error case while
-			// the VPN is up: setServers above already pushed the new outbounds
-			// (and any bandit URL overrides) into the running tunnel, and
-			// addOutbounds triggers an immediate probe cycle for them via
-			// MutableAutoSelect.CheckOutbounds. The "offline" pre-warm path
-			// here is for the not-yet-connected case only — running both
-			// would duplicate work and conflict with the live auto-select group.
+			// ErrTunnelAlreadyConnected is expected while the VPN is up:
+			// updateServers already pushed the new outbounds into the live
+			// tunnel via UpdateOutbounds, so the offline pre-warm — which
+			// targets the not-yet-connected case — would duplicate work and
+			// conflict with the live auto-select group.
 			slog.Error("Failed to run offline URL tests after config update", "error", err)
 		}
 	})
