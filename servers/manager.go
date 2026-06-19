@@ -317,29 +317,6 @@ func warnIfReaderStarved(caller string, wait time.Duration) {
 	)
 }
 
-// SetServers sets the server options for servers with a matching IsLantern value.
-// Important: this will overwrite any existing servers with the same IsLantern value. To add new
-// servers without overwriting existing ones, use [AddServers] instead.
-func (m *Manager) SetServers(list ServerList, isLantern bool) error {
-	func() {
-		m.access.Lock()
-		defer m.access.Unlock()
-		// Remove existing with matching IsLantern
-		for tag, srv := range m.servers {
-			if srv.IsLantern == isLantern {
-				delete(m.servers, tag)
-			}
-		}
-		// Add new
-		for _, srv := range list.Servers {
-			srv.IsLantern = isLantern
-			m.servers[srv.Tag] = srv
-		}
-	}()
-	// saveServers acquires its own locks; don't hold the write lock across it.
-	return m.saveServers()
-}
-
 // AddServers adds new servers. If force is true, it will overwrite any
 // existing servers with the same tags. If force is false, it returns an error
 // if any of the tags already exist.

@@ -667,7 +667,8 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 }
 
 // lanternServersToEvict returns the Lantern server tags to remove before the
-// next config batch is added. Hard-demoted servers are removed first. Remaining
+// next config batch is added. Hard-demoted servers are always evicted so a
+// later re-offer is treated as a fresh candidate and re-probed. Remaining
 // candidates are evicted oldest-first by SelectionHistory.UpdatedAt; missing
 // history sorts oldest.
 func lanternServersToEvict(
@@ -681,6 +682,7 @@ func lanternServersToEvict(
 		if !srv.IsLantern {
 			continue
 		}
+		// Always evict hard-demoted servers.
 		if isHardDemoted(srv) {
 			tagsToEvict = append(tagsToEvict, srv.Tag)
 			continue
