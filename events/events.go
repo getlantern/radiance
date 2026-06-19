@@ -28,6 +28,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sync"
@@ -126,7 +127,8 @@ func Emit[T Event](evt T) {
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						slog.Error("Panic in event callback", "error", r)
+						evtStr := fmt.Sprintf("%T{%+v}", evt, evt)
+						slog.Error("Panic in event callback", "error", r, "event", evtStr)
 					}
 				}()
 				cb(evt)

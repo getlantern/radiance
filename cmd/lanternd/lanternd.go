@@ -199,7 +199,7 @@ func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProces
 	go func() {
 		defer stdoutPipe.Close()
 		var w io.Writer = os.Stdout
-		if h, ok := logger.Handler().(*rlog.Handler); ok {
+		if h, ok := logger.Handler().(rlog.Handler); ok {
 			w = h.Writer()
 		}
 		scanner := bufio.NewScanner(stdoutPipe)

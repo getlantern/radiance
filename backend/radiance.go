@@ -262,7 +262,7 @@ func (r *LocalBackend) Start() {
 				span.End() // point-in-time marker — config was received at this timestamp
 			}
 		}
-		if err := r.setServers(list, true); err != nil {
+		if err := r.updateServers(list); err != nil {
 			slog.Error("setting servers in manager", "error", err)
 		}
 		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
@@ -613,9 +613,46 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
-func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error {
-	if err := r.srvManager.SetServers(list, isLantern); err != nil {
-		return fmt.Errorf("failed to set servers in ServerManager: %w", err)
+// maxRetainedLanternServers caps the number of working Lantern servers retained
+// across config updates.
+const maxRetainedLanternServers = 60
+
+func (r *LocalBackend) updateServers(list servers.ServerList) error {
+	incomingTags := serverTagSet(list.Servers)
+	existing := r.srvManager.AllServers()
+	tagsToEvict := lanternServersToEvict(
+		existing,
+		incomingTags,
+		len(list.Servers),
+		maxRetainedLanternServers,
+	)
+
+	if len(tagsToEvict) > 0 {
+		slog.Debug(
+			"Evicting retained Lantern servers to make room for new config batch",
+			"count", len(tagsToEvict),
+			"tags", tagsToEvict,
+		)
+		if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
+			return fmt.Errorf("remove retained Lantern servers: %w", err)
+		}
+	}
+
+	// prune any servers from the incoming list that already exists to avoid deleting
+	// selection history results and closing existing connections
+	existingTags := serverTagSet(existing)
+	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
+		_, exists := existingTags[srv.Tag]
+		return exists
+	})
+
+	slog.Debug(
+		"Adding new Lantern servers from config update",
+		"count", len(list.Servers),
+		"tags", slices.Collect(maps.Keys(serverTagSet(list.Servers))),
+	)
+	if err := r.srvManager.AddServers(list, false); err != nil {
+		return fmt.Errorf("add Lantern servers: %w", err)
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
@@ -627,6 +664,76 @@ func (r *LocalBackend) setServers(list servers.ServerList, isLantern bool) error
 		r.clearSelectedIfMissing()
 	}
 	return nil
+}
+
+func serverTagSet(list []*servers.Server) map[string]struct{} {
+	tags := make(map[string]struct{}, len(list))
+	for _, srv := range list {
+		tags[srv.Tag] = struct{}{}
+	}
+	return tags
+}
+
+// lanternServersToEvict returns the Lantern server tags to remove before the
+// next config batch is added. Refreshed tags are skipped so AddServers can
+// update them in place. Hard-demoted servers are removed first. Remaining
+// candidates are evicted oldest-first by SelectionHistory.UpdatedAt; missing
+// history sorts oldest.
+func lanternServersToEvict(
+	existing []*servers.Server,
+	incomingTags map[string]struct{},
+	incomingCount, limit int,
+) []string {
+	tagsToEvict := make([]string, 0)
+	retentionCandidates := make([]*servers.Server, 0, len(existing))
+
+	for _, srv := range existing {
+		if !isRetainedLanternServer(srv, incomingTags) {
+			continue
+		}
+		if isHardDemoted(srv) {
+			tagsToEvict = append(tagsToEvict, srv.Tag)
+			continue
+		}
+		retentionCandidates = append(retentionCandidates, srv)
+	}
+
+	retentionBudget := max(limit-incomingCount, 0)
+	if len(retentionCandidates) <= retentionBudget {
+		return tagsToEvict
+	}
+
+	slices.SortFunc(retentionCandidates, compareSelectionAge)
+
+	overflow := len(retentionCandidates) - retentionBudget
+	for _, srv := range retentionCandidates[:overflow] {
+		tagsToEvict = append(tagsToEvict, srv.Tag)
+	}
+
+	return tagsToEvict
+}
+
+func isRetainedLanternServer(srv *servers.Server, incomingTags map[string]struct{}) bool {
+	if !srv.IsLantern {
+		return false
+	}
+	_, refreshed := incomingTags[srv.Tag]
+	return !refreshed
+}
+
+func isHardDemoted(srv *servers.Server) bool {
+	return srv.SelectionHistory != nil && srv.SelectionHistory.HardDemoted
+}
+
+func compareSelectionAge(a, b *servers.Server) int {
+	return selectionUpdatedAt(a).Compare(selectionUpdatedAt(b))
+}
+
+func selectionUpdatedAt(srv *servers.Server) time.Time {
+	if srv.SelectionHistory == nil {
+		return time.Time{}
+	}
+	return srv.SelectionHistory.UpdatedAt
 }
 
 // clearSelectedIfMissing reverts the persisted selection to auto-select when
