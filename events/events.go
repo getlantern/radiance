@@ -121,12 +121,13 @@ func (e *Subscription[T]) Unsubscribe() {
 func Emit[T Event](evt T) {
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()
-	if subs, ok := subscriptions[reflect.TypeFor[T]()]; ok {
+	evtType := reflect.TypeFor[T]()
+	if subs, ok := subscriptions[evtType]; ok {
 		for _, cb := range subs {
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						slog.Error("Panic in event callback", "error", r)
+						slog.Error("Panic in event callback", "error", r, "event", evtType.String())
 					}
 				}()
 				cb(evt)

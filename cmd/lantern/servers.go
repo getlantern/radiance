@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	C "github.com/getlantern/common"
@@ -24,6 +25,7 @@ type ServersCmd struct {
 type ServersListCmd struct {
 	Latency bool `arg:"--latency" help:"include latest latency from selection history"`
 	JSON    bool `arg:"--json" help:"output JSON"`
+	Limit   int  `arg:"--limit" help:"limit number of servers to list"`
 }
 
 type ServersShowCmd struct {
@@ -92,9 +94,9 @@ func runServers(ctx context.Context, c *ipc.Client, cmd *ServersCmd) error {
 	case cmd.PrivateServer != nil:
 		return runPrivateServer(ctx, c, cmd.PrivateServer)
 	case cmd.List != nil:
-		return serversList(ctx, c, cmd.List.Latency, cmd.List.JSON)
+		return serversList(ctx, c, cmd.List.Latency, cmd.List.JSON, cmd.List.Limit)
 	default:
-		return serversList(ctx, c, false, false)
+		return serversList(ctx, c, false, false, 0)
 	}
 }
 
@@ -116,11 +118,42 @@ func runPrivateServer(ctx context.Context, c *ipc.Client, cmd *PrivateServerCmd)
 	}
 }
 
-func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool) error {
+func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool, limit int) error {
 	srvs, err := c.Servers(ctx)
 	if err != nil {
 		return err
 	}
+	total := len(srvs)
+
+	latestDelay := func(s *servers.Server) uint32 {
+		if s.SelectionHistory != nil {
+			return s.SelectionHistory.LatestSuccessDelay()
+		}
+		return 0
+	}
+	slices.SortFunc(srvs, func(a, b *servers.Server) int {
+		ad := latestDelay(a)
+		bd := latestDelay(b)
+
+		switch {
+		case ad == 0 && bd == 0:
+			return 0
+		case ad == 0:
+			return 1
+		case bd == 0:
+			return -1
+		case ad < bd:
+			return -1
+		case ad > bd:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if limit > 0 && limit < len(srvs) {
+		srvs = srvs[:limit]
+	}
+
 	if asJSON {
 		out := make([]ServerListEntry, 0, len(srvs))
 		for _, s := range srvs {
@@ -133,13 +166,14 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool) e
 		}
 		return printJSON(out)
 	}
-	if len(srvs) == 0 {
+	if total == 0 {
 		fmt.Println("No servers available")
 		return nil
 	}
 	for _, s := range srvs {
 		printServerEntry(s, showLatency)
 	}
+	fmt.Printf("%d total server(s)\n", total)
 	return nil
 }
 
@@ -152,11 +186,13 @@ func printServerEntry(s *servers.Server, showLatency bool) {
 		fmt.Println()
 		return
 	}
-	if d := s.SelectionHistory.LatestSuccessDelay(); d > 0 {
-		fmt.Printf(" (%dms)\n", d)
-	} else {
-		fmt.Println(" (n/a)")
+	if s.SelectionHistory != nil {
+		if d := s.SelectionHistory.LatestSuccessDelay(); d > 0 {
+			fmt.Printf(" (%dms)\n", d)
+			return
+		}
 	}
+	fmt.Println(" (n/a)")
 }
 
 func serversGet(ctx context.Context, c *ipc.Client, tag string) error {
