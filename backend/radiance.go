@@ -872,6 +872,10 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	return bOptions
 }
 
+// appendManagedServerOptions adds server-manager options that are missing from
+// the current config options. Config options remain authoritative for duplicate
+// tags, but retained Lantern servers and user servers stay connectable on cold
+// tunnel start.
 func appendManagedServerOptions(options *option.Options, managed []*servers.Server) {
 	existingTags := optionTagSet(*options)
 	for _, srv := range managed {
@@ -902,6 +906,9 @@ func appendManagedServerOptions(options *option.Options, managed []*servers.Serv
 	}
 }
 
+// managedOptionTag returns the tag that sing-box will see for a managed option.
+// Prefer the embedded option tag, falling back to Server.Tag for older or
+// partially populated records.
 func managedOptionTag(serverTag, optionTag string) string {
 	if optionTag != "" {
 		return optionTag
@@ -909,6 +916,8 @@ func managedOptionTag(serverTag, optionTag string) string {
 	return serverTag
 }
 
+// optionTagSet returns the outbound and endpoint tags already present in the
+// box options.
 func optionTagSet(options option.Options) map[string]struct{} {
 	tags := make(map[string]struct{}, len(options.Outbounds)+len(options.Endpoints))
 	for _, out := range options.Outbounds {
