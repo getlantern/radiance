@@ -506,7 +506,7 @@ func (c *Client) SignupEmailResendCode(ctx context.Context, email string) error 
 }
 
 // VerifyPassword checks the password for the given email, returning a nil
-// error only when the credentials are not valid.
+// error only when the credentials are valid.
 func (c *Client) VerifyPassword(ctx context.Context, email, password string) error {
 	_, err := c.do(ctx, http.MethodPost, accountVerifyPasswordEndpoint, EmailPasswordRequest{Email: email, Password: password})
 	return err
