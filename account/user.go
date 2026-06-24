@@ -390,8 +390,7 @@ func (a *Client) ValidateEmailRecoveryCode(ctx context.Context, email, code stri
 	return nil
 }
 
-// VerifyPassword confirms the password is correct for the given email by
-// deriving the SRP client proof
+// VerifyPassword confirms the password is correct for the given email by deriving the SRP client proof.
 func (a *Client) VerifyPassword(ctx context.Context, email, password string) ([]byte, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "verify_password")
 	defer span.End()

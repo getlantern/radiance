@@ -920,7 +920,7 @@ func (s *localapi) accountVerifyPasswordHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := s.backend(r.Context()).VerifyPassword(r.Context(), req.Email, req.Password); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
