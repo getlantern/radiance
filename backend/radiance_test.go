@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -117,4 +118,94 @@ func TestLanternServersToEvict(t *testing.T) {
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
+}
+
+func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
+	options := option.Options{
+		Outbounds: []option.Outbound{
+			{Tag: "current", Type: "shadowsocks"},
+			{Tag: "retained-current", Type: "shadowsocks"},
+		},
+		Endpoints: []option.Endpoint{
+			{Tag: "current-endpoint", Type: "wireguard"},
+		},
+	}
+	managed := []*servers.Server{
+		{
+			Tag:       "retained-current",
+			Type:      "hysteria2",
+			IsLantern: true,
+			Options:   option.Outbound{Tag: "retained-current", Type: "hysteria2"},
+		},
+		{
+			Tag:       "server-alias-for-current",
+			Type:      "hysteria2",
+			IsLantern: true,
+			Options:   option.Outbound{Tag: "current", Type: "hysteria2"},
+		},
+		{
+			Tag:       "retained-missing",
+			Type:      "shadowsocks",
+			IsLantern: true,
+			Options:   option.Outbound{Tag: "retained-missing", Type: "shadowsocks"},
+		},
+		{
+			Tag:       "user-missing",
+			Type:      "trojan",
+			IsLantern: false,
+			Options:   option.Outbound{Tag: "user-missing", Type: "trojan"},
+		},
+		{
+			Tag:       "missing-option-tag",
+			Type:      "shadowsocks",
+			IsLantern: true,
+			Options:   option.Outbound{Type: "shadowsocks"},
+		},
+		{
+			Tag:       "retained-endpoint",
+			Type:      "wireguard",
+			IsLantern: true,
+			Options:   option.Endpoint{Tag: "retained-endpoint", Type: "wireguard"},
+		},
+		{
+			Tag:       "server-alias-for-current-endpoint",
+			Type:      "wireguard",
+			IsLantern: true,
+			Options:   option.Endpoint{Tag: "current-endpoint", Type: "wireguard"},
+		},
+		{
+			Tag:       "metadata-only",
+			IsLantern: true,
+		},
+	}
+
+	appendManagedServerOptions(&options, managed)
+
+	assert.Equal(t, []string{
+		"current",
+		"retained-current",
+		"retained-missing",
+		"user-missing",
+	}, outboundTags(options.Outbounds))
+	assert.Equal(t, "shadowsocks", options.Outbounds[1].Type, "current config should win duplicate tags")
+	assert.Equal(t, []string{
+		"current-endpoint",
+		"retained-endpoint",
+	}, endpointTags(options.Endpoints))
+}
+
+func outboundTags(outbounds []option.Outbound) []string {
+	tags := make([]string, 0, len(outbounds))
+	for _, out := range outbounds {
+		tags = append(tags, out.Tag)
+	}
+	return tags
+}
+
+func endpointTags(endpoints []option.Endpoint) []string {
+	tags := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		tags = append(tags, endpoint.Tag)
+	}
+	return tags
 }
