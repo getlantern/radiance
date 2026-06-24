@@ -390,6 +390,23 @@ func (a *Client) ValidateEmailRecoveryCode(ctx context.Context, email, code stri
 	return nil
 }
 
+// VerifyPassword confirms the password is correct for the given email by
+// deriving the SRP client proof
+func (a *Client) VerifyPassword(ctx context.Context, email, password string) ([]byte, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "verify_password")
+	defer span.End()
+	lowerCaseEmail := strings.ToLower(email)
+	salt, err := a.getSalt(ctx, lowerCaseEmail)
+	if err != nil {
+		return nil, traces.RecordError(ctx, err)
+	}
+	proof, err := a.clientProof(ctx, lowerCaseEmail, password, salt)
+	if err != nil {
+		return nil, traces.RecordError(ctx, err)
+	}
+	return proof, nil
+}
+
 // StartChangeEmail initializes a change of the email address associated with this user account.
 func (a *Client) StartChangeEmail(ctx context.Context, newEmail, password string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "start_change_email")
@@ -398,11 +415,7 @@ func (a *Client) StartChangeEmail(ctx context.Context, newEmail, password string
 	lowerCaseEmail := strings.ToLower(settings.GetString(settings.EmailKey))
 	lowerCaseNewEmail := strings.ToLower(newEmail)
 
-	salt, err := a.getSalt(ctx, lowerCaseEmail)
-	if err != nil {
-		return traces.RecordError(ctx, err)
-	}
-	proof, err := a.clientProof(ctx, lowerCaseEmail, password, salt)
+	proof, err := a.VerifyPassword(ctx, lowerCaseEmail, password)
 	if err != nil {
 		return traces.RecordError(ctx, err)
 	}

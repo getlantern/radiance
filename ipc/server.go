@@ -69,18 +69,19 @@ const (
 	splitTunnelEndpoint = "/split-tunnel"
 
 	// Account endpoints
-	accountNewUserEndpoint       = "/account/new-user"
-	accountLoginEndpoint         = "/account/login"
-	accountLogoutEndpoint        = "/account/logout"
-	accountUserDataEndpoint      = "/account/user"
-	accountDevicesEndpoint       = "/account/devices/"
-	accountSignupEndpoint        = "/account/signup/"
-	accountEmailEndpoint         = "/account/email"
-	accountRecoveryEndpoint      = "/account/recovery"
-	accountDeleteEndpoint        = "/account/delete"
-	accountOAuthEndpoint         = "/account/oauth"
-	accountDataCapEndpoint       = "/account/datacap"
-	accountDataCapStreamEndpoint = "/account/datacap/stream"
+	accountNewUserEndpoint        = "/account/new-user"
+	accountLoginEndpoint          = "/account/login"
+	accountLogoutEndpoint         = "/account/logout"
+	accountUserDataEndpoint       = "/account/user"
+	accountDevicesEndpoint        = "/account/devices/"
+	accountSignupEndpoint         = "/account/signup/"
+	accountVerifyPasswordEndpoint = "/account/verify-password"
+	accountEmailEndpoint          = "/account/email"
+	accountRecoveryEndpoint       = "/account/recovery"
+	accountDeleteEndpoint         = "/account/delete"
+	accountOAuthEndpoint          = "/account/oauth"
+	accountDataCapEndpoint        = "/account/datacap"
+	accountDataCapStreamEndpoint  = "/account/datacap/stream"
 
 	// Subscription endpoints
 	subscriptionActivationEndpoint         = "/subscription/activation"
@@ -239,6 +240,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+accountUserDataEndpoint, traced(s.accountUserDataHandler))
 	mux.HandleFunc(accountDevicesEndpoint+"{deviceID...}", traced(s.accountDevicesHandler))
 	mux.HandleFunc("POST "+accountSignupEndpoint+"{action...}", traced(s.accountSignupHandler))
+	mux.HandleFunc("POST "+accountVerifyPasswordEndpoint, traced(s.accountVerifyPasswordHandler))
 	mux.HandleFunc("POST "+accountEmailEndpoint+"/{action}", traced(s.accountEmailHandler))
 	mux.HandleFunc("POST "+accountRecoveryEndpoint+"/{action}", traced(s.accountRecoveryHandler))
 	mux.HandleFunc("DELETE "+accountDeleteEndpoint, traced(s.accountDeleteHandler))
@@ -908,6 +910,20 @@ func (s *localapi) accountSignupHandler(w http.ResponseWriter, r *http.Request) 
 		}
 		writeJSON(w, http.StatusOK, SignupResponse{Salt: salt, Response: resp})
 	}
+}
+
+// accountVerifyPasswordHandler handles POST /account/verify-password.
+func (s *localapi) accountVerifyPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	var req EmailPasswordRequest
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.backend(r.Context()).VerifyPassword(r.Context(), req.Email, req.Password); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // accountEmailHandler handles POST /account/email/{action} for start and complete.
