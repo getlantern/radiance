@@ -156,7 +156,7 @@ func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) 
 			Options:   option.Outbound{Tag: "user-missing", Type: "trojan"},
 		},
 		{
-			Tag:       "fallback-tag",
+			Tag:       "missing-option-tag",
 			Type:      "shadowsocks",
 			IsLantern: true,
 			Options:   option.Outbound{Type: "shadowsocks"},
@@ -186,7 +186,6 @@ func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) 
 		"retained-current",
 		"retained-missing",
 		"user-missing",
-		"fallback-tag",
 	}, outboundTags(options.Outbounds))
 	assert.Equal(t, "shadowsocks", options.Outbounds[1].Type, "current config should win duplicate tags")
 	assert.Equal(t, []string{

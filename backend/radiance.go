@@ -881,39 +881,27 @@ func appendManagedServerOptions(options *option.Options, managed []*servers.Serv
 	for _, srv := range managed {
 		switch opts := srv.Options.(type) {
 		case option.Outbound:
-			tag := managedOptionTag(srv.Tag, opts.Tag)
+			tag := opts.Tag
 			if tag == "" {
 				continue
 			}
 			if _, exists := existingTags[tag]; exists {
 				continue
 			}
-			opts.Tag = tag
 			options.Outbounds = append(options.Outbounds, opts)
 			existingTags[tag] = struct{}{}
 		case option.Endpoint:
-			tag := managedOptionTag(srv.Tag, opts.Tag)
+			tag := opts.Tag
 			if tag == "" {
 				continue
 			}
 			if _, exists := existingTags[tag]; exists {
 				continue
 			}
-			opts.Tag = tag
 			options.Endpoints = append(options.Endpoints, opts)
 			existingTags[tag] = struct{}{}
 		}
 	}
-}
-
-// managedOptionTag returns the tag that sing-box will see for a managed option.
-// Prefer the embedded option tag, falling back to Server.Tag for older or
-// partially populated records.
-func managedOptionTag(serverTag, optionTag string) string {
-	if optionTag != "" {
-		return optionTag
-	}
-	return serverTag
 }
 
 // optionTagSet returns the outbound and endpoint tags already present in the
