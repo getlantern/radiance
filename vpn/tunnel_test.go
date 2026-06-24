@@ -110,10 +110,8 @@ func TestContextDone(t *testing.T) {
 	assert.True(t, contextDone(ctx))
 }
 
-// The mobile memory limits must stay ordered: GOMEMLIMIT below the conntrack killer
-// (so Go GC reacts before connections are dropped), and the killer below the iOS cap.
 func TestMobileMemoryLimitsOrdering(t *testing.T) {
 	const iOSFootprintCap = 50 << 20
-	assert.Less(t, mobileMemoryLimit, mobileConntrackLimit, "GOMEMLIMIT must be below the conntrack killer")
-	assert.Less(t, mobileConntrackLimit, iOSFootprintCap, "conntrack killer must be below the iOS footprint cap")
+	assert.Less(t, mobileMemoryLimit, defaultMemLimitBytes, "GOMEMLIMIT must be below the monitor budget")
+	assert.Less(t, defaultMemLimitBytes, iOSFootprintCap, "monitor budget must be below the iOS cap")
 }

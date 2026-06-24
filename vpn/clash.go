@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing/common"
@@ -16,16 +17,22 @@ import (
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 
-	"github.com/sagernet/sing-box/adapter"
+	A "github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
-	"github.com/sagernet/sing-box/option"
+	O "github.com/sagernet/sing-box/option"
 
 	"github.com/gofrs/uuid/v5"
 )
 
-var _ adapter.ClashServer = (*clashServer)(nil)
+const rejectMode = "reject"
 
-// clashServer is a stub adapter.ClashServer: it exposes the traffic manager
+type dialAdmissionGate interface {
+	RecordDial(time.Time)
+}
+
+var _ A.ClashServer = (*clashServer)(nil)
+
+// clashServer is a stub A.ClashServer: it exposes the traffic manager
 // and URL-test history hook the rest of the tunnel depends on, but does not
 // run the Clash HTTP API. Start and Close are no-ops because there are no
 // owned resources beyond what's wired in via the sing-box service context.
@@ -34,9 +41,9 @@ type clashServer struct {
 	cancel    context.CancelFunc
 	startOnce sync.Once
 
-	dnsRouter adapter.DNSRouter
-	outbound  adapter.OutboundManager
-	endpoint  adapter.EndpointManager
+	dnsRouter A.DNSRouter
+	outbound  A.OutboundManager
+	endpoint  A.EndpointManager
 
 	connTracker       *connTracker
 	throughputTracker *throughputTracker
@@ -45,10 +52,13 @@ type clashServer struct {
 	mode     string
 	modeList []string
 
+	admissionGate atomic.Value // dialAdmissionGate; set once before the box routes, read lock-free on the dial path
+	rejecting     atomic.Bool
+
 	mu sync.RWMutex
 }
 
-func newClashServer(ctx context.Context, _ log.ObservableFactory, options option.ClashAPIOptions) (adapter.ClashServer, error) {
+func newClashServer(ctx context.Context, _ log.ObservableFactory, options O.ClashAPIOptions) (A.ClashServer, error) {
 	modeList := options.ModeList
 	initial := options.DefaultMode
 	if len(modeList) == 0 {
@@ -67,9 +77,9 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options option
 	return &clashServer{
 		ctx:               runCtx,
 		cancel:            cancel,
-		dnsRouter:         service.FromContext[adapter.DNSRouter](ctx),
-		outbound:          service.FromContext[adapter.OutboundManager](ctx),
-		endpoint:          service.FromContext[adapter.EndpointManager](ctx),
+		dnsRouter:         service.FromContext[A.DNSRouter](ctx),
+		outbound:          service.FromContext[A.OutboundManager](ctx),
+		endpoint:          service.FromContext[A.EndpointManager](ctx),
 		connTracker:       ct,
 		throughputTracker: tp,
 		modeList:          modeList,
@@ -96,6 +106,9 @@ func (s *clashServer) SetMode(mode string) error {
 }
 
 func (s *clashServer) Mode() string {
+	if s.rejecting.Load() {
+		return rejectMode
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mode
@@ -107,7 +120,7 @@ func (s *clashServer) ModeList() []string {
 	return s.modeList
 }
 
-func (s *clashServer) Start(stage adapter.StartStage) error {
+func (s *clashServer) Start(stage A.StartStage) error {
 	s.startOnce.Do(func() {
 		s.trackerDone = make(chan struct{})
 		go func() {
@@ -126,9 +139,26 @@ func (s *clashServer) Close() error {
 	return nil
 }
 
-// HistoryStorage always returns nil. [adapter.URLTestHistoryStorage] is not used by [clashServer]
-// so this is to satisfy [adapter.ClashServer].
-func (s *clashServer) HistoryStorage() adapter.URLTestHistoryStorage {
+func (s *clashServer) SetAdmissionGate(gate dialAdmissionGate) {
+	if gate != nil {
+		s.admissionGate.Store(gate)
+	}
+}
+
+func (s *clashServer) setRejectMode(enable bool) {
+	if swapped := s.rejecting.Swap(enable); swapped == enable {
+		return
+	}
+	if enable {
+		slog.Warn("Enabling reject mode: all connections will be rejected until disabled")
+		return
+	}
+	slog.Info("Disabling reject mode: routing will resume as normal")
+}
+
+// HistoryStorage always returns nil. [A.URLTestHistoryStorage] is not used by [clashServer]
+// so this is to satisfy [A.ClashServer].
+func (s *clashServer) HistoryStorage() A.URLTestHistoryStorage {
 	return nil
 }
 
@@ -138,7 +168,7 @@ func (s *clashServer) ThroughputTracker() *throughputTracker {
 
 // newRecord builds a lean record for a routed connection, copying the scalars radiance reads out of
 // metadata and resolving the outbound chain.
-func (s *clashServer) newRecord(metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) *record {
+func (s *clashServer) newRecord(metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) *record {
 	id, _ := uuid.NewV4()
 	outbound, outboundType, chain := s.resolveChain(matchOutbound)
 	return &record{
@@ -160,7 +190,7 @@ func (s *clashServer) newRecord(metadata adapter.InboundContext, matchedRule ada
 	}
 }
 
-func (s *clashServer) resolveChain(matchOutbound adapter.Outbound) (outbound, outboundType string, chain []string) {
+func (s *clashServer) resolveChain(matchOutbound A.Outbound) (outbound, outboundType string, chain []string) {
 	var next string
 	if matchOutbound != nil {
 		next = matchOutbound.Tag()
@@ -181,7 +211,7 @@ func (s *clashServer) resolveChain(matchOutbound adapter.Outbound) (outbound, ou
 		outbound = detour.Tag()
 		outboundType = detour.Type()
 
-		group, isGroup := detour.(adapter.OutboundGroup)
+		group, isGroup := detour.(A.OutboundGroup)
 		if !isGroup {
 			break
 		}
@@ -191,7 +221,7 @@ func (s *clashServer) resolveChain(matchOutbound adapter.Outbound) (outbound, ou
 	return outbound, outboundType, common.Reverse(chain)
 }
 
-func formatRule(rule adapter.Rule) string {
+func formatRule(rule A.Rule) string {
 	if rule == nil {
 		return ""
 	}
@@ -212,7 +242,15 @@ func (s *clashServer) downloadCounter(r *record) N.CountFunc {
 	}
 }
 
-func (s *clashServer) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) net.Conn {
+func (s *clashServer) admitConnection(now time.Time) {
+	if gate, _ := s.admissionGate.Load().(dialAdmissionGate); gate != nil {
+		gate.RecordDial(now)
+	}
+}
+
+func (s *clashServer) RoutedConnection(ctx context.Context, conn net.Conn, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) net.Conn {
+	s.admitConnection(time.Now())
+
 	r := s.newRecord(metadata, matchedRule, matchOutbound)
 	c := &tcpConn{
 		ExtendedConn: bufio.NewCounterConn(
@@ -223,11 +261,14 @@ func (s *clashServer) RoutedConnection(ctx context.Context, conn net.Conn, metad
 		rec: r,
 		ct:  s.connTracker,
 	}
+	r.closer = c
 	s.connTracker.join(r)
 	return c
 }
 
-func (s *clashServer) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) N.PacketConn {
+func (s *clashServer) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) N.PacketConn {
+	s.admitConnection(time.Now())
+
 	r := s.newRecord(metadata, matchedRule, matchOutbound)
 	c := &udpConn{
 		PacketConn: bufio.NewCounterPacketConn(
@@ -238,6 +279,7 @@ func (s *clashServer) RoutedPacketConnection(ctx context.Context, conn N.PacketC
 		rec: r,
 		ct:  s.connTracker,
 	}
+	r.closer = c
 	s.connTracker.join(r)
 	return c
 }

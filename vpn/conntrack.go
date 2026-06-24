@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,10 @@ type record struct {
 	// closed is the exactly-once gate for leave: Close may fire more than once (half-close,
 	// error/abort, ctx-cancel then explicit close), but the accounting must fold only once.
 	closed atomic.Bool
+
+	// closer closes the underlying wrapped connection; set once at creation so the memory monitor
+	// can evict a specific connection by id. Closing it folds the record out via leave.
+	closer io.Closer
 
 	outbound     string // raw leaf outbound tag: per-outbound bucket key and group-manager shim
 	outboundType string
@@ -206,6 +211,30 @@ func (m *connTracker) activeStats() (count int, perOutbound map[string]int) {
 
 func (m *connTracker) activeConnectionCount() int64 {
 	return m.activeCount.Load()
+}
+
+func (m *connTracker) closeRecord(r *record) {
+	if r == nil || r.closer == nil {
+		return
+	}
+	_ = r.closer.Close()
+}
+
+// closeConn closes the connection with id by closing its wrapper, which folds it out via leave.
+func (m *connTracker) closeConn(id uuid.UUID) {
+	r, ok := m.conns.Load(id)
+	if !ok {
+		return
+	}
+	m.closeRecord(r)
+}
+
+// closeAllTracked closes every live connection. It is the hard-reclaim path when conntrack is
+// compiled out (otherwise conntrack.Close drains every dialed conn).
+func (m *connTracker) closeAllTracked() {
+	for _, r := range m.conns.Iter() {
+		m.closeRecord(r)
+	}
 }
 
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
