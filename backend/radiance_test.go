@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -117,4 +118,55 @@ func TestLanternServersToEvict(t *testing.T) {
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
+}
+
+func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
+	options := option.Options{
+		Outbounds: []option.Outbound{
+			{Tag: "current", Type: "shadowsocks"},
+			{Tag: "retained-current", Type: "shadowsocks"},
+		},
+	}
+	managed := []*servers.Server{
+		{
+			Tag:       "retained-current",
+			Type:      "hysteria2",
+			IsLantern: true,
+			Options:   option.Outbound{Tag: "retained-current", Type: "hysteria2"},
+		},
+		{
+			Tag:       "retained-missing",
+			Type:      "shadowsocks",
+			IsLantern: true,
+			Options:   option.Outbound{Tag: "retained-missing", Type: "shadowsocks"},
+		},
+		{
+			Tag:       "user-missing",
+			Type:      "trojan",
+			IsLantern: false,
+			Options:   option.Outbound{Tag: "user-missing", Type: "trojan"},
+		},
+		{
+			Tag:       "metadata-only",
+			IsLantern: true,
+		},
+	}
+
+	appendManagedServerOptions(&options, managed)
+
+	assert.Equal(t, []string{
+		"current",
+		"retained-current",
+		"retained-missing",
+		"user-missing",
+	}, outboundTags(options.Outbounds))
+	assert.Equal(t, "shadowsocks", options.Outbounds[1].Type, "current config should win duplicate tags")
+}
+
+func outboundTags(outbounds []option.Outbound) []string {
+	tags := make([]string, 0, len(outbounds))
+	for _, out := range outbounds {
+		tags = append(tags, out.Tag)
+	}
+	return tags
 }

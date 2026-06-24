@@ -857,16 +857,11 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			bOptions.AdBlock = cfg.AdBlock
 		}
 	}
+	servers := r.srvManager.AllServers()
+	appendManagedServerOptions(&bOptions.Options, servers)
+
 	seed := make(map[string]lbA.TagHistory)
-	for _, srv := range r.srvManager.AllServers() {
-		if !srv.IsLantern {
-			switch opts := srv.Options.(type) {
-			case option.Outbound:
-				bOptions.Options.Outbounds = append(bOptions.Options.Outbounds, opts)
-			case option.Endpoint:
-				bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, opts)
-			}
-		}
+	for _, srv := range servers {
 		if srv.SelectionHistory != nil {
 			seed[srv.Tag] = *srv.SelectionHistory
 		}
@@ -875,6 +870,34 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.SelectionHistorySeed = seed
 	}
 	return bOptions
+}
+
+func appendManagedServerOptions(options *option.Options, managed []*servers.Server) {
+	existingTags := optionTagSet(*options)
+	for _, srv := range managed {
+		if _, exists := existingTags[srv.Tag]; exists {
+			continue
+		}
+		switch opts := srv.Options.(type) {
+		case option.Outbound:
+			options.Outbounds = append(options.Outbounds, opts)
+			existingTags[opts.Tag] = struct{}{}
+		case option.Endpoint:
+			options.Endpoints = append(options.Endpoints, opts)
+			existingTags[opts.Tag] = struct{}{}
+		}
+	}
+}
+
+func optionTagSet(options option.Options) map[string]struct{} {
+	tags := make(map[string]struct{}, len(options.Outbounds)+len(options.Endpoints))
+	for _, out := range options.Outbounds {
+		tags[out.Tag] = struct{}{}
+	}
+	for _, ep := range options.Endpoints {
+		tags[ep.Tag] = struct{}{}
+	}
+	return tags
 }
 
 func (r *LocalBackend) DisconnectVPN() error {
