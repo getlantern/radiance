@@ -1184,6 +1184,11 @@ func (r *LocalBackend) FetchUserData(ctx context.Context) (*account.UserData, er
 	return r.accountClient.FetchUserData(ctx)
 }
 
+func (r *LocalBackend) VerifyPassword(ctx context.Context, email, password string) error {
+	_, err := r.accountClient.VerifyPassword(ctx, email, password)
+	return err
+}
+
 func (r *LocalBackend) StartChangeEmail(ctx context.Context, newEmail, password string) error {
 	return r.accountClient.StartChangeEmail(ctx, newEmail, password)
 }
