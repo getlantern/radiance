@@ -126,6 +126,9 @@ func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) 
 			{Tag: "current", Type: "shadowsocks"},
 			{Tag: "retained-current", Type: "shadowsocks"},
 		},
+		Endpoints: []option.Endpoint{
+			{Tag: "current-endpoint", Type: "wireguard"},
+		},
 	}
 	managed := []*servers.Server{
 		{
@@ -133,6 +136,12 @@ func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) 
 			Type:      "hysteria2",
 			IsLantern: true,
 			Options:   option.Outbound{Tag: "retained-current", Type: "hysteria2"},
+		},
+		{
+			Tag:       "server-alias-for-current",
+			Type:      "hysteria2",
+			IsLantern: true,
+			Options:   option.Outbound{Tag: "current", Type: "hysteria2"},
 		},
 		{
 			Tag:       "retained-missing",
@@ -147,6 +156,24 @@ func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) 
 			Options:   option.Outbound{Tag: "user-missing", Type: "trojan"},
 		},
 		{
+			Tag:       "fallback-tag",
+			Type:      "shadowsocks",
+			IsLantern: true,
+			Options:   option.Outbound{Type: "shadowsocks"},
+		},
+		{
+			Tag:       "retained-endpoint",
+			Type:      "wireguard",
+			IsLantern: true,
+			Options:   option.Endpoint{Tag: "retained-endpoint", Type: "wireguard"},
+		},
+		{
+			Tag:       "server-alias-for-current-endpoint",
+			Type:      "wireguard",
+			IsLantern: true,
+			Options:   option.Endpoint{Tag: "current-endpoint", Type: "wireguard"},
+		},
+		{
 			Tag:       "metadata-only",
 			IsLantern: true,
 		},
@@ -159,14 +186,27 @@ func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) 
 		"retained-current",
 		"retained-missing",
 		"user-missing",
+		"fallback-tag",
 	}, outboundTags(options.Outbounds))
 	assert.Equal(t, "shadowsocks", options.Outbounds[1].Type, "current config should win duplicate tags")
+	assert.Equal(t, []string{
+		"current-endpoint",
+		"retained-endpoint",
+	}, endpointTags(options.Endpoints))
 }
 
 func outboundTags(outbounds []option.Outbound) []string {
 	tags := make([]string, 0, len(outbounds))
 	for _, out := range outbounds {
 		tags = append(tags, out.Tag)
+	}
+	return tags
+}
+
+func endpointTags(endpoints []option.Endpoint) []string {
+	tags := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		tags = append(tags, endpoint.Tag)
 	}
 	return tags
 }
