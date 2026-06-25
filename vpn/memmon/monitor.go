@@ -145,7 +145,7 @@ func (m *Monitor) logTick(now time.Time, s Sample, d Decision) {
 			"heap_mb", logMB(s.GoStats.HeapObjects),
 			"goroutines", s.GoStats.Goroutines,
 			"num_gc", s.GoStats.NumGC,
-			"level", d.Level.String(),
+			"pressure_level", d.Level.String(),
 			"reason", d.Reason,
 			"predicted", d.IsPredicted,
 			"next_interval", d.NextInterval,
