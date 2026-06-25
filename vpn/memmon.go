@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	// defaultMemLimitBytes is the Android/dev byte budget, just under the ≈50 MB iOS extension cap.
 	// iOS uses dynamic headroom when available and falls back to this budget otherwise.
-	defaultMemLimitBytes = 48 * 1024 * 1024
+	defaultIOSMemLimitBytes    = 48 * 1024 * 1024  // 48 MB
+	defaultNonIOSMemLimitBytes = 512 * 1024 * 1024 // 512 MB
 
 	minMemLimitMB = 16
 	maxMemLimitMB = 512
@@ -30,85 +30,118 @@ const (
 // lock, and falls back to the tracker when conntrack is compiled out (without the with_conntrack
 // build tag conntrack.Close is a no-op) so a hard reclaim is never silently lost.
 type memoryReclaimer struct {
-	ct *connTracker
+	tracker *connTracker
 }
 
 func (r *memoryReclaimer) ConnectionsOldestFirst() []memmon.ConnectionRef {
-	md := r.ct.Connections()
-	refs := make([]memmon.ConnectionRef, len(md))
-	for i, m := range md {
-		refs[i] = memmon.ConnectionRef{ID: m.ID, CreatedAt: m.CreatedAt}
+	metadata := r.tracker.Connections()
+	refs := make([]memmon.ConnectionRef, len(metadata))
+	for i, conn := range metadata {
+		refs[i] = memmon.ConnectionRef{ID: conn.ID, CreatedAt: conn.CreatedAt}
 	}
-	slices.SortFunc(refs, func(a, b memmon.ConnectionRef) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	slices.SortFunc(refs, func(a, b memmon.ConnectionRef) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
 	return refs
 }
 
-func (r *memoryReclaimer) CloseConn(id uuid.UUID) { r.ct.closeConn(id) }
-
-func (r *memoryReclaimer) CloseAllConnections() { closeAllRouted(r.ct) }
-
-// closeAllRouted force-closes every connection, preferring conntrack.Close (all dialed conns under
-// one lock) and falling back to the tracker when conntrack is compiled out — so it is never a silent
-// no-op regardless of the with_conntrack build tag. Shared by the hard reclaim and the mode-switch
-// reset.
-func closeAllRouted(ct *connTracker) {
-	if conntrack.Enabled {
-		conntrack.Close()
-		return
-	}
-	ct.closeAllTracked()
+func (r *memoryReclaimer) FreeOSMemory() {
+	runtimeDebug.FreeOSMemory()
 }
 
-func (r *memoryReclaimer) FreeOSMemory() { runtimeDebug.FreeOSMemory() }
-
-func (r *memoryReclaimer) OpenConnectionCount() int { return int(r.ct.activeConnectionCount()) }
+func (r *memoryReclaimer) OpenConnectionCount() int {
+	return int(r.tracker.activeConnectionCount())
+}
 
 func (r *memoryReclaimer) TotalDialedConnections() int {
 	if conntrack.Enabled {
 		return conntrack.Count()
 	}
-	return int(r.ct.activeConnectionCount())
+	return int(r.tracker.activeConnectionCount())
 }
 
-func startMemoryMonitor(ctx context.Context, cs *clashServer) io.Closer {
-	limit := memmon.FixedLimit(monitorLimitBytes())
-	cfg := memoryMonitorConfig(limit)
+func (r *memoryReclaimer) CloseConn(id uuid.UUID) {
+	r.tracker.closeConn(id)
+}
 
-	// The gate samples a fresh footprint per admitted connection, so it needs its
-	// own Sensor: sampling concurrently with the monitor's would race the reused
-	// runtime/metrics buffers.
+func (r *memoryReclaimer) CloseAllConnections() {
+	closeAllRouted(r.tracker)
+}
+
+// Prefer conntrack.Close when available, and fall back to tracked connections
+// when conntrack support is compiled out.
+func closeAllRouted(tracker *connTracker) {
+	if conntrack.Enabled {
+		conntrack.Close()
+		return
+	}
+	tracker.closeAllTracked()
+}
+
+func startMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
+	if common.IsIOS() {
+		return startIOSMemoryMonitor(ctx, server)
+	}
+
+	return startFixedMemoryMonitor(ctx)
+}
+
+func startFixedMemoryMonitor(ctx context.Context) io.Closer {
+	limit := memmon.FixedLimit(defaultNonIOSMemLimitBytes)
+	// Non-iOS uses the monitor for visibility only. Reclaim and admission
+	// control remain disabled by passing a nil executor.
+	monitor := memmon.New(
+		memoryMonitorConfig(limit),
+		memmon.NewSensor(limit),
+		nil,
+	)
+
+	return runMonitor(ctx, monitor)
+}
+
+func startIOSMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
+	limit := memmon.FixedLimit(monitorLimitBytes())
+
+	// Use a dedicated sensor here. Sharing the monitor sensor would race its
+	// reused runtime/metrics buffers.
 	gate := memmon.NewAdmissionGate(
 		memmon.AdmissionConfig{},
 		memmon.NewSensor(limit),
-		admissionRejectionHandler(cs),
+		admissionRejectionHandler(server),
 	)
-	cs.SetAdmissionGate(gate)
+	server.SetAdmissionGate(gate)
 
-	exec := memmon.NewExecutor(
-		&memoryReclaimer{ct: cs.connTracker},
+	reclaimer := &memoryReclaimer{tracker: server.connTracker}
+	executor := memmon.NewExecutor(
+		reclaimer,
 		settings.GetString(settings.LogPathKey),
 		common.Platform,
 		common.Version,
 		gate,
 	)
 
-	mon := memmon.New(cfg, memmon.NewSensor(limit), exec)
-	return runMonitor(ctx, mon)
+	monitor := memmon.New(
+		memoryMonitorConfig(limit),
+		memmon.NewSensor(limit),
+		executor,
+	)
+
+	return runMonitor(ctx, monitor)
 }
 
 func monitorLimitBytes() uint64 {
 	mb := env.GetInt(env.MemoryLimitMB)
 	switch {
 	case mb <= 0:
-		return defaultMemLimitBytes
+		return defaultIOSMemLimitBytes
 	case mb < minMemLimitMB:
 		slog.Warn("Ignoring low memory monitor limit override", "mb", mb, "min_mb", minMemLimitMB)
 	case mb > maxMemLimitMB:
 		slog.Warn("Ignoring high memory monitor limit override", "mb", mb, "max_mb", maxMemLimitMB)
 	default:
-		return uint64(mb) << 20
+		return uint64(mb) * 1024 * 1024
 	}
-	return defaultMemLimitBytes
+	return defaultIOSMemLimitBytes
 }
 
 func memoryMonitorConfig(limit memmon.LimitProvider) memmon.Config {

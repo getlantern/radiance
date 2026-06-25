@@ -8,7 +8,10 @@
 // is unit-testable in isolation.
 package memmon
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // PressureLevel is the graded memory-pressure level the decision core derives.
 type PressureLevel int8
@@ -138,3 +141,9 @@ func clampUnit(f float64) float64 {
 	}
 	return f
 }
+
+// logMB and logRound2 trim values to two decimals purely for log readability;
+// they must not feed any decision, only slog calls.
+func logMB(b uint64) float64 { return math.Round(float64(b)/(1024*1024)*100) / 100 }
+
+func logRound2(f float64) float64 { return math.Round(f*100) / 100 }

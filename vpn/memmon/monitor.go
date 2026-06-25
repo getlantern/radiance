@@ -2,6 +2,7 @@ package memmon
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
@@ -78,7 +79,15 @@ type Monitor struct {
 	readSample   func(now time.Time) Sample
 	executor     Executor
 	baseInterval time.Duration
+
+	lastLevel   PressureLevel
+	lastTickLog time.Time
 }
+
+// normalTickLogInterval throttles the per-tick DEBUG log while pressure is
+// Normal so steady state emits a heartbeat rather than one line per tick; any
+// elevated level logs every tick, where the per-tick detail is worth the volume.
+const normalTickLogInterval = 10 * time.Second
 
 // New wires a Monitor from the decision config, the per-tick Sampler, and the
 // executor.
@@ -118,8 +127,48 @@ func (m *Monitor) Run(ctx context.Context) {
 func (m *Monitor) Step(now time.Time) Decision {
 	sample := m.readSample(now)
 	decision := m.engine.Decide(sample)
+	m.logTick(now, sample, decision)
 	if m.executor != nil {
 		m.executor.Apply(decision, now)
 	}
 	return decision
+}
+
+func (m *Monitor) logTick(now time.Time, s Sample, d Decision) {
+	if m.shouldLogTick(now, d.Level) {
+		m.lastTickLog = now
+		slog.Debug("memory tick",
+			"footprint_mb", logMB(s.Footprint),
+			"cap_mb", logMB(s.Cap),
+			"pressure", logRound2(d.PressureRatio),
+			"go_mb", logMB(s.GoBytes),
+			"heap_mb", logMB(s.GoStats.HeapObjects),
+			"goroutines", s.GoStats.Goroutines,
+			"num_gc", s.GoStats.NumGC,
+			"level", d.Level.String(),
+			"reason", d.Reason,
+			"predicted", d.IsPredicted,
+			"next_interval", d.NextInterval,
+		)
+	}
+	if d.Level != m.lastLevel {
+		slog.Info("memory pressure level change",
+			"from", m.lastLevel.String(),
+			"to", d.Level.String(),
+			"pressure", logRound2(d.PressureRatio),
+			"footprint_mb", logMB(s.Footprint),
+			"reason", d.Reason,
+		)
+		m.lastLevel = d.Level
+	}
+}
+
+// shouldLogTick reports whether this tick's DEBUG line should be emitted: always
+// while pressure is elevated, but no more than once per normalTickLogInterval
+// while Normal. The first tick always logs so a baseline is recorded.
+func (m *Monitor) shouldLogTick(now time.Time, level PressureLevel) bool {
+	if level != LevelNormal || m.lastTickLog.IsZero() {
+		return true
+	}
+	return now.Sub(m.lastTickLog) >= normalTickLogInterval
 }

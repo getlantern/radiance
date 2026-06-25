@@ -51,7 +51,7 @@ func newTestClashServer(t *testing.T) *clashServer {
 
 func TestMemmonReclaimer(t *testing.T) {
 	ct := newConnTracker()
-	r := &memoryReclaimer{ct: ct}
+	r := &memoryReclaimer{tracker: ct}
 	base := time.Unix(1_700_000_000, 0)
 
 	// Joined out of creation order; ConnectionsOldestFirst must return oldest-first.
@@ -135,7 +135,7 @@ func TestMemoryMonitorE2E(t *testing.T) {
 	src := &adjustableSampler{capBytes: 1 << 30}
 	gate := memmon.NewAdmissionGate(memmon.AdmissionConfig{}, src, cs.setRejectMode)
 	cs.SetAdmissionGate(gate)
-	exec := memmon.NewExecutor(&memoryReclaimer{ct: cs.connTracker}, t.TempDir(), "test", "test", gate)
+	exec := memmon.NewExecutor(&memoryReclaimer{tracker: cs.connTracker}, t.TempDir(), "test", "test", gate)
 	mon := memmon.New(memmon.Config{}, src, exec)
 
 	step := func(p float64, at time.Time) {

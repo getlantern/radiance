@@ -112,6 +112,6 @@ func TestContextDone(t *testing.T) {
 
 func TestMobileMemoryLimitsOrdering(t *testing.T) {
 	const iOSFootprintCap = 50 << 20
-	assert.Less(t, mobileMemoryLimit, defaultMemLimitBytes, "GOMEMLIMIT must be below the monitor budget")
-	assert.Less(t, defaultMemLimitBytes, iOSFootprintCap, "monitor budget must be below the iOS cap")
+	assert.Less(t, mobileMemoryLimit, defaultIOSMemLimitBytes, "GOMEMLIMIT must be below the monitor budget")
+	assert.Less(t, defaultIOSMemLimitBytes, iOSFootprintCap, "monitor budget must be below the iOS cap")
 }

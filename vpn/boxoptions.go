@@ -219,7 +219,7 @@ func baseOpts(basePath string) O.Options {
 	if common.Platform == "android" && hasTunInbound(inbounds) {
 		opts.Route.OverrideAndroidVPN = true
 	}
-	if common.IsMobile() {
+	if common.IsIOS() {
 		opts.Route.Rules = append([]O.Rule{highMemoryRejectRule()}, opts.Route.Rules...)
 	}
 	return opts
@@ -238,7 +238,7 @@ func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
 	// The rules MUST be in this order to ensure proper functionality:
-	// 0. 	(Mobile-only) admission gate for rejecting new connections during high memory usage.
+	// 0. 	(iOS-only) admission gate for rejecting new connections during high memory usage.
 	// 		Only enabled long enough to allow memory to be returned to the OS. Prepended as the
 	// 		first rule to minimize any additional memory allocation while it's being reclaimed.
 	// 1.    Enable traffic sniffing

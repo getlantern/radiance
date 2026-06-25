@@ -182,7 +182,9 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	if common.IsMobile() {
+	if common.IsIOS() {
+		// only set memory limits on iOS since Android doesn't appear to apply any restrictions.
+		// we still start the memory monitor on Android so we can log usage.
 		setMobileMemoryLimits()
 	}
 
@@ -279,6 +281,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	t.clashServer.connTracker.SetObserver(t.connObserver)
 
 	if common.IsMobile() {
+		// still start the memory monitor on Android so we can still monitor and log usage
 		t.closers = append(t.closers, startMemoryMonitor(t.ctx, t.clashServer))
 	}
 

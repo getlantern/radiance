@@ -1,6 +1,7 @@
 package memmon
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -107,10 +108,16 @@ func (g *AdmissionGate) RecordDial(now time.Time) {
 	if g.rejecting {
 		return
 	}
-	if g.samplePressureLocked(now) >= g.cfg.StartRejectingPressure {
+	if p := g.samplePressureLocked(now); p >= g.cfg.StartRejectingPressure {
 		g.rejecting = true
 		g.rejectSince = now
 		g.setReject(true)
+		slog.Info("admission gate latched reject",
+			"pressure", logRound2(p),
+			"threshold", logRound2(g.cfg.StartRejectingPressure),
+			"armed", g.armed.Load(),
+			"burst", burst,
+		)
 	}
 }
 
@@ -124,6 +131,11 @@ func (g *AdmissionGate) Observe(level PressureLevel, pressure float64, now time.
 	if g.rejecting && (pressure < g.cfg.StopRejectingPressure || now.Sub(g.rejectSince) >= g.cfg.MaxRejectDuration) {
 		g.rejecting = false
 		g.setReject(false)
+		reason := "recovered"
+		if pressure >= g.cfg.StopRejectingPressure {
+			reason = "max_duration"
+		}
+		slog.Info("admission gate cleared reject", "reason", reason, "pressure", logRound2(pressure))
 	}
 }
 

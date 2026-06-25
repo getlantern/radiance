@@ -1,6 +1,9 @@
 package memmon
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 // executor is the reaction actuator. It is a pure actuator: it obeys the
 // Decision's flags and never decides when to act — all timing (the hard edge,
@@ -42,15 +45,18 @@ func (e *executor) Apply(a Decision, now time.Time) {
 	}
 	switch {
 	case a.CloseAllConnections:
+		open := e.reclaimer.OpenConnectionCount()
 		e.reclaimer.CloseAllConnections()
 		e.freeOSMemoryRL(now)
+		slog.Info("hard reclaim: closing all connections", "open_conns", open)
 	case a.Level == LevelSoft && a.EvictOldestBatch:
-		e.softEvict()
+		evicted, total := e.softEvict()
 		// The signal will not recede on its own after a soft eviction — freed
 		// relay buffers sit in the bufpool and the scavenger releases lazily —
 		// so a throttled FreeOSMemory is what lets the DecisionEngine observe a real drop
 		// and exit Soft. Rate-limited, so not the per-tick STW cost.
 		e.freeOSMemoryRL(now)
+		slog.Debug("soft eviction", "evicted", evicted, "remaining", total-evicted)
 	}
 	if a.Level != e.lastLevel {
 		if a.Level <= LevelSoft {
@@ -63,12 +69,13 @@ func (e *executor) Apply(a Decision, now time.Time) {
 	}
 }
 
-func (e *executor) softEvict() {
+func (e *executor) softEvict() (evicted, total int) {
 	refs := e.reclaimer.ConnectionsOldestFirst()
 	n := e.batchFor(len(refs))
 	for _, c := range refs[:n] {
 		e.reclaimer.CloseConn(c.ID)
 	}
+	return n, len(refs)
 }
 
 func (e *executor) batchFor(available int) int {
@@ -100,6 +107,13 @@ func (e *executor) maybeDump(a Decision, now time.Time) {
 	if e.dumped || e.dump == nil || a.Snapshot == nil {
 		return
 	}
-	_ = e.dump.write(a, e.reclaimer.OpenConnectionCount(), e.reclaimer.TotalDialedConnections(), now)
+	if err := e.dump.write(a, e.reclaimer.OpenConnectionCount(), e.reclaimer.TotalDialedConnections(), now); err != nil {
+		slog.Warn("failed to write memory crash dump", "error", err)
+	} else {
+		slog.Info("wrote memory crash dump",
+			"footprint_mb", logMB(a.Footprint),
+			"pressure", logRound2(a.PressureRatio),
+		)
+	}
 	e.dumped = true
 }
