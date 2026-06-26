@@ -183,7 +183,8 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	if common.IsMobile() {
+	if common.IsIOS() {
+		// only set memory limits on iOS since Android doesn't appear to apply any restrictions.
 		setMobileMemoryLimits()
 	}
 
