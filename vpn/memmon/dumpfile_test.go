@@ -25,7 +25,7 @@ func TestAppendDumpText(t *testing.T) {
 		},
 	}
 
-	got := string(appendDump(nil, a, 12, 15, at, "ios", "1.2.3"))
+	got := string(buildDump(nil, a, 12, 15, at, "ios", "1.2.3"))
 	for _, want := range []string{
 		`platform="ios"`,
 		`version="1.2.3"`,
@@ -50,9 +50,9 @@ func TestAppendDumpAllocFree(t *testing.T) {
 		},
 	}
 	buf := make([]byte, 0, 4096)
-	buf = appendDump(buf[:0], a, 1, 2, time.Unix(2, 0), "ios", "1.2.3")
+	buf = buildDump(buf[:0], a, 1, 2, time.Unix(2, 0), "ios", "1.2.3")
 	allocs := testing.AllocsPerRun(100, func() {
-		buf = appendDump(buf[:0], a, 1, 2, time.Unix(2, 0), "ios", "1.2.3")
+		buf = buildDump(buf[:0], a, 1, 2, time.Unix(2, 0), "ios", "1.2.3")
 	})
 	assert.Zero(t, allocs, "appendDump must be alloc-free after warmup")
 }

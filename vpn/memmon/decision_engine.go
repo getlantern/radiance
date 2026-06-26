@@ -67,7 +67,11 @@ type DecisionEngine struct {
 
 // NewDecisionEngine returns a DecisionEngine with cfg defaults applied.
 func NewDecisionEngine(cfg Config) *DecisionEngine {
-	return &DecisionEngine{cfg: cfg.applyDefaults(), ring: make([]Sample, 0, ringLen), levels: make([]LevelChange, 0, ringLen)}
+	return &DecisionEngine{
+		cfg:    cfg.applyDefaults(),
+		ring:   make([]Sample, 0, ringLen),
+		levels: make([]LevelChange, 0, ringLen),
+	}
 }
 
 // Level reports the current pressure level (for tests and observability).

@@ -31,11 +31,11 @@ func newDumpWriter(dir, platform, version string) *dumpWriter {
 // write assembles the dump from the Decision's Snapshot plus the connection counts and writes it
 // atomically. The caller guarantees a.Snapshot is non-nil.
 func (d *dumpWriter) write(a Decision, routed, dialed int, now time.Time) error {
-	d.buf = appendDump(d.buf[:0], a, routed, dialed, now, d.platform, d.version)
+	d.buf = buildDump(d.buf[:0], a, routed, dialed, now, d.platform, d.version)
 	return atomicfile.WriteFile(d.path, d.buf, fileperm.File)
 }
 
-func appendDump(buf []byte, a Decision, routed, dialed int, now time.Time, platform, version string) []byte {
+func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platform, version string) []byte {
 	last := lastSample(a.Snapshot)
 	var samples []Sample
 	var levels []LevelChange
