@@ -10,6 +10,27 @@ import (
 
 const testCap = 1_000_000
 
+// Threshold values the pressure series in this file are calibrated against.
+// Pinned explicitly so the engine-mechanics tests (hysteresis, dwell, settle,
+// prediction) stay independent of the production tuning in applyDefaults.
+const (
+	testSoftEnter = 0.75
+	testSoftExit  = 0.65
+	testHardEnter = 0.92
+	testHardExit  = 0.85
+)
+
+// testThresholds returns a Config carrying the classic test thresholds the
+// pressure series target. Callers set PredictHorizon/GoMemLimit as needed.
+func testThresholds() Config {
+	return Config{
+		SoftEnter: testSoftEnter,
+		SoftExit:  testSoftExit,
+		HardEnter: testHardEnter,
+		HardExit:  testHardExit,
+	}
+}
+
 func sampleAt(base time.Time, d time.Duration, pressure float64) Sample {
 	return Sample{
 		Footprint: uint64(pressure * testCap),
@@ -38,7 +59,11 @@ func levelsOf(acts []Decision) []PressureLevel {
 
 // noPredict disables the trend predictor so threshold/hysteresis tests are not
 // preempted by early escalation.
-func noPredict() Config { return Config{PredictHorizon: time.Nanosecond} }
+func noPredict() Config {
+	cfg := testThresholds()
+	cfg.PredictHorizon = time.Nanosecond
+	return cfg
+}
 
 func TestLevelProgression(t *testing.T) {
 	tests := []struct {
@@ -80,7 +105,7 @@ func TestLevelProgression(t *testing.T) {
 			// One isolated up-tick (still below hardEnter) is below predictMinTicks, so the
 			// predictor must not escalate to Hard. Predictor left enabled (default Config).
 			name:       "single spike does not false-predict hard",
-			cfg:        Config{},
+			cfg:        testThresholds(),
 			spacing:    time.Second,
 			pressures:  []float64{0.78, 0.78, 0.82, 0.78, 0.78},
 			wantLevels: []PressureLevel{LevelSoft, LevelSoft, LevelSoft, LevelSoft, LevelSoft},
@@ -99,7 +124,7 @@ func TestLevelProgression(t *testing.T) {
 }
 
 func TestPredictsAndDumpsOnHard(t *testing.T) {
-	c := NewDecisionEngine(Config{}) // default 5s predict horizon
+	c := NewDecisionEngine(testThresholds()) // default 5s predict horizon
 	acts := drive(c, time.Second, 0.78, 0.80, 0.85, 0.90)
 	last := acts[len(acts)-1]
 	require.Equal(t, LevelHard, last.Level, "sustained ramp escalates to Hard")
@@ -125,9 +150,12 @@ func TestCapZeroNoOp(t *testing.T) {
 }
 
 func TestGoMemLimitClamp(t *testing.T) {
-	// Cap=testCap, GoMemLimit pins soft-enter to 0.90 (> default 0.75), so 0.85
+	// Cap=testCap, GoMemLimit pins soft-enter to 0.90 (> base 0.75), so 0.85
 	// stays Normal and only 0.92 enters Soft.
-	c := NewDecisionEngine(Config{GoMemLimit: 0.90 * testCap, PredictHorizon: time.Nanosecond})
+	cfg := testThresholds()
+	cfg.GoMemLimit = 0.90 * testCap
+	cfg.PredictHorizon = time.Nanosecond
+	c := NewDecisionEngine(cfg)
 	acts := drive(c, 2*time.Second, 0.85, 0.92)
 	assert.Equal(t, LevelNormal, acts[0].Level, "p=0.85 stays Normal under the GOMEMLIMIT clamp")
 	assert.NotEqual(t, LevelNormal, acts[1].Level, "p=0.92 enters Soft under the clamp")
@@ -136,7 +164,10 @@ func TestGoMemLimitClamp(t *testing.T) {
 func TestGoMemLimitClampNeverInert(t *testing.T) {
 	// A cap below GOMEMLIMIT must not push soft-enter past hard-enter, which
 	// would make Soft unreachable and the monitor permanently inert.
-	c := NewDecisionEngine(Config{GoMemLimit: 2 * testCap, PredictHorizon: time.Nanosecond})
+	cfg := testThresholds()
+	cfg.GoMemLimit = 2 * testCap
+	cfg.PredictHorizon = time.Nanosecond
+	c := NewDecisionEngine(cfg)
 	assert.LessOrEqual(t, c.effectiveSoftEnter(testCap), c.cfg.HardEnter, "soft-enter capped at hard-enter")
 	// The monitor still reacts: a saturated footprint enters Soft then Hard.
 	acts := drive(c, 2*time.Second, 0.99, 0.99)
@@ -144,8 +175,19 @@ func TestGoMemLimitClampNeverInert(t *testing.T) {
 	assert.Equal(t, LevelHard, acts[1].Level, "and escalates to Hard")
 }
 
+func TestProductionDefaultsTolerateRestingFootprint(t *testing.T) {
+	resting := NewDecisionEngine(Config{})
+	for _, a := range drive(resting, time.Second, 0.83, 0.83, 0.83, 0.83, 0.83, 0.83) {
+		assert.Equal(t, LevelNormal, a.Level, "resting footprint stays Normal under production defaults")
+	}
+
+	climbed := NewDecisionEngine(Config{})
+	acts := drive(climbed, time.Second, 0.90, 0.90)
+	assert.Equal(t, LevelSoft, acts[0].Level, "a footprint above SoftEnter still enters Soft")
+}
+
 func TestHardReclaimEdgeTriggered(t *testing.T) {
-	c := NewDecisionEngine(Config{PredictHorizon: time.Nanosecond})
+	c := NewDecisionEngine(noPredict())
 	t0 := time.Unix(0, 0).UTC()
 
 	c.Decide(sampleAt(t0, 0, 0.80))

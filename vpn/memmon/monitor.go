@@ -17,22 +17,30 @@ type Config struct {
 	// available-memory Cap is self-correcting and the clamp is not wanted.
 	GoMemLimit uint64
 
-	BaseInterval   time.Duration
+	BaseInterval time.Duration
+
+	// PredictHorizon is the lookahead window for predictive escalation.
+	//
+	// If the monitor estimates that the threshold will be crossed within this duration,
+	// it escalates to Hard before the crossing occurs.
+	//
+	// A longer horizon causes earlier and more frequent predictive escalation.
+	// A shorter horizon requires a steeper, more imminent rise.
 	PredictHorizon time.Duration
 
 	// SoftEnter, HardEnter, SoftExit, and HardExit are pressure thresholds in
-	// [0,1]. The soft band is wide so eviction is gradual rather than a quick
-	// step to Hard.
+	// [0,1]. Each level's enter and exit thresholds are separated to provide
+	// hysteresis, so a footprint hovering at a boundary does not flap levels.
 	SoftEnter, HardEnter, SoftExit, HardExit float64
 
 	DwellSamples int
 }
 
 const (
-	defaultSoftEnter      = 0.75
+	defaultSoftEnter      = 0.88
 	defaultHardEnter      = 0.92
 	defaultHardExit       = 0.85
-	defaultSoftExit       = 0.65
+	defaultSoftExit       = 0.80
 	defaultBaseInterval   = 1 * time.Second
 	defaultPredictHorizon = 5 * time.Second
 	defaultDwellSamples   = 3
