@@ -89,14 +89,30 @@ func TestHardForceCloseAll(t *testing.T) {
 	assert.Equal(t, 1, r.closeAllN, "no re-close on a lingering Hard tick without CloseAllConnections")
 }
 
-func TestFreeOSMemoryRateLimited(t *testing.T) {
-	r := &fakeReclaimer{conns: refs(5)}
-	e := newTestExec(r, reactionConfig{FreeOSMinInterval: 3 * time.Second})
-	t0 := time.Unix(0, 0)
+func TestSoftScavengeRateLimited(t *testing.T) {
+	r := &fakeReclaimer{conns: refs(20)}
+	e := newTestExec(r, reactionConfig{SoftDivisor: 4, FreeOSMinInterval: 3 * time.Second})
+	start := time.Unix(0, 0)
 
-	e.Apply(Decision{Level: LevelHard, CloseAllConnections: true}, t0)
-	e.Apply(Decision{Level: LevelHard, CloseAllConnections: true}, t0.Add(time.Second)) // inside the window
-	assert.Equal(t, 1, r.freeOSCnt, "second call within the window is rate-limited")
-	e.Apply(Decision{Level: LevelHard, CloseAllConnections: true}, t0.Add(4*time.Second)) // past the window
-	assert.Equal(t, 2, r.freeOSCnt, "fires again past the window")
+	e.Apply(Decision{Level: LevelSoft, EvictOldestBatch: true}, start)
+	e.Apply(Decision{Level: LevelSoft, EvictOldestBatch: true}, start.Add(time.Second)) // inside the window
+	assert.Equal(t, 1, r.freeOSCnt, "soft scavenge within the window is rate-limited")
+
+	e.Apply(Decision{Level: LevelSoft, EvictOldestBatch: true}, start.Add(4*time.Second)) // past the window
+	assert.Equal(t, 2, r.freeOSCnt, "soft scavenge fires again past the window")
+}
+
+func TestHardReclaimScavengeBypassesSoftRateLimit(t *testing.T) {
+	r := &fakeReclaimer{conns: refs(20)}
+	e := newTestExec(r, reactionConfig{SoftDivisor: 4, FreeOSMinInterval: 3 * time.Second})
+	start := time.Unix(0, 0)
+
+	// A soft scavenge spends the rate-limit budget.
+	e.Apply(Decision{Level: LevelSoft, EvictOldestBatch: true}, start)
+	require.Equal(t, 1, r.freeOSCnt)
+
+	// A Hard close-all one second later, well inside FreeOSMinInterval, must still
+	// scavenge: the core already edge-triggers and hardCooldown-spaces it.
+	e.Apply(Decision{Level: LevelHard, CloseAllConnections: true}, start.Add(time.Second))
+	assert.Equal(t, 2, r.freeOSCnt, "hard reclaim scavenges even within the soft rate-limit window")
 }

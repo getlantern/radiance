@@ -47,16 +47,13 @@ func (e *executor) Apply(a Decision, now time.Time) {
 	case a.CloseAllConnections:
 		open := e.reclaimer.OpenConnectionCount()
 		e.reclaimer.CloseAllConnections()
-		e.freeOSMemoryRL(now)
+		// Hard reclaim always scavenges immediately.
+		e.freeOSMemoryNow(now)
 		slog.Info("hard reclaim: closing all connections", "open_conns", open)
 	case a.Level == LevelSoft && a.EvictOldestBatch:
 		evicted, total := e.softEvict()
-		// The signal will not recede on its own after a soft eviction — freed
-		// relay buffers sit in the bufpool and the scavenger releases lazily —
-		// so a throttled FreeOSMemory is what lets the DecisionEngine observe a real drop
-		// and exit Soft. Rate-limited, so not the per-tick STW cost.
-		e.freeOSMemoryRL(now)
-		slog.Debug("soft eviction", "evicted", evicted, "remaining", total-evicted)
+		e.freeOSMemoryRateLimited(now)
+		slog.Info("soft reclaim: evicted oldest batch", "evicted", evicted, "remaining", total-evicted)
 	}
 	if a.Level != e.lastLevel {
 		if a.Level <= LevelSoft {
@@ -87,14 +84,17 @@ func (e *executor) batchFor(available int) int {
 	return min(n, available, e.cfg.SoftBatchMax)
 }
 
-// freeOSMemoryRL runs FreeOSMemory at most once per FreeOSMinInterval. The
-// DecisionEngine's hard cooldown and settle window are the primary limiters; this
-// single-flight gate is the backstop that guarantees no 4 Hz forced-GC spiral
-// even if a reclaim flag were to re-fire.
-func (e *executor) freeOSMemoryRL(now time.Time) {
+// freeOSMemoryRateLimited runs FreeOSMemory at most once per
+// FreeOSMinInterval. Hard reclaim bypasses this limiter.
+func (e *executor) freeOSMemoryRateLimited(now time.Time) {
 	if now.Sub(e.lastFreeOS) < e.cfg.FreeOSMinInterval {
 		return
 	}
+	e.freeOSMemoryNow(now)
+}
+
+// freeOSMemoryNow runs FreeOSMemory immediately and records the run time.
+func (e *executor) freeOSMemoryNow(now time.Time) {
 	e.lastFreeOS = now
 	e.reclaimer.FreeOSMemory()
 }
