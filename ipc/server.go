@@ -88,6 +88,7 @@ const (
 	subscriptionStripeEndpoint             = "/subscription/stripe"
 	subscriptionPaymentRedirectEndpoint    = "/subscription/payment-redirect"
 	subscriptionReferralEndpoint           = "/subscription/referral"
+	subscriptionReferralV2Endpoint         = "/subscription/referral-v2"
 	subscriptionBillingPortalEndpoint      = "/subscription/billing-portal"
 	subscriptionPaymentRedirectURLEndpoint = "/subscription/payment-redirect-url"
 	subscriptionPlansEndpoint              = "/subscription/plans"
@@ -255,6 +256,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+subscriptionStripeEndpoint, traced(s.subscriptionStripeHandler))
 	mux.HandleFunc("POST "+subscriptionPaymentRedirectEndpoint, traced(s.subscriptionPaymentRedirectHandler))
 	mux.HandleFunc("POST "+subscriptionReferralEndpoint, traced(s.subscriptionReferralHandler))
+	mux.HandleFunc("POST "+subscriptionReferralV2Endpoint, traced(s.subscriptionReferralV2Handler))
 	mux.HandleFunc("GET "+subscriptionBillingPortalEndpoint, traced(s.subscriptionBillingPortalHandler))
 	mux.HandleFunc("POST "+subscriptionPaymentRedirectURLEndpoint, traced(s.subscriptionPaymentRedirectURLHandler))
 	mux.HandleFunc("GET "+subscriptionPlansEndpoint, traced(s.subscriptionPlansHandler))
@@ -1116,6 +1118,20 @@ func (s *localapi) subscriptionReferralHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, SuccessResponse{Success: ok})
+}
+
+func (s *localapi) subscriptionReferralV2Handler(w http.ResponseWriter, r *http.Request) {
+	var req CodeRequest
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.backend(r.Context()).ReferralAttachV2(r.Context(), req.Code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *localapi) subscriptionBillingPortalHandler(w http.ResponseWriter, r *http.Request) {

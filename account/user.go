@@ -621,6 +621,35 @@ func (a *Client) ReferralAttach(ctx context.Context, code string) (bool, error) 
 	return true, nil
 }
 
+type ReferralAttachV2Response struct {
+	*protos.BaseResponse `json:",inline"`
+	Providers            map[string][]*protos.PaymentMethod `json:"providers"`
+	Plans                []*protos.Plan                     `json:"plans"`
+	Code                 string                             `json:"code"`
+	DiscountPct          int                                `json:"discountPct"`
+}
+
+func (a *Client) ReferralAttachV2(ctx context.Context, code string) (*ReferralAttachV2Response, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach_v2")
+	defer span.End()
+
+	data := map[string]string{
+		"code": code,
+	}
+	resp, err := a.sendProRequest(ctx, "POST", "/referral-attach-v2", nil, nil, data)
+	if err != nil {
+		return nil, traces.RecordError(ctx, err)
+	}
+	var referral ReferralAttachV2Response
+	if err := json.Unmarshal(resp, &referral); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling referral attach v2 response: %w", err))
+	}
+	if referral.BaseResponse != nil && referral.Error != "" {
+		return nil, traces.RecordError(ctx, errors.New(referral.Error))
+	}
+	return &referral, nil
+}
+
 type UserChangeEvent struct {
 	events.Event
 }
