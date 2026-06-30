@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -274,6 +275,82 @@ func TestRetryableHTTPClient(t *testing.T) {
 	resp, err := cli.Do(request)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+// validServerJSON returns the on-wire JSON for a parseable shadowsocks server
+// with the given tag.
+func validServerJSON(t *testing.T, tag string) []byte {
+	t.Helper()
+	srv := &Server{
+		Tag:  tag,
+		Type: "shadowsocks",
+		Options: option.Outbound{
+			Tag:  tag,
+			Type: "shadowsocks",
+			Options: &option.ShadowsocksOutboundOptions{
+				ServerOptions: option.ServerOptions{Server: "9.9.9.9", ServerPort: 443},
+				Method:        "chacha20-ietf-poly1305",
+				Password:      "pw",
+			},
+		},
+	}
+	b, err := srv.MarshalJSON()
+	require.NoError(t, err)
+	return b
+}
+
+func TestLoadServersSalvagesParseableEntries(t *testing.T) {
+	mgr := testManager(t)
+	// One valid entry and one whose outbound type this build can't decode (the
+	// shape a downgrade produces). The invalidServerJSON entry must not discard the good one.
+	invalidServerJSON := []byte(`{"tag":"bad","type":"future-proto","outbound":{"tag":"bad","type":"future-proto"}}`)
+	serverJSON := []byte("[" + string(validServerJSON(t, "good")) + "," + string(invalidServerJSON) + "]")
+	require.NoError(t, os.WriteFile(mgr.serversFile, serverJSON, 0o600))
+
+	err := mgr.loadServers()
+	require.Error(t, err, "skipped entries must be reported to the caller")
+	assert.Contains(t, err.Error(), "skipped 1 of 2")
+
+	_, found := mgr.GetServerByTag("good")
+	assert.True(t, found, "parseable server must be loaded")
+	_, found = mgr.GetServerByTag("bad")
+	assert.False(t, found, "unparseable server must be skipped")
+
+	invalidPath := filepath.Join(filepath.Dir(mgr.serversFile), internal.ServersInvalidFileName)
+	assert.FileExists(t, invalidPath, "skipped entries must be preserved for diagnostics")
+	assert.FileExists(t, mgr.serversFile, "servers.json must be left in place for re-upgrade")
+}
+
+func TestLoadServersMalformedListStartsEmpty(t *testing.T) {
+	mgr := testManager(t)
+	require.NoError(t, os.WriteFile(mgr.serversFile, []byte("[ this is not json"), 0o600))
+
+	require.Error(t, mgr.loadServers(), "a malformed file must be reported to the caller")
+	assert.Empty(t, mgr.AllServers(), "no servers should be loaded from a malformed file")
+
+	invalidPath := filepath.Join(filepath.Dir(mgr.serversFile), internal.ServersInvalidFileName)
+	assert.FileExists(t, invalidPath, "malformed file must be quarantined for diagnostics")
+}
+
+func TestLoadServersMissingFileIsClean(t *testing.T) {
+	mgr := testManager(t)
+	require.NoError(t, mgr.loadServers(), "a missing servers file is not an error")
+	assert.Empty(t, mgr.AllServers())
+	invalidPath := filepath.Join(filepath.Dir(mgr.serversFile), internal.ServersInvalidFileName)
+	assert.NoFileExists(t, invalidPath, "nothing to quarantine when there is no file")
+}
+
+func TestNewManagerReturnsUsableManagerOnLoadError(t *testing.T) {
+	dataDir := t.TempDir()
+	invalidServerJSON := []byte(`{"tag":"bad","type":"future-proto","outbound":{"tag":"bad","type":"future-proto"}}`)
+	serverJSON := []byte("[" + string(validServerJSON(t, "good")) + "," + string(invalidServerJSON) + "]")
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ServersFileName), serverJSON, 0o600))
+
+	mgr, err := NewManager(dataDir, log.NoOpLogger())
+	require.Error(t, err, "a partial load must surface an error")
+	require.NotNil(t, mgr, "manager must be usable despite the load error")
+	_, found := mgr.GetServerByTag("good")
+	assert.True(t, found, "salvaged server must be available from the returned manager")
 }
 
 func testManager(t *testing.T) *Manager {

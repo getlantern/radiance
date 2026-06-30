@@ -4,6 +4,7 @@ package vpn
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,8 +19,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/internal"
 	rlog "github.com/getlantern/radiance/log"
 )
+
+func TestNewSplitTunnelHandlerQuarantinesInvalidRuleFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	ruleFile := filepath.Join(tmpDir, internal.SplitTunnelFileName)
+	// A rule file this build's sing-box can't decode — the shape a downgrade
+	// leaves behind. Staged before construction so newSplitTunnel won't replace it.
+	require.NoError(t, atomicfile.WriteFile(ruleFile,
+		[]byte(`{"version":3,"rules":[{"unknown_field":true}]}`), 0o600))
+
+	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.Error(t, err, "an unparseable rule file must be reported to the caller")
+	require.NotNil(t, st, "handler must be usable despite the load error")
+
+	// Falls back to the default no-op rule.
+	assert.Empty(t, st.Filters().Domain)
+	assert.False(t, st.IsEnabled())
+
+	invalidPath := filepath.Join(tmpDir, internal.SplitTunnelInvalidFileName)
+	assert.FileExists(t, invalidPath, "the unparseable file must be preserved for diagnostics")
+	assert.FileExists(t, ruleFile, "split-tunnel.json must be left in place for re-upgrade")
+}
 
 func TestEnableDisableIsEnabled(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())

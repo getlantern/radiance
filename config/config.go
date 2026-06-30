@@ -377,7 +377,7 @@ func (ch *ConfigHandler) loadConfig() error {
 }
 
 func load(path string) (*Config, error) {
-	buf, err := atomicfile.ReadFile(path)
+	rawConfig, err := atomicfile.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil // No config file yet
 	}
@@ -385,18 +385,41 @@ func load(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
 	ctx := box.BaseContext()
-	cfg, err := singjson.UnmarshalExtendedContext[*Config](ctx, buf)
-	if err != nil {
-		// try to migrate from old format if parsing fails
-		// TODO(3/06, garmr-ulfr): remove this migration code after a few releases
-		if cfg, err = migrateToNewFmt(buf); err == nil {
-			saveConfig(cfg, path)
-		}
+	cfg, err := singjson.UnmarshalExtendedContext[*Config](ctx, rawConfig)
+	if err == nil {
+		return cfg, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
+
+	// try to migrate from old format if parsing fails
+	// TODO(3/06, garmr-ulfr): remove this migration code after a few releases
+	if migrated, mErr := migrateToNewFmt(rawConfig); mErr == nil {
+		saveConfig(migrated, path)
+		return migrated, nil
 	}
-	return cfg, nil
+
+	// The config is unparseable — most likely a downgrade where this build's
+	// sing-box can't decode a newer on-disk config. Quarantine it so it stops
+	// re-failing on every start and is preserved for diagnostics, then start
+	// with no config; the next successful fetch repopulates config.json.
+	quarantineInvalidConfig(path, rawConfig)
+	return nil, nil
+}
+
+// quarantineInvalidConfig moves an unparseable config aside to
+// config.invalid.json so it no longer blocks loading on subsequent starts while
+// remaining available for diagnostics.
+func quarantineInvalidConfig(path string, buf []byte) {
+	invalidPath := filepath.Join(filepath.Dir(path), internal.ConfigInvalidFileName)
+	if err := atomicfile.WriteFile(invalidPath, buf, fileperm.File); err != nil {
+		// Keep the original in place when the copy fails so the unparseable
+		// config isn't lost entirely; the next fetch overwrites it regardless.
+		slog.Error("writing invalid config copy; leaving original in place", "path", invalidPath, "error", err)
+		return
+	}
+	slog.Warn("quarantined unparseable config for diagnostics", "path", invalidPath)
+	if err := os.Remove(path); err != nil {
+		slog.Error("removing unparseable config file", "path", path, "error", err)
+	}
 }
 
 func migrateToNewFmt(data []byte) (*Config, error) {
