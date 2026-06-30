@@ -3,12 +3,19 @@ package issue
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// maxLogReadFactor bounds how much uncompressed log to read toward an archive:
+// maxArchiveSize * maxLogReadFactor bytes. Even with poor compression, the
+// archive can't need more than this to reach its size budget.
+const maxLogReadFactor int64 = 20
 
 // buildIssueArchive creates a zip archive containing all .log files found in
 // logDir plus additional attachment files. The primary log (lantern.log) is
@@ -42,7 +49,98 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 
 	attachments := readExtraFiles(additionalFiles)
 
+	primaryPath := filepath.Join(logDir, logArchiveName)
+	primaryLogData = prependMostRecentBackup(primaryPath, primaryLogData, maxSize)
+
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
+}
+
+// prependMostRecentBackup prepends the newest rotated gzip backup, if present,
+// so a mid-session rotation does not lose earlier log history.
+func prependMostRecentBackup(primaryLogPath string, current []byte, maxArchiveSize int64) []byte {
+	backupPath, ok := findMostRecentCompressedBackup(primaryLogPath)
+	if !ok {
+		return current
+	}
+
+	maxRead := maxArchiveSize * maxLogReadFactor
+	backupData, err := readGzipTail(backupPath, maxRead)
+	if err != nil {
+		slog.Warn("unable to read compressed log backup", "path", backupPath, "error", err)
+		return current
+	}
+	if len(backupData) == 0 {
+		return current
+	}
+	if backupData[len(backupData)-1] != '\n' {
+		backupData = append(backupData, '\n')
+	}
+
+	return append(backupData, current...)
+}
+
+// findMostRecentCompressedBackup returns the newest rotated gzip backup for the
+// primary log path. Lumberjack timestamps sort lexically, so the largest match
+// is the newest file.
+func findMostRecentCompressedBackup(primaryLogPath string) (string, bool) {
+	dir := filepath.Dir(primaryLogPath)
+	base := filepath.Base(primaryLogPath)
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+
+	// The "name-*.ext.gz" wildcard also matches siblings such as
+	// lantern-crash-*.log.gz, so this relies on lantern.log being the only
+	// gzip-rotated lantern-* log in dir.
+	pattern := filepath.Join(dir, name+"-*"+ext+".gz")
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		return "", false
+	}
+
+	latest := matches[0]
+	for _, match := range matches[1:] {
+		if match > latest {
+			latest = match
+		}
+	}
+
+	return latest, true
+}
+
+// readGzipTail returns up to maxRead bytes from the end of the decompressed file.
+// The tail is kept rather than the head because it is the history nearest in time
+// to the current log; memory stays bounded to ~maxRead even when the backup
+// decompresses to more.
+func readGzipTail(path string, maxRead int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+
+	var tail []byte
+	chunk := make([]byte, 32*1024)
+	for {
+		n, readErr := gz.Read(chunk)
+		if n > 0 {
+			tail = append(tail, chunk[:n]...)
+			if int64(len(tail)) > maxRead {
+				tail = append(tail[:0], tail[int64(len(tail))-maxRead:]...)
+			}
+		}
+		if readErr == io.EOF {
+			return tail, nil
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
 }
 
 // globLogFiles returns all .log files in dir, sorted by filepath.Glob order.
@@ -74,9 +172,7 @@ func snapshotLogFile(logPath string, maxCompressed int64) ([]byte, error) {
 		return nil, nil
 	}
 
-	// Cap the amount we read: even with poor compression, we'd never need more
-	// than maxCompressed * 20 bytes of uncompressed log to fill the archive.
-	maxRead := maxCompressed * 20
+	maxRead := maxCompressed * maxLogReadFactor
 	readSize := size
 	if readSize > maxRead {
 		readSize = maxRead

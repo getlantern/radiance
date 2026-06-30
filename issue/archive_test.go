@@ -3,6 +3,7 @@ package issue
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"crypto/rand"
 	"io"
 	"os"
@@ -235,9 +236,7 @@ func TestFitArchive(t *testing.T) {
 	t.Run("log truncated to tail when too large", func(t *testing.T) {
 		// Use incompressible random data (2MB) with a budget that fits ~1-2
 		// chunks (256KB each) but not the full log.
-		logData := make([]byte, 2*1024*1024) // 2MB
-		_, err := rand.Read(logData)
-		require.NoError(t, err)
+		logData := randomBytes(t, 2*1024*1024) // 2MB random
 
 		maxSize := int64(512 * 1024) // 512KB
 
@@ -275,9 +274,7 @@ func TestSearchMaxLogTail(t *testing.T) {
 	})
 
 	t.Run("truncates incompressible data", func(t *testing.T) {
-		logData := make([]byte, 1024*1024) // 1MB random
-		_, err := rand.Read(logData)
-		require.NoError(t, err)
+		logData := randomBytes(t, 1024*1024) // 1MB random
 
 		maxSize := int64(300 * 1024) // 300KB
 		tailSize := searchMaxLogTail(logData, maxSize)
@@ -393,10 +390,8 @@ func TestBuildIssueArchive(t *testing.T) {
 	t.Run("archive respects maxSize", func(t *testing.T) {
 		dir := t.TempDir()
 		// Write incompressible data (2MB).
-		logContent := make([]byte, 2*1024*1024)
-		_, err := rand.Read(logContent)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), logContent, 0644))
+		logData := randomBytes(t, 2*1024*1024)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), logData, 0644))
 
 		maxSize := int64(512 * 1024)
 		result, err := buildIssueArchive(dir, nil, maxSize)
@@ -407,7 +402,7 @@ func TestBuildIssueArchive(t *testing.T) {
 		entries := readZipEntries(t, result)
 		require.Len(t, entries, 1)
 		content := entries[0].content
-		assert.Equal(t, string(logContent[len(logContent)-len(content):]), content)
+		assert.Equal(t, string(logData[len(logData)-len(content):]), content)
 	})
 
 	t.Run("snapshot excludes data written after call", func(t *testing.T) {
@@ -454,4 +449,158 @@ func readZipEntries(t *testing.T, data []byte) []zipEntry {
 		entries = append(entries, zipEntry{name: f.Name, content: string(body)})
 	}
 	return entries
+}
+
+func writeGzipFile(t *testing.T, path string, content []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, err := gz.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, gz.Close())
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0644))
+}
+
+func TestMostRecentCompressedBackup(t *testing.T) {
+	t.Run("picks newest by lexical timestamp order", func(t *testing.T) {
+		dir := t.TempDir()
+		primary := filepath.Join(dir, "lantern.log")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), nil, 0644))
+		newest := filepath.Join(dir, "lantern-2026-06-15T16-02-44.000.log.gz")
+		require.NoError(t, os.WriteFile(newest, nil, 0644))
+
+		got, ok := findMostRecentCompressedBackup(primary)
+		require.True(t, ok)
+		assert.Equal(t, newest, got)
+	})
+
+	t.Run("false when no compressed backup", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log"), nil, 0644))
+
+		_, ok := findMostRecentCompressedBackup(filepath.Join(dir, "lantern.log"))
+		assert.False(t, ok)
+	})
+}
+
+func TestReadGzipTail(t *testing.T) {
+	t.Run("round-trips content within cap", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "backup.log.gz")
+		writeGzipFile(t, path, []byte("old line 1\nold line 2\n"))
+
+		data, err := readGzipTail(path, 1024)
+		require.NoError(t, err)
+		assert.Equal(t, "old line 1\nold line 2\n", string(data))
+	})
+
+	t.Run("keeps the tail when over cap", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "backup.log.gz")
+		writeGzipFile(t, path, []byte("0123456789"))
+
+		data, err := readGzipTail(path, 4)
+		require.NoError(t, err)
+		assert.Equal(t, "6789", string(data))
+	})
+
+	t.Run("keeps the tail across multiple read chunks", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "backup.log.gz")
+		content := append(bytes.Repeat([]byte("A"), 100*1024), []byte("TAILMARKER")...)
+		writeGzipFile(t, path, content)
+
+		data, err := readGzipTail(path, 10)
+		require.NoError(t, err)
+		assert.Equal(t, "TAILMARKER", string(data))
+	})
+
+	t.Run("error on non-gzip input", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "backup.log.gz")
+		require.NoError(t, os.WriteFile(path, []byte("not gzip data"), 0644))
+
+		_, err := readGzipTail(path, 1024)
+		assert.Error(t, err)
+	})
+}
+
+func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
+	primaryContent := func(t *testing.T, result []byte) string {
+		t.Helper()
+		for _, e := range readZipEntries(t, result) {
+			if e.name == logArchiveName {
+				return e.content
+			}
+		}
+		t.Fatalf("no %s entry in archive", logArchiveName)
+		return ""
+	}
+
+	t.Run("orders backup before current", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
+		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), []byte("rotated line\n"))
+
+		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		require.NoError(t, err)
+		assert.Equal(t, "rotated line\ncurrent line\n", primaryContent(t, result))
+	})
+
+	t.Run("inserts newline when backup lacks trailing newline", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
+		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), []byte("rotated line"))
+
+		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		require.NoError(t, err)
+		assert.Equal(t, "rotated line\ncurrent line\n", primaryContent(t, result))
+	})
+
+	t.Run("falls back to current on corrupt backup", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), []byte("not gzip"), 0644))
+
+		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		require.NoError(t, err)
+		assert.Equal(t, "current line\n", primaryContent(t, result))
+	})
+
+	t.Run("ignores empty backup", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
+		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), nil)
+
+		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		require.NoError(t, err)
+		assert.Equal(t, "current line\n", primaryContent(t, result))
+	})
+
+	t.Run("trims oldest backup bytes first when over budget", func(t *testing.T) {
+		dir := t.TempDir()
+		current := randomBytes(t, 200*1024)
+		copy(current[len(current)-len("CURRENTTAILMARKER"):], "CURRENTTAILMARKER")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), current, 0644))
+
+		backup := randomBytes(t, 400*1024)
+		copy(backup, "BACKUPHEADMARKER")
+		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), backup)
+
+		// Budget fits a 256 KiB tail but not 512 KiB, so the trim must drop the
+		// prepended backup (oldest) and keep the current log (newest).
+		result, err := buildIssueArchive(dir, nil, 384*1024)
+		require.NoError(t, err)
+		primary := primaryContent(t, result)
+		assert.Contains(t, primary, "CURRENTTAILMARKER")
+		assert.NotContains(t, primary, "BACKUPHEADMARKER")
+	})
+}
+
+func randomBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	_, err := rand.Read(b)
+	require.NoError(t, err)
+	return b
 }
