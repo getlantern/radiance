@@ -394,7 +394,9 @@ func load(path string) (*Config, error) {
 	// TODO: remove this migration once the old config format no longer appears
 	// on disk in the field.
 	if migrated, mErr := migrateToNewFmt(rawConfig); mErr == nil {
-		saveConfig(migrated, path)
+		if err := saveConfig(migrated, path); err != nil {
+			return nil, fmt.Errorf("saving migrated config: %w", err)
+		}
 		return migrated, nil
 	}
 
