@@ -19,6 +19,8 @@ import (
 
 func TestFetchConfig(t *testing.T) {
 	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
+
 	settings.Set(settings.DeviceIDKey, "mock-device-id")
 	settings.Set(settings.UserIDKey, 1234567890)
 	settings.Set(settings.TokenKey, "mock-legacy-token")
@@ -119,9 +121,11 @@ func TestUserIDFormatMatchesMain(t *testing.T) {
 		{name: "small id", set: true, value: 42, expect: "42"},
 		{name: "large id (exercises float64 JSON round-trip)", set: true, value: 1234567890, expect: "1234567890"},
 	}
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	defer settings.Reset()
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, settings.InitSettings(t.TempDir()))
 			settings.Clear(settings.UserIDKey)
 			if tc.set {
 				require.NoError(t, settings.Set(settings.UserIDKey, tc.value))
