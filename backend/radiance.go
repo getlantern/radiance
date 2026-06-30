@@ -857,16 +857,11 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			bOptions.AdBlock = cfg.AdBlock
 		}
 	}
+	managedServers := r.srvManager.AllServers()
+	appendManagedServerOptions(&bOptions.Options, managedServers)
+
 	seed := make(map[string]lbA.TagHistory)
-	for _, srv := range r.srvManager.AllServers() {
-		if !srv.IsLantern {
-			switch opts := srv.Options.(type) {
-			case option.Outbound:
-				bOptions.Options.Outbounds = append(bOptions.Options.Outbounds, opts)
-			case option.Endpoint:
-				bOptions.Options.Endpoints = append(bOptions.Options.Endpoints, opts)
-			}
-		}
+	for _, srv := range managedServers {
 		if srv.SelectionHistory != nil {
 			seed[srv.Tag] = *srv.SelectionHistory
 		}
@@ -875,6 +870,51 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.SelectionHistorySeed = seed
 	}
 	return bOptions
+}
+
+// appendManagedServerOptions adds server-manager options that are missing from
+// the current config options. Config options remain authoritative for duplicate
+// tags, but retained Lantern servers and user servers stay connectable on cold
+// tunnel start.
+func appendManagedServerOptions(options *option.Options, managed []*servers.Server) {
+	existingTags := optionTagSet(*options)
+	for _, srv := range managed {
+		switch opts := srv.Options.(type) {
+		case option.Outbound:
+			tag := opts.Tag
+			if tag == "" {
+				continue
+			}
+			if _, exists := existingTags[tag]; exists {
+				continue
+			}
+			options.Outbounds = append(options.Outbounds, opts)
+			existingTags[tag] = struct{}{}
+		case option.Endpoint:
+			tag := opts.Tag
+			if tag == "" {
+				continue
+			}
+			if _, exists := existingTags[tag]; exists {
+				continue
+			}
+			options.Endpoints = append(options.Endpoints, opts)
+			existingTags[tag] = struct{}{}
+		}
+	}
+}
+
+// optionTagSet returns the outbound and endpoint tags already present in the
+// box options.
+func optionTagSet(options option.Options) map[string]struct{} {
+	tags := make(map[string]struct{}, len(options.Outbounds)+len(options.Endpoints))
+	for _, out := range options.Outbounds {
+		tags[out.Tag] = struct{}{}
+	}
+	for _, ep := range options.Endpoints {
+		tags[ep.Tag] = struct{}{}
+	}
+	return tags
 }
 
 func (r *LocalBackend) DisconnectVPN() error {
@@ -1142,6 +1182,11 @@ func (r *LocalBackend) Logout(ctx context.Context, email string) (*account.UserD
 
 func (r *LocalBackend) FetchUserData(ctx context.Context) (*account.UserData, error) {
 	return r.accountClient.FetchUserData(ctx)
+}
+
+func (r *LocalBackend) VerifyPassword(ctx context.Context, email, password string) error {
+	_, err := r.accountClient.VerifyPassword(ctx, email, password)
+	return err
 }
 
 func (r *LocalBackend) StartChangeEmail(ctx context.Context, newEmail, password string) error {

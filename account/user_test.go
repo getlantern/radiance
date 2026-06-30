@@ -329,6 +329,22 @@ func TestValidateEmailRecoveryCode(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestVerifyPassword(t *testing.T) {
+	email := "test@example.com"
+	ac, _ := newTestClientWithSRP(t, email, "password")
+	proof, err := ac.VerifyPassword(context.Background(), email, "password")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, proof)
+}
+
+func TestVerifyPassword_WrongPassword(t *testing.T) {
+	email := "test@example.com"
+	ac, _ := newTestClientWithSRP(t, email, "password")
+	proof, err := ac.VerifyPassword(context.Background(), email, "wrong-password")
+	assert.Error(t, err)
+	assert.Nil(t, proof)
+}
+
 func TestStartChangeEmail(t *testing.T) {
 	email := "test@example.com"
 	ac, _ := newTestClientWithSRP(t, email, "password")
