@@ -447,10 +447,18 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
-	// Route cold-start routing rule-set fetches (geosite-cn*) through a proxyless
-	// smart-dialer "mirror" outbound instead of `direct`, which the GFW throttles.
-	// Detour-only — deliberately not added to the selectable `tags`. Inject the
-	// outbound only when a rule-set was actually repointed to it (#3657).
+	// Cold-start fix (#3657): convert server-pushed geosite-cn* REMOTE rule-sets to
+	// LOCAL, backed by a copy bundled into the client. No GFW-reachable host exists
+	// to fetch them from at our scale (S3 rate-throttled, jsDelivr org-blocks us,
+	// raw.githubusercontent flaky+scale-risky), so eliminate the fetch entirely —
+	// it can't brick startup and geosite-cn always loads.
+	if bundled := bundleGeositeRuleSets(&opts, bOptions.BasePath); len(bundled) > 0 {
+		slog.Info("Bundled geosite rule-set(s) as local — no cold-start fetch", slog.Any("tags", bundled))
+	}
+	// Any *other* remote rule-set still fetched over `direct` (which the GFW
+	// throttles) is routed through the proxyless smart-dialer "mirror" outbound.
+	// Detour-only — not added to the selectable `tags`; injected only if used.
+	// (Groundwork for a fronted-refresh layer; geosite-cn is bundled above.)
 	if repointRuleSetsToMirror(&opts) {
 		opts.Outbounds = append(opts.Outbounds, mirrorOutbound())
 	}
