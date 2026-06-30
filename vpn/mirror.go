@@ -14,12 +14,13 @@ import (
 const mirrorOutboundTag = "mirror"
 
 // geositeMirrorHosts are the hosts the smart dialer probes to find a working
-// (resolver + TLS-fragmentation) strategy for fetching routing rule-sets from
-// inside censored networks. Diversified across CDNs: from real CN residential
-// IPs none of these is cleanly blocked — they're throttled at the SNI/flow
-// layer, which TLS-record fragmentation defeats.
+// (resolver + TLS-fragmentation) strategy. Validated 2026-06-30 from CN
+// residential: the jsdelivr/Fastly + githubusercontent family is throttled at
+// the SNI layer, which TLS-record fragmentation reliably defeats (full .srs in
+// 3-5s). s3.amazonaws.com is deliberately EXCLUDED — its throttle is rate/flow-
+// based, NOT SNI, so fragmentation does not help it (0/6 completed in testing).
+// The rule-set URL must therefore point at one of these hosts, not s3.
 var geositeMirrorHosts = []string{
-	"s3.amazonaws.com",
 	"fastly.jsdelivr.net",
 	"cdn.jsdelivr.net",
 	"raw.githubusercontent.com",
