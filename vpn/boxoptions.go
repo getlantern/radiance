@@ -447,6 +447,14 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
+	// Route cold-start routing rule-set fetches (geosite-cn*) through a proxyless
+	// smart-dialer "mirror" outbound instead of `direct`, which the GFW throttles.
+	// Detour-only — deliberately not added to the selectable `tags`. Inject the
+	// outbound only when a rule-set was actually repointed to it (#3657).
+	if repointRuleSetsToMirror(&opts) {
+		opts.Outbounds = append(opts.Outbounds, mirrorOutbound())
+	}
+
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's
 	// managed data directory instead.
