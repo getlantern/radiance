@@ -84,31 +84,30 @@ func TestSnapshotLogFile(t *testing.T) {
 	})
 }
 
-func TestGlobLogFiles(t *testing.T) {
-	t.Run("finds all log files", func(t *testing.T) {
+func TestGlobFiles(t *testing.T) {
+	t.Run("returns matching .log files", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("main"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash.log"), []byte("crash"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("not a log"), 0644))
 
-		files := globLogFiles(dir)
+		files := globFiles(dir, "*.log")
 		require.Len(t, files, 2)
 		bases := make([]string, len(files))
 		for i, f := range files {
 			bases[i] = filepath.Base(f)
 		}
-		assert.Contains(t, bases, "lantern.log")
-		assert.Contains(t, bases, "lantern-crash.log")
+		assert.ElementsMatch(t, []string{"lantern-crash.log", "lantern.log"}, bases)
 	})
 
 	t.Run("returns nil for empty dir", func(t *testing.T) {
 		dir := t.TempDir()
-		files := globLogFiles(dir)
+		files := globFiles(dir, "*.log")
 		assert.Nil(t, files)
 	})
 
 	t.Run("returns nil for nonexistent dir", func(t *testing.T) {
-		files := globLogFiles("/nonexistent/dir")
+		files := globFiles("/nonexistent/dir", "*.log")
 		assert.Nil(t, files)
 	})
 }
@@ -481,6 +480,21 @@ func TestMostRecentCompressedBackup(t *testing.T) {
 		_, ok := findMostRecentCompressedBackup(filepath.Join(dir, "lantern.log"))
 		assert.False(t, ok)
 	})
+
+	t.Run("ignores siblings the glob matches but lumberjack did not produce", func(t *testing.T) {
+		dir := t.TempDir()
+		primary := filepath.Join(dir, "lantern.log")
+		backup := filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz")
+		require.NoError(t, os.WriteFile(backup, nil, 0644))
+		// A crash-log sibling the "lantern-*.log.gz" glob also matches; its later
+		// timestamp would win a naive newest-wins comparison, but it is not a
+		// rotation of lantern.log and must be rejected.
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash-2026-06-15T16-00-00.000.log.gz"), nil, 0644))
+
+		got, ok := findMostRecentCompressedBackup(primary)
+		require.True(t, ok)
+		assert.Equal(t, backup, got)
+	})
 }
 
 func TestReadGzipTail(t *testing.T) {
@@ -587,8 +601,9 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 		copy(backup, "BACKUPHEADMARKER")
 		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), backup)
 
-		// Budget fits a 256 KiB tail but not 512 KiB, so the trim must drop the
-		// prepended backup (oldest) and keep the current log (newest).
+		// 200 KiB current + 400 KiB backup (incompressible) exceed the 384 KiB
+		// budget, so the tail-trim must drop the prepended backup (oldest) and
+		// keep the current log (newest).
 		result, err := buildIssueArchive(dir, nil, 384*1024)
 		require.NoError(t, err)
 		primary := primaryContent(t, result)
