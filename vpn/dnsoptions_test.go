@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"net/netip"
 	"slices"
 	"testing"
 
@@ -148,27 +149,49 @@ func TestLocalDNSIP(t *testing.T) {
 	}
 }
 
-func TestBuildDNSRules_SuppressesAAAA(t *testing.T) {
+func TestBuildDNSServers_FakeIPDualStack(t *testing.T) {
+	server := requireFakeIPServer(t, buildDNSServers())
+	requireDualStackFakeIPServer(t, server)
+}
+
+func TestBuildDNSRules_RoutesAddressQueriesToFakeIP(t *testing.T) {
 	rules := buildDNSRules()
 
-	var fakeIP, aaaa *option.DefaultDNSRule
+	var fakeIP, suppressedAAAA *option.DefaultDNSRule
 	for i := range rules {
 		d := &rules[i].DefaultOptions
 		switch {
-		case d.Action == constant.RuleActionTypeRoute && d.RouteOptions.Server == "dns_fakeip":
+		case d.Action == constant.RuleActionTypeRoute && d.RouteOptions.Server == fakeIPServerTag:
 			fakeIP = d
-		case slices.Contains(d.QueryType, option.DNSQueryType(dns.TypeAAAA)):
-			aaaa = d
+		case d.Action == constant.RuleActionTypePredefined &&
+			slices.Contains(d.QueryType, option.DNSQueryType(dns.TypeAAAA)):
+			suppressedAAAA = d
 		}
 	}
 
 	require.NotNil(t, fakeIP, "expected a fake-IP route rule")
 	assert.Contains(t, fakeIP.QueryType, option.DNSQueryType(dns.TypeA), "fake-IP rule should handle A queries")
-	assert.NotContains(t, fakeIP.QueryType, option.DNSQueryType(dns.TypeAAAA), "fake-IP rule must not handle AAAA — AAAA is suppressed")
+	assert.Contains(t, fakeIP.QueryType, option.DNSQueryType(dns.TypeAAAA), "fake-IP rule should handle AAAA queries")
+	assert.Nil(t, suppressedAAAA, "AAAA should not be suppressed before fake-IP can preserve domain routing")
+}
 
-	require.NotNil(t, aaaa, "expected an AAAA suppression rule")
-	assert.Equal(t, constant.RuleActionTypePredefined, aaaa.Action, "AAAA rule should use the predefined action")
-	require.NotNil(t, aaaa.PredefinedOptions.Rcode, "AAAA predefined rule must set an rcode")
-	assert.Equal(t, dns.RcodeSuccess, int(*aaaa.PredefinedOptions.Rcode), "AAAA suppression must return NODATA (NOERROR), not NXDOMAIN")
-	assert.Empty(t, aaaa.PredefinedOptions.Answer, "AAAA suppression must return no answer records (NODATA)")
+func requireFakeIPServer(t *testing.T, servers []option.DNSServerOptions) option.DNSServerOptions {
+	t.Helper()
+	idx := slices.IndexFunc(servers, func(server option.DNSServerOptions) bool {
+		return server.Type == constant.DNSTypeFakeIP
+	})
+	require.NotEqual(t, -1, idx, "expected a fake-IP DNS server")
+	return servers[idx]
+}
+
+func requireDualStackFakeIPServer(t *testing.T, server option.DNSServerOptions) {
+	t.Helper()
+	assert.Equal(t, fakeIPServerTag, server.Tag, "fake-IP server should use the routing tag")
+	require.Equal(t, constant.DNSTypeFakeIP, server.Type, "expected fake-IP server type")
+	opts, ok := server.Options.(*option.FakeIPDNSServerOptions)
+	require.True(t, ok, "expected fake-IP server options")
+	require.NotNil(t, opts.Inet4Range, "fake-IP server should have an IPv4 range")
+	require.NotNil(t, opts.Inet6Range, "fake-IP server should have an IPv6 range")
+	assert.Equal(t, fakeIPv4Range, opts.Inet4Range.Build(netip.Prefix{}).String())
+	assert.Equal(t, fakeIPv6Range, opts.Inet6Range.Build(netip.Prefix{}).String())
 }

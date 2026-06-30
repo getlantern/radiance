@@ -234,7 +234,7 @@ func hasTunInbound(inbounds []O.Inbound) bool {
 func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
-	// The rules MUST be in this order to ensure proper functionality:
+	// The rules MUST be in this order for proper behavior:
 	// 1.    Enable traffic sniffing
 	// 2.    Hijack DNS to allow sing-box to handle DNS requests
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
@@ -244,12 +244,12 @@ func baseRoutingRules() []O.Rule {
 	// 7.    Reject QUIC (UDP/443) for any UDP/443 not already matched above; placed
 	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
 	//       their QUIC. Added in buildOptions.
-	// 8.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
-	//       so direct-routed v6 is preserved while proxied v6 fails over to IPv4. Added
-	//	      in buildOptions.
+	// 8.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here so
+	//       direct-routed v6 is preserved while non-fake-IP proxied v6 fails fast. Added
+	//       in buildOptions.
 	// 9,10. Group rules for auto and manual selector modes (added in buildOptions).
-	// 11.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
-	//       by previous rules does not automatically bypass the VPN.
+	// 11.   Catch-all blocking rule (added in buildOptions). Traffic not covered
+	//       by previous rules must not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
 	//   rules or their order can break certain functionalities like DNS resolution, smart connect,
@@ -374,11 +374,9 @@ func rejectQUICRule() O.Rule {
 	}
 }
 
-// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
-// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
-// hints, apps using their own DNS). The default reject method (ICMP unreachable /
-// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
-// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
+// rejectIPv6Rule rejects non-fake-IP IPv6 destinations as a backstop for
+// literals, HTTPS-record hints, or apps using their own DNS. The default reject
+// method fails fast; "drop" would blackhole and stall.
 func rejectIPv6Rule() O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
@@ -485,7 +483,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
-	// catch-all rule to ensure no fallthrough
+	// catch-all rule so traffic cannot fall through
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
 	slog.Debug("Finished building options", "env", common.Env())
 
@@ -533,8 +531,9 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 	// overwrite base DNS options with config from src (server)
 	if src.DNS != nil {
 		dns := *src.DNS
-		// prepend the AAAA suppression rule to ensure it fails over quickly.
-		dns.Rules = append([]O.DNSRule{suppressAAAARule()}, dns.Rules...)
+		dns.Servers = slices.Clone(src.DNS.Servers)
+		dns.Rules = slices.Clone(src.DNS.Rules)
+		addFakeIPDNSFallback(&dns)
 		dst.DNS = &dns
 	}
 

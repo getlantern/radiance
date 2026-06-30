@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/miekg/dns"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -205,6 +206,53 @@ func TestBuildOptions_WATERDirOverride(t *testing.T) {
 	// Original struct must not be mutated.
 	assert.Equal(t, "/tmp/stale", waterOutbound.Options.(*lbO.WATEROutboundOptions).Dir,
 		"buildOptions must not mutate the caller's WATEROutboundOptions")
+}
+
+func TestMergeAndCollectTags_AddsDualStackFakeIPDNS(t *testing.T) {
+	srcRule := O.DNSRule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultDNSRule{
+			RawDefaultDNSRule: O.RawDefaultDNSRule{
+				Domain: []string{"direct.example"},
+			},
+			DNSRuleAction: O.DNSRuleAction{
+				Action: C.RuleActionTypeRoute,
+				RouteOptions: O.DNSRouteActionOptions{
+					Server: "dns_local",
+				},
+			},
+		},
+	}
+	src := O.Options{
+		DNS: &O.DNSOptions{
+			RawDNSOptions: O.RawDNSOptions{
+				Servers: []O.DNSServerOptions{
+					newDNSServerOptions(C.DNSTypeLocal, "dns_local", "", ""),
+				},
+				Rules: []O.DNSRule{srcRule},
+				Final: "dns_local",
+			},
+		},
+	}
+
+	var dst O.Options
+	mergeAndCollectTags(&dst, &src)
+
+	require.NotNil(t, dst.DNS, "expected merged DNS options")
+	require.Len(t, dst.DNS.Rules, 2, "expected source DNS rule plus fake-IP fallback")
+	assert.Equal(t, srcRule, dst.DNS.Rules[0], "source DNS rules should keep their priority")
+
+	fakeRule := dst.DNS.Rules[1].DefaultOptions
+	assert.Equal(t, C.RuleActionTypeRoute, fakeRule.Action)
+	assert.Equal(t, fakeIPServerTag, fakeRule.RouteOptions.Server)
+	assert.Contains(t, fakeRule.QueryType, O.DNSQueryType(dns.TypeA))
+	assert.Contains(t, fakeRule.QueryType, O.DNSQueryType(dns.TypeAAAA))
+
+	server := requireFakeIPServer(t, dst.DNS.Servers)
+	requireDualStackFakeIPServer(t, server)
+
+	require.Len(t, src.DNS.Servers, 1, "merge must not mutate source DNS servers")
+	require.Len(t, src.DNS.Rules, 1, "merge must not mutate source DNS rules")
 }
 
 func contains[S ~[]E, E any](t *testing.T, s S, e E) bool {
@@ -476,10 +524,9 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 	})
 }
 
-// TestBuildOptions_RejectsQUICAfterDirectRules pins the placement of the QUIC
-// reject: it must follow the split-tunnel and smart-routing rules (so a
-// direct-routed domain keeps its QUIC) and precede the selector rules (so
-// QUIC bound for the proxy is rejected).
+// TestBuildOptions_RejectsIPv6WhenCaptured pins the placement of the IPv6
+// reject: direct-routed IPv6 must run first, and only non-fake-IP proxied IPv6
+// should fail fast before the selector rules.
 func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	cfg := testConfig(t)
 	opts, err := buildOptions(BoxOptions{
@@ -514,7 +561,7 @@ func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	require.NotEqual(t, -1, splitIdx, "expected split-tunnel rule in built options")
 	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
 	assert.Greater(t, rejectIdx, splitIdx, "IPv6 reject must come after split-tunnel so split-direct v6 keeps flowing")
-	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so proxied v6 is rejected")
+	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so non-fake-IP proxied v6 is rejected")
 }
 
 func TestRejectIPv6Rule(t *testing.T) {

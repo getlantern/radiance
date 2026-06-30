@@ -3,6 +3,7 @@ package vpn
 import (
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -11,6 +12,12 @@ import (
 	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common/settings"
+)
+
+const (
+	fakeIPServerTag = "dns_fakeip"
+	fakeIPv4Range   = "198.18.0.0/15"
+	fakeIPv6Range   = "fc00::/18"
 )
 
 // buildDNSServers returns a list of three DNSServerOptions, a local DNS server
@@ -31,14 +38,6 @@ func buildDNSServers() []option.DNSServerOptions {
 					},
 				},
 			},
-		},
-	}
-	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
-	fakeIP := option.DNSServerOptions{
-		Tag:  "dns_fakeip",
-		Type: constant.DNSTypeFakeIP,
-		Options: &option.FakeIPDNSServerOptions{
-			Inet4Range: &ipv4Prefix,
 		},
 	}
 
@@ -67,7 +66,7 @@ func buildDNSServers() []option.DNSServerOptions {
 	return []option.DNSServerOptions{
 		remote,
 		local,
-		fakeIP,
+		fakeIPServer(),
 	}
 }
 
@@ -111,56 +110,88 @@ func normalizeLocale(locale string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(locale), "-", ""), "_", "")
 }
 
-// buildDNSRules routes A queries to the fake-IP server and suppresses AAAA so
-// applications fall back to IPv4.
+// buildDNSRules routes address queries to fake-IP so routing keeps domain
+// context for both IPv4 and IPv6 destinations.
 func buildDNSRules() []option.DNSRule {
-	return []option.DNSRule{suppressAAAARule(), fakeipRule()}
-
+	return []option.DNSRule{fakeIPRule(fakeIPServerTag)}
 }
 
-func fakeipServer() option.DNSServerOptions {
-	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
+// fakeIPServer returns the dual-stack fake-IP DNS server. The IPv6 range keeps
+// AAAA answers domain-aware instead of sending raw IPv6 destinations to routing.
+func fakeIPServer() option.DNSServerOptions {
+	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix(fakeIPv4Range))
+	ipv6Prefix := badoption.Prefix(netip.MustParsePrefix(fakeIPv6Range))
 	return option.DNSServerOptions{
-		Tag:  "dns_fakeip",
+		Tag:  fakeIPServerTag,
 		Type: constant.DNSTypeFakeIP,
 		Options: &option.FakeIPDNSServerOptions{
 			Inet4Range: &ipv4Prefix,
+			Inet6Range: &ipv6Prefix,
 		},
 	}
-
 }
 
-func fakeipRule() option.DNSRule {
+// fakeIPRule routes address queries to fake-IP so route matching can recover
+// the queried domain before evaluating IP fallback rules.
+func fakeIPRule(serverTag string) option.DNSRule {
 	return option.DNSRule{
 		Type: constant.RuleTypeDefault,
 		DefaultOptions: option.DefaultDNSRule{
 			RawDefaultDNSRule: option.RawDefaultDNSRule{
-				QueryType: badoption.Listable[option.DNSQueryType]{option.DNSQueryType(dns.TypeA)},
+				QueryType: badoption.Listable[option.DNSQueryType]{
+					option.DNSQueryType(dns.TypeA),
+					option.DNSQueryType(dns.TypeAAAA),
+				},
 			},
 			DNSRuleAction: option.DNSRuleAction{
 				Action: constant.RuleActionTypeRoute,
 				RouteOptions: option.DNSRouteActionOptions{
-					Server: "dns_fakeip",
+					Server: serverTag,
 				},
 			},
 		},
 	}
 }
 
-// suppressAAAARule answers AAAA queries with NODATA (NOERROR and no records) so
-// applications see no IPv6 address and connect over IPv4.
-func suppressAAAARule() option.DNSRule {
-	noError := option.DNSRCode(dns.RcodeSuccess)
-	return option.DNSRule{
-		Type: constant.RuleTypeDefault,
-		DefaultOptions: option.DefaultDNSRule{
-			RawDefaultDNSRule: option.RawDefaultDNSRule{
-				QueryType: badoption.Listable[option.DNSQueryType]{option.DNSQueryType(dns.TypeAAAA)},
-			},
-			DNSRuleAction: option.DNSRuleAction{
-				Action:            constant.RuleActionTypePredefined,
-				PredefinedOptions: option.DNSRouteActionPredefined{Rcode: &noError},
-			},
-		},
+// addFakeIPDNSFallback appends the dual-stack fake-IP path to server DNS
+// options while keeping server-supplied rules ahead of the fallback.
+func addFakeIPDNSFallback(dnsOptions *option.DNSOptions) {
+	serverTag := setFakeIPServer(&dnsOptions.Servers)
+	if !hasAddressFakeIPRule(dnsOptions.Rules, serverTag) {
+		dnsOptions.Rules = append(dnsOptions.Rules, fakeIPRule(serverTag))
 	}
+}
+
+// setFakeIPServer returns the fake-IP server tag, replacing any existing
+// fake-IP entry with Radiance's dual-stack ranges.
+func setFakeIPServer(servers *[]option.DNSServerOptions) string {
+	fakeIP := fakeIPServer()
+	for i := range *servers {
+		if (*servers)[i].Type != constant.DNSTypeFakeIP {
+			continue
+		}
+		if (*servers)[i].Tag == "" {
+			(*servers)[i].Tag = fakeIPServerTag
+		}
+		fakeIP.Tag = (*servers)[i].Tag
+		(*servers)[i] = fakeIP
+		return fakeIP.Tag
+	}
+	*servers = append(*servers, fakeIP)
+	return fakeIP.Tag
+}
+
+// hasAddressFakeIPRule reports whether A and AAAA queries already route to the
+// fake-IP server.
+func hasAddressFakeIPRule(rules []option.DNSRule, serverTag string) bool {
+	for _, rule := range rules {
+		opts := rule.DefaultOptions
+		if opts.Action == constant.RuleActionTypeRoute &&
+			opts.RouteOptions.Server == serverTag &&
+			slices.Contains(opts.QueryType, option.DNSQueryType(dns.TypeA)) &&
+			slices.Contains(opts.QueryType, option.DNSQueryType(dns.TypeAAAA)) {
+			return true
+		}
+	}
+	return false
 }
