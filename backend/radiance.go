@@ -102,10 +102,12 @@ type Options struct {
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
-	// Invariant: only return IO errors (failure to read or write a file). Every
-	// other failure (e.g. parse errors from incompatible on-disk state) must be
-	// logged and degraded, never returned, so a user can always construct a
-	// backend and report an issue.
+	// Invariant: a user must always be able to construct a backend and report an
+	// issue, even when on-disk state is unreadable or incompatible (e.g. after a
+	// downgrade). Failures loading the server manager, split tunnel, and config
+	// are logged and degraded, never returned. The only fatal path is
+	// common.Init, which fails only when the data directory or settings file
+	// can't be created or read — i.e. the app genuinely cannot run.
 
 	// Must run before common.Init: it reads RADIANCE_VERSION once and
 	// freezes it, so a later Setenv is ignored by the header-fill path.

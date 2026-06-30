@@ -108,21 +108,24 @@ func InitSettings(fileDir string) error {
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
 	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
-	k.initialized = true
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
-		return save()
+		if err := save(); err != nil {
+			return err
+		}
 	case errors.Is(err, errParseSettings):
 		// An invalid settings file must not be fatal: quarantine it, then start
 		// from in-memory defaults and overwrite the bad file with them.
 		slog.Error("Settings file is invalid; starting from defaults", "path", k.filePath, "error", err)
 		quarantineInvalidSettings(k.filePath)
-		return save()
+		if err := save(); err != nil {
+			return err
+		}
 	case err != nil:
-		k.initialized = false
 		return fmt.Errorf("loading settings: %w", err)
 	}
+	k.initialized = true
 	return nil
 }
 

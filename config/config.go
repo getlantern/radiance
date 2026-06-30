@@ -391,7 +391,8 @@ func load(path string) (*Config, error) {
 	}
 
 	// try to migrate from old format if parsing fails
-	// TODO(3/06, garmr-ulfr): remove this migration code after a few releases
+	// TODO: remove this migration once the old config format no longer appears
+	// on disk in the field.
 	if migrated, mErr := migrateToNewFmt(rawConfig); mErr == nil {
 		saveConfig(migrated, path)
 		return migrated, nil
@@ -401,6 +402,8 @@ func load(path string) (*Config, error) {
 	// sing-box can't decode a newer on-disk config. Quarantine it so it stops
 	// re-failing on every start and is preserved for diagnostics, then start
 	// with no config; the next successful fetch repopulates config.json.
+	slog.Warn("config file is invalid; quarantining and starting without a config",
+		"path", path, "error", err)
 	quarantineInvalidConfig(path, rawConfig)
 	return nil, nil
 }
