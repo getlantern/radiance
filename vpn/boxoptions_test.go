@@ -209,6 +209,7 @@ func TestBuildOptions_WATERDirOverride(t *testing.T) {
 }
 
 func TestMergeAndCollectTags_AddsDualStackFakeIPDNS(t *testing.T) {
+	srcServer := newDNSServerOptions(C.DNSTypeLocal, "dns_local", "", "")
 	srcRule := O.DNSRule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultDNSRule{
@@ -227,7 +228,7 @@ func TestMergeAndCollectTags_AddsDualStackFakeIPDNS(t *testing.T) {
 		DNS: &O.DNSOptions{
 			RawDNSOptions: O.RawDNSOptions{
 				Servers: []O.DNSServerOptions{
-					newDNSServerOptions(C.DNSTypeLocal, "dns_local", "", ""),
+					srcServer,
 				},
 				Rules: []O.DNSRule{srcRule},
 				Final: "dns_local",
@@ -253,6 +254,8 @@ func TestMergeAndCollectTags_AddsDualStackFakeIPDNS(t *testing.T) {
 
 	require.Len(t, src.DNS.Servers, 1, "merge must not mutate source DNS servers")
 	require.Len(t, src.DNS.Rules, 1, "merge must not mutate source DNS rules")
+	assert.Equal(t, srcServer, src.DNS.Servers[0], "merge must not rewrite source DNS servers")
+	assert.Equal(t, srcRule, src.DNS.Rules[0], "merge must not rewrite source DNS rules")
 }
 
 func contains[S ~[]E, E any](t *testing.T, s S, e E) bool {
@@ -525,8 +528,8 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 }
 
 // TestBuildOptions_RejectsIPv6WhenCaptured pins the placement of the IPv6
-// reject: direct-routed IPv6 must run first, and only non-fake-IP proxied IPv6
-// should fail fast before the selector rules.
+// reject: direct-routed IPv6 must run first, and remaining IPv6 should fail
+// fast before the selector rules.
 func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	cfg := testConfig(t)
 	opts, err := buildOptions(BoxOptions{
@@ -561,7 +564,7 @@ func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	require.NotEqual(t, -1, splitIdx, "expected split-tunnel rule in built options")
 	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
 	assert.Greater(t, rejectIdx, splitIdx, "IPv6 reject must come after split-tunnel so split-direct v6 keeps flowing")
-	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so non-fake-IP proxied v6 is rejected")
+	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so remaining v6 is rejected")
 }
 
 func TestRejectIPv6Rule(t *testing.T) {

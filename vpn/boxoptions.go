@@ -245,8 +245,7 @@ func baseRoutingRules() []O.Rule {
 	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
 	//       their QUIC. Added in buildOptions.
 	// 8.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here so
-	//       direct-routed v6 is preserved while non-fake-IP proxied v6 fails fast. Added
-	//       in buildOptions.
+	//       direct-routed v6 is preserved while remaining IPv6 fails fast. Added in buildOptions.
 	// 9,10. Group rules for auto and manual selector modes (added in buildOptions).
 	// 11.   Catch-all blocking rule (added in buildOptions). Traffic not covered
 	//       by previous rules must not automatically bypass the VPN.
@@ -374,9 +373,8 @@ func rejectQUICRule() O.Rule {
 	}
 }
 
-// rejectIPv6Rule rejects non-fake-IP IPv6 destinations as a backstop for
-// literals, HTTPS-record hints, or apps using their own DNS. The default reject
-// method fails fast; "drop" would blackhole and stall.
+// rejectIPv6Rule rejects IPv6 destinations that reach this late in route order.
+// The default reject method fails fast; "drop" would blackhole and stall.
 func rejectIPv6Rule() O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,

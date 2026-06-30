@@ -162,8 +162,8 @@ func addFakeIPDNSFallback(dnsOptions *option.DNSOptions) {
 	}
 }
 
-// setFakeIPServer returns the fake-IP server tag, replacing any existing
-// fake-IP entry with Radiance's dual-stack ranges.
+// setFakeIPServer returns the fake-IP server tag, replacing the first fake-IP
+// entry it finds with Radiance's dual-stack ranges.
 func setFakeIPServer(servers *[]option.DNSServerOptions) string {
 	fakeIP := fakeIPServer()
 	for i := range *servers {

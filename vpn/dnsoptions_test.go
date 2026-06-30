@@ -178,7 +178,7 @@ func TestBuildDNSRules_RoutesAddressQueriesToFakeIP(t *testing.T) {
 func requireFakeIPServer(t *testing.T, servers []option.DNSServerOptions) option.DNSServerOptions {
 	t.Helper()
 	idx := slices.IndexFunc(servers, func(server option.DNSServerOptions) bool {
-		return server.Type == constant.DNSTypeFakeIP
+		return server.Type == constant.DNSTypeFakeIP && server.Tag == fakeIPServerTag
 	})
 	require.NotEqual(t, -1, idx, "expected a fake-IP DNS server")
 	return servers[idx]
