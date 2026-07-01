@@ -3,11 +3,28 @@ package issue
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+)
+
+const (
+	// maxLogReadFactor bounds how much uncompressed log to read toward an archive:
+	// maxArchiveSize * maxLogReadFactor bytes. Logs compress by at most roughly this
+	// factor, so reading more than this can never be needed to reach the compressed
+	// size budget.
+	maxLogReadFactor int64 = 20
+	// backupTimeFormat matches the timestamp format used in rotated backup
+	// filenames: "<log-name>-<timestamp>.log.gz".
+	backupTimeFormat = "2006-01-02T15-04-05.000"
+
+	logExt    = ".log"
+	backupExt = ".log.gz"
 )
 
 // buildIssueArchive creates a zip archive containing all .log files found in
@@ -16,7 +33,7 @@ import (
 // greedily if space permits. The total compressed archive size will not exceed
 // maxSize bytes.
 func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) ([]byte, error) {
-	logFiles := globLogFiles(logDir)
+	logFiles := globFiles(logDir, "*.log")
 
 	var primaryLogData []byte
 	var secondaryLogs []extraFile
@@ -42,14 +59,119 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 
 	attachments := readExtraFiles(additionalFiles)
 
+	primaryPath := filepath.Join(logDir, logArchiveName)
+	primaryLogData = prependMostRecentBackup(primaryPath, primaryLogData, maxSize)
+
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
 }
 
-// globLogFiles returns all .log files in dir, sorted by filepath.Glob order.
-func globLogFiles(dir string) []string {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.log"))
+// prependMostRecentBackup prepends the newest rotated gzip backup, if present,
+// so a mid-session rotation does not lose earlier log history.
+func prependMostRecentBackup(primaryLogPath string, current []byte, maxArchiveSize int64) []byte {
+	backupPath, ok := findMostRecentCompressedBackup(primaryLogPath)
+	if !ok {
+		return current
+	}
+
+	remaining := maxArchiveSize*maxLogReadFactor - int64(len(current))
+	if remaining <= 0 {
+		return current
+	}
+
+	backupData, err := readGzipTail(backupPath, remaining)
 	if err != nil {
-		slog.Warn("unable to glob log files", "dir", dir, "error", err)
+		slog.Warn("unable to read compressed log backup", "path", backupPath, "error", err)
+		return current
+	}
+	if len(backupData) == 0 {
+		return current
+	}
+	if backupData[len(backupData)-1] != '\n' {
+		backupData = append(backupData, '\n')
+	}
+
+	return append(backupData, current...)
+}
+
+func findMostRecentCompressedBackup(primaryLogPath string) (string, bool) {
+	dir := filepath.Dir(primaryLogPath)
+	base := filepath.Base(primaryLogPath)
+	logName := strings.TrimSuffix(base, logExt)
+
+	matches := globFiles(dir, logName+"-*"+backupExt)
+	if len(matches) == 0 {
+		return "", false
+	}
+
+	var latestPath string
+	var latestTimestamp time.Time
+	for _, match := range matches {
+		timestamp, ok := parseBackupTimestamp(match, logName)
+		if ok && timestamp.After(latestTimestamp) {
+			latestTimestamp = timestamp
+			latestPath = match
+		}
+	}
+
+	return latestPath, latestPath != ""
+}
+
+func parseBackupTimestamp(path, logName string) (time.Time, bool) {
+	filename := filepath.Base(path)
+	prefix := logName + "-"
+	if !strings.HasPrefix(filename, prefix) || !strings.HasSuffix(filename, backupExt) {
+		return time.Time{}, false
+	}
+
+	timestamp := filename[len(prefix) : len(filename)-len(backupExt)]
+	ts, err := time.Parse(backupTimeFormat, timestamp)
+	return ts, err == nil
+}
+
+// readGzipTail returns up to maxRead bytes from the end of the decompressed file.
+// The tail is kept rather than the head because it is the history nearest in time
+// to the current log; memory stays bounded to ~maxRead even when the backup
+// decompresses to more.
+func readGzipTail(path string, maxRead int64) ([]byte, error) {
+	if maxRead <= 0 {
+		return nil, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+
+	var tail []byte
+	chunk := make([]byte, 32*1024)
+	for {
+		n, readErr := gz.Read(chunk)
+		if n > 0 {
+			tail = append(tail, chunk[:n]...)
+			if int64(len(tail)) > maxRead {
+				tail = append(tail[:0], tail[int64(len(tail))-maxRead:]...)
+			}
+		}
+		if readErr == io.EOF {
+			return tail, nil
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+}
+
+func globFiles(dir, pattern string) []string {
+	matches, err := filepath.Glob(filepath.Join(dir, pattern))
+	if err != nil {
+		slog.Warn("unable to glob files", "dir", dir, "pattern", pattern, "error", err)
 		return nil
 	}
 	return matches
@@ -74,9 +196,7 @@ func snapshotLogFile(logPath string, maxCompressed int64) ([]byte, error) {
 		return nil, nil
 	}
 
-	// Cap the amount we read: even with poor compression, we'd never need more
-	// than maxCompressed * 20 bytes of uncompressed log to fill the archive.
-	maxRead := maxCompressed * 20
+	maxRead := maxCompressed * maxLogReadFactor
 	readSize := size
 	if readSize > maxRead {
 		readSize = maxRead
