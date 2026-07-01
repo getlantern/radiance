@@ -22,13 +22,11 @@ import (
 var bundledGeositeCN []byte
 
 // bundleGeositeRuleSets converts server-pushed geosite-cn* REMOTE rule-sets into
-// LOCAL rule-sets backed by the .srs bundled above, eliminating the cold-start
-// network fetch. There is no GFW-reachable host to fetch it from at our scale —
-// S3 is rate-throttled, jsDelivr org-blocks getlantern, raw.githubusercontent is
-// flaky + scale-risky — so the bundled copy is the reliable floor: the fetch
-// can't fail (it doesn't happen) and the rule-set always loads. A later fronted-
-// refresh layer can overwrite the on-disk copy to keep it current between
-// releases. Returns the tags that were bundled.
+// LOCAL rule-sets backed by the .srs bundled above, removing the tunnel-start
+// network fetch: no CDN reliably serves it from behind the GFW at our scale, so
+// the bundled copy is the floor — the rule-set always loads and a blocked fetch
+// can't stall startup. A later refresh layer may overwrite the on-disk copy to
+// keep it current between releases. Returns the tags that were bundled.
 func bundleGeositeRuleSets(opts *O.Options, basePath string) []string {
 	dir := filepath.Join(basePath, "rulesets")
 	var bundled []string
@@ -56,12 +54,16 @@ func bundleGeositeRuleSets(opts *O.Options, basePath string) []string {
 				slog.String("tag", rs.Tag), slog.Any("error", err))
 			continue
 		}
-		// Always (re)write: the bundled copy is the source of truth until a
-		// fronted-refresh layer exists to drop a fresher copy at this path.
-		if err := atomicfile.WriteFile(path, bundledGeositeCN, fileperm.File); err != nil {
-			slog.Warn("bundle geosite: write failed; leaving remote rule-set",
-				slog.String("tag", rs.Tag), slog.Any("error", err))
-			continue
+		// Write only when missing or a different size: buildOptions runs on every
+		// connect, and re-fsyncing the rule-set each time is wasteful. The embedded
+		// rule-set's length changes on app upgrade, so a size mismatch reliably
+		// signals "needs rewrite".
+		if fi, err := os.Stat(path); err != nil || fi.Size() != int64(len(bundledGeositeCN)) {
+			if err := atomicfile.WriteFile(path, bundledGeositeCN, fileperm.File); err != nil {
+				slog.Warn("bundle geosite: write failed; leaving remote rule-set",
+					slog.String("tag", rs.Tag), slog.Any("error", err))
+				continue
+			}
 		}
 		*rs = O.RuleSet{
 			Type:         C.RuleSetTypeLocal,

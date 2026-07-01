@@ -13,8 +13,8 @@
 // splitting, which a CONNECT proxy may coalesce, so a split failure here is not
 // conclusive; a tlsfrag result IS.
 //
-// Requires OXY_USER / OXY_PASS in the environment (exported by the
-// residential-proxy skill). Then: go run ./cmd/geosite-throttle-test
+// Requires OXY_USER / OXY_PASS (oxylabs residential proxy credentials) in the
+// environment. Then: go run ./cmd/geosite-throttle-test
 package main
 
 import (
