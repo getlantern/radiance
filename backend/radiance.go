@@ -1300,8 +1300,8 @@ func (r *LocalBackend) ActivationCode(ctx context.Context, email, resellerCode s
 	return r.accountClient.ActivationCode(ctx, email, resellerCode)
 }
 
-func (r *LocalBackend) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
-	return r.accountClient.NewStripeSubscription(ctx, email, planID)
+func (r *LocalBackend) NewStripeSubscription(ctx context.Context, email, planID, couponCode string) (string, error) {
+	return r.accountClient.NewStripeSubscription(ctx, email, planID, couponCode)
 }
 
 func (r *LocalBackend) PaymentRedirect(ctx context.Context, data account.PaymentRedirectData) (string, error) {

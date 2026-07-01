@@ -597,10 +597,10 @@ func (c *Client) ActivationCode(ctx context.Context, email, resellerCode string)
 }
 
 // NewStripeSubscription creates a new Stripe subscription and returns the client secret.
-func (c *Client) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
+func (c *Client) NewStripeSubscription(ctx context.Context, email, planID, couponCode string) (string, error) {
 	var resp ClientSecretResponse
 	err := c.doJSON(ctx, http.MethodPost, subscriptionStripeEndpoint,
-		StripeSubscriptionRequest{Email: email, PlanID: planID}, &resp)
+		StripeSubscriptionRequest{Email: email, PlanID: planID, CouponCode: couponCode}, &resp)
 	return resp.ClientSecret, err
 }
 

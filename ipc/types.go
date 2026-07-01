@@ -92,8 +92,9 @@ type ActivationRequest struct {
 }
 
 type StripeSubscriptionRequest struct {
-	Email  string `json:"email"`
-	PlanID string `json:"planID"`
+	Email      string `json:"email"`
+	PlanID     string `json:"planID"`
+	CouponCode string `json:"couponCode"`
 }
 
 type VerifySubscriptionRequest struct {

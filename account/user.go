@@ -627,6 +627,8 @@ type ReferralAttachV2Response struct {
 	Plans                []*protos.Plan                     `json:"plans"`
 	Code                 string                             `json:"code"`
 	DiscountPct          int                                `json:"discountPct"`
+	// Type distinguishes the kind of code applied: "affiliate" or "referral".
+	Type string `json:"type"`
 }
 
 func (a *Client) ReferralAttachV2(ctx context.Context, code string) (*ReferralAttachV2Response, error) {
