@@ -254,6 +254,8 @@ func (r *LocalBackend) applyConfig(cfg *config.Config) {
 	list := serverListFromConfig(cfg)
 	if len(cfg.BanditURLOverrides) > 0 {
 		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
+			// Link this marker span to the API's bandit trace so config receipt
+			// and the per-outbound callback stay visible in one distributed trace.
 			_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
 				trace.WithAttributes(
 					attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
@@ -277,7 +279,7 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
 		slog.Error("failed to set country code in settings", "error", err)
 	}
-	slog.Info("Set country code from config response", "country_code", cfg.Country)
+	slog.Info("Set country code from config", "country_code", cfg.Country)
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed
