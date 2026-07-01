@@ -15,8 +15,8 @@ import (
 )
 
 // bundledGeositeCN is Lantern's custom compiled geosite-cn rule-set, embedded in
-// the client so cold start needs no network fetch. Refresh by re-copying the
-// upstream compiled rule-set into rulesets/ and rebuilding.
+// the client so cold start needs no network fetch. Refresh by replacing the
+// embedded file with a newer upstream build and rebuilding.
 //
 //go:embed rulesets/geosite-cn.srs
 var bundledGeositeCN []byte
