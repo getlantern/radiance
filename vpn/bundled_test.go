@@ -20,10 +20,12 @@ func TestBundleGeositeRuleSets(t *testing.T) {
 			RemoteOptions: O.RemoteRuleSet{URL: "https://example.com/ai.srs", DownloadDetour: "direct"}},
 		{Type: C.RuleSetTypeLocal, Tag: "split-tunnel", Format: C.RuleSetFormatSource,
 			LocalOptions: O.LocalRuleSet{Path: "/x/split.json"}},
-		// A malicious server-provided tag with path separators must be rejected,
-		// not written outside the rulesets dir.
+		// Malicious/buggy server-provided tags with path separators must be
+		// rejected — neither escaping (../) nor nesting (sub/) the rulesets dir.
 		{Type: C.RuleSetTypeRemote, Tag: "geosite-cn/../../evil", Format: C.RuleSetFormatBinary,
 			RemoteOptions: O.RemoteRuleSet{URL: "https://x/evil.srs", DownloadDetour: "direct"}},
+		{Type: C.RuleSetTypeRemote, Tag: "geosite-cn2/sub", Format: C.RuleSetFormatBinary,
+			RemoteOptions: O.RemoteRuleSet{URL: "https://x/sub.srs", DownloadDetour: "direct"}},
 	}
 
 	bundled := bundleGeositeRuleSets(opts, base)
@@ -55,8 +57,10 @@ func TestBundleGeositeRuleSets(t *testing.T) {
 	if opts.Route.RuleSet[2].Tag != "split-tunnel" || opts.Route.RuleSet[2].Type != C.RuleSetTypeLocal {
 		t.Errorf("split-tunnel should be untouched")
 	}
-	if opts.Route.RuleSet[3].Type != C.RuleSetTypeRemote {
-		t.Errorf("unsafe tag should be left remote (not bundled), got %q", opts.Route.RuleSet[3].Type)
+	for _, i := range []int{3, 4} { // both unsafe tags left remote (not bundled)
+		if opts.Route.RuleSet[i].Type != C.RuleSetTypeRemote {
+			t.Errorf("unsafe tag %q should stay remote, got %q", opts.Route.RuleSet[i].Tag, opts.Route.RuleSet[i].Type)
+		}
 	}
 	// Nothing escaped the rulesets dir.
 	if escaped, _ := filepath.Glob(filepath.Join(base, "*.srs")); len(escaped) != 0 {

@@ -37,10 +37,16 @@ func bundleGeositeRuleSets(opts *O.Options, basePath string) []string {
 		if rs.Type != C.RuleSetTypeRemote || !strings.HasPrefix(rs.Tag, "geosite-cn") {
 			continue
 		}
-		// The tag is server-provided and becomes a filename; guard against a tag
-		// with path separators or ".." escaping the rulesets dir.
+		// The tag is server-provided and becomes a filename; require a bare
+		// filename (reject path separators / "..") so it can neither escape nor
+		// nest under the rulesets dir.
+		if filepath.Base(rs.Tag) != rs.Tag {
+			slog.Warn("bundle geosite: unsafe rule-set tag; leaving remote rule-set",
+				slog.String("tag", rs.Tag))
+			continue
+		}
 		path := filepath.Join(dir, rs.Tag+".srs")
-		if !strings.HasPrefix(path, dir+string(os.PathSeparator)) {
+		if !strings.HasPrefix(path, dir+string(os.PathSeparator)) { // defense in depth
 			slog.Warn("bundle geosite: unsafe rule-set tag; leaving remote rule-set",
 				slog.String("tag", rs.Tag))
 			continue
