@@ -447,9 +447,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
-	// Cold-start fix (#3657): convert server-pushed geosite-cn* REMOTE rule-sets to
-	// LOCAL, backed by a copy bundled into the client. No GFW-reachable host exists
-	// to fetch them from at our scale (S3 rate-throttled, jsDelivr org-blocks us,
+	// Cold-start fix: convert server-pushed geosite-cn* REMOTE rule-sets to LOCAL,
+	// backed by a copy bundled into the client. No GFW-reachable host exists to
+	// fetch them from at our scale (S3 rate-throttled, jsDelivr org-blocks us,
 	// raw.githubusercontent flaky+scale-risky), so eliminate the fetch entirely —
 	// it can't brick startup and geosite-cn always loads.
 	if bundled := bundleGeositeRuleSets(&opts, bOptions.BasePath); len(bundled) > 0 {

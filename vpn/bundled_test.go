@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,6 +20,10 @@ func TestBundleGeositeRuleSets(t *testing.T) {
 			RemoteOptions: O.RemoteRuleSet{URL: "https://example.com/ai.srs", DownloadDetour: "direct"}},
 		{Type: C.RuleSetTypeLocal, Tag: "split-tunnel", Format: C.RuleSetFormatSource,
 			LocalOptions: O.LocalRuleSet{Path: "/x/split.json"}},
+		// A malicious server-provided tag with path separators must be rejected,
+		// not written outside the rulesets dir.
+		{Type: C.RuleSetTypeRemote, Tag: "geosite-cn/../../evil", Format: C.RuleSetFormatBinary,
+			RemoteOptions: O.RemoteRuleSet{URL: "https://x/evil.srs", DownloadDetour: "direct"}},
 	}
 
 	bundled := bundleGeositeRuleSets(opts, base)
@@ -39,15 +44,22 @@ func TestBundleGeositeRuleSets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bundled file not written: %v", err)
 	}
-	if len(data) == 0 || len(data) != len(bundledGeositeCN) {
-		t.Errorf("written %d bytes, embedded %d", len(data), len(bundledGeositeCN))
+	if !bytes.Equal(data, bundledGeositeCN) {
+		t.Errorf("written file (%d bytes) != embedded rule-set (%d bytes)", len(data), len(bundledGeositeCN))
 	}
 
-	// A non-geosite remote rule-set and an existing local rule-set are untouched.
+	// Non-geosite remote, existing local, and the unsafe-tag rule-sets are untouched.
 	if opts.Route.RuleSet[1].Type != C.RuleSetTypeRemote {
 		t.Errorf("ai-domains should stay remote, got %q", opts.Route.RuleSet[1].Type)
 	}
 	if opts.Route.RuleSet[2].Tag != "split-tunnel" || opts.Route.RuleSet[2].Type != C.RuleSetTypeLocal {
 		t.Errorf("split-tunnel should be untouched")
+	}
+	if opts.Route.RuleSet[3].Type != C.RuleSetTypeRemote {
+		t.Errorf("unsafe tag should be left remote (not bundled), got %q", opts.Route.RuleSet[3].Type)
+	}
+	// Nothing escaped the rulesets dir.
+	if escaped, _ := filepath.Glob(filepath.Join(base, "*.srs")); len(escaped) != 0 {
+		t.Errorf("files written outside rulesets/: %v", escaped)
 	}
 }

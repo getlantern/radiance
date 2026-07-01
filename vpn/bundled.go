@@ -14,9 +14,9 @@ import (
 	"github.com/getlantern/radiance/common/fileperm"
 )
 
-// bundledGeositeCN is Lantern's custom geosite-cn rule-set, compiled, embedded in
-// the client. Source of truth: getlantern/rulesets srs/geosite-cn.srs (built from
-// csv/). Refresh by re-copying that file and rebuilding.
+// bundledGeositeCN is Lantern's custom compiled geosite-cn rule-set, embedded in
+// the client so cold start needs no network fetch. Refresh by re-copying the
+// upstream compiled rule-set into rulesets/ and rebuilding.
 //
 //go:embed rulesets/geosite-cn.srs
 var bundledGeositeCN []byte
@@ -25,10 +25,10 @@ var bundledGeositeCN []byte
 // LOCAL rule-sets backed by the .srs bundled above, eliminating the cold-start
 // network fetch. There is no GFW-reachable host to fetch it from at our scale —
 // S3 is rate-throttled, jsDelivr org-blocks getlantern, raw.githubusercontent is
-// flaky + scale-risky (see engineering#3657) — so the bundled copy is the
-// reliable floor: the fetch can't fail (it doesn't happen) and the rule-set
-// always loads. A later fronted-refresh layer can overwrite the on-disk copy to
-// keep it current between releases. Returns the tags that were bundled.
+// flaky + scale-risky — so the bundled copy is the reliable floor: the fetch
+// can't fail (it doesn't happen) and the rule-set always loads. A later fronted-
+// refresh layer can overwrite the on-disk copy to keep it current between
+// releases. Returns the tags that were bundled.
 func bundleGeositeRuleSets(opts *O.Options, basePath string) []string {
 	dir := filepath.Join(basePath, "rulesets")
 	var bundled []string
@@ -37,12 +37,19 @@ func bundleGeositeRuleSets(opts *O.Options, basePath string) []string {
 		if rs.Type != C.RuleSetTypeRemote || !strings.HasPrefix(rs.Tag, "geosite-cn") {
 			continue
 		}
+		// The tag is server-provided and becomes a filename; guard against a tag
+		// with path separators or ".." escaping the rulesets dir.
+		path := filepath.Join(dir, rs.Tag+".srs")
+		if !strings.HasPrefix(path, dir+string(os.PathSeparator)) {
+			slog.Warn("bundle geosite: unsafe rule-set tag; leaving remote rule-set",
+				slog.String("tag", rs.Tag))
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			slog.Warn("bundle geosite: mkdir failed; leaving remote rule-set",
 				slog.String("tag", rs.Tag), slog.Any("error", err))
 			continue
 		}
-		path := filepath.Join(dir, rs.Tag+".srs")
 		// Always (re)write: the bundled copy is the source of truth until a
 		// fronted-refresh layer exists to drop a fresher copy at this path.
 		if err := atomicfile.WriteFile(path, bundledGeositeCN, fileperm.File); err != nil {
