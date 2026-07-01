@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"bytes"
 	_ "embed"
 	"log/slog"
 	"os"
@@ -54,11 +55,11 @@ func bundleGeositeRuleSets(opts *O.Options, basePath string) []string {
 				slog.String("tag", rs.Tag), slog.Any("error", err))
 			continue
 		}
-		// Write only when missing or a different size: buildOptions runs on every
-		// connect, and re-fsyncing the rule-set each time is wasteful. The embedded
-		// rule-set's length changes on app upgrade, so a size mismatch reliably
-		// signals "needs rewrite".
-		if fi, err := os.Stat(path); err != nil || fi.Size() != int64(len(bundledGeositeCN)) {
+		// Write only when the on-disk copy differs: buildOptions runs on every
+		// connect, so skip the temp-write+fsync+rename when unchanged. Reading to
+		// compare is far cheaper than that write, and unlike a size check it also
+		// catches a same-length content change on app upgrade.
+		if cur, err := os.ReadFile(path); err != nil || !bytes.Equal(cur, bundledGeositeCN) {
 			if err := atomicfile.WriteFile(path, bundledGeositeCN, fileperm.File); err != nil {
 				slog.Warn("bundle geosite: write failed; leaving remote rule-set",
 					slog.String("tag", rs.Tag), slog.Any("error", err))

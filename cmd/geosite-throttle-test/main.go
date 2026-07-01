@@ -128,7 +128,7 @@ func fetch(dialer transport.StreamDialer, url string) (int64, time.Duration, err
 func main() {
 	oxyUser, oxyPass := os.Getenv("OXY_USER"), os.Getenv("OXY_PASS")
 	if oxyUser == "" || oxyPass == "" {
-		fmt.Fprintln(os.Stderr, "set OXY_USER/OXY_PASS (source the residential-proxy-env.sh first)")
+		fmt.Fprintln(os.Stderr, "OXY_USER and OXY_PASS must be set (oxylabs residential proxy credentials)")
 		os.Exit(1)
 	}
 
