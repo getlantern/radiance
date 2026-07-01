@@ -455,13 +455,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	if bundled := bundleGeositeRuleSets(&opts, bOptions.BasePath); len(bundled) > 0 {
 		slog.Info("Bundled geosite rule-set(s) as local — no cold-start fetch", slog.Any("tags", bundled))
 	}
-	// Any *other* remote rule-set still fetched over `direct` (which the GFW
-	// throttles) is routed through the proxyless smart-dialer "mirror" outbound.
-	// Detour-only — not added to the selectable `tags`; injected only if used.
-	// (Groundwork for a fronted-refresh layer; geosite-cn is bundled above.)
-	if repointRuleSetsToMirror(&opts) {
-		opts.Outbounds = append(opts.Outbounds, mirrorOutbound())
-	}
 
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's

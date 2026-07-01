@@ -112,7 +112,7 @@ func main() {
 		size      int64
 	}{
 		{"fastly", "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs", 0},
-		{"s3", "https://s3.amazonaws.com/lantern/geosite-cn.srs", 454323},
+		{"raw.githubusercontent", "https://raw.githubusercontent.com/getlantern/rulesets/681577d4c825397df1521337f90ea5d3a3383c77/srs/geosite-cn.srs", 454323},
 	}
 
 	strats := []struct {
