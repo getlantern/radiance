@@ -371,7 +371,6 @@ func (ch *ConfigHandler) loadConfig() error {
 	}
 	if cfg != nil {
 		ch.config.Store(cfg)
-		emit(nil, cfg)
 	}
 	return nil
 }

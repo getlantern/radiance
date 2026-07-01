@@ -216,55 +216,11 @@ func (r *LocalBackend) Start() {
 
 	// set country code in settings when new config is received so it can be included in issue reports
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		if env.GetString(env.Country) != "" {
-			return // respect env override if set
-		}
-		if evt.New != nil && evt.New.Country != "" {
-			if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
-				slog.Error("failed to set country code in settings", "error", err)
-			}
-			slog.Info("Set country code from config response", "country_code", evt.New.Country)
-		}
+		setCountryCodeFromConfig(evt.New)
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
-		if evt.New == nil {
-			return
-		}
-		cfg := evt.New
-		var srvs []*servers.Server
-		addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
-			s := &servers.Server{
-				Tag: tag, Type: typ, IsLantern: true, Options: opts,
-			}
-			if loc != nil {
-				s.Location = *loc
-			}
-			srvs = append(srvs, s)
-		}
-		for _, out := range cfg.Options.Outbounds {
-			addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
-		}
-		for _, ep := range cfg.Options.Endpoints {
-			addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
-		}
-		list := servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
-		if len(cfg.BanditURLOverrides) > 0 {
-			// Create a marker span linked to the API's bandit trace so the
-			// config fetch appears in the same distributed trace as the callback.
-			if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
-				_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
-					trace.WithAttributes(
-						attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
-						attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
-					),
-				)
-				span.End() // point-in-time marker — config was received at this timestamp
-			}
-		}
-		if err := r.updateServers(list); err != nil {
-			slog.Error("updating servers in manager", "error", err)
-		}
+		r.applyConfig(evt.New)
 		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
 			// ErrTunnelAlreadyConnected is expected while the VPN is up:
 			// updateServers already pushed the new outbounds into the live
@@ -274,7 +230,78 @@ func (r *LocalBackend) Start() {
 			slog.Error("Failed to run offline URL tests after config update", "error", err)
 		}
 	})
+	r.applyCurrentConfig()
 	r.confHandler.Start()
+}
+
+// applyCurrentConfig applies any config already loaded from disk before the
+// fetch loop has a chance to refresh it.
+func (r *LocalBackend) applyCurrentConfig() {
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		return
+	}
+	setCountryCodeFromConfig(cfg)
+	r.applyConfig(cfg)
+}
+
+// applyConfig updates the runtime server state from a config snapshot.
+// Startup-loaded cached configs and freshly fetched configs both use this path.
+func (r *LocalBackend) applyConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	list := serverListFromConfig(cfg)
+	if len(cfg.BanditURLOverrides) > 0 {
+		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
+			// Link this marker span to the API's bandit trace so config receipt
+			// and the per-outbound callback stay visible in one distributed trace.
+			_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
+				trace.WithAttributes(
+					attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
+					attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
+				),
+			)
+			span.End()
+		}
+	}
+	if err := r.updateServers(list); err != nil {
+		slog.Error("updating servers in manager", "error", err)
+	}
+}
+
+// setCountryCodeFromConfig stores the config country for diagnostics unless
+// an explicit country override is active.
+func setCountryCodeFromConfig(cfg *config.Config) {
+	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" {
+		return
+	}
+	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
+		slog.Error("failed to set country code in settings", "error", err)
+	}
+	slog.Info("Set country code from config", "country_code", cfg.Country)
+}
+
+// serverListFromConfig converts config outbounds and endpoints into managed
+// Lantern servers while preserving location and bandit URL metadata.
+func serverListFromConfig(cfg *config.Config) servers.ServerList {
+	srvs := make([]*servers.Server, 0, len(cfg.Options.Outbounds)+len(cfg.Options.Endpoints))
+	addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
+		s := &servers.Server{
+			Tag: tag, Type: typ, IsLantern: true, Options: opts,
+		}
+		if loc != nil {
+			s.Location = *loc
+		}
+		srvs = append(srvs, s)
+	}
+	for _, out := range cfg.Options.Outbounds {
+		addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
+	}
+	for _, ep := range cfg.Options.Endpoints {
+		addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
+	}
+	return servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
 }
 
 func (r *LocalBackend) Close() {
