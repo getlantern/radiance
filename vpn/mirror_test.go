@@ -68,6 +68,22 @@ func TestRepointRuleSetsToMirror_NilRoute(t *testing.T) {
 	}
 }
 
+func TestTagInUse(t *testing.T) {
+	opts := &O.Options{
+		Outbounds: []O.Outbound{{Tag: "proxy-a"}, {Tag: mirrorOutboundTag}},
+		Endpoints: []O.Endpoint{{Tag: "wg0"}},
+	}
+	if !tagInUse(opts, mirrorOutboundTag) {
+		t.Error("expected tagInUse=true for a matching outbound tag")
+	}
+	if !tagInUse(opts, "wg0") {
+		t.Error("expected tagInUse=true for a matching endpoint tag")
+	}
+	if tagInUse(opts, "absent") {
+		t.Error("expected tagInUse=false for an absent tag")
+	}
+}
+
 // expectMirrorDetour applies the production repoint (repointRuleSetsToMirror) to
 // the given rule-sets in place, so golden assertions in other tests reflect what
 // buildOptions produces without duplicating the rewrite predicate here.
