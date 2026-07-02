@@ -67,3 +67,15 @@ func TestRepointRuleSetsToMirror_NilRoute(t *testing.T) {
 		t.Error("expected repointed=false with nil Route (and no panic)")
 	}
 }
+
+// expectMirrorDetour rewrites expected rule-sets the way buildOptions does via
+// repointRuleSetsToMirror — direct-fetched remote rule-sets get the mirror
+// detour — so golden assertions in other tests reflect the repoint.
+func expectMirrorDetour(ruleSets []O.RuleSet) {
+	for i := range ruleSets {
+		rs := &ruleSets[i]
+		if rs.Type == "remote" && (rs.RemoteOptions.DownloadDetour == "" || rs.RemoteOptions.DownloadDetour == "direct") {
+			rs.RemoteOptions.DownloadDetour = mirrorOutboundTag
+		}
+	}
+}

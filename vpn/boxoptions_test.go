@@ -106,6 +106,9 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 	`
 	wantSmartRoutingOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(smartRouteJSON))
 	require.NoError(t, err)
+	// buildOptions repoints every direct-fetched remote rule-set to the mirror
+	// download_detour, so the expected rule-sets carry that detour too.
+	expectMirrorDetour(wantSmartRoutingOpts.Route.RuleSet)
 
 	t.Run("with smart routing", func(t *testing.T) {
 		cfg := testConfig(t)
@@ -147,6 +150,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			AdBlock:  cfg.AdBlock,
 		}
 		wantRule, wantRulesets := cfg.AdBlock.ToOptions()
+		expectMirrorDetour(wantRulesets)
 		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
