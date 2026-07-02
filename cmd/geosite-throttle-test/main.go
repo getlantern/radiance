@@ -171,11 +171,19 @@ func main() {
 		}},
 	}
 
+	const runsPerStrategy = 2
 	for _, t := range targets {
 		fmt.Printf("\n===== %s — %s =====\n", t.name, t.url)
+		// One Oxylabs session per iteration, reused across strategies, so e.g.
+		// direct #1 and tlsfrag #1 measure the same residential exit — a fair
+		// per-strategy comparison instead of one confounded by exit variance.
+		sessions := make([]string, runsPerStrategy)
+		for i := range sessions {
+			sessions[i] = sessUser(oxyUser)
+		}
 		for _, s := range strats {
-			for i := 1; i <= 2; i++ {
-				base := connectDialer{user: sessUser(oxyUser), pass: oxyPass}
+			for i := 1; i <= runsPerStrategy; i++ {
+				base := connectDialer{user: sessions[i-1], pass: oxyPass}
 				d, err := s.wrap(base)
 				if err != nil {
 					fmt.Printf("  %-10s #%d  build-err: %v\n", s.name, i, err)
