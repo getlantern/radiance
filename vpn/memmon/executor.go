@@ -22,8 +22,8 @@ type executor struct {
 }
 
 // NewExecutor builds the reaction executor. An empty dumpDir disables crash
-// dumps; a nil emit disables pressure events; a nil gate disables admission
-// control. platform and version are stamped into the dump.
+// dumps, and a nil gate disables admission control. platform and version are
+// stamped into the dump.
 func NewExecutor(reclaimer Reclaimer, dumpDir, platform, version string, gate *AdmissionGate) Executor {
 	return newExecutor(reclaimer, dumpDir, platform, version, gate, reactionConfig{})
 }
@@ -110,11 +110,11 @@ func (e *executor) maybeDump(decision Decision, now time.Time) {
 	err := e.dump.write(decision, e.reclaimer.OpenConnectionCount(), e.reclaimer.TotalDialedConnections(), now)
 	if err != nil {
 		slog.Warn("failed to write memory crash dump", "error", err)
-	} else {
-		slog.Info("wrote memory crash dump",
-			"footprint_mb", logMB(decision.Footprint),
-			"pressure", logRound2(decision.PressureRatio),
-		)
+		return
 	}
+	slog.Info("wrote memory crash dump",
+		"footprint_mb", logMB(decision.Footprint),
+		"pressure", logRound2(decision.PressureRatio),
+	)
 	e.dumped = true
 }

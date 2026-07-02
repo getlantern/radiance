@@ -17,11 +17,11 @@ import (
 type PressureLevel int8
 
 const (
-	// LevelNormal: GC and the scavenger handle memory; the monitor only observes.
+	// LevelNormal leaves memory management to GC and the scavenger.
 	LevelNormal PressureLevel = iota
-	// LevelSoft: close oldest connections first, reclaiming gradually.
+	// LevelSoft closes the oldest connections first and reclaims gradually.
 	LevelSoft
-	// LevelHard: force-close all connections and reclaim maximally.
+	// LevelHard force-closes all connections and reclaims as much as possible.
 	LevelHard
 )
 

@@ -18,7 +18,7 @@ const (
 
 // AdmissionConfig tunes the AdmissionGate. Zero-valued fields take defaults.
 type AdmissionConfig struct {
-	// StartRejectingPressure is the pressure at or above which new connections is refused.
+	// StartRejectingPressure is the pressure at or above which new connections are refused.
 	StartRejectingPressure float64
 	// StopRejectingPressure is the pressure below which an active rejection lifts. Kept under
 	// StartRejectingPressure so a recovering footprint does not re-trip immediately.
@@ -89,7 +89,7 @@ type AdmissionGate struct {
 	rejectSince time.Time
 }
 
-// NewAdmissionGate builds a gate. src is the dedicated footprint sampler;
+// NewAdmissionGate builds a gate. sampler is the dedicated footprint sampler;
 // setReject toggles reject mode.
 func NewAdmissionGate(cfg AdmissionConfig, sampler Sampler, setReject func(bool)) *AdmissionGate {
 	return &AdmissionGate{cfg: cfg.applyDefaults(), sampler: sampler, setReject: setReject}

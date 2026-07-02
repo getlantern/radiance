@@ -21,7 +21,9 @@ const (
 	defaultIOSMemLimitBytes    = 48 * 1024 * 1024  // 48 MB
 	defaultNonIOSMemLimitBytes = 512 * 1024 * 1024 // 512 MB
 
-	minMemLimitMB = 16
+	// minMemLimitMB is the minimum override. It is floored at GOMEMLIMIT so GC
+	// can react before the fixed-budget monitor starts shedding work.
+	minMemLimitMB = mobileMemoryLimit / (1024 * 1024)
 	maxMemLimitMB = 512
 )
 

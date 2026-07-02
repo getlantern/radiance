@@ -62,7 +62,7 @@ func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platfo
 	b = appendKVU64(b, " avail_bytes", last.Available)
 	b = appendKVU64(b, " go_bytes", last.GoBytes)
 	b = appendKVU64(b, " non_go_bytes", nonGo)
-	b = appendKVBool(b, " native_available", last.HasNativeFootprint)
+	b = appendKVBool(b, " has_native_footprint", last.HasNativeFootprint)
 	b = append(b, '\n')
 
 	// dump go/connection line

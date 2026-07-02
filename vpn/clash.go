@@ -26,6 +26,8 @@ import (
 
 const rejectMode = "reject"
 
+// dialAdmissionGate is notified on each dial so the AdmissionGate can record
+// the dial and decide whether to reject new connections.
 type dialAdmissionGate interface {
 	RecordDial(time.Time)
 }
@@ -139,12 +141,16 @@ func (s *clashServer) Close() error {
 	return nil
 }
 
+// SetAdmissionGate installs the admission gate consulted on each dial. Nil
+// is ignored, so the gate can be updated but not cleared.
 func (s *clashServer) SetAdmissionGate(gate dialAdmissionGate) {
 	if gate != nil {
 		s.admissionGate.Store(gate)
 	}
 }
 
+// setRejectMode enables or disables reject mode. Existing connections continue;
+// only new ones are refused.
 func (s *clashServer) setRejectMode(enable bool) {
 	if swapped := s.rejecting.Swap(enable); swapped == enable {
 		return
