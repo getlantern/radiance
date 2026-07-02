@@ -447,6 +447,17 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
+	// Route remote rule-set fetches through the proxyless "mirror" outbound so a
+	// cold-start fetch survives DPI throttling of the CDNs they're served from.
+	// Detour-only — deliberately not added to the selectable `tags`. Bail out
+	// entirely (before repointing) if the config already claims the tag on an
+	// outbound or endpoint: only rewrite rule-sets to the mirror detour when we
+	// can guarantee our outbound backs it, so they're never left pointing at a
+	// foreign "mirror" tag.
+	if !tagInUse(&opts, mirrorOutboundTag) && repointRuleSetsToMirror(&opts) {
+		opts.Outbounds = append(opts.Outbounds, mirrorOutbound())
+	}
+
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's
 	// managed data directory instead.
