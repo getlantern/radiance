@@ -13,8 +13,9 @@
 // splitting, which a CONNECT proxy may coalesce, so a split failure here is not
 // conclusive; a tlsfrag result IS.
 //
-// Requires OXY_USER / OXY_PASS (oxylabs residential proxy credentials) in the
-// environment. Then: go run ./cmd/geosite-throttle-test
+// Requires OXY_USER / OXY_PASS in the environment: OXY_USER is the bare Oxylabs
+// customer ID (sessUser adds the "customer-" prefix and session modifiers),
+// OXY_PASS is the proxy password. Then: go run ./cmd/geosite-throttle-test
 package main
 
 import (
@@ -87,7 +88,9 @@ func (d connectDialer) DialStream(ctx context.Context, addr string) (transport.S
 // CloseWrite (via net.Conn half-close on the underlying TCP) but no CloseRead.
 type tlsStreamConn struct{ *tls.Conn }
 
-func (tlsStreamConn) CloseRead() error { return nil }
+// CloseRead falls back to a full close: *tls.Conn can't close only the read
+// half, so a no-op would falsely report success without changing state.
+func (c tlsStreamConn) CloseRead() error { return c.Close() }
 
 // bufConn preserves any bytes the reader buffered past the CONNECT response.
 type bufConn struct {
@@ -97,6 +100,8 @@ type bufConn struct {
 
 func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
+// sessUser formats an Oxylabs CN residential session username from a bare
+// customer ID.
 func sessUser(base string) string {
 	return fmt.Sprintf("customer-%s-cc-%s-sessid-%d-sesstime-10", base, oxyCC, time.Now().UnixNano()%1000000)
 }
