@@ -38,10 +38,17 @@ type SplitTunnel struct {
 	logger       *slog.Logger
 }
 
+// NewSplitTunnelHandler creates a SplitTunnel handler, loading the saved rule
+// set from disk.
+//
+// The returned handler is always usable, even when the error is non-nil: an
+// unreadable or unparseable rule file — e.g. one this build's sing-box can't
+// decode after a version downgrade — falls back to the default no-op rule,
+// yielding a working handler plus an error describing the failure.
 func NewSplitTunnelHandler(dataPath string, logger *slog.Logger) (*SplitTunnel, error) {
 	s := newSplitTunnel(dataPath, logger)
 	if err := s.loadRule(); err != nil {
-		return nil, fmt.Errorf("loading split tunnel rule file %s: %w", s.ruleFile, err)
+		return s, fmt.Errorf("loading split tunnel rule file %s: %w", s.ruleFile, err)
 	}
 	return s, nil
 }
@@ -262,13 +269,14 @@ func isEmptyRule(rule O.DefaultHeadlessRule) bool {
 }
 
 func (s *SplitTunnel) loadRule() error {
-	content, err := atomicfile.ReadFile(s.ruleFile)
+	rawRuleSet, err := atomicfile.ReadFile(s.ruleFile)
 	// the file should exist at this point, so we don't need to check for fs.ErrNotExist
 	if err != nil {
 		return fmt.Errorf("reading rule file %s: %w", s.ruleFile, err)
 	}
-	ruleSet, err := json.UnmarshalExtended[O.PlainRuleSetCompat](content)
+	ruleSet, err := json.UnmarshalExtended[O.PlainRuleSetCompat](rawRuleSet)
 	if err != nil {
+		s.quarantineInvalidRuleSet(rawRuleSet)
 		return fmt.Errorf("unmarshalling rule file %s: %w", s.ruleFile, err)
 	}
 	rules := ruleSet.Options.Rules
@@ -353,6 +361,18 @@ func (s *SplitTunnel) loadRule() error {
 		"file", s.ruleFile, "filters", s.Filters().String(), "enabled", s.IsEnabled(),
 	)
 	return nil
+}
+
+// quarantineInvalidRuleSet copies the unparseable rule file aside to
+// split-tunnel.invalid.json for diagnostics. The original is left in place so a
+// later re-upgrade can still read rules this build couldn't.
+func (s *SplitTunnel) quarantineInvalidRuleSet(content []byte) {
+	invalidPath := filepath.Join(filepath.Dir(s.ruleFile), internal.SplitTunnelInvalidFileName)
+	if err := atomicfile.WriteFile(invalidPath, content, fileperm.File); err != nil {
+		s.logger.Error("Writing invalid split tunnel copy", "path", invalidPath, "error", err)
+		return
+	}
+	s.logger.Warn("Preserved unparseable split tunnel file for diagnostics", "path", invalidPath)
 }
 
 func defaultRule() O.LogicalHeadlessRule {
