@@ -77,3 +77,20 @@ func repointRuleSetsToMirror(opts *O.Options) bool {
 	}
 	return repointed
 }
+
+// tagInUse reports whether any outbound or endpoint already uses tag. sing-box
+// requires tags unique across both, so the mirror injection checks both before
+// adding its outbound.
+func tagInUse(opts *O.Options, tag string) bool {
+	for _, o := range opts.Outbounds {
+		if o.Tag == tag {
+			return true
+		}
+	}
+	for _, e := range opts.Endpoints {
+		if e.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
