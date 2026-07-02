@@ -114,9 +114,19 @@ func fetch(dialer transport.StreamDialer, url string) (int64, time.Duration, err
 		TLSHandshakeTimeout: 15 * time.Second,
 		DisableKeepAlives:   true,
 		ForceAttemptHTTP2:   false,
-		TLSClientConfig:     &tls.Config{NextProtos: []string{"http/1.1"}},
+		// Count wire bytes: don't let the transport request+decode gzip, or the
+		// reported size would be the decompressed body, not what crossed the GFW.
+		DisableCompression: true,
+		TLSClientConfig:    &tls.Config{NextProtos: []string{"http/1.1"}},
 	}
-	client := &http.Client{Transport: tr, Timeout: 30 * time.Second}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   30 * time.Second,
+		// Don't follow redirects — measure the URL we asked for, not a hop that
+		// might land on a different (unthrottled) host. A 3xx then trips the
+		// non-2xx check below.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	start := time.Now()
 	resp, err := client.Get(url)
 	if err != nil {
