@@ -450,8 +450,11 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	// Route remote rule-set fetches through the proxyless "mirror" outbound so a
 	// cold-start fetch survives DPI throttling of the CDNs they're served from.
 	// Detour-only — deliberately not added to the selectable `tags`. Injected
-	// only when a rule-set was actually repointed (engineering#3657).
-	if repointRuleSetsToMirror(&opts) {
+	// only when a rule-set was repointed and the config didn't already define the
+	// tag, so a config carrying its own "mirror" outbound can't collide.
+	if repointRuleSetsToMirror(&opts) && !slices.ContainsFunc(opts.Outbounds, func(o O.Outbound) bool {
+		return o.Tag == mirrorOutboundTag
+	}) {
 		opts.Outbounds = append(opts.Outbounds, mirrorOutbound())
 	}
 

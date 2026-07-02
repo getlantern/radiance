@@ -9,7 +9,7 @@ import (
 )
 
 // mirrorOutboundTag is the tag of the proxyless "mirror" outbound used as the
-// download_detour for remote rule-sets fetched at cold start (engineering#3657).
+// download_detour for remote rule-sets fetched at cold start.
 const mirrorOutboundTag = "mirror"
 
 // mirrorProbeHosts are the hosts the smart dialer probes to find a working
