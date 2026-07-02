@@ -92,10 +92,14 @@ type Monitor struct {
 	lastTickLog time.Time
 }
 
-// normalTickLogInterval throttles the per-tick DEBUG log while pressure is
-// Normal so steady state emits a heartbeat rather than one line per tick; any
-// elevated level logs every tick, where the per-tick detail is worth the volume.
-const normalTickLogInterval = 10 * time.Second
+// normalTickLogInterval and elevatedTickLogInterval throttle the per-tick DEBUG
+// log so it emits a periodic heartbeat rather than one line per tick. The
+// elevated interval is shorter because an active pressure episode is worth finer
+// detail, but still far coarser than the sub-second tick cadence.
+const (
+	normalTickLogInterval   = 10 * time.Second
+	elevatedTickLogInterval = 5 * time.Second
+)
 
 // New wires a Monitor from the decision config, the per-tick Sampler, and the
 // executor.
@@ -171,12 +175,14 @@ func (m *Monitor) logTick(now time.Time, s Sample, d Decision) {
 	}
 }
 
-// shouldLogTick reports whether this tick's DEBUG line should be emitted: always
-// while pressure is elevated, but no more than once per normalTickLogInterval
-// while Normal. The first tick always logs so a baseline is recorded.
+// shouldLogTick rate-limits per-tick DEBUG logs; transitions are logged elsewhere.
 func (m *Monitor) shouldLogTick(now time.Time, level PressureLevel) bool {
-	if level != LevelNormal || m.lastTickLog.IsZero() {
+	if m.lastTickLog.IsZero() {
 		return true
 	}
-	return now.Sub(m.lastTickLog) >= normalTickLogInterval
+	interval := normalTickLogInterval
+	if level != LevelNormal {
+		interval = elevatedTickLogInterval
+	}
+	return now.Sub(m.lastTickLog) >= interval
 }
