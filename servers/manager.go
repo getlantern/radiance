@@ -6,6 +6,7 @@ package servers
 import (
 	"bytes"
 	"context"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -213,6 +214,11 @@ type Manager struct {
 }
 
 // NewManager creates a new Manager instance, loading server options from disk.
+//
+// The returned Manager is always usable, even when the error is non-nil:
+// loadServers salvages every parseable server, so a partial load (e.g. an
+// on-disk entry this build can't decode after a downgrade) yields a working
+// Manager plus an error describing what was dropped.
 func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 	mgr := &Manager{
 		servers:     make(map[string]*Server),
@@ -225,8 +231,7 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 
 	mgr.logger.Debug("Loading servers", "file", mgr.serversFile)
 	if err := mgr.loadServers(); err != nil {
-		mgr.logger.Error("Failed to load servers", "file", mgr.serversFile, "error", err)
-		return nil, fmt.Errorf("failed to load servers from file: %w", err)
+		return mgr, fmt.Errorf("failed to load servers from file: %w", err)
 	}
 	mgr.logger.Log(nil, log.LevelTrace, "Loaded servers")
 	return mgr, nil
@@ -458,29 +463,71 @@ const (
 	modeUser    = "user"
 )
 
+// loadServers reads servers.json into the in-memory map, salvaging every
+// parseable entry. A single unparseable server — e.g. an outbound type or option
+// field this build's sing-box doesn't recognize after a version downgrade — is
+// skipped rather than discarding the whole file.
+//
+// It returns a non-nil error enumerating any skipped entries (or a wholly
+// unparseable file); the in-memory state is still valid when it does.
 func (m *Manager) loadServers() error {
-	buf, err := atomicfile.ReadFile(m.serversFile)
+	rawServersFile, err := atomicfile.ReadFile(m.serversFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // file doesn't exist
 	}
 	if err != nil {
-		return fmt.Errorf("read server file %q: %w", m.serversFile, err)
+		return fmt.Errorf("read servers file %q: %w", m.serversFile, err)
 	}
-	buf = bytes.TrimSpace(buf)
-	ctx := box.BaseContext()
-
-	if len(buf) > 0 && buf[0] == '[' {
-		loaded, err := json.UnmarshalExtendedContext[[]*Server](ctx, buf)
-		if err != nil {
-			return fmt.Errorf("unmarshal servers: %w", err)
-		}
-		for _, srv := range loaded {
-			m.servers[srv.Tag] = srv
-		}
+	rawServersFile = bytes.TrimSpace(rawServersFile)
+	if len(rawServersFile) == 0 {
 		return nil
 	}
 
-	// Fall back to old format: map[string]Options and mirgrate to new format on save.
+	if rawServersFile[0] == '[' {
+		return m.loadServerList(rawServersFile)
+	}
+
+	return m.loadOldFormat(rawServersFile)
+}
+
+// loadServerList handles the current array-based on-disk format and salvages
+// every entry that can still be decoded by this build.
+func (m *Manager) loadServerList(buf []byte) error {
+	var rawServers []stdjson.RawMessage
+	if err := stdjson.Unmarshal(buf, &rawServers); err != nil {
+		m.quarantineInvalidServers(buf)
+		return fmt.Errorf("servers file is not a valid JSON array: %w", err)
+	}
+
+	var skippedErrors []error
+	for _, rawServer := range rawServers {
+		srv := new(Server)
+		if err := srv.UnmarshalJSON(rawServer); err != nil {
+			skippedErrors = append(skippedErrors, fmt.Errorf("server %q: %w", serverTag(rawServer), err))
+			continue
+		}
+		m.servers[srv.Tag] = srv
+	}
+
+	if len(skippedErrors) > 0 {
+		m.quarantineInvalidServers(buf)
+		return fmt.Errorf("skipped %d of %d server(s): %w",
+			len(skippedErrors), len(rawServers), errors.Join(skippedErrors...))
+	}
+
+	return nil
+}
+
+// loadOldFormat handles the legacy map[string]Options layout and migrates it to
+// the current format on the next save. Unlike the array path it does not salvage
+// per-element: a downgrade-incompatible entry fails the whole map, in which case
+// the file is quarantined and the map is left empty. This is acceptable because
+// the old format predates the types that introduce downgrade hazards and is
+// being phased out.
+//
+// TODO: remove once the legacy map layout no longer appears on disk in the field.
+func (m *Manager) loadOldFormat(buf []byte) error {
+	ctx := box.BaseContext()
 	type oldOptions struct {
 		Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
 		Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
@@ -489,7 +536,8 @@ func (m *Manager) loadServers() error {
 	}
 	old, err := json.UnmarshalExtendedContext[map[string]oldOptions](ctx, buf)
 	if err != nil {
-		return fmt.Errorf("unmarshal server options: %w", err)
+		m.quarantineInvalidServers(buf)
+		return fmt.Errorf("unmarshal legacy server options: %w", err)
 	}
 	for group, opts := range old {
 		isLantern := group == modeLantern
@@ -514,8 +562,36 @@ func (m *Manager) loadServers() error {
 			m.servers[ep.Tag] = srv
 		}
 	}
-	// Re-save in new format
-	return m.saveServers()
+	if err := m.saveServers(); err != nil {
+		return fmt.Errorf("re-saving migrated servers in new format: %w", err)
+	}
+	return nil
+}
+
+// serverTag extracts just the tag from a raw server entry to label the
+// skipped-entry error when the full entry failed to parse. Returns
+// "<unknown>" if even the tag is unreadable.
+func serverTag(raw []byte) string {
+	var tag struct {
+		Tag string `json:"tag"`
+	}
+	_ = stdjson.Unmarshal(raw, &tag)
+	if tag.Tag == "" {
+		return "<unknown>"
+	}
+	return tag.Tag
+}
+
+// quarantineInvalidServers copies the unparseable servers file aside for
+// diagnostics. servers.json is intentionally left in place so entries skipped
+// by this build remain available to a later re-upgrade.
+func (m *Manager) quarantineInvalidServers(buf []byte) {
+	invalidPath := filepath.Join(filepath.Dir(m.serversFile), internal.ServersInvalidFileName)
+	if err := atomicfile.WriteFile(invalidPath, buf, fileperm.File); err != nil {
+		m.logger.Error("Writing invalid servers copy", "path", invalidPath, "error", err)
+		return
+	}
+	m.logger.Warn("Preserved unparseable servers file for diagnostics", "path", invalidPath)
 }
 
 // Lantern Server Manager Integration

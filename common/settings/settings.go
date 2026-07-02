@@ -66,9 +66,16 @@ const (
 	// migrateLegacySettingsIfNeeded reads it from there so Pro state
 	// survives the rename.
 	legacySettingsFileName = "local.json"
+
+	settingsInvalidFileName = "settings.invalid.json"
 )
 
 var ErrNotExist = errors.New("key does not exist")
+
+// errParseSettings marks a settings file that exists but isn't valid JSON. It
+// distinguishes a recoverable invalid file (quarantine + start from defaults)
+// from a genuine read failure, which stays fatal.
+var errParseSettings = errors.New("settings file is not valid JSON")
 
 func (k _key) String() string { return string(k) }
 
@@ -104,7 +111,17 @@ func InitSettings(fileDir string) error {
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
-		return save()
+		if err := save(); err != nil {
+			return err
+		}
+	case errors.Is(err, errParseSettings):
+		// An invalid settings file must not be fatal: quarantine it, then start
+		// from in-memory defaults and overwrite the bad file with them.
+		slog.Error("Settings file is invalid; starting from defaults", "path", k.filePath, "error", err)
+		quarantineInvalidSettings(k.filePath)
+		if err := save(); err != nil {
+			return err
+		}
 	case err != nil:
 		return fmt.Errorf("loading settings: %w", err)
 	}
@@ -254,10 +271,27 @@ func loadSettings(path string) error {
 	}
 	kk := koanf.New(".")
 	if err := kk.Load(rawbytes.Provider(contents), json.Parser()); err != nil {
-		return fmt.Errorf("parsing settings: %w", err)
+		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
 	k.k = kk
 	return nil
+}
+
+// quarantineInvalidSettings copies an invalid settings file aside to
+// settings.invalid.json so a fresh default file can replace it in place while
+// the original remains available for diagnostics.
+func quarantineInvalidSettings(path string) {
+	rawSettings, err := atomicfile.ReadFile(path)
+	if err != nil {
+		slog.Error("reading invalid settings for quarantine", "path", path, "error", err)
+		return
+	}
+	invalidPath := filepath.Join(filepath.Dir(path), settingsInvalidFileName)
+	if err := atomicfile.WriteFile(invalidPath, rawSettings, fileperm.File); err != nil {
+		slog.Error("writing invalid settings copy", "path", invalidPath, "error", err)
+		return
+	}
+	slog.Warn("quarantined invalid settings for diagnostics", "path", invalidPath)
 }
 
 func Get(key _key) any {
