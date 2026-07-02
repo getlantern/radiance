@@ -447,6 +447,14 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
+	// Route remote rule-set fetches through the proxyless "mirror" outbound so a
+	// cold-start fetch survives DPI throttling of the CDNs they're served from.
+	// Detour-only — deliberately not added to the selectable `tags`. Injected
+	// only when a rule-set was actually repointed (engineering#3657).
+	if repointRuleSetsToMirror(&opts) {
+		opts.Outbounds = append(opts.Outbounds, mirrorOutbound())
+	}
+
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's
 	// managed data directory instead.
