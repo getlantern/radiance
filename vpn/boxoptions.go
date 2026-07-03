@@ -47,7 +47,7 @@ const (
 	cacheClearMarkerName = "lantern.cache.clear"
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block", proxylessDetourTag}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -447,17 +447,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options)
 
-	// Route remote rule-set fetches through the proxyless outbound so a
-	// cold-start fetch survives DPI throttling of the CDNs they're served from.
-	// Detour-only — deliberately not added to the selectable `tags`. Bail out
-	// entirely (before repointing) if the config already claims the tag on an
-	// outbound or endpoint: only rewrite rule-sets to the proxyless detour when we
-	// can guarantee our outbound backs it, so they're never left pointing at a
-	// foreign "proxyless" tag.
-	if !tagInUse(&opts, proxylessOutboundTag) && repointRuleSetsToProxyless(&opts) {
-		opts.Outbounds = append(opts.Outbounds, proxylessOutbound())
-	}
-
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's
 	// managed data directory instead.
@@ -551,6 +540,12 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 
 	var tags []string
 	for _, out := range src.Outbounds {
+		// Infrastructure outbounds (direct/block and the server-sent proxyless
+		// rule-set detour) are merged into the config but must not appear as
+		// user-selectable proxies.
+		if slices.Contains(reservedTags, out.Tag) {
+			continue
+		}
 		tags = append(tags, out.Tag)
 	}
 	for _, ep := range src.Endpoints {

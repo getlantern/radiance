@@ -106,9 +106,6 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 	`
 	wantSmartRoutingOpts, err := json.UnmarshalExtendedContext[O.Options](box.BaseContext(), []byte(smartRouteJSON))
 	require.NoError(t, err)
-	// buildOptions repoints every direct-fetched remote rule-set to the proxyless
-	// download_detour, so the expected rule-sets carry that detour too.
-	expectProxylessDetour(wantSmartRoutingOpts.Route.RuleSet)
 
 	t.Run("with smart routing", func(t *testing.T) {
 		cfg := testConfig(t)
@@ -150,58 +147,11 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			AdBlock:  cfg.AdBlock,
 		}
 		wantRule, wantRulesets := cfg.AdBlock.ToOptions()
-		expectProxylessDetour(wantRulesets)
 		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
 		assert.Contains(t, options.Route.Rules, wantRule, "missing ad block rule")
 		assert.Subset(t, options.Route.RuleSet, wantRulesets, "missing ad block ruleset")
-	})
-}
-
-func TestBuildOptions_ProxylessInjection(t *testing.T) {
-	t.Run("injects proxyless outbound and repoints when the tag is free", func(t *testing.T) {
-		cfg := testConfig(t)
-		options, err := buildOptions(BoxOptions{
-			BasePath:     t.TempDir(),
-			Options:      cfg.Options,
-			SmartRouting: cfg.SmartRouting,
-		})
-		require.NoError(t, err)
-		assert.Contains(t, options.Outbounds, proxylessOutbound(),
-			"proxyless outbound should be injected when a rule-set is repointed")
-		for _, rs := range options.Route.RuleSet {
-			if rs.Type == "remote" {
-				assert.NotEqual(t, "direct", rs.RemoteOptions.DownloadDetour,
-					"no remote rule-set should remain on the direct detour after repoint")
-			}
-		}
-	})
-
-	t.Run("no injection or repoint when a proxyless tag already exists", func(t *testing.T) {
-		cfg := testConfig(t)
-		// A config that already claims the tag (here on an outbound) must not be
-		// collided with, and rule-sets must be left on their original detour.
-		cfg.Options.Outbounds = append(cfg.Options.Outbounds, O.Outbound{Type: C.TypeDirect, Tag: proxylessOutboundTag})
-		options, err := buildOptions(BoxOptions{
-			BasePath:     t.TempDir(),
-			Options:      cfg.Options,
-			SmartRouting: cfg.SmartRouting,
-		})
-		require.NoError(t, err)
-		proxylessCount := 0
-		for _, o := range options.Outbounds {
-			if o.Tag == proxylessOutboundTag {
-				proxylessCount++
-			}
-		}
-		assert.Equal(t, 1, proxylessCount, "must not inject a duplicate proxyless outbound")
-		for _, rs := range options.Route.RuleSet {
-			if rs.Type == "remote" {
-				assert.NotEqual(t, proxylessOutboundTag, rs.RemoteOptions.DownloadDetour,
-					"rule-sets must not be repointed when the tag is already claimed")
-			}
-		}
 	})
 }
 
