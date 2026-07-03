@@ -8,11 +8,11 @@ import (
 	O "github.com/sagernet/sing-box/option"
 )
 
-// mirrorOutboundTag is the tag of the proxyless "mirror" outbound used as the
+// proxylessOutboundTag is the tag of the proxyless outbound used as the
 // download_detour for remote rule-sets fetched at cold start.
-const mirrorOutboundTag = "mirror"
+const proxylessOutboundTag = "proxyless"
 
-// mirrorProbeHosts are the hosts the smart dialer probes to find a working
+// proxylessProbeHosts are the hosts the smart dialer probes to find a working
 // (resolver + TLS-fragmentation) strategy. The winning strategy is then applied
 // to every dial through the outbound, whatever the actual rule-set host — so
 // these need only be representative of the CDNs the rule-sets are served from
@@ -21,23 +21,23 @@ const mirrorOutboundTag = "mirror"
 // SNI layer, which TLS-record fragmentation reliably defeats (full .srs in
 // 3-5s). s3.amazonaws.com is deliberately excluded — its throttle is rate/flow-
 // based, not SNI, so fragmentation doesn't help it (0/6 completed in testing).
-var mirrorProbeHosts = []string{
+var proxylessProbeHosts = []string{
 	"fastly.jsdelivr.net",
 	"cdn.jsdelivr.net",
 	"raw.githubusercontent.com",
 }
 
-// mirrorOutbound builds the proxyless "mirror" outbound: the outline-sdk smart
+// proxylessOutbound builds the proxyless outbound: the outline-sdk smart
 // dialer reaching rule-set hosts directly with DoH resolution + TLS-record
 // fragmentation, defeating SNI-based DPI without a proxy server. Used only as a
 // download_detour (not a user-selectable proxy), so a cold-start rule-set fetch
 // survives DPI interference where a plain `direct` fetch is throttled to death.
-func mirrorOutbound() O.Outbound {
+func proxylessOutbound() O.Outbound {
 	return O.Outbound{
 		Type: lbC.TypeOutline,
-		Tag:  mirrorOutboundTag,
+		Tag:  proxylessOutboundTag,
 		Options: &lbO.OutboundOutlineOptions{
-			Domains:     mirrorProbeHosts,
+			Domains:     proxylessProbeHosts,
 			TestTimeout: "5s",
 			// DoH resolvers (un-poisonable), incl. an in-China one (AliDNS) so
 			// the strategy search can resolve from behind the GFW.
@@ -53,12 +53,12 @@ func mirrorOutbound() O.Outbound {
 	}
 }
 
-// repointRuleSetsToMirror rewrites every remote rule-set fetching over `direct`
-// (the DPI-exposed path) to fetch through the mirror outbound instead. Applies
+// repointRuleSetsToProxyless rewrites every remote rule-set fetching over `direct`
+// (the DPI-exposed path) to fetch through the proxyless outbound instead. Applies
 // to all remote rule-sets regardless of region — any of them can be throttled at
-// cold start behind a censor, and the mirror tries plain direct first, so
+// cold start behind a censor, and the proxyless tries plain direct first, so
 // uncensored fetches are unaffected. Returns true if any rule-set was repointed.
-func repointRuleSetsToMirror(opts *O.Options) bool {
+func repointRuleSetsToProxyless(opts *O.Options) bool {
 	if opts.Route == nil {
 		return false
 	}
@@ -69,9 +69,9 @@ func repointRuleSetsToMirror(opts *O.Options) bool {
 			continue
 		}
 		if d := rs.RemoteOptions.DownloadDetour; d == "" || d == "direct" {
-			rs.RemoteOptions.DownloadDetour = mirrorOutboundTag
+			rs.RemoteOptions.DownloadDetour = proxylessOutboundTag
 			repointed = true
-			slog.Info("Repointing rule-set fetch to mirror outbound",
+			slog.Info("Repointing rule-set fetch to proxyless outbound",
 				slog.String("tag", rs.Tag), slog.String("url", rs.RemoteOptions.URL))
 		}
 	}
@@ -79,7 +79,7 @@ func repointRuleSetsToMirror(opts *O.Options) bool {
 }
 
 // tagInUse reports whether any outbound or endpoint already uses tag. sing-box
-// requires tags unique across both, so the mirror injection checks both before
+// requires tags unique across both, so the proxyless injection checks both before
 // adding its outbound.
 func tagInUse(opts *O.Options, tag string) bool {
 	for _, o := range opts.Outbounds {
