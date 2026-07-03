@@ -520,7 +520,10 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 // Helper functions //
 //////////////////////
 
-// mergeAndCollectTags merges src into dst and returns all outbound/endpoint tags from src.
+// mergeAndCollectTags merges src into dst and returns the selectable outbound and
+// endpoint tags from src. Reserved/infrastructure tags (direct, block, and the
+// proxyless rule-set detour) are still merged into the config but omitted from
+// the returned set, so they never appear in the auto/manual selector groups.
 func mergeAndCollectTags(dst, src *O.Options) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)

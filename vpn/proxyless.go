@@ -5,6 +5,6 @@ package vpn
 // server owns that outbound's config (DoH resolvers, TLS-fragmentation
 // strategies, probe hosts) and sets it as the rule-sets' download_detour, so it
 // stays tunable without a client release. radiance only needs to know the tag
-// names an infrastructure outbound — merged into the box config but excluded
-// from the user-selectable proxy groups (see reservedTags).
+// names an infrastructure outbound: merged into the box config so the detour
+// resolves, but never offered as a user-selectable proxy.
 const proxylessDetourTag = "proxyless"
