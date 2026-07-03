@@ -38,6 +38,7 @@ jobs:
           repository: getlantern/automation
           ref: main
           token: ${{ secrets.GH_TEAMLANTERN_TOKEN }}
+          persist-credentials: false
           path: .automation
       - uses: ./.automation/actions/stale-bot
         with:
