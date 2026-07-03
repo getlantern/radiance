@@ -29,7 +29,8 @@ concurrency:
 jobs:
   stale:
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read
     steps:
       - uses: getlantern/automation/actions/stale-bot@main
         with:
