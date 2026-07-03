@@ -1,0 +1,38 @@
+name: Stale Bot
+
+on:
+  schedule:
+    - cron: "0 9 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      stale_days:
+        description: "Days of inactivity before a PR is marked stale"
+        type: number
+        default: 90
+      close_days:
+        description: "Days after stale label before closing"
+        type: number
+        default: 30
+      exempt:
+        description: "Comma-separated labels that exempt a PR from being marked stale"
+        type: string
+        default: ''
+      dry_run:
+        description: "Dry run (no actions taken)"
+        type: boolean
+        default: false
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: getlantern/automation/actions/stale-bot@main
+        with:
+          repos: getlantern/radiance
+          stale-days: ${{ inputs.stale_days || 90 }}
+          close-days: ${{ inputs.close_days || 30 }}
+          exempt: ${{ inputs.exempt }}
+          fallback-channel: '#engineering-organization'
+          dry-run: ${{ inputs.dry_run == true }}
+          github-token: ${{ secrets.GH_TEAMLANTERN_TOKEN }}
+          slack-token: ${{ secrets.SLACK_GLOBOT_TOKEN }}
