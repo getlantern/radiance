@@ -25,6 +25,7 @@ on:
 jobs:
   stale:
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - uses: getlantern/automation/actions/stale-bot@main
         with:
