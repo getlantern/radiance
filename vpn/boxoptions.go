@@ -47,7 +47,7 @@ const (
 	cacheClearMarkerName = "lantern.cache.clear"
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block", proxylessDetourTag}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -63,6 +63,10 @@ type BoxOptions struct {
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// NonSelectableOutbounds lists server-declared outbound tags that are
+	// infrastructure (e.g. the proxyless rule-set detour): merged into the box
+	// config so references resolve, but excluded from the selectable proxy groups.
+	NonSelectableOutbounds []string `json:"non_selectable_outbounds,omitempty"`
 	// InitialServer chooses the outbound selected when the tunnel starts.
 	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
 	// must match an outbound or endpoint and forces manual selection.
@@ -445,7 +449,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
 	}
 
-	tags := mergeAndCollectTags(&opts, &bOptions.Options)
+	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
 
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's
@@ -521,10 +525,11 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 //////////////////////
 
 // mergeAndCollectTags merges src into dst and returns the selectable outbound and
-// endpoint tags from src. Reserved/infrastructure tags (direct, block, and the
-// proxyless rule-set detour) are still merged into the config but omitted from
-// the returned set, so they never appear in the auto/manual selector groups.
-func mergeAndCollectTags(dst, src *O.Options) []string {
+// endpoint tags from src. Reserved tags (auto, manual, direct, block) and any
+// server-declared non-selectable outbounds are still merged into the config but
+// omitted from the returned set, so they never appear in the auto/manual selector
+// groups.
+func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
 
@@ -543,10 +548,10 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 
 	var tags []string
 	for _, out := range src.Outbounds {
-		// Infrastructure outbounds (direct/block and the server-sent proxyless
-		// rule-set detour) are merged into the config but must not appear as
-		// user-selectable proxies.
-		if slices.Contains(reservedTags, out.Tag) {
+		// Infrastructure outbounds — reserved (direct/block) and any the server
+		// declares non-selectable — are merged into the config but must not appear
+		// as user-selectable proxies.
+		if slices.Contains(reservedTags, out.Tag) || slices.Contains(nonSelectable, out.Tag) {
 			continue
 		}
 		tags = append(tags, out.Tag)

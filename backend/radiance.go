@@ -894,6 +894,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	}
 	if cfg != nil {
 		bOptions.Options = cfg.Options
+		bOptions.NonSelectableOutbounds = cfg.NonSelectableOutbounds
 		bOptions.BanditURLOverrides = cfg.BanditURLOverrides
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
