@@ -22,6 +22,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: stale
+  cancel-in-progress: false
+
 jobs:
   stale:
     runs-on: ubuntu-latest
@@ -29,11 +33,11 @@ jobs:
     steps:
       - uses: getlantern/automation/actions/stale-bot@main
         with:
-          repos: getlantern/radiance
-          stale-days: ${{ inputs.stale_days || 90 }}
-          close-days: ${{ inputs.close_days || 30 }}
-          exempt: ${{ inputs.exempt }}
+          repos: ${{ github.repository }}
+          stale-days: ${{ github.event.inputs.stale_days || 90 }}
+          close-days: ${{ github.event.inputs.close_days || 30 }}
+          exempt: ${{ github.event.inputs.exempt }}
           fallback-channel: '#engineering-organization'
-          dry-run: ${{ inputs.dry_run == true }}
+          dry-run: ${{ github.event.inputs.dry_run == 'true' }}
           github-token: ${{ secrets.GH_TEAMLANTERN_TOKEN }}
           slack-token: ${{ secrets.SLACK_GLOBOT_TOKEN }}
