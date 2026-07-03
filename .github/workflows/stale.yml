@@ -32,7 +32,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: getlantern/automation/actions/stale-bot@main
+      # public → private `uses:` is blocked; check out with a PAT.
+      - uses: actions/checkout@v4
+        with:
+          repository: getlantern/automation
+          ref: main
+          token: ${{ secrets.GH_TEAMLANTERN_TOKEN }}
+          path: .automation
+      - uses: ./.automation/actions/stale-bot
         with:
           repos: ${{ github.repository }}
           stale-days: ${{ github.event.inputs.stale_days || 90 }}
