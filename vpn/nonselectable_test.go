@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The server declares certain outbounds (e.g. a proxyless rule-set detour) as
-// non-selectable via NonSelectableOutbounds. They must be merged into the box
+// The server declares certain outbounds or endpoints (e.g. a proxyless rule-set
+// detour) as non-selectable via NonSelectableOutbounds. They must be merged into the box
 // config so their references (download_detour) resolve, but excluded from the
 // user-selectable proxy groups.
 func TestMergeAndCollectTags_ExcludesNonSelectable(t *testing.T) {
