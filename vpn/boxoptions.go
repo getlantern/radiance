@@ -525,10 +525,12 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 //////////////////////
 
 // mergeAndCollectTags merges src into dst and returns the selectable outbound and
-// endpoint tags from src. Reserved tags (auto, manual, direct, block) and any
-// server-declared non-selectable outbounds are still merged into the config but
-// omitted from the returned set, so they never appear in the auto/manual selector
-// groups.
+// endpoint tags from src. The returned tags become the members of both the auto
+// (URLTest) group and the manual selector, so reserved tags (auto, manual,
+// direct, block) and any server-declared non-selectable outbounds are omitted:
+// they're still merged into the config (references resolve) but are never added
+// to the auto group (auto-selection won't route traffic through them) nor offered
+// in the manual selector.
 func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
@@ -549,8 +551,9 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	var tags []string
 	for _, out := range src.Outbounds {
 		// Infrastructure outbounds — reserved (direct/block) and any the server
-		// declares non-selectable — are merged into the config but must not appear
-		// as user-selectable proxies.
+		// declares non-selectable — are merged into the config but excluded from
+		// the selectable set: not added to the auto (URLTest) group and not offered
+		// in the manual selector.
 		if slices.Contains(reservedTags, out.Tag) || slices.Contains(nonSelectable, out.Tag) {
 			continue
 		}
