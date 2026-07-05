@@ -13,7 +13,7 @@
 // Usage:
 //
 //	export OXY_USER=... OXY_PASS=...           # oxylabs residential creds (vault: secret/lantern_cloud/pinger)
-//	go run ./cmd/residential-urltest --config /tmp/ticket-176866/attachments/debug-box-options.json --country ru
+//	go run ./cmd/residential-urltest --config /path/to/debug-box-options.json --country ru
 //
 // Input is either a marshaled sing-box options file (top-level "outbounds") or
 // any JSON with an "outbounds" array. Output: per-outbound REACHABLE(latency)/
@@ -42,9 +42,9 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
 	O "github.com/sagernet/sing-box/option"
-	M "github.com/sagernet/sing/common/metadata"
 	singjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 
@@ -78,6 +78,9 @@ func main() {
 	if *cfgPath == "" {
 		fmt.Fprintln(os.Stderr, "need --config")
 		os.Exit(2)
+	}
+	if !*direct && *poolN <= 0 {
+		fatal("--pool must be > 0 when using a residential detour")
 	}
 
 	raw, err := os.ReadFile(*cfgPath)
@@ -159,16 +162,17 @@ func main() {
 	}
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound("offline-test", tags))
 
-	// Mirror radiance RunOfflineURLTests setup.
+	// URLTestGroup requires a history storage and a filemanager entry in ctx
+	// (nil filemanager is fine for a one-shot CLI run).
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 	hist := urltest.NewHistoryStorage()
 	ctx = service.ContextWithPtr(ctx, hist)
 	service.MustRegister[adapter.URLTestHistoryStorage](ctx, hist)
-	ctxTimeout := *timeoutS
-	if *throughput && ctxTimeout < 150 { // downloads need a longer window than a url-test probe
-		ctxTimeout = 150
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(ctxTimeout)*time.Second)
+	// The instance ctx must outlive the whole run: a deadline here would kill
+	// outbounds mid-loop during sequential throughput downloads and report
+	// them as STALLED. --timeout scopes only the URLTest call below;
+	// throughput requests carry their own per-request client timeout.
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	inst, err := sbox.New(sbox.Options{Context: ctx, Options: opts})
@@ -184,7 +188,9 @@ func main() {
 	if !ok {
 		fatal("offline-test is not a URLTestGroup")
 	}
-	results, err := tester.URLTest(ctx)
+	utCtx, utCancel := context.WithTimeout(ctx, time.Duration(*timeoutS)*time.Second)
+	results, err := tester.URLTest(utCtx)
+	utCancel()
 	if err != nil {
 		fatal("url test: %v", err)
 	}
@@ -261,6 +267,9 @@ func measureThroughput(ob adapter.Outbound, url string, maxBytes int) (kbps floa
 		return 0, 0, time.Since(start), err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return 0, 0, time.Since(start), fmt.Errorf("throughput target returned %s", resp.Status)
+	}
 	got, err = io.Copy(io.Discard, io.LimitReader(resp.Body, int64(maxBytes)))
 	dur = time.Since(start)
 	if dur > 0 {
@@ -299,9 +308,12 @@ func providerGateway(provider, gwOverride, country string) (string, int, func(st
 			return "", 0, nil, "", fmt.Errorf("bad --gw: %w", err)
 		}
 		host = h
-		port, _ = strconv.Atoi(ps)
+		port, err = parsePort("--gw", ps)
+		if err != nil {
+			return "", 0, nil, "", err
+		}
 	}
-	switch provider {
+	switch strings.ToLower(provider) {
 	case "brightdata", "brd":
 		cust, zone, pw := os.Getenv("BRD_CUSTOMER_ID"), os.Getenv("BRD_ZONE"), os.Getenv("BRD_PASSWORD")
 		if cust == "" || zone == "" || pw == "" {
@@ -310,7 +322,11 @@ func providerGateway(provider, gwOverride, country string) (string, int, func(st
 		if host == "" {
 			host, port = "brd.superproxy.io", 33335
 			if p := os.Getenv("BRD_PORT"); p != "" {
-				port, _ = strconv.Atoi(p)
+				bp, err := parsePort("BRD_PORT", p)
+				if err != nil {
+					return "", 0, nil, "", err
+				}
+				port = bp
 			}
 		}
 		mk := func(sess string) string {
@@ -328,7 +344,7 @@ func providerGateway(provider, gwOverride, country string) (string, int, func(st
 		pw := fmt.Sprintf("%s_country-%s", key, countryName(cc))
 		mk := func(sess string) string { return user } // PacketStream rotates IP per connection; no session field
 		return host, port, mk, pw, nil
-	default: // oxylabs
+	case "oxylabs", "oxy":
 		user, pass := os.Getenv("OXY_USER"), os.Getenv("OXY_PASS")
 		if user == "" || pass == "" {
 			return "", 0, nil, "", fmt.Errorf("oxylabs needs OXY_USER/OXY_PASS env")
@@ -340,7 +356,17 @@ func providerGateway(provider, gwOverride, country string) (string, int, func(st
 			return fmt.Sprintf("customer-%s-cc-%s-sessid-%s-sesstime-10", user, cc, sess)
 		}
 		return host, port, mk, pass, nil
+	default:
+		return "", 0, nil, "", fmt.Errorf("unknown --provider %q (want oxylabs, brightdata, or packetstream)", provider)
 	}
+}
+
+func parsePort(name, value string) (int, error) {
+	port, err := strconv.Atoi(value)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("%s must be a valid TCP port, got %q", name, value)
+	}
+	return port, nil
 }
 
 func countryName(cc string) string {
