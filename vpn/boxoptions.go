@@ -548,19 +548,23 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 		dst.DNS = &dns
 	}
 
+	// Infrastructure tags — reserved (direct/block) and any the server declares
+	// non-selectable — are merged into the config but excluded from the selectable
+	// set: not added to the auto (URLTest) group and not offered in the manual
+	// selector. Applies to both outbounds and endpoints.
+	skip := func(tag string) bool {
+		return slices.Contains(reservedTags, tag) || slices.Contains(nonSelectable, tag)
+	}
 	var tags []string
 	for _, out := range src.Outbounds {
-		// Infrastructure outbounds — reserved (direct/block) and any the server
-		// declares non-selectable — are merged into the config but excluded from
-		// the selectable set: not added to the auto (URLTest) group and not offered
-		// in the manual selector.
-		if slices.Contains(reservedTags, out.Tag) || slices.Contains(nonSelectable, out.Tag) {
-			continue
+		if !skip(out.Tag) {
+			tags = append(tags, out.Tag)
 		}
-		tags = append(tags, out.Tag)
 	}
 	for _, ep := range src.Endpoints {
-		tags = append(tags, ep.Tag)
+		if !skip(ep.Tag) {
+			tags = append(tags, ep.Tag)
+		}
 	}
 	return tags
 }

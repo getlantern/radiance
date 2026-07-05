@@ -19,19 +19,33 @@ func TestMergeAndCollectTags_ExcludesNonSelectable(t *testing.T) {
 			{Type: "outline", Tag: "proxyless"}, // server-declared non-selectable
 			{Type: "direct", Tag: "direct"},     // base reserved tag
 		},
+		Endpoints: []O.Endpoint{
+			{Type: "wireguard", Tag: "wg-ep-proxy2"},
+			{Type: "wireguard", Tag: "infra-ep"}, // server-declared non-selectable endpoint
+		},
 	}
 
-	tags := mergeAndCollectTags(dst, src, []string{"proxyless"})
+	tags := mergeAndCollectTags(dst, src, []string{"proxyless", "infra-ep"})
 
 	assert.Contains(t, tags, "ss-out-proxy1", "a real proxy should be selectable")
+	assert.Contains(t, tags, "wg-ep-proxy2", "a real endpoint should be selectable")
 	assert.NotContains(t, tags, "proxyless", "a server-declared non-selectable outbound must be excluded")
+	assert.NotContains(t, tags, "infra-ep", "a server-declared non-selectable endpoint must be excluded")
 	assert.NotContains(t, tags, "direct", "a base reserved tag must be excluded")
 
-	merged := 0
+	// Non-selectable outbounds/endpoints are still merged into the config so their
+	// references resolve; they're only kept out of the selectable set.
+	outMerged, epMerged := false, false
 	for _, o := range dst.Outbounds {
 		if o.Tag == "proxyless" {
-			merged++
+			outMerged = true
 		}
 	}
-	assert.Equal(t, 1, merged, "the non-selectable outbound must still be merged into the config")
+	for _, e := range dst.Endpoints {
+		if e.Tag == "infra-ep" {
+			epMerged = true
+		}
+	}
+	assert.True(t, outMerged, "the non-selectable outbound must still be merged into the config")
+	assert.True(t, epMerged, "the non-selectable endpoint must still be merged into the config")
 }

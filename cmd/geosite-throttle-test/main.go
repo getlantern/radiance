@@ -47,6 +47,9 @@ const (
 // happens at the exit (CONNECT carries the hostname).
 type connectDialer struct{ user, pass string }
 
+// DialStream opens a TLS tunnel to the oxylabs proxy, issues an authenticated
+// CONNECT to addr, and returns the resulting stream so the target dial exits
+// from a CN residential IP.
 func (d connectDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
 	raw, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", oxyGateway)
 	if err != nil {
