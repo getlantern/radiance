@@ -6,9 +6,12 @@
 // It reuses the exact v9 stack (lantern-box outbound registry + sing-box
 // MutableURLTest) so custom protocols (samizdat, reflex, shadowsocks, vless…)
 // are constructed the same way the client builds them. Every proxy's *server
-// dial* is routed through the oxylabs residential HTTP-CONNECT gateway
-// (pr.oxylabs.io:7777) with a `customer-<user>-cc-<cc>-sessid-<n>` login, via a
-// pool of `http` outbounds set as each proxy's `detour`.
+// dial* is routed through a residential HTTP-CONNECT gateway (oxylabs by
+// default; --provider selects brightdata or packetstream, each with its own
+// gateway and login format) via a pool of `http` outbounds set as each
+// proxy's `detour`, one session id per pool entry — a distinct sticky
+// residential IP on session-based providers; packetstream ignores it and
+// rotates IP per connection.
 //
 // Usage:
 //
@@ -231,7 +234,8 @@ func main() {
 	// Throughput phase. A url-test only proves the handshake + first byte work —
 	// which sails past a censor that THROTTLES the data plane (RU TSPU's signature:
 	// "connects, then chokes to ~1 KB/s"). Pull several MB through each reachable
-	// outbound and report achieved goodput. Compare against --direct (US control)
+	// outbound and report achieved goodput. Compare against --direct (no-detour
+	// control from the operator's own network)
 	// and prefer oxylabs (stable exit bandwidth) over packetstream (noisy peers)
 	// so a low number reflects path throttling, not a slow residential peer.
 	if *throughput && len(ok2) > 0 {
@@ -287,8 +291,10 @@ func urlTestOutbound(tag string, outbounds []string) O.Outbound {
 		Type: lbC.TypeMutableURLTest,
 		Tag:  tag,
 		Options: &lbO.MutableURLTestOutboundOptions{
-			Outbounds:   outbounds,
-			URL:         "https://www.google.com/generate_204",
+			Outbounds: outbounds,
+			// Same URL the v9 client url-tests with — www. would behave
+			// differently under DNS/SNI filtering.
+			URL:         "https://google.com/generate_204",
 			Interval:    badoption.Duration(time.Minute),
 			IdleTimeout: badoption.Duration(5 * time.Minute),
 		},
