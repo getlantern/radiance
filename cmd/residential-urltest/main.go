@@ -183,7 +183,10 @@ func main() {
 	if err := inst.PreStart(); err != nil {
 		fatal("prestart: %v", err)
 	}
-	ob, _ := inst.Outbound().Outbound("offline-test")
+	ob, found := inst.Outbound().Outbound("offline-test")
+	if !found {
+		fatal("offline-test outbound not registered")
+	}
 	tester, ok := ob.(adapter.URLTestGroup)
 	if !ok {
 		fatal("offline-test is not a URLTestGroup")
@@ -238,6 +241,7 @@ func main() {
 		for _, r := range ok2 {
 			ob2, found := inst.Outbound().Outbound(r.tag)
 			if !found {
+				fmt.Printf("  MISSING   %s — outbound not registered, skipping\n", r.tag)
 				continue
 			}
 			kbps, n, dur, terr := measureThroughput(ob2, thURL, *dlBytes)
@@ -297,8 +301,9 @@ func fatal(f string, a ...any) {
 }
 
 // providerGateway returns the residential gateway host/port, a per-session login
-// builder, and the shared secret for the chosen provider. Mirrors lantern-cloud
-// cmd/pinger/pingercommon/common.go proxyEnvForCountry. Creds come from env.
+// builder, and the shared secret for the chosen provider. Login formats match
+// the formats lantern-cloud's pinger uses in production, so credentials
+// validated there work here unchanged. Creds come from env.
 func providerGateway(provider, gwOverride, country string) (string, int, func(string) string, string, error) {
 	cc := strings.ToLower(country)
 	host, port := "", 0
