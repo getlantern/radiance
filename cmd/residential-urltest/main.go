@@ -20,7 +20,7 @@
 // UNREACHABLE from the residential vantage.
 //
 // NOTE: the HTTP-CONNECT detour carries TCP only — UDP-based protocols
-// (hysteria2/tuic) are skipped and reported as such.
+// (hysteria/hysteria2/tuic) are skipped and reported as such.
 package main
 
 import (
