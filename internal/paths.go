@@ -16,6 +16,7 @@ const (
 	SplitTunnelInvalidFileName = "split-tunnel.invalid.json"
 	LogFileName                = "lantern.log"
 	CrashLogFileName           = "lantern-crash.log"
+	MemoryDumpFileName         = "lantern-memdump.txt"
 )
 
 func DefaultDataPath() string {

@@ -427,13 +427,18 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 func baseIssueAttachments() []string {
 	logPath := settings.GetString(settings.LogPathKey)
 	dataPath := settings.GetString(settings.DataPathKey)
-	// TODO: any other files we want to include??
-	return []string{
+	files := []string{
 		filepath.Join(logPath, internal.CrashLogFileName),
 		filepath.Join(dataPath, internal.ConfigFileName),
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
 	}
+	memdump := filepath.Join(dataPath, internal.MemoryDumpFileName)
+	if _, err := os.Stat(memdump); err == nil {
+		// put memory dump first in the list so it's prioritized.
+		files = append([]string{memdump}, files...)
+	}
+	return files
 }
 
 /////////////////

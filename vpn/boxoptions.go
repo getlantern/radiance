@@ -223,6 +223,9 @@ func baseOpts(basePath string) O.Options {
 	if common.Platform == "android" && hasTunInbound(inbounds) {
 		opts.Route.OverrideAndroidVPN = true
 	}
+	if common.IsIOS() {
+		opts.Route.Rules = append([]O.Rule{highMemoryRejectRule()}, opts.Route.Rules...)
+	}
 	return opts
 }
 
@@ -239,6 +242,9 @@ func baseRoutingRules() []O.Rule {
 	// routing rules are evaluated in the order they are defined and the first matching rule
 	// is applied. So order is important here.
 	// The rules MUST be in this order to ensure proper functionality:
+	// 0. 	(iOS-only) admission gate for rejecting new connections during high memory usage.
+	// 		Only enabled long enough to allow memory to be returned to the OS. Prepended as the
+	// 		first rule to minimize any additional memory allocation while it's being reclaimed.
 	// 1.    Enable traffic sniffing
 	// 2.    Hijack DNS to allow sing-box to handle DNS requests
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
@@ -656,6 +662,12 @@ func catchAllBlockerRule() O.Rule {
 			},
 		},
 	}
+}
+
+func highMemoryRejectRule() O.Rule {
+	rule := catchAllBlockerRule()
+	rule.DefaultOptions.RawDefaultRule.ClashMode = rejectMode
+	return rule
 }
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {

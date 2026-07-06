@@ -35,9 +35,7 @@ const (
 	DeviceIDKey    _key = "device_id"    // string/int
 
 	// Application behavior related keys.
-	TelemetryKey           _key = "telemetry_enabled"     // bool
-	ConfigFetchDisabledKey _key = "config_fetch_disabled" // bool
-	FeatureOverridesKey    _key = "feature_overrides"     // string
+	TelemetryKey _key = "telemetry_enabled" // bool
 
 	// User account related keys.
 	EmailKey         _key = "email"          // string
@@ -68,6 +66,11 @@ const (
 	legacySettingsFileName = "local.json"
 
 	settingsInvalidFileName = "settings.invalid.json"
+
+	// Development only keys
+	ConfigFetchDisabledKey        _key = "config_fetch_disabled"     // bool
+	FeatureOverridesKey           _key = "feature_overrides"         // string
+	AdmissionRejectionDisabledKey _key = "admission_reject_disabled" // bool
 )
 
 var ErrNotExist = errors.New("key does not exist")
