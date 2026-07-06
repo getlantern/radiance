@@ -105,6 +105,20 @@ func TestInitSettings(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, content, 0644), "failed to create test config file")
 		require.Error(t, loadSettings(path), "expected error for invalid config file")
 	})
+
+	t.Run("invalid config file recovers", func(t *testing.T) {
+		Reset()
+		t.Cleanup(Reset)
+		tempDir := t.TempDir()
+		path := filepath.Join(tempDir, settingsFileName)
+		require.NoError(t, os.WriteFile(path, []byte(`{invalid json}`), 0644))
+
+		require.NoError(t, InitSettings(tempDir), "an invalid settings file must not block initialization")
+
+		invalidPath := filepath.Join(tempDir, settingsInvalidFileName)
+		assert.FileExists(t, invalidPath, "the invalid file must be preserved for diagnostics")
+		assert.NoError(t, loadSettings(path), "settings.json must be rewritten with a parseable default")
+	})
 }
 
 func TestMigrateLegacySettingsIfNeeded(t *testing.T) {

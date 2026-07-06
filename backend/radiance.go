@@ -47,6 +47,8 @@ const tracerName = "github.com/getlantern/radiance/backend"
 
 // LocalBackend ties all the core functionality of Radiance together. It manages the configuration,
 // servers, VPN connection, account management, issue reporting, and telemetry for the application.
+//
+// A nil LocalBackend is valid for reporting issues.
 type LocalBackend struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -100,6 +102,13 @@ type Options struct {
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
+	// Invariant: a user must always be able to construct a backend and report an
+	// issue, even when on-disk state is unreadable or incompatible (e.g. after a
+	// downgrade). Failures loading the server manager, split tunnel, and config
+	// are logged and degraded, never returned. The only fatal path is
+	// common.Init, which fails only when the data directory or settings file
+	// can't be created or read — i.e. the app genuinely cannot run.
+
 	// Must run before common.Init: it reads RADIANCE_VERSION once and
 	// freezes it, so a later Setenv is ignored by the header-fill path.
 	var envOverrideErrs error
@@ -108,11 +117,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 			envOverrideErrs = errors.Join(envOverrideErrs, fmt.Errorf("apply env override %q: %w", k, err))
 		}
 	}
-	if envOverrideErrs != nil {
-		return nil, fmt.Errorf("failed to apply environment overrides: %w", envOverrideErrs)
-	}
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize common components: %w", err)
+	}
+	if envOverrideErrs != nil {
+		slog.Warn("Failed to apply some env overrides", "error", envOverrideErrs)
 	}
 	if opts.Locale == "" {
 		if tag, err := locale.Detect(); err != nil {
@@ -145,14 +154,14 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		dataDir, slog.Default().With("service", "server_manager"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create server manager: %w", err)
+		slog.Error("Loading server manager", "error", err)
 	}
 
 	splitTunnelMgr, err := vpn.NewSplitTunnelHandler(
 		dataDir, slog.Default().With("service", "split_tunnel"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create split tunnel manager: %w", err)
+		slog.Error("Loading split tunnel handler", "error", err)
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
@@ -362,23 +371,60 @@ func (r *LocalBackend) Sessions(limit int) []vpn.Session {
 // Issue Report //
 //////////////////
 
+type issueReportMetadata struct {
+	country            string
+	deviceID           string
+	reporter           *issue.IssueReporter
+	splitTunnelEnabled bool
+}
+
+// buildIssueReportMetadata gathers the backend state needed to file an issue
+// report. It is safe to call with a nil or partially initialized backend.
+func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
+	meta := issueReportMetadata{
+		country: settings.GetString(settings.CountryCodeKey),
+	}
+
+	if r == nil {
+		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
+		return meta
+	}
+	if r.issueReporter != nil {
+		meta.reporter = r.issueReporter
+	} else {
+		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
+	}
+	meta.deviceID = r.deviceID
+
+	// get country from the config returned by the backend
+	if r.confHandler != nil {
+		if cfg, err := r.confHandler.GetConfig(); err != nil {
+			slog.Warn("failed to get config", "error", err)
+		} else {
+			meta.country = cfg.Country
+		}
+	}
+
+	if r.splitTunnelMgr != nil {
+		meta.splitTunnelEnabled = r.splitTunnelMgr.IsEnabled()
+	}
+
+	return meta
+}
+
 // ReportIssue allows the user to report an issue with the application. It collects relevant
 // information about the user's environment such as country, device ID, user ID, subscription level,
 // and locale, and log files to include in the report.
+//
+// ReportIssue is safe to call with a nil receiver.
 func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
 	defer span.End()
-	// get country from the config returned by the backend
-	var country string
-	cfg, err := r.confHandler.GetConfig()
-	if err != nil {
-		slog.Warn("Failed to get config", "error", err)
-	} else {
-		country = cfg.Country
-	}
+
+	meta := r.buildIssueReportMetadata()
 
 	attachmentPaths := baseIssueAttachments()
-	if r.splitTunnelMgr.IsEnabled() {
+	if meta.splitTunnelEnabled {
 		attachmentPaths = append(attachmentPaths, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
 	}
 	attachmentPaths = append(attachmentPaths, additionalAttachments...)
@@ -387,16 +433,15 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		Type:                  issueType,
 		Description:           description,
 		Email:                 email,
-		CountryCode:           country,
-		DeviceID:              r.deviceID,
+		CountryCode:           meta.country,
+		DeviceID:              meta.deviceID,
 		UserID:                settings.GetString(settings.UserIDKey),
 		SubscriptionLevel:     settings.GetString(settings.UserLevelKey),
 		Locale:                settings.GetString(settings.LocaleKey),
 		Attachments:           attachments,
 		AdditionalAttachments: attachmentPaths,
 	}
-	err = r.issueReporter.Report(ctx, report)
-	if err != nil {
+	if err := meta.reporter.Report(ctx, report); err != nil {
 		slog.Error("Failed to report issue", "error", err)
 		return traces.RecordError(ctx, fmt.Errorf("failed to report issue: %w", err))
 	}
@@ -409,13 +454,18 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 func baseIssueAttachments() []string {
 	logPath := settings.GetString(settings.LogPathKey)
 	dataPath := settings.GetString(settings.DataPathKey)
-	// TODO: any other files we want to include??
-	return []string{
+	files := []string{
 		filepath.Join(logPath, internal.CrashLogFileName),
 		filepath.Join(dataPath, internal.ConfigFileName),
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
 	}
+	memdump := filepath.Join(dataPath, internal.MemoryDumpFileName)
+	if _, err := os.Stat(memdump); err == nil {
+		// put memory dump first in the list so it's prioritized.
+		files = append([]string{memdump}, files...)
+	}
+	return files
 }
 
 /////////////////
@@ -876,6 +926,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	}
 	if cfg != nil {
 		bOptions.Options = cfg.Options
+		bOptions.NonSelectableOutbounds = cfg.NonSelectableOutbounds
 		bOptions.BanditURLOverrides = cfg.BanditURLOverrides
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting

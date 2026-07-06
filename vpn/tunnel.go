@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/common/conntrack"
 	"github.com/sagernet/sing-box/experimental"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
@@ -183,7 +182,9 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	if common.IsMobile() {
+	if common.IsIOS() {
+		// only set memory limits on iOS since Android doesn't appear to apply any restrictions.
+		// we still start the memory monitor on Android so we can log usage.
 		setMobileMemoryLimits()
 	}
 
@@ -194,26 +195,19 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 // Memory tuning for mobile devices, which have more constrained resources. iOS will silently
 // kill the extension if it exceeds a hard cap (≈50 MB).
 const (
-	// mobileGCPercent is the soft cap for triggering the GC. This is higher than sing-box's
-	// default of 30 to allow more memory headroom for the Go side before hitting the iOS hard cap.
+	// mobileGCPercent is the soft cap for triggering the GC.
 	mobileGCPercent = 50
 	// mobileMemoryLimit is the GOMEMLIMIT soft cap. This needs to be below the iOS hard cap
 	// to leave room for the non-Go side (Swift, cgo, etc.).
 	mobileMemoryLimit = 40 * 1024 * 1024 // 40 MB
-	// mobileConntrackLimit is the footprint at which the conntrack killer closes all
-	// connections and frees OS memory — the last resort before the OS kills the
-	// extension. It sits above GOMEMLIMIT so Go GC reacts first.
-	mobileConntrackLimit = 45 * 1024 * 1024 // 45 MB
 )
 
 func setMobileMemoryLimits() {
 	slog.Debug("Setting memory limits for mobile platform", "platform", common.Platform,
-		"gc_percent", mobileGCPercent, "go_mem_limit", mobileMemoryLimit, "conntrack_limit", mobileConntrackLimit,
+		"gc_percent", mobileGCPercent, "go_mem_limit", mobileMemoryLimit,
 	)
 	runtimeDebug.SetGCPercent(mobileGCPercent)
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
-	conntrack.KillerEnabled = true
-	conntrack.MemoryLimit = mobileConntrackLimit
 }
 
 func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
@@ -286,6 +280,11 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.clashServer.connTracker.SetObserver(t.connObserver)
 
+	if common.IsMobile() {
+		// still start the memory monitor on Android so we can still monitor and log usage
+		t.closers = append(t.closers, startMemoryMonitor(t.ctx, t.clashServer))
+	}
+
 	var mutGrpMgr *groups.MutableGroupManager
 	if err := traceSpan(ctx, "newMutableGroupManager", func() error {
 		var err error
@@ -349,7 +348,8 @@ func (t *tunnel) selectMode(mode string) error {
 
 	if t.clashServer.Mode() != mode {
 		t.clashServer.SetMode(mode)
-		conntrack.Close()
+		// Reset connections on a mode switch since the user explicitly chose to switch
+		closeAllRouted(t.clashServer.connTracker)
 		go func() {
 			time.Sleep(time.Second)
 			runtimeDebug.FreeOSMemory()

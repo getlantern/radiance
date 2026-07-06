@@ -80,6 +80,34 @@ func cachedConfig() *config.Config {
 	}
 }
 
+// TestNewLocalBackendToleratesInvalidOnDiskState guards the init hardening:
+// invalid-but-readable on-disk state must not make NewLocalBackend fatal, so a
+// user can always report an issue. Every fixture is readable, so a returned
+// error can only come from parsing — a non-IO failure that must stay non-fatal.
+func TestNewLocalBackendToleratesInvalidOnDiskState(t *testing.T) {
+	dataDir := t.TempDir()
+	logDir := t.TempDir()
+	// setupDirectories honors these env vars over the Options paths; pin them so
+	// the resolved data dir is exactly where the invalid files are staged.
+	t.Setenv("RADIANCE_DATA_PATH", dataDir)
+	t.Setenv("RADIANCE_LOG_PATH", logDir)
+
+	invalidFiles := map[string][]byte{
+		"settings.json":              []byte(`{invalid json}`),
+		internal.ConfigFileName:      []byte(`{"options":{"outbounds":[{"type":"future-proto"}]}}`),
+		internal.ServersFileName:     []byte(`[{"tag":"bad","type":"future-proto","outbound":{"tag":"bad","type":"future-proto"}}]`),
+		internal.SplitTunnelFileName: []byte(`{"version":3,"rules":[{"unknown_field":true}]}`),
+	}
+	for name, content := range invalidFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(dataDir, name), content, 0o600))
+	}
+
+	backend, err := NewLocalBackend(context.Background(), Options{DataDir: dataDir, LogDir: logDir, LogLevel: "error"})
+	require.NoError(t, err, "invalid but readable on-disk state must not make initialization fatal")
+	require.NotNil(t, backend)
+	t.Cleanup(backend.Close)
+}
+
 func TestExhaustionGate_AllowRateLimitsBelowGap(t *testing.T) {
 	prev := defaultExhaustionRefetchGap
 	defaultExhaustionRefetchGap = 50 * time.Millisecond
