@@ -63,6 +63,10 @@ type BoxOptions struct {
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
+	// are infrastructure (e.g. the proxyless rule-set detour): merged into the box
+	// config so references resolve, but excluded from the selectable proxy groups.
+	NonSelectableOutbounds []string `json:"non_selectable_outbounds,omitempty"`
 	// InitialServer chooses the outbound selected when the tunnel starts.
 	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
 	// must match an outbound or endpoint and forces manual selection.
@@ -445,7 +449,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
 	}
 
-	tags := mergeAndCollectTags(&opts, &bOptions.Options)
+	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
 
 	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
 	// be writable on the device; always point WATER outbounds at the app's
@@ -520,8 +524,14 @@ func writeBoxOptions(path string, opts O.Options) []byte {
 // Helper functions //
 //////////////////////
 
-// mergeAndCollectTags merges src into dst and returns all outbound/endpoint tags from src.
-func mergeAndCollectTags(dst, src *O.Options) []string {
+// mergeAndCollectTags merges src into dst and returns the selectable outbound and
+// endpoint tags from src. The returned tags become the members of both the auto
+// (URLTest) group and the manual selector, so reserved tags (auto, manual,
+// direct, block) and any server-declared non-selectable tags are omitted:
+// they're still merged into the config (references resolve) but are never added
+// to the auto group (auto-selection won't route traffic through them) nor offered
+// in the manual selector.
+func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
 
@@ -538,12 +548,23 @@ func mergeAndCollectTags(dst, src *O.Options) []string {
 		dst.DNS = &dns
 	}
 
+	// Infrastructure tags — reserved (auto/manual/direct/block) and any the server declares
+	// non-selectable — are merged into the config but excluded from the selectable
+	// set: not added to the auto (URLTest) group and not offered in the manual
+	// selector. Applies to both outbounds and endpoints.
+	skip := func(tag string) bool {
+		return slices.Contains(reservedTags, tag) || slices.Contains(nonSelectable, tag)
+	}
 	var tags []string
 	for _, out := range src.Outbounds {
-		tags = append(tags, out.Tag)
+		if !skip(out.Tag) {
+			tags = append(tags, out.Tag)
+		}
 	}
 	for _, ep := range src.Endpoints {
-		tags = append(tags, ep.Tag)
+		if !skip(ep.Tag) {
+			tags = append(tags, ep.Tag)
+		}
 	}
 	return tags
 }
