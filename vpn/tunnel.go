@@ -183,7 +183,8 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	if common.IsMobile() {
+	if common.IsIOS() {
+		// Android has no comparable per-process budget; imposing the iOS cap there only drives unnecessary GC.
 		setMobileMemoryLimits()
 	}
 
