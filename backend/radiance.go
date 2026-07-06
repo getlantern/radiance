@@ -230,28 +230,37 @@ func (r *LocalBackend) Start() {
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		r.applyConfig(evt.New)
-		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
-			// ErrTunnelAlreadyConnected is expected while the VPN is up:
-			// updateServers already pushed the new outbounds into the live
-			// tunnel via UpdateOutbounds, so the offline pre-warm — which
-			// targets the not-yet-connected case — would duplicate work and
-			// conflict with the live auto-select group.
-			slog.Error("Failed to run offline URL tests after config update", "error", err)
-		}
+		r.prewarmOfflineURLTests("config update")
 	})
-	r.applyCurrentConfig()
+	if r.applyCurrentConfig() {
+		r.prewarmOfflineURLTests("cached config")
+	}
 	r.confHandler.Start()
 }
 
 // applyCurrentConfig applies any config already loaded from disk before the
 // fetch loop has a chance to refresh it.
-func (r *LocalBackend) applyCurrentConfig() {
+func (r *LocalBackend) applyCurrentConfig() bool {
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
-		return
+		return false
 	}
 	setCountryCodeFromConfig(cfg)
 	r.applyConfig(cfg)
+	return true
+}
+
+// prewarmOfflineURLTests records reachability history for the not-yet-connected
+// tunnel path and treats connected-tunnel races as harmless.
+func (r *LocalBackend) prewarmOfflineURLTests(source string) {
+	if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
+		// ErrTunnelAlreadyConnected is expected while the VPN is up:
+		// updateServers already pushed the new outbounds into the live
+		// tunnel via UpdateOutbounds, so the offline pre-warm, which
+		// targets the not-yet-connected case, would duplicate work and
+		// conflict with the live auto-select group.
+		slog.Error("Failed to run offline URL tests", "source", source, "error", err)
+	}
 }
 
 // applyConfig updates the runtime server state from a config snapshot.
@@ -694,15 +703,22 @@ const maxRetainedLanternServers = 60
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	existing := r.srvManager.AllServers()
-	// prune any servers from the incoming list that already exists to avoid deleting
-	// selection history results and closing existing connections
-	existingTags := serverTagSet(existing)
+	existingByTag := serverByTag(existing)
+	incomingNewCount := 0
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
-		_, exists := existingTags[srv.Tag]
-		return exists
+		prev, exists := existingByTag[srv.Tag]
+		if !exists {
+			incomingNewCount++
+			return false
+		}
+		if !prev.IsLantern {
+			return true
+		}
+		preserveConfigServerState(srv, prev)
+		return false
 	})
 
-	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers)
+	tagsToEvict := lanternServersToEvict(existing, incomingNewCount, maxRetainedLanternServers)
 
 	if len(tagsToEvict) > 0 {
 		slog.Debug(
@@ -720,7 +736,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 		"count", len(list.Servers),
 		"tags", slices.Collect(maps.Keys(serverTagSet(list.Servers))),
 	)
-	if err := r.srvManager.AddServers(list, false); err != nil {
+	if err := r.srvManager.AddServers(list, true); err != nil {
 		return fmt.Errorf("add Lantern servers: %w", err)
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
@@ -735,12 +751,37 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	return nil
 }
 
+// serverByTag returns a tag-indexed view of the provided server list.
+func serverByTag(list []*servers.Server) map[string]*servers.Server {
+	byTag := make(map[string]*servers.Server, len(list))
+	for _, srv := range list {
+		byTag[srv.Tag] = srv
+	}
+	return byTag
+}
+
 func serverTagSet(list []*servers.Server) map[string]struct{} {
 	tags := make(map[string]struct{}, len(list))
 	for _, srv := range list {
 		tags[srv.Tag] = struct{}{}
 	}
 	return tags
+}
+
+// preserveConfigServerState carries local runtime state onto a refreshed
+// config entry while letting fresh config replace the connect options.
+func preserveConfigServerState(next, prev *servers.Server) {
+	if next.Credentials == nil && prev.Credentials != nil {
+		creds := *prev.Credentials
+		next.Credentials = &creds
+	}
+	if next.SelectionHistory == nil && prev.SelectionHistory != nil && !isHardDemoted(prev) {
+		history := *prev.SelectionHistory
+		if len(history.UserFailures) > 0 {
+			history.UserFailures = slices.Clone(history.UserFailures)
+		}
+		next.SelectionHistory = &history
+	}
 }
 
 // lanternServersToEvict returns the Lantern server tags to remove before the
