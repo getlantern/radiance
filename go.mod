@@ -31,7 +31,7 @@ require (
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/common v1.2.1-0.20260705172801-57aaafd97c1b
+	github.com/getlantern/common v1.2.1-0.20260707190506-5d90dcb22437
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260625001429-518c0256669b
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
