@@ -230,10 +230,10 @@ func (r *LocalBackend) Start() {
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		r.applyConfig(evt.New)
-		r.prewarmOfflineURLTests("config update")
+		go r.prewarmOfflineURLTests("config update")
 	})
 	if r.applyCurrentConfig() {
-		r.prewarmOfflineURLTests("cached config")
+		go r.prewarmOfflineURLTests("cached config")
 	}
 	r.confHandler.Start()
 }
@@ -410,7 +410,9 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 		if cfg, err := r.confHandler.GetConfig(); err != nil {
 			slog.Warn("failed to get config", "error", err)
 		} else {
-			meta.country = cfg.Country
+			if cfg.Country != "" {
+				meta.country = cfg.Country
+			}
 		}
 	}
 
@@ -703,22 +705,13 @@ const maxRetainedLanternServers = 60
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	existing := r.srvManager.AllServers()
-	existingByTag := serverByTag(existing)
-	incomingNewCount := 0
+	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
-		prev, exists := existingByTag[srv.Tag]
-		if !exists {
-			incomingNewCount++
-			return false
-		}
-		if !prev.IsLantern {
-			return true
-		}
-		preserveConfigServerState(srv, prev)
-		return false
+		_, exists := existingTags[srv.Tag]
+		return exists
 	})
 
-	tagsToEvict := lanternServersToEvict(existing, incomingNewCount, maxRetainedLanternServers)
+	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers)
 
 	if len(tagsToEvict) > 0 {
 		slog.Debug(
@@ -736,7 +729,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 		"count", len(list.Servers),
 		"tags", slices.Collect(maps.Keys(serverTagSet(list.Servers))),
 	)
-	if err := r.srvManager.AddServers(list, true); err != nil {
+	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("add Lantern servers: %w", err)
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
@@ -751,37 +744,12 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	return nil
 }
 
-// serverByTag returns a tag-indexed view of the provided server list.
-func serverByTag(list []*servers.Server) map[string]*servers.Server {
-	byTag := make(map[string]*servers.Server, len(list))
-	for _, srv := range list {
-		byTag[srv.Tag] = srv
-	}
-	return byTag
-}
-
 func serverTagSet(list []*servers.Server) map[string]struct{} {
 	tags := make(map[string]struct{}, len(list))
 	for _, srv := range list {
 		tags[srv.Tag] = struct{}{}
 	}
 	return tags
-}
-
-// preserveConfigServerState carries local runtime state onto a refreshed
-// config entry while letting fresh config replace the connect options.
-func preserveConfigServerState(next, prev *servers.Server) {
-	if next.Credentials == nil && prev.Credentials != nil {
-		creds := *prev.Credentials
-		next.Credentials = &creds
-	}
-	if next.SelectionHistory == nil && prev.SelectionHistory != nil && !isHardDemoted(prev) {
-		history := *prev.SelectionHistory
-		if len(history.UserFailures) > 0 {
-			history.UserFailures = slices.Clone(history.UserFailures)
-		}
-		next.SelectionHistory = &history
-	}
 }
 
 // lanternServersToEvict returns the Lantern server tags to remove before the
