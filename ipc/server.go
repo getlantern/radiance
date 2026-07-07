@@ -1126,7 +1126,7 @@ func (s *localapi) subscriptionReferralV2Handler(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := s.backend(r.Context()).ReferralAttachV2(r.Context(), req.Code)
+	resp, err := s.backend(r.Context()).ReferralAttachV2(r.Context(), req.Code, req.Channel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

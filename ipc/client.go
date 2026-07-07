@@ -613,9 +613,9 @@ func (c *Client) ReferralAttach(ctx context.Context, code string) (bool, error) 
 
 // ReferralAttachV2 attaches a referral code to the current user and returns the
 // resulting plans, providers, and discount.
-func (c *Client) ReferralAttachV2(ctx context.Context, code string) (*account.ReferralAttachV2Response, error) {
+func (c *Client) ReferralAttachV2(ctx context.Context, code, channel string) (*account.ReferralAttachV2Response, error) {
 	var resp account.ReferralAttachV2Response
-	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralV2Endpoint, CodeRequest{Code: code}, &resp)
+	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralV2Endpoint, CodeRequest{Code: code, Channel: channel}, &resp)
 	if err != nil {
 		return nil, err
 	}

@@ -631,14 +631,17 @@ type ReferralAttachV2Response struct {
 	Type string `json:"type"`
 }
 
-func (a *Client) ReferralAttachV2(ctx context.Context, code string) (*ReferralAttachV2Response, error) {
+func (a *Client) ReferralAttachV2(ctx context.Context, code, channel string) (*ReferralAttachV2Response, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach_v2")
 	defer span.End()
 
+	params := map[string]string{
+		"distributionChannel": channel,
+	}
 	data := map[string]string{
 		"code": code,
 	}
-	resp, err := a.sendProRequest(ctx, "POST", "/referral-attach-v2", nil, nil, data)
+	resp, err := a.sendProRequest(ctx, "POST", "/referral-attach-v2", params, nil, data)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}

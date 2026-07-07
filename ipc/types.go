@@ -33,7 +33,8 @@ type OAuthTokenRequest struct {
 }
 
 type CodeRequest struct {
-	Code string `json:"code"`
+	Code    string `json:"code"`
+	Channel string `json:"channel"`
 }
 
 type JSONConfigRequest struct {

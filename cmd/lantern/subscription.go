@@ -49,7 +49,8 @@ type ReferralCmd struct {
 }
 
 type ReferralV2Cmd struct {
-	Code string `arg:"-c,--code" help:"referral code"`
+	Code    string `arg:"-c,--code" help:"referral code"`
+	Channel string `arg:"--channel" help:"subscription channel"`
 }
 
 type StripeBillingCmd struct{}
@@ -228,7 +229,7 @@ func subReferralV2(ctx context.Context, c *ipc.Client, cmd *ReferralV2Cmd) error
 			return err
 		}
 	}
-	resp, err := c.ReferralAttachV2(ctx, code)
+	resp, err := c.ReferralAttachV2(ctx, code, cmd.Channel)
 	if err != nil {
 		return err
 	}

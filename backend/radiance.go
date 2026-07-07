@@ -1312,8 +1312,8 @@ func (r *LocalBackend) ReferralAttach(ctx context.Context, code string) (bool, e
 	return r.accountClient.ReferralAttach(ctx, code)
 }
 
-func (r *LocalBackend) ReferralAttachV2(ctx context.Context, code string) (*account.ReferralAttachV2Response, error) {
-	return r.accountClient.ReferralAttachV2(ctx, code)
+func (r *LocalBackend) ReferralAttachV2(ctx context.Context, code, channel string) (*account.ReferralAttachV2Response, error) {
+	return r.accountClient.ReferralAttachV2(ctx, code, channel)
 }
 
 func (r *LocalBackend) StripeBillingPortalURL(ctx context.Context) (string, error) {
