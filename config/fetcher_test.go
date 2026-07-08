@@ -97,6 +97,8 @@ func TestFetchConfig(t *testing.T) {
 			assert.Equal(t, "1234567890", confReq.UserID,
 				"UserID must serialize as a base-10 decimal string matching main's format")
 			assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
+			assert.Contains(t, confReq.Capabilities, C.CapabilityNonSelectableOutbounds,
+				"server-side infra-outbound gating depends on this advertisement")
 			if tt.preferredServerLoc != nil {
 				assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 			}
