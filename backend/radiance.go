@@ -223,16 +223,30 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
-	// set country code in settings when new config is received so it can be included in issue reports
-	events.SubscribeOnce(func(evt config.NewConfigEvent) {
+	// Track the country from every config response: it feeds issue reports and
+	// gates which transports kindling wires up (AMP is disabled in China). When
+	// the country change flips that policy, rebuild kindling so it re-applies.
+	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		if env.GetString(env.Country) != "" {
 			return // respect env override if set
 		}
-		if evt.New != nil && evt.New.Country != "" {
-			if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
-				slog.Error("failed to set country code in settings", "error", err)
+		if evt.New == nil || evt.New.Country == "" {
+			return
+		}
+		prev := settings.GetString(settings.CountryCodeKey)
+		if evt.New.Country == prev {
+			return
+		}
+		if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
+			slog.Error("failed to set country code in settings", "error", err)
+			return
+		}
+		slog.Info("Set country code from config response", "country_code", evt.New.Country)
+		if kindling.AMPEnabledForCountry(prev) != kindling.AMPEnabledForCountry(evt.New.Country) {
+			if err := kindling.Close(); err != nil {
+				slog.Error("failed to close kindling before country rebuild", "error", err)
 			}
-			slog.Info("Set country code from config response", "country_code", evt.New.Country)
+			kindling.Init()
 		}
 	})
 	// update VPN outbounds when new config is received

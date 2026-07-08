@@ -43,6 +43,13 @@ var (
 	transport http.RoundTripper
 )
 
+// AMPEnabledForCountry reports whether the AMP transport should be wired up for
+// the given country. AMP fronts through Google domains that are unreachable
+// from China, so racing it there only wastes connection attempts.
+func AMPEnabledForCountry(country string) bool {
+	return !strings.EqualFold(country, "CN")
+}
+
 func initKindling() {
 	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
 	if err != nil {
@@ -182,7 +189,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 	}
 
-	if enabled := EnabledTransports[kindling.TransportAMP]; enabled {
+	if EnabledTransports[kindling.TransportAMP] && AMPEnabledForCountry(settings.GetString(settings.CountryCodeKey)) {
 		ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 		if err != nil {
 			slog.Error("failed to create amp client", slog.Any("error", err))
