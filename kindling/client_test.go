@@ -9,6 +9,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAMPEnabledForCountry(t *testing.T) {
+	wantEnabled := map[string]bool{
+		"":   true,
+		"US": true,
+		"CN": false,
+		"cn": false, // matching is case-insensitive
+	}
+	for country, want := range wantEnabled {
+		assert.Equal(t, want, AMPEnabledForCountry(country), "country=%q", country)
+	}
+}
+
 func TestNewClient(t *testing.T) {
 	transports := []kindling.TransportName{
 		kindling.TransportDomainfront,
