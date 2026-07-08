@@ -900,17 +900,15 @@ func (r *LocalBackend) runSelectionReporter(ctx context.Context, storage vpn.Aut
 // cycle so a changed cadence takes effect the next tick and a dropped interval
 // stops the loop within one cycle.
 func runReportLoop(ctx context.Context, interval func() time.Duration, report func()) {
-	ticker := time.NewTicker(1)
 	for {
 		wait := interval()
 		if wait <= 0 {
 			return
 		}
-		ticker.Reset(wait)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(wait):
 			report()
 		}
 	}
