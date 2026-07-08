@@ -14,6 +14,8 @@ import (
 
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/lantern-box/adapter"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/servers"
@@ -108,6 +110,7 @@ func (sr *selectionReporter) report(
 	snapshot map[string]servers.SelectionHistory,
 	tokens map[string]string,
 ) error {
+	span := trace.SpanFromContext(ctx)
 	now := sr.now()
 	prepared := sr.prepareReport(now, snapshot, tokens)
 	if len(prepared.entries) == 0 {
@@ -120,6 +123,10 @@ func (sr *selectionReporter) report(
 		return nil
 	}
 
+	span.AddEvent("selection_report", trace.WithAttributes(
+		attribute.Int("entries", len(prepared.entries)),
+		attribute.Int("skippedNoToken", prepared.skippedNoToken),
+	))
 	if err := sr.post(ctx, prepared.entries); err != nil {
 		return err
 	}

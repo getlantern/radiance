@@ -951,6 +951,9 @@ func runReportLoop(ctx context.Context, interval func() time.Duration, report fu
 }
 
 func (r *LocalBackend) reportSelectionHistory(ctx context.Context, storage vpn.AutoSelectHistoryStorage) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "report_selection_history")
+	defer span.End()
+
 	cfg, _ := r.confHandler.GetConfig()
 	if cfg == nil || len(cfg.BanditReportTokens) == 0 {
 		return
@@ -963,6 +966,7 @@ func (r *LocalBackend) reportSelectionHistory(ctx context.Context, storage vpn.A
 	defer cancel()
 	if err := r.selectionReporter.report(ctx, snapshot, cfg.BanditReportTokens); err != nil {
 		slog.Warn("Failed to report selection history", "error", err)
+		span.RecordError(err)
 	}
 }
 
