@@ -22,7 +22,7 @@ import (
 // so a test can advance time deterministically between report calls.
 func testReporter(t *testing.T, url string) (*selectionReporter, *time.Time) {
 	t.Helper()
-	clock := time.Unix(0, 0)
+	clock := time.Unix(0, 0).UTC()
 	sr := &selectionReporter{
 		httpClient:   http.DefaultClient,
 		reportURL:    url,
@@ -56,7 +56,7 @@ func reportAt(
 ) error {
 	t.Helper()
 
-	*clock = time.Unix(int64(at), 0)
+	*clock = time.Unix(int64(at), 0).UTC()
 	return sr.report(t.Context(), snapshot, tokens)
 }
 
@@ -81,8 +81,8 @@ func TestSelectionReporter_Report_PostsTokenedEntries(t *testing.T) {
 			ReportToken:   "tok-1",
 			WindowSeconds: 300,
 			Failures: []lbA.UserFailure{
-				{At: time.Unix(1, 0), Kind: lbA.UserFailureDial},
-				{At: time.Unix(2, 0), Kind: lbA.UserFailureReset},
+				{At: time.Unix(1, 0).UTC(), Kind: lbA.UserFailureDial},
+				{At: time.Unix(2, 0).UTC(), Kind: lbA.UserFailureReset},
 			},
 		},
 	}
@@ -107,8 +107,8 @@ func TestSelectionReporter_Report_SkipsTagsWithoutTokenOrFailures(t *testing.T) 
 	defer srv.Close()
 
 	snapshot := map[string]servers.SelectionHistory{
-		"has-token":    {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0), Kind: lbA.UserFailureStall}}},
-		"no-token":     {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0), Kind: lbA.UserFailureStall}}},
+		"has-token":    {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0).UTC(), Kind: lbA.UserFailureStall}}},
+		"no-token":     {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0).UTC(), Kind: lbA.UserFailureStall}}},
 		"no-failures":  {},
 		"token-nofail": {},
 	}
@@ -127,7 +127,7 @@ func TestSelectionReporter_Report_NoopWhenNothingReportable(t *testing.T) {
 	defer srv.Close()
 
 	snapshot := map[string]servers.SelectionHistory{
-		"a": {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0), Kind: lbA.UserFailureStall}}},
+		"a": {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0).UTC(), Kind: lbA.UserFailureStall}}},
 	}
 	// No token for "a" → nothing attributable → no request.
 	require.NoError(t, reportAt(t, sr, clock, 300, snapshot, map[string]string{}))
@@ -140,7 +140,7 @@ func TestSelectionReporter_Report_ErrorOnNon2xx(t *testing.T) {
 	defer srv.Close()
 
 	snapshot := map[string]servers.SelectionHistory{
-		"a": {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0), Kind: lbA.UserFailureStall}}},
+		"a": {UserFailures: []lbA.UserFailure{{At: time.Unix(1, 0).UTC(), Kind: lbA.UserFailureStall}}},
 	}
 	assert.Error(t, reportAt(t, sr, clock, 300, snapshot, map[string]string{"a": "tok"}))
 	assert.True(t, sr.lastReported["a"].IsZero(), "lastReported should not change when the POST fails")
@@ -158,14 +158,14 @@ func TestSelectionReporter_Report_DrainsAndWidensWindow(t *testing.T) {
 	tokens := map[string]string{"a": "tok"}
 
 	require.NoError(t, reportAt(t, sr, clock, 100, map[string]servers.SelectionHistory{
-		"a": history(lbA.UserFailure{At: time.Unix(10, 0), Kind: lbA.UserFailureDial}),
+		"a": history(lbA.UserFailure{At: time.Unix(10, 0).UTC(), Kind: lbA.UserFailureDial}),
 	}, tokens))
 
 	// The already-reported failure is still in the sliding window, plus a new one.
 	require.NoError(t, reportAt(t, sr, clock, 200, map[string]servers.SelectionHistory{
 		"a": history(
-			lbA.UserFailure{At: time.Unix(10, 0), Kind: lbA.UserFailureDial},
-			lbA.UserFailure{At: time.Unix(150, 0), Kind: lbA.UserFailureStall},
+			lbA.UserFailure{At: time.Unix(10, 0).UTC(), Kind: lbA.UserFailureDial},
+			lbA.UserFailure{At: time.Unix(150, 0).UTC(), Kind: lbA.UserFailureStall},
 		),
 	}, tokens))
 
@@ -201,7 +201,7 @@ func TestSelectionReporter_Report_RetainsFailuresAfterFailedPost(t *testing.T) {
 
 	tokens := map[string]string{"a": "tok"}
 	snapshot := map[string]servers.SelectionHistory{
-		"a": {UserFailures: []lbA.UserFailure{{At: time.Unix(10, 0), Kind: lbA.UserFailureReset}}},
+		"a": {UserFailures: []lbA.UserFailure{{At: time.Unix(10, 0).UTC(), Kind: lbA.UserFailureReset}}},
 	}
 
 	require.Error(t, reportAt(t, sr, clock, 100, snapshot, tokens))
@@ -227,14 +227,14 @@ func TestSelectionReporter_Reset_ReanchorsWindow(t *testing.T) {
 	tokens := map[string]string{"a": "tok"}
 
 	require.NoError(t, reportAt(t, sr, clock, 100, map[string]servers.SelectionHistory{
-		"a": history(lbA.UserFailure{At: time.Unix(10, 0), Kind: lbA.UserFailureDial}),
+		"a": history(lbA.UserFailure{At: time.Unix(10, 0).UTC(), Kind: lbA.UserFailureDial}),
 	}, tokens))
 
-	*clock = time.Unix(500, 0)
+	*clock = time.Unix(500, 0).UTC()
 	sr.reset()
 
 	require.NoError(t, reportAt(t, sr, clock, 560, map[string]servers.SelectionHistory{
-		"a": history(lbA.UserFailure{At: time.Unix(520, 0), Kind: lbA.UserFailureStall}),
+		"a": history(lbA.UserFailure{At: time.Unix(520, 0).UTC(), Kind: lbA.UserFailureStall}),
 	}, tokens))
 
 	got := decodeReportRequest(t, body)
@@ -259,7 +259,7 @@ func TestSelectionReporter_Report_ResetDuringPostDropsStaleWatermark(t *testing.
 	sr.reportURL = srv.URL
 
 	require.NoError(t, reportAt(t, sr, clock, 100, map[string]servers.SelectionHistory{
-		"a": history(lbA.UserFailure{At: time.Unix(10, 0), Kind: lbA.UserFailureDial}),
+		"a": history(lbA.UserFailure{At: time.Unix(10, 0).UTC(), Kind: lbA.UserFailureDial}),
 	}, map[string]string{"a": "tok"}))
 	<-reset
 
