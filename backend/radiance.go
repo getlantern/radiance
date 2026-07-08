@@ -223,81 +223,125 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
-	// Track the country from every config response: it feeds issue reports and
-	// gates which transports kindling wires up (AMP is disabled in China). When
-	// the country change flips that policy, rebuild kindling so it re-applies.
+	// Track the country on every config response, not just the first: it feeds
+	// issue reports and gates which transports kindling wires up (AMP is
+	// disabled in China), and the country can change while the app runs.
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
-		if env.GetString(env.Country) != "" {
-			return // respect env override if set
-		}
-		if evt.New == nil || evt.New.Country == "" {
-			return
-		}
-		prev := settings.GetString(settings.CountryCodeKey)
-		if evt.New.Country == prev {
-			return
-		}
-		if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
-			slog.Error("failed to set country code in settings", "error", err)
-			return
-		}
-		slog.Info("Set country code from config response", "country_code", evt.New.Country)
-		if kindling.AMPEnabledForCountry(prev) != kindling.AMPEnabledForCountry(evt.New.Country) {
-			if err := kindling.Close(); err != nil {
-				slog.Error("failed to close kindling before country rebuild", "error", err)
-			}
-			kindling.Init()
-		}
+		setCountryCodeFromConfig(evt.New)
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
-		if evt.New == nil {
-			return
-		}
-		cfg := evt.New
-		var srvs []*servers.Server
-		addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
-			s := &servers.Server{
-				Tag: tag, Type: typ, IsLantern: true, Options: opts,
-			}
-			if loc != nil {
-				s.Location = *loc
-			}
-			srvs = append(srvs, s)
-		}
-		for _, out := range cfg.Options.Outbounds {
-			addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
-		}
-		for _, ep := range cfg.Options.Endpoints {
-			addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
-		}
-		list := servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
-		if len(cfg.BanditURLOverrides) > 0 {
-			// Create a marker span linked to the API's bandit trace so the
-			// config fetch appears in the same distributed trace as the callback.
-			if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
-				_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
-					trace.WithAttributes(
-						attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
-						attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
-					),
-				)
-				span.End() // point-in-time marker — config was received at this timestamp
-			}
-		}
-		if err := r.updateServers(list); err != nil {
-			slog.Error("updating servers in manager", "error", err)
-		}
-		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
-			// ErrTunnelAlreadyConnected is expected while the VPN is up:
-			// updateServers already pushed the new outbounds into the live
-			// tunnel via UpdateOutbounds, so the offline pre-warm — which
-			// targets the not-yet-connected case — would duplicate work and
-			// conflict with the live auto-select group.
-			slog.Error("Failed to run offline URL tests after config update", "error", err)
-		}
+		r.applyConfig(evt.New)
+		go r.prewarmOfflineURLTests("config update")
 	})
+	if r.applyCurrentConfig() {
+		go r.prewarmOfflineURLTests("cached config")
+	}
 	r.confHandler.Start()
+}
+
+// applyCurrentConfig applies any config already loaded from disk before the
+// fetch loop has a chance to refresh it.
+func (r *LocalBackend) applyCurrentConfig() bool {
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		return false
+	}
+	setCountryCodeFromConfig(cfg)
+	r.applyConfig(cfg)
+	return true
+}
+
+// prewarmOfflineURLTests records reachability history for the not-yet-connected
+// tunnel path and treats connected-tunnel races as harmless.
+func (r *LocalBackend) prewarmOfflineURLTests(source string) {
+	if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
+		// ErrTunnelAlreadyConnected is expected while the VPN is up:
+		// updateServers already pushed the new outbounds into the live
+		// tunnel via UpdateOutbounds, so the offline pre-warm, which
+		// targets the not-yet-connected case, would duplicate work and
+		// conflict with the live auto-select group.
+		slog.Error("Failed to run offline URL tests", "source", source, "error", err)
+	}
+}
+
+// applyConfig updates the runtime server state from a config snapshot.
+// Startup-loaded cached configs and freshly fetched configs both use this path.
+func (r *LocalBackend) applyConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	list := serverListFromConfig(cfg)
+	if len(cfg.BanditURLOverrides) > 0 {
+		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
+			// Link this marker span to the API's bandit trace so config receipt
+			// and the per-outbound callback stay visible in one distributed trace.
+			_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
+				trace.WithAttributes(
+					attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
+					attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
+				),
+			)
+			span.End()
+		}
+	}
+	if err := r.updateServers(list); err != nil {
+		slog.Error("updating servers in manager", "error", err)
+	}
+}
+
+// countryUpdateMu serializes country transitions: config events are dispatched
+// in independent goroutines (events.Emit), so the read-modify-write on
+// CountryCodeKey and the kindling rebuild must not interleave.
+var countryUpdateMu sync.Mutex
+
+// setCountryCodeFromConfig stores the config country for diagnostics and, when
+// the change flips the per-country transport policy (AMP is disabled in China),
+// rebuilds kindling so it re-applies. The rebuild is a full teardown of the
+// transport stack, so it is gated on an actual policy flip rather than any
+// country change. An explicit country override takes precedence and suppresses
+// both.
+func setCountryCodeFromConfig(cfg *config.Config) {
+	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" {
+		return
+	}
+	countryUpdateMu.Lock()
+	defer countryUpdateMu.Unlock()
+	prev := settings.GetString(settings.CountryCodeKey)
+	if cfg.Country == prev {
+		return
+	}
+	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
+		slog.Error("failed to set country code in settings", "error", err)
+		return
+	}
+	slog.Info("Set country code from config", "country_code", cfg.Country)
+	if kindling.AMPEnabledForCountry(prev) != kindling.AMPEnabledForCountry(cfg.Country) {
+		kindling.Close()
+		kindling.Init()
+	}
+}
+
+// serverListFromConfig converts config outbounds and endpoints into managed
+// Lantern servers while preserving location and bandit URL metadata.
+func serverListFromConfig(cfg *config.Config) servers.ServerList {
+	srvs := make([]*servers.Server, 0, len(cfg.Options.Outbounds)+len(cfg.Options.Endpoints))
+	addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
+		s := &servers.Server{
+			Tag: tag, Type: typ, IsLantern: true, Options: opts,
+		}
+		if loc != nil {
+			s.Location = *loc
+		}
+		srvs = append(srvs, s)
+	}
+	for _, out := range cfg.Options.Outbounds {
+		addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
+	}
+	for _, ep := range cfg.Options.Endpoints {
+		addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
+	}
+	return servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
 }
 
 func (r *LocalBackend) Close() {
@@ -388,7 +432,9 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 		if cfg, err := r.confHandler.GetConfig(); err != nil {
 			slog.Warn("failed to get config", "error", err)
 		} else {
-			meta.country = cfg.Country
+			if cfg.Country != "" {
+				meta.country = cfg.Country
+			}
 		}
 	}
 
@@ -681,8 +727,6 @@ const maxRetainedLanternServers = 60
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	existing := r.srvManager.AllServers()
-	// prune any servers from the incoming list that already exists to avoid deleting
-	// selection history results and closing existing connections
 	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		_, exists := existingTags[srv.Tag]
