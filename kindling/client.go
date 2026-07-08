@@ -18,6 +18,7 @@ import (
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
@@ -189,7 +190,13 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 	}
 
-	if EnabledTransports[kindling.TransportAMP] && AMPEnabledForCountry(settings.GetString(settings.CountryCodeKey)) {
+	// env.Country overrides the config-derived country and isn't always mirrored
+	// into settings (e.g. RADIANCE_COUNTRY set at launch), so resolve it here.
+	country := settings.GetString(settings.CountryCodeKey)
+	if override := env.GetString(env.Country); override != "" {
+		country = override
+	}
+	if EnabledTransports[kindling.TransportAMP] && AMPEnabledForCountry(country) {
 		ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 		if err != nil {
 			slog.Error("failed to create amp client", slog.Any("error", err))
