@@ -122,11 +122,12 @@ func NewLogger(cfg Config) *slog.Logger {
 					a.Value = slog.StringValue(FormatLogLevel(level))
 					break
 				}
-				vtype := fmt.Sprintf("%T", a.Value.Any())
+				val := a.Value.Any()
+				vtype := fmt.Sprintf("%T", val)
 				return slog.Group("",
 					slog.String("level", FormatLogLevel(slog.LevelWarn)),
 					slog.String("error", "unexpected type for level: "+vtype),
-					slog.Any("level-"+vtype, a.Value),
+					slog.Any("level-"+vtype, val),
 				)
 			}
 			return a
