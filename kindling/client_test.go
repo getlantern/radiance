@@ -9,16 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAMPEnabledForCountry(t *testing.T) {
-	wantEnabled := map[string]bool{
-		"":   true,
-		"US": true,
-		"CN": false,
-		"cn": false, // matching is case-insensitive
-	}
-	for country, want := range wantEnabled {
-		assert.Equal(t, want, AMPEnabledForCountry(country), "country=%q", country)
-	}
+func TestEnableTransport(t *testing.T) {
+	prev := EnabledTransports[kindling.TransportAMP]
+	t.Cleanup(func() { EnabledTransports[kindling.TransportAMP] = prev })
+
+	EnabledTransports[kindling.TransportAMP] = true
+	assert.True(t, EnableTransport(kindling.TransportAMP, false), "flipping the value reports a change")
+	assert.False(t, EnabledTransports[kindling.TransportAMP])
+	assert.False(t, EnableTransport(kindling.TransportAMP, false), "setting the same value reports no change")
 }
 
 func TestNewClient(t *testing.T) {

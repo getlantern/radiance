@@ -18,7 +18,6 @@ import (
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling/dnstt"
@@ -27,12 +26,24 @@ import (
 	"github.com/getlantern/radiance/traces"
 )
 
+// TransportName identifies a transport that can be toggled via EnableTransport.
+type TransportName = kindling.TransportName
+
+// Transport names re-exported so callers configure transports through this
+// package without importing the upstream kindling library directly.
+const (
+	TransportAMP         = kindling.TransportAMP
+	TransportDomainfront = kindling.TransportDomainfront
+	TransportDNSTunnel   = kindling.TransportDNSTunnel
+	TransportSmart       = kindling.TransportSmart
+)
+
 var (
 	mu          sync.Mutex
 	initialized bool
 	k           *Client
-	// EnabledTransports gates which transports NewKindling wires up. Intended for tests; not a
-	// production toggle.
+	// EnabledTransports gates which transports NewKindling wires up. Toggle it
+	// through EnableTransport, then rebuild via Close+Init to apply the change.
 	EnabledTransports = map[kindling.TransportName]bool{
 		kindling.TransportDNSTunnel:   true,
 		kindling.TransportAMP:         true,
@@ -44,11 +55,16 @@ var (
 	transport http.RoundTripper
 )
 
-// AMPEnabledForCountry reports whether the AMP transport should be wired up for
-// the given country. AMP fronts through Google domains that are unreachable
-// from China, so racing it there only wastes connection attempts.
-func AMPEnabledForCountry(country string) bool {
-	return !strings.EqualFold(country, "CN")
+// EnableTransport sets whether NewKindling wires up the given transport and
+// reports whether that changed the current setting. The change takes effect on
+// the next rebuild (Close then Init). Call it before rebuilding, not
+// concurrently with one.
+func EnableTransport(transport TransportName, enable bool) bool {
+	if EnabledTransports[transport] == enable {
+		return false
+	}
+	EnabledTransports[transport] = enable
+	return true
 }
 
 func initKindling() {
@@ -190,13 +206,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 	}
 
-	// env.Country overrides the config-derived country and isn't always mirrored
-	// into settings (e.g. RADIANCE_COUNTRY set at launch), so resolve it here.
-	country := settings.GetString(settings.CountryCodeKey)
-	if override := env.GetString(env.Country); override != "" {
-		country = override
-	}
-	if EnabledTransports[kindling.TransportAMP] && AMPEnabledForCountry(country) {
+	if enabled := EnabledTransports[kindling.TransportAMP]; enabled {
 		ampClient, err := fronted.NewAMPClient(updaterCtx, dataDir, logger)
 		if err != nil {
 			slog.Error("failed to create amp client", slog.Any("error", err))
