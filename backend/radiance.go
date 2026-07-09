@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	"time"
@@ -223,11 +224,12 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
-	// Track the country on every config response, not just the first: it feeds
-	// issue reports and gates which transports kindling wires up (AMP is
-	// disabled in China), and the country can change while the app runs.
-	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
+	// The server derives the country from the client IP, so it's stable for the
+	// session: react once to record it for issue reports and to apply the
+	// country-specific transport policy (AMP is disabled in China).
+	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
+		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -248,6 +250,7 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
+	applyTransportPolicy()
 	r.applyConfig(cfg)
 	return true
 }
@@ -290,33 +293,33 @@ func (r *LocalBackend) applyConfig(cfg *config.Config) {
 	}
 }
 
-// countryUpdateMu serializes country transitions: config events are dispatched
-// in independent goroutines (events.Emit), so the read-modify-write on
-// CountryCodeKey and the kindling rebuild must not interleave.
-var countryUpdateMu sync.Mutex
-
-// setCountryCodeFromConfig stores the config country for diagnostics and, when
-// the change flips the per-country transport policy (AMP is disabled in China),
-// rebuilds kindling so it re-applies. The rebuild is a full teardown of the
-// transport stack, so it is gated on an actual policy flip rather than any
-// country change. An explicit country override takes precedence and suppresses
-// both.
+// setCountryCodeFromConfig stores the config country for diagnostics unless
+// an explicit country override is active.
 func setCountryCodeFromConfig(cfg *config.Config) {
 	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" {
 		return
 	}
-	countryUpdateMu.Lock()
-	defer countryUpdateMu.Unlock()
-	prev := settings.GetString(settings.CountryCodeKey)
-	if cfg.Country == prev {
-		return
-	}
 	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
 		slog.Error("failed to set country code in settings", "error", err)
-		return
 	}
 	slog.Info("Set country code from config", "country_code", cfg.Country)
-	if kindling.AMPEnabledForCountry(prev) != kindling.AMPEnabledForCountry(cfg.Country) {
+}
+
+// ampEnabledForCountry reports whether the AMP transport works from the given
+// country. AMP fronts through Google domains that are unreachable from China.
+func ampEnabledForCountry(country string) bool {
+	return !strings.EqualFold(country, "CN")
+}
+
+// applyTransportPolicy enables or disables the AMP transport based on the
+// user's country and rebuilds kindling when that changes the enabled set. The
+// env override takes precedence over the config-derived country in settings.
+func applyTransportPolicy() {
+	country := settings.GetString(settings.CountryCodeKey)
+	if override := env.GetString(env.Country); override != "" {
+		country = override
+	}
+	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
 		kindling.Close()
 		kindling.Init()
 	}
