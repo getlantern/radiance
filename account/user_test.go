@@ -27,8 +27,17 @@ type testServer struct {
 	cache                                        map[string]string
 	paymentRedirectIdempotencyKey                string
 	paymentRedirectHasIdempotencyKey             bool
+	paymentRedirectCouponCode                    string
+	paymentRedirectHasCouponCode                 bool
 	subscriptionPaymentRedirectIdempotencyKey    string
 	subscriptionPaymentRedirectHasIdempotencyKey bool
+	subscriptionPaymentRedirectCouponCode        string
+	subscriptionPaymentRedirectHasCouponCode     bool
+	stripeSubscriptionCouponCode                 string
+	stripeSubscriptionHasCouponCode              bool
+	referralAttachV2Code                         string
+	referralAttachV2Channel                      string
+	referralAttachV2Error                        string
 	paymentRedirectResponse                      any
 }
 
@@ -176,6 +185,22 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		writeJSONResponse(w, protos.BaseResponse{})
 	})
 
+	mux.HandleFunc("/referral-attach-v2", func(w http.ResponseWriter, r *http.Request) {
+		state.referralAttachV2Channel = r.URL.Query().Get("distributionChannel")
+		var body struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		state.referralAttachV2Code = body.Code
+		writeJSONResponse(w, ReferralAttachV2Response{
+			BaseResponse: &protos.BaseResponse{Error: state.referralAttachV2Error},
+			Code:         body.Code,
+			DiscountPct:  20,
+			Type:         "affiliate",
+			Plans:        []*protos.Plan{{Id: "1y-usd-10", Description: "Pro Plan"}},
+		})
+	})
+
 	// Subscription endpoints
 	mux.HandleFunc("/plans-v5", func(w http.ResponseWriter, r *http.Request) {
 		writeJSONResponse(w, SubscriptionPlans{
@@ -188,6 +213,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		values := r.URL.Query()
 		state.subscriptionPaymentRedirectIdempotencyKey = values.Get("idempotencyKey")
 		_, state.subscriptionPaymentRedirectHasIdempotencyKey = values["idempotencyKey"]
+		state.subscriptionPaymentRedirectCouponCode = values.Get("couponCode")
+		_, state.subscriptionPaymentRedirectHasCouponCode = values["couponCode"]
 		writeJSONResponse(w, map[string]string{"redirect": "https://example.com/redirect"})
 	})
 
@@ -195,6 +222,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		values := r.URL.Query()
 		state.paymentRedirectIdempotencyKey = values.Get("idempotencyKey")
 		_, state.paymentRedirectHasIdempotencyKey = values["idempotencyKey"]
+		state.paymentRedirectCouponCode = values.Get("couponCode")
+		_, state.paymentRedirectHasCouponCode = values["couponCode"]
 		resp := state.paymentRedirectResponse
 		if resp == nil {
 			resp = map[string]string{"redirect": "https://example.com/redirect"}
@@ -203,6 +232,9 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/stripe-subscription", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		state.stripeSubscriptionCouponCode, state.stripeSubscriptionHasCouponCode = body["couponCode"]
 		writeJSONResponse(w, SubscriptionResponse{
 			CustomerID:     "cus_123",
 			SubscriptionID: "sub_123",
@@ -393,4 +425,26 @@ func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
 	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error decoding JWT")
+}
+
+func TestReferralAttachV2(t *testing.T) {
+	ac, ts := newTestClient(t)
+	resp, err := ac.ReferralAttachV2(context.Background(), "AFF123", "store")
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "AFF123", ts.referralAttachV2Code)
+	assert.Equal(t, "store", ts.referralAttachV2Channel)
+	assert.Equal(t, "AFF123", resp.Code)
+	assert.Equal(t, 20, resp.DiscountPct)
+	assert.Equal(t, "affiliate", resp.Type)
+	assert.NotEmpty(t, resp.Plans)
+}
+
+func TestReferralAttachV2_Error(t *testing.T) {
+	ac, ts := newTestClient(t)
+	ts.referralAttachV2Error = "invalid code"
+	resp, err := ac.ReferralAttachV2(context.Background(), "BAD", "store")
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "invalid code")
 }
