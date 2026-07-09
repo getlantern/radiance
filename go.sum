@@ -246,8 +246,8 @@ github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3 h1:YPBbuyvd
 github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3/go.mod h1:ag5g9aWUw2FJcX5RVRpJ9EBQBy5yJuy2WXDouIn/m4w=
 github.com/getlantern/kindling v0.0.0-20260625002640-7cdf7184420c h1:F4/LE+5zehr6AUfuJBab3iubscOOTdFZxwYldIpLgg8=
 github.com/getlantern/kindling v0.0.0-20260625002640-7cdf7184420c/go.mod h1:rN6O8pIQ9nc7Gyvtf2GGSjiWEFIApGsRCHkgYz0h3Ak=
-github.com/getlantern/lantern-box v0.0.101-0.20260707172850-b5037237bcc5 h1:7FoLHuMumPH75PSFATf2B/Zy5bSFZ8IuDs3Ud/W+V80=
-github.com/getlantern/lantern-box v0.0.101-0.20260707172850-b5037237bcc5/go.mod h1:yQhnLpnDY17+c/s+4WiiUhun3HtoHNj5NFb355ThKQk=
+github.com/getlantern/lantern-box v0.0.101 h1:HXJWgpv48B5lo9d9p4Q0crYi3X3YIn+tJMh/F3sbyH0=
+github.com/getlantern/lantern-box v0.0.101/go.mod h1:yQhnLpnDY17+c/s+4WiiUhun3HtoHNj5NFb355ThKQk=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 h1:grfGavAUp2E9w9ZoJuM3FyWyQ0sCJ64V4ZMKtZKRqTc=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNiMhCu4bf60nqcIuQpTYb00Ezm1ag=
