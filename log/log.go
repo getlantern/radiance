@@ -114,12 +114,20 @@ func NewLogger(cfg Config) *slog.Logger {
 				if t, ok := a.Value.Any().(time.Time); ok {
 					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
 				}
-				return a
 			case slog.LevelKey:
-				// format the log level to account for the custom levels defined in internal/util.go, i.e. trace
+				// format the log level to account for the custom levels, i.e. trace
 				// otherwise, slog will print as "DEBUG-4" (trace) or similar
-				level := a.Value.Any().(slog.Level)
-				a.Value = slog.StringValue(FormatLogLevel(level))
+				level, ok := a.Value.Any().(slog.Level)
+				if ok {
+					a.Value = slog.StringValue(FormatLogLevel(level))
+					break
+				}
+				vtype := fmt.Sprintf("%T", a.Value.Any())
+				return slog.Group("",
+					slog.String("level", FormatLogLevel(slog.LevelWarn)),
+					slog.String("error", "unexpected type for level: "+vtype),
+					slog.Any("level-"+vtype, a.Value),
+				)
 			}
 			return a
 		},
