@@ -40,7 +40,7 @@ type selectionReportEntry struct {
 }
 
 type selectionReportRequest struct {
-	Reports []selectionReportEntry `json:"reports"`
+	Reports []selectionReportEntry `json:"entries"`
 }
 
 // selectionReporter sends route-selection failure history to the server.
