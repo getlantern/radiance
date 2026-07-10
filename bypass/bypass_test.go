@@ -2,58 +2,44 @@ package bypass
 
 import (
 	"context"
-	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	lbox "github.com/getlantern/lantern-box"
 )
 
-// newConnectProxy returns an httptest.Server that handles HTTP CONNECT
-// requests by hijacking the connection and tunneling data to the target.
-func newConnectProxy(t *testing.T) *httptest.Server {
+// newSingboxServer starts a sing-box mixed inbound on ProxyPort that routes to
+// the default direct outbound, standing in for the production bypass proxy. It
+// is torn down on test cleanup so the fixed port is free for the next test.
+func newSingboxServer(t *testing.T) *box.Box {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodConnect {
-			http.Error(w, "only CONNECT supported", http.StatusMethodNotAllowed)
-			return
+	opts := `{
+	"inbounds": [
+		{
+			"type": "mixed",
+			"tag": "socks-in",
+			"listen": "127.0.0.1",
+			"listen_port": 14985
 		}
-
-		target, err := net.DialTimeout("tcp", r.Host, 5*time.Second)
-		if err != nil {
-			http.Error(w, "bad gateway", http.StatusBadGateway)
-			return
-		}
-		defer target.Close()
-
-		hijacker, ok := w.(http.Hijacker)
-		if !ok {
-			http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-			return
-		}
-
-		clientConn, _, err := hijacker.Hijack()
-		if err != nil {
-			return
-		}
-		defer clientConn.Close()
-
-		clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-
-		done := make(chan struct{}, 2)
-		cp := func(dst, src net.Conn) {
-			io.Copy(dst, src)
-			done <- struct{}{}
-		}
-		go cp(target, clientConn)
-		go cp(clientConn, target)
-		<-done
-		<-done
-	}))
+	]
+}`
+	ctx := lbox.BaseContext()
+	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(opts))
+	require.NoError(t, err)
+	server, err := box.New(box.Options{
+		Context: ctx,
+		Options: options,
+	})
+	require.NoError(t, err)
+	require.NoError(t, server.Start())
+	t.Cleanup(func() { server.Close() })
+	return server
 }
 
 // newEchoServer starts a TCP listener that accepts one connection,
@@ -78,34 +64,51 @@ func newEchoServer(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func TestDialContext_ProxyAvailable(t *testing.T) {
-	proxy := newConnectProxy(t)
-	defer proxy.Close()
+// deadTCPAddr returns a 127.0.0.1 address with no listener, so a dial to it is
+// refused deterministically.
+func deadTCPAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+	return addr
+}
 
+func TestDialContext_ThroughProxy(t *testing.T) {
+	newSingboxServer(t)
 	echoAddr := newEchoServer(t)
 
-	proxyConn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+	conn, err := DialContext(context.Background(), "tcp", echoAddr)
 	require.NoError(t, err)
-	defer proxyConn.Close()
+	defer conn.Close()
 
-	tunnelConn, err := httpConnect(context.Background(), proxyConn, echoAddr)
-	require.NoError(t, err)
+	_, ok := conn.(*tunneledConn)
+	require.True(t, ok, "expected the proxy path (tunneledConn), not the direct fallback")
 
 	msg := []byte("hello bypass")
-	_, err = tunnelConn.Write(msg)
+	_, err = conn.Write(msg)
 	require.NoError(t, err)
 
 	buf := make([]byte, 64)
-	n, err := tunnelConn.Read(buf)
+	n, err := conn.Read(buf)
 	require.NoError(t, err)
 	assert.Equal(t, string(msg), string(buf[:n]))
+}
+
+func TestDialContext_UpstreamUnreachable(t *testing.T) {
+	newSingboxServer(t)
+	deadEnd := deadTCPAddr(t)
+
+	_, err := DialContext(context.Background(), "tcp", deadEnd)
+	require.Error(t, err, "an unreachable upstream must error so Happy Eyeballs can fail over")
 }
 
 func TestDialContext_FallbackWhenProxyDown(t *testing.T) {
 	echoAddr := newEchoServer(t)
 
 	conn, err := DialContext(context.Background(), "tcp", echoAddr)
-	require.NoError(t, err, "DialContext should fall back to direct dial")
+	require.NoError(t, err, "DialContext should fall back to direct dial when the proxy is down")
 	defer conn.Close()
 
 	msg := []byte("direct fallback")
@@ -116,6 +119,18 @@ func TestDialContext_FallbackWhenProxyDown(t *testing.T) {
 	n, err := conn.Read(buf)
 	require.NoError(t, err)
 	assert.Equal(t, string(msg), string(buf[:n]))
+}
+
+func TestStreamDialer_ProxyPathMasksTCPConn(t *testing.T) {
+	newSingboxServer(t)
+	echoAddr := newEchoServer(t)
+
+	conn, err := StreamDialer().DialStream(context.Background(), echoAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, ok := conn.(*net.TCPConn)
+	assert.False(t, ok, "proxy path must not expose the loopback socket as *net.TCPConn, or disorder would poke the wrong socket")
 }
 
 func TestStreamDialer_DirectReturnsTCPConn(t *testing.T) {
@@ -135,19 +150,4 @@ func TestDialContext_ContextCancellation(t *testing.T) {
 
 	_, err := DialContext(ctx, "tcp", "127.0.0.1:1")
 	require.Error(t, err, "expected error with cancelled context")
-}
-
-func TestHttpConnect_BadStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-	}))
-	defer srv.Close()
-
-	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
-	require.NoError(t, err)
-	defer conn.Close()
-
-	_, err = httpConnect(context.Background(), conn, "example.com:443")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "403")
 }
