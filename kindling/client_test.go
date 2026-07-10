@@ -9,6 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEnableTransport(t *testing.T) {
+	prev := EnabledTransports[kindling.TransportAMP]
+	t.Cleanup(func() { EnabledTransports[kindling.TransportAMP] = prev })
+
+	EnabledTransports[kindling.TransportAMP] = true
+	assert.True(t, EnableTransport(kindling.TransportAMP, false), "flipping the value reports a change")
+	assert.False(t, EnabledTransports[kindling.TransportAMP])
+	assert.False(t, EnableTransport(kindling.TransportAMP, false), "setting the same value reports no change")
+}
+
 func TestNewClient(t *testing.T) {
 	transports := []kindling.TransportName{
 		kindling.TransportDomainfront,
