@@ -277,7 +277,11 @@ func baseRoutingRules() []O.Rule {
 		{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{},
+				RawDefaultRule: O.RawDefaultRule{
+					// skip sniffing the bypass inbound for vpn builds, it forces an early
+					// read and reply, breaking IPv6 fallback.
+					Inbound: []string{inboundTag},
+				},
 				RuleAction: O.RuleAction{
 					Action: C.RuleActionTypeSniff,
 				},

@@ -1,110 +1,84 @@
 package bypass
 
 import (
-	"bufio"
 	"context"
-	"fmt"
+	"errors"
 	"net"
-	"net/http"
-	"net/url"
 	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
 )
 
 const (
 	// ProxyPort is the port for the local bypass proxy listener.
 	ProxyPort = 14985
 
-	// ProxyAddr is the address of the local bypass proxy listener in the VPN process.
-	ProxyAddr = "127.0.0.1:14985"
-
 	// BypassInboundTag is the sing-box inbound tag used for routing bypass traffic to direct.
 	BypassInboundTag = "bypass-in"
 
-	// connectTimeout is the default timeout for the HTTP CONNECT handshake
-	// when the caller's context has no deadline.
-	connectTimeout = 10 * time.Second
-
-	// dialTimeout is the timeout for establishing the initial TCP connection.
-	dialTimeout = 30 * time.Second
-
-	// dialKeepAlive is the interval for TCP keep-alive probes.
+	dialTimeout   = 30 * time.Second
 	dialKeepAlive = 30 * time.Second
 )
 
-// DialContext tries to connect through the local bypass proxy. If the proxy is
-// not reachable (VPN not running), it falls back to a direct dial.
+// proxyClient dials through the local bypass proxy. We use SOCKS5
+// because sing-box's HTTP inbound returns 200 OK for CONNECT before
+// the upstream connection is established, falsely signaling success
+// to callers.
+var proxyClient = socks.NewClient(
+	proxyDialer{N.SystemDialer},
+	M.ParseSocksaddrHostPort("127.0.0.1", uint16(ProxyPort)),
+	socks.Version5,
+	"", "",
+)
+
+// proxyDialer tags a failure to reach the local bypass proxy so DialContext can
+// tell a down proxy apart from a SOCKS handshake or upstream dial failure.
+type proxyDialer struct{ N.Dialer }
+
+func (d proxyDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	conn, err := d.Dialer.DialContext(ctx, network, destination)
+	if err != nil {
+		return nil, &proxyUnreachable{err}
+	}
+	return conn, nil
+}
+
+type proxyUnreachable struct{ err error }
+
+func (e *proxyUnreachable) Error() string { return e.err.Error() }
+func (e *proxyUnreachable) Unwrap() error { return e.err }
+
+// DialContext dials addr through the local SOCKS5 bypass proxy. It falls back to
+// a direct dial only when the proxy itself is unreachable (VPN not running); a
+// handshake or upstream failure propagates so the smart dialer can fail over
+// rather than silently succeeding via a route that skips the proxy.
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := proxyClient.DialContext(ctx, network, M.ParseSocksaddr(addr))
+	if err == nil {
+		return &tunneledConn{conn}, nil
+	}
+	var unreachable *proxyUnreachable
+	if !errors.As(err, &unreachable) {
+		return nil, err
+	}
 	dialer := &net.Dialer{
 		Timeout:   dialTimeout,
 		KeepAlive: dialKeepAlive,
 	}
-	proxyConn, err := dialer.DialContext(ctx, "tcp", ProxyAddr)
-	if err != nil {
-		return dialer.DialContext(ctx, network, addr)
-	}
-	tunnelConn, err := httpConnect(ctx, proxyConn, addr)
-	if err != nil {
-		proxyConn.Close()
-		return nil, err
-	}
-	return tunnelConn, nil
+	return dialer.DialContext(ctx, network, addr)
+}
+
+// tunneledConn masks the loopback socket to the bypass proxy so StreamDialer
+// keeps it away from strategies like disorder that manipulate the target
+// socket directly.
+type tunneledConn struct {
+	net.Conn
 }
 
 // Dial is a convenience wrapper without context, suitable for use with
 // amp.WithDialer which expects func(network, addr string) (net.Conn, error).
 func Dial(network, addr string) (net.Conn, error) {
 	return DialContext(context.Background(), network, addr)
-}
-
-// bufferedConn wraps a net.Conn with a bufio.Reader so that any bytes
-// buffered during the HTTP CONNECT response read are not lost.
-type bufferedConn struct {
-	net.Conn
-	br *bufio.Reader
-}
-
-func (c *bufferedConn) Read(b []byte) (int, error) {
-	return c.br.Read(b)
-}
-
-// httpConnect performs an HTTP CONNECT handshake over an already-established
-// connection to the proxy. It returns a wrapped connection that preserves any
-// bytes buffered during the response read. It respects the context deadline;
-// if none is set, a default timeout is applied for the handshake and cleared
-// afterward.
-func httpConnect(ctx context.Context, conn net.Conn, addr string) (net.Conn, error) {
-	deadline, hasDeadline := ctx.Deadline()
-	if !hasDeadline {
-		deadline = time.Now().Add(connectTimeout)
-	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		return nil, fmt.Errorf("bypass: failed to set deadline: %w", err)
-	}
-
-	req := &http.Request{
-		Method: http.MethodConnect,
-		URL:    &url.URL{Opaque: addr},
-		Host:   addr,
-		Header: make(http.Header),
-	}
-	if err := req.Write(conn); err != nil {
-		return nil, fmt.Errorf("bypass: failed to write CONNECT request: %w", err)
-	}
-
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, req)
-	if err != nil {
-		return nil, fmt.Errorf("bypass: failed to read CONNECT response: %w", err)
-	}
-	resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bypass: CONNECT returned status %d", resp.StatusCode)
-	}
-
-	// Clear deadline so subsequent I/O on the tunneled connection isn't constrained.
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return nil, fmt.Errorf("bypass: failed to clear deadline: %w", err)
-	}
-	return &bufferedConn{Conn: conn, br: br}, nil
 }
