@@ -246,8 +246,8 @@ github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3 h1:YPBbuyvd
 github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3/go.mod h1:ag5g9aWUw2FJcX5RVRpJ9EBQBy5yJuy2WXDouIn/m4w=
 github.com/getlantern/kindling v0.0.0-20260625002640-7cdf7184420c h1:F4/LE+5zehr6AUfuJBab3iubscOOTdFZxwYldIpLgg8=
 github.com/getlantern/kindling v0.0.0-20260625002640-7cdf7184420c/go.mod h1:rN6O8pIQ9nc7Gyvtf2GGSjiWEFIApGsRCHkgYz0h3Ak=
-github.com/getlantern/lantern-box v0.0.100 h1:mnWdy4lfPBABtu8ClWQ/8qzfV5PAJWjrbKapk37dw/o=
-github.com/getlantern/lantern-box v0.0.100/go.mod h1:yQhnLpnDY17+c/s+4WiiUhun3HtoHNj5NFb355ThKQk=
+github.com/getlantern/lantern-box v0.0.102-0.20260710183150-d72337314328 h1:WD8wG6FrEBSLvfCxVJvj7niIQDzzS4b0+MNVTaSraCg=
+github.com/getlantern/lantern-box v0.0.102-0.20260710183150-d72337314328/go.mod h1:VXwP3vd6hO8J1tB2WvThSVVf6nIxPk331cQ2EAE3E6A=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 h1:grfGavAUp2E9w9ZoJuM3FyWyQ0sCJ64V4ZMKtZKRqTc=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNiMhCu4bf60nqcIuQpTYb00Ezm1ag=
@@ -268,8 +268,8 @@ github.com/getlantern/sing-box-minimal v1.12.22-lantern.0.20260529221144-4396515
 github.com/getlantern/sing-box-minimal v1.12.22-lantern.0.20260529221144-439651539f38/go.mod h1:LzlFRel9E92gX0HXWCdsxgeg+kuAEPzLR+Znixk9EI4=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9/go.mod h1:7uvbzuoOr3uYGHZx5QWlI8/C52XEf/aTb/tJFEe41Ak=
-github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa h1:goZee1cURbWPiqX1xyjfwLB/zByQ50hEwonnnyLmcJQ=
-github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa/go.mod h1:Yo6Yk++Q9HRaCT+6/eYk3elNoNtjlJ3V5FufHY6ezto=
+github.com/getlantern/water v0.7.1-alpha.0.20260619150927-31d1e50fe910 h1:si3w1ruCFAs5qzQEi2qRUxvNkrzuiv9q4ayiCIvDpLQ=
+github.com/getlantern/water v0.7.1-alpha.0.20260619150927-31d1e50fe910/go.mod h1:Yo6Yk++Q9HRaCT+6/eYk3elNoNtjlJ3V5FufHY6ezto=
 github.com/getlantern/wazero v1.11.0-water.1 h1:mzUlaOoQKMDd16yL3mBIFrzg2nEK+gw7mdQgff1nOPQ=
 github.com/getlantern/wazero v1.11.0-water.1/go.mod h1:eV28rsN8Q+xwjogd7f4/Pp4xFxO7uOGbLcD/LzB1wiU=
 github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4 h1:j/A6xSUbz78xQfFXyDbnWkg96D+UprbLgKlGjXbodxA=
