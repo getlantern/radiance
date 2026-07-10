@@ -45,7 +45,7 @@ var (
 	// EnabledTransports gates which transports NewKindling wires up. Toggle it
 	// through EnableTransport, then rebuild via Close+Init to apply the change.
 	EnabledTransports = map[kindling.TransportName]bool{
-		kindling.TransportDNSTunnel:   true,
+		kindling.TransportDNSTunnel:   false,
 		kindling.TransportAMP:         true,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
