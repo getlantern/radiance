@@ -2,6 +2,7 @@ package bypass
 
 import (
 	"context"
+	"errors"
 	"net"
 	"time"
 
@@ -26,24 +27,47 @@ const (
 // the upstream connection is established, falsely signaling success
 // to callers.
 var proxyClient = socks.NewClient(
-	N.SystemDialer,
+	proxyDialer{N.SystemDialer},
 	M.ParseSocksaddrHostPort("127.0.0.1", uint16(ProxyPort)),
 	socks.Version5,
 	"", "",
 )
 
-// DialContext uses the local SOCKS5 bypass proxy when it is available.
-// If the proxy itself is down, it falls back to a direct dial.
+// proxyDialer tags a failure to reach the local bypass proxy so DialContext can
+// tell a down proxy apart from a SOCKS handshake or upstream dial failure.
+type proxyDialer struct{ N.Dialer }
+
+func (d proxyDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	conn, err := d.Dialer.DialContext(ctx, network, destination)
+	if err != nil {
+		return nil, &proxyUnreachable{err}
+	}
+	return conn, nil
+}
+
+type proxyUnreachable struct{ err error }
+
+func (e *proxyUnreachable) Error() string { return e.err.Error() }
+func (e *proxyUnreachable) Unwrap() error { return e.err }
+
+// DialContext dials addr through the local SOCKS5 bypass proxy. It falls back to
+// a direct dial only when the proxy itself is unreachable (VPN not running); a
+// handshake or upstream failure propagates so the smart dialer can fail over
+// rather than silently succeeding via a route that skips the proxy.
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	conn, err := proxyClient.DialContext(ctx, network, M.ParseSocksaddr(addr))
-	if err != nil {
-		dialer := &net.Dialer{
-			Timeout:   dialTimeout,
-			KeepAlive: dialKeepAlive,
-		}
-		return dialer.DialContext(ctx, network, addr)
+	if err == nil {
+		return &tunneledConn{conn}, nil
 	}
-	return &tunneledConn{conn}, nil
+	var unreachable *proxyUnreachable
+	if !errors.As(err, &unreachable) {
+		return nil, err
+	}
+	dialer := &net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: dialKeepAlive,
+	}
+	return dialer.DialContext(ctx, network, addr)
 }
 
 // tunneledConn masks the loopback socket to the bypass proxy so StreamDialer

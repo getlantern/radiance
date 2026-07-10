@@ -2,6 +2,7 @@ package bypass
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 
@@ -19,16 +20,16 @@ import (
 // is torn down on test cleanup so the fixed port is free for the next test.
 func newSingboxServer(t *testing.T) *box.Box {
 	t.Helper()
-	opts := `{
+	opts := fmt.Sprintf(`{
 	"inbounds": [
 		{
 			"type": "mixed",
 			"tag": "socks-in",
 			"listen": "127.0.0.1",
-			"listen_port": 14985
+			"listen_port": %d
 		}
 	]
-}`
+}`, ProxyPort)
 	ctx := lbox.BaseContext()
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(opts))
 	require.NoError(t, err)
