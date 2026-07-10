@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	"time"
@@ -225,9 +226,12 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
-	// set country code in settings when new config is received so it can be included in issue reports
+	// The server derives the country from the client IP, so it's stable for the
+	// session: react once to record it for issue reports and to apply the
+	// country-specific transport policy (AMP is disabled in China).
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
+		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -248,6 +252,7 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
+	applyTransportPolicy()
 	r.applyConfig(cfg)
 	return true
 }
@@ -300,6 +305,26 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 		slog.Error("failed to set country code in settings", "error", err)
 	}
 	slog.Info("Set country code from config", "country_code", cfg.Country)
+}
+
+// ampEnabledForCountry reports whether the AMP transport works from the given
+// country. AMP fronts through Google domains that are unreachable from China.
+func ampEnabledForCountry(country string) bool {
+	return !strings.EqualFold(country, "CN")
+}
+
+// applyTransportPolicy enables or disables the AMP transport based on the
+// user's country and rebuilds kindling when that changes the enabled set. The
+// env override takes precedence over the config-derived country in settings.
+func applyTransportPolicy() {
+	country := settings.GetString(settings.CountryCodeKey)
+	if override := env.GetString(env.Country); override != "" {
+		country = override
+	}
+	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
+		kindling.Close()
+		kindling.Init()
+	}
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed
