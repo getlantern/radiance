@@ -85,6 +85,10 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
 		Protocols:      protocol.SupportedProtocols(),
+		// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
+		// outbounds but keep them out of the proxy-selection groups) so the server can
+		// gate such outbounds on the capability rather than the client version.
+		Capabilities: []string{C.CapabilityNonSelectableOutbounds},
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred

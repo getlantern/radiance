@@ -46,6 +46,23 @@ func TestSaveConfig(t *testing.T) {
 	// Verify the content matches the expected config
 	assert.Equal(t, expectedConfig, actualConfig, "Saved config should match the expected config")
 }
+func TestLoadQuarantinesUnparseableConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, internal.ConfigFileName)
+	// An outbound type this build's sing-box can't decode — the shape a
+	// downgrade leaves behind.
+	require.NoError(t, os.WriteFile(configPath,
+		[]byte(`{"options":{"outbounds":[{"tag":"x","type":"future-proto"}]}}`), 0o600))
+
+	cfg, err := load(configPath)
+	require.NoError(t, err, "unparseable config must not be a fatal error")
+	assert.Nil(t, cfg, "no config should be returned for an unparseable file")
+
+	assert.NoFileExists(t, configPath, "unparseable config.json should be moved aside")
+	invalidPath := filepath.Join(tempDir, internal.ConfigInvalidFileName)
+	assert.FileExists(t, invalidPath, "unparseable config should be quarantined for diagnostics")
+}
+
 func TestGetConfig(t *testing.T) {
 	// Setup temporary directory for testing
 	tempDir := t.TempDir()

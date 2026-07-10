@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	"time"
@@ -47,6 +48,8 @@ const tracerName = "github.com/getlantern/radiance/backend"
 
 // LocalBackend ties all the core functionality of Radiance together. It manages the configuration,
 // servers, VPN connection, account management, issue reporting, and telemetry for the application.
+//
+// A nil LocalBackend is valid for reporting issues.
 type LocalBackend struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -100,6 +103,13 @@ type Options struct {
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
+	// Invariant: a user must always be able to construct a backend and report an
+	// issue, even when on-disk state is unreadable or incompatible (e.g. after a
+	// downgrade). Failures loading the server manager, split tunnel, and config
+	// are logged and degraded, never returned. The only fatal path is
+	// common.Init, which fails only when the data directory or settings file
+	// can't be created or read — i.e. the app genuinely cannot run.
+
 	// Must run before common.Init: it reads RADIANCE_VERSION once and
 	// freezes it, so a later Setenv is ignored by the header-fill path.
 	var envOverrideErrs error
@@ -108,11 +118,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 			envOverrideErrs = errors.Join(envOverrideErrs, fmt.Errorf("apply env override %q: %w", k, err))
 		}
 	}
-	if envOverrideErrs != nil {
-		return nil, fmt.Errorf("failed to apply environment overrides: %w", envOverrideErrs)
-	}
 	if err := common.Init(opts.DataDir, opts.LogDir, opts.LogLevel); err != nil {
 		return nil, fmt.Errorf("failed to initialize common components: %w", err)
+	}
+	if envOverrideErrs != nil {
+		slog.Warn("Failed to apply some env overrides", "error", envOverrideErrs)
 	}
 	if opts.Locale == "" {
 		if tag, err := locale.Detect(); err != nil {
@@ -145,14 +155,14 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		dataDir, slog.Default().With("service", "server_manager"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create server manager: %w", err)
+		slog.Error("Loading server manager", "error", err)
 	}
 
 	splitTunnelMgr, err := vpn.NewSplitTunnelHandler(
 		dataDir, slog.Default().With("service", "split_tunnel"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create split tunnel manager: %w", err)
+		slog.Error("Loading split tunnel handler", "error", err)
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
@@ -214,67 +224,127 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
-	// set country code in settings when new config is received so it can be included in issue reports
+	// The server derives the country from the client IP, so it's stable for the
+	// session: react once to record it for issue reports and to apply the
+	// country-specific transport policy (AMP is disabled in China).
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		if env.GetString(env.Country) != "" {
-			return // respect env override if set
-		}
-		if evt.New != nil && evt.New.Country != "" {
-			if err := settings.Set(settings.CountryCodeKey, evt.New.Country); err != nil {
-				slog.Error("failed to set country code in settings", "error", err)
-			}
-			slog.Info("Set country code from config response", "country_code", evt.New.Country)
-		}
+		setCountryCodeFromConfig(evt.New)
+		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
-		if evt.New == nil {
-			return
-		}
-		cfg := evt.New
-		var srvs []*servers.Server
-		addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
-			s := &servers.Server{
-				Tag: tag, Type: typ, IsLantern: true, Options: opts,
-			}
-			if loc != nil {
-				s.Location = *loc
-			}
-			srvs = append(srvs, s)
-		}
-		for _, out := range cfg.Options.Outbounds {
-			addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
-		}
-		for _, ep := range cfg.Options.Endpoints {
-			addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
-		}
-		list := servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
-		if len(cfg.BanditURLOverrides) > 0 {
-			// Create a marker span linked to the API's bandit trace so the
-			// config fetch appears in the same distributed trace as the callback.
-			if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
-				_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
-					trace.WithAttributes(
-						attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
-						attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
-					),
-				)
-				span.End() // point-in-time marker — config was received at this timestamp
-			}
-		}
-		if err := r.updateServers(list); err != nil {
-			slog.Error("updating servers in manager", "error", err)
-		}
-		if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
-			// ErrTunnelAlreadyConnected is expected while the VPN is up:
-			// updateServers already pushed the new outbounds into the live
-			// tunnel via UpdateOutbounds, so the offline pre-warm — which
-			// targets the not-yet-connected case — would duplicate work and
-			// conflict with the live auto-select group.
-			slog.Error("Failed to run offline URL tests after config update", "error", err)
-		}
+		r.applyConfig(evt.New)
+		go r.prewarmOfflineURLTests("config update")
 	})
+	if r.applyCurrentConfig() {
+		go r.prewarmOfflineURLTests("cached config")
+	}
 	r.confHandler.Start()
+}
+
+// applyCurrentConfig applies any config already loaded from disk before the
+// fetch loop has a chance to refresh it.
+func (r *LocalBackend) applyCurrentConfig() bool {
+	cfg, err := r.confHandler.GetConfig()
+	if err != nil {
+		return false
+	}
+	setCountryCodeFromConfig(cfg)
+	applyTransportPolicy()
+	r.applyConfig(cfg)
+	return true
+}
+
+// prewarmOfflineURLTests records reachability history for the not-yet-connected
+// tunnel path and treats connected-tunnel races as harmless.
+func (r *LocalBackend) prewarmOfflineURLTests(source string) {
+	if err := r.RunOfflineURLTests(); err != nil && !errors.Is(err, vpn.ErrTunnelAlreadyConnected) {
+		// ErrTunnelAlreadyConnected is expected while the VPN is up:
+		// updateServers already pushed the new outbounds into the live
+		// tunnel via UpdateOutbounds, so the offline pre-warm, which
+		// targets the not-yet-connected case, would duplicate work and
+		// conflict with the live auto-select group.
+		slog.Error("Failed to run offline URL tests", "source", source, "error", err)
+	}
+}
+
+// applyConfig updates the runtime server state from a config snapshot.
+// Startup-loaded cached configs and freshly fetched configs both use this path.
+func (r *LocalBackend) applyConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	list := serverListFromConfig(cfg)
+	if len(cfg.BanditURLOverrides) > 0 {
+		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
+			// Link this marker span to the API's bandit trace so config receipt
+			// and the per-outbound callback stay visible in one distributed trace.
+			_, span := otel.Tracer(tracerName).Start(ctx, "radiance.config_received",
+				trace.WithAttributes(
+					attribute.Int("bandit.override_count", len(cfg.BanditURLOverrides)),
+					attribute.Int("bandit.outbound_count", len(cfg.Options.Outbounds)),
+				),
+			)
+			span.End()
+		}
+	}
+	if err := r.updateServers(list); err != nil {
+		slog.Error("updating servers in manager", "error", err)
+	}
+}
+
+// setCountryCodeFromConfig stores the config country for diagnostics unless
+// an explicit country override is active.
+func setCountryCodeFromConfig(cfg *config.Config) {
+	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" {
+		return
+	}
+	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
+		slog.Error("failed to set country code in settings", "error", err)
+	}
+	slog.Info("Set country code from config", "country_code", cfg.Country)
+}
+
+// ampEnabledForCountry reports whether the AMP transport works from the given
+// country. AMP fronts through Google domains that are unreachable from China.
+func ampEnabledForCountry(country string) bool {
+	return !strings.EqualFold(country, "CN")
+}
+
+// applyTransportPolicy enables or disables the AMP transport based on the
+// user's country and rebuilds kindling when that changes the enabled set. The
+// env override takes precedence over the config-derived country in settings.
+func applyTransportPolicy() {
+	country := settings.GetString(settings.CountryCodeKey)
+	if override := env.GetString(env.Country); override != "" {
+		country = override
+	}
+	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
+		kindling.Close()
+		kindling.Init()
+	}
+}
+
+// serverListFromConfig converts config outbounds and endpoints into managed
+// Lantern servers while preserving location and bandit URL metadata.
+func serverListFromConfig(cfg *config.Config) servers.ServerList {
+	srvs := make([]*servers.Server, 0, len(cfg.Options.Outbounds)+len(cfg.Options.Endpoints))
+	addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
+		s := &servers.Server{
+			Tag: tag, Type: typ, IsLantern: true, Options: opts,
+		}
+		if loc != nil {
+			s.Location = *loc
+		}
+		srvs = append(srvs, s)
+	}
+	for _, out := range cfg.Options.Outbounds {
+		addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
+	}
+	for _, ep := range cfg.Options.Endpoints {
+		addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
+	}
+	return servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
 }
 
 func (r *LocalBackend) Close() {
@@ -335,23 +405,62 @@ func (r *LocalBackend) Sessions(limit int) []vpn.Session {
 // Issue Report //
 //////////////////
 
+type issueReportMetadata struct {
+	country            string
+	deviceID           string
+	reporter           *issue.IssueReporter
+	splitTunnelEnabled bool
+}
+
+// buildIssueReportMetadata gathers the backend state needed to file an issue
+// report. It is safe to call with a nil or partially initialized backend.
+func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
+	meta := issueReportMetadata{
+		country: settings.GetString(settings.CountryCodeKey),
+	}
+
+	if r == nil {
+		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
+		return meta
+	}
+	if r.issueReporter != nil {
+		meta.reporter = r.issueReporter
+	} else {
+		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
+	}
+	meta.deviceID = r.deviceID
+
+	// get country from the config returned by the backend
+	if r.confHandler != nil {
+		if cfg, err := r.confHandler.GetConfig(); err != nil {
+			slog.Warn("failed to get config", "error", err)
+		} else {
+			if cfg.Country != "" {
+				meta.country = cfg.Country
+			}
+		}
+	}
+
+	if r.splitTunnelMgr != nil {
+		meta.splitTunnelEnabled = r.splitTunnelMgr.IsEnabled()
+	}
+
+	return meta
+}
+
 // ReportIssue allows the user to report an issue with the application. It collects relevant
 // information about the user's environment such as country, device ID, user ID, subscription level,
 // and locale, and log files to include in the report.
+//
+// ReportIssue is safe to call with a nil receiver.
 func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
 	defer span.End()
-	// get country from the config returned by the backend
-	var country string
-	cfg, err := r.confHandler.GetConfig()
-	if err != nil {
-		slog.Warn("Failed to get config", "error", err)
-	} else {
-		country = cfg.Country
-	}
+
+	meta := r.buildIssueReportMetadata()
 
 	attachmentPaths := baseIssueAttachments()
-	if r.splitTunnelMgr.IsEnabled() {
+	if meta.splitTunnelEnabled {
 		attachmentPaths = append(attachmentPaths, filepath.Join(settings.GetString(settings.DataPathKey), internal.SplitTunnelFileName))
 	}
 	attachmentPaths = append(attachmentPaths, additionalAttachments...)
@@ -360,16 +469,15 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 		Type:                  issueType,
 		Description:           description,
 		Email:                 email,
-		CountryCode:           country,
-		DeviceID:              r.deviceID,
+		CountryCode:           meta.country,
+		DeviceID:              meta.deviceID,
 		UserID:                settings.GetString(settings.UserIDKey),
 		SubscriptionLevel:     settings.GetString(settings.UserLevelKey),
 		Locale:                settings.GetString(settings.LocaleKey),
 		Attachments:           attachments,
 		AdditionalAttachments: attachmentPaths,
 	}
-	err = r.issueReporter.Report(ctx, report)
-	if err != nil {
+	if err := meta.reporter.Report(ctx, report); err != nil {
 		slog.Error("Failed to report issue", "error", err)
 		return traces.RecordError(ctx, fmt.Errorf("failed to report issue: %w", err))
 	}
@@ -382,13 +490,18 @@ func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email
 func baseIssueAttachments() []string {
 	logPath := settings.GetString(settings.LogPathKey)
 	dataPath := settings.GetString(settings.DataPathKey)
-	// TODO: any other files we want to include??
-	return []string{
+	files := []string{
 		filepath.Join(logPath, internal.CrashLogFileName),
 		filepath.Join(dataPath, internal.ConfigFileName),
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
 	}
+	memdump := filepath.Join(dataPath, internal.MemoryDumpFileName)
+	if _, err := os.Stat(memdump); err == nil {
+		// put memory dump first in the list so it's prioritized.
+		files = append([]string{memdump}, files...)
+	}
+	return files
 }
 
 /////////////////
@@ -617,8 +730,6 @@ const maxRetainedLanternServers = 60
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	existing := r.srvManager.AllServers()
-	// prune any servers from the incoming list that already exists to avoid deleting
-	// selection history results and closing existing connections
 	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		_, exists := existingTags[srv.Tag]
@@ -849,6 +960,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	}
 	if cfg != nil {
 		bOptions.Options = cfg.Options
+		bOptions.NonSelectableOutbounds = cfg.NonSelectableOutbounds
 		bOptions.BanditURLOverrides = cfg.BanditURLOverrides
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting

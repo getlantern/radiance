@@ -13,9 +13,13 @@ import (
 	"github.com/getlantern/radiance/common/env"
 )
 
-// defaultSocksAddress is the listen address for the novpn build's SOCKS/HTTP
-// inbound when RADIANCE_SOCKS_ADDRESS is unset.
-const defaultSocksAddress = "127.0.0.1:1080"
+const (
+	// defaultSocksAddress is the listen address for the novpn build's SOCKS/HTTP
+	// inbound when RADIANCE_SOCKS_ADDRESS is unset.
+	defaultSocksAddress = "127.0.0.1:1080"
+
+	inboundTag = "http-socks-in"
+)
 
 // baseInbounds returns the SOCKS/HTTP proxy inbound. The novpn build has no TUN
 // device, so this mixed inbound is the only entry point for traffic.
@@ -34,7 +38,7 @@ func baseInbounds() []O.Inbound {
 	return []O.Inbound{
 		{
 			Type: C.TypeMixed,
-			Tag:  "http-socks-in",
+			Tag:  inboundTag,
 			Options: &O.HTTPMixedInboundOptions{
 				ListenOptions: O.ListenOptions{
 					Listen:     &listen,

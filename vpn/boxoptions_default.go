@@ -16,11 +16,15 @@ import (
 	"github.com/getlantern/radiance/common"
 )
 
-// minAndroidSystemStackKernel is the minimum Linux kernel version (major.minor)
-// required for the system TUN stack to work reliably on Android only. Devices
-// running a kernel below this version fall back to gvisor. This constant has no
-// effect on other platforms.
-const minAndroidSystemStackKernel = "5.10"
+const (
+	// minAndroidSystemStackKernel is the minimum Linux kernel version (major.minor)
+	// required for the system TUN stack to work reliably on Android only. Devices
+	// running a kernel below this version fall back to gvisor. This constant has no
+	// effect on other platforms.
+	minAndroidSystemStackKernel = "5.10"
+
+	inboundTag = "tun-in"
+)
 
 // baseInbounds returns the tunnel-build inbounds: the TUN device (per-platform
 // stack/routing applied here) plus the loopback bypass proxy that carries
@@ -67,7 +71,7 @@ func baseInbounds() []O.Inbound {
 	return []O.Inbound{
 		{
 			Type:    "tun",
-			Tag:     "tun-in",
+			Tag:     inboundTag,
 			Options: tunOpts,
 		},
 		{

@@ -29,6 +29,7 @@ var (
 	FeatureOverrides _key = "RADIANCE_FEATURE_OVERRIDES"
 	AppVersion       _key = "RADIANCE_VERSION"
 	BufPoolBudgetMB  _key = "RADIANCE_BUF_POOL_BUDGET_MB"
+	MemoryLimitMB    _key = "RADIANCE_MEM_LIMIT_MB"
 
 	Testing _key = "RADIANCE_TESTING"
 
