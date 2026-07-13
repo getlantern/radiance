@@ -59,10 +59,12 @@ func baseInbounds() []O.Inbound {
 			slog.Warn("kernel version unknown, keeping default TUN stack")
 		} else if kernelBelow(kv, minAndroidSystemStackKernel) {
 			tunOpts.Stack = "gvisor"
+			tunOpts.EndpointIndependentNat = true
 			slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
 		}
 	case "ios":
 		tunOpts.Stack = ""
+		tunOpts.EndpointIndependentNat = true
 	case "linux":
 		tunOpts.AutoRedirect = true
 	}
