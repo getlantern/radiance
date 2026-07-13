@@ -1308,12 +1308,8 @@ func (r *LocalBackend) PaymentRedirect(ctx context.Context, data account.Payment
 	return r.accountClient.PaymentRedirect(ctx, data)
 }
 
-func (r *LocalBackend) ReferralAttach(ctx context.Context, code string) (bool, error) {
-	return r.accountClient.ReferralAttach(ctx, code)
-}
-
-func (r *LocalBackend) ReferralAttachV2(ctx context.Context, code, channel string) (*account.ReferralAttachV2Response, error) {
-	return r.accountClient.ReferralAttachV2(ctx, code, channel)
+func (r *LocalBackend) ReferralAttach(ctx context.Context, code, channel string) (*account.ReferralAttachResponse, error) {
+	return r.accountClient.ReferralAttach(ctx, code, channel)
 }
 
 func (r *LocalBackend) StripeBillingPortalURL(ctx context.Context) (string, error) {

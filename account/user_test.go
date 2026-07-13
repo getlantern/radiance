@@ -35,6 +35,8 @@ type testServer struct {
 	subscriptionPaymentRedirectHasCouponCode     bool
 	stripeSubscriptionCouponCode                 string
 	stripeSubscriptionHasCouponCode              bool
+	referralAttachV1Code                         string
+	referralAttachV1Error                        string
 	referralAttachV2Code                         string
 	referralAttachV2Channel                      string
 	referralAttachV2Error                        string
@@ -182,7 +184,12 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/referral-attach", func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, protos.BaseResponse{})
+		var body struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		state.referralAttachV1Code = body.Code
+		writeProtoResponse(w, &protos.BaseResponse{Error: state.referralAttachV1Error})
 	})
 
 	mux.HandleFunc("/referral-attach-v2", func(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +199,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		state.referralAttachV2Code = body.Code
-		writeJSONResponse(w, ReferralAttachV2Response{
+		writeJSONResponse(w, ReferralAttachResponse{
 			BaseResponse: &protos.BaseResponse{Error: state.referralAttachV2Error},
 			Code:         body.Code,
 			DiscountPct:  20,
@@ -427,23 +434,42 @@ func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "error decoding JWT")
 }
 
-func TestReferralAttachV2(t *testing.T) {
+func TestReferralAttach_EmptyChannelUsesV1(t *testing.T) {
 	ac, ts := newTestClient(t)
-	resp, err := ac.ReferralAttachV2(context.Background(), "AFF123", "store")
+	resp, err := ac.ReferralAttach(context.Background(), "AFF123", "")
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "AFF123", ts.referralAttachV1Code)
+	assert.Empty(t, ts.referralAttachV2Code)
+}
+
+func TestReferralAttach_V1Error(t *testing.T) {
+	ac, ts := newTestClient(t)
+	ts.referralAttachV1Error = "invalid code"
+	resp, err := ac.ReferralAttach(context.Background(), "BAD", "")
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "invalid code")
+}
+
+func TestReferralAttach_ChannelUsesV2(t *testing.T) {
+	ac, ts := newTestClient(t)
+	resp, err := ac.ReferralAttach(context.Background(), "AFF123", "store")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, "AFF123", ts.referralAttachV2Code)
 	assert.Equal(t, "store", ts.referralAttachV2Channel)
+	assert.Empty(t, ts.referralAttachV1Code)
 	assert.Equal(t, "AFF123", resp.Code)
 	assert.Equal(t, 20, resp.DiscountPct)
 	assert.Equal(t, "affiliate", resp.Type)
 	assert.NotEmpty(t, resp.Plans)
 }
 
-func TestReferralAttachV2_Error(t *testing.T) {
+func TestReferralAttach_V2Error(t *testing.T) {
 	ac, ts := newTestClient(t)
 	ts.referralAttachV2Error = "invalid code"
-	resp, err := ac.ReferralAttachV2(context.Background(), "BAD", "store")
+	resp, err := ac.ReferralAttach(context.Background(), "BAD", "store")
 	require.Error(t, err)
 	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "invalid code")

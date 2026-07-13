@@ -15,7 +15,6 @@ type SubscriptionCmd struct {
 	StripeSub       *StripeSubCmd          `arg:"subcommand:stripe-sub" help:"create Stripe subscription"`
 	PaymentRedirect *PaymentRedirectCmd    `arg:"subcommand:redirect" help:"get payment redirect URL"`
 	Referral        *ReferralCmd           `arg:"subcommand:referral" help:"attach referral code"`
-	ReferralV2      *ReferralV2Cmd         `arg:"subcommand:referral-v2" help:"attach referral code and get plans"`
 	StripeBilling   *StripeBillingCmd      `arg:"subcommand:stripe-billing" help:"get Stripe billing portal URL"`
 	Verify          *VerifySubscriptionCmd `arg:"subcommand:verify" help:"verify subscription"`
 }
@@ -45,12 +44,8 @@ type PaymentRedirectCmd struct {
 }
 
 type ReferralCmd struct {
-	Code string `arg:"-c,--code" help:"referral code"`
-}
-
-type ReferralV2Cmd struct {
 	Code    string `arg:"-c,--code" help:"referral code"`
-	Channel string `arg:"--channel" help:"subscription channel"`
+	Channel string `arg:"--channel" help:"subscription channel (optional; when set, returns plans and discount)"`
 }
 
 type StripeBillingCmd struct{}
@@ -72,8 +67,6 @@ func runSubscription(ctx context.Context, c *ipc.Client, cmd *SubscriptionCmd) e
 		return subRedirect(ctx, c, cmd.PaymentRedirect)
 	case cmd.Referral != nil:
 		return subReferral(ctx, c, cmd.Referral)
-	case cmd.ReferralV2 != nil:
-		return subReferralV2(ctx, c, cmd.ReferralV2)
 	case cmd.StripeBilling != nil:
 		return subStripeBilling(ctx, c, cmd.StripeBilling)
 	case cmd.Verify != nil:
@@ -208,28 +201,7 @@ func subReferral(ctx context.Context, c *ipc.Client, cmd *ReferralCmd) error {
 			return err
 		}
 	}
-	ok, err := c.ReferralAttach(ctx, code)
-	if err != nil {
-		return err
-	}
-	if ok {
-		fmt.Println("Referral attached successfully")
-	} else {
-		fmt.Println("Referral was not attached")
-	}
-	return nil
-}
-
-func subReferralV2(ctx context.Context, c *ipc.Client, cmd *ReferralV2Cmd) error {
-	code := cmd.Code
-	if code == "" {
-		var err error
-		code, err = prompt("Referral code: ")
-		if err != nil {
-			return err
-		}
-	}
-	resp, err := c.ReferralAttachV2(ctx, code, cmd.Channel)
+	resp, err := c.ReferralAttach(ctx, code, cmd.Channel)
 	if err != nil {
 		return err
 	}

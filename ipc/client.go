@@ -604,18 +604,11 @@ func (c *Client) NewStripeSubscription(ctx context.Context, email, planID, coupo
 	return resp.ClientSecret, err
 }
 
-// ReferralAttach attaches a referral code to the current user.
-func (c *Client) ReferralAttach(ctx context.Context, code string) (bool, error) {
-	var resp SuccessResponse
-	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralEndpoint, CodeRequest{Code: code}, &resp)
-	return resp.Success, err
-}
-
-// ReferralAttachV2 attaches a referral code to the current user and returns the
-// resulting plans, providers, and discount.
-func (c *Client) ReferralAttachV2(ctx context.Context, code, channel string) (*account.ReferralAttachV2Response, error) {
-	var resp account.ReferralAttachV2Response
-	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralV2Endpoint, CodeRequest{Code: code, Channel: channel}, &resp)
+// ReferralAttach attaches a referral code to the current user. A non-empty
+// channel also returns the resulting plans, providers, and discount.
+func (c *Client) ReferralAttach(ctx context.Context, code, channel string) (*account.ReferralAttachResponse, error) {
+	var resp account.ReferralAttachResponse
+	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralEndpoint, CodeRequest{Code: code, Channel: channel}, &resp)
 	if err != nil {
 		return nil, err
 	}
