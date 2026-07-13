@@ -78,6 +78,7 @@ type LocalBackend struct {
 
 	stopSelectionHistoryListener context.CancelFunc
 	selectionHistoryMu           sync.Mutex
+	selectionReporter            *selectionReporter
 
 	exhaustionGate exhaustionGate
 }
@@ -175,14 +176,15 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		Logger:        slog.Default().With("service", "config_handler"),
 	}
 	r := &LocalBackend{
-		ctx:            ctx,
-		cancel:         cancel,
-		issueReporter:  issue.NewIssueReporter(kindling.HTTPClient()),
-		accountClient:  accountClient,
-		confHandler:    config.NewConfigHandler(ctx, cOpts),
-		srvManager:     svrMgr,
-		vpnClient:      vpnClient,
-		splitTunnelMgr: splitTunnelMgr,
+		ctx:               ctx,
+		cancel:            cancel,
+		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient()),
+		selectionReporter: newSelectionReporter(kindling.HTTPClient()),
+		accountClient:     accountClient,
+		confHandler:       config.NewConfigHandler(ctx, cOpts),
+		srvManager:        svrMgr,
+		vpnClient:         vpnClient,
+		splitTunnelMgr:    splitTunnelMgr,
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
@@ -877,6 +879,10 @@ func (r *LocalBackend) updateSelectionHistoryListener(status vpn.VPNStatus) {
 			}
 		})
 		go r.runSelectionHistoryListener(ctx, storage, hook)
+		if r.selectionReportInterval() > 0 {
+			r.selectionReporter.reset()
+			go r.runSelectionReporter(ctx, storage)
+		}
 		slog.Debug("Started selection history listener")
 	case vpn.Disconnected, vpn.ErrorStatus:
 		if r.stopSelectionHistoryListener != nil {
@@ -913,16 +919,79 @@ func (r *LocalBackend) runSelectionHistoryListener(ctx context.Context, storage 
 }
 
 func (r *LocalBackend) flushSelectionHistory(storage vpn.AutoSelectHistoryStorage) {
-	results := make(map[string]servers.SelectionHistory)
+	history := r.collectSelectionHistory(storage)
+	if len(history) == 0 {
+		return
+	}
+
+	if err := r.srvManager.UpdateSelectionHistory(history); err != nil {
+		slog.Warn("Failed to persist selection history", "error", err)
+	}
+}
+
+func (r *LocalBackend) collectSelectionHistory(storage vpn.AutoSelectHistoryStorage) map[string]servers.SelectionHistory {
+	history := make(map[string]servers.SelectionHistory)
 	for _, srv := range r.srvManager.AllServers() {
 		if h := storage.Load(srv.Tag); h != nil {
-			results[srv.Tag] = *h
+			history[srv.Tag] = *h
 		}
 	}
-	if len(results) > 0 {
-		if err := r.srvManager.UpdateSelectionHistory(results); err != nil {
-			slog.Warn("Failed to persist selection history", "error", err)
+	return history
+}
+
+// selectionReportInterval is the server-configured report cadence. Zero is
+// returned if reporting is disabled or the config is unavailable.
+func (r *LocalBackend) selectionReportInterval() time.Duration {
+	cfg, _ := r.confHandler.GetConfig()
+	if cfg == nil || cfg.RouteSelectionReportIntervalSeconds <= 0 {
+		return 0
+	}
+
+	return time.Duration(cfg.RouteSelectionReportIntervalSeconds) * time.Second
+}
+
+func (r *LocalBackend) runSelectionReporter(ctx context.Context, storage vpn.AutoSelectHistoryStorage) {
+	runReportLoop(ctx, r.selectionReportInterval, func() {
+		r.reportSelectionHistory(ctx, storage)
+	})
+}
+
+// runReportLoop calls report once per interval() until the context is canceled
+// or interval() returns a non-positive duration. The interval is re-derived each
+// cycle so a changed cadence takes effect the next tick and a dropped interval
+// stops the loop within one cycle.
+func runReportLoop(ctx context.Context, interval func() time.Duration, report func()) {
+	for {
+		wait := interval()
+		if wait <= 0 {
+			return
 		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+			report()
+		}
+	}
+}
+
+func (r *LocalBackend) reportSelectionHistory(ctx context.Context, storage vpn.AutoSelectHistoryStorage) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "report_selection_history")
+	defer span.End()
+
+	cfg, _ := r.confHandler.GetConfig()
+	if cfg == nil || len(cfg.BanditReportTokens) == 0 {
+		return
+	}
+	snapshot := r.collectSelectionHistory(storage)
+	if len(snapshot) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, selectionReportTimeout)
+	defer cancel()
+	if err := r.selectionReporter.report(ctx, snapshot, cfg.BanditReportTokens); err != nil {
+		slog.Warn("Failed to report selection history", "error", err)
+		span.RecordError(err)
 	}
 }
 
