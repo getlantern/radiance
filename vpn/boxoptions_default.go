@@ -45,12 +45,11 @@ func baseInbounds() []O.Inbound {
 	}
 
 	tunOpts := &O.TunInboundOptions{
-		InterfaceName:          "utun225",
-		Address:                tunAddress,
-		AutoRoute:              true,
-		StrictRoute:            true,
-		EndpointIndependentNat: true, // needed for QUIC migration and hole-punching
-		Stack:                  "system",
+		InterfaceName: "utun225",
+		Address:       tunAddress,
+		AutoRoute:     true,
+		StrictRoute:   true,
+		Stack:         "system",
 	}
 	switch common.Platform {
 	case "android":
@@ -60,10 +59,12 @@ func baseInbounds() []O.Inbound {
 			slog.Warn("kernel version unknown, keeping default TUN stack")
 		} else if kernelBelow(kv, minAndroidSystemStackKernel) {
 			tunOpts.Stack = "gvisor"
+			tunOpts.EndpointIndependentNat = true
 			slog.Info("kernel below 5.10, using gvisor TUN stack", "kernel", kv)
 		}
 	case "ios":
 		tunOpts.Stack = ""
+		tunOpts.EndpointIndependentNat = true
 	case "linux":
 		tunOpts.AutoRedirect = true
 	}
