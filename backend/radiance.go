@@ -69,6 +69,9 @@ type LocalBackend struct {
 	deviceID string
 
 	telemetryCfgSub *events.Subscription[config.NewConfigEvent]
+
+	// reused across reconnects; fully released only when telemetry shuts down.
+	connObserver    vpn.ConnObserver
 	stopConnMetrics context.CancelFunc
 	connMetricsMu   sync.Mutex
 
@@ -620,7 +623,7 @@ func (r *LocalBackend) stopTelemetry() {
 		r.telemetryCfgSub.Unsubscribe()
 		r.telemetryCfgSub = nil
 	}
-	r.updateConnMetrics(vpn.Disconnected)
+	r.teardownConnMetrics()
 	telemetry.Close()
 }
 
@@ -630,26 +633,47 @@ func (r *LocalBackend) updateConnMetrics(status vpn.VPNStatus) {
 	}
 	r.connMetricsMu.Lock()
 	defer r.connMetricsMu.Unlock()
-	if status == vpn.Connected {
-		if r.stopConnMetrics != nil {
-			return // already running
-		}
-		ctx, cancel := context.WithCancel(r.ctx)
-		observer, err := telemetry.StartConnectionMetrics(ctx, r.vpnClient.ActiveConnectionCount)
-		if err != nil {
-			cancel()
-			slog.Warn("Failed to start connection metrics collection", "error", err)
-			return
-		}
-		r.vpnClient.SetConnObserver(observer)
-		r.stopConnMetrics = cancel
-		slog.Debug("Started connection metrics collection")
-	} else if r.stopConnMetrics != nil {
+
+	if status != vpn.Connected {
 		r.vpnClient.SetConnObserver(nil)
+		return
+	}
+	if !r.ensureConnMetricsObserverLocked() {
+		return
+	}
+	r.vpnClient.SetConnObserver(r.connObserver)
+}
+
+func (r *LocalBackend) ensureConnMetricsObserverLocked() bool {
+	if r.connObserver != nil {
+		return true
+	}
+
+	ctx, cancel := context.WithCancel(r.ctx)
+	observer, err := telemetry.StartConnectionMetrics(ctx, r.vpnClient.ActiveConnectionCount)
+	if err != nil {
+		cancel()
+		slog.Warn("Failed to start connection metrics collection", "error", err)
+		return false
+	}
+
+	r.connObserver = observer
+	r.stopConnMetrics = cancel
+	return true
+}
+
+// teardownConnMetrics fully detaches and releases the connection metrics observer.
+func (r *LocalBackend) teardownConnMetrics() {
+	r.connMetricsMu.Lock()
+	defer r.connMetricsMu.Unlock()
+	if r.vpnClient != nil {
+		r.vpnClient.SetConnObserver(nil)
+	}
+	if r.stopConnMetrics != nil {
 		r.stopConnMetrics()
 		r.stopConnMetrics = nil
-		slog.Debug("Stopped connection metrics collection")
 	}
+	r.connObserver = nil
 }
 
 ///////////////////////
