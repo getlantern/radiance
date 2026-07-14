@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -25,16 +27,26 @@ import (
 	"github.com/getlantern/radiance/vpn"
 )
 
+const (
+	envLanterndChildKey = "_LANTERND_CHILD"
+	envLanterndChildVal = "1"
+	envLanterndChild    = envLanterndChildKey + "=" + envLanterndChildVal
+
+	envGoDebug = "GODEBUG=gctrace=1,scavtrace=1"
+)
+
 type runCmd struct {
-	DataPath string `arg:"--data-path" help:"path to store data"`
-	LogPath  string `arg:"--log-path" help:"path to store logs"`
-	LogLevel string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	DataPath  string `arg:"--data-path" help:"path to store data"`
+	LogPath   string `arg:"--log-path" help:"path to store logs"`
+	LogLevel  string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	PprofAddr string `arg:"--pprof-addr" help:"serve net/http/pprof on this address; also sets GODEBUG=gctrace=1,scavtrace=1 on the daemon; disabled when empty."`
 }
 
 type installCmd struct {
-	DataPath string `arg:"--data-path" help:"path to store data"`
-	LogPath  string `arg:"--log-path" help:"path to store logs"`
-	LogLevel string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	DataPath  string `arg:"--data-path" help:"path to store data"`
+	LogPath   string `arg:"--log-path" help:"path to store logs"`
+	LogLevel  string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	PprofAddr string `arg:"--pprof-addr" help:"serve net/http/pprof on this address; also sets GODEBUG=gctrace=1,scavtrace=1 on the daemon; disabled when empty."`
 }
 
 type uninstallCmd struct{}
@@ -75,8 +87,8 @@ func main() {
 	case a.Run != nil:
 		dataPath := os.ExpandEnv(withDefault(a.Run.DataPath, defaultDataPath))
 		logPath := os.ExpandEnv(withDefault(a.Run.LogPath, defaultLogPath))
-		if os.Getenv("_LANTERND_CHILD") != "1" {
-			err = babysit(os.Args[1:], dataPath, logPath, a.Run.LogLevel)
+		if os.Getenv(envLanterndChildKey) != envLanterndChildVal {
+			err = babysit(os.Args[1:], dataPath, logPath, a.Run.LogLevel, a.Run.PprofAddr != "")
 			break
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -93,12 +105,13 @@ func main() {
 			// Restore default signal behavior so a second signal terminates immediately.
 			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		}()
-		err = runDaemon(ctx, dataPath, logPath, a.Run.LogLevel)
+		err = runDaemon(ctx, dataPath, logPath, a.Run.LogLevel, a.Run.PprofAddr)
 	case a.Install != nil:
 		err = install(
 			os.ExpandEnv(withDefault(a.Install.DataPath, defaultDataPath)),
 			os.ExpandEnv(withDefault(a.Install.LogPath, defaultLogPath)),
 			a.Install.LogLevel,
+			a.Install.PprofAddr,
 		)
 	case a.Uninstall != nil:
 		err = uninstall()
@@ -171,14 +184,17 @@ type childProcess struct {
 
 // spawnChild creates and starts a daemon child process with piped I/O. The child's stdout and
 // stderr are merged and drained through the provided logger (or os.Stdout as fallback).
-func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProcess, error) {
+func spawnChild(args []string, dataPath, logPath, logLevel string, withPprof bool) (*childProcess, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get executable path: %w", err)
 	}
 
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(os.Environ(), "_LANTERND_CHILD=1")
+	cmd.Env = append(os.Environ(), envLanterndChild)
+	if withPprof {
+		cmd.Env = append(cmd.Env, envGoDebug)
+	}
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
@@ -268,7 +284,7 @@ func (c *childProcess) HandleCrash(err error) {
 //
 // Graceful shutdown is signaled by closing the child's stdin pipe — this works cross-platform,
 // including inside a Windows service where there is no console for signal delivery.
-func babysit(args []string, dataPath, logPath, logLevel string) error {
+func babysit(args []string, dataPath, logPath, logLevel string, withPprof bool) error {
 	// On termination signal, request graceful shutdown of the current child.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -278,7 +294,7 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	bo := common.NewBackoff(60 * time.Second)
 
 	for {
-		child, err := spawnChild(args, dataPath, logPath, logLevel)
+		child, err := spawnChild(args, dataPath, logPath, logLevel, withPprof)
 		if err != nil {
 			if stopping {
 				return nil
@@ -322,11 +338,31 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	}
 }
 
-func runDaemon(ctx context.Context, dataPath, logPath, logLevel string) error {
+func startPprofServer(ctx context.Context, addr string) {
+	srv := &http.Server{Addr: addr}
+	go func() {
+		slog.Info("Starting pprof server", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("pprof server stopped", "error", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+}
+
+func runDaemon(ctx context.Context, dataPath, logPath, logLevel, pprofAddr string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
+
+	if pprofAddr != "" {
+		startPprofServer(ctx, pprofAddr)
+	}
 	be, err := backend.NewLocalBackend(ctx, backend.Options{
 		DataDir:  dataPath,
 		LogDir:   logPath,

@@ -1,4 +1,6 @@
-base_tags := "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack"
+with_low_memory := ""
+low_memory_tag := if with_low_memory != "" { ",with_low_memory" } else { "" }
+base_tags := "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack" + low_memory_tag
 tags := if os() == "macos" { "standalone," + base_tags } else { base_tags }
 lanternd := if os() == "windows" { "lanternd.exe" } else { "lanternd" }
 lantern := if os() == "windows" { "lantern.exe" } else { "lantern" }
@@ -17,6 +19,7 @@ run-daemon *args:
 build-cli:
     go build {{cli_tags_flag}} {{ldflags}} -o bin/{{lantern}} ./cmd/lantern
 
+[parallel]
 build: build-daemon build-cli
 
 # install* recipes compile binaries into $GOBIN. They do NOT register
@@ -27,6 +30,7 @@ install-daemon:
 install-cli:
     go install {{cli_tags_flag}} {{ldflags}} ./cmd/lantern
 
+[parallel]
 install: install-daemon install-cli
 
 proto:

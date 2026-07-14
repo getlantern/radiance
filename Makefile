@@ -1,4 +1,9 @@
 TAGS=with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_conntrack
+with_low_memory ?=
+
+ifneq ($(with_low_memory),)
+   TAGS := $(TAGS),with_low_memory
+endif
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)

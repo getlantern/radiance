@@ -31,7 +31,7 @@ func init() {
 	isWindowsService = isSvc
 }
 
-func install(dataPath, logPath, logLevel string) error {
+func install(dataPath, logPath, logLevel, pprofAddr string) error {
 	dataPath = os.ExpandEnv(dataPath)
 	logPath = os.ExpandEnv(logPath)
 
@@ -67,6 +67,9 @@ func install(dataPath, logPath, logLevel string) error {
 		"--data-path", dataPath,
 		"--log-path", logPath,
 		"--log-level", logLevel,
+	}
+	if pprofAddr != "" {
+		args = append(args, "--pprof-addr", pprofAddr)
 	}
 
 	slog.Info("Creating Windows service", "exe", exe, "args", args)
@@ -166,12 +169,15 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 	// (typically just [serviceName]). The actual configured arguments are baked into
 	// os.Args via the service ImagePath. Parse from os.Args to get the real values,
 	// falling back to defaults if not present.
-	dataPath, logPath, logLevel := parseServiceArgs(os.Args[1:])
+	dataPath, logPath, logLevel, pprofAddr := parseServiceArgs(os.Args[1:])
 
 	// Run the daemon as a child process so we can clean up network state if it crashes,
 	// regardless of whether the SCM is configured to restart the service.
 	childArgs := []string{"run", "--data-path", dataPath, "--log-path", logPath, "--log-level", logLevel}
-	child, err := spawnChild(childArgs, dataPath, logPath, logLevel)
+	if pprofAddr != "" {
+		childArgs = append(childArgs, "--pprof-addr", pprofAddr)
+	}
+	child, err := spawnChild(childArgs, dataPath, logPath, logLevel, pprofAddr != "")
 	if err != nil {
 		slog.Error("Failed to start daemon", "error", err)
 		return true, 1
@@ -204,7 +210,7 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 	}
 }
 
-func parseServiceArgs(args []string) (dataPath, logPath, logLevel string) {
+func parseServiceArgs(args []string) (dataPath, logPath, logLevel, pprofAddr string) {
 	dataPath = internal.DefaultDataPath()
 	logPath = internal.DefaultLogPath()
 	logLevel = "info"
@@ -223,6 +229,11 @@ func parseServiceArgs(args []string) (dataPath, logPath, logLevel string) {
 		case "--log-level":
 			if i+1 < len(args) {
 				logLevel = args[i+1]
+				i++
+			}
+		case "--pprof-addr":
+			if i+1 < len(args) {
+				pprofAddr = args[i+1]
 				i++
 			}
 		}

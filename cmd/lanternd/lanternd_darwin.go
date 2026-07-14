@@ -37,7 +37,9 @@ var launchdPlistTmpl = template.Must(template.New("plist").Parse(`<?xml version=
 		<string>{{.LogPath}}</string>
 		<string>--log-level</string>
 		<string>{{.LogLevel}}</string>
-	</array>
+{{if .PprofAddr}}		<string>--pprof-addr</string>
+		<string>{{.PprofAddr}}</string>
+{{end}}	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -54,7 +56,7 @@ func plistPath() string {
 	return fmt.Sprintf("/Library/LaunchDaemons/%s.plist", serviceName)
 }
 
-func install(dataPath, logPath, logLevel string) error {
+func install(dataPath, logPath, logLevel, pprofAddr string) error {
 	slog.Info("Installing launchd service..", "version", common.Version)
 
 	// Remove any existing service so we can recreate it cleanly.
@@ -76,8 +78,8 @@ func install(dataPath, logPath, logLevel string) error {
 	defer f.Close()
 
 	err = launchdPlistTmpl.Execute(f, struct {
-		ServiceName, ExePath, DataPath, LogPath, LogLevel string
-	}{serviceName, exe, dataPath, logPath, logLevel})
+		ServiceName, ExePath, DataPath, LogPath, LogLevel, PprofAddr string
+	}{serviceName, exe, dataPath, logPath, logLevel, pprofAddr})
 	if err != nil {
 		return fmt.Errorf("failed to write plist: %w", err)
 	}
