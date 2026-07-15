@@ -501,7 +501,7 @@ func baseIssueAttachments() []string {
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
 	}
-	memdump := filepath.Join(dataPath, internal.MemoryDumpFileName)
+	memdump := filepath.Join(logPath, internal.MemoryDumpFileName)
 	if _, err := os.Stat(memdump); err == nil {
 		// put memory dump first in the list so it's prioritized.
 		files = append([]string{memdump}, files...)
