@@ -1294,11 +1294,11 @@ func (x *LoginResponse_Device) GetCreated() int64 {
 }
 
 type LoginResponse_UserData struct {
-	state     protoimpl.MessageState             `protogen:"open.v1"`
-	UserId    int64                              `protobuf:"varint,1,opt,name=userId,proto3" json:"userId,omitempty"`
-	Code      string                             `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
-	Token     string                             `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
-	Referrals []*LoginResponse_UserData_Referral `protobuf:"bytes,4,rep,name=referrals,proto3" json:"referrals,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	UserId   int64                  `protobuf:"varint,1,opt,name=userId,proto3" json:"userId,omitempty"`
+	Code     string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	Token    string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	Referral string                 `protobuf:"bytes,4,opt,name=referral,proto3" json:"referral,omitempty"`
 	// Deprecated: Marked as deprecated in account/protos/auth.proto.
 	Phone        string   `protobuf:"bytes,5,opt,name=phone,proto3" json:"phone,omitempty"` // not used anymore
 	Email        string   `protobuf:"bytes,6,opt,name=email,proto3" json:"email,omitempty"`
@@ -1318,8 +1318,9 @@ type LoginResponse_UserData struct {
 	SubscriptionData *LoginResponse_UserData_SubscriptionData `protobuf:"bytes,20,opt,name=subscriptionData,proto3" json:"subscriptionData,omitempty"`
 	DeviceID         string                                   `protobuf:"bytes,21,opt,name=deviceID,proto3" json:"deviceID,omitempty"`
 	// informs us whether the legacy id and token are username-password flow registered
-	UnpassRegistered bool  `protobuf:"varint,22,opt,name=unpassRegistered,proto3" json:"unpassRegistered,omitempty"`
-	LastExpiredOn    int64 `protobuf:"varint,23,opt,name=lastExpiredOn,proto3" json:"lastExpiredOn,omitempty"`
+	UnpassRegistered bool                               `protobuf:"varint,22,opt,name=unpassRegistered,proto3" json:"unpassRegistered,omitempty"`
+	LastExpiredOn    int64                              `protobuf:"varint,23,opt,name=lastExpiredOn,proto3" json:"lastExpiredOn,omitempty"`
+	Referrals        []*LoginResponse_UserData_Referral `protobuf:"bytes,24,rep,name=referrals,proto3" json:"referrals,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1375,11 +1376,11 @@ func (x *LoginResponse_UserData) GetToken() string {
 	return ""
 }
 
-func (x *LoginResponse_UserData) GetReferrals() []*LoginResponse_UserData_Referral {
+func (x *LoginResponse_UserData) GetReferral() string {
 	if x != nil {
-		return x.Referrals
+		return x.Referral
 	}
-	return nil
+	return ""
 }
 
 // Deprecated: Marked as deprecated in account/protos/auth.proto.
@@ -1507,6 +1508,13 @@ func (x *LoginResponse_UserData) GetLastExpiredOn() int64 {
 		return x.LastExpiredOn
 	}
 	return 0
+}
+
+func (x *LoginResponse_UserData) GetReferrals() []*LoginResponse_UserData_Referral {
+	if x != nil {
+		return x.Referrals
+	}
+	return nil
 }
 
 type LoginResponse_UserData_SubscriptionData struct {
@@ -1735,7 +1743,7 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\fLoginRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x14\n" +
 	"\x05proof\x18\x02 \x01(\fR\x05proof\x12\x1a\n" +
-	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\xf5\f\n" +
+	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\x91\r\n" +
 	"\rLoginResponse\x12\x1a\n" +
 	"\blegacyID\x18\x01 \x01(\x03R\blegacyID\x12 \n" +
 	"\vlegacyToken\x18\x02 \x01(\tR\vlegacyToken\x12\x0e\n" +
@@ -1748,13 +1756,13 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\x06Device\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\x83\n" +
+	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\x9f\n" +
 	"\n" +
 	"\bUserData\x12\x16\n" +
 	"\x06userId\x18\x01 \x01(\x03R\x06userId\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x14\n" +
-	"\x05token\x18\x03 \x01(\tR\x05token\x12>\n" +
-	"\treferrals\x18\x04 \x03(\v2 .LoginResponse.UserData.ReferralR\treferrals\x12\x18\n" +
+	"\x05token\x18\x03 \x01(\tR\x05token\x12\x1a\n" +
+	"\breferral\x18\x04 \x01(\tR\breferral\x12\x18\n" +
 	"\x05phone\x18\x05 \x01(\tB\x02\x18\x01R\x05phone\x12\x14\n" +
 	"\x05email\x18\x06 \x01(\tR\x05email\x12\x1e\n" +
 	"\n" +
@@ -1777,7 +1785,8 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\x10subscriptionData\x18\x14 \x01(\v2(.LoginResponse.UserData.SubscriptionDataR\x10subscriptionData\x12\x1a\n" +
 	"\bdeviceID\x18\x15 \x01(\tR\bdeviceID\x12*\n" +
 	"\x10unpassRegistered\x18\x16 \x01(\bR\x10unpassRegistered\x12$\n" +
-	"\rlastExpiredOn\x18\x17 \x01(\x03R\rlastExpiredOn\x1a\xf0\x02\n" +
+	"\rlastExpiredOn\x18\x17 \x01(\x03R\rlastExpiredOn\x12>\n" +
+	"\treferrals\x18\x18 \x03(\v2 .LoginResponse.UserData.ReferralR\treferrals\x1a\xf0\x02\n" +
 	"\x10SubscriptionData\x12&\n" +
 	"\x0esubscriptionID\x18\x01 \x01(\tR\x0esubscriptionID\x12\x16\n" +
 	"\x06planID\x18\x02 \x01(\tR\x06planID\x12*\n" +
@@ -1879,9 +1888,9 @@ var file_account_protos_auth_proto_goTypes = []any{
 var file_account_protos_auth_proto_depIdxs = []int32{
 	21, // 0: LoginResponse.legacyUserData:type_name -> LoginResponse.UserData
 	20, // 1: LoginResponse.devices:type_name -> LoginResponse.Device
-	23, // 2: LoginResponse.UserData.referrals:type_name -> LoginResponse.UserData.Referral
-	20, // 3: LoginResponse.UserData.devices:type_name -> LoginResponse.Device
-	22, // 4: LoginResponse.UserData.subscriptionData:type_name -> LoginResponse.UserData.SubscriptionData
+	20, // 2: LoginResponse.UserData.devices:type_name -> LoginResponse.Device
+	22, // 3: LoginResponse.UserData.subscriptionData:type_name -> LoginResponse.UserData.SubscriptionData
+	23, // 4: LoginResponse.UserData.referrals:type_name -> LoginResponse.UserData.Referral
 	5,  // [5:5] is the sub-list for method output_type
 	5,  // [5:5] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
