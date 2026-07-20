@@ -74,7 +74,7 @@ message LoginResponse {
     int64 userId = 1;
     string code = 2;
     string token = 3;
-    string referral = 4;
+    repeated Referral referrals = 4;
     string phone = 5 [deprecated = true]; // not used anymore
     string email = 6;
     string userStatus = 7;
@@ -105,12 +105,18 @@ message LoginResponse {
       string provider = 11;
 }
 
-  SubscriptionData subscriptionData = 20; 
+    message Referral {
+      string userId = 1;
+      bool converted = 2;
+      int64 convertedAt = 3;
+      int64 bonusDaysEarned = 4;
+    }
+
+  SubscriptionData subscriptionData = 20;
   string deviceID = 21;
   	// informs us whether the legacy id and token are username-password flow registered
   bool unpassRegistered = 22;
   int64 lastExpiredOn = 23;
-  
 }
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login
