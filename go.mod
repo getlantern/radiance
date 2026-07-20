@@ -33,9 +33,9 @@ require (
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/common v1.2.1-0.20260708083946-cc657b08792c
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
-	github.com/getlantern/domainfront v0.0.0-20260625001429-518c0256669b
+	github.com/getlantern/domainfront v0.0.0-20260720182103-06118b2faed5
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
-	github.com/getlantern/kindling v0.0.0-20260625002640-7cdf7184420c
+	github.com/getlantern/kindling v0.0.0-20260720193730-b9d35ab1ec50
 	github.com/getlantern/lantern-box v0.0.104
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
