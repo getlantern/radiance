@@ -232,8 +232,8 @@ github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wd
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
 github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac h1:TMvkNgLVyIYAfu1dYrOuRPYMVY+cHEo1C0CYWhtSw2A=
 github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac/go.mod h1:0+wlia2hljruM7rhjzBMFhve011lGRO0OxjVSOcXBoQ=
-github.com/getlantern/domainfront v0.0.0-20260721025733-db7c158ccac8 h1:/XB/H1/nRXANtAybB5NjRDjYMfZwR9X0Qs7eGSUGTK4=
-github.com/getlantern/domainfront v0.0.0-20260721025733-db7c158ccac8/go.mod h1:eOcE66YcVTxLiASh77rngh83B9PQtm4gSr7ZxWnaxZU=
+github.com/getlantern/domainfront v0.0.0-20260722154128-2862f7ad2558 h1:2Fiu74ER24v0JeSVA32A5NriP8xQ8RyaNrUpE5AV84s=
+github.com/getlantern/domainfront v0.0.0-20260722154128-2862f7ad2558/go.mod h1:eOcE66YcVTxLiASh77rngh83B9PQtm4gSr7ZxWnaxZU=
 github.com/getlantern/errors v1.0.4 h1:i2iR1M9GKj4WuingpNqJ+XQEw6i6dnAgKAmLj6ZB3X0=
 github.com/getlantern/errors v1.0.4/go.mod h1:/Foq8jtSDGP8GOXzAjeslsC4Ar/3kB+UiQH+WyV4pzY=
 github.com/getlantern/golog v0.0.0-20230503153817-8e72de7e0a65 h1:NlQedYmPI3pRAXJb+hLVVDGqfvvXGRPV8vp7XOjKAZ0=
