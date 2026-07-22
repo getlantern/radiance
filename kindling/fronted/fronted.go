@@ -59,14 +59,15 @@ func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.
 // WithDomainFronting option. The caller owns the returned *Client and is
 // responsible for calling Close() to shut down background goroutines.
 //
-// Startup does no network I/O: it bootstraps on the on-disk config cache (from
-// a prior run) and then the embedded copy. configURL lives on
-// raw.githubusercontent.com, which is blocked in some regions (e.g. China), and
-// fetching it synchronously here stalled radiance init for the full
-// initialFetchTime on every cold start there. The live config is refreshed off
-// the critical path instead — domainfront's own config updater (WithConfigURL)
-// applies it to the in-memory front pool, and a background goroutine warms the
-// on-disk cache for the next cold start.
+// Startup never blocks on network I/O: it bootstraps synchronously on the
+// on-disk config cache (from a prior run) and then the embedded copy, and the
+// live fetch from configURL happens only off the critical path. configURL lives
+// on raw.githubusercontent.com, which is blocked in some regions (e.g. China),
+// and fetching it synchronously here stalled radiance init for the full
+// initialFetchTime on every cold start there. That refresh now runs in the
+// background instead — domainfront's own config updater (WithConfigURL) applies
+// it to the in-memory front pool, and a background goroutine warms the on-disk
+// cache for the next cold start.
 func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*domainfront.Client, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "NewFronted")
 	defer span.End()
@@ -117,7 +118,9 @@ func loadBootstrapConfig(path string) (*domainfront.Config, error) {
 	if path != "" {
 		if f, err := os.Open(path); err == nil {
 			defer f.Close()
-			if cfg, err := domainfront.ParseConfigFromReader(f); err == nil {
+			// Bound the local parse to the same size cap as network fetches; a
+			// larger cache file is treated as unusable and falls through to embedded.
+			if cfg, err := domainfront.ParseConfigFromReader(io.LimitReader(f, maxConfigBytes+1)); err == nil {
 				slog.Debug("bootstrapped fronted config from on-disk cache", "path", path)
 				return cfg, nil
 			} else {
