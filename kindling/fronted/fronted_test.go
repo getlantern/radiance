@@ -34,16 +34,21 @@ func TestLoadBootstrapConfig_FallsBackOnCorruptCache(t *testing.T) {
 	assert.NotEmpty(t, cfg.Providers)
 }
 
-// TestLoadBootstrapConfig_PrefersOnDiskCache verifies a valid on-disk cache is
-// read (the disk branch executes) rather than always using the embedded copy.
+// TestLoadBootstrapConfig_PrefersOnDiskCache verifies the on-disk cache is read
+// in preference to the embedded copy. The embedded fallback is corrupted for
+// the duration of the test so a successful parse can only have come from disk.
 func TestLoadBootstrapConfig_PrefersOnDiskCache(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), configCacheName)
-	// The embedded bytes are a known-valid gzipped config; reuse them as a
-	// stand-in for a previously cached fetch.
+	// Seed the cache with the (valid) embedded bytes before corrupting the
+	// in-memory fallback, so disk holds a good config and embedded does not.
 	require.NoError(t, os.WriteFile(cache, embeddedConfig, 0o600))
 
+	orig := embeddedConfig
+	t.Cleanup(func() { embeddedConfig = orig })
+	embeddedConfig = []byte("corrupt")
+
 	cfg, err := loadBootstrapConfig(cache)
-	require.NoError(t, err)
+	require.NoError(t, err, "must succeed from the on-disk cache with the embedded fallback broken")
 	require.NotNil(t, cfg)
 	assert.NotEmpty(t, cfg.Providers)
 }
@@ -67,7 +72,7 @@ func TestFetchAndCacheConfig_PersistsValidConfig(t *testing.T) {
 }
 
 // TestFetchAndCacheConfig_NoWriteOnError verifies a failed fetch neither errors
-// silently nor poisons the cache — the cache file is left untouched.
+// silently nor clobbers an existing cache — a previously good config survives.
 func TestFetchAndCacheConfig_NoWriteOnError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -75,9 +80,13 @@ func TestFetchAndCacheConfig_NoWriteOnError(t *testing.T) {
 	defer srv.Close()
 
 	cache := filepath.Join(t.TempDir(), configCacheName)
+	seed := []byte("previous-good-config")
+	require.NoError(t, os.WriteFile(cache, seed, 0o600))
+
 	err := fetchAndCacheConfig(context.Background(), srv.Client(), srv.URL, cache)
 	require.Error(t, err)
 
-	_, statErr := os.Stat(cache)
-	assert.True(t, os.IsNotExist(statErr), "cache must not be written on a failed fetch")
+	got, readErr := os.ReadFile(cache)
+	require.NoError(t, readErr)
+	assert.Equal(t, seed, got, "a failed fetch must leave the existing cache untouched")
 }

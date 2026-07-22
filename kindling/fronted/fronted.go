@@ -24,9 +24,9 @@ import (
 
 const (
 	tracerName = "github.com/getlantern/radiance/kindling/fronted"
-	// The masquerades cron pushes daily regenerated configs to domainfront;
-	// the old getlantern/fronted copy went stale when the cron's target moved
-	// during the domainfront fork (last update 2026-06-05).
+	// configURL is the domainfront repo's daily-regenerated fronted.yaml.gz. The
+	// old getlantern/fronted copy went stale when the masquerades cron's target
+	// moved during the domainfront fork (last update 2026-06-05).
 	configURL = "https://raw.githubusercontent.com/getlantern/domainfront/refs/heads/main/fronted.yaml.gz"
 	// initialFetchTime bounds the background cache-warming fetch of configURL.
 	// It no longer gates startup — startup boots on the cached/embedded config —
