@@ -115,18 +115,8 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*do
 // preferring the on-disk cache over the embedded copy. It errors only when the
 // embedded copy is itself unparseable.
 func loadBootstrapConfig(path string) (*domainfront.Config, error) {
-	if path != "" {
-		if f, err := os.Open(path); err == nil {
-			defer f.Close()
-			// Bound the local parse to the same size cap as network fetches; a
-			// larger cache file is treated as unusable and falls through to embedded.
-			if cfg, err := domainfront.ParseConfigFromReader(io.LimitReader(f, maxConfigBytes+1)); err == nil {
-				slog.Debug("bootstrapped fronted config from on-disk cache", "path", path)
-				return cfg, nil
-			} else {
-				slog.Warn("failed to parse on-disk fronted config, using embedded", "path", path, "err", err)
-			}
-		}
+	if cfg := parseCachedConfig(path); cfg != nil {
+		return cfg, nil
 	}
 	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(embeddedConfig))
 	if err != nil {
@@ -134,6 +124,40 @@ func loadBootstrapConfig(path string) (*domainfront.Config, error) {
 	}
 	slog.Debug("bootstrapped fronted config from embedded copy")
 	return cfg, nil
+}
+
+// parseCachedConfig returns the on-disk cached config, or nil when it is absent,
+// unreadable, larger than maxConfigBytes, or unparseable — in every failure
+// case the caller falls back to the embedded copy. The size check mirrors the
+// network path (fetchAndCacheConfig): read one byte past the cap and reject if
+// present, since gzip's tolerance of trailing bytes means a bare io.LimitReader
+// would accept an oversized file whose config prefix happens to parse.
+func parseCachedConfig(path string) *domainfront.Config {
+	if path == "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		slog.Warn("failed to read on-disk fronted config, using embedded", "path", path, "err", err)
+		return nil
+	}
+	if len(data) > maxConfigBytes {
+		slog.Warn("on-disk fronted config exceeds size cap, using embedded", "path", path)
+		return nil
+	}
+	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(data))
+	if err != nil {
+		slog.Warn("failed to parse on-disk fronted config, using embedded", "path", path, "err", err)
+		return nil
+	}
+	slog.Debug("bootstrapped fronted config from on-disk cache", "path", path)
+	return cfg
 }
 
 // fetchAndCacheConfig fetches the live config and, when it parses cleanly,

@@ -53,6 +53,24 @@ func TestLoadBootstrapConfig_PrefersOnDiskCache(t *testing.T) {
 	assert.NotEmpty(t, cfg.Providers)
 }
 
+// TestLoadBootstrapConfig_RejectsOversizedCache verifies a cache file over the
+// size cap is rejected even when its gzip prefix would parse (gzip ignores
+// trailing bytes). With the embedded fallback broken, acceptance of the disk
+// file would surface as success; rejection surfaces as the embedded error.
+func TestLoadBootstrapConfig_RejectsOversizedCache(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), configCacheName)
+	oversized := make([]byte, maxConfigBytes+1)
+	copy(oversized, embeddedConfig) // valid gzip config prefix, then zero padding
+	require.NoError(t, os.WriteFile(cache, oversized, 0o600))
+
+	orig := embeddedConfig
+	t.Cleanup(func() { embeddedConfig = orig })
+	embeddedConfig = []byte("corrupt")
+
+	_, err := loadBootstrapConfig(cache)
+	require.Error(t, err, "oversized cache must be rejected; the broken embedded fallback then errors")
+}
+
 // TestFetchAndCacheConfig_PersistsValidConfig verifies a good response is
 // validated and written to the cache path for the next cold start.
 func TestFetchAndCacheConfig_PersistsValidConfig(t *testing.T) {
