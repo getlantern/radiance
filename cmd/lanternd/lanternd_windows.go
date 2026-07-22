@@ -13,7 +13,6 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/internal"
 )
 
 const (
@@ -31,7 +30,7 @@ func init() {
 	isWindowsService = isSvc
 }
 
-func install(dataPath, logPath, logLevel string) error {
+func install(dataPath, logPath, logLevel string, environment daemonEnvironment) error {
 	dataPath = os.ExpandEnv(dataPath)
 	logPath = os.ExpandEnv(logPath)
 
@@ -62,12 +61,12 @@ func install(dataPath, logPath, logLevel string) error {
 		Description:  "Lantern Daemon Service",
 	}
 
-	args := []string{
-		"run",
-		"--data-path", dataPath,
-		"--log-path", logPath,
-		"--log-level", logLevel,
-	}
+	args := (serviceRunConfig{
+		dataPath:    dataPath,
+		logPath:     logPath,
+		logLevel:    logLevel,
+		environment: environment,
+	}).args()
 
 	slog.Info("Creating Windows service", "exe", exe, "args", args)
 	service, err := m.CreateService(serviceName, exe, config, args...)
@@ -166,12 +165,16 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 	// (typically just [serviceName]). The actual configured arguments are baked into
 	// os.Args via the service ImagePath. Parse from os.Args to get the real values,
 	// falling back to defaults if not present.
-	dataPath, logPath, logLevel := parseServiceArgs(os.Args[1:])
+	config, err := parseServiceRunArgs(os.Args[1:])
+	if err != nil {
+		slog.Error("Failed to parse service arguments", "error", err)
+		return true, 1
+	}
 
 	// Run the daemon as a child process so we can clean up network state if it crashes,
 	// regardless of whether the SCM is configured to restart the service.
-	childArgs := []string{"run", "--data-path", dataPath, "--log-path", logPath, "--log-level", logLevel}
-	child, err := spawnChild(childArgs, dataPath, logPath, logLevel)
+	childArgs := config.args()
+	child, err := spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
 	if err != nil {
 		slog.Error("Failed to start daemon", "error", err)
 		return true, 1
@@ -202,30 +205,4 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 			}
 		}
 	}
-}
-
-func parseServiceArgs(args []string) (dataPath, logPath, logLevel string) {
-	dataPath = internal.DefaultDataPath()
-	logPath = internal.DefaultLogPath()
-	logLevel = "info"
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--data-path":
-			if i+1 < len(args) {
-				dataPath = os.ExpandEnv(args[i+1])
-				i++
-			}
-		case "--log-path":
-			if i+1 < len(args) {
-				logPath = os.ExpandEnv(args[i+1])
-				i++
-			}
-		case "--log-level":
-			if i+1 < len(args) {
-				logLevel = args[i+1]
-				i++
-			}
-		}
-	}
-	return
 }
