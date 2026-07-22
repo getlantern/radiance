@@ -23,11 +23,14 @@ import (
 )
 
 const (
-	tracerName       = "github.com/getlantern/radiance/kindling/fronted"
+	tracerName = "github.com/getlantern/radiance/kindling/fronted"
 	// The masquerades cron pushes daily regenerated configs to domainfront;
 	// the old getlantern/fronted copy went stale when the cron's target moved
 	// during the domainfront fork (last update 2026-06-05).
-	configURL        = "https://raw.githubusercontent.com/getlantern/domainfront/refs/heads/main/fronted.yaml.gz"
+	configURL = "https://raw.githubusercontent.com/getlantern/domainfront/refs/heads/main/fronted.yaml.gz"
+	// initialFetchTime bounds the background cache-warming fetch of configURL.
+	// It no longer gates startup — startup boots on the cached/embedded config —
+	// so a long timeout here is harmless where configURL is blocked.
 	initialFetchTime = 30 * time.Second
 	// configCacheName holds the last successfully fetched config so the next
 	// startup can bootstrap when configURL is unreachable.
@@ -39,8 +42,8 @@ const (
 	maxConfigBytes = 10 << 20 // 10 MiB
 )
 
-// embeddedConfig is the last-resort fallback when both the live fetch and
-// the local config cache fail — typical case is a fresh install with
+// embeddedConfig is the last-resort bootstrap when the on-disk config cache is
+// absent or unparseable — typical case is a fresh install with
 // raw.githubusercontent.com blocked from the very first boot.
 //
 //go:embed fronted.yaml.gz
@@ -56,9 +59,14 @@ func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.
 // WithDomainFronting option. The caller owns the returned *Client and is
 // responsible for calling Close() to shut down background goroutines.
 //
-// The initial config is fetched synchronously; on failure NewFronted falls
-// back to a previously cached config and then to an embedded copy, so it
-// does not block first boot when the config host is unreachable.
+// Startup does no network I/O: it bootstraps on the on-disk config cache (from
+// a prior run) and then the embedded copy. configURL lives on
+// raw.githubusercontent.com, which is blocked in some regions (e.g. China), and
+// fetching it synchronously here stalled radiance init for the full
+// initialFetchTime on every cold start there. The live config is refreshed off
+// the critical path instead — domainfront's own config updater (WithConfigURL)
+// applies it to the in-memory front pool, and a background goroutine warms the
+// on-disk cache for the next cold start.
 func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*domainfront.Client, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "NewFronted")
 	defer span.End()
@@ -70,10 +78,10 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*do
 	}
 
 	configCache := filepath.Join(filepath.Dir(cacheFile), configCacheName)
-	cfg, err := fetchInitialConfig(ctx, smartClient, configCache)
+	cfg, err := loadBootstrapConfig(configCache)
 	if err != nil {
 		span.RecordError(err)
-		return nil, fmt.Errorf("fetch initial fronted config: %w", err)
+		return nil, fmt.Errorf("load bootstrap fronted config: %w", err)
 	}
 
 	opts := []domainfront.Option{
@@ -83,70 +91,86 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*do
 		domainfront.WithConfigURL(configURL),
 		domainfront.WithHTTPClient(smartClient),
 	}
+	client, err := domainfront.New(ctx, cfg, opts...)
+	if err != nil {
+		span.RecordError(err)
+		return nil, err
+	}
 
-	return domainfront.New(ctx, cfg, opts...)
+	// Warm the on-disk cache so the next cold start bootstraps on a fresh
+	// config even if configURL is unreachable then. Best-effort and off the
+	// critical path: boot already succeeded on the cached copy, and the
+	// in-memory pool is kept current by domainfront's own updater.
+	go func() {
+		if err := fetchAndCacheConfig(ctx, smartClient, configURL, configCache); err != nil {
+			slog.Debug("background fronted-config cache refresh failed", "err", err)
+		}
+	}()
+
+	return client, nil
 }
 
-// fetchInitialConfig persists only parsed-OK bytes to configCache; on any
-// failure it falls through to loadCachedConfig.
-func fetchInitialConfig(ctx context.Context, httpClient *http.Client, configCache string) (*domainfront.Config, error) {
+// loadBootstrapConfig returns the startup config with no network I/O,
+// preferring the on-disk cache over the embedded copy. It errors only when the
+// embedded copy is itself unparseable.
+func loadBootstrapConfig(path string) (*domainfront.Config, error) {
+	if path != "" {
+		if f, err := os.Open(path); err == nil {
+			defer f.Close()
+			if cfg, err := domainfront.ParseConfigFromReader(f); err == nil {
+				slog.Debug("bootstrapped fronted config from on-disk cache", "path", path)
+				return cfg, nil
+			} else {
+				slog.Warn("failed to parse on-disk fronted config, using embedded", "path", path, "err", err)
+			}
+		}
+	}
+	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(embeddedConfig))
+	if err != nil {
+		return nil, fmt.Errorf("embedded fronted config parse failed: %w", err)
+	}
+	slog.Debug("bootstrapped fronted config from embedded copy")
+	return cfg, nil
+}
+
+// fetchAndCacheConfig fetches the live config and, when it parses cleanly,
+// persists it to configCache for the next cold start. It does no fallback:
+// callers run it off the critical path and ignore failures, since startup has
+// already succeeded on the bootstrap config.
+func fetchAndCacheConfig(ctx context.Context, httpClient *http.Client, url, configCache string) error {
 	fetchCtx, cancel := context.WithTimeout(ctx, initialFetchTime)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, configURL, nil)
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("new request: %w", err)
+		return fmt.Errorf("new request: %w", err)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return loadCachedConfig(configCache, fmt.Errorf("fetch %s: %w", configURL, err))
+		return fmt.Errorf("fetch %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return loadCachedConfig(configCache, fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, configURL))
+		return fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, url)
 	}
 
 	// Cap reads to maxConfigBytes + 1 so we can detect when the body exceeds
 	// the limit (vs. a body that happens to be exactly maxConfigBytes long).
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigBytes+1))
 	if err != nil {
-		return loadCachedConfig(configCache, fmt.Errorf("read response: %w", err))
+		return fmt.Errorf("read response: %w", err)
 	}
 	if len(body) > maxConfigBytes {
-		return loadCachedConfig(configCache, fmt.Errorf("response body exceeds %d bytes", maxConfigBytes))
+		return fmt.Errorf("response body exceeds %d bytes", maxConfigBytes)
 	}
-	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(body))
-	if err != nil {
-		return loadCachedConfig(configCache, fmt.Errorf("parse response: %w", err))
+	// Validate before persisting so a corrupt body never poisons the cache.
+	if _, err := domainfront.ParseConfigFromReader(bytes.NewReader(body)); err != nil {
+		return fmt.Errorf("parse response: %w", err)
 	}
 	if configCache != "" {
 		if err := atomicfile.WriteFile(configCache, body, fileperm.File); err != nil {
-			slog.Warn("failed to persist fronted config cache", "path", configCache, "err", err)
+			return fmt.Errorf("persist config cache %s: %w", configCache, err)
 		}
 	}
-	return cfg, nil
-}
-
-// loadCachedConfig tries, in order: the on-disk config cache (from a prior
-// successful fetch) and then the embedded config. Returns fetchErr only if
-// both fallbacks fail to parse — so a clean install with the live fetch
-// blocked still boots on the embedded copy.
-func loadCachedConfig(path string, fetchErr error) (*domainfront.Config, error) {
-	if path != "" {
-		if f, err := os.Open(path); err == nil {
-			defer f.Close()
-			if cfg, err := domainfront.ParseConfigFromReader(f); err == nil {
-				slog.Warn("using cached fronted config", "path", path, "fetch_err", fetchErr)
-				return cfg, nil
-			} else {
-				slog.Warn("failed to parse on-disk fronted config, trying embedded", "path", path, "err", err)
-			}
-		}
-	}
-	cfg, err := domainfront.ParseConfigFromReader(bytes.NewReader(embeddedConfig))
-	if err != nil {
-		return nil, fmt.Errorf("embedded fronted config parse failed: %w (original fetch error: %v)", err, fetchErr)
-	}
-	slog.Warn("using embedded fronted config", "fetch_err", fetchErr)
-	return cfg, nil
+	return nil
 }
