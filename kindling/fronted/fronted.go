@@ -57,7 +57,10 @@ func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.
 
 // NewFronted builds a domainfront.Client for use with kindling's
 // WithDomainFronting option. The caller owns the returned *Client and is
-// responsible for calling Close() to shut down background goroutines.
+// responsible for calling Close() to shut down the client's own background
+// goroutines (crawler, config updater). The one-shot cache-warming goroutine
+// started here is not tied to Close(): it is bounded by ctx and the fetch
+// timeout, so cancel ctx to abort an in-flight refresh.
 //
 // Startup never blocks on network I/O: it bootstraps synchronously on the
 // on-disk config cache (from a prior run) and then the embedded copy, and the
