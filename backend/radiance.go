@@ -1505,16 +1505,16 @@ func (r *LocalBackend) ActivationCode(ctx context.Context, email, resellerCode s
 	return r.accountClient.ActivationCode(ctx, email, resellerCode)
 }
 
-func (r *LocalBackend) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
-	return r.accountClient.NewStripeSubscription(ctx, email, planID)
+func (r *LocalBackend) NewStripeSubscription(ctx context.Context, email, planID, couponCode string) (string, error) {
+	return r.accountClient.NewStripeSubscription(ctx, email, planID, couponCode)
 }
 
 func (r *LocalBackend) PaymentRedirect(ctx context.Context, data account.PaymentRedirectData) (string, error) {
 	return r.accountClient.PaymentRedirect(ctx, data)
 }
 
-func (r *LocalBackend) ReferralAttach(ctx context.Context, code string) (bool, error) {
-	return r.accountClient.ReferralAttach(ctx, code)
+func (r *LocalBackend) ReferralAttach(ctx context.Context, code, channel string) (*account.ReferralAttachResponse, error) {
+	return r.accountClient.ReferralAttach(ctx, code, channel)
 }
 
 func (r *LocalBackend) StripeBillingPortalURL(ctx context.Context) (string, error) {

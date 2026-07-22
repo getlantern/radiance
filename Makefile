@@ -58,8 +58,8 @@ install: install-daemon install-cli
 .PHONY: proto
 proto:
 	go build -o build/protoc-gen-go google.golang.org/protobuf/cmd/protoc-gen-go
-	protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative api/protos/auth.proto
-	protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative api/protos/subscription.proto
+	protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative account/protos/auth.proto
+	protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative account/protos/subscription.proto
 	protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative issue/issue.proto
 
 .PHONY: test

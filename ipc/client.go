@@ -597,18 +597,22 @@ func (c *Client) ActivationCode(ctx context.Context, email, resellerCode string)
 }
 
 // NewStripeSubscription creates a new Stripe subscription and returns the client secret.
-func (c *Client) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
+func (c *Client) NewStripeSubscription(ctx context.Context, email, planID, couponCode string) (string, error) {
 	var resp ClientSecretResponse
 	err := c.doJSON(ctx, http.MethodPost, subscriptionStripeEndpoint,
-		StripeSubscriptionRequest{Email: email, PlanID: planID}, &resp)
+		StripeSubscriptionRequest{Email: email, PlanID: planID, CouponCode: couponCode}, &resp)
 	return resp.ClientSecret, err
 }
 
-// ReferralAttach attaches a referral code to the current user.
-func (c *Client) ReferralAttach(ctx context.Context, code string) (bool, error) {
-	var resp SuccessResponse
-	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralEndpoint, CodeRequest{Code: code}, &resp)
-	return resp.Success, err
+// ReferralAttach attaches a referral code to the current user. A non-empty
+// channel also returns the resulting plans, providers, and discount.
+func (c *Client) ReferralAttach(ctx context.Context, code, channel string) (*account.ReferralAttachResponse, error) {
+	var resp account.ReferralAttachResponse
+	err := c.doJSON(ctx, http.MethodPost, subscriptionReferralEndpoint, CodeRequest{Code: code, Channel: channel}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // StripeBillingPortalURL returns the Stripe billing portal URL.

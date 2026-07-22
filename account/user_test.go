@@ -27,8 +27,19 @@ type testServer struct {
 	cache                                        map[string]string
 	paymentRedirectIdempotencyKey                string
 	paymentRedirectHasIdempotencyKey             bool
+	paymentRedirectCouponCode                    string
+	paymentRedirectHasCouponCode                 bool
 	subscriptionPaymentRedirectIdempotencyKey    string
 	subscriptionPaymentRedirectHasIdempotencyKey bool
+	subscriptionPaymentRedirectCouponCode        string
+	subscriptionPaymentRedirectHasCouponCode     bool
+	stripeSubscriptionCouponCode                 string
+	stripeSubscriptionHasCouponCode              bool
+	referralAttachV1Code                         string
+	referralAttachV1Error                        string
+	referralAttachV2Code                         string
+	referralAttachV2Channel                      string
+	referralAttachV2Error                        string
 	paymentRedirectResponse                      any
 }
 
@@ -173,7 +184,28 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/referral-attach", func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, protos.BaseResponse{})
+		var body struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		state.referralAttachV1Code = body.Code
+		writeProtoResponse(w, &protos.BaseResponse{Error: state.referralAttachV1Error})
+	})
+
+	mux.HandleFunc("/referral-attach-v2", func(w http.ResponseWriter, r *http.Request) {
+		state.referralAttachV2Channel = r.URL.Query().Get("distributionChannel")
+		var body struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		state.referralAttachV2Code = body.Code
+		writeJSONResponse(w, ReferralAttachResponse{
+			BaseResponse: &protos.BaseResponse{Error: state.referralAttachV2Error},
+			Code:         body.Code,
+			DiscountPct:  20,
+			Type:         "affiliate",
+			Plans:        []*protos.Plan{{Id: "1y-usd-10", Description: "Pro Plan"}},
+		})
 	})
 
 	// Subscription endpoints
@@ -188,6 +220,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		values := r.URL.Query()
 		state.subscriptionPaymentRedirectIdempotencyKey = values.Get("idempotencyKey")
 		_, state.subscriptionPaymentRedirectHasIdempotencyKey = values["idempotencyKey"]
+		state.subscriptionPaymentRedirectCouponCode = values.Get("couponCode")
+		_, state.subscriptionPaymentRedirectHasCouponCode = values["couponCode"]
 		writeJSONResponse(w, map[string]string{"redirect": "https://example.com/redirect"})
 	})
 
@@ -195,6 +229,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		values := r.URL.Query()
 		state.paymentRedirectIdempotencyKey = values.Get("idempotencyKey")
 		_, state.paymentRedirectHasIdempotencyKey = values["idempotencyKey"]
+		state.paymentRedirectCouponCode = values.Get("couponCode")
+		_, state.paymentRedirectHasCouponCode = values["couponCode"]
 		resp := state.paymentRedirectResponse
 		if resp == nil {
 			resp = map[string]string{"redirect": "https://example.com/redirect"}
@@ -203,6 +239,9 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/stripe-subscription", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		state.stripeSubscriptionCouponCode, state.stripeSubscriptionHasCouponCode = body["couponCode"]
 		writeJSONResponse(w, SubscriptionResponse{
 			CustomerID:     "cus_123",
 			SubscriptionID: "sub_123",
@@ -393,4 +432,45 @@ func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
 	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error decoding JWT")
+}
+
+func TestReferralAttach_EmptyChannelUsesV1(t *testing.T) {
+	ac, ts := newTestClient(t)
+	resp, err := ac.ReferralAttach(context.Background(), "AFF123", "")
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "AFF123", ts.referralAttachV1Code)
+	assert.Empty(t, ts.referralAttachV2Code)
+}
+
+func TestReferralAttach_V1Error(t *testing.T) {
+	ac, ts := newTestClient(t)
+	ts.referralAttachV1Error = "invalid code"
+	resp, err := ac.ReferralAttach(context.Background(), "BAD", "")
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "invalid code")
+}
+
+func TestReferralAttach_ChannelUsesV2(t *testing.T) {
+	ac, ts := newTestClient(t)
+	resp, err := ac.ReferralAttach(context.Background(), "AFF123", "store")
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "AFF123", ts.referralAttachV2Code)
+	assert.Equal(t, "store", ts.referralAttachV2Channel)
+	assert.Empty(t, ts.referralAttachV1Code)
+	assert.Equal(t, "AFF123", resp.Code)
+	assert.Equal(t, 20, resp.DiscountPct)
+	assert.Equal(t, "affiliate", resp.Type)
+	assert.NotEmpty(t, resp.Plans)
+}
+
+func TestReferralAttach_V2Error(t *testing.T) {
+	ac, ts := newTestClient(t)
+	ts.referralAttachV2Error = "invalid code"
+	resp, err := ac.ReferralAttach(context.Background(), "BAD", "store")
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "invalid code")
 }

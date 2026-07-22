@@ -40,6 +40,7 @@ type PaymentRedirectData struct {
 	DeviceName     string           `json:"deviceName" validate:"required" errorId:"device-name"`
 	BillingType    SubscriptionType `json:"billingType"`
 	IdempotencyKey string           `json:"idempotencyKey"`
+	CouponCode     string           `json:"couponCode"`
 }
 
 type SubscriptionPlans struct {
@@ -83,13 +84,16 @@ func (a *Client) SubscriptionPlans(ctx context.Context, channel string) (string,
 }
 
 // NewStripeSubscription creates a new Stripe subscription for the given email and plan ID.
-func (a *Client) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
+func (a *Client) NewStripeSubscription(ctx context.Context, email, planID, couponCode string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_stripe_subscription")
 	defer span.End()
 
 	data := map[string]string{
 		"email":  email,
 		"planId": planID,
+	}
+	if couponCode != "" {
+		data["couponCode"] = couponCode
 	}
 	resp, err := a.sendProRequest(ctx, "POST", "/stripe-subscription", nil, nil, data)
 	if err != nil {
@@ -226,6 +230,9 @@ func (a *Client) SubscriptionPaymentRedirectURL(ctx context.Context, data Paymen
 	if data.IdempotencyKey != "" {
 		params["idempotencyKey"] = data.IdempotencyKey
 	}
+	if data.CouponCode != "" {
+		params["couponCode"] = data.CouponCode
+	}
 	return a.paymentRedirect(ctx, "/subscription-payment-redirect", params)
 }
 
@@ -242,6 +249,9 @@ func (a *Client) PaymentRedirect(ctx context.Context, data PaymentRedirectData) 
 	}
 	if data.IdempotencyKey != "" {
 		params["idempotencyKey"] = data.IdempotencyKey
+	}
+	if data.CouponCode != "" {
+		params["couponCode"] = data.CouponCode
 	}
 	return a.paymentRedirect(ctx, "/payment-redirect", params)
 }

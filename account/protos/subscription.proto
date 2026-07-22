@@ -14,6 +14,11 @@ message Plan {
   string formattedBonus = 10;
   string renewalText = 11;
   map<string, int64> renewalBonusExpected = 13;
+  int64 originalUsdPrice = 14;
+  int64 originalUsdPrice1Y = 15;
+  int64 originalUsdPrice2Y = 16;
+  map<string, int64> originalPrice = 17;
+  map<string, int64> originalExpectedMonthlyPrice = 18;
 }
 
 message PaymentProviders {
