@@ -1318,8 +1318,9 @@ type LoginResponse_UserData struct {
 	SubscriptionData *LoginResponse_UserData_SubscriptionData `protobuf:"bytes,20,opt,name=subscriptionData,proto3" json:"subscriptionData,omitempty"`
 	DeviceID         string                                   `protobuf:"bytes,21,opt,name=deviceID,proto3" json:"deviceID,omitempty"`
 	// informs us whether the legacy id and token are username-password flow registered
-	UnpassRegistered bool  `protobuf:"varint,22,opt,name=unpassRegistered,proto3" json:"unpassRegistered,omitempty"`
-	LastExpiredOn    int64 `protobuf:"varint,23,opt,name=lastExpiredOn,proto3" json:"lastExpiredOn,omitempty"`
+	UnpassRegistered bool                               `protobuf:"varint,22,opt,name=unpassRegistered,proto3" json:"unpassRegistered,omitempty"`
+	LastExpiredOn    int64                              `protobuf:"varint,23,opt,name=lastExpiredOn,proto3" json:"lastExpiredOn,omitempty"`
+	Referrals        []*LoginResponse_UserData_Referral `protobuf:"bytes,24,rep,name=referrals,proto3" json:"referrals,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1509,6 +1510,13 @@ func (x *LoginResponse_UserData) GetLastExpiredOn() int64 {
 	return 0
 }
 
+func (x *LoginResponse_UserData) GetReferrals() []*LoginResponse_UserData_Referral {
+	if x != nil {
+		return x.Referrals
+	}
+	return nil
+}
+
 type LoginResponse_UserData_SubscriptionData struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	SubscriptionID     string                 `protobuf:"bytes,1,opt,name=subscriptionID,proto3" json:"subscriptionID,omitempty"`
@@ -1633,6 +1641,74 @@ func (x *LoginResponse_UserData_SubscriptionData) GetProvider() string {
 	return ""
 }
 
+type LoginResponse_UserData_Referral struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	UserId          string                 `protobuf:"bytes,1,opt,name=userId,proto3" json:"userId,omitempty"`
+	Converted       bool                   `protobuf:"varint,2,opt,name=converted,proto3" json:"converted,omitempty"`
+	ConvertedAt     int64                  `protobuf:"varint,3,opt,name=convertedAt,proto3" json:"convertedAt,omitempty"`
+	BonusDaysEarned int64                  `protobuf:"varint,4,opt,name=bonusDaysEarned,proto3" json:"bonusDaysEarned,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *LoginResponse_UserData_Referral) Reset() {
+	*x = LoginResponse_UserData_Referral{}
+	mi := &file_account_protos_auth_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoginResponse_UserData_Referral) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoginResponse_UserData_Referral) ProtoMessage() {}
+
+func (x *LoginResponse_UserData_Referral) ProtoReflect() protoreflect.Message {
+	mi := &file_account_protos_auth_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoginResponse_UserData_Referral.ProtoReflect.Descriptor instead.
+func (*LoginResponse_UserData_Referral) Descriptor() ([]byte, []int) {
+	return file_account_protos_auth_proto_rawDescGZIP(), []int{9, 1, 1}
+}
+
+func (x *LoginResponse_UserData_Referral) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *LoginResponse_UserData_Referral) GetConverted() bool {
+	if x != nil {
+		return x.Converted
+	}
+	return false
+}
+
+func (x *LoginResponse_UserData_Referral) GetConvertedAt() int64 {
+	if x != nil {
+		return x.ConvertedAt
+	}
+	return 0
+}
+
+func (x *LoginResponse_UserData_Referral) GetBonusDaysEarned() int64 {
+	if x != nil {
+		return x.BonusDaysEarned
+	}
+	return 0
+}
+
 var File_account_protos_auth_proto protoreflect.FileDescriptor
 
 const file_account_protos_auth_proto_rawDesc = "" +
@@ -1667,7 +1743,7 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\fLoginRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x14\n" +
 	"\x05proof\x18\x02 \x01(\fR\x05proof\x12\x1a\n" +
-	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\xc2\v\n" +
+	"\bdeviceId\x18\x03 \x01(\tR\bdeviceId\"\x91\r\n" +
 	"\rLoginResponse\x12\x1a\n" +
 	"\blegacyID\x18\x01 \x01(\x03R\blegacyID\x12 \n" +
 	"\vlegacyToken\x18\x02 \x01(\tR\vlegacyToken\x12\x0e\n" +
@@ -1680,7 +1756,8 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\x06Device\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\xd0\b\n" +
+	"\acreated\x18\x03 \x01(\x03R\acreated\x1a\x9f\n" +
+	"\n" +
 	"\bUserData\x12\x16\n" +
 	"\x06userId\x18\x01 \x01(\x03R\x06userId\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x14\n" +
@@ -1708,7 +1785,8 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\x10subscriptionData\x18\x14 \x01(\v2(.LoginResponse.UserData.SubscriptionDataR\x10subscriptionData\x12\x1a\n" +
 	"\bdeviceID\x18\x15 \x01(\tR\bdeviceID\x12*\n" +
 	"\x10unpassRegistered\x18\x16 \x01(\bR\x10unpassRegistered\x12$\n" +
-	"\rlastExpiredOn\x18\x17 \x01(\x03R\rlastExpiredOn\x1a\xf0\x02\n" +
+	"\rlastExpiredOn\x18\x17 \x01(\x03R\rlastExpiredOn\x12>\n" +
+	"\treferrals\x18\x18 \x03(\v2 .LoginResponse.UserData.ReferralR\treferrals\x1a\xf0\x02\n" +
 	"\x10SubscriptionData\x12&\n" +
 	"\x0esubscriptionID\x18\x01 \x01(\tR\x0esubscriptionID\x12\x16\n" +
 	"\x06planID\x18\x02 \x01(\tR\x06planID\x12*\n" +
@@ -1721,7 +1799,12 @@ const file_account_protos_auth_proto_rawDesc = "" +
 	"\vcancelledAt\x18\t \x01(\x03R\vcancelledAt\x12\x1c\n" +
 	"\tautoRenew\x18\n" +
 	" \x01(\bR\tautoRenew\x12\x1a\n" +
-	"\bprovider\x18\v \x01(\tR\bprovider\"3\n" +
+	"\bprovider\x18\v \x01(\tR\bprovider\x1a\x8c\x01\n" +
+	"\bReferral\x12\x16\n" +
+	"\x06userId\x18\x01 \x01(\tR\x06userId\x12\x1c\n" +
+	"\tconverted\x18\x02 \x01(\bR\tconverted\x12 \n" +
+	"\vconvertedAt\x18\x03 \x01(\x03R\vconvertedAt\x12(\n" +
+	"\x0fbonusDaysEarned\x18\x04 \x01(\x03R\x0fbonusDaysEarned\"3\n" +
 	"\x1bStartRecoveryByEmailRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\"\x88\x01\n" +
 	"\x1eCompleteRecoveryByEmailRequest\x12\x14\n" +
@@ -1775,7 +1858,7 @@ func file_account_protos_auth_proto_rawDescGZIP() []byte {
 	return file_account_protos_auth_proto_rawDescData
 }
 
-var file_account_protos_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_account_protos_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_account_protos_auth_proto_goTypes = []any{
 	(*SignupRequest)(nil),                           // 0: SignupRequest
 	(*SignupResponse)(nil),                          // 1: SignupResponse
@@ -1800,17 +1883,19 @@ var file_account_protos_auth_proto_goTypes = []any{
 	(*LoginResponse_Device)(nil),                    // 20: LoginResponse.Device
 	(*LoginResponse_UserData)(nil),                  // 21: LoginResponse.UserData
 	(*LoginResponse_UserData_SubscriptionData)(nil), // 22: LoginResponse.UserData.SubscriptionData
+	(*LoginResponse_UserData_Referral)(nil),         // 23: LoginResponse.UserData.Referral
 }
 var file_account_protos_auth_proto_depIdxs = []int32{
 	21, // 0: LoginResponse.legacyUserData:type_name -> LoginResponse.UserData
 	20, // 1: LoginResponse.devices:type_name -> LoginResponse.Device
 	20, // 2: LoginResponse.UserData.devices:type_name -> LoginResponse.Device
 	22, // 3: LoginResponse.UserData.subscriptionData:type_name -> LoginResponse.UserData.SubscriptionData
-	4,  // [4:4] is the sub-list for method output_type
-	4,  // [4:4] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	23, // 4: LoginResponse.UserData.referrals:type_name -> LoginResponse.UserData.Referral
+	5,  // [5:5] is the sub-list for method output_type
+	5,  // [5:5] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_account_protos_auth_proto_init() }
@@ -1824,7 +1909,7 @@ func file_account_protos_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_account_protos_auth_proto_rawDesc), len(file_account_protos_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
