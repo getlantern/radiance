@@ -103,15 +103,22 @@ message LoginResponse {
       int64 cancelledAt = 9;
       bool autoRenew = 10;
       string provider = 11;
-}
+    }
 
-  SubscriptionData subscriptionData = 20; 
-  string deviceID = 21;
-  	// informs us whether the legacy id and token are username-password flow registered
-  bool unpassRegistered = 22;
-  int64 lastExpiredOn = 23;
-  
-}
+    message Referral {
+      string userId = 1;
+      bool converted = 2;
+      int64 convertedAt = 3;
+      int64 bonusDaysEarned = 4;
+    }
+
+    SubscriptionData subscriptionData = 20;
+    string deviceID = 21;
+    // informs us whether the legacy id and token are username-password flow registered
+    bool unpassRegistered = 22;
+    int64 lastExpiredOn = 23;
+    repeated Referral referrals = 24;
+  }
   bool Success = 5;
   // this maps to /user-data call in pro-server and is returned only on successful login
   UserData legacyUserData = 6;
