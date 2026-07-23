@@ -81,6 +81,7 @@ func attachmentContentType(attachment *Attachment) string {
 
 // validateFirstClassAttachments applies the screenshot limits before we switch
 // the issue request from the protobuf-only path to multipart/form-data.
+//
 // existingBytes accounts for attachments already committed to the outgoing
 // multipart body (log archive, proto-side attachments) so screenshots and
 // logs share a single budget instead of each getting an independent cap.

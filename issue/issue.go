@@ -88,7 +88,8 @@ type IssueReport struct {
 	Model string
 	// Attachments contains in-memory screenshot attachments supplied by the caller.
 	// They are sent as separate multipart files, with at most
-	// [MaxFirstClassAttachmentCount] files and [MaxFirstClassAttachmentBytes] bytes.
+	// [MaxFirstClassAttachmentCount] files; their combined size with the log
+	// archive is capped at [MaxAttachmentBytes].
 	Attachments []*Attachment
 	// AdditionalAttachments is a list of additional files to be attached. The log file will be
 	// automatically included.
