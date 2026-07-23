@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	maxCompressedSize = int64(19.5 * 1024 * 1024) // 19.5 MB - 20 MB is the max size so allow some buffer for overhead
+	maxCompressedSize = int64(MaxAttachmentBytes)
 	tracerName        = "github.com/getlantern/radiance/issue"
 )
 
@@ -157,7 +157,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	contentType := "application/x-protobuf"
 	body := bytes.NewReader(out)
 	if len(firstClassAttachments) > 0 {
-		if err := validateFirstClassAttachments(firstClassAttachments); err != nil {
+		if err := validateFirstClassAttachments(firstClassAttachments, len(archive)); err != nil {
 			slog.Error("invalid issue attachments", "error", err)
 			return err
 		}

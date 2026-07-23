@@ -15,9 +15,12 @@ const (
 	// MaxFirstClassAttachmentCount is the maximum number of screenshot
 	// attachments that can be sent as first-class multipart files.
 	MaxFirstClassAttachmentCount = 3
-	// MaxFirstClassAttachmentBytes is the maximum combined size of screenshot
-	// attachments that can be sent as first-class multipart files.
-	MaxFirstClassAttachmentBytes = 15 * 1024 * 1024
+	// MaxAttachmentBytes bounds the total size of every attachment in the
+	// multipart body (screenshots plus the log archive plus any other proto
+	// attachments). Freshdesk rejects tickets whose combined attachments
+	// exceed 20 MB; the remaining headroom covers multipart framing and
+	// non-attachment proto fields.
+	MaxAttachmentBytes = 19 * 1024 * 1024
 
 	requestPartName        = "request"
 	requestPartFilename    = "request.pb"
@@ -77,9 +80,12 @@ func attachmentContentType(attachment *Attachment) string {
 
 // validateFirstClassAttachments applies the screenshot limits before we switch
 // the issue request from the protobuf-only path to multipart/form-data.
-func validateFirstClassAttachments(attachments []*Attachment) error {
+// existingBytes accounts for attachments already committed to the outgoing
+// multipart body (log archive, proto-side attachments) so screenshots and
+// logs share a single budget instead of each getting an independent cap.
+func validateFirstClassAttachments(attachments []*Attachment, existingBytes int) error {
 	count := 0
-	totalBytes := 0
+	totalBytes := existingBytes
 
 	for _, attachment := range attachments {
 		if attachment == nil {
@@ -117,10 +123,10 @@ func validateFirstClassAttachments(attachments []*Attachment) error {
 		}
 
 		totalBytes += len(attachment.Data)
-		if totalBytes > MaxFirstClassAttachmentBytes {
+		if totalBytes > MaxAttachmentBytes {
 			return fmt.Errorf(
-				"total screenshot attachment size exceeds %d bytes",
-				MaxFirstClassAttachmentBytes,
+				"total attachment size exceeds %d bytes",
+				MaxAttachmentBytes,
 			)
 		}
 	}
