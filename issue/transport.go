@@ -15,11 +15,12 @@ const (
 	// MaxFirstClassAttachmentCount is the maximum number of screenshot
 	// attachments that can be sent as first-class multipart files.
 	MaxFirstClassAttachmentCount = 3
-	// MaxAttachmentBytes bounds the total size of every attachment in the
-	// multipart body (screenshots plus the log archive plus any other proto
-	// attachments). Freshdesk rejects tickets whose combined attachments
-	// exceed 20 MB; the remaining headroom covers multipart framing and
-	// non-attachment proto fields.
+	// MaxAttachmentBytes bounds the combined attachment payload sent to
+	// Freshdesk per issue report (screenshots plus the log archive plus any
+	// other proto attachments), regardless of whether the request is
+	// protobuf-only or multipart. Freshdesk rejects tickets whose combined
+	// attachments exceed 20 MB; the remaining headroom covers multipart
+	// framing and non-attachment proto fields.
 	MaxAttachmentBytes = 19 * 1024 * 1024
 
 	requestPartName        = "request"
