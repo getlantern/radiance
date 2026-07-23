@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	maxCompressedSize = int64(MaxAttachmentBytes)
-	tracerName        = "github.com/getlantern/radiance/issue"
+	maxTotalAttachmentBytes = int64(19.5 * 1024 * 1024)
+	tracerName              = "github.com/getlantern/radiance/issue"
 )
 
 // IssueReporter is used to send issue reports to backend.
@@ -88,8 +88,7 @@ type IssueReport struct {
 	Model string
 	// Attachments contains in-memory screenshot attachments supplied by the caller.
 	// They are sent as separate multipart files, with at most
-	// [MaxFirstClassAttachmentCount] files; their combined size with the log
-	// archive is capped at [MaxAttachmentBytes].
+	// [MaxFirstClassAttachmentCount] files and [MaxFirstClassAttachmentBytes] bytes.
 	Attachments []*Attachment
 	// AdditionalAttachments is a list of additional files to be attached. The log file will be
 	// automatically included.
@@ -135,8 +134,22 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		firstClassAttachments = append(firstClassAttachments, attachment)
 	}
 
+	if len(firstClassAttachments) > 0 {
+		if err := validateFirstClassAttachments(firstClassAttachments); err != nil {
+			slog.Error("invalid issue attachments", "error", err)
+			return err
+		}
+	}
+
+	screenshotBytes := 0
+	for _, attachment := range firstClassAttachments {
+		screenshotBytes += len(attachment.Data)
+	}
+	archiveBudget := maxTotalAttachmentBytes - int64(screenshotBytes)
+	archiveBudget = max(archiveBudget, 0)
+
 	logDir := settings.GetString(settings.LogPathKey)
-	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, maxCompressedSize)
+	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, archiveBudget)
 	if err != nil {
 		slog.Error("failed to build issue archive", "error", err)
 	}
@@ -158,11 +171,6 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	contentType := "application/x-protobuf"
 	body := bytes.NewReader(out)
 	if len(firstClassAttachments) > 0 {
-		if err := validateFirstClassAttachments(firstClassAttachments, len(archive)); err != nil {
-			slog.Error("invalid issue attachments", "error", err)
-			return err
-		}
-
 		multipartBody, multipartContentType, err := buildMultipartIssueBody(out, firstClassAttachments)
 		if err != nil {
 			slog.Error("unable to build multipart issue report", "error", err)

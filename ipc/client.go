@@ -671,8 +671,8 @@ func (c *Client) RestoreSubscription(ctx context.Context, service account.Subscr
 // ReportIssue submits an issue report. additionalAttachments is a list of file paths for additional
 // files to include. Logs, diagnostics, and the config response are included automatically and do
 // not need to be specified. attachments contains screenshot files sent as first-class multipart
-// attachments; callers may include up to [issue.MaxFirstClassAttachmentCount] files, and the
-// combined size of screenshots plus the log archive is capped at [issue.MaxAttachmentBytes].
+// attachments; callers may include up to [issue.MaxFirstClassAttachmentCount] files with a
+// combined size of [issue.MaxFirstClassAttachmentBytes] bytes.
 func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
 	_, err := c.do(ctx, http.MethodPost, issueEndpoint,
 		IssueReportRequest{
