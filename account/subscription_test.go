@@ -59,6 +59,43 @@ func TestPaymentRedirectOmitsEmptyIdempotencyKey(t *testing.T) {
 	assert.False(t, ts.subscriptionPaymentRedirectHasIdempotencyKey)
 }
 
+func TestPaymentRedirectForwardsCouponCode(t *testing.T) {
+	ac, ts := newTestClient(t)
+	data := PaymentRedirectData{
+		Provider:   "stripe",
+		Plan:       "pro",
+		DeviceName: "test-device",
+		CouponCode: "SAVE20",
+	}
+
+	_, err := ac.PaymentRedirect(context.Background(), data)
+	require.NoError(t, err)
+	assert.True(t, ts.paymentRedirectHasCouponCode)
+	assert.Equal(t, data.CouponCode, ts.paymentRedirectCouponCode)
+
+	_, err = ac.SubscriptionPaymentRedirectURL(context.Background(), data)
+	require.NoError(t, err)
+	assert.True(t, ts.subscriptionPaymentRedirectHasCouponCode)
+	assert.Equal(t, data.CouponCode, ts.subscriptionPaymentRedirectCouponCode)
+}
+
+func TestPaymentRedirectOmitsEmptyCouponCode(t *testing.T) {
+	ac, ts := newTestClient(t)
+	data := PaymentRedirectData{
+		Provider:   "stripe",
+		Plan:       "pro",
+		DeviceName: "test-device",
+	}
+
+	_, err := ac.PaymentRedirect(context.Background(), data)
+	require.NoError(t, err)
+	assert.False(t, ts.paymentRedirectHasCouponCode)
+
+	_, err = ac.SubscriptionPaymentRedirectURL(context.Background(), data)
+	require.NoError(t, err)
+	assert.False(t, ts.subscriptionPaymentRedirectHasCouponCode)
+}
+
 func TestPaymentRedirectRequiresRedirectURL(t *testing.T) {
 	ac, ts := newTestClient(t)
 	ts.paymentRedirectResponse = map[string]string{"status": "error", "error": "try again later"}
@@ -122,4 +159,21 @@ func TestPlans(t *testing.T) {
 	resp, err := ac.SubscriptionPlans(context.Background(), "store")
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp)
+}
+
+func TestNewStripeSubscriptionForwardsCouponCode(t *testing.T) {
+	ac, ts := newTestClient(t)
+	resp, err := ac.NewStripeSubscription(context.Background(), "test@getlantern.org", "1y-usd-10", "SAVE20")
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp)
+	assert.True(t, ts.stripeSubscriptionHasCouponCode)
+	assert.Equal(t, "SAVE20", ts.stripeSubscriptionCouponCode)
+}
+
+func TestNewStripeSubscriptionOmitsEmptyCouponCode(t *testing.T) {
+	ac, ts := newTestClient(t)
+	resp, err := ac.NewStripeSubscription(context.Background(), "test@getlantern.org", "1y-usd-10", "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp)
+	assert.False(t, ts.stripeSubscriptionHasCouponCode)
 }

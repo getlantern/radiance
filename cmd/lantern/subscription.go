@@ -29,8 +29,9 @@ type ActivateCmd struct {
 }
 
 type StripeSubCmd struct {
-	Email  string `arg:"-e,--email" help:"email address"`
-	PlanID string `arg:"-p,--plan" help:"plan ID"`
+	Email      string `arg:"-e,--email" help:"email address"`
+	PlanID     string `arg:"-p,--plan" help:"plan ID"`
+	CouponCode string `arg:"-c,--coupon" help:"coupon code (optional)"`
 }
 
 type PaymentRedirectCmd struct {
@@ -39,10 +40,12 @@ type PaymentRedirectCmd struct {
 	Email       string `arg:"-e,--email" help:"email address"`
 	DeviceName  string `arg:"-d,--device" help:"device name"`
 	BillingType string `arg:"-b,--billing-type" default:"subscription" help:"one_time or subscription"`
+	CouponCode  string `arg:"-c,--coupon" help:"coupon code (optional)"`
 }
 
 type ReferralCmd struct {
-	Code string `arg:"-c,--code" help:"referral code"`
+	Code    string `arg:"-c,--code" help:"referral code"`
+	Channel string `arg:"--channel" help:"subscription channel (optional; when set, returns plans and discount)"`
 }
 
 type StripeBillingCmd struct{}
@@ -129,7 +132,7 @@ func subStripeSub(ctx context.Context, c *ipc.Client, cmd *StripeSubCmd) error {
 			return err
 		}
 	}
-	secret, err := c.NewStripeSubscription(ctx, email, planID)
+	secret, err := c.NewStripeSubscription(ctx, email, planID, cmd.CouponCode)
 	if err != nil {
 		return err
 	}
@@ -137,7 +140,7 @@ func subStripeSub(ctx context.Context, c *ipc.Client, cmd *StripeSubCmd) error {
 	return nil
 }
 
-func promptRedirectData(planID, provider, email, deviceName, billingType string) (account.PaymentRedirectData, error) {
+func promptRedirectData(planID, provider, email, deviceName, billingType, couponCode string) (account.PaymentRedirectData, error) {
 	var err error
 	if planID == "" {
 		planID, err = prompt("Plan ID: ")
@@ -172,11 +175,12 @@ func promptRedirectData(planID, provider, email, deviceName, billingType string)
 		Email:       email,
 		DeviceName:  deviceName,
 		BillingType: account.SubscriptionType(billingType),
+		CouponCode:  couponCode,
 	}, nil
 }
 
 func subRedirect(ctx context.Context, c *ipc.Client, cmd *PaymentRedirectCmd) error {
-	data, err := promptRedirectData(cmd.PlanID, cmd.Provider, cmd.Email, cmd.DeviceName, cmd.BillingType)
+	data, err := promptRedirectData(cmd.PlanID, cmd.Provider, cmd.Email, cmd.DeviceName, cmd.BillingType, cmd.CouponCode)
 	if err != nil {
 		return err
 	}
@@ -197,15 +201,15 @@ func subReferral(ctx context.Context, c *ipc.Client, cmd *ReferralCmd) error {
 			return err
 		}
 	}
-	ok, err := c.ReferralAttach(ctx, code)
+	resp, err := c.ReferralAttach(ctx, code, cmd.Channel)
 	if err != nil {
 		return err
 	}
-	if ok {
-		fmt.Println("Referral attached successfully")
-	} else {
-		fmt.Println("Referral was not attached")
+	out, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return err
 	}
+	fmt.Println(string(out))
 	return nil
 }
 

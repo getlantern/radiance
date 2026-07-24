@@ -1082,7 +1082,7 @@ func (s *localapi) subscriptionStripeHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	clientSecret, err := s.backend(r.Context()).NewStripeSubscription(r.Context(), req.Email, req.PlanID)
+	clientSecret, err := s.backend(r.Context()).NewStripeSubscription(r.Context(), req.Email, req.PlanID, req.CouponCode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1110,12 +1110,12 @@ func (s *localapi) subscriptionReferralHandler(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ok, err := s.backend(r.Context()).ReferralAttach(r.Context(), req.Code)
+	resp, err := s.backend(r.Context()).ReferralAttach(r.Context(), req.Code, req.Channel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, SuccessResponse{Success: ok})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *localapi) subscriptionBillingPortalHandler(w http.ResponseWriter, r *http.Request) {
