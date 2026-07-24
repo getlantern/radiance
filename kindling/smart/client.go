@@ -43,7 +43,14 @@ func NewHTTPClientWithSmartTransport(logWriter io.Writer, addresses ...string) (
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse URL %q: %v", address, err)
 		}
-		domains = append(domains, u.Host)
+		// Hostname() drops any :port; skip entries with no host (e.g. a
+		// scheme-less URL) so the dialer isn't tuned for an empty domain.
+		if host := u.Hostname(); host != "" {
+			domains = append(domains, host)
+		}
+	}
+	if len(domains) == 0 {
+		return nil, fmt.Errorf("no valid config host among %v", addresses)
 	}
 	trans, err := kindling.NewSmartHTTPTransportWithConfig(logWriter, DialerConfig, bypass.StreamDialer(), nil, domains...)
 	if err != nil {
@@ -77,7 +84,13 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	ctx, span := otel.Tracer(tracerName).Start(
 		req.Context(),
 		"lazy_dialing_round_trip",
-		trace.WithAttributes(attribute.StringSlice("domains", lz.domains)),
+		trace.WithAttributes(
+			// Keep the original "domain" key (first host) for existing tracing
+			// queries; add "domains" for the full raced set. domains is always
+			// non-empty (the constructor errors otherwise).
+			attribute.String("domain", lz.domains[0]),
+			attribute.StringSlice("domains", lz.domains),
+		),
 	)
 	defer span.End()
 
