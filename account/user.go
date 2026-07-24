@@ -600,7 +600,26 @@ func (a *Client) RemoveDevice(ctx context.Context, deviceID string) (*LinkRespon
 	return &link, nil
 }
 
-func (a *Client) ReferralAttach(ctx context.Context, code string) (bool, error) {
+type ReferralAttachResponse struct {
+	*protos.BaseResponse `json:",inline"`
+	Providers            map[string][]*protos.PaymentMethod `json:"providers"`
+	Plans                []*protos.Plan                     `json:"plans"`
+	Code                 string                             `json:"code"`
+	DiscountPct          int                                `json:"discountPct"`
+	Type                 string                             `json:"referralType"`
+}
+
+// ReferralAttach attaches a referral code to the current user. A non-empty
+// channel uses the v2 API, which also returns the plans, providers, and
+// discount for the referral; the legacy v1 API returns only a BaseResponse.
+func (a *Client) ReferralAttach(ctx context.Context, code, channel string) (*ReferralAttachResponse, error) {
+	if channel == "" {
+		return a.referralAttachV1(ctx, code)
+	}
+	return a.referralAttachV2(ctx, code, channel)
+}
+
+func (a *Client) referralAttachV1(ctx context.Context, code string) (*ReferralAttachResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach")
 	defer span.End()
 
@@ -609,16 +628,42 @@ func (a *Client) ReferralAttach(ctx context.Context, code string) (bool, error) 
 	}
 	resp, err := a.sendProRequest(ctx, "POST", "/referral-attach", nil, nil, data)
 	if err != nil {
-		return false, traces.RecordError(ctx, err)
+		return nil, traces.RecordError(ctx, err)
 	}
 	var baseResp protos.BaseResponse
 	if err := proto.Unmarshal(resp, &baseResp); err != nil {
-		return false, traces.RecordError(ctx, fmt.Errorf("error unmarshalling referral attach response: %w", err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling referral attach response: %w", err))
 	}
 	if baseResp.Error != "" {
-		return false, traces.RecordError(ctx, errors.New(baseResp.Error))
+		return nil, traces.RecordError(ctx, errors.New(baseResp.Error))
 	}
-	return true, nil
+	return &ReferralAttachResponse{
+		BaseResponse: &baseResp,
+	}, nil
+}
+
+func (a *Client) referralAttachV2(ctx context.Context, code, channel string) (*ReferralAttachResponse, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "referral_attach_v2")
+	defer span.End()
+
+	params := map[string]string{
+		"distributionChannel": channel,
+	}
+	data := map[string]string{
+		"code": code,
+	}
+	resp, err := a.sendProRequest(ctx, "POST", "/referral-attach-v2", params, nil, data)
+	if err != nil {
+		return nil, traces.RecordError(ctx, err)
+	}
+	var referral ReferralAttachResponse
+	if err := json.Unmarshal(resp, &referral); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling referral attach v2 response: %w", err))
+	}
+	if referral.BaseResponse != nil && referral.Error != "" {
+		return nil, traces.RecordError(ctx, errors.New(referral.Error))
+	}
+	return &referral, nil
 }
 
 type UserChangeEvent struct {

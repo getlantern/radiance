@@ -33,7 +33,8 @@ type OAuthTokenRequest struct {
 }
 
 type CodeRequest struct {
-	Code string `json:"code"`
+	Code    string `json:"code"`
+	Channel string `json:"channel"`
 }
 
 type JSONConfigRequest struct {
@@ -92,8 +93,9 @@ type ActivationRequest struct {
 }
 
 type StripeSubscriptionRequest struct {
-	Email  string `json:"email"`
-	PlanID string `json:"planID"`
+	Email      string `json:"email"`
+	PlanID     string `json:"planID"`
+	CouponCode string `json:"couponCode"`
 }
 
 type VerifySubscriptionRequest struct {

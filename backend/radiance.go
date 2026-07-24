@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	"time"
@@ -68,6 +69,9 @@ type LocalBackend struct {
 	deviceID string
 
 	telemetryCfgSub *events.Subscription[config.NewConfigEvent]
+
+	// reused across reconnects; fully released only when telemetry shuts down.
+	connObserver    vpn.ConnObserver
 	stopConnMetrics context.CancelFunc
 	connMetricsMu   sync.Mutex
 
@@ -77,6 +81,7 @@ type LocalBackend struct {
 
 	stopSelectionHistoryListener context.CancelFunc
 	selectionHistoryMu           sync.Mutex
+	selectionReporter            *selectionReporter
 
 	exhaustionGate exhaustionGate
 }
@@ -174,14 +179,15 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		Logger:        slog.Default().With("service", "config_handler"),
 	}
 	r := &LocalBackend{
-		ctx:            ctx,
-		cancel:         cancel,
-		issueReporter:  issue.NewIssueReporter(kindling.HTTPClient()),
-		accountClient:  accountClient,
-		confHandler:    config.NewConfigHandler(ctx, cOpts),
-		srvManager:     svrMgr,
-		vpnClient:      vpnClient,
-		splitTunnelMgr: splitTunnelMgr,
+		ctx:               ctx,
+		cancel:            cancel,
+		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient()),
+		selectionReporter: newSelectionReporter(kindling.HTTPClient()),
+		accountClient:     accountClient,
+		confHandler:       config.NewConfigHandler(ctx, cOpts),
+		srvManager:        svrMgr,
+		vpnClient:         vpnClient,
+		splitTunnelMgr:    splitTunnelMgr,
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
@@ -223,9 +229,12 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
-	// set country code in settings when new config is received so it can be included in issue reports
+	// The server derives the country from the client IP, so it's stable for the
+	// session: react once to record it for issue reports and to apply the
+	// country-specific transport policy (AMP is disabled in China).
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
+		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -246,6 +255,7 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
+	applyTransportPolicy()
 	r.applyConfig(cfg)
 	return true
 }
@@ -298,6 +308,26 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 		slog.Error("failed to set country code in settings", "error", err)
 	}
 	slog.Info("Set country code from config", "country_code", cfg.Country)
+}
+
+// ampEnabledForCountry reports whether the AMP transport works from the given
+// country. AMP fronts through Google domains that are unreachable from China.
+func ampEnabledForCountry(country string) bool {
+	return !strings.EqualFold(country, "CN")
+}
+
+// applyTransportPolicy enables or disables the AMP transport based on the
+// user's country and rebuilds kindling when that changes the enabled set. The
+// env override takes precedence over the config-derived country in settings.
+func applyTransportPolicy() {
+	country := settings.GetString(settings.CountryCodeKey)
+	if override := env.GetString(env.Country); override != "" {
+		country = override
+	}
+	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
+		kindling.Close()
+		kindling.Init()
+	}
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed
@@ -471,7 +501,7 @@ func baseIssueAttachments() []string {
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
 	}
-	memdump := filepath.Join(dataPath, internal.MemoryDumpFileName)
+	memdump := filepath.Join(logPath, internal.MemoryDumpFileName)
 	if _, err := os.Stat(memdump); err == nil {
 		// put memory dump first in the list so it's prioritized.
 		files = append([]string{memdump}, files...)
@@ -593,7 +623,7 @@ func (r *LocalBackend) stopTelemetry() {
 		r.telemetryCfgSub.Unsubscribe()
 		r.telemetryCfgSub = nil
 	}
-	r.updateConnMetrics(vpn.Disconnected)
+	r.teardownConnMetrics()
 	telemetry.Close()
 }
 
@@ -603,26 +633,47 @@ func (r *LocalBackend) updateConnMetrics(status vpn.VPNStatus) {
 	}
 	r.connMetricsMu.Lock()
 	defer r.connMetricsMu.Unlock()
-	if status == vpn.Connected {
-		if r.stopConnMetrics != nil {
-			return // already running
-		}
-		ctx, cancel := context.WithCancel(r.ctx)
-		observer, err := telemetry.StartConnectionMetrics(ctx, r.vpnClient.ActiveConnectionCount)
-		if err != nil {
-			cancel()
-			slog.Warn("Failed to start connection metrics collection", "error", err)
-			return
-		}
-		r.vpnClient.SetConnObserver(observer)
-		r.stopConnMetrics = cancel
-		slog.Debug("Started connection metrics collection")
-	} else if r.stopConnMetrics != nil {
+
+	if status != vpn.Connected {
 		r.vpnClient.SetConnObserver(nil)
+		return
+	}
+	if !r.ensureConnMetricsObserverLocked() {
+		return
+	}
+	r.vpnClient.SetConnObserver(r.connObserver)
+}
+
+func (r *LocalBackend) ensureConnMetricsObserverLocked() bool {
+	if r.connObserver != nil {
+		return true
+	}
+
+	ctx, cancel := context.WithCancel(r.ctx)
+	observer, err := telemetry.StartConnectionMetrics(ctx, r.vpnClient.ActiveConnectionCount)
+	if err != nil {
+		cancel()
+		slog.Warn("Failed to start connection metrics collection", "error", err)
+		return false
+	}
+
+	r.connObserver = observer
+	r.stopConnMetrics = cancel
+	return true
+}
+
+// teardownConnMetrics fully detaches and releases the connection metrics observer.
+func (r *LocalBackend) teardownConnMetrics() {
+	r.connMetricsMu.Lock()
+	defer r.connMetricsMu.Unlock()
+	if r.vpnClient != nil {
+		r.vpnClient.SetConnObserver(nil)
+	}
+	if r.stopConnMetrics != nil {
 		r.stopConnMetrics()
 		r.stopConnMetrics = nil
-		slog.Debug("Stopped connection metrics collection")
 	}
+	r.connObserver = nil
 }
 
 ///////////////////////
@@ -852,6 +903,10 @@ func (r *LocalBackend) updateSelectionHistoryListener(status vpn.VPNStatus) {
 			}
 		})
 		go r.runSelectionHistoryListener(ctx, storage, hook)
+		if r.selectionReportInterval() > 0 {
+			r.selectionReporter.reset()
+			go r.runSelectionReporter(ctx, storage)
+		}
 		slog.Debug("Started selection history listener")
 	case vpn.Disconnected, vpn.ErrorStatus:
 		if r.stopSelectionHistoryListener != nil {
@@ -888,16 +943,79 @@ func (r *LocalBackend) runSelectionHistoryListener(ctx context.Context, storage 
 }
 
 func (r *LocalBackend) flushSelectionHistory(storage vpn.AutoSelectHistoryStorage) {
-	results := make(map[string]servers.SelectionHistory)
+	history := r.collectSelectionHistory(storage)
+	if len(history) == 0 {
+		return
+	}
+
+	if err := r.srvManager.UpdateSelectionHistory(history); err != nil {
+		slog.Warn("Failed to persist selection history", "error", err)
+	}
+}
+
+func (r *LocalBackend) collectSelectionHistory(storage vpn.AutoSelectHistoryStorage) map[string]servers.SelectionHistory {
+	history := make(map[string]servers.SelectionHistory)
 	for _, srv := range r.srvManager.AllServers() {
 		if h := storage.Load(srv.Tag); h != nil {
-			results[srv.Tag] = *h
+			history[srv.Tag] = *h
 		}
 	}
-	if len(results) > 0 {
-		if err := r.srvManager.UpdateSelectionHistory(results); err != nil {
-			slog.Warn("Failed to persist selection history", "error", err)
+	return history
+}
+
+// selectionReportInterval is the server-configured report cadence. Zero is
+// returned if reporting is disabled or the config is unavailable.
+func (r *LocalBackend) selectionReportInterval() time.Duration {
+	cfg, _ := r.confHandler.GetConfig()
+	if cfg == nil || cfg.RouteSelectionReportIntervalSeconds <= 0 {
+		return 0
+	}
+
+	return time.Duration(cfg.RouteSelectionReportIntervalSeconds) * time.Second
+}
+
+func (r *LocalBackend) runSelectionReporter(ctx context.Context, storage vpn.AutoSelectHistoryStorage) {
+	runReportLoop(ctx, r.selectionReportInterval, func() {
+		r.reportSelectionHistory(ctx, storage)
+	})
+}
+
+// runReportLoop calls report once per interval() until the context is canceled
+// or interval() returns a non-positive duration. The interval is re-derived each
+// cycle so a changed cadence takes effect the next tick and a dropped interval
+// stops the loop within one cycle.
+func runReportLoop(ctx context.Context, interval func() time.Duration, report func()) {
+	for {
+		wait := interval()
+		if wait <= 0 {
+			return
 		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+			report()
+		}
+	}
+}
+
+func (r *LocalBackend) reportSelectionHistory(ctx context.Context, storage vpn.AutoSelectHistoryStorage) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "report_selection_history")
+	defer span.End()
+
+	cfg, _ := r.confHandler.GetConfig()
+	if cfg == nil || len(cfg.BanditReportTokens) == 0 {
+		return
+	}
+	snapshot := r.collectSelectionHistory(storage)
+	if len(snapshot) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, selectionReportTimeout)
+	defer cancel()
+	if err := r.selectionReporter.report(ctx, snapshot, cfg.BanditReportTokens); err != nil {
+		slog.Warn("Failed to report selection history", "error", err)
+		span.RecordError(err)
 	}
 }
 
@@ -1387,16 +1505,16 @@ func (r *LocalBackend) ActivationCode(ctx context.Context, email, resellerCode s
 	return r.accountClient.ActivationCode(ctx, email, resellerCode)
 }
 
-func (r *LocalBackend) NewStripeSubscription(ctx context.Context, email, planID string) (string, error) {
-	return r.accountClient.NewStripeSubscription(ctx, email, planID)
+func (r *LocalBackend) NewStripeSubscription(ctx context.Context, email, planID, couponCode string) (string, error) {
+	return r.accountClient.NewStripeSubscription(ctx, email, planID, couponCode)
 }
 
 func (r *LocalBackend) PaymentRedirect(ctx context.Context, data account.PaymentRedirectData) (string, error) {
 	return r.accountClient.PaymentRedirect(ctx, data)
 }
 
-func (r *LocalBackend) ReferralAttach(ctx context.Context, code string) (bool, error) {
-	return r.accountClient.ReferralAttach(ctx, code)
+func (r *LocalBackend) ReferralAttach(ctx context.Context, code, channel string) (*account.ReferralAttachResponse, error) {
+	return r.accountClient.ReferralAttach(ctx, code, channel)
 }
 
 func (r *LocalBackend) StripeBillingPortalURL(ctx context.Context) (string, error) {
