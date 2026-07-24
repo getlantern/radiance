@@ -75,6 +75,16 @@ type serviceRunConfig struct {
 	environment daemonEnvironment
 }
 
+// serviceConfig applies platform defaults and expands paths after command-line parsing.
+func (c runCmd) serviceConfig() serviceRunConfig {
+	return serviceRunConfig{
+		dataPath:    os.ExpandEnv(withDefault(c.DataPath, internal.DefaultDataPath())),
+		logPath:     os.ExpandEnv(withDefault(c.LogPath, internal.DefaultLogPath())),
+		logLevel:    c.LogLevel,
+		environment: c.Environment,
+	}
+}
+
 // args builds the command line used to start a daemon with this service configuration.
 func (c serviceRunConfig) args() []string {
 	return []string{
@@ -88,40 +98,18 @@ func (c serviceRunConfig) args() []string {
 
 // parseServiceRunArgs recovers the persisted daemon configuration from a service command line.
 func parseServiceRunArgs(args []string) (serviceRunConfig, error) {
-	config := serviceRunConfig{
-		dataPath:    internal.DefaultDataPath(),
-		logPath:     internal.DefaultLogPath(),
-		logLevel:    "info",
-		environment: daemonEnvironmentProd,
+	var parsed daemonArgs
+	parser, err := arg.NewParser(arg.Config{}, &parsed)
+	if err != nil {
+		return serviceRunConfig{}, fmt.Errorf("create service argument parser: %w", err)
 	}
-	for i := 0; i < len(args); i++ {
-		if i+1 >= len(args) {
-			switch args[i] {
-			case "--data-path", "--log-path", "--log-level", "--environment":
-				return serviceRunConfig{}, fmt.Errorf("missing value for %s", args[i])
-			}
-			continue
-		}
-		switch args[i] {
-		case "--data-path":
-			config.dataPath = os.ExpandEnv(args[i+1])
-			i++
-		case "--log-path":
-			config.logPath = os.ExpandEnv(args[i+1])
-			i++
-		case "--log-level":
-			config.logLevel = args[i+1]
-			i++
-		case "--environment":
-			environment, err := parseDaemonEnvironment(args[i+1])
-			if err != nil {
-				return serviceRunConfig{}, err
-			}
-			config.environment = environment
-			i++
-		}
+	if err := parser.Parse(args); err != nil {
+		return serviceRunConfig{}, fmt.Errorf("parse service arguments: %w", err)
 	}
-	return config, nil
+	if parsed.Run == nil {
+		return serviceRunConfig{}, errors.New("service command must run the daemon")
+	}
+	return parsed.Run.serviceConfig(), nil
 }
 
 type uninstallCmd struct{}
@@ -160,10 +148,9 @@ func main() {
 	var err error
 	switch {
 	case a.Run != nil:
-		dataPath := os.ExpandEnv(withDefault(a.Run.DataPath, defaultDataPath))
-		logPath := os.ExpandEnv(withDefault(a.Run.LogPath, defaultLogPath))
+		config := a.Run.serviceConfig()
 		if os.Getenv("_LANTERND_CHILD") != "1" {
-			err = babysit(os.Args[1:], dataPath, logPath, a.Run.LogLevel)
+			err = babysit(os.Args[1:], config.dataPath, config.logPath, config.logLevel)
 			break
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -180,7 +167,7 @@ func main() {
 			// Restore default signal behavior so a second signal terminates immediately.
 			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		}()
-		err = runDaemon(ctx, dataPath, logPath, a.Run.LogLevel, a.Run.Environment)
+		err = runDaemon(ctx, config.dataPath, config.logPath, config.logLevel, config.environment)
 	case a.Install != nil:
 		err = install(
 			os.ExpandEnv(withDefault(a.Install.DataPath, defaultDataPath)),
