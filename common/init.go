@@ -98,25 +98,45 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 
 	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	createCrashReporter()
-	if Dev() {
-		logModuleInfo()
-	}
+	logBuildInfo()
 	return nil
 }
 
-func logModuleInfo() {
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		slog.Debug("Build Information:", "goversion", bi.GoVersion, "main module", bi.Main.Path+" @ "+bi.Main.Version)
-		if len(bi.Deps) > 0 {
-			slog.Debug("Dependencies:")
-			for _, dep := range bi.Deps {
-				slog.Debug("dep", "path", dep.Path, "version", dep.Version)
-			}
-		} else {
-			slog.Debug("No dependencies found.\n")
+// loadBearingDeps carry the circumvention/transport logic; their linked versions
+// are surfaced at Info in every build because a stale one — a build resolving deps
+// differently than go.mod declares — has shipped user-facing regressions. The full
+// dependency list is logged at Debug.
+var loadBearingDeps = map[string]struct{}{
+	"github.com/getlantern/keepcurrent": {},
+	"github.com/getlantern/amp":         {},
+	"github.com/getlantern/domainfront": {},
+	"github.com/getlantern/kindling":    {},
+	"github.com/getlantern/lantern-box": {},
+	"github.com/sagernet/sing-box":      {},
+}
+
+// logBuildInfo records the build's identity (version, build time, commit) and the
+// dep versions actually linked into the binary, in every build — not just Dev — so
+// a shipped binary is self-describing and a stale-cache build is visible in logs
+// rather than silent.
+func logBuildInfo() {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		slog.Info("build", "version", Version, "buildTime", BuildTime, "commit", Commit, "note", "no build info")
+		return
+	}
+	slog.Info("build",
+		"version", Version,
+		"buildTime", BuildTime,
+		"commit", Commit,
+		"goVersion", bi.GoVersion,
+		"mainModule", bi.Main.Path+"@"+bi.Main.Version,
+	)
+	for _, dep := range bi.Deps {
+		if _, ok := loadBearingDeps[dep.Path]; ok {
+			slog.Info("build dep", "path", dep.Path, "version", dep.Version)
 		}
-	} else {
-		slog.Info("No build information available.")
+		slog.Debug("build dep", "path", dep.Path, "version", dep.Version)
 	}
 }
 
