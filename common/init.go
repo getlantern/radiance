@@ -140,6 +140,10 @@ func logBuildInfo() {
 			replacement := dep.Replace.Path
 			if dep.Replace.Version != "" { // local-directory replaces have no version
 				replacement += "@" + dep.Replace.Version
+			} else if filepath.IsAbs(replacement) {
+				// These logs ship in support tickets and crash reports; don't leak
+				// build-host paths (usernames, home dirs). Relative replaces stay.
+				replacement = "(local directory)"
 			}
 			attrs = append(attrs, "replacedBy", replacement)
 		}
