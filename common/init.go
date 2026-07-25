@@ -137,7 +137,11 @@ func logBuildInfo() {
 		if dep.Replace != nil {
 			// A replace directive means the linked module is not the declared one —
 			// the exact mismatch this banner exists to surface.
-			attrs = append(attrs, "replacedBy", dep.Replace.Path+"@"+dep.Replace.Version)
+			replacement := dep.Replace.Path
+			if dep.Replace.Version != "" { // local-directory replaces have no version
+				replacement += "@" + dep.Replace.Version
+			}
+			attrs = append(attrs, "replacedBy", replacement)
 		}
 		if _, ok := loadBearingDeps[dep.Path]; ok {
 			slog.Info("build dep", attrs...)
