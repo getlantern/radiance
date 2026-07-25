@@ -32,23 +32,43 @@ const tracerName = "github.com/getlantern/radiance/kindling/smart"
 //go:embed smart_dialer_config.yml
 var DialerConfig []byte
 
-func NewHTTPClientWithSmartTransport(logWriter io.Writer, address string) (*http.Client, error) {
-	// Parse the domain from the URL.
-	u, err := url.Parse(address)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
+// NewHTTPClientWithSmartTransport returns an HTTP client whose transport uses
+// the Outline smart dialer, tuned for the hosts of the supplied config URLs (the
+// dialer searches for a working strategy against each). At least one URL with a
+// host is required.
+func NewHTTPClientWithSmartTransport(logWriter io.Writer, addresses ...string) (*http.Client, error) {
+	// Extract each URL's host; the smart dialer searches for a working strategy
+	// against all of them, so a caller that races several config sources (e.g.
+	// the GitHub config URL and a jsDelivr mirror) gets a transport tuned for
+	// every host it may fetch from.
+	seen := make(map[string]bool, len(addresses))
+	domains := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		u, err := url.Parse(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse URL %q: %w", address, err)
+		}
+		// Hostname() drops any :port; skip empties (e.g. scheme-less URLs) and
+		// dedup so a shared host isn't probed twice.
+		host := u.Hostname()
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		domains = append(domains, host)
 	}
-
-	// Extract the domain from the URL.
-	domain := u.Host
-	trans, err := kindling.NewSmartHTTPTransportWithConfig(logWriter, DialerConfig, bypass.StreamDialer(), nil, domain)
+	if len(domains) == 0 {
+		return nil, fmt.Errorf("no valid config host among %v", addresses)
+	}
+	trans, err := kindling.NewSmartHTTPTransportWithConfig(logWriter, DialerConfig, bypass.StreamDialer(), nil, domains...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create smart HTTP transport: %v", err)
+		return nil, fmt.Errorf("failed to create smart HTTP transport: %w", err)
 	}
 	lz := &lazyDialingRoundTripper{
 		smartTransportMu: sync.Mutex{},
 		logWriter:        logWriter,
-		domain:           domain}
+		domains:          domains,
+	}
 	if trans != nil {
 		lz.smartTransport = trans
 	}
@@ -62,7 +82,7 @@ type lazyDialingRoundTripper struct {
 	smartTransportMu sync.Mutex
 
 	logWriter io.Writer
-	domain    string
+	domains   []string
 }
 
 // Make sure lazyDialingRoundTripper implements http.RoundTripper
@@ -72,7 +92,13 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	ctx, span := otel.Tracer(tracerName).Start(
 		req.Context(),
 		"lazy_dialing_round_trip",
-		trace.WithAttributes(attribute.String("domain", lz.domain)),
+		trace.WithAttributes(
+			// Keep the original "domain" key (first host) for existing tracing
+			// queries; add "domains" for the full raced set. domains is always
+			// non-empty (the constructor errors otherwise).
+			attribute.String("domain", lz.domains[0]),
+			attribute.StringSlice("domains", lz.domains),
+		),
 	)
 	defer span.End()
 
@@ -80,7 +106,7 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 
 	if lz.smartTransport == nil {
 		slog.Info("Smart transport is nil")
-		trans, err := kindling.NewSmartHTTPTransportWithConfig(lz.logWriter, DialerConfig, bypass.StreamDialer(), nil, lz.domain)
+		trans, err := kindling.NewSmartHTTPTransportWithConfig(lz.logWriter, DialerConfig, bypass.StreamDialer(), nil, lz.domains...)
 		if err != nil {
 			slog.Info("Error creating smart transport", "error", err)
 			lz.smartTransportMu.Unlock()

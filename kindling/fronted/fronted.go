@@ -23,8 +23,13 @@ const (
 	// old getlantern/fronted copy went stale when the masquerades cron's target
 	// moved during the domainfront fork (last update 2026-06-05).
 	configURL = "https://raw.githubusercontent.com/getlantern/domainfront/refs/heads/main/fronted.yaml.gz"
+	// mirrorConfigURL serves the same fronted.yaml.gz via jsDelivr from a
+	// non-getlantern account, reachable where raw.githubusercontent.com is
+	// blocked (e.g. China) — jsDelivr bans the getlantern org, so the mirror
+	// lives elsewhere. Raced against configURL; first valid response wins.
+	mirrorConfigURL = "https://cdn.jsdelivr.net/gh/firetweet/domainfront@main/fronted.yaml.gz"
 	// configCacheName is where domainfront persists the last successfully fetched
-	// config so the next start can bootstrap when configURL is unreachable.
+	// config so the next start can bootstrap when the config hosts are unreachable.
 	configCacheName = "fronted_config.yaml.gz"
 )
 
@@ -45,18 +50,18 @@ func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.
 // responsible for calling Close() to shut down its background goroutines.
 //
 // Startup does no blocking network I/O: it seeds domainfront with the embedded
-// config and lets domainfront own the live config lifecycle. configURL lives on
-// raw.githubusercontent.com, which is blocked in some regions (e.g. China);
-// fetching it synchronously here stalled radiance init for the full fetch
-// timeout on every cold start there. domainfront's config updater
-// (WithConfigURL) now fetches it off the critical path, persists it
-// (WithConfigCacheFile), and bootstraps from that persisted copy on the next
-// start in preference to the embedded seed.
+// config and lets domainfront own the live config lifecycle. The primary source
+// (configURL) is on raw.githubusercontent.com, blocked in some regions (e.g.
+// China), so it's raced against a jsDelivr mirror (mirrorConfigURL) — first
+// valid response wins. domainfront's config updater (WithConfigURL) fetches them
+// off the critical path, persists the result (WithConfigCacheFile), and
+// bootstraps from that persisted copy on the next start in preference to the
+// embedded seed. The smart HTTP client is tuned for both hosts.
 func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*domainfront.Client, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "NewFronted")
 	defer span.End()
 
-	smartClient, err := smart.NewHTTPClientWithSmartTransport(logWriter, configURL)
+	smartClient, err := smart.NewHTTPClientWithSmartTransport(logWriter, configURL, mirrorConfigURL)
 	if err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("build smart HTTP client: %w", err)
@@ -73,7 +78,7 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*do
 		domainfront.WithConfigCacheFile(filepath.Join(filepath.Dir(cacheFile), configCacheName)),
 		domainfront.WithDialer(bypassDialer{}),
 		domainfront.WithLogger(slog.Default()),
-		domainfront.WithConfigURL(configURL),
+		domainfront.WithConfigURL(configURL, mirrorConfigURL),
 		domainfront.WithHTTPClient(smartClient),
 	}
 	return domainfront.New(ctx, seed, opts...)
