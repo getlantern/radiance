@@ -133,10 +133,16 @@ func logBuildInfo() {
 		"mainModule", bi.Main.Path+"@"+bi.Main.Version,
 	)
 	for _, dep := range bi.Deps {
-		if _, ok := loadBearingDeps[dep.Path]; ok {
-			slog.Info("build dep", "path", dep.Path, "version", dep.Version)
+		attrs := []any{"path", dep.Path, "version", dep.Version}
+		if dep.Replace != nil {
+			// A replace directive means the linked module is not the declared one —
+			// the exact mismatch this banner exists to surface.
+			attrs = append(attrs, "replacedBy", dep.Replace.Path+"@"+dep.Replace.Version)
 		}
-		slog.Debug("build dep", "path", dep.Path, "version", dep.Version)
+		if _, ok := loadBearingDeps[dep.Path]; ok {
+			slog.Info("build dep", attrs...)
+		}
+		slog.Debug("build dep", attrs...)
 	}
 }
 
