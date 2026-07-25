@@ -11,6 +11,15 @@ import (
 //	-X 'github.com/getlantern/radiance/common.Version=x.y.z'
 var Version = "dev"
 
+// BuildTime (UTC, RFC3339) and Commit are injected at build time via ldflags,
+// e.g. -X 'github.com/getlantern/radiance/common.BuildTime=2026-07-08T12:00:00Z'.
+// They make a shipped binary self-describing so a stale build — one whose linked
+// deps don't match go.mod — is visible in logs and crash reports.
+var (
+	BuildTime = "unknown"
+	Commit    = "unknown"
+)
+
 const (
 	Name = "lantern"
 

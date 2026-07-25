@@ -98,25 +98,63 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 
 	slog.Info("Using data and log directories", "dataDir", data, "logDir", logs)
 	createCrashReporter()
-	if Dev() {
-		logModuleInfo()
-	}
+	logBuildInfo()
 	return nil
 }
 
-func logModuleInfo() {
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		slog.Debug("Build Information:", "goversion", bi.GoVersion, "main module", bi.Main.Path+" @ "+bi.Main.Version)
-		if len(bi.Deps) > 0 {
-			slog.Debug("Dependencies:")
-			for _, dep := range bi.Deps {
-				slog.Debug("dep", "path", dep.Path, "version", dep.Version)
+// extraLoadBearingDeps are non-getlantern modules whose linked versions are
+// surfaced at Info alongside all github.com/getlantern/* deps (see
+// isLoadBearing). A stale one — a build resolving deps differently than go.mod
+// declares — has shipped user-facing regressions. The full dependency list is
+// logged at Debug.
+var extraLoadBearingDeps = map[string]struct{}{
+	"github.com/sagernet/sing-box": {},
+}
+
+func isLoadBearing(path string) bool {
+	if strings.HasPrefix(path, "github.com/getlantern/") {
+		return true
+	}
+	_, ok := extraLoadBearingDeps[path]
+	return ok
+}
+
+// logBuildInfo records the build's identity (version, build time, commit) and the
+// dep versions actually linked into the binary, in every build — not just Dev — so
+// a shipped binary is self-describing and a stale-cache build is visible in logs
+// rather than silent.
+func logBuildInfo() {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		slog.Info("build", "version", Version, "buildTime", BuildTime, "commit", Commit, "note", "no build info")
+		return
+	}
+	slog.Info("build",
+		"version", Version,
+		"buildTime", BuildTime,
+		"commit", Commit,
+		"goVersion", bi.GoVersion,
+		"mainModule", bi.Main.Path+"@"+bi.Main.Version,
+	)
+	for _, dep := range bi.Deps {
+		attrs := []any{"path", dep.Path, "version", dep.Version}
+		if dep.Replace != nil {
+			// A replace directive means the linked module is not the declared one —
+			// the exact mismatch this banner exists to surface.
+			replacement := dep.Replace.Path
+			if dep.Replace.Version != "" { // local-directory replaces have no version
+				replacement += "@" + dep.Replace.Version
+			} else if filepath.IsAbs(replacement) {
+				// These logs ship in support tickets and crash reports; don't leak
+				// build-host paths (usernames, home dirs). Relative replaces stay.
+				replacement = "(local directory)"
 			}
-		} else {
-			slog.Debug("No dependencies found.\n")
+			attrs = append(attrs, "replacedBy", replacement)
 		}
-	} else {
-		slog.Info("No build information available.")
+		if isLoadBearing(dep.Path) {
+			slog.Info("build dep", attrs...)
+		}
+		slog.Debug("build dep", attrs...)
 	}
 }
 
