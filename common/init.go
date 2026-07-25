@@ -102,17 +102,21 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 	return nil
 }
 
-// loadBearingDeps carry the circumvention/transport logic; their linked versions
-// are surfaced at Info in every build because a stale one — a build resolving deps
-// differently than go.mod declares — has shipped user-facing regressions. The full
-// dependency list is logged at Debug.
-var loadBearingDeps = map[string]struct{}{
-	"github.com/getlantern/keepcurrent": {},
-	"github.com/getlantern/amp":         {},
-	"github.com/getlantern/domainfront": {},
-	"github.com/getlantern/kindling":    {},
-	"github.com/getlantern/lantern-box": {},
-	"github.com/sagernet/sing-box":      {},
+// extraLoadBearingDeps are non-getlantern modules whose linked versions are
+// surfaced at Info alongside all github.com/getlantern/* deps (see
+// isLoadBearing). A stale one — a build resolving deps differently than go.mod
+// declares — has shipped user-facing regressions. The full dependency list is
+// logged at Debug.
+var extraLoadBearingDeps = map[string]struct{}{
+	"github.com/sagernet/sing-box": {},
+}
+
+func isLoadBearing(path string) bool {
+	if strings.HasPrefix(path, "github.com/getlantern/") {
+		return true
+	}
+	_, ok := extraLoadBearingDeps[path]
+	return ok
 }
 
 // logBuildInfo records the build's identity (version, build time, commit) and the
@@ -147,7 +151,7 @@ func logBuildInfo() {
 			}
 			attrs = append(attrs, "replacedBy", replacement)
 		}
-		if _, ok := loadBearingDeps[dep.Path]; ok {
+		if isLoadBearing(dep.Path) {
 			slog.Info("build dep", attrs...)
 		}
 		slog.Debug("build dep", attrs...)
