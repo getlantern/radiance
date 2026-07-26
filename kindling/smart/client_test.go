@@ -137,6 +137,27 @@ func TestConcurrentRequestsShareOneSearch(t *testing.T) {
 	assert.EqualValues(t, 1, searches.Load(), "a host searches once, however many requests are waiting on it")
 }
 
+// TestSuccessfulSearchIsRemembered issues its requests one after another, so
+// that each has already settled when the next arrives: concurrent requests
+// would collapse into one search whether or not the result is ever kept.
+func TestSuccessfulSearchIsRemembered(t *testing.T) {
+	var searches atomic.Int32
+	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
+		searches.Add(1)
+		return echoHostRoundTripper{host: host}, nil
+	})
+
+	client, err := NewHTTPClientWithSmartTransport(io.Discard, "https://config.example/config")
+	require.NoError(t, err)
+
+	for range 5 {
+		assert.Equal(t, "config.example", getBody(t, client, "https://config.example/config"))
+	}
+
+	assert.EqualValues(t, 1, searches.Load(),
+		"a host with a working transport must not search again")
+}
+
 func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
 	searched := make(chan string, 1)
 	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
@@ -178,6 +199,44 @@ func TestRequestGivesUpOnSearchWhenItsContextEnds(t *testing.T) {
 	_, err = client.Do(req)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), time.Second, "a request must be able to abandon a search it is waiting on")
+}
+
+// TestSearchStarterGivesUpWhenItsContextEnds covers the caller that starts the
+// search rather than joining one, which has no other way out of a search that
+// never returns.
+func TestSearchStarterGivesUpWhenItsContextEnds(t *testing.T) {
+	neverFinishes := make(chan struct{})
+	t.Cleanup(func() { close(neverFinishes) })
+
+	ht := &hostTransport{
+		host:      "config.example",
+		logWriter: io.Discard,
+		newTransport: func(io.Writer, string) (http.RoundTripper, error) {
+			<-neverFinishes
+			return nil, nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := ht.roundTripper(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+func TestPanickingSearchBecomesAnError(t *testing.T) {
+	stubSmartTransport(t, func(string) (http.RoundTripper, error) {
+		panic("strategy search exploded")
+	})
+
+	client, err := NewHTTPClientWithSmartTransport(io.Discard, "https://config.example/config")
+	require.NoError(t, err)
+
+	_, err = client.Get("https://config.example/config")
+	require.ErrorContains(t, err, "panicked",
+		"a panicking search must not take the process down with it")
 }
 
 func TestUnknownHostUsesFirstConfiguredTransport(t *testing.T) {

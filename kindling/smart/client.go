@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
+	"sync"
 
 	"github.com/getlantern/kindling"
 	"github.com/getlantern/radiance/bypass"
@@ -64,15 +66,14 @@ func NewHTTPClientWithSmartTransport(logWriter io.Writer, addresses ...string) (
 			host:         host,
 			logWriter:    logWriter,
 			newTransport: newSmartTransport,
-			searching:    make(chan struct{}, 1),
 		}
 		byHost[host] = ht
-		// Searching in the background keeps the client constructible while
-		// offline yet still spends the search before anything waits on it.
-		// Callers bound a whole config fetch at a timeout of the same order as
-		// the search itself, so one that pays for the search inside that budget
-		// has little of it left for the request.
-		go func() { _, _ = ht.roundTripper(context.Background()) }()
+		// Searching now keeps the client constructible while offline yet still
+		// spends the search before anything waits on it. Callers bound a whole
+		// config fetch at a timeout of the same order as the search itself, so
+		// one that pays for the search inside that budget has little of it left
+		// for the request.
+		ht.beginSearch()
 	}
 	lz := &lazyDialingRoundTripper{hosts: hosts, byHost: byHost}
 	return &http.Client{Transport: traces.NewRoundTripper(lz)}, nil
@@ -115,12 +116,14 @@ type lazyDialingRoundTripper struct {
 var _ http.RoundTripper = (*lazyDialingRoundTripper)(nil)
 
 func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	ht := lz.transportFor(req.URL.Hostname())
+	host := req.URL.Hostname()
+	ht := lz.transportFor(host)
 	ctx, span := otel.Tracer(tracerName).Start(
 		req.Context(),
 		"lazy_dialing_round_trip",
 		trace.WithAttributes(
-			attribute.String("domain", ht.host),
+			attribute.String("domain", host),
+			attribute.String("transport_host", ht.host),
 			attribute.StringSlice("domains", lz.hosts),
 		),
 	)
@@ -128,6 +131,11 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 
 	trans, err := ht.roundTripper(ctx)
 	if err != nil {
+		// A caller that gave up learned nothing about the host, so don't report
+		// its own cancellation as this host being unreachable.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport for %q -- offline? %w", ht.host, err))
 	}
 	res, err := trans.RoundTrip(req.WithContext(ctx))
@@ -147,6 +155,9 @@ func (lz *lazyDialingRoundTripper) transportFor(host string) *hostTransport {
 	return lz.byHost[lz.hosts[0]]
 }
 
+// hostTransport holds one host's smart transport, built by a strategy search and
+// reused once it lands. Searches are single-flight: concurrent callers join the
+// one already running rather than starting their own.
 type hostTransport struct {
 	host      string
 	logWriter io.Writer
@@ -156,34 +167,88 @@ type hostTransport struct {
 	// a test restoring the seam.
 	newTransport func(logWriter io.Writer, host string) (http.RoundTripper, error)
 
-	// searching admits one strategy search at a time, and is a channel rather
-	// than a mutex so that a caller can abandon its wait when its own context
-	// ends while the search runs on for whoever comes next.
-	searching chan struct{}
-	trans     http.RoundTripper
+	mu       sync.Mutex
+	trans    http.RoundTripper
+	inFlight *pendingSearch
 }
 
-// roundTripper returns the transport for this host, running the strategy search
-// on first use — so it blocks for however long that search takes, or until ctx
-// ends. A failed search is deliberately not remembered: this requires callers
-// to retry on their own schedule, in exchange for letting a host blocked at
-// first contact recover without a restart.
+// pendingSearch is one attempt at building a host's transport. trans and err are
+// written before done is closed, so a caller that has received from done may
+// read them without the lock.
+type pendingSearch struct {
+	done  chan struct{}
+	trans http.RoundTripper
+	err   error
+}
+
+// roundTripper returns the transport for this host, starting a strategy search
+// on first use and joining one already under way otherwise. ctx bounds only the
+// wait — the search itself takes no context and runs to completion on its own
+// goroutine, so work a caller gave up on still serves whoever comes next.
+//
+// A failed search is deliberately not remembered: this requires callers to
+// retry on their own schedule, in exchange for letting a host blocked at first
+// contact recover without a restart.
 func (ht *hostTransport) roundTripper(ctx context.Context) (http.RoundTripper, error) {
+	trans, search := ht.beginSearch()
+	if trans != nil {
+		return trans, nil
+	}
 	select {
-	case ht.searching <- struct{}{}:
+	case <-search.done:
+		return search.trans, search.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	defer func() { <-ht.searching }()
+}
 
+// beginSearch hands the search back rather than waiting on it, so that the
+// caller who starts one can abandon it on its own context just as a caller who
+// joins one can.
+func (ht *hostTransport) beginSearch() (http.RoundTripper, *pendingSearch) {
+	ht.mu.Lock()
+	defer ht.mu.Unlock()
 	if ht.trans != nil {
 		return ht.trans, nil
 	}
-	trans, err := ht.newTransport(ht.logWriter, ht.host)
-	if err != nil {
-		slog.Warn("smart dialer found no working strategy", "host", ht.host, "error", err)
-		return nil, err
+	if ht.inFlight == nil {
+		ht.inFlight = &pendingSearch{done: make(chan struct{})}
+		go ht.runSearch(ht.inFlight)
 	}
-	ht.trans = trans
-	return trans, nil
+	return nil, ht.inFlight
+}
+
+// runSearch clears inFlight before releasing anyone waiting on search, so a
+// caller arriving in that window starts a fresh search rather than joining a
+// finished one. Releasing is deferred because recover cannot stop a
+// runtime.Goexit — a test helper's t.Fatal, say — from unwinding this goroutine.
+func (ht *hostTransport) runSearch(search *pendingSearch) {
+	defer close(search.done)
+
+	search.trans, search.err = ht.buildTransport()
+	if search.err != nil {
+		slog.Warn("smart dialer found no working strategy", "host", ht.host, "error", search.err)
+	}
+
+	ht.mu.Lock()
+	if search.err == nil {
+		ht.trans = search.trans
+	}
+	ht.inFlight = nil
+	ht.mu.Unlock()
+}
+
+// buildTransport turns a panic into an error: the search runs on a goroutine of
+// its own, where a panic would take the process down with no caller in a
+// position to intercept it, and a host whose search blows up should cost only
+// that host.
+func (ht *hostTransport) buildTransport() (trans http.RoundTripper, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("smart dialer strategy search panicked",
+				"host", ht.host, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("strategy search panicked: %v", r)
+		}
+	}()
+	return ht.newTransport(ht.logWriter, ht.host)
 }
