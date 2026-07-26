@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,27 +124,35 @@ func TestFailedSearchIsRetried(t *testing.T) {
 }
 
 func TestConcurrentRequestsShareOneSearch(t *testing.T) {
+	// The search is held open on a channel until every request goroutine is
+	// running, so the requests demonstrably overlap the one in-flight search
+	// rather than relying on a sleep to line them up.
 	var searches atomic.Int32
+	searching := make(chan struct{})
 	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
 		searches.Add(1)
-		time.Sleep(50 * time.Millisecond)
+		<-searching
 		return echoHostRoundTripper{host: host}, nil
 	})
 
 	client, err := NewHTTPClientWithSmartTransport(io.Discard, "https://config.example/config")
 	require.NoError(t, err)
 
-	var wg sync.WaitGroup
+	var running, wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
+		running.Add(1)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			running.Done()
 			res, err := client.Get("https://config.example/config")
 			if assert.NoError(t, err) {
 				res.Body.Close()
 			}
 		}()
 	}
+	running.Wait()
+	close(searching)
 	wg.Wait()
 
 	assert.EqualValues(t, 1, searches.Load(), "a host searches once, however many requests are waiting on it")
@@ -173,8 +182,8 @@ func TestSuccessfulSearchIsRemembered(t *testing.T) {
 func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
 	// The search blocks until cleanup rather than sleeping: it cannot finish
 	// while the test runs, so construction returning at all proves it does not
-	// wait on the search (radiance has to start while offline). A regression
-	// deadlocks construction and fails via the test timeout.
+	// wait on the search (radiance has to start while offline). Construction
+	// runs under a watchdog so a regression fails fast instead of hanging.
 	searched := make(chan string, 1)
 	searching := make(chan struct{})
 	t.Cleanup(func() { close(searching) })
@@ -184,8 +193,17 @@ func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
 		return echoHostRoundTripper{host: host}, nil
 	})
 
-	_, err := NewHTTPClientWithSmartTransport(io.Discard, "https://config.example/config")
-	require.NoError(t, err)
+	built := make(chan error, 1)
+	go func() {
+		_, err := NewHTTPClientWithSmartTransport(io.Discard, "https://config.example/config")
+		built <- err
+	}()
+	select {
+	case err := <-built:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("radiance has to start while offline — construction must not wait on the search")
+	}
 
 	select {
 	case host := <-searched:
@@ -236,10 +254,55 @@ func TestSearchStarterGivesUpWhenItsContextEnds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
-	_, err := ht.roundTripper(ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Less(t, time.Since(start), time.Second)
+	// A watchdog so that a roundTripper that regresses to ignoring ctx fails
+	// the test fast instead of deadlocking it until the package timeout.
+	gaveUp := make(chan error, 1)
+	go func() {
+		_, err := ht.roundTripper(ctx)
+		gaveUp <- err
+	}()
+	select {
+	case err := <-gaveUp:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller who starts a search must be able to abandon it with its context")
+	}
+}
+
+// TestGoexitingSearchStillReleasesWaiters covers the unwind recover cannot
+// intercept: the search goroutine must still hand waiters an error rather than
+// (nil, nil), and must clear the in-flight slot so the host can search again.
+// It drives a hostTransport directly — a client's construction-time search
+// would absorb the Goexit before a request could join it.
+func TestGoexitingSearchStillReleasesWaiters(t *testing.T) {
+	var exited atomic.Bool
+	ht := &hostTransport{
+		host:      "config.example",
+		logWriter: io.Discard,
+		newTransport: func(io.Writer, string) (http.RoundTripper, error) {
+			if exited.CompareAndSwap(false, true) {
+				runtime.Goexit()
+			}
+			return echoHostRoundTripper{host: "config.example"}, nil
+		},
+	}
+
+	got := make(chan error, 1)
+	go func() {
+		_, err := ht.roundTripper(context.Background())
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		require.ErrorContains(t, err, "without a result",
+			"a search that unwound must not hand waiters (nil, nil)")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a search that unwound must still release its waiters")
+	}
+
+	trans, err := ht.roundTripper(context.Background())
+	require.NoError(t, err, "a host whose search unwound must be able to search again")
+	require.NotNil(t, trans)
 }
 
 func TestPanickingSearchBecomesAnError(t *testing.T) {

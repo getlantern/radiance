@@ -136,7 +136,7 @@ func (lz *lazyDialingRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport for %q -- offline? %w", ht.host, err))
+		return nil, traces.RecordError(ctx, fmt.Errorf("could not create smart transport for %q: %w", ht.host, err))
 	}
 	res, err := trans.RoundTrip(req.WithContext(ctx))
 	if err != nil {
@@ -220,22 +220,28 @@ func (ht *hostTransport) beginSearch() (http.RoundTripper, *pendingSearch) {
 
 // runSearch clears inFlight before releasing anyone waiting on search, so a
 // caller arriving in that window starts a fresh search rather than joining a
-// finished one. Releasing is deferred because recover cannot stop a
-// runtime.Goexit — a test helper's t.Fatal, say — from unwinding this goroutine.
+// finished one. The entire release path is deferred because recover cannot stop
+// a runtime.Goexit — a test helper's t.Fatal, say — from unwinding this
+// goroutine: even then the search must report an error rather than (nil, nil),
+// clear inFlight so the next caller starts fresh, and only then release.
 func (ht *hostTransport) runSearch(search *pendingSearch) {
-	defer close(search.done)
+	defer func() {
+		if search.trans == nil && search.err == nil {
+			search.err = fmt.Errorf("strategy search for %q exited without a result", ht.host)
+		}
+		ht.mu.Lock()
+		if search.err == nil {
+			ht.trans = search.trans
+		}
+		ht.inFlight = nil
+		ht.mu.Unlock()
+		close(search.done)
+	}()
 
 	search.trans, search.err = ht.buildTransport()
 	if search.err != nil {
 		slog.Warn("smart dialer found no working strategy", "host", ht.host, "error", search.err)
 	}
-
-	ht.mu.Lock()
-	if search.err == nil {
-		ht.trans = search.trans
-	}
-	ht.inFlight = nil
-	ht.mu.Unlock()
 }
 
 // buildTransport turns a panic into an error: the search runs on a goroutine of
