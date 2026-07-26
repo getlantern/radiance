@@ -72,10 +72,15 @@ func TestBlockedHostDoesNotBlockOthers(t *testing.T) {
 }
 
 func TestSlowSearchDoesNotDelayOtherHosts(t *testing.T) {
-	const slowSearch = time.Second
+	// The slow host's search blocks until cleanup rather than sleeping: it
+	// cannot finish while the test runs, so the fast host answering at all
+	// proves its request never waited on it — no wall-clock race on a loaded
+	// CI runner.
+	slowSearching := make(chan struct{})
+	t.Cleanup(func() { close(slowSearching) })
 	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
 		if host == "slow.example" {
-			time.Sleep(slowSearch)
+			<-slowSearching
 		}
 		return echoHostRoundTripper{host: host}, nil
 	})
@@ -83,10 +88,17 @@ func TestSlowSearchDoesNotDelayOtherHosts(t *testing.T) {
 	client, err := NewHTTPClientWithSmartTransport(io.Discard, "https://slow.example/config", "https://fast.example/config")
 	require.NoError(t, err)
 
-	start := time.Now()
-	assert.Equal(t, "fast.example", getBody(t, client, "https://fast.example/config"))
-	assert.Less(t, time.Since(start), slowSearch/2,
-		"a search for one host must stay off another host's request path")
+	// Bounded so a regression fails the test instead of hanging the suite.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://fast.example/config", nil)
+	require.NoError(t, err)
+	res, err := client.Do(req)
+	require.NoError(t, err, "a search for one host must stay off another host's request path")
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "fast.example", string(body))
 }
 
 func TestFailedSearchIsRetried(t *testing.T) {
@@ -159,17 +171,21 @@ func TestSuccessfulSearchIsRemembered(t *testing.T) {
 }
 
 func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
+	// The search blocks until cleanup rather than sleeping: it cannot finish
+	// while the test runs, so construction returning at all proves it does not
+	// wait on the search (radiance has to start while offline). A regression
+	// deadlocks construction and fails via the test timeout.
 	searched := make(chan string, 1)
+	searching := make(chan struct{})
+	t.Cleanup(func() { close(searching) })
 	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
 		searched <- host
-		time.Sleep(time.Second)
+		<-searching
 		return echoHostRoundTripper{host: host}, nil
 	})
 
-	start := time.Now()
 	_, err := NewHTTPClientWithSmartTransport(io.Discard, "https://config.example/config")
 	require.NoError(t, err)
-	assert.Less(t, time.Since(start), 250*time.Millisecond, "radiance has to start while offline")
 
 	select {
 	case host := <-searched:
