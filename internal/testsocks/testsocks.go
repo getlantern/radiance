@@ -18,28 +18,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type Server struct {
-	ln net.Listener
-}
-
 // Listen starts a SOCKS5 CONNECT proxy on addr and closes it on test cleanup.
-// Pass port 0 for an ephemeral port and read the resolved one from Addr.
-func Listen(t *testing.T, addr string) *Server {
+func Listen(t *testing.T, addr string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
-
-	s := &Server{ln: ln}
-	go s.serve()
-	return s
+	go serve(ln)
 }
 
-func (s *Server) Addr() string { return s.ln.Addr().String() }
-
-func (s *Server) serve() {
+func serve(ln net.Listener) {
 	for {
-		conn, err := s.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}

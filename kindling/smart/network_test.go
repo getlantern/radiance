@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -39,9 +40,12 @@ const (
 // a cold search on a slow emulator can legitimately take tens of seconds.
 const searchTimeout = 90 * time.Second
 
+// requireNetworkTests parses rather than checking for non-empty, so that an
+// explicit 0 or false disables the tests instead of enabling them.
 func requireNetworkTests(t *testing.T) {
 	t.Helper()
-	if os.Getenv(networkTestEnv) == "" {
+	on, err := strconv.ParseBool(os.Getenv(networkTestEnv))
+	if err != nil || !on {
 		t.Skipf("set %s=1 to run tests that need real egress", networkTestEnv)
 	}
 }
