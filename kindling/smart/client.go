@@ -23,18 +23,14 @@ import (
 
 const tracerName = "github.com/getlantern/radiance/kindling/smart"
 
-// DialerConfig is a copy of kindling's smart_dialer_config.yml that diverges
-// from it in two ways, both of which a resync has to carry over.
-//
-// The `system: {}` DNS entry is removed. The outline-sdk smart strategy rejects
-// any base StreamDialer that isn't *transport.TCPDialer when the system
-// resolver is selected, which the bypass dialer can't satisfy. DoH entries
-// route every probe through the supplied StreamDialer instead, which is
-// what we want anyway — system DNS uses OS routing tables and would loop
-// back through the VPN TUN we're trying to bypass.
-//
-// disorder sits leftmost in the tls list rather than rightmost, so configurl
-// hands it the raw socket it requires.
+// DialerConfig is a copy of kindling's smart_dialer_config.yml with the
+// `system: {}` DNS entry removed, which is the one divergence a resync has to
+// carry over. The outline-sdk smart strategy rejects any base StreamDialer that
+// isn't *transport.TCPDialer when the system resolver is selected, which the
+// bypass dialer can't satisfy. DoH entries route every probe through the
+// supplied StreamDialer instead, which is what we want anyway — system DNS uses
+// OS routing tables and would loop back through the VPN TUN we're trying to
+// bypass.
 //
 //go:embed smart_dialer_config.yml
 var DialerConfig []byte
