@@ -264,8 +264,8 @@ github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb h1:c5YM7b3a4r2J
 github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb/go.mod h1:GkPT5P9JoOTIRXRmFWxYgu1hhXgTFFTNc2hoG7WQc3g=
 github.com/getlantern/sing v0.7.18-lantern h1:QKGgIUA3LwmKYP/7JlQTRkxj9jnP4cX2Q/B+nd8XEjo=
 github.com/getlantern/sing v0.7.18-lantern/go.mod h1:ARkL0gM13/Iv5VCZmci/NuoOlePoIsW0m7BWfln/Hak=
-github.com/getlantern/sing-box-minimal v1.12.22-lantern.0.20260717223538-d0cc8eb0fb17 h1:0L34+GKrF2zc6IVwncnh7AIcNHD5mPnfFtKe6uk4NrM=
-github.com/getlantern/sing-box-minimal v1.12.22-lantern.0.20260717223538-d0cc8eb0fb17/go.mod h1:LzlFRel9E92gX0HXWCdsxgeg+kuAEPzLR+Znixk9EI4=
+github.com/getlantern/sing-box-minimal v1.12.22-lantern.0.20260727203219-1739626c9ad2 h1:uS0Ao70BMoDptUDMYP0nnuU47FyqgTiRJutYAuz6j3o=
+github.com/getlantern/sing-box-minimal v1.12.22-lantern.0.20260727203219-1739626c9ad2/go.mod h1:LzlFRel9E92gX0HXWCdsxgeg+kuAEPzLR+Znixk9EI4=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9/go.mod h1:7uvbzuoOr3uYGHZx5QWlI8/C52XEf/aTb/tJFEe41Ak=
 github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa h1:goZee1cURbWPiqX1xyjfwLB/zByQ50hEwonnnyLmcJQ=
