@@ -65,3 +65,9 @@ proto:
 .PHONY: test
 test:
 	go test -v ./...
+
+# Runs on a connected device or emulator. Set RADIANCE_SMART_NETWORK_TEST=1 to
+# include the tests that need real egress.
+.PHONY: test-android
+test-android:
+	./scripts/android-test.sh

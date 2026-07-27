@@ -37,3 +37,8 @@ proto:
 
 test:
     go test -v ./...
+
+# Runs on a connected device or emulator. Set RADIANCE_SMART_NETWORK_TEST=1 to
+# include the tests that need real egress.
+test-android *packages:
+    ./scripts/android-test.sh {{packages}}

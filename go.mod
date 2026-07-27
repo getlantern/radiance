@@ -27,6 +27,7 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 require (
 	github.com/1Password/srp v0.2.0
 	github.com/Jigsaw-Code/outline-sdk v0.0.19
+	github.com/Jigsaw-Code/outline-sdk/x v0.0.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
@@ -64,7 +65,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.2 // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
@@ -302,7 +302,7 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260504160031-60b97b32f348 // indirect
 	google.golang.org/grpc v1.80.0
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
 
