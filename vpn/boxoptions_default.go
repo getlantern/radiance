@@ -45,11 +45,10 @@ func baseInbounds() []O.Inbound {
 	}
 
 	tunOpts := &O.TunInboundOptions{
-		InterfaceName: "utun225",
-		Address:       tunAddress,
-		AutoRoute:     true,
-		StrictRoute:   true,
-		Stack:         "system",
+		Address:     tunAddress,
+		AutoRoute:   true,
+		StrictRoute: true,
+		Stack:       "system",
 	}
 	switch common.Platform {
 	case "android":
