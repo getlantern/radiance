@@ -146,7 +146,9 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		case opts.DeviceID != "":
 			platformDeviceID = opts.DeviceID
 		case settings.Exists(settings.DeviceIDKey):
-			platformDeviceID = settings.GetString(settings.DeviceIDKey)
+			if platformDeviceID = settings.GetString(settings.DeviceIDKey); platformDeviceID == "" {
+				slog.Warn("No device ID was found")
+			}
 		default:
 			slog.Warn("No device ID was found")
 		}
