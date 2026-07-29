@@ -139,7 +139,17 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	var platformDeviceID string
 	switch common.Platform {
 	case "ios", "android":
-		platformDeviceID = opts.DeviceID
+		// The device ID is owned by the native caller and shared to the extension
+		// through persisted settings so both use the same ID. Unlike the desktop
+		// branch, don't generate one here — log and continue if it's absent.
+		switch {
+		case opts.DeviceID != "":
+			platformDeviceID = opts.DeviceID
+		case settings.Exists(settings.DeviceIDKey):
+			platformDeviceID = settings.GetString(settings.DeviceIDKey)
+		default:
+			slog.Warn("No device ID was found")
+		}
 	default:
 		platformDeviceID = deviceid.Get(settings.GetString(settings.DataPathKey))
 	}
