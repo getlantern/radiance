@@ -251,14 +251,11 @@ func baseRoutingRules() []O.Rule {
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
-	// 7.    Reject QUIC (UDP/443) for any UDP/443 not already matched above; placed
-	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
-	//       their QUIC. Added in buildOptions.
-	// 8.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
+	// 7.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
 	//       so direct-routed v6 is preserved while proxied v6 fails over to IPv4. Added
 	//	      in buildOptions.
-	// 9,10. Group rules for auto and manual selector modes (added in buildOptions).
-	// 11.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
+	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
