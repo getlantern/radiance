@@ -366,28 +366,6 @@ func consumeCacheClearMarker(basePath string) error {
 	return nil
 }
 
-// rejectQUICRule rejects UDP/443 to force HTTP/2-over-TCP fallback. Standard
-// pattern in TUN-mode sing-box clients (Hiddify, NekoBox, Clash Meta) because
-// QUIC-over-TCP-outbound stacks two loss-recovery/congestion regimes — strictly
-// worse than letting Chrome drop to HTTP/2. Caller is responsible for placing
-// this AFTER all rules that may route to direct (split tunnel, smart routing,
-// config file) so direct-routed domains keep their QUIC, and BEFORE the
-// proxy selectors so QUIC bound for a proxy is rejected.
-func rejectQUICRule() O.Rule {
-	return O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{
-				Network: []string{"udp"},
-				Port:    []uint16{443},
-			},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	}
-}
-
 // rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
 // a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
 // hints, apps using their own DNS). The default reject method (ICMP unreachable /
@@ -488,7 +466,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
-	opts.Route.Rules = append(opts.Route.Rules, rejectQUICRule())
 	if tunHasIPv6(opts) {
 		opts.Route.Rules = append(opts.Route.Rules, rejectIPv6Rule())
 	}
