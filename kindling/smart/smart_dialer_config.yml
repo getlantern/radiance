@@ -28,5 +28,8 @@ tls:
   - "" # Direct dialer
   - split:1
   - split:2,20*5
-  - split:200|disorder:1
+  # disorder must precede split: configurl pipes left to right, so the rightmost
+  # entry is outermost, and disorder type-asserts its inner conn to *net.TCPConn.
+  # Spelled the other way round it never dials.
+  - disorder:1|split:200
   - tlsfrag:1

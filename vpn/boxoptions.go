@@ -251,14 +251,11 @@ func baseRoutingRules() []O.Rule {
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
-	// 7.    Reject QUIC (UDP/443) for any UDP/443 not already matched above; placed
-	//       here so split-tunnel, smart-routed, and config-routed direct paths keep
-	//       their QUIC. Added in buildOptions.
-	// 8.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
+	// 7.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
 	//       so direct-routed v6 is preserved while proxied v6 fails over to IPv4. Added
 	//	      in buildOptions.
-	// 9,10. Group rules for auto and manual selector modes (added in buildOptions).
-	// 11.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
+	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
+	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
 	//
 	// * DO NOT change the order of these rules unless you know what you're doing. Changing these
@@ -366,28 +363,6 @@ func consumeCacheClearMarker(basePath string) error {
 	return nil
 }
 
-// rejectQUICRule rejects UDP/443 to force HTTP/2-over-TCP fallback. Standard
-// pattern in TUN-mode sing-box clients (Hiddify, NekoBox, Clash Meta) because
-// QUIC-over-TCP-outbound stacks two loss-recovery/congestion regimes — strictly
-// worse than letting Chrome drop to HTTP/2. Caller is responsible for placing
-// this AFTER all rules that may route to direct (split tunnel, smart routing,
-// config file) so direct-routed domains keep their QUIC, and BEFORE the
-// proxy selectors so QUIC bound for a proxy is rejected.
-func rejectQUICRule() O.Rule {
-	return O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{
-				Network: []string{"udp"},
-				Port:    []uint16{443},
-			},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	}
-}
-
 // rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
 // a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
 // hints, apps using their own DNS). The default reject method (ICMP unreachable /
@@ -488,7 +463,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
-	opts.Route.Rules = append(opts.Route.Rules, rejectQUICRule())
 	if tunHasIPv6(opts) {
 		opts.Route.Rules = append(opts.Route.Rules, rejectIPv6Rule())
 	}
