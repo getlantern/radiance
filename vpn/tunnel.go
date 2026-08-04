@@ -13,6 +13,7 @@ import (
 	"slices"
 	"time"
 
+	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental"
 	"github.com/sagernet/sing-box/experimental/libbox"
@@ -42,7 +43,7 @@ import (
 
 type tunnel struct {
 	ctx                  context.Context
-	lbService            *libbox.BoxService
+	boxInstance          *sbox.Box
 	clashServer          *clashServer
 	selectionHistory     lbA.AutoSelectHistoryStorage
 	selectionHistorySeed map[string]lbA.TagHistory
@@ -66,20 +67,13 @@ type tunnel struct {
 	closers []io.Closer
 }
 
-func (t *tunnel) start(ctx context.Context, options string, platformIfce libbox.PlatformInterface, isRestart bool) error {
+func (t *tunnel) start(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface, isRestart bool) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.start",
 		trace.WithAttributes(
-			attribute.Int("options_size", len(options)),
 			attribute.String("platform", common.Platform),
 			attribute.Bool("is_restart", isRestart),
 		))
 	defer span.End()
-
-	// Unbounded signaling must dial freddie outside the VPN tunnel or it
-	// recursively re-enters itself. streamingRoundTripper forces kindling to
-	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
-	baseCtx := lbA.ContextWithDirectTransport(box.BaseContext(), streamingRoundTripper{inner: kindling.HTTPClient().Transport})
-	t.ctx, t.cancel = context.WithCancel(baseCtx)
 
 	if err := t.init(ctx, options, platformIfce); err != nil {
 		t.close()
@@ -109,7 +103,7 @@ func traceSpan(ctx context.Context, name string, fn func() error) error {
 	return err
 }
 
-func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.PlatformInterface) (err error) {
+func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
 	defer func() {
 		if err != nil {
@@ -118,6 +112,14 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 		}
 		span.End()
 	}()
+
+	// Must run before sbox.New, which acquires the cache flock.
+	if err := consumeCacheClearMarker(t.dataPath); err != nil {
+		slog.Warn("Failed to apply deferred tunnel cache clear", "path", t.dataPath, "error", err)
+	}
+
+	// Must overwrite the clash server constructor before calling sbox.New
+	experimental.RegisterClashServerConstructor(newClashServer)
 
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
@@ -141,15 +143,22 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 		return fmt.Errorf("setup libbox: %w", err)
 	}
 
-	// Must run before NewServiceWithContext, which acquires the cache flock.
-	if err := consumeCacheClearMarker(dataPath); err != nil {
-		slog.Warn("Failed to apply deferred tunnel cache clear", "path", dataPath, "error", err)
+	// box.Context calls libbox.BaseContext, which instantiates a sing/service/filemanager using
+	// the setup options, so we need to set those BEFORE calling box.BaseContext or re-instantiate
+	// the filemanager.
+	boxCtx := box.BaseContext()
+	if platformIfce != nil {
+		boxCtx = service.ContextWith[adapter.PlatformInterface](boxCtx, libbox.NewPlatformInterfaceWrapper(platformIfce))
 	}
+
+	// Unbounded signaling must dial freddie outside the VPN tunnel or it
+	// recursively re-enters itself. streamingRoundTripper forces kindling to
+	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
+	boxCtx = lbA.ContextWithDirectTransport(boxCtx, streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	t.ctx, t.cancel = context.WithCancel(boxCtx)
 
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
-
-	experimental.RegisterClashServerConstructor(newClashServer)
 
 	t.selectionHistory = lbA.NewAutoSelectHistoryStorage()
 	for tag, h := range t.selectionHistorySeed {
@@ -159,11 +168,14 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	service.MustRegister[lbA.AutoSelectHistoryStorage](t.ctx, t.selectionHistory)
 	t.closers = append(t.closers, t.selectionHistory)
 
-	slog.Log(nil, rlog.LevelTrace, "Creating libbox service")
-	var lb *libbox.BoxService
-	if err := traceSpan(ctx, "libbox.NewServiceWithContext", func() error {
+	slog.Log(nil, rlog.LevelTrace, "Creating box instance")
+	var instance *sbox.Box
+	if err := traceSpan(ctx, "sbox.New", func() error {
 		var err error
-		lb, err = libbox.NewServiceWithContext(t.ctx, options, platformIfce)
+		instance, err = sbox.New(sbox.Options{
+			Context: t.ctx,
+			Options: options,
+		})
 		return err
 	}); err != nil {
 		return fmt.Errorf("create libbox service: %w", err)
@@ -179,8 +191,8 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	router := service.FromContext[adapter.Router](t.ctx)
 	router.AppendTracker(clientContextInjector)
 
-	t.closers = append(t.closers, lb)
-	t.lbService = lb
+	t.closers = append(t.closers, instance)
+	t.boxInstance = instance
 
 	if common.IsIOS() {
 		// only set memory limits on iOS since Android doesn't appear to apply any restrictions.
@@ -269,7 +281,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 		}
 	}()
 	if err := traceSpan(ctx, "libbox.BoxService.Start", func() error {
-		return t.lbService.Start()
+		return t.boxInstance.Start()
 	}); err != nil {
 		slog.Error("Failed to start libbox service", "error", err)
 		return fmt.Errorf("starting libbox service: %w", err)
@@ -342,7 +354,7 @@ func (t *tunnel) emitExhaustionEvents(ch <-chan struct{}) {
 }
 
 func (t *tunnel) selectMode(mode string) error {
-	if t.lbService == nil {
+	if t.boxInstance == nil {
 		return fmt.Errorf("tunnel not running")
 	}
 
@@ -394,7 +406,7 @@ func (t *tunnel) close() error {
 	}
 
 	t.closers = nil
-	t.lbService = nil
+	t.boxInstance = nil
 	return err
 }
 
@@ -661,16 +673,13 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 	}
 }
 
-func makeOutboundOptsMap(ctx context.Context, options string) *lsync.TypedMap[string, []byte] {
-	// we can ignore the error here because we would have already failed if we couldn't parse the
-	// options JSON in the first place
-	opts, _ := json.UnmarshalExtendedContext[O.Options](ctx, []byte(options))
+func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap[string, []byte] {
 	var optsMap lsync.TypedMap[string, []byte]
-	for _, out := range opts.Outbounds {
+	for _, out := range options.Outbounds {
 		b, _ := json.MarshalContext(ctx, out)
 		optsMap.Store(out.Tag, b)
 	}
-	for _, ep := range opts.Endpoints {
+	for _, ep := range options.Endpoints {
 		b, _ := json.MarshalContext(ctx, ep)
 		optsMap.Store(ep.Tag, b)
 	}

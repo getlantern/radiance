@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/gofrs/uuid/v5"
-	"github.com/sagernet/sing-box/common/conntrack"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/env"
@@ -56,9 +55,6 @@ func (r *memoryReclaimer) OpenConnectionCount() int {
 }
 
 func (r *memoryReclaimer) TotalDialedConnections() int {
-	if conntrack.Enabled {
-		return conntrack.Count()
-	}
 	return int(r.tracker.activeConnectionCount())
 }
 
@@ -73,10 +69,6 @@ func (r *memoryReclaimer) CloseAllConnections() {
 // Prefer conntrack.Close when available, and fall back to tracked connections
 // when conntrack support is compiled out.
 func closeAllRouted(tracker *connTracker) {
-	if conntrack.Enabled {
-		conntrack.Close()
-		return
-	}
 	tracker.closeAllTracked()
 }
 

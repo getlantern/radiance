@@ -24,7 +24,7 @@ func TestTunnelClose(t *testing.T) {
 		err := tun.close()
 		assert.NoError(t, err)
 		assert.Nil(t, tun.closers)
-		assert.Nil(t, tun.lbService)
+		assert.Nil(t, tun.boxInstance)
 	})
 
 	t.Run("cancels context", func(t *testing.T) {

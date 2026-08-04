@@ -656,7 +656,7 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 		},
 	}
 	if domainResolver != "" {
-		remoteOpts.LocalDNSServerOptions = O.LocalDNSServerOptions{
+		remoteOpts.RawLocalDNSServerOptions = O.RawLocalDNSServerOptions{
 			DialerOptions: O.DialerOptions{
 				DomainResolver: &O.DomainResolveOptions{
 					Server: domainResolver,
