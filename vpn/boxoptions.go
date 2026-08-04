@@ -363,25 +363,6 @@ func consumeCacheClearMarker(basePath string) error {
 	return nil
 }
 
-// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
-// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
-// hints, apps using their own DNS). The default reject method (ICMP unreachable /
-// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
-// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
-func rejectIPv6Rule() O.Rule {
-	return O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{
-				IPCIDR: []string{"::/0"},
-			},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	}
-}
-
 // tunHasIPv6 reports whether a TUN inbound was given an IPv6 address, meaning v6
 // is captured into the tunnel and must be rejected rather than left to bypass.
 func tunHasIPv6(opts O.Options) bool {
@@ -630,22 +611,36 @@ func selectModeRule(mode string) O.Rule {
 	}
 }
 
-func catchAllBlockerRule() O.Rule {
+func rejectRule(rule O.RawDefaultRule) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{},
+			RawDefaultRule: rule,
 			RuleAction: O.RuleAction{
 				Action: C.RuleActionTypeReject,
+				RejectOptions: O.RejectActionOptions{
+					Method: C.RuleActionRejectMethodDefault,
+				},
 			},
 		},
 	}
 }
 
+func catchAllBlockerRule() O.Rule {
+	return rejectRule(O.RawDefaultRule{})
+}
+
 func highMemoryRejectRule() O.Rule {
-	rule := catchAllBlockerRule()
-	rule.DefaultOptions.RawDefaultRule.ClashMode = rejectMode
-	return rule
+	return rejectRule(O.RawDefaultRule{ClashMode: rejectMode})
+}
+
+// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
+// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
+// hints, apps using their own DNS). The default reject method (ICMP unreachable /
+// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
+// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
+func rejectIPv6Rule() O.Rule {
+	return rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
 }
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
