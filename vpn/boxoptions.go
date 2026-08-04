@@ -1,9 +1,7 @@
 package vpn
 
 import (
-	"bytes"
 	"context"
-	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +14,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	lcommon "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
@@ -169,7 +165,7 @@ func baseOpts(basePath string) O.Options {
 	opts := O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
-			Output:       "lantern-box.log",
+			Output:       "lantern.log",
 			Timestamp:    true,
 			DisableColor: true,
 		},
@@ -458,31 +454,26 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
 	slog.Debug("Finished building options", "env", common.Env())
 
-	span.AddEvent("finished building options", trace.WithAttributes(
-		attribute.String("options", string(writeBoxOptions(bOptions.BasePath, opts))),
-	))
+	opts, err := jsonRoundTrip(bOptions.BasePath, opts)
+	if err != nil {
+		return opts, fmt.Errorf("validating options: %w", err)
+	}
+
 	return opts, nil
 }
 
-// writeBoxOptions marshals the options as JSON and stores them in a file so we can debug them
-// we can ignore the errors here since the tunnel will error out anyway if something is wrong
-func writeBoxOptions(path string, opts O.Options) []byte {
-	buf, err := json.MarshalContext(box.BaseContext(), opts)
+// jsonRoundTrip marshals and unmarshals the options to let sing-box set defaults and validate it.
+func jsonRoundTrip(path string, opts O.Options) (O.Options, error) {
+	ctx := box.BaseContext()
+	buf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
-		slog.Warn("failed to marshal options while writing debug box options", slog.Any("error", err))
-		return nil
+		return opts, fmt.Errorf("marshal options: %w", err)
 	}
-
-	var b bytes.Buffer
-	if err := stdjson.Indent(&b, buf, "", "  "); err != nil {
-		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
-		return buf
+	err = atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), buf, fileperm.File)
+	if err != nil {
+		slog.Warn("failed to write debug options", "error", err)
 	}
-	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), b.Bytes(), fileperm.File); err != nil {
-		slog.Warn("failed to write options file", slog.Any("error", err))
-		return buf
-	}
-	return b.Bytes()
+	return json.UnmarshalExtendedContext[O.Options](ctx, buf)
 }
 
 //////////////////////
