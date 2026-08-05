@@ -32,6 +32,7 @@ require (
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
+	github.com/getlantern/broflake v0.0.0-20260717153233-f2cacf69fe86
 	github.com/getlantern/common v1.2.1-0.20260708083946-cc657b08792c
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
@@ -116,7 +117,6 @@ require (
 	github.com/gaissmai/bart v0.11.1 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
-	github.com/getlantern/broflake v0.0.0-20260717153233-f2cacf69fe86 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260724223841-a5ee9ab56830 // indirect
 	github.com/go-chi/chi/v5 v5.2.2 // indirect
