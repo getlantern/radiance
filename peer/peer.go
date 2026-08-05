@@ -790,6 +790,16 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		}
 	}
 
+	// Same defence-in-depth gate Start applies, because rotation installs a
+	// freshly fetched launch_cfg on an already-running peer. Validating only
+	// at Start would let a server-side regression reach every long-lived peer
+	// on its next hourly rotation. Failing here keeps the current, already
+	// validated box serving.
+	if err := validateAbuseRules(regResp.ServerConfig); err != nil {
+		cleanupNewRoute(err)
+		return fmt.Errorf("rotated launch_cfg failed abuse-rule sanity check: %w", err)
+	}
+
 	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
 	if err != nil {
 		cleanupNewRoute(err)

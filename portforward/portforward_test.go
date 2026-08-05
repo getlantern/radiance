@@ -338,3 +338,44 @@ func TestForwarder_RenewalAfterTeardown_DoesNotReAdd(t *testing.T) {
 		"no AddPortMapping may be issued after UnmapPort")
 	assert.Equal(t, int64(1), c.deleteCalls.Load(), "no compensating delete was needed")
 }
+
+// A caller that gives up mid-MapPort must not leave a mapping behind: the
+// gateway may still accept it, and because f.mapping was never recorded,
+// UnmapPort would short-circuit and nothing would ever remove the forward.
+func TestForwarder_MapPort_CancelledMidCall_RemovesAcceptedMapping(t *testing.T) {
+	release := make(chan struct{})
+	c := &fakeIGD{addBlock: release}
+	f := newTestForwarder(t, c)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		m   *Mapping
+		err error
+	}
+	res := make(chan result, 1)
+	go func() {
+		m, err := f.MapPort(ctx, 15100, "test")
+		res <- result{m, err}
+	}()
+
+	// Park inside AddPortMapping, then give up.
+	require.Eventually(t, func() bool { return c.addCalls.Load() >= 1 },
+		2*time.Second, time.Millisecond, "MapPort never reached AddPortMapping")
+	cancel()
+	close(release) // the gateway accepts it anyway
+
+	var got result
+	select {
+	case got = <-res:
+	case <-time.After(3 * time.Second):
+		t.Fatal("MapPort did not return")
+	}
+
+	require.Error(t, got.err, "a cancelled caller must get an error")
+	assert.ErrorIs(t, got.err, context.Canceled)
+	assert.Nil(t, got.m)
+	assert.Nil(t, f.mapping, "no mapping should be recorded")
+	assert.Equal(t, int64(1), c.deleteCalls.Load(),
+		"the accepted-but-unreported mapping must be deleted, or it survives untracked")
+	assert.Equal(t, uint16(15100), c.lastDelete.externalPort)
+}

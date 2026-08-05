@@ -128,9 +128,31 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 	// retry with a different internalPort.
 	externalPort := internalPort
 	client := f.client
-	err = runWithCtx(ctx, func() error {
-		return client.AddPortMapping("", externalPort, "TCP", internalPort, internalIP, true, description, requestedLease)
-	})
+	// Deliberately NOT runWithCtx, for the same reason as renewLoop: it
+	// returns the moment ctx is cancelled while its goroutine keeps running,
+	// so the mapping could land on the gateway after we returned an error and
+	// without f.mapping recording it — and UnmapPort short-circuits on a nil
+	// f.mapping, so nothing would ever remove it. Wait for the outcome, then
+	// clean up if the caller has given up.
+	addErrCh := make(chan error, 1)
+	go func() {
+		addErrCh <- client.AddPortMapping("", externalPort, "TCP", internalPort, internalIP, true, description, requestedLease)
+	}()
+	var addLanded bool
+	select {
+	case err = <-addErrCh:
+		addLanded = err == nil
+	case <-time.After(addCallTimeout):
+		// Outcome unknowable; assume it landed so the cleanup below removes it.
+		addLanded = true
+		err = fmt.Errorf("add port mapping timed out after %s", addCallTimeout)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil && addLanded {
+		// The caller gave up but the gateway accepted the mapping. Remove it —
+		// otherwise it survives with no Forwarder tracking it.
+		f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client)
+		return nil, fmt.Errorf("add port mapping: %w", ctxErr)
+	}
 	if err != nil {
 		// Propagate ctx cancellation/deadline verbatim so callers can retry
 		// rather than treating it as a permanent "this network won't work".
@@ -214,6 +236,8 @@ const (
 	// giving up on learning whether the mapping was re-added. SOAP to a LAN
 	// gateway normally answers in milliseconds.
 	renewCallTimeout = 30 * time.Second
+	// addCallTimeout is the same bound for the initial MapPort call.
+	addCallTimeout = 30 * time.Second
 )
 
 func (f *Forwarder) StartRenewal(ctx context.Context) {
