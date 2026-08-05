@@ -425,6 +425,8 @@ func (t *tunnel) addOutbounds(list servers.ServerList) error {
 	return t.addOutboundsLocked(list)
 }
 
+// addOutboundsLocked adds the servers in list to the tunnel. The caller must
+// hold t.outboundMu.
 func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
@@ -558,6 +560,8 @@ func (t *tunnel) removeOutbounds(tags []string) error {
 	return t.removeOutboundsLocked(tags)
 }
 
+// removeOutboundsLocked removes the outbounds with the given tags from the
+// tunnel. The caller must hold t.outboundMu.
 func (t *tunnel) removeOutboundsLocked(tags []string) error {
 	var (
 		mutGrpMgr = t.mutGrpMgr

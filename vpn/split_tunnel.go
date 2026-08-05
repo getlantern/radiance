@@ -75,6 +75,8 @@ func newSplitTunnel(path string, logger *slog.Logger) *SplitTunnel {
 	return s
 }
 
+// SetEnabled enables or disables split tunneling, persisting the change to
+// disk. It is a no-op when already in the requested state.
 func (s *SplitTunnel) SetEnabled(enabled bool) error {
 	s.access.Lock()
 	defer s.access.Unlock()
@@ -163,6 +165,8 @@ func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
 
 type actionFn func(slice []string, items []string) []string
 
+// updateFilterLocked applies fn to the filter of the given type. The caller
+// must hold s.access.
 func (s *SplitTunnel) updateFilterLocked(filterType string, item string, fn actionFn) error {
 	rule, exist := s.ruleMap[filterType]
 	if !exist {
@@ -191,6 +195,8 @@ func (s *SplitTunnel) updateFilterLocked(filterType string, item string, fn acti
 	return nil
 }
 
+// updateFiltersLocked applies fn to every filter category present in diff. The
+// caller must hold s.access.
 func (s *SplitTunnel) updateFiltersLocked(diff SplitTunnelFilter, fn actionFn) {
 	s.ruleMap[TypeDomain].Domain = fn(s.ruleMap[TypeDomain].Domain, diff.Domain)
 	s.ruleMap[TypeDomainSuffix].DomainSuffix = fn(s.ruleMap[TypeDomainSuffix].DomainSuffix, diff.DomainSuffix)
@@ -225,6 +231,10 @@ func remove(s []string, items []string) []string {
 	return s[:i]
 }
 
+// saveLocked serializes the current rule set to disk. The caller must hold
+// s.access: it reads activeFilter.Rules and rule.Mode, which the mutators
+// modify under the same lock, so an unsynchronized save can marshal a
+// half-updated rule set.
 func (s *SplitTunnel) saveLocked() error {
 	// Build a serialization-only copy of the rules, filtering out empty entries
 	// without mutating the live activeFilter/ruleMap state.
