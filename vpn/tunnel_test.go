@@ -3,6 +3,7 @@ package vpn
 import (
 	"context"
 	"testing"
+	"time"
 
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
@@ -43,6 +44,34 @@ func TestTunnelClose(t *testing.T) {
 
 		err := tun.close()
 		assert.ErrorIs(t, err, assert.AnError)
+	})
+
+	// On the timeout branch close() returns while the closer goroutine is still
+	// running; a follow-up close() (as on a restart) must not race or panic on
+	// the abandoned goroutine's slice, and the slow closer must still finish.
+	t.Run("timeout abandons slow closer without corrupting a restart", func(t *testing.T) {
+		release := make(chan struct{})
+		finished := make(chan struct{})
+		tun := &tunnel{closeTimeout: 50 * time.Millisecond}
+		tun.closers = append(tun.closers, closerFunc(func() error {
+			<-release
+			close(finished)
+			return nil
+		}))
+
+		err := tun.close()
+		require.Error(t, err, "close must report the timeout")
+		assert.Nil(t, tun.closers, "shared closers must be cleared before returning")
+		assert.Nil(t, tun.lbService)
+
+		assert.NoError(t, tun.close(), "a second close must find no closers")
+
+		close(release)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("abandoned closer never finished")
+		}
 	})
 }
 

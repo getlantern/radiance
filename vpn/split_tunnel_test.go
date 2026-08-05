@@ -4,7 +4,9 @@ package vpn
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,6 +121,30 @@ func TestAddRemoveItems(t *testing.T) {
 	f = st.Filters()
 	assert.Equal(t, []string{"b.com"}, f.Domain)
 	assert.Empty(t, f.ProcessName)
+}
+
+// Concurrent mutators share activeFilter.Rules and rule.Mode. Without holding
+// s.access across the mutate and the subsequent save, saveLocked reads those
+// fields while another goroutine modifies them — flagged by -race and capable
+// of serializing a torn rule set.
+func TestConcurrentMutationPersistsParseableRuleSet(t *testing.T) {
+	tmpDir := t.TempDir()
+	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			domain := fmt.Sprintf("d%d.example.com", i)
+			_ = st.AddItems(SplitTunnelFilter{Domain: []string{domain}, ProcessName: []string{fmt.Sprintf("p%d", i)}})
+			_ = st.SetEnabled(i%2 == 0)
+			_ = st.RemoveItems(SplitTunnelFilter{Domain: []string{domain}})
+		})
+	}
+	wg.Wait()
+
+	_, err = NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err, "rule set persisted under concurrent mutation must still parse")
 }
 
 func TestFilterPersistence(t *testing.T) {
