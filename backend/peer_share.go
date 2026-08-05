@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -49,6 +50,19 @@ func newPeerClient(platformDeviceID string) (*peer.Client, error) {
 // sequence could see the second call's "already active" rollback racing the
 // third call's Stop.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
+	// Construction degrades to a nil client rather than failing (the backend
+	// must always come up so a user can report an issue), so the toggle
+	// reports the outage instead of panicking. Roll the setting back, or a
+	// persisted "on" would survive with nothing behind it.
+	if r.peerClient == nil {
+		if enabled {
+			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
+				slog.Error("peer share rollback failed with no peer client", "error", rbErr)
+			}
+			return errors.New("peer share unavailable: peer client failed to initialize")
+		}
+		return nil
+	}
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()
 	toggleCtx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
@@ -120,7 +134,12 @@ func (r *LocalBackend) closePeerClient() {
 }
 
 // PeerStatus returns the current peer-share session state for the IPC
-// /peer/status endpoint.
+// /peer/status endpoint. A nil peerClient reports the zero Status rather
+// than panicking: construction degrades to a nil client, and the IPC
+// handler serves this on every GET /peer/status.
 func (r *LocalBackend) PeerStatus() peer.Status {
+	if r.peerClient == nil {
+		return peer.Status{}
+	}
 	return r.peerClient.CurrentStatus()
 }

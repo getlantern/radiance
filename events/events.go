@@ -136,7 +136,9 @@ func Emit[T Event](evt T) {
 	// Diagnostic hook; default no-op so high-frequency event types
 	// don't flood logs in prod. Tests / debugging swap in a real
 	// logger via SetEmitDebugLogger.
-	emitDebugLogger(key, len(cbs))
+	if fn := emitDebugLogger.Load(); fn != nil {
+		(*fn)(key, len(cbs))
+	}
 	for _, cb := range cbs {
 		go func() {
 			defer func() {
@@ -149,19 +151,21 @@ func Emit[T Event](evt T) {
 	}
 }
 
-// emitDebugLogger is invoked once per Emit with the event type and
-// current subscriber count. Default is a no-op; callers (tests,
-// diagnostic builds) swap in a real logger via SetEmitDebugLogger.
-var emitDebugLogger = func(reflect.Type, int) {}
+// emitDebugLogger holds the hook invoked once per Emit with the event type
+// and current subscriber count; nil means no-op. Held atomically because
+// Emit reads it from arbitrary goroutines — peer.Client's heartbeat and
+// rotation loops emit for the process lifetime, so any post-startup
+// SetEmitDebugLogger would otherwise race an in-flight Emit.
+var emitDebugLogger atomic.Pointer[func(reflect.Type, int)]
 
 // SetEmitDebugLogger replaces the no-op diagnostic hook for the
 // duration of an investigation (e.g., tracking "events vanish" paths).
-// Pass nil to restore the no-op default. Safe to call from main /
-// init; not safe to call concurrently with Emit on the hot path.
+// Pass nil to restore the no-op default. Safe to call concurrently with
+// Emit.
 func SetEmitDebugLogger(fn func(eventType reflect.Type, subscriberCount int)) {
 	if fn == nil {
-		emitDebugLogger = func(reflect.Type, int) {}
+		emitDebugLogger.Store(nil)
 		return
 	}
-	emitDebugLogger = fn
+	emitDebugLogger.Store(&fn)
 }

@@ -187,9 +187,12 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
 
+	// Degraded, not fatal, per the invariant above: a nil peerClient only
+	// disables Share My Connection, and must not cost the user their ability
+	// to report an issue. applyPeerShare and PeerStatus handle nil.
 	peerClient, err := newPeerClient(platformDeviceID)
 	if err != nil {
-		return nil, err
+		slog.Error("Loading peer client", "error", err)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -603,17 +606,20 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[k]; ok {
 		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
 	}
+	// settings.Patch above already persisted the whole diff, so an early
+	// return here would leave a persisted key that no runtime state matches —
+	// exactly the divergence applyPeerShare's rollback exists to prevent.
+	// Run both handlers and join their errors.
+	var errs error
 	if err := r.maybeRestartVPN(diff); err != nil {
-		return err
+		errs = errors.Join(errs, err)
 	}
-
 	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
 		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
-			return err
+			errs = errors.Join(errs, err)
 		}
 	}
-
-	return nil
+	return errs
 }
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings
