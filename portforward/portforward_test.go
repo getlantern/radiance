@@ -26,7 +26,7 @@ type fakeIGD struct {
 }
 
 type mappingArgs struct {
-	externalPort, internalPort uint16
+	externalPort, internalPort  uint16
 	internalClient, description string
 	leaseDuration               uint32
 }
@@ -232,7 +232,7 @@ func (emptyExtIPClient) AddPortMapping(string, uint16, string, uint16, string, b
 	return nil
 }
 func (emptyExtIPClient) DeletePortMapping(string, uint16, string) error { return nil }
-func (emptyExtIPClient) GetExternalIPAddress() (string, error)         { return "", nil }
+func (emptyExtIPClient) GetExternalIPAddress() (string, error)          { return "", nil }
 
 func TestForwarder_ExternalIP_PropagatesError(t *testing.T) {
 	c := &fakeIGD{extIPErr: errors.New("upstream timeout")}

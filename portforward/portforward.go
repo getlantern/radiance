@@ -371,7 +371,9 @@ func discoverIGDv1(ctx context.Context) (igdClient, error) {
 // IGDv1 and IGDv2's generated clients have slightly different method
 // signatures, so wrappers normalize them to a single igdClient interface.
 
-type wanIPv2Wrapper struct{ c *internetgateway2.WANIPConnection2 }
+type wanIPv2Wrapper struct {
+	c *internetgateway2.WANIPConnection2
+}
 
 func (w wanIPv2Wrapper) AddPortMapping(remoteHost string, externalPort uint16, protocol string, internalPort uint16, internalClient string, enabled bool, description string, leaseDuration uint32) error {
 	return w.c.AddPortMapping(remoteHost, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration)
@@ -383,7 +385,9 @@ func (w wanIPv2Wrapper) GetExternalIPAddress() (string, error) {
 	return w.c.GetExternalIPAddress()
 }
 
-type wanIPv1Wrapper struct{ c *internetgateway1.WANIPConnection1 }
+type wanIPv1Wrapper struct {
+	c *internetgateway1.WANIPConnection1
+}
 
 func (w wanIPv1Wrapper) AddPortMapping(remoteHost string, externalPort uint16, protocol string, internalPort uint16, internalClient string, enabled bool, description string, leaseDuration uint32) error {
 	return w.c.AddPortMapping(remoteHost, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration)
@@ -395,7 +399,9 @@ func (w wanIPv1Wrapper) GetExternalIPAddress() (string, error) {
 	return w.c.GetExternalIPAddress()
 }
 
-type wanPPPv1Wrapper struct{ c *internetgateway1.WANPPPConnection1 }
+type wanPPPv1Wrapper struct {
+	c *internetgateway1.WANPPPConnection1
+}
 
 func (w wanPPPv1Wrapper) AddPortMapping(remoteHost string, externalPort uint16, protocol string, internalPort uint16, internalClient string, enabled bool, description string, leaseDuration uint32) error {
 	return w.c.AddPortMapping(remoteHost, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration)

@@ -63,7 +63,7 @@ const (
 	// Advanced setting in the Share My Connection UI for users on
 	// networks where UPnP is disabled or unavailable.
 	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
-	SelectedServerKey   _key = "selected_server"    // [servers.Server] Server.Options is not stored
+	SelectedServerKey _key = "selected_server"  // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
 
