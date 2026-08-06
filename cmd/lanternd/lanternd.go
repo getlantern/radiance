@@ -19,6 +19,7 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
+	commonenv "github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/ipc"
 	rlog "github.com/getlantern/radiance/log"
@@ -26,15 +27,89 @@ import (
 )
 
 type runCmd struct {
-	DataPath string `arg:"--data-path" help:"path to store data"`
-	LogPath  string `arg:"--log-path" help:"path to store logs"`
-	LogLevel string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	DataPath    string            `arg:"--data-path" help:"path to store data"`
+	LogPath     string            `arg:"--log-path" help:"path to store logs"`
+	LogLevel    string            `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	Environment daemonEnvironment `arg:"--environment" default:"prod" help:"backend environment (prod or staging)"`
 }
 
 type installCmd struct {
-	DataPath string `arg:"--data-path" help:"path to store data"`
-	LogPath  string `arg:"--log-path" help:"path to store logs"`
-	LogLevel string `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	DataPath    string            `arg:"--data-path" help:"path to store data"`
+	LogPath     string            `arg:"--log-path" help:"path to store logs"`
+	LogLevel    string            `arg:"--log-level" default:"info" help:"logging level (trace, debug, info, warn, error)"`
+	Environment daemonEnvironment `arg:"--environment" default:"prod" help:"backend environment (prod or staging)"`
+}
+
+type daemonEnvironment string
+
+const (
+	daemonEnvironmentProd    daemonEnvironment = "prod"
+	daemonEnvironmentStaging daemonEnvironment = "staging"
+)
+
+// UnmarshalText validates the environment while go-arg parses the command line.
+func (e *daemonEnvironment) UnmarshalText(text []byte) error {
+	parsed, err := parseDaemonEnvironment(string(text))
+	if err != nil {
+		return err
+	}
+	*e = parsed
+	return nil
+}
+
+// parseDaemonEnvironment keeps lanternd from silently accepting an unknown environment.
+func parseDaemonEnvironment(value string) (daemonEnvironment, error) {
+	environment := daemonEnvironment(value)
+	switch environment {
+	case daemonEnvironmentProd, daemonEnvironmentStaging:
+		return environment, nil
+	default:
+		return "", fmt.Errorf("unsupported environment %q (must be prod or staging)", value)
+	}
+}
+
+type serviceRunConfig struct {
+	dataPath    string
+	logPath     string
+	logLevel    string
+	environment daemonEnvironment
+}
+
+// serviceConfig applies platform defaults and expands paths after command-line parsing.
+func (c runCmd) serviceConfig() serviceRunConfig {
+	return serviceRunConfig{
+		dataPath:    os.ExpandEnv(withDefault(c.DataPath, internal.DefaultDataPath())),
+		logPath:     os.ExpandEnv(withDefault(c.LogPath, internal.DefaultLogPath())),
+		logLevel:    c.LogLevel,
+		environment: c.Environment,
+	}
+}
+
+// args builds the command line used to start a daemon with this service configuration.
+func (c serviceRunConfig) args() []string {
+	return []string{
+		"run",
+		"--data-path", c.dataPath,
+		"--log-path", c.logPath,
+		"--log-level", c.logLevel,
+		"--environment", string(c.environment),
+	}
+}
+
+// parseServiceRunArgs recovers the persisted daemon configuration from a service command line.
+func parseServiceRunArgs(args []string) (serviceRunConfig, error) {
+	var parsed daemonArgs
+	parser, err := arg.NewParser(arg.Config{}, &parsed)
+	if err != nil {
+		return serviceRunConfig{}, fmt.Errorf("create service argument parser: %w", err)
+	}
+	if err := parser.Parse(args); err != nil {
+		return serviceRunConfig{}, fmt.Errorf("parse service arguments: %w", err)
+	}
+	if parsed.Run == nil {
+		return serviceRunConfig{}, errors.New("service command must run the daemon")
+	}
+	return parsed.Run.serviceConfig(), nil
 }
 
 type uninstallCmd struct{}
@@ -73,10 +148,9 @@ func main() {
 	var err error
 	switch {
 	case a.Run != nil:
-		dataPath := os.ExpandEnv(withDefault(a.Run.DataPath, defaultDataPath))
-		logPath := os.ExpandEnv(withDefault(a.Run.LogPath, defaultLogPath))
+		config := a.Run.serviceConfig()
 		if os.Getenv("_LANTERND_CHILD") != "1" {
-			err = babysit(os.Args[1:], dataPath, logPath, a.Run.LogLevel)
+			err = babysit(os.Args[1:], config.dataPath, config.logPath, config.logLevel)
 			break
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -93,12 +167,13 @@ func main() {
 			// Restore default signal behavior so a second signal terminates immediately.
 			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 		}()
-		err = runDaemon(ctx, dataPath, logPath, a.Run.LogLevel)
+		err = runDaemon(ctx, config.dataPath, config.logPath, config.logLevel, config.environment)
 	case a.Install != nil:
 		err = install(
 			os.ExpandEnv(withDefault(a.Install.DataPath, defaultDataPath)),
 			os.ExpandEnv(withDefault(a.Install.LogPath, defaultLogPath)),
 			a.Install.LogLevel,
+			a.Install.Environment,
 		)
 	case a.Uninstall != nil:
 		err = uninstall()
@@ -322,16 +397,33 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	}
 }
 
-func runDaemon(ctx context.Context, dataPath, logPath, logLevel string) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath)
-	be, err := backend.NewLocalBackend(ctx, backend.Options{
+// daemonBackendOptions passes the selected daemon environment through to the backend.
+func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemonEnvironment) backend.Options {
+	return backend.Options{
 		DataDir:  dataPath,
 		LogDir:   logPath,
 		LogLevel: logLevel,
-	})
+		EnvOverrides: map[string]string{
+			commonenv.ENV.String(): string(environment),
+		},
+	}
+}
+
+// daemonBackendURLs returns the endpoints that the backend will use for the selected environment.
+func daemonBackendURLs(environment daemonEnvironment) (authURL, proServerURL string) {
+	if environment == daemonEnvironmentStaging {
+		return common.StageBaseURL, common.StageProServerURL
+	}
+	return common.BaseURL, common.ProServerURL
+}
+
+func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environment daemonEnvironment) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	authURL, proServerURL := daemonBackendURLs(environment)
+	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath, "environment", environment, "authURL", authURL, "proServerURL", proServerURL)
+	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel, environment))
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
 	}
