@@ -54,9 +54,12 @@ func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.
 // CloudFront sets "x-cache: Error from cloudfront" even when proxying an origin
 // 4xx. Unmarked third-party origins keep domainfront's default behavior.
 func retryableResponse(resp *http.Response) bool {
-	if resp.StatusCode != http.StatusForbidden && resp.StatusCode < 500 {
+	is5xx := resp.StatusCode >= 500 && resp.StatusCode < 600
+	if resp.StatusCode != http.StatusForbidden && !is5xx {
 		return false
 	}
+	// Get, not a direct map read: it canonicalizes the key, and an empty value is
+	// not a usable marker, so it falls back to the default retry behavior.
 	return resp.Header.Get(common.OriginHeader) == ""
 }
 

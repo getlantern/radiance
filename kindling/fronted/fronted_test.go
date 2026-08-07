@@ -70,6 +70,11 @@ func TestRetryableResponse(t *testing.T) {
 		{"edge 200", 200, cloudFrontEdge, false},
 		{"404 is a real answer even unmarked", 404, http.Header{}, false},
 		{"301 is not a front failure", 301, http.Header{}, false},
+		// Outside 5xx, so not a rejection status even though it exceeds 500.
+		{"malformed 600 is not a front failure", 600, http.Header{}, false},
+		// An empty marker is unusable, so it falls back to the default behavior
+		// rather than being honored as proof of origin.
+		{"empty marker is not proof of origin", 403, http.Header{common.OriginHeader: []string{""}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := retryableResponse(&http.Response{StatusCode: tc.status, Header: tc.header})
