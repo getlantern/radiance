@@ -44,6 +44,12 @@ const (
 	ClientIPHeader          = "X-Lantern-Config-Client-IP"
 	ContentTypeHeader       = "content-type"
 	AcceptHeader            = "accept"
+
+	// OriginHeader is set by Lantern origins on every response (see
+	// lantern-cloud's router.OriginMarker). Unlike the headers above it is a
+	// response header: fronted requests use its presence to tell an origin-issued
+	// status from a CDN edge's, since a CDN relays the origin's response verbatim.
+	OriginHeader = "X-Lantern-Origin"
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.

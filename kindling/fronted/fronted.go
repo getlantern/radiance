@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"path/filepath"
 
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/domainfront"
 	"github.com/getlantern/radiance/bypass"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/kindling/smart"
 )
 
@@ -43,6 +45,19 @@ type bypassDialer struct{}
 
 func (bypassDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return bypass.DialContext(ctx, network, addr)
+}
+
+// retryableResponse treats 403/5xx as a front failure only when
+// common.OriginHeader is absent. Our API returns 403 for ordinary auth outcomes
+// (unknown email, expired SRP state), and retrying those discards healthy fronts
+// and buries the real error. The signal has to be a positive one from the origin:
+// CloudFront sets "x-cache: Error from cloudfront" even when proxying an origin
+// 4xx. Unmarked third-party origins keep domainfront's default behavior.
+func retryableResponse(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode < 500 {
+		return false
+	}
+	return resp.Header.Get(common.OriginHeader) == ""
 }
 
 // NewFronted builds a domainfront.Client for use with kindling's
@@ -80,6 +95,7 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*do
 		domainfront.WithLogger(slog.Default()),
 		domainfront.WithConfigURL(configURL, mirrorConfigURL),
 		domainfront.WithHTTPClient(smartClient),
+		domainfront.WithRetryableResponse(retryableResponse),
 	}
 	return domainfront.New(ctx, seed, opts...)
 }
