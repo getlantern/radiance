@@ -31,6 +31,11 @@ var (
 	BufPoolBudgetMB  _key = "RADIANCE_BUF_POOL_BUDGET_MB"
 	MemoryLimitMB    _key = "RADIANCE_MEM_LIMIT_MB"
 
+	// PeerExternalPort, when set to a 1..65535 value, makes peer.Client.Start
+	// skip UPnP discovery and treat the value as a manually-forwarded port
+	// on the user's router (handy for eero / ISP CPE that don't expose UPnP).
+	PeerExternalPort _key = "RADIANCE_PEER_EXTERNAL_PORT"
+
 	Testing _key = "RADIANCE_TESTING"
 
 	mu     sync.RWMutex

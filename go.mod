@@ -37,7 +37,7 @@ require (
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
 	github.com/getlantern/kindling v0.0.0-20260727211028-573c1ef64464
-	github.com/getlantern/lantern-box v0.0.107
+	github.com/getlantern/lantern-box v0.0.109
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
@@ -46,6 +46,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
+	github.com/huin/goupnp v1.3.0
 	github.com/knadh/koanf/parsers/json v1.0.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
@@ -135,7 +136,6 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
-	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/illarion/gonotify/v2 v2.0.3 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
