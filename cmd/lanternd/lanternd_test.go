@@ -128,3 +128,11 @@ func TestStagingServiceRunConfigSelectsStagingAccountEndpoints(t *testing.T) {
 	require.Equal(t, common.StageBaseURL, authURL)
 	require.Equal(t, common.StageProServerURL, proServerURL)
 }
+
+func TestProductionBackendOptionsPreserveDevelopmentEnvironment(t *testing.T) {
+	t.Setenv(commonenv.ENV.String(), "dev")
+
+	options := daemonBackendOptions("/data", "/logs", "debug", daemonEnvironmentProd)
+	require.NotContains(t, options.EnvOverrides, commonenv.ENV.String())
+	require.Equal(t, "dev", common.Env())
+}

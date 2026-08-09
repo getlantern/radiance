@@ -47,7 +47,7 @@ const (
 	daemonEnvironmentStaging daemonEnvironment = "staging"
 )
 
-// UnmarshalText validates the environment while go-arg parses the command line.
+// UnmarshalText rejects unsupported daemon environments during CLI decoding.
 func (e *daemonEnvironment) UnmarshalText(text []byte) error {
 	parsed, err := parseDaemonEnvironment(string(text))
 	if err != nil {
@@ -57,7 +57,6 @@ func (e *daemonEnvironment) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// parseDaemonEnvironment keeps lanternd from silently accepting an unknown environment.
 func parseDaemonEnvironment(value string) (daemonEnvironment, error) {
 	environment := daemonEnvironment(value)
 	switch environment {
@@ -75,7 +74,6 @@ type serviceRunConfig struct {
 	environment daemonEnvironment
 }
 
-// serviceConfig applies platform defaults and expands paths after command-line parsing.
 func (c runCmd) serviceConfig() serviceRunConfig {
 	return serviceRunConfig{
 		dataPath:    os.ExpandEnv(withDefault(c.DataPath, internal.DefaultDataPath())),
@@ -85,7 +83,6 @@ func (c runCmd) serviceConfig() serviceRunConfig {
 	}
 }
 
-// args builds the command line used to start a daemon with this service configuration.
 func (c serviceRunConfig) args() []string {
 	return []string{
 		"run",
@@ -96,7 +93,6 @@ func (c serviceRunConfig) args() []string {
 	}
 }
 
-// parseServiceRunArgs recovers the persisted daemon configuration from a service command line.
 func parseServiceRunArgs(args []string) (serviceRunConfig, error) {
 	var parsed daemonArgs
 	parser, err := arg.NewParser(arg.Config{}, &parsed)
@@ -397,19 +393,21 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	}
 }
 
-// daemonBackendOptions passes the selected daemon environment through to the backend.
+// daemonBackendOptions overrides only staging so the production default preserves an externally configured development environment.
 func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemonEnvironment) backend.Options {
-	return backend.Options{
+	options := backend.Options{
 		DataDir:  dataPath,
 		LogDir:   logPath,
 		LogLevel: logLevel,
-		EnvOverrides: map[string]string{
-			commonenv.ENV.String(): string(environment),
-		},
 	}
+	if environment == daemonEnvironmentStaging {
+		options.EnvOverrides = map[string]string{
+			commonenv.ENV.String(): string(environment),
+		}
+	}
+	return options
 }
 
-// daemonBackendURLs returns the endpoints that the backend will use for the selected environment.
 func daemonBackendURLs(environment daemonEnvironment) (authURL, proServerURL string) {
 	if environment == daemonEnvironmentStaging {
 		return common.StageBaseURL, common.StageProServerURL
