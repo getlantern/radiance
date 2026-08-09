@@ -223,8 +223,6 @@ func TestThroughputTracker_ConcurrentSampleAndClose(t *testing.T) {
 	assert.Equal(t, int64(producers*perProducer*5), down)
 }
 
-
-
 func TestThroughputTracker_NonPositiveIntervalUsesDefault(t *testing.T) {
 	ct := newConnTracker()
 	for _, interval := range []time.Duration{0, -time.Second} {
