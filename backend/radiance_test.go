@@ -510,3 +510,40 @@ func TestPatchSettings_PeerShareDispatches(t *testing.T) {
 	assert.Equal(t, int64(1), fake.stopCalls.Load())
 	assert.False(t, fake.IsActive())
 }
+
+// Construction degrades to a nil peerClient rather than failing, so that a
+// peer-client problem can never cost the user the ability to report an issue.
+// Everything reachable from IPC must tolerate that.
+
+func TestPeerStatus_NilClientReturnsZeroStatus(t *testing.T) {
+	r := newPeerTestBackend(t, nil)
+	r.peerClient = nil
+
+	var got peer.Status
+	require.NotPanics(t, func() { got = r.PeerStatus() },
+		"the IPC /peer/status handler calls this on every request")
+	assert.Equal(t, peer.Status{}, got)
+}
+
+func TestApplyPeerShare_NilClientReportsUnavailableAndRollsBack(t *testing.T) {
+	r := newPeerTestBackend(t, nil)
+	r.peerClient = nil
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	err := r.applyPeerShare(true)
+
+	require.Error(t, err, "enabling with no peer client must report the outage, not panic")
+	assert.ErrorContains(t, err, "peer share unavailable")
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey),
+		"the setting must roll back so a persisted \"on\" doesn't survive with nothing behind it")
+}
+
+func TestApplyPeerShare_NilClientDisableIsNoop(t *testing.T) {
+	r := newPeerTestBackend(t, nil)
+	r.peerClient = nil
+
+	require.NotPanics(t, func() {
+		assert.NoError(t, r.applyPeerShare(false),
+			"turning it off when it was never on is not an error")
+	})
+}

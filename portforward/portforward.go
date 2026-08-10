@@ -48,6 +48,11 @@ type Forwarder struct {
 	method  string
 	mapping *Mapping
 	cancel  context.CancelFunc
+	// closed marks that UnmapPort has begun tearing the mapping down. A
+	// renewal already past its pre-check consults this again afterwards, so
+	// an AddPortMapping that lands after the delete gets undone rather than
+	// left on the gateway forever.
+	closed bool
 }
 
 // ProbeUPnP reports whether IGD discovery on the local network turns up a
@@ -105,6 +110,13 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 		return nil, errors.New("forwarder already has an active mapping")
 	}
 
+	// Bail before localIP's interface enumeration; runWithCtx only checks ctx
+	// once it is reached, so an already-cancelled caller would otherwise pay
+	// for work whose result is discarded.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	internalIP, err := localIP()
 	if err != nil {
 		return nil, fmt.Errorf("determine local ip: %w", err)
@@ -116,9 +128,31 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 	// retry with a different internalPort.
 	externalPort := internalPort
 	client := f.client
-	err = runWithCtx(ctx, func() error {
-		return client.AddPortMapping("", externalPort, "TCP", internalPort, internalIP, true, description, requestedLease)
-	})
+	// Deliberately NOT runWithCtx, for the same reason as renewLoop: it
+	// returns the moment ctx is cancelled while its goroutine keeps running,
+	// so the mapping could land on the gateway after we returned an error and
+	// without f.mapping recording it — and UnmapPort short-circuits on a nil
+	// f.mapping, so nothing would ever remove it. Wait for the outcome, then
+	// clean up if the caller has given up.
+	addErrCh := make(chan error, 1)
+	go func() {
+		addErrCh <- client.AddPortMapping("", externalPort, "TCP", internalPort, internalIP, true, description, requestedLease)
+	}()
+	var addLanded bool
+	select {
+	case err = <-addErrCh:
+		addLanded = err == nil
+	case <-time.After(addCallTimeout):
+		// Outcome unknowable; assume it landed so the cleanup below removes it.
+		addLanded = true
+		err = fmt.Errorf("add port mapping timed out after %s", addCallTimeout)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil && addLanded {
+		// The caller gave up but the gateway accepted the mapping. Remove it —
+		// otherwise it survives with no Forwarder tracking it.
+		f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client)
+		return nil, fmt.Errorf("add port mapping: %w", ctxErr)
+	}
 	if err != nil {
 		// Propagate ctx cancellation/deadline verbatim so callers can retry
 		// rather than treating it as a permanent "this network won't work".
@@ -166,6 +200,9 @@ func (f *Forwarder) UnmapPort(ctx context.Context) error {
 		f.cancel()
 		f.cancel = nil
 	}
+	// Set before the delete and while holding the lock: a renewal blocked on
+	// f.mu will observe it and undo anything it re-added.
+	f.closed = true
 	if f.mapping == nil {
 		return nil
 	}
@@ -190,6 +227,19 @@ func (f *Forwarder) UnmapPort(ctx context.Context) error {
 // The peer's heartbeat path will surface that failure and auto-Stop the
 // session; routine 30-minute refresh of an hour-long requested lease
 // handles the common case where the router honors the requested duration.
+const (
+	// racedUnmapTimeout bounds the compensating delete issued when a renewal
+	// re-added a mapping after teardown. Short: the session is already going
+	// away and nothing waits on this.
+	racedUnmapTimeout = 10 * time.Second
+	// renewCallTimeout bounds how long a renewal waits for the gateway before
+	// giving up on learning whether the mapping was re-added. SOAP to a LAN
+	// gateway normally answers in milliseconds.
+	renewCallTimeout = 30 * time.Second
+	// addCallTimeout is the same bound for the initial MapPort call.
+	addCallTimeout = 30 * time.Second
+)
+
 func (f *Forwarder) StartRenewal(ctx context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -208,6 +258,24 @@ func (f *Forwarder) StartRenewal(ctx context.Context) {
 	go f.renewLoop(renewCtx, interval)
 }
 
+// deleteRacedMapping removes a mapping that an in-flight renewal re-added
+// after UnmapPort had already deleted it. The renewal ctx is cancelled by
+// then, so this takes its own short deadline; best effort, since the only
+// remaining recourse is the router's own lease expiry.
+func (f *Forwarder) deleteRacedMapping(m *Mapping, client igdClient) {
+	ctx, cancel := context.WithTimeout(context.Background(), racedUnmapTimeout)
+	defer cancel()
+	if err := runWithCtx(ctx, func() error {
+		return client.DeletePortMapping("", m.ExternalPort, m.Protocol)
+	}); err != nil {
+		slog.Warn("portforward: could not remove mapping re-added by an in-flight renewal",
+			"err", err, "external_port", m.ExternalPort)
+		return
+	}
+	slog.Info("portforward: removed mapping re-added by an in-flight renewal",
+		"external_port", m.ExternalPort)
+}
+
 func (f *Forwarder) renewLoop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -219,18 +287,52 @@ func (f *Forwarder) renewLoop(ctx context.Context, interval time.Duration) {
 			f.mu.Lock()
 			m := f.mapping
 			client := f.client
+			closed := f.closed
 			f.mu.Unlock()
-			if m == nil {
+			if m == nil || closed {
 				return
 			}
 			// Most routers treat a re-issued AddPortMapping as "extend the
 			// existing lease"; some replace it with a fresh one. Either is
 			// fine here.
-			err := runWithCtx(ctx, func() error {
-				return client.AddPortMapping("", m.ExternalPort, "TCP", m.InternalPort, m.InternalIP, true, "Lantern peer share (renew)", uint32(m.LeaseDuration/time.Second))
-			})
-			if err != nil {
-				slog.Warn("portforward: lease renewal failed", "err", err, "external_port", m.ExternalPort)
+			//
+			// Deliberately NOT runWithCtx: that returns the moment ctx is
+			// cancelled while its goroutine keeps running, so the request can
+			// reach the gateway at any later point. The teardown check below
+			// is only sound if we know the call has finished, so wait for it
+			// and bound a wedged gateway with renewCallTimeout instead.
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- client.AddPortMapping("", m.ExternalPort, "TCP", m.InternalPort, m.InternalIP, true, "Lantern peer share (renew)", uint32(m.LeaseDuration/time.Second))
+			}()
+			var landed bool
+			select {
+			case err := <-errCh:
+				landed = err == nil
+				if err != nil {
+					slog.Warn("portforward: lease renewal failed", "err", err, "external_port", m.ExternalPort)
+				}
+			case <-time.After(renewCallTimeout):
+				// Outcome unknowable — the call may still land. Assume it did
+				// so teardown removes it rather than leaving a forward behind.
+				landed = true
+				slog.Warn("portforward: lease renewal timed out; treating the mapping as re-added",
+					"external_port", m.ExternalPort, "timeout", renewCallTimeout)
+			}
+
+			// UnmapPort may have deleted the mapping while the renewal was in
+			// flight, in which case the renewal just re-added an inbound
+			// forward to this host that no other code path removes —
+			// permanent on routers that ignore the requested lease. Blocking
+			// on f.mu orders this strictly after UnmapPort's delete.
+			f.mu.Lock()
+			teardownRaced := f.closed
+			f.mu.Unlock()
+			if teardownRaced {
+				if landed {
+					f.deleteRacedMapping(m, client)
+				}
+				return
 			}
 		}
 	}

@@ -324,3 +324,35 @@ func TestValidateAbuseRules_AcceptsExplicitInvertFalse(t *testing.T) {
 		t.Fatalf("explicit invert=false should be treated as a pure reject, got: %v", err)
 	}
 }
+
+// A launch_cfg may inline a default rule *and* state its type explicitly.
+// sing-box's marshaller omits "type" for default rules, but its parser accepts
+// it, and launch_cfg is authored server-side rather than round-tripped through
+// sing-box — so the discriminator must not read as an extra constraint and
+// make the peer refuse a config that does reject unconditionally.
+func TestValidateAbuseRules_AcceptsInlinedExplicitDefaultType(t *testing.T) {
+	inlined := strings.ReplaceAll(minimalValidLaunchCfg,
+		`{"action":"reject","rule_set":`,
+		`{"type":"default","action":"reject","rule_set":`)
+	if inlined == minimalValidLaunchCfg {
+		t.Fatal("fixture substitution did not apply — test would be vacuous")
+	}
+	if err := validateAbuseRules(inlined); err != nil {
+		t.Fatalf("inlined rule carrying an explicit \"type\":\"default\" should pass, got: %v", err)
+	}
+}
+
+// Tolerating the discriminator must not extend to types that carry their own
+// matching fields. A logical rule scopes via mode/rules, so it is not an
+// unconditional reject even though it says action=reject.
+func TestValidateAbuseRules_RejectsNonDefaultRuleType(t *testing.T) {
+	bad := strings.Replace(minimalValidLaunchCfg,
+		`{"action":"reject","rule_set":["geosite-malware"]}`,
+		`{"type":"logical","action":"reject","rule_set":["geosite-malware"]}`, 1)
+	if bad == minimalValidLaunchCfg {
+		t.Fatal("fixture substitution did not apply — test would be vacuous")
+	}
+	if err := validateAbuseRules(bad); err == nil {
+		t.Fatal("a logical rule must not count as an unconditional reject")
+	}
+}
