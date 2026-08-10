@@ -275,3 +275,107 @@ func TestForwarder_MapPort_GatewayErrorWrapsErrNoPortForwarding(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoPortForwarding, "callers must be able to detect via errors.Is")
 	assert.ErrorContains(t, err, "ConflictInMappingEntry", "underlying gateway error must survive for diagnostics")
 }
+
+// A renewal that was already mid-call when UnmapPort deleted the mapping
+// re-adds an inbound forward to this host, and nothing else would ever remove
+// it — permanent on routers that ignore the requested lease. The renewal must
+// notice the teardown and delete what it re-added.
+func TestForwarder_RenewalRacingTeardown_DeletesWhatItReAdded(t *testing.T) {
+	release := make(chan struct{})
+	c := &fakeIGD{addBlock: release}
+	f := newTestForwarder(t, c)
+	f.mapping = &Mapping{
+		ExternalPort: 15000, InternalPort: 15000, InternalIP: "192.168.1.10",
+		Protocol: "TCP", LeaseDuration: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	f.cancel = cancel
+	loopDone := make(chan struct{})
+	go func() { f.renewLoop(ctx, time.Millisecond); close(loopDone) }()
+
+	// Park the renewal inside AddPortMapping, past its teardown pre-check.
+	require.Eventually(t, func() bool { return c.addCalls.Load() >= 1 },
+		2*time.Second, time.Millisecond, "renewal never reached AddPortMapping")
+
+	require.NoError(t, f.UnmapPort(context.Background()))
+	deletesAfterUnmap := c.deleteCalls.Load()
+	require.Equal(t, int64(1), deletesAfterUnmap, "UnmapPort should have deleted once")
+
+	// Let the in-flight renewal complete — it lands after the delete.
+	close(release)
+
+	select {
+	case <-loopDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("renewLoop did not exit after teardown")
+	}
+	assert.Equal(t, int64(2), c.deleteCalls.Load(),
+		"the renewal must delete the mapping it re-added after teardown")
+	assert.Equal(t, uint16(15000), c.lastDelete.externalPort)
+}
+
+// Once teardown has run, a later tick must not touch the gateway at all.
+func TestForwarder_RenewalAfterTeardown_DoesNotReAdd(t *testing.T) {
+	c := &fakeIGD{}
+	f := newTestForwarder(t, c)
+	f.mapping = &Mapping{
+		ExternalPort: 15001, InternalPort: 15001, InternalIP: "192.168.1.10",
+		Protocol: "TCP", LeaseDuration: time.Hour,
+	}
+	require.NoError(t, f.UnmapPort(context.Background()))
+	require.Equal(t, int64(1), c.deleteCalls.Load())
+
+	// renewLoop started (or ticking) after teardown must exit without adding.
+	done := make(chan struct{})
+	go func() { f.renewLoop(context.Background(), time.Millisecond); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("renewLoop did not exit once the mapping was torn down")
+	}
+	assert.Equal(t, int64(0), c.addCalls.Load(),
+		"no AddPortMapping may be issued after UnmapPort")
+	assert.Equal(t, int64(1), c.deleteCalls.Load(), "no compensating delete was needed")
+}
+
+// A caller that gives up mid-MapPort must not leave a mapping behind: the
+// gateway may still accept it, and because f.mapping was never recorded,
+// UnmapPort would short-circuit and nothing would ever remove the forward.
+func TestForwarder_MapPort_CancelledMidCall_RemovesAcceptedMapping(t *testing.T) {
+	release := make(chan struct{})
+	c := &fakeIGD{addBlock: release}
+	f := newTestForwarder(t, c)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		m   *Mapping
+		err error
+	}
+	res := make(chan result, 1)
+	go func() {
+		m, err := f.MapPort(ctx, 15100, "test")
+		res <- result{m, err}
+	}()
+
+	// Park inside AddPortMapping, then give up.
+	require.Eventually(t, func() bool { return c.addCalls.Load() >= 1 },
+		2*time.Second, time.Millisecond, "MapPort never reached AddPortMapping")
+	cancel()
+	close(release) // the gateway accepts it anyway
+
+	var got result
+	select {
+	case got = <-res:
+	case <-time.After(3 * time.Second):
+		t.Fatal("MapPort did not return")
+	}
+
+	require.Error(t, got.err, "a cancelled caller must get an error")
+	assert.ErrorIs(t, got.err, context.Canceled)
+	assert.Nil(t, got.m)
+	assert.Nil(t, f.mapping, "no mapping should be recorded")
+	assert.Equal(t, int64(1), c.deleteCalls.Load(),
+		"the accepted-but-unreported mapping must be deleted, or it survives untracked")
+	assert.Equal(t, uint16(15100), c.lastDelete.externalPort)
+}

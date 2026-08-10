@@ -204,7 +204,19 @@ func isUnconditionalReject(body map[string]any, matchKey string) bool {
 	if invert, _ := body["invert"].(bool); invert {
 		return false
 	}
-	allowed := map[string]bool{"action": true, "invert": true, matchKey: true}
+	// "type" is a discriminator, not a matcher, so its presence must not make
+	// an otherwise-unconditional rule look scoped. sing-box's marshaller drops
+	// it for default rules, but its parser accepts "default" explicitly, and
+	// launch_cfg is authored server-side rather than round-tripped through
+	// sing-box — so an inlined rule can legitimately carry it. Only the
+	// default forms are tolerated: any other type (e.g. "logical") brings its
+	// own fields, which the allow-list below still rejects.
+	if t, ok := body["type"]; ok {
+		if s, isStr := t.(string); !isStr || (s != "" && s != "default") {
+			return false
+		}
+	}
+	allowed := map[string]bool{"action": true, "invert": true, "type": true, matchKey: true}
 	for k := range body {
 		if !allowed[k] {
 			return false

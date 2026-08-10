@@ -1064,3 +1064,65 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
 	}
 }
+
+// Rotation installs a freshly fetched launch_cfg on an already-running peer,
+// so it has to re-apply the same abuse-rule gate Start does. Validating only
+// at Start would let a server-side regression reach every long-lived peer on
+// its next hourly rotation — the exact scenario the gate exists to prevent.
+// A rejected rotation must leave the current, already validated box serving.
+func TestClient_RotationRejectsLaunchCfgMissingAbuseRules(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	srv := newStubServer(t)
+
+	var registerSeq atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		n := registerSeq.Add(1)
+		cfg := minimalValidLaunchCfg
+		if n > 1 {
+			// The rotation response drops the route block entirely.
+			cfg = `{"inbounds":[{"type":"samizdat","tag":"samizdat-in"}]}`
+		}
+		return RegisterResponse{
+			RouteID:                  fmt.Sprintf("00000000-0000-0000-0000-00000000000%d", n),
+			ServerConfig:             cfg,
+			HeartbeatIntervalSeconds: 60,
+		}
+	}
+
+	var (
+		boxesMu sync.Mutex
+		boxes   []*fakeBoxService
+	)
+	c := newTestClient(t, fwd, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = 30 * time.Millisecond
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = func(_ context.Context, _ string) (boxService, error) {
+			b := &fakeBoxService{}
+			boxesMu.Lock()
+			boxes = append(boxes, b)
+			boxesMu.Unlock()
+			return b, nil
+		}
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	// Give the rotation loop several chances to attempt the bad config.
+	require.Eventually(t, func() bool { return srv.registerCount.Load() >= 2 },
+		3*time.Second, 10*time.Millisecond, "rotation never re-registered")
+	time.Sleep(100 * time.Millisecond)
+
+	boxesMu.Lock()
+	built := len(boxes)
+	firstClosed := boxes[0].closed.Load()
+	boxesMu.Unlock()
+
+	assert.Equal(t, 1, built,
+		"a launch_cfg missing abuse rules must be rejected before a new box is built")
+	assert.False(t, firstClosed,
+		"the original validated box must keep serving when a rotation is rejected")
+	assert.True(t, c.IsActive(), "the peer must stay active after a rejected rotation")
+	assert.Positive(t, srv.deregisterCount.Load(),
+		"the orphan route created for the rejected rotation must be deregistered")
+}
