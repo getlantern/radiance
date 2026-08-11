@@ -32,13 +32,13 @@ require (
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20260717153233-f2cacf69fe86
+	github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952
 	github.com/getlantern/common v1.2.1-0.20260708083946-cc657b08792c
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
 	github.com/getlantern/kindling v0.0.0-20260727211028-573c1ef64464
-	github.com/getlantern/lantern-box v0.0.109
+	github.com/getlantern/lantern-box v0.0.111
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
