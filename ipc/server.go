@@ -347,7 +347,11 @@ func (s *localapi) vpnConnectHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).ConnectVPN(req.Tag); err != nil {
+	if err := s.backend(r.Context()).ConnectVPN(r.Context(), req.Tag); err != nil {
+		if errors.Is(err, backend.ErrConnectInProgress) {
+			w.WriteHeader(http.StatusOK) // a connect is already running; no-op
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
