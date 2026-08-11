@@ -128,6 +128,10 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 		return traces.RecordError(ctx, ctx.Err())
 	}
 
+	// The bring-up below must outlive the request that triggered it, so detach
+	// from the caller's cancellation while keeping trace context (span values).
+	ctx = context.WithoutCancel(ctx)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tunnel != nil {
