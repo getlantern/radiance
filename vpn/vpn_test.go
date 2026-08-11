@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -87,7 +88,7 @@ func TestConnect(t *testing.T) {
 		c.status.Store(Connected)
 		c.tunnel = &tunnel{}
 
-		err := c.Connect(BoxOptions{})
+		err := c.Connect(context.Background(), BoxOptions{})
 		assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
 	})
 
@@ -98,7 +99,7 @@ func TestConnect(t *testing.T) {
 				c.status.Store(status)
 				c.tunnel = &tunnel{}
 
-				err := c.Connect(BoxOptions{})
+				err := c.Connect(context.Background(), BoxOptions{})
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), string(status))
 			})
@@ -114,12 +115,25 @@ func TestConnect(t *testing.T) {
 
 				// Connect fails because BoxOptions has no outbounds, but the stale
 				// tunnel should be cleared first so the error comes from buildOptions.
-				err := c.Connect(BoxOptions{BasePath: t.TempDir()})
+				err := c.Connect(context.Background(), BoxOptions{BasePath: t.TempDir()})
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "no outbounds")
 			})
 		}
 	})
+}
+
+func TestConnect_CanceledDuringOfflineTestWait(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	// An open (never-closed) channel keeps the offline-test wait blocked, so the
+	// only way out of Connect is ctx cancellation.
+	c.offlineTestDone = make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := c.Connect(ctx, BoxOptions{})
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestDisconnect_NoTunnel(t *testing.T) {

@@ -66,6 +66,10 @@ type LocalBackend struct {
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
 
+	// Rejects overlapping ConnectVPN calls (TryLock) so a burst can't each
+	// drive a full tunnel bring-up.
+	connectMu sync.Mutex
+
 	deviceID string
 
 	telemetryCfgSub *events.Subscription[config.NewConfigEvent]
@@ -1039,7 +1043,21 @@ func (r *LocalBackend) VPNStatus() vpn.VPNStatus {
 	return r.vpnClient.Status()
 }
 
-func (r *LocalBackend) ConnectVPN(tag string) error {
+// ErrConnectInProgress signals that a connect attempt is already running. It is
+// benign, not a failure: bursts of connect requests (e.g. rapid taps while every
+// attempt is blocked in a censored network) must not each drive a full tunnel
+// bring-up.
+var ErrConnectInProgress = errors.New("connect already in progress")
+
+func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
+	// Shed overlapping connects before getBoxOptions: it assembles the full
+	// outbound set, and without this each queued request also stacks a full
+	// sing-box bring-up behind vpnClient's mutex.
+	if !r.connectMu.TryLock() {
+		return ErrConnectInProgress
+	}
+	defer r.connectMu.Unlock()
+
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
@@ -1050,7 +1068,7 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 	}
 	bOptions := r.getBoxOptions()
 	bOptions.InitialServer = tag
-	if err := r.vpnClient.Connect(bOptions); err != nil {
+	if err := r.vpnClient.Connect(ctx, bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
 	r.persistSelection(tag)

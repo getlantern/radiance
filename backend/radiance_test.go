@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -305,4 +306,32 @@ func endpointTags(endpoints []option.Endpoint) []string {
 		tags = append(tags, endpoint.Tag)
 	}
 	return tags
+}
+
+func TestConnectVPN_ShedsConcurrentCalls(t *testing.T) {
+	r := &LocalBackend{}
+
+	// Simulate an in-flight connect holding the guard. TryLock is the first thing
+	// ConnectVPN does, so contended calls return before touching any dependency.
+	require.True(t, r.connectMu.TryLock())
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = r.ConnectVPN(context.Background(), vpn.AutoSelectTag)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.ErrorIsf(t, err, ErrConnectInProgress, "call %d should be shed", i)
+	}
+
+	// The reject path must not release the guard; only the holder unlocks it.
+	r.connectMu.Unlock()
+	assert.True(t, r.connectMu.TryLock())
 }
