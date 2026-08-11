@@ -37,7 +37,7 @@ require (
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
 	github.com/getlantern/kindling v0.0.0-20260727211028-573c1ef64464
-	github.com/getlantern/lantern-box v0.0.109
+	github.com/getlantern/lantern-box v0.0.111
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
@@ -116,7 +116,7 @@ require (
 	github.com/gaissmai/bart v0.11.1 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
-	github.com/getlantern/broflake v0.0.0-20260717153233-f2cacf69fe86 // indirect
+	github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260724223841-a5ee9ab56830 // indirect
 	github.com/go-chi/chi/v5 v5.2.2 // indirect
