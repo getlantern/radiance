@@ -10,12 +10,13 @@ type debugHookEvent struct{}
 
 func (debugHookEvent) IsEvent() {}
 
-// SetEmitDebugLogger has to be safe against a concurrent Emit. peer.Client's
-// heartbeat and rotation loops emit for the whole process lifetime, so any
-// post-startup call to install the hook overlaps an in-flight Emit — and an
-// unsynchronized write to a function-valued global racing a read is a data
-// race, which `go test -race` fails on. Run with -race for this to be
-// meaningful; without it, the test only shows neither side crashes.
+// TestSetEmitDebugLogger_SafeConcurrentlyWithEmit checks that installing the
+// hook is safe against a concurrent Emit. peer.Client's heartbeat and rotation
+// loops emit for the whole process lifetime, so any post-startup call to
+// install the hook overlaps an in-flight Emit — and an unsynchronized write to
+// a function-valued global racing a read is a data race, which `go test -race`
+// fails on. Run with -race for this to be meaningful; without it, the test
+// only shows neither side crashes.
 func TestSetEmitDebugLogger_SafeConcurrentlyWithEmit(t *testing.T) {
 	t.Cleanup(func() { SetEmitDebugLogger(nil) })
 
@@ -46,9 +47,10 @@ func TestSetEmitDebugLogger_SafeConcurrentlyWithEmit(t *testing.T) {
 	wg.Wait()
 }
 
-// The installed hook must actually receive the event type and subscriber
-// count, and clearing it must stop delivery — otherwise the atomic swap could
-// "fix" the race by silently never invoking the hook.
+// TestSetEmitDebugLogger_ReceivesTypeAndCountThenClears checks that the
+// installed hook receives the event type and subscriber count, and that
+// clearing it stops delivery — otherwise the atomic swap could "fix" the race
+// by silently never invoking the hook.
 func TestSetEmitDebugLogger_ReceivesTypeAndCountThenClears(t *testing.T) {
 	t.Cleanup(func() { SetEmitDebugLogger(nil) })
 
