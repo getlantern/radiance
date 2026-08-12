@@ -74,7 +74,7 @@ func performLanternPing(urlToHit string, runId string, deviceId string, userId i
 		}
 	}
 	t1 := time.Now()
-	if err = be.ConnectVPN(vpn.AutoSelectTag); err != nil {
+	if err = be.ConnectVPN(context.Background(), vpn.AutoSelectTag); err != nil {
 		return fmt.Errorf("quick connect failed: %w", err)
 	}
 	fmt.Println("Quick connect successful")

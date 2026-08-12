@@ -113,11 +113,8 @@ func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInt
 	return c
 }
 
-func (c *VPNClient) Connect(boxOptions BoxOptions) error {
-	ctx, span := otel.Tracer(tracerName).Start(
-		context.Background(),
-		"connect",
-	)
+func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "connect")
 	defer span.End()
 
 	c.mu.Lock()
@@ -125,7 +122,15 @@ func (c *VPNClient) Connect(boxOptions BoxOptions) error {
 	c.offlineTestCancel()
 	done := c.offlineTestDone
 	c.mu.Unlock()
-	<-done
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return traces.RecordError(ctx, ctx.Err())
+	}
+
+	// The bring-up below must outlive the request that triggered it, so detach
+	// from the caller's cancellation while keeping trace context (span values).
+	ctx = context.WithoutCancel(ctx)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
