@@ -213,13 +213,41 @@ func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
 	}
 }
 
+// inFlightSearch reports ht's pending search, read under the lock that guards it.
+func inFlightSearch(ht *hostTransport) *pendingSearch {
+	ht.mu.Lock()
+	defer ht.mu.Unlock()
+	return ht.inFlight
+}
+
 func TestOnlyPrimarySearchesAtConstruction(t *testing.T) {
 	// Each search probes the whole strategy space at once; two of them running
 	// concurrently overran the iOS extension's 50 MB jetsam cap and the tunnel
 	// was killed seconds after connecting.
-	searched := make(chan string, 4)
+	//
+	// beginSearch records inFlight under the lock before it spawns the search
+	// goroutine, so construction alone decides these values — no wall-clock wait
+	// can make a regression pass here. The search blocks until cleanup so that a
+	// mistakenly started one cannot finish and clear inFlight behind our back.
+	searching := make(chan struct{})
+	t.Cleanup(func() { close(searching) })
 	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
-		searched <- host
+		<-searching
+		return echoHostRoundTripper{host: host}, nil
+	})
+
+	lz, err := newLazyDialingRoundTripper(io.Discard,
+		"https://primary.example/config", "https://mirror.example/config")
+	require.NoError(t, err)
+
+	assert.NotNil(t, inFlightSearch(lz.byHost["primary.example"]),
+		"the primary has to search before a caller waits on it")
+	assert.Nil(t, inFlightSearch(lz.byHost["mirror.example"]),
+		"only the primary may search at construction")
+}
+
+func TestFallbackHostSearchesOnFirstUse(t *testing.T) {
+	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
 		return echoHostRoundTripper{host: host}, nil
 	})
 
@@ -227,19 +255,7 @@ func TestOnlyPrimarySearchesAtConstruction(t *testing.T) {
 		"https://primary.example/config", "https://mirror.example/config")
 	require.NoError(t, err)
 
-	select {
-	case host := <-searched:
-		assert.Equal(t, "primary.example", host)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the primary has to search before a caller waits on it")
-	}
-	select {
-	case host := <-searched:
-		t.Fatalf("only the primary may search at construction, but %q searched too", host)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	// The deferred search still has to happen when something actually asks.
+	// Deferring the mirror's search must not cost it reachability.
 	assert.Equal(t, "mirror.example", getBody(t, client, "https://mirror.example/config"))
 }
 

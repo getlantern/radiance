@@ -57,6 +57,16 @@ var newSmartTransport = func(logWriter io.Writer, host string) (http.RoundTrippe
 // one strategy unblocks every one of them, and a host that is blocked outright
 // then takes the reachable ones down with it.
 func NewHTTPClientWithSmartTransport(logWriter io.Writer, addresses ...string) (*http.Client, error) {
+	lz, err := newLazyDialingRoundTripper(logWriter, addresses...)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: traces.NewRoundTripper(lz)}, nil
+}
+
+// newLazyDialingRoundTripper builds the per-host transports. Split out so tests
+// can read which hosts have a search under way without unwrapping the client.
+func newLazyDialingRoundTripper(logWriter io.Writer, addresses ...string) (*lazyDialingRoundTripper, error) {
 	hosts, err := configHosts(addresses)
 	if err != nil {
 		return nil, err
@@ -78,8 +88,7 @@ func NewHTTPClientWithSmartTransport(logWriter io.Writer, addresses ...string) (
 			ht.beginSearch()
 		}
 	}
-	lz := &lazyDialingRoundTripper{hosts: hosts, byHost: byHost}
-	return &http.Client{Transport: traces.NewRoundTripper(lz)}, nil
+	return &lazyDialingRoundTripper{hosts: hosts, byHost: byHost}, nil
 }
 
 // configHosts returns each address's host, in order and deduplicated.
