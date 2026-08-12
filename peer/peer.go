@@ -1057,8 +1057,10 @@ func newPeerBoxContext(ctx context.Context) context.Context {
 }
 
 // peerBoxContext resolves Deadline/Done/Err from the embedded caller
-// context so a Stop-induced cancel propagates into box internals, and
-// every other value from base.
+// context so a Stop-induced cancel propagates into box internals. Values
+// come from the caller first and from base only as a fallback, so anything
+// the caller carries shadows base — which matters because base holds the one
+// captured registry instance libbox both registers into and reads back.
 type peerBoxContext struct {
 	context.Context
 	base context.Context
