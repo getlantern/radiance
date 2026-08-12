@@ -59,7 +59,10 @@ type tunnel struct {
 	outboundMgr adapter.OutboundManager
 
 	clientContextTracker *clientcontext.ClientContextInjector
-	memoryMonitor        *memmon.Monitor
+
+	// memoryMonitor starts during tunnel init in visibility-only mode.
+	// On iOS, its executor is installed later, after the clash server exists.
+	memoryMonitor *memmon.Monitor
 
 	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
 	// connection-close pushes for telemetry.
@@ -208,7 +211,7 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	slog.Info("Tunnel initializated")
+	slog.Info("Tunnel initialized")
 	return nil
 }
 

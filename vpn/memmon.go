@@ -94,6 +94,8 @@ func startMemoryMonitor(ctx context.Context) (*memmon.Monitor, io.Closer) {
 	return monitor, runMonitor(ctx, monitor)
 }
 
+// initExecutor attaches reclaim and admission control after the clash server
+// becomes available. The monitor starts earlier in visibility-only mode.
 func initExecutor(monitor *memmon.Monitor, server *clashServer) {
 	// Use a dedicated sensor here. Sharing the monitor sensor would race its
 	// reused runtime/metrics buffers.
