@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	sblog "github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1063,6 +1066,66 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 		assert.NotEmpty(t, c.platform, "%s must carry %s", path, common.PlatformHeader)
 		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
 	}
+}
+
+// The peer box's log factory has to survive the trip into libbox, and the
+// bug that made it not survive was invisible: box.BaseContext() mints a
+// fresh service registry per call, so a wrapper that rebuilt the base on
+// every Value lookup handed out a different registry each time. Reads kept
+// working (each fresh base carries the same protocol registrations), which
+// is why only a registration could expose it. These four tests pin the
+// properties that make the registration land.
+
+// A registration made against the context libbox receives must be
+// retrievable from that same context.
+func TestPeerBoxContext_LogFactoryIsRetrievable(t *testing.T) {
+	boxCtx := newPeerBoxContext(context.Background())
+
+	got := service.FromContext[sblog.Factory](boxCtx)
+	require.NotNil(t, got, "the registered sing-box log factory must be readable "+
+		"from the context handed to libbox, or this box logs only to stderr")
+}
+
+// Repeated registry lookups must return the same object. This is the
+// invariant the old wrapper broke: two lookups, two registries, so a write
+// through one was never seen through the other.
+func TestPeerBoxContext_RegistryIsStableAcrossLookups(t *testing.T) {
+	boxCtx := newPeerBoxContext(context.Background())
+
+	first := service.RegistryFromContext(boxCtx)
+	second := service.RegistryFromContext(boxCtx)
+	require.NotNil(t, first)
+	assert.True(t, first == second,
+		"every lookup must resolve to one registry; a per-lookup rebuild makes "+
+			"service.MustRegister write into an object that is immediately discarded")
+}
+
+// Cancellation still comes from the caller, so a Stop-induced cancel reaches
+// box internals rather than being swallowed by the base context.
+func TestPeerBoxContext_InheritsCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	boxCtx := newPeerBoxContext(ctx)
+	require.NoError(t, boxCtx.Err())
+
+	cancel()
+
+	select {
+	case <-boxCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer box context did not observe the caller's cancel")
+	}
+	assert.ErrorIs(t, boxCtx.Err(), context.Canceled)
+}
+
+// The lantern-box protocol registries must still resolve through the
+// wrapper. This is the registry libbox reports as "missing inbound fields
+// registry in context" when it is absent, which is what would break
+// decoding the samizdat inbound from /peer/register.
+func TestPeerBoxContext_StillResolvesInboundRegistry(t *testing.T) {
+	boxCtx := newPeerBoxContext(context.Background())
+
+	assert.NotNil(t, service.FromContext[option.InboundOptionsRegistry](boxCtx),
+		"registering the log factory must not displace the protocol registries")
 }
 
 // Rotation installs a freshly fetched launch_cfg on an already-running peer,

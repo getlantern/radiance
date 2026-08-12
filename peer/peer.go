@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox"
+	sblog "github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing/service"
 
 	box "github.com/getlantern/lantern-box"
+	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
@@ -1019,43 +1022,53 @@ func pickInternalPort() uint16 {
 // inbound is just an HTTPS server bound to a TCP port; sing-box's default
 // network stack handles it.
 //
-// box.BaseContext registers the lantern-box protocol fields registries
-// (samizdat, reflex, etc.) into the ctx so libbox can decode the
-// inbounds[0].type="samizdat" stanza coming back from /peer/register.
-// Without it the user's ctx is missing InboundOptionsRegistry and
-// libbox returns "missing inbound fields registry in context" — the
-// failure mode is silent in CI because the integration tests stub
-// BuildBoxService entirely; only TestDefaultBuildBoxService_DecodesSamizdatInbound
-// exercises the real decode path.
-//
-// We wrap so libbox sees the caller's Deadline/Done (so a Stop-induced
-// ctx cancel propagates to box internals) AND can still resolve the
-// registry values from box.BaseContext via Value lookups.
-//
-// Lives in the same process as the user's main VPN tunnel, which has
-// already invoked libbox.Setup at process start. The registries set
-// here are scoped to this peer's box instance via context values, so
-// the two coexist without stomping on each other.
+// The registries newPeerBoxContext supplies are what let libbox decode the
+// inbounds[0].type="samizdat" stanza from /peer/register; without them it
+// fails with "missing inbound fields registry in context". They are scoped
+// to this box instance, so the peer and the main tunnel coexist without
+// stomping on each other.
 func defaultBuildBoxService(ctx context.Context, options string) (boxService, error) {
-	bs, err := libbox.NewServiceWithContext(boxRegistryCtx{ctx}, options, nil)
+	bs, err := libbox.NewServiceWithContext(newPeerBoxContext(ctx), options, nil)
 	if err != nil {
 		return nil, fmt.Errorf("libbox.NewServiceWithContext: %w", err)
 	}
 	return bs, nil
 }
 
-// boxRegistryCtx is a context wrapper that delegates Value() lookups to
-// box.BaseContext() (where lantern-box's protocol registries live) while
-// keeping the caller's Deadline/Done/Err for cancellation. Without this,
-// passing box.BaseContext() directly to libbox would discard the
-// caller's runCtx, leaving libbox internals running past Stop.
-type boxRegistryCtx struct {
-	context.Context
+// newPeerBoxContext assembles the context for one peer box: cancellation
+// from ctx, lantern-box's protocol registries and this box's log factory
+// from a single captured base context.
+//
+// The base must be captured exactly once. box.BaseContext() builds a new
+// service registry on every call, and service.MustRegister mutates
+// whichever registry the context hands back, so registering through a
+// wrapper that rebuilds the base per lookup writes into a registry that
+// is discarded before libbox ever reads it — the registration silently
+// does nothing.
+func newPeerBoxContext(ctx context.Context) context.Context {
+	base := box.BaseContext()
+	// The peer runs a second box beside the main tunnel's. Absent its own
+	// factory it keeps sing-box's stderr-only default, so this box's
+	// router and dial errors never reach lantern.log — the signal that
+	// explains why a peer-share verify failed. Mirrors the main tunnel's
+	// registration.
+	service.MustRegister[sblog.Factory](base, lblog.NewFactory(slog.Default().Handler()))
+	return peerBoxContext{Context: ctx, base: base}
 }
 
-func (c boxRegistryCtx) Value(key any) any {
+// peerBoxContext resolves Deadline/Done/Err from the embedded caller
+// context so a Stop-induced cancel propagates into box internals. Values
+// come from the caller first and from base only as a fallback, so anything
+// the caller carries shadows base — which matters because base holds the one
+// captured registry instance libbox both registers into and reads back.
+type peerBoxContext struct {
+	context.Context
+	base context.Context
+}
+
+func (c peerBoxContext) Value(key any) any {
 	if v := c.Context.Value(key); v != nil {
 		return v
 	}
-	return box.BaseContext().Value(key)
+	return c.base.Value(key)
 }
