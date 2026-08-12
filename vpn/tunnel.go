@@ -212,14 +212,22 @@ const (
 	// mobileMemoryLimit is the GOMEMLIMIT soft cap. This needs to be below the iOS hard cap
 	// to leave room for the non-Go side (Swift, cgo, etc.).
 	mobileMemoryLimit = 40 * 1024 * 1024 // 40 MB
+
+	// iosGoMemLimit is the GOMEMLIMIT for the iOS network extension. The kernel cap is
+	// fatal ("exceeded mem limit: ActiveHard 50 MB (fatal)" → jetsam per-process-limit),
+	// and GOMEMLIMIT is only a soft target: field memdumps show go_bytes reaching 44 MB
+	// under a 40 MB limit, which with ~4 MB of non-Go footprint lands 2 MB from the cap.
+	// 36 MB keeps the projected peak near 44 MB while staying clear of the ~30 MB of live
+	// heap plus goroutine stacks seen in those dumps, below which GC would thrash.
+	iosGoMemLimit = 36 * 1024 * 1024 // 36 MB
 )
 
 func setMobileMemoryLimits() {
 	slog.Debug("Setting memory limits for mobile platform", "platform", common.Platform,
-		"gc_percent", mobileGCPercent, "go_mem_limit", mobileMemoryLimit,
+		"gc_percent", mobileGCPercent, "go_mem_limit", iosGoMemLimit,
 	)
 	runtimeDebug.SetGCPercent(mobileGCPercent)
-	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
+	runtimeDebug.SetMemoryLimit(iosGoMemLimit)
 }
 
 func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
