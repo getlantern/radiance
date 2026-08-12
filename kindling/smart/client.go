@@ -62,19 +62,21 @@ func NewHTTPClientWithSmartTransport(logWriter io.Writer, addresses ...string) (
 		return nil, err
 	}
 	byHost := make(map[string]*hostTransport, len(hosts))
-	for _, host := range hosts {
+	for i, host := range hosts {
 		ht := &hostTransport{
 			host:         host,
 			logWriter:    logWriter,
 			newTransport: newSmartTransport,
 		}
 		byHost[host] = ht
-		// Searching now keeps the client constructible while offline yet still
-		// spends the search before anything waits on it. Callers bound a whole
-		// config fetch at a timeout of the same order as the search itself, so
-		// one that pays for the search inside that budget has little of it left
-		// for the request.
-		ht.beginSearch()
+		// Only the primary searches up front. A search probes the whole strategy
+		// space at once, and two running concurrently overran the iOS extension's
+		// 50 MB jetsam cap. Fallbacks search on first use in roundTripper, paying
+		// for it inside that caller's timeout — a cost borne only on the path
+		// taken when the primary is already blocked.
+		if i == 0 {
+			ht.beginSearch()
+		}
 	}
 	lz := &lazyDialingRoundTripper{hosts: hosts, byHost: byHost}
 	return &http.Client{Transport: traces.NewRoundTripper(lz)}, nil

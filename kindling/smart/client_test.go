@@ -213,6 +213,36 @@ func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
 	}
 }
 
+func TestOnlyPrimarySearchesAtConstruction(t *testing.T) {
+	// Each search probes the whole strategy space at once; two of them running
+	// concurrently overran the iOS extension's 50 MB jetsam cap and the tunnel
+	// was killed seconds after connecting.
+	searched := make(chan string, 4)
+	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
+		searched <- host
+		return echoHostRoundTripper{host: host}, nil
+	})
+
+	client, err := NewHTTPClientWithSmartTransport(io.Discard,
+		"https://primary.example/config", "https://mirror.example/config")
+	require.NoError(t, err)
+
+	select {
+	case host := <-searched:
+		assert.Equal(t, "primary.example", host)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the primary has to search before a caller waits on it")
+	}
+	select {
+	case host := <-searched:
+		t.Fatalf("only the primary may search at construction, but %q searched too", host)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// The deferred search still has to happen when something actually asks.
+	assert.Equal(t, "mirror.example", getBody(t, client, "https://mirror.example/config"))
+}
+
 func TestRequestGivesUpOnSearchWhenItsContextEnds(t *testing.T) {
 	neverFinishes := make(chan struct{})
 	t.Cleanup(func() { close(neverFinishes) })
