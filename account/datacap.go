@@ -39,6 +39,11 @@ const (
 
 	// exhaustedRetryGrace waits just past the reported reset time.
 	exhaustedRetryGrace = 30 * time.Second
+
+	// datacapDisabledRetry is how long to pause before rechecking after the
+	// server reports datacap is disabled for this device. This state rarely
+	// changes, so recheck infrequently.
+	datacapDisabledRetry = time.Hour
 )
 
 // errCapExhausted marks a deliberate server close after the daily allotment is
@@ -47,14 +52,16 @@ var errCapExhausted = errors.New("datacap exhausted")
 
 type dataCapStreamState struct {
 	progressed   bool
+	enabled      bool
 	allotmentEnd time.Time
 }
 
-// wrap records stream progress and the latest allotment end time before calling
-// the caller-provided handler.
+// wrap records stream progress, whether datacap is enabled, and the latest
+// allotment end time before calling the caller-provided handler.
 func (s *dataCapStreamState) wrap(handler func(*DataCapInfo)) func(*DataCapInfo) {
 	return func(info *DataCapInfo) {
 		s.progressed = true
+		s.enabled = info.Enabled
 		s.allotmentEnd = parseAllotmentEnd(info.Usage)
 		handler(info)
 	}
@@ -155,6 +162,18 @@ func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) 
 			continue
 		}
 
+		// Datacap disabled: the server sends a single Enabled:false event and
+		// closes. Recheck on a long interval rather than reconnecting into an
+		// immediate close.
+		if state.progressed && !state.enabled {
+			slog.Info("datacap disabled; pausing before recheck", "retryIn", datacapDisabledRetry)
+			if err := waitOrDone(ctx, datacapDisabledRetry); err != nil {
+				return err
+			}
+			bo.Reset()
+			continue
+		}
+
 		// Only streams that made progress and stayed up long enough reset
 		// backoff. Early failures keep backing off.
 		if streamWasHealthy(state.progressed, time.Since(start)) {
@@ -184,10 +203,14 @@ func allotmentResetWait(allotmentEnd time.Time) time.Duration {
 func (a *Client) waitForAllotmentReset(ctx context.Context, allotmentEnd time.Time) error {
 	wait := allotmentResetWait(allotmentEnd)
 	slog.Info("datacap exhausted; waiting for allotment reset", "wait", wait, "allotmentEnd", allotmentEnd)
+	return waitOrDone(ctx, wait)
+}
 
-	timer := time.NewTimer(wait)
+// waitOrDone blocks for d or until ctx is cancelled, returning ctx.Err() on
+// cancellation and nil once d elapses.
+func waitOrDone(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
 	defer timer.Stop()
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

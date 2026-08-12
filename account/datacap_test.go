@@ -156,6 +156,22 @@ func TestAllotmentResetWait(t *testing.T) {
 	assert.Equal(t, minExhaustedRetry, allotmentResetWait(now.Add(-time.Hour)))
 }
 
+func TestDataCapStreamState_Wrap(t *testing.T) {
+	var s dataCapStreamState
+	var delivered bool
+	h := s.wrap(func(*DataCapInfo) { delivered = true })
+
+	h(&DataCapInfo{
+		Enabled: false,
+		Usage:   &DataCapUsageDetails{AllotmentEndTime: "2026-08-13T00:00:00Z"},
+	})
+
+	assert.True(t, delivered, "wrap must call the wrapped handler")
+	assert.True(t, s.progressed)
+	assert.False(t, s.enabled, "Enabled:false must be recorded so DataCapStream can pause")
+	assert.False(t, s.allotmentEnd.IsZero(), "a valid AllotmentEndTime must be parsed")
+}
+
 func TestStreamWasHealthy(t *testing.T) {
 	// The reset must key on progress AND a duration well past the server's
 	// update cadence; a stream that dies near the cadence must not reset.
