@@ -80,32 +80,26 @@ func closeAllRouted(tracker *connTracker) {
 	tracker.closeAllTracked()
 }
 
-func startMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
-	if common.IsIOS() {
-		return startIOSMemoryMonitor(ctx, server)
-	}
-
-	return startFixedMemoryMonitor(ctx)
-}
-
-func startFixedMemoryMonitor(ctx context.Context) io.Closer {
-	limit := memmon.FixedLimit(defaultNonIOSMemLimitBytes)
-	// Non-iOS uses the monitor for visibility only. Reclaim and admission
-	// control remain disabled by passing a nil executor.
+// startMemoryMonitor creates and starts a visibility-only memory monitor,
+// returning the monitor so an executor can be installed later and a Closer that
+// stops the run loop and waits for it to exit.
+func startMemoryMonitor(ctx context.Context) (*memmon.Monitor, io.Closer) {
+	limit := getLimit()
 	monitor := memmon.New(
 		memoryMonitorConfig(limit),
 		memmon.NewSensor(limit),
 		nil,
 	)
 
-	return runMonitor(ctx, monitor)
+	return monitor, runMonitor(ctx, monitor)
 }
 
-func startIOSMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
-	limit := memmon.FixedLimit(monitorLimitBytes())
-
+// initExecutor attaches reclaim and admission control after the clash server
+// becomes available. The monitor starts earlier in visibility-only mode.
+func initExecutor(monitor *memmon.Monitor, server *clashServer) {
 	// Use a dedicated sensor here. Sharing the monitor sensor would race its
 	// reused runtime/metrics buffers.
+	limit := getLimit()
 	gate := memmon.NewAdmissionGate(
 		memmon.AdmissionConfig{},
 		memmon.NewSensor(limit),
@@ -121,14 +115,14 @@ func startIOSMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
 		common.Version,
 		gate,
 	)
+	monitor.SetExecutor(executor)
+}
 
-	monitor := memmon.New(
-		memoryMonitorConfig(limit),
-		memmon.NewSensor(limit),
-		executor,
-	)
-
-	return runMonitor(ctx, monitor)
+func getLimit() memmon.LimitProvider {
+	if common.IsIOS() {
+		return memmon.FixedLimit(monitorLimitBytes())
+	}
+	return memmon.FixedLimit(defaultNonIOSMemLimitBytes)
 }
 
 func monitorLimitBytes() uint64 {

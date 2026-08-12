@@ -39,6 +39,7 @@ import (
 	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/vpn/memmon"
 )
 
 type tunnel struct {
@@ -58,6 +59,10 @@ type tunnel struct {
 	outboundMgr adapter.OutboundManager
 
 	clientContextTracker *clientcontext.ClientContextInjector
+
+	// memoryMonitor starts during tunnel init in visibility-only mode.
+	// On iOS, its executor is installed later, after the clash server exists.
+	memoryMonitor *memmon.Monitor
 
 	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
 	// connection-close pushes for telemetry.
@@ -132,6 +137,18 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	}()
 
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
+	if common.IsMobile() {
+		var monitorCloser io.Closer
+		t.memoryMonitor, monitorCloser = startMemoryMonitor(t.ctx)
+		t.closers = append(t.closers, monitorCloser)
+
+		if common.IsIOS() {
+			// Pin GOMEMLIMIT before the allocation-heavy libbox bring-up so GC
+			// gets its turn during it. Only iOS needs this: it silently kills the
+			// extension past a hard cap; Android applies no such restriction.
+			setMobileMemoryLimits()
+		}
+	}
 
 	// setup libbox service
 	dataPath := t.dataPath
@@ -194,13 +211,7 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 	t.closers = append(t.closers, lb)
 	t.lbService = lb
 
-	if common.IsIOS() {
-		// only set memory limits on iOS since Android doesn't appear to apply any restrictions.
-		// we still start the memory monitor on Android so we can log usage.
-		setMobileMemoryLimits()
-	}
-
-	slog.Info("Tunnel initializated")
+	slog.Info("Tunnel initialized")
 	return nil
 }
 
@@ -292,9 +303,10 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.clashServer.connTracker.SetObserver(t.connObserver)
 
-	if common.IsMobile() {
-		// still start the memory monitor on Android so we can still monitor and log usage
-		t.closers = append(t.closers, startMemoryMonitor(t.ctx, t.clashServer))
+	if common.IsIOS() {
+		// Only iOS enforces a hard memory cap, so only it gets reclaim and
+		// admission control. Android runs the monitor for visibility only.
+		initExecutor(t.memoryMonitor, t.clashServer)
 	}
 
 	var mutGrpMgr *groups.MutableGroupManager
