@@ -766,9 +766,13 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
-// maxRetainedLanternServers caps the number of working Lantern servers retained
-// across config updates.
-const maxRetainedLanternServers = 60
+// maxLanternServers caps how many Lantern servers a client holds. The iOS network
+// extension runs under a fatal 50 MB jetsam cap and its startup work scales with
+// this set — each outbound carries adapter state, and the offline URL tests and
+// strategy search run across it. Enforced on the incoming batch as well as on
+// retention, so no config can push a client past it. Private servers are not
+// Lantern servers and are unaffected.
+const maxLanternServers = 30
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	existing := r.srvManager.AllServers()
@@ -778,7 +782,16 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 		return exists
 	})
 
-	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers)
+	if capped := capServerBatch(list.Servers, maxLanternServers); len(capped) < len(list.Servers) {
+		slog.Debug(
+			"Truncating config batch to the client outbound cap",
+			"received", len(list.Servers),
+			"cap", maxLanternServers,
+		)
+		list.Servers = capped
+	}
+
+	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxLanternServers)
 
 	if len(tagsToEvict) > 0 {
 		slog.Debug(
@@ -824,6 +837,15 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 // later re-offer is treated as a fresh candidate and re-probed. Remaining
 // candidates are evicted oldest-first by SelectionHistory.UpdatedAt; missing
 // history sorts oldest.
+// capServerBatch truncates an incoming config batch to limit. Config order is the
+// server's preference, so the leading entries are the ones kept.
+func capServerBatch(srvs []*servers.Server, limit int) []*servers.Server {
+	if limit < 0 || len(srvs) <= limit {
+		return srvs
+	}
+	return srvs[:limit]
+}
+
 func lanternServersToEvict(
 	existing []*servers.Server,
 	incomingCount, limit int,

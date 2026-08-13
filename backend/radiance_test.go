@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -214,6 +215,49 @@ func TestLanternServersToEvict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit)
 			assert.ElementsMatch(t, tt.want, got)
+		})
+	}
+}
+
+// The cap used to bound only retention, so a config larger than the limit was
+// added in full — production configs delivered 120 servers against a limit of 60.
+// The iOS extension pays for every one of them under a fatal 50 MB jetsam cap, so
+// what matters is the total the client is left holding, not just what it retained.
+func TestClientHoldsNoMoreThanTheCapAfterAnUpdate(t *testing.T) {
+	baseTime := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+
+	for _, tt := range []struct {
+		name              string
+		existingCount     int
+		incomingCount     int
+		limit             int
+		wantIncomingAfter int
+	}{
+		{"oversized config is truncated", 0, 120, 30, 30},
+		{"oversized config with existing servers", 45, 120, 30, 30},
+		{"config at the cap is untouched", 10, 30, 30, 30},
+		{"undersized config is untouched", 5, 12, 30, 12},
+		{"empty config keeps existing within the cap", 40, 0, 30, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := make([]*servers.Server, 0, tt.existingCount)
+			for i := range tt.existingCount {
+				existing = append(existing,
+					newTestServer(fmt.Sprintf("existing-%d", i), true, false,
+						baseTime.Add(time.Duration(i)*time.Minute)))
+			}
+			incoming := make([]*servers.Server, 0, tt.incomingCount)
+			for i := range tt.incomingCount {
+				incoming = append(incoming, newTestServer(fmt.Sprintf("incoming-%d", i), true, false, baseTime))
+			}
+
+			capped := capServerBatch(incoming, tt.limit)
+			assert.Len(t, capped, tt.wantIncomingAfter)
+
+			evicted := lanternServersToEvict(existing, len(capped), tt.limit)
+			held := len(capped) + len(existing) - len(evicted)
+			assert.LessOrEqual(t, held, tt.limit,
+				"client would hold %d servers, over the %d cap", held, tt.limit)
 		})
 	}
 }
