@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -166,6 +167,16 @@ type Client struct {
 	// Setting this flag before box.Close drops the cascade inline.
 	listenerDraining atomic.Bool
 
+	// connsByIP counts open connections per remote IP so ActiveClients can
+	// report distinct devices. Keyed by IP rather than the "ip:port" Source
+	// because samizdat multiplexes many H2 streams over one TCP conn and a
+	// client may open several, so counting events or ports would report more
+	// people than are actually being helped. Guarded by its own mutex: the
+	// peerconn listener fires from box's accept/close goroutines and must not
+	// contend with Start/Stop holding c.mu.
+	connsMu   sync.Mutex
+	connsByIP map[string]int
+
 	// externalPort / internalPort persist the port mapping picked at
 	// Start so the cred-rotation loop can re-register against the same
 	// (address, port) tuple without re-probing UPnP / re-mapping. The
@@ -284,6 +295,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		// callbacks short-circuit even if SetListener races (see Stop).
 		c.listenerDraining.Store(true)
 		peerconn.SetListener(nil)
+		c.resetConnTracking()
 		if box != nil {
 			_ = box.Close()
 		}
@@ -414,6 +426,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		// per-connection breadcrumb.
 		slog.Debug("peer listener: forwarding connection event",
 			"state", state, "source", source)
+		c.trackConn(state, source)
 		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
@@ -532,6 +545,7 @@ func (c *Client) Stop(ctx context.Context) error {
 	// to release the listener closure's reference to this Client.
 	c.listenerDraining.Store(true)
 	peerconn.SetListener(nil)
+	c.resetConnTracking()
 
 	cancel()
 	<-done
@@ -593,6 +607,51 @@ func (c *Client) emitPhase(p Phase, errMsg string) {
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
 // tearing down resources. The channel is passed in rather than read off the
 // Client because Stop nils c.runDone before waiting on its local copy.
+// trackConn maintains the per-IP open-connection tally behind ActiveClients.
+// A -1 for an IP with no recorded connection is ignored rather than allowed to
+// go negative: peerconn is process-wide and a disconnect for a connection
+// accepted before this Client registered its listener can still arrive.
+func (c *Client) trackConn(state int, source string) {
+	ip, _, err := net.SplitHostPort(source)
+	if err != nil {
+		ip = source
+	}
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	if c.connsByIP == nil {
+		c.connsByIP = make(map[string]int)
+	}
+	switch {
+	case state > 0:
+		c.connsByIP[ip]++
+	case state < 0:
+		if n, ok := c.connsByIP[ip]; ok {
+			if n <= 1 {
+				delete(c.connsByIP, ip)
+			} else {
+				c.connsByIP[ip] = n - 1
+			}
+		}
+	}
+}
+
+// ActiveClients reports how many distinct remote IPs currently hold at least
+// one connection. Reported to the server on each heartbeat so it can stop
+// assigning new clients to a peer that is already carrying its share.
+func (c *Client) ActiveClients() int {
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	return len(c.connsByIP)
+}
+
+// resetConnTracking drops the tally on teardown so a subsequent Start doesn't
+// inherit connections belonging to the previous session's box.
+func (c *Client) resetConnTracking() {
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	c.connsByIP = nil
+}
+
 func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done chan struct{}) {
 	defer close(done)
 	t := time.NewTicker(interval)
@@ -609,7 +668,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			err := c.cfg.API.Heartbeat(hbCtx, routeID)
+			err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
 			cancel()
 			if err != nil {
 				// A single transient blip shouldn't kill the registration —

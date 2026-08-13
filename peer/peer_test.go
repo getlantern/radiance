@@ -1050,7 +1050,7 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 	_, err := api.Register(ctx, RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698, InternalPort: 35698})
 	require.NoError(t, err)
 	require.NoError(t, api.Verify(ctx, "00000000-0000-0000-0000-000000000123"))
-	require.NoError(t, api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123"))
+	require.NoError(t, api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123", 0))
 	require.NoError(t, api.Deregister(ctx, "00000000-0000-0000-0000-000000000123"))
 
 	for _, path := range []string{"/peer/register", "/peer/verify", "/peer/heartbeat", "/peer/deregister"} {
@@ -1188,4 +1188,61 @@ func TestClient_RotationRejectsLaunchCfgMissingAbuseRules(t *testing.T) {
 	assert.True(t, c.IsActive(), "the peer must stay active after a rejected rotation")
 	assert.Positive(t, srv.deregisterCount.Load(),
 		"the orphan route created for the rejected rotation must be deregistered")
+}
+
+// TestTrackConn_CountsDistinctIPsNotConnections pins the reason ActiveClients
+// keys on IP: samizdat multiplexes many H2 streams over one TCP conn and a
+// client may hold several, so counting events would report more people helped
+// than there are people.
+func TestTrackConn_CountsDistinctIPsNotConnections(t *testing.T) {
+	c := &Client{}
+
+	c.trackConn(1, "203.0.113.7:44001")
+	c.trackConn(1, "203.0.113.7:44002")
+	c.trackConn(1, "203.0.113.7:44003")
+	assert.Equal(t, 1, c.ActiveClients(), "one device with three connections is one client")
+
+	c.trackConn(1, "198.51.100.9:55001")
+	assert.Equal(t, 2, c.ActiveClients())
+
+	// The device stays counted until its LAST connection closes.
+	c.trackConn(-1, "203.0.113.7:44001")
+	c.trackConn(-1, "203.0.113.7:44002")
+	assert.Equal(t, 2, c.ActiveClients(), "still holding one connection")
+	c.trackConn(-1, "203.0.113.7:44003")
+	assert.Equal(t, 1, c.ActiveClients())
+}
+
+// TestTrackConn_IgnoresUnmatchedClose guards the count against going negative.
+// peerconn is process-wide, so a close for a connection accepted before this
+// Client registered its listener can still arrive.
+func TestTrackConn_IgnoresUnmatchedClose(t *testing.T) {
+	c := &Client{}
+
+	c.trackConn(-1, "203.0.113.7:44001")
+	assert.Equal(t, 0, c.ActiveClients())
+
+	c.trackConn(1, "203.0.113.7:44001")
+	c.trackConn(-1, "203.0.113.7:44001")
+	c.trackConn(-1, "203.0.113.7:44001")
+	assert.Equal(t, 0, c.ActiveClients(), "an extra close must not drive the tally below zero")
+
+	c.trackConn(1, "198.51.100.9:55001")
+	assert.Equal(t, 1, c.ActiveClients(), "and must not corrupt later counting")
+}
+
+// TestResetConnTracking_ClearsAcrossSessions covers Stop → Start: the new
+// session's box has its own connections, so inheriting the old tally would
+// report load that no longer exists.
+func TestResetConnTracking_ClearsAcrossSessions(t *testing.T) {
+	c := &Client{}
+	c.trackConn(1, "203.0.113.7:44001")
+	c.trackConn(1, "198.51.100.9:55001")
+	require.Equal(t, 2, c.ActiveClients())
+
+	c.resetConnTracking()
+	assert.Equal(t, 0, c.ActiveClients())
+
+	c.trackConn(1, "203.0.113.7:44001")
+	assert.Equal(t, 1, c.ActiveClients(), "tracking still works after a reset")
 }

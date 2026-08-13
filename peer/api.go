@@ -30,6 +30,18 @@ type LifecycleRequest struct {
 	RouteID string `json:"route_id"`
 }
 
+// HeartbeatRequest is LifecycleRequest plus the peer's current load. Separate
+// from LifecycleRequest so verify and deregister, which have no load to
+// report, don't carry a field that would read as "zero clients".
+type HeartbeatRequest struct {
+	RouteID string `json:"route_id"`
+	// ActiveClients counts distinct remote IPs with at least one open
+	// connection, not connections: samizdat multiplexes many H2 streams over
+	// one TCP conn, and a client may hold several, so a connection count would
+	// overstate how many people are actually being helped.
+	ActiveClients int `json:"active_clients"`
+}
+
 // APIError carries the server's HTTP status and body. Callers map specific
 // statuses to user-facing errors (404 → not registered, 422 → not reachable
 // from the public internet, 503 → feature off).
@@ -77,11 +89,20 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 	return nil
 }
 
-// Heartbeat extends the peer route's TTL. The server owner-gates via
+// Heartbeat extends the peer route's TTL and reports how many distinct client
+// devices are currently connected. The server owner-gates via
 // X-Lantern-Device-Id, so a leaked route_id can't be used by another device
 // to keep the registration alive.
-func (a *API) Heartbeat(ctx context.Context, routeID string) error {
-	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", LifecycleRequest{RouteID: routeID}, nil); err != nil {
+//
+// activeClients lets the server stop handing this peer to new clients once it
+// is carrying its share. It is reported rather than inferred because the
+// server has no other view of it: assignment records only exist for WireGuard
+// variants, and a peer serves samizdat. Reporting also self-corrects — a count
+// measured now cannot go stale the way an assignment log does when clients
+// simply disappear.
+func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) error {
+	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients}
+	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, nil); err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
 	return nil
