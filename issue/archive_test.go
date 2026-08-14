@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common"
 )
 
 func TestSnapshotLogFile(t *testing.T) {
@@ -30,12 +32,13 @@ func TestSnapshotLogFile(t *testing.T) {
 		dir := t.TempDir()
 		logPath := filepath.Join(dir, "test.log")
 
-		// maxCompressed=100 → maxRead = 100*20 = 2000
-		// Write 5000 bytes so the file exceeds the cap.
+		// The cap is bytes now, not a compressed-size budget scaled up by
+		// maxLogReadFactor: the archiver's peak has to be bounded by what the
+		// process can actually hold.
 		full := bytes.Repeat([]byte("X"), 5000)
 		require.NoError(t, os.WriteFile(logPath, full, 0644))
 
-		data, err := snapshotLogFile(logPath, 100)
+		data, err := snapshotLogFile(logPath, 2000)
 		require.NoError(t, err)
 		assert.Equal(t, 2000, len(data))
 		// Should be the tail of the file.
@@ -332,6 +335,31 @@ func TestAddExtrasGreedily(t *testing.T) {
 		require.Len(t, entries, 1)
 		assert.Equal(t, logArchiveName, entries[0].name)
 	})
+}
+
+// The archiver reads whole files into memory. maxLogReadFactor bounds reads
+// against the compression ratio (19.5 MB * 20 = 390 MB), which is no memory
+// bound at all: on iOS this runs inside a network extension with a fatal 50 MB
+// cap, and reporting an issue while connected read 42 MB of logs and killed the
+// tunnel. engineering#3820. Guard the total the archiver is willing to hold.
+func TestArchiveInputBudgetIsBoundedOnMobile(t *testing.T) {
+	const archiveSize = int64(19.5 * 1024 * 1024) // the real maxTotalAttachmentBytes
+
+	unbounded := archiveSize * maxLogReadFactor
+	require.Greater(t, unbounded, int64(300*1024*1024),
+		"sanity: the compression-derived bound really is this loose")
+
+	// archiveInputBudget keys off common.IsMobile(), a compile-time GOOS check, so
+	// assert the branch that applies to the platform the tests run on.
+	got := archiveInputBudget(archiveSize)
+	if common.IsMobile() {
+		assert.LessOrEqual(t, got, maxMobileInputBytes,
+			"mobile must not let the archiver hold more than the process can survive")
+	} else {
+		assert.Equal(t, unbounded, got, "desktop keeps the compression-derived bound")
+	}
+	assert.LessOrEqual(t, maxMobileInputBytes, int64(16*1024*1024),
+		"the mobile cap has to leave room under a 50 MB process ceiling")
 }
 
 func TestBuildIssueArchive(t *testing.T) {

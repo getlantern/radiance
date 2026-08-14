@@ -11,14 +11,23 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/getlantern/radiance/common"
 )
 
 const (
 	// maxLogReadFactor bounds how much uncompressed log to read toward an archive:
 	// maxArchiveSize * maxLogReadFactor bytes. Logs compress by at most roughly this
 	// factor, so reading more than this can never be needed to reach the compressed
-	// size budget.
+	// size budget. That is a compression bound, not a memory one — see
+	// maxMobileInputBytes.
 	maxLogReadFactor int64 = 20
+	// maxMobileInputBytes caps the uncompressed bytes the archiver holds at once on
+	// mobile. maxLogReadFactor alone permits 19.5 MB * 20 = 390 MB per file, no
+	// constraint at all inside the iOS network extension's fatal 50 MB jetsam cap:
+	// reporting an issue while connected read 42 MB of logs and the extension was
+	// killed mid-archive, dropping the tunnel. engineering#3820.
+	maxMobileInputBytes int64 = 8 * 1024 * 1024
 	// backupTimeFormat matches the timestamp format used in rotated backup
 	// filenames: "<log-name>-<timestamp>.log.gz".
 	backupTimeFormat = "2006-01-02T15-04-05.000"
@@ -38,8 +47,16 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 	var primaryLogData []byte
 	var secondaryLogs []extraFile
 
+	// One budget shared across every read below, so the archiver's peak is bounded
+	// by the platform rather than by the sum of whatever happens to be on disk.
+	// Reading the tail means a smaller budget costs history, not correctness.
+	budget := archiveInputBudget(maxSize)
 	for _, lf := range logFiles {
-		data, err := snapshotLogFile(lf, maxSize)
+		if budget <= 0 {
+			slog.Warn("archive input budget exhausted, skipping log", "path", lf)
+			continue
+		}
+		data, err := snapshotLogFile(lf, budget)
 		if err != nil {
 			slog.Warn("unable to snapshot log file", "path", lf, "error", err)
 			continue
@@ -47,6 +64,7 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 		if len(data) == 0 {
 			continue
 		}
+		budget -= int64(len(data))
 		if filepath.Base(lf) == logArchiveName {
 			primaryLogData = data
 		} else {
@@ -58,22 +76,36 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 	}
 
 	attachments := readExtraFiles(additionalFiles)
+	for _, a := range attachments {
+		budget -= int64(len(a.data))
+	}
 
 	primaryPath := filepath.Join(logDir, logArchiveName)
-	primaryLogData = prependMostRecentBackup(primaryPath, primaryLogData, maxSize)
+	primaryLogData = prependMostRecentBackup(primaryPath, primaryLogData, budget)
 
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
 }
 
+// archiveInputBudget is the total uncompressed bytes the archiver may hold. On
+// mobile the process ceiling matters more than archive completeness.
+func archiveInputBudget(maxSize int64) int64 {
+	budget := maxSize * maxLogReadFactor
+	if common.IsMobile() && budget > maxMobileInputBytes {
+		return maxMobileInputBytes
+	}
+	return budget
+}
+
 // prependMostRecentBackup prepends the newest rotated gzip backup, if present,
 // so a mid-session rotation does not lose earlier log history.
-func prependMostRecentBackup(primaryLogPath string, current []byte, maxArchiveSize int64) []byte {
+// remaining is what is left of the archiver's shared input budget; the backup is
+// decompressed into memory, so it has to draw from the same pool as the live logs.
+func prependMostRecentBackup(primaryLogPath string, current []byte, remaining int64) []byte {
 	backupPath, ok := findMostRecentCompressedBackup(primaryLogPath)
 	if !ok {
 		return current
 	}
 
-	remaining := maxArchiveSize*maxLogReadFactor - int64(len(current))
 	if remaining <= 0 {
 		return current
 	}
@@ -177,9 +209,9 @@ func globFiles(dir, pattern string) []string {
 	return matches
 }
 
-// snapshotLogFile opens the log file, records its current size, and reads the tail
-// up to a reasonable cap.
-func snapshotLogFile(logPath string, maxCompressed int64) ([]byte, error) {
+// snapshotLogFile opens the log file, records its current size, and reads at most
+// maxRead bytes of the tail.
+func snapshotLogFile(logPath string, maxRead int64) ([]byte, error) {
 	f, err := os.Open(logPath)
 	if err != nil {
 		return nil, err
@@ -196,7 +228,6 @@ func snapshotLogFile(logPath string, maxCompressed int64) ([]byte, error) {
 		return nil, nil
 	}
 
-	maxRead := maxCompressed * maxLogReadFactor
 	readSize := size
 	if readSize > maxRead {
 		readSize = maxRead
