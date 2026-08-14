@@ -50,10 +50,28 @@ const (
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
 
 	// VPN related keys.
-	SmartRoutingKey   _key = "smart_routing"   // bool
-	SplitTunnelKey    _key = "split_tunnel"    // bool
-	AdBlockKey        _key = "ad_block"        // bool
-	AutoConnectKey    _key = "auto_connect"    // bool
+	SmartRoutingKey     _key = "smart_routing"      // bool
+	SplitTunnelKey      _key = "split_tunnel"       // bool
+	AdBlockKey          _key = "ad_block"           // bool
+	AutoConnectKey      _key = "auto_connect"       // bool
+	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	// PeerManualPortKey is the TCP port number the user has manually
+	// forwarded on their router for the peer-proxy inbound (single-
+	// port 1:1 NAT). Valid range is 1..65535; 0 means unset, in which
+	// case the peer falls back to UPnP discovery. Out-of-range values
+	// (negative, > 65535) are logged on read and treated as unset
+	// rather than silently wrapping to a wrong port. Surfaced as an
+	// Advanced setting in the Share My Connection UI for users on
+	// networks where UPnP is disabled or unavailable.
+	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
+	// UnboundedKey is the local opt-in for the broflake / Unbounded
+	// widget proxy. When true AND the server-side Features[unbounded]
+	// flag is on AND the server provides UnboundedConfig (discovery
+	// + egress URLs), the widget proxy starts. Surfaced as a "Basic
+	// mode" option in the Share My Connection UI for networks where
+	// UPnP isn't workable but the user still wants to contribute via
+	// the WebRTC-based donor path.
+	UnboundedKey      _key = "unbounded"       // bool
 	SelectedServerKey _key = "selected_server" // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]

@@ -38,6 +38,7 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
@@ -62,6 +63,10 @@ type LocalBackend struct {
 	vpnClient      *vpn.VPNClient
 	splitTunnelMgr *vpn.SplitTunnel
 	sessionHistory *vpn.SessionHistory
+
+	peerClient   peerController
+	peerToggleMu sync.Mutex
+	peerWG       sync.WaitGroup
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -186,6 +191,15 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+
+	// Degraded, not fatal, per the invariant above: a nil peerClient only
+	// disables Share My Connection, and must not cost the user their ability
+	// to report an issue. applyPeerShare and PeerStatus handle nil.
+	peerClient, err := newPeerClient(platformDeviceID)
+	if err != nil {
+		slog.Error("Loading peer client", "error", err)
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
@@ -204,6 +218,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		srvManager:        svrMgr,
 		vpnClient:         vpnClient,
 		splitTunnelMgr:    splitTunnelMgr,
+		peerClient:        peerClient,
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
@@ -232,7 +247,11 @@ func (r *LocalBackend) Start() {
 			slog.Warn("Failed to get public IP", "error", err)
 		} else {
 			common.SetPublicIP(result.IP.String())
-			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+			// IP intentionally omitted — Lantern users in censored regions
+			// can't safely have their public IP in routinely-collected
+			// client logs. Confidence + sources are enough for operator
+			// triage; the actual IP is correlated server-side via traces.
+			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
 		}
 	}()
 
@@ -244,6 +263,20 @@ func (r *LocalBackend) Start() {
 	r.startVPNStatusListeners()
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
+
+	r.resumePeerShareIfEnabled()
+
+	// Wire the broflake / Unbounded widget proxy lifecycle to config
+	// updates. This single subscription handles all three start/stop
+	// triggers (local toggle, server feature flag, server-supplied
+	// config); InitSubscription is sync.Once-guarded so a future Start
+	// retry after Close won't double-subscribe.
+	//
+	// Seed with the already-cached config (loaded from disk before
+	// Start runs) so an opted-in user auto-starts the widget on
+	// launch instead of waiting for the next config refresh.
+	cachedCfg, _ := r.confHandler.GetConfig()
+	unbounded.InitSubscription(cachedCfg)
 
 	// The server derives the country from the client IP, so it's stable for the
 	// session: react once to record it for issue reports and to apply the
@@ -371,8 +404,26 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
-		if err := r.DisconnectVPN(); err != nil {
-			slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+		r.closePeerClient()
+		// unbounded.start spawns its worker on a context.Background-
+		// derived ctx (it has to outlive any single NewConfigEvent),
+		// so Close has to explicitly tell it to shut down — otherwise
+		// the broflake widget goroutine survives backend close and
+		// leaks until process exit. Use a fresh ctx so a cancelled
+		// shutdown path doesn't skip the Stop.
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := unbounded.Stop(stopCtx); err != nil {
+			slog.Warn("unbounded stop on backend close returned error", "error", err)
+		}
+		cancel()
+		// vpnClient is always set in production via NewLocalBackend, but
+		// peer-focused unit tests construct partial LocalBackends without
+		// one. Guard the call so Close stays robust under those paths
+		// rather than panicking in DisconnectVPN.
+		if r.vpnClient != nil {
+			if err := r.DisconnectVPN(); err != nil {
+				slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+			}
 		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		for _, shutdown := range r.shutdownFuncs {
@@ -590,7 +641,32 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[k]; ok {
 		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
 	}
-	return r.maybeRestartVPN(diff)
+	// settings.Patch above already persisted the whole diff, so an early
+	// return here would leave a persisted key that no runtime state matches —
+	// exactly the divergence applyPeerShare's rollback exists to prevent.
+	// Run both handlers and join their errors.
+	var errs error
+	if err := r.maybeRestartVPN(diff); err != nil {
+		errs = errors.Join(errs, err)
+	}
+	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
+		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	// Drive the Unbounded widget proxy off the toggle change immediately
+	// rather than waiting for the next NewConfigEvent to re-evaluate.
+	// settings.Patch above has already persisted the new value, so go
+	// straight to Apply() — SetEnabled would short-circuit on the
+	// already-matching persisted value and never re-evaluate the
+	// manager. Apply re-checks the three-condition predicate against
+	// the cached server-side state and starts or stops accordingly.
+	if _, ok := diff[settings.UnboundedKey]; ok {
+		if err := unbounded.Apply(); err != nil {
+			slog.Warn("unbounded apply failed", "error", err)
+		}
+	}
+	return errs
 }
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings

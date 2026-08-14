@@ -119,19 +119,53 @@ func (e *Subscription[T]) Unsubscribe() {
 // Emit notifies all subscribers of the event, passing event data. Callbacks are invoked
 // asynchronously in separate goroutines.
 func Emit[T Event](evt T) {
+	key := reflect.TypeFor[T]()
+	// Snapshot the callbacks into a slice under the RLock, then drop
+	// the lock before doing anything that could block (the diagnostic
+	// log, the per-callback goroutine spawn). Iterating the underlying
+	// map after releasing the lock would race against Unsubscribe's
+	// write lock — `concurrent map iteration and map write` panic
+	// territory under load.
 	subscriptionsMu.RLock()
-	defer subscriptionsMu.RUnlock()
-	evtType := reflect.TypeFor[T]()
-	if subs, ok := subscriptions[evtType]; ok {
-		for _, cb := range subs {
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("Panic in event callback", "error", r, "event", evtType.String())
-					}
-				}()
-				cb(evt)
-			}()
-		}
+	subsMap := subscriptions[key]
+	cbs := make([]func(any), 0, len(subsMap))
+	for _, cb := range subsMap {
+		cbs = append(cbs, cb)
 	}
+	subscriptionsMu.RUnlock()
+	// Diagnostic hook; default no-op so high-frequency event types
+	// don't flood logs in prod. Tests / debugging swap in a real
+	// logger via SetEmitDebugLogger.
+	if fn := emitDebugLogger.Load(); fn != nil {
+		(*fn)(key, len(cbs))
+	}
+	for _, cb := range cbs {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("Panic in event callback", "error", r, "event", key.String())
+				}
+			}()
+			cb(evt)
+		}()
+	}
+}
+
+// emitDebugLogger holds the hook invoked once per Emit with the event type
+// and current subscriber count; nil means no-op. Held atomically because
+// Emit reads it from arbitrary goroutines — peer.Client's heartbeat and
+// rotation loops emit for the process lifetime, so any post-startup
+// SetEmitDebugLogger would otherwise race an in-flight Emit.
+var emitDebugLogger atomic.Pointer[func(reflect.Type, int)]
+
+// SetEmitDebugLogger replaces the no-op diagnostic hook for the
+// duration of an investigation (e.g., tracking "events vanish" paths).
+// Pass nil to restore the no-op default. Safe to call concurrently with
+// Emit.
+func SetEmitDebugLogger(fn func(eventType reflect.Type, subscriberCount int)) {
+	if fn == nil {
+		emitDebugLogger.Store(nil)
+		return
+	}
+	emitDebugLogger.Store(&fn)
 }
