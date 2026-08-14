@@ -10,8 +10,9 @@ import (
 // be driven by a fake in tests — verifying eviction order, batch sizing, and the hard-close path
 // without a live tunnel — while production code can provide tracker-backed reclamation.
 type Reclaimer interface {
-	// ConnectionsOldestFirst returns the live routed connections sorted by creation time, oldest first.
-	ConnectionsOldestFirst() []ConnectionRef
+	// OldestConnections returns up to limit live routed connections ordered oldest-first, plus
+	// the total live count. A non-positive limit returns no refs but still reports total.
+	OldestConnections(limit int) (oldest []ConnectionRef, total int)
 	// CloseConn is a no-op when id is no longer live.
 	CloseConn(id uuid.UUID)
 	// CloseAllConnections closes every tracked connection for a hard reclaim.

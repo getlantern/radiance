@@ -88,6 +88,8 @@ func NewSessionHistory(logger *slog.Logger, info SessionInfo) *SessionHistory {
 	h := &SessionHistory{
 		logger: logger,
 		info:   info,
+		// Preallocate the retention cap so finalizing a session can shift in place.
+		stored: make([]Session, 0, maxSessions),
 	}
 	h.sub = events.Subscribe(h.handleStatus)
 	h.startPruner()
@@ -194,10 +196,12 @@ func (h *SessionHistory) finalizeLocked(errMsg string) {
 	}
 	s := *h.current
 	h.current = nil
-	h.stored = append([]Session{s}, h.stored...)
-	if len(h.stored) > maxSessions {
-		h.stored = h.stored[:maxSessions]
+	// Avoid prepending onto a fresh slice while sessions may finalize under memory pressure.
+	if len(h.stored) < maxSessions {
+		h.stored = append(h.stored, Session{})
 	}
+	copy(h.stored[1:], h.stored[:len(h.stored)-1])
+	h.stored[0] = s
 	h.pruneLocked(now)
 }
 

@@ -18,12 +18,16 @@ type fakeReclaimer struct {
 	dialed    int
 }
 
-func (f *fakeReclaimer) ConnectionsOldestFirst() []ConnectionRef { return f.conns }
-func (f *fakeReclaimer) CloseConn(id uuid.UUID)                  { f.closed = append(f.closed, id) }
-func (f *fakeReclaimer) CloseAllConnections()                    { f.closeAllN++ }
-func (f *fakeReclaimer) FreeOSMemory()                           { f.freeOSCnt++ }
-func (f *fakeReclaimer) OpenConnectionCount() int                { return f.openCount }
-func (f *fakeReclaimer) TotalDialedConnections() int             { return f.dialed }
+// OldestConnections returns the fake's oldest-first prefix so limit handling exercises executor
+// behavior, not sorting.
+func (f *fakeReclaimer) OldestConnections(limit int) ([]ConnectionRef, int) {
+	return f.conns[:min(limit, len(f.conns))], len(f.conns)
+}
+func (f *fakeReclaimer) CloseConn(id uuid.UUID)      { f.closed = append(f.closed, id) }
+func (f *fakeReclaimer) CloseAllConnections()        { f.closeAllN++ }
+func (f *fakeReclaimer) FreeOSMemory()               { f.freeOSCnt++ }
+func (f *fakeReclaimer) OpenConnectionCount() int    { return f.openCount }
+func (f *fakeReclaimer) TotalDialedConnections() int { return f.dialed }
 
 func refs(n int) []ConnectionRef {
 	out := make([]ConnectionRef, n)

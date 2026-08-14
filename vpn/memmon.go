@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/sagernet/sing-box/common/conntrack"
@@ -35,16 +36,27 @@ type memoryReclaimer struct {
 	tracker *connTracker
 }
 
-func (r *memoryReclaimer) ConnectionsOldestFirst() []memmon.ConnectionRef {
-	metadata := r.tracker.Connections()
-	refs := make([]memmon.ConnectionRef, len(metadata))
-	for i, conn := range metadata {
-		refs[i] = memmon.ConnectionRef{ID: conn.ID, CreatedAt: conn.CreatedAt}
+func (r *memoryReclaimer) OldestConnections(limit int) (oldest []memmon.ConnectionRef, total int) {
+	oldest = make([]memmon.ConnectionRef, 0, max(limit, 0))
+	for id, rec := range r.tracker.conns.Iter() {
+		total++
+		createdAt := rec.createdAt
+		// A candidate that can't join the oldest-limit window is skipped, but the loop
+		// continues so total still counts every connection.
+		if limit <= 0 || (len(oldest) == limit && !createdAt.Before(oldest[limit-1].CreatedAt)) {
+			continue
+		}
+		i, _ := slices.BinarySearchFunc(oldest, createdAt, func(ref memmon.ConnectionRef, t time.Time) int {
+			return ref.CreatedAt.Compare(t)
+		})
+		if len(oldest) < limit {
+			oldest = append(oldest, memmon.ConnectionRef{})
+		}
+		// At limit, this evicts the newest kept entry to make room.
+		copy(oldest[i+1:], oldest[i:])
+		oldest[i] = memmon.ConnectionRef{ID: id, CreatedAt: createdAt}
 	}
-	slices.SortFunc(refs, func(a, b memmon.ConnectionRef) int {
-		return a.CreatedAt.Compare(b.CreatedAt)
-	})
-	return refs
+	return oldest, total
 }
 
 func (r *memoryReclaimer) FreeOSMemory() {
