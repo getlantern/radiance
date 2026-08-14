@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
 )
 
@@ -28,6 +29,19 @@ func NewClient() *Client {
 // Close releases resources held by the client, including any local backend.
 func (c *Client) Close() {
 	c.http.CloseIdleConnections()
+}
+
+// reportIssue hands the report to the daemon, which owns the logs and live backend state.
+func (c *Client) reportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
+	_, err := c.do(ctx, http.MethodPost, issueEndpoint,
+		IssueReportRequest{
+			IssueType:             issueType,
+			Description:           description,
+			Email:                 email,
+			AdditionalAttachments: additionalAttachments,
+			Attachments:           attachments,
+		})
+	return err
 }
 
 // do executes an HTTP request with an optional JSON body and returns the raw response body. If

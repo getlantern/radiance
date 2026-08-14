@@ -673,16 +673,10 @@ func (c *Client) RestoreSubscription(ctx context.Context, service account.Subscr
 // not need to be specified. attachments contains screenshot files sent as first-class multipart
 // attachments; callers may include up to [issue.MaxFirstClassAttachmentCount] files with a
 // combined size of [issue.MaxFirstClassAttachmentBytes] bytes.
+//
+// On mobile the report is assembled in this process to avoid pressuring the tunnel process.
 func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
-	_, err := c.do(ctx, http.MethodPost, issueEndpoint,
-		IssueReportRequest{
-			IssueType:             issueType,
-			Description:           description,
-			Email:                 email,
-			AdditionalAttachments: additionalAttachments,
-			Attachments:           attachments,
-		})
-	return err
+	return c.reportIssue(ctx, issueType, description, email, additionalAttachments, attachments)
 }
 
 /////////////

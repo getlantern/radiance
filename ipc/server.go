@@ -1192,7 +1192,7 @@ func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.backend(r.Context()).ReportIssue(req.IssueType, req.Description, req.Email, req.AdditionalAttachments, req.Attachments); err != nil {
+	if err := s.backend(r.Context()).ReportIssue(r.Context(), req.IssueType, req.Description, req.Email, req.AdditionalAttachments, req.Attachments); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

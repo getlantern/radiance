@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
@@ -334,4 +335,20 @@ func TestConnectVPN_ShedsConcurrentCalls(t *testing.T) {
 	// The reject path must not release the guard; only the holder unlocks it.
 	r.connectMu.Unlock()
 	assert.True(t, r.connectMu.TryLock())
+}
+
+func TestBuildIssueReportMetadataFallsBackToSettings(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "IR"))
+	require.NoError(t, settings.Set(settings.DeviceIDKey, "device-123"))
+	require.NoError(t, settings.Set(settings.SplitTunnelKey, true))
+
+	meta := (*LocalBackend)(nil).buildIssueReportMetadata()
+
+	assert.Equal(t, "IR", meta.country)
+	assert.Equal(t, "device-123", meta.deviceID, "device ID must survive a backendless report")
+	assert.True(t, meta.splitTunnelEnabled, "split-tunnel state must survive a backendless report")
+	assert.NotNil(t, meta.reporter, "a reporter is always needed to upload the report")
 }
