@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -501,4 +502,103 @@ Token: tok
 		assert.Equal(t, `{"user_level": "expired"}`, string(got),
 			"canonical with non-ENOENT read error should be left alone")
 	})
+}
+
+func TestReload(t *testing.T) {
+	initSettingsAt := func(t *testing.T, contents string) string {
+		t.Helper()
+		Reset()
+		t.Cleanup(Reset)
+		dir := t.TempDir()
+		path := filepath.Join(dir, settingsFileName)
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0644))
+		require.NoError(t, InitSettings(dir))
+		return path
+	}
+
+	t.Run("adopts values written by another process", func(t *testing.T) {
+		path := initSettingsAt(t, `{"country_code": "US", "device_id": "old-device"}`)
+		require.Equal(t, "US", GetString(CountryCodeKey))
+
+		require.NoError(t, os.WriteFile(path, []byte(`{"country_code": "IR", "device_id": "new-device"}`), 0644))
+		require.Equal(t, "US", GetString(CountryCodeKey), "cached value is served until a reload")
+
+		require.NoError(t, Reload())
+		assert.Equal(t, "IR", GetString(CountryCodeKey))
+		assert.Equal(t, "new-device", GetString(DeviceIDKey))
+	})
+
+	t.Run("keeps this process's own writes", func(t *testing.T) {
+		initSettingsAt(t, `{"country_code": "US"}`)
+		require.NoError(t, Set(DeviceIDKey, "written-here"))
+
+		require.NoError(t, Reload())
+		assert.Equal(t, "written-here", GetString(DeviceIDKey), "Set persists before returning, so a reload reads it back")
+	})
+
+	t.Run("leaves settings intact when the file is unreadable", func(t *testing.T) {
+		path := initSettingsAt(t, `{"country_code": "US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{invalid json}`), 0644))
+
+		assert.Error(t, Reload())
+		assert.Equal(t, "US", GetString(CountryCodeKey), "a failed reload must not wipe live settings")
+	})
+
+	t.Run("adopts deletions", func(t *testing.T) {
+		path := initSettingsAt(t, `{"country_code": "US", "user_id": "user-1"}`)
+		require.Equal(t, "user-1", GetString(UserIDKey))
+
+		require.NoError(t, os.WriteFile(path, []byte(`{"country_code": "IR"}`), 0644))
+		require.NoError(t, Reload())
+
+		assert.Equal(t, "IR", GetString(CountryCodeKey), "changed values are adopted")
+		assert.Empty(t, GetString(UserIDKey), "a removed key is dropped, not kept")
+		assert.False(t, Exists(UserIDKey))
+	})
+
+	t.Run("missing file is not an error", func(t *testing.T) {
+		path := initSettingsAt(t, `{"country_code": "US"}`)
+		require.NoError(t, os.Remove(path))
+
+		assert.NoError(t, Reload())
+		assert.Equal(t, "US", GetString(CountryCodeKey))
+	})
+
+	t.Run("errors when uninitialized", func(t *testing.T) {
+		Reset()
+		t.Cleanup(Reset)
+		assert.Error(t, Reload())
+	})
+}
+
+func TestReloadRacesNothing(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	path := filepath.Join(dir, settingsFileName)
+	require.NoError(t, os.WriteFile(path, []byte(`{"country_code": "US"}`), 0644))
+	require.NoError(t, InitSettings(dir))
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = GetString(CountryCodeKey)
+					_ = GetBool(SplitTunnelKey)
+				}
+			}
+		}()
+	}
+	for range 50 {
+		require.NoError(t, Reload())
+	}
+	close(stop)
+	wg.Wait()
 }

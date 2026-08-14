@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -267,16 +268,29 @@ func userLevelInJSON(contents []byte) string {
 	return s.UserLevel
 }
 
-func loadSettings(path string) error {
+// loadSettings applies the file to the in-memory settings.
+//
+// Koanf parses before taking its write lock, so malformed files leave the live settings untouched.
+// Without opts the file merges over current settings; pass replaceAll when omitted keys must be
+// dropped.
+func loadSettings(path string, opts ...koanf.Option) error {
 	contents, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	kk := koanf.New(".")
-	if err := kk.Load(rawbytes.Provider(contents), json.Parser()); err != nil {
+	if err := k.k.Load(rawbytes.Provider(contents), json.Parser(), opts...); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
-	k.k = kk
+	return nil
+}
+
+// replaceAll makes a koanf load overwrite rather than merge, so keys the source omits are dropped.
+//
+// Koanf re-flattens dest after this returns, so dest must be mutated in place; replacing the map
+// header would silently lose the load.
+func replaceAll(src, dest map[string]any) error {
+	clear(dest)
+	maps.Copy(dest, src)
 	return nil
 }
 
@@ -436,6 +450,27 @@ func Reset() {
 	defer k.mu.Unlock()
 	k.k = koanf.New(".")
 	k.initialized = false
+}
+
+// Reload re-reads the settings file, adopting values written by another process.
+//
+// Mobile keeps the tunnel in a separate process that persists to the same file, so long-lived
+// callers must reload before using cross-process metadata. The file supersedes memory rather than
+// merging over it, so keys removed by another process do not linger. A missing file is not an
+// error, and failed reloads leave the current settings untouched.
+func Reload() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if !k.initialized {
+		return errors.New("settings not initialized")
+	}
+	switch err := loadSettings(k.filePath, koanf.WithMergeFunc(replaceAll)); {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("reloading settings: %w", err)
+	}
+	return nil
 }
 
 func IsPro() bool {

@@ -437,7 +437,9 @@ type issueReportMetadata struct {
 // report. It is safe to call with a nil or partially initialized backend.
 func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	meta := issueReportMetadata{
-		country: settings.GetString(settings.CountryCodeKey),
+		country:            settings.GetString(settings.CountryCodeKey),
+		deviceID:           settings.GetString(settings.DeviceIDKey),
+		splitTunnelEnabled: settings.GetBool(settings.SplitTunnelKey),
 	}
 
 	if r == nil {
@@ -449,9 +451,10 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	} else {
 		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
 	}
-	meta.deviceID = r.deviceID
+	if r.deviceID != "" {
+		meta.deviceID = r.deviceID
+	}
 
-	// get country from the config returned by the backend
 	if r.confHandler != nil {
 		if cfg, err := r.confHandler.GetConfig(); err != nil {
 			slog.Warn("failed to get config", "error", err)
@@ -469,13 +472,17 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	return meta
 }
 
-// ReportIssue allows the user to report an issue with the application. It collects relevant
-// information about the user's environment such as country, device ID, user ID, subscription level,
-// and locale, and log files to include in the report.
+// ReportIssue sends an issue report with current metadata and diagnostic attachments.
 //
-// ReportIssue is safe to call with a nil receiver.
-func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
+// ReportIssue is safe to call with a nil receiver; in that case it uses settings-backed metadata.
+func (r *LocalBackend) ReportIssue(
+	ctx context.Context,
+	issueType issue.IssueType,
+	description, email string,
+	additionalAttachments []string,
+	attachments []*issue.Attachment,
+) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "report_issue")
 	defer span.End()
 
 	meta := r.buildIssueReportMetadata()
