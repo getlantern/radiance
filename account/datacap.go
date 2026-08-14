@@ -92,9 +92,10 @@ func readSSE(ctx context.Context, body io.Reader) (<-chan sseEvent, func() error
 	go func() {
 		defer close(ch)
 		scanner := bufio.NewScanner(body)
-		// Keep the long-lived scanner buffer near normal SSE event size
+		// The initial buffer stays small to bound resident memory; the 1 MiB max still
+		// admits a rare oversized line rather than failing it.
 		buf := make([]byte, 0, 4*1024)
-		scanner.Buffer(buf, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
 
 		var evt sseEvent
 		for scanner.Scan() {

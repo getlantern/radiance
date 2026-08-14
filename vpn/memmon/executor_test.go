@@ -21,6 +21,9 @@ type fakeReclaimer struct {
 // OldestConnections returns the fake's oldest-first prefix so limit handling exercises executor
 // behavior, not sorting.
 func (f *fakeReclaimer) OldestConnections(limit int) ([]ConnectionRef, int) {
+	if limit <= 0 {
+		return nil, len(f.conns)
+	}
 	return f.conns[:min(limit, len(f.conns))], len(f.conns)
 }
 func (f *fakeReclaimer) CloseConn(id uuid.UUID)      { f.closed = append(f.closed, id) }
