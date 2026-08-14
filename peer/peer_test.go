@@ -1246,3 +1246,28 @@ func TestResetConnTracking_ClearsAcrossSessions(t *testing.T) {
 	c.trackConn(1, "203.0.113.7:44001")
 	assert.Equal(t, 1, c.ActiveClients(), "tracking still works after a reset")
 }
+
+// TestTrackConn_DropsCountsWhileDraining covers the race the drain flag exists
+// for. A peerconn callback that passed the listener wrapper's check before Stop
+// set the flag can still reach trackConn after resetConnTracking cleared the
+// map; without a second check under connsMu it would repopulate the map and
+// leak a stale count into the next Start.
+func TestTrackConn_DropsCountsWhileDraining(t *testing.T) {
+	c := &Client{}
+	c.trackConn(1, "203.0.113.7:44001")
+	require.Equal(t, 1, c.ActiveClients())
+
+	// Teardown ordering: flag first, then the reset.
+	c.listenerDraining.Store(true)
+	c.resetConnTracking()
+
+	// The straggler callback lands here.
+	c.trackConn(1, "198.51.100.9:55001")
+	assert.Equal(t, 0, c.ActiveClients(),
+		"a callback outliving Stop must not repopulate the tally")
+
+	// A subsequent Start clears the flag and counting resumes.
+	c.listenerDraining.Store(false)
+	c.trackConn(1, "198.51.100.9:55001")
+	assert.Equal(t, 1, c.ActiveClients())
+}

@@ -618,6 +618,16 @@ func (c *Client) trackConn(state int, source string) {
 	}
 	c.connsMu.Lock()
 	defer c.connsMu.Unlock()
+	// Re-check the drain flag here, not just in the listener wrapper. A
+	// callback that passed the wrapper's check before Stop set the flag can
+	// reach this point after resetConnTracking has already cleared the map,
+	// repopulating it and leaking a stale count into the next Start. Checking
+	// under connsMu is what makes this airtight rather than merely narrower:
+	// Stop sets the flag before taking connsMu to reset, so any call that
+	// acquires the lock after the reset necessarily observes the flag.
+	if c.listenerDraining.Load() {
+		return
+	}
 	if c.connsByIP == nil {
 		c.connsByIP = make(map[string]int)
 	}
