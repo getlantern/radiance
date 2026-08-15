@@ -34,13 +34,12 @@ const peerToggleTimeout = 30 * time.Second
 // is a constant, so the real check cannot be faked at runtime.
 //
 // iOS is excluded because the backend runs inside the network extension
-// there — MobileStartIPCServer, the only caller of NewLocalBackend, is
-// invoked from the tunnel provider — where the memory budget is 48MB against
-// 512MB elsewhere and serving would add a second sing-box instance to it.
-// The memory monitor cannot absorb that: its sensor is process-wide, but its
-// reclaimer only sheds the VPN's own dialed connections, so peer load would
-// be relieved by evicting the user's traffic, and failing that the extension
-// is killed and the user loses the VPN.
+// there, on a memory budget roughly a tenth of every other platform's, and
+// serving adds a second sing-box instance to it. The memory monitor cannot
+// absorb the difference: it measures the whole process but can only reclaim
+// the VPN's own connections, so peer load would be relieved by evicting the
+// user's own traffic, and failing that the extension is killed and the VPN
+// goes down with it.
 var peerShareUnsupported = common.IsIOS
 
 // newPeerClient constructs the production peer.Client wired against the
@@ -71,7 +70,7 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
 				slog.Error("peer share rollback failed on unsupported platform", "error", rbErr)
 			}
-			return errors.New("peer share is not supported on this platform")
+			return fmt.Errorf("peer share is not supported on %s", common.Platform)
 		}
 		return nil
 	}

@@ -598,9 +598,10 @@ func TestApplyPeerShare_UnsupportedPlatformDisableIsNoop(t *testing.T) {
 	assert.Zero(t, fake.stopCalls.Load(), "nothing was started, so nothing needs stopping")
 }
 
-// The auto-resume path reaches Start through applyPeerShare, so the gate has to
-// hold there too: a setting persisted before the platform was excluded (or
-// synced from another device) would otherwise start a peer on every launch.
+// TestResumePeerShare_UnsupportedPlatformDoesNotStart covers the auto-resume
+// path, which reaches Start through applyPeerShare rather than directly: a
+// setting persisted before the platform was excluded, or synced from another
+// device, would otherwise start a peer on every launch.
 func TestResumePeerShare_UnsupportedPlatformDoesNotStart(t *testing.T) {
 	withPeerShareUnsupported(t)
 	fake := &fakePeerController{}
