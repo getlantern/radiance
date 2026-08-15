@@ -29,6 +29,20 @@ type peerController interface {
 // shutdown.
 const peerToggleTimeout = 30 * time.Second
 
+// peerShareUnsupported reports platforms that must never serve as a peer. It
+// is a var solely so tests can reach the unsupported branch: common.Platform
+// is a constant, so the real check cannot be faked at runtime.
+//
+// iOS is excluded because the backend runs inside the network extension
+// there — MobileStartIPCServer, the only caller of NewLocalBackend, is
+// invoked from the tunnel provider — where the memory budget is 48MB against
+// 512MB elsewhere and serving would add a second sing-box instance to it.
+// The memory monitor cannot absorb that: its sensor is process-wide, but its
+// reclaimer only sheds the VPN's own dialed connections, so peer load would
+// be relieved by evicting the user's traffic, and failing that the extension
+// is killed and the user loses the VPN.
+var peerShareUnsupported = common.IsIOS
+
 // newPeerClient constructs the production peer.Client wired against the
 // shared kindling HTTP client and the platform device ID. Pulled out of
 // NewLocalBackend so the construction site is a one-liner.
@@ -50,6 +64,17 @@ func newPeerClient(platformDeviceID string) (*peer.Client, error) {
 // sequence could see the second call's "already active" rollback racing the
 // third call's Stop.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
+	if peerShareUnsupported() {
+		if enabled {
+			// Same reason as the nil-client path below: a persisted "on"
+			// would otherwise survive every restart with nothing behind it.
+			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
+				slog.Error("peer share rollback failed on unsupported platform", "error", rbErr)
+			}
+			return errors.New("peer share is not supported on this platform")
+		}
+		return nil
+	}
 	// Construction degrades to a nil client rather than failing (the backend
 	// must always come up so a user can report an issue), so the toggle
 	// reports the outage instead of panicking. Roll the setting back, or a
