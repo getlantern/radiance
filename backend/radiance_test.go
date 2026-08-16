@@ -564,6 +564,58 @@ func TestApplyPeerShare_NilClientReportsUnavailableAndRollsBack(t *testing.T) {
 		"the setting must roll back so a persisted \"on\" doesn't survive with nothing behind it")
 }
 
+// withPeerShareUnsupported forces the platform gate on for one test. The real
+// predicate reads common.Platform, a constant, so the branch is unreachable on
+// the host that runs these tests.
+func withPeerShareUnsupported(t *testing.T) {
+	t.Helper()
+	prev := peerShareUnsupported
+	peerShareUnsupported = func() bool { return true }
+	t.Cleanup(func() { peerShareUnsupported = prev })
+}
+
+func TestApplyPeerShare_UnsupportedPlatformRefusesAndRollsBack(t *testing.T) {
+	withPeerShareUnsupported(t)
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	err := r.applyPeerShare(true)
+
+	require.Error(t, err, "enabling on an unsupported platform must report, not silently no-op")
+	assert.ErrorContains(t, err, "not supported")
+	assert.Zero(t, fake.startCalls.Load(), "the peer must never start on an unsupported platform")
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey),
+		"the setting must roll back so a persisted \"on\" doesn't survive every restart")
+}
+
+func TestApplyPeerShare_UnsupportedPlatformDisableIsNoop(t *testing.T) {
+	withPeerShareUnsupported(t)
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+
+	assert.NoError(t, r.applyPeerShare(false), "turning it off where it never ran is not an error")
+	assert.Zero(t, fake.stopCalls.Load(), "nothing was started, so nothing needs stopping")
+}
+
+// TestResumePeerShare_UnsupportedPlatformDoesNotStart covers the auto-resume
+// path, which reaches Start through applyPeerShare rather than directly: a
+// setting persisted before the platform was excluded, or synced from another
+// device, would otherwise start a peer on every launch.
+func TestResumePeerShare_UnsupportedPlatformDoesNotStart(t *testing.T) {
+	withPeerShareUnsupported(t)
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	r.resumePeerShareIfEnabled()
+	r.peerWG.Wait()
+
+	assert.Zero(t, fake.startCalls.Load(), "auto-resume must not start a peer on an unsupported platform")
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey),
+		"the stale setting is cleared on the way through")
+}
+
 func TestApplyPeerShare_NilClientDisableIsNoop(t *testing.T) {
 	r := newPeerTestBackend(t, nil)
 	r.peerClient = nil

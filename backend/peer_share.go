@@ -29,6 +29,19 @@ type peerController interface {
 // shutdown.
 const peerToggleTimeout = 30 * time.Second
 
+// peerShareUnsupported reports platforms that must never serve as a peer. It
+// is a var solely so tests can reach the unsupported branch: common.Platform
+// is a constant, so the real check cannot be faked at runtime.
+//
+// iOS is excluded because the backend runs inside the network extension
+// there, on a memory budget roughly a tenth of every other platform's, and
+// serving adds a second sing-box instance to it. The memory monitor cannot
+// absorb the difference: it measures the whole process but can only reclaim
+// the VPN's own connections, so peer load would be relieved by evicting the
+// user's own traffic, and failing that the extension is killed and the VPN
+// goes down with it.
+var peerShareUnsupported = common.IsIOS
+
 // newPeerClient constructs the production peer.Client wired against the
 // shared kindling HTTP client and the platform device ID. Pulled out of
 // NewLocalBackend so the construction site is a one-liner.
@@ -50,6 +63,17 @@ func newPeerClient(platformDeviceID string) (*peer.Client, error) {
 // sequence could see the second call's "already active" rollback racing the
 // third call's Stop.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
+	if peerShareUnsupported() {
+		if enabled {
+			// Same reason as the nil-client path below: a persisted "on"
+			// would otherwise survive every restart with nothing behind it.
+			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
+				slog.Error("peer share rollback failed on unsupported platform", "error", rbErr)
+			}
+			return fmt.Errorf("peer share is not supported on %s", common.Platform)
+		}
+		return nil
+	}
 	// Construction degrades to a nil client rather than failing (the backend
 	// must always come up so a user can report an issue), so the toggle
 	// reports the outage instead of panicking. Roll the setting back, or a
