@@ -75,7 +75,7 @@ type Connection struct {
 func newConnection(r *record) Connection {
 	return Connection{
 		ID:           r.id.String(),
-		Inbound:      r.inboundType + "/" + r.inboundName,
+		Inbound:      r.inboundLabel,
 		IPVersion:    int(r.ipVersion),
 		Network:      r.network,
 		Source:       r.source,
@@ -87,7 +87,7 @@ func newConnection(r *record) Connection {
 		Uplink:       r.upload.Load(),
 		Downlink:     r.download.Load(),
 		Rule:         r.ruleStr,
-		Outbound:     r.outboundType + "/" + r.outbound,
+		Outbound:     r.outboundLabel,
 		ChainList:    r.chain,
 	}
 }

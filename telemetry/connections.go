@@ -10,13 +10,22 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn"
 )
 
 // connEventBuffer sizes the channel used for buffered ConnClose events.
 // Sends are non-blocking; on overflow the event is dropped and counted rather than stalling
 // a connection close.
-const connEventBuffer = 4096
+//
+// Channel backing storage is allocated at make time; on mobile the smaller depth trades
+// counted drops for lower resident footprint.
+var connEventBuffer = func() int {
+	if common.IsMobile() {
+		return 256
+	}
+	return 4096
+}()
 
 // droppedFlushInterval is how often run folds the dropped-event count into its metric. The overflow
 // path only touches an atomic, so the metric trails by at most one interval.

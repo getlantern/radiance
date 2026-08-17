@@ -1,9 +1,7 @@
 package vpn
 
 import (
-	"bytes"
 	"context"
-	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +14,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	lcommon "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
@@ -476,32 +472,22 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
 	slog.Debug("Finished building options", "env", common.Env())
-
-	span.AddEvent("finished building options", trace.WithAttributes(
-		attribute.String("options", string(writeBoxOptions(bOptions.BasePath, opts))),
-	))
+	writeBoxOptions(bOptions.BasePath, opts)
 	return opts, nil
 }
 
-// writeBoxOptions marshals the options as JSON and stores them in a file so we can debug them
-// we can ignore the errors here since the tunnel will error out anyway if something is wrong
-func writeBoxOptions(path string, opts O.Options) []byte {
+// writeBoxOptions marshals the options as JSON and writes them to a file. we can ignore
+// errors here since the tunnel will error out anyway if something is wrong
+func writeBoxOptions(path string, opts O.Options) {
 	buf, err := json.MarshalContext(box.BaseContext(), opts)
 	if err != nil {
-		slog.Warn("failed to marshal options while writing debug box options", slog.Any("error", err))
-		return nil
+		slog.Warn("failed to marshal options while writing debug box options", "error", err)
+		return
 	}
 
-	var b bytes.Buffer
-	if err := stdjson.Indent(&b, buf, "", "  "); err != nil {
-		slog.Warn("failed to indent marshaled options while writing debug box options", slog.Any("error", err))
-		return buf
+	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), buf, fileperm.File); err != nil {
+		slog.Warn("failed to write options file", "error", err)
 	}
-	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), b.Bytes(), fileperm.File); err != nil {
-		slog.Warn("failed to write options file", slog.Any("error", err))
-		return buf
-	}
-	return b.Bytes()
 }
 
 //////////////////////
