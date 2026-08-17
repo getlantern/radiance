@@ -144,3 +144,24 @@ func TestMobileMemoryLimitsOrdering(t *testing.T) {
 	assert.Less(t, mobileMemoryLimit, defaultIOSMemLimitBytes, "GOMEMLIMIT must be below the monitor budget")
 	assert.Less(t, defaultIOSMemLimitBytes, iOSFootprintCap, "monitor budget must be below the iOS cap")
 }
+
+func TestNewClientContextInjectorSeedsLanternTags(t *testing.T) {
+	t.Run("seeds outbound bounds with the given lantern tags", func(t *testing.T) {
+		inj := newClientContextInjector(nil, "", []string{"a", "b"})
+		bounds := inj.MatchBounds()
+		assert.Equal(t, []string{"a", "b"}, bounds.Outbound)
+		assert.Equal(t, []string{"any"}, bounds.Inbound)
+	})
+
+	t.Run("nil tags yield empty outbound bounds", func(t *testing.T) {
+		inj := newClientContextInjector(nil, "", nil)
+		assert.Empty(t, inj.MatchBounds().Outbound)
+	})
+
+	t.Run("clones input so later caller mutation does not alias the bounds", func(t *testing.T) {
+		tags := []string{"a", "b"}
+		inj := newClientContextInjector(nil, "", tags)
+		tags[0] = "mutated"
+		assert.Equal(t, []string{"a", "b"}, inj.MatchBounds().Outbound)
+	})
+}

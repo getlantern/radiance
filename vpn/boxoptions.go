@@ -79,6 +79,12 @@ type BoxOptions struct {
 	// SelectionHistorySeed seeds the tunnel's AutoSelectHistoryStorage
 	// at startup with the latest persisted snapshot per tag.
 	SelectionHistorySeed map[string]lbA.TagHistory `json:"tag_history"`
+	// LanternServerTags lists the outbound/endpoint tags in Options that are
+	// Lantern servers. Only Lantern servers receive injected client info, so
+	// these seed the client-context injector's match bounds at construction —
+	// otherwise servers baked into the initial config get no data-usage
+	// attribution until a config refresh adds them.
+	LanternServerTags []string `json:"lantern_server_tags,omitempty"`
 }
 
 // isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
