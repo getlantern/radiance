@@ -466,7 +466,7 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 		// Outbound.
 		lanternTags := make([]string, 0, len(list.Servers))
 		for _, srv := range list.Servers {
-			if srv.IsLantern {
+			if srv.IsLantern && srv.Tag != "" {
 				lanternTags = append(lanternTags, srv.Tag)
 			}
 		}
