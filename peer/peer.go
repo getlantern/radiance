@@ -326,8 +326,17 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if retErr != nil {
 			failedPhase := c.currentPhase()
 			if named := classifyStartFailure(failedPhase, retErr); named != nil {
-				slog.Error("peer: start failed", "phase", failedPhase,
-					"reason", named.Reason, "err", retErr)
+				if named.Reason == ReasonCanceled {
+					// Not a failure: the user toggled sharing back off while
+					// it was still coming up. At Error this would put an
+					// expected click into the error rate, and the rate is
+					// only useful if everything in it is worth looking at.
+					slog.Info("peer: start canceled before it finished",
+						"phase", failedPhase, "err", retErr)
+				} else {
+					slog.Error("peer: start failed", "phase", failedPhase,
+						"reason", named.Reason, "err", retErr)
+				}
 				reason = named.Reason
 				retErr = named
 			} else {

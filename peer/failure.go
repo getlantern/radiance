@@ -63,12 +63,13 @@ func (e *StartError) Unwrap() error { return e.cause }
 // enough to stay sound.
 //
 // It deliberately has no catch-all "something network-ish went wrong at this
-// phase" rule. A phase spans more than one operation: validateAbuseRules and
-// ensurePeerOutboundsBypassVPN both run while the phase still reads
-// "registering", so a phase-keyed guess reported a launch_cfg that failed our
-// own safety check as "couldn't reach Lantern's servers" — pointing the user
-// at their network for a server-side config problem. Guessing from position
-// is how you get a confident wrong answer; an unnamed error at least stays
+// phase" rule. A phase spans more than one operation — validating the
+// server's launch config and patching it for the local VPN both happen after
+// registration has already succeeded, while the phase still reads
+// "registering" — so a phase-keyed guess reported a launch config that failed
+// our own safety check as "couldn't reach Lantern's servers", pointing the
+// user at their network for a server-side problem. Guessing from position is
+// how you get a confident wrong answer; an unnamed error at least stays
 // honest.
 func classifyStartFailure(phase Phase, err error) *StartError {
 	if err == nil {
