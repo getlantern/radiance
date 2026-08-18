@@ -1185,7 +1185,16 @@ func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
 	}
 	slog.Info("Waiting for a config before connecting", "tag", tag)
 	ready := make(chan struct{})
-	sub := events.SubscribeOnce(func(config.NewConfigEvent) { close(ready) })
+	// Subscribe, not SubscribeOnce: this unsubscribes on return anyway, and
+	// SubscribeUntil's self-referential `sub` capture is read from the callback
+	// goroutine without synchronization (events.go:78 vs :85).
+	//
+	// Emit runs each callback on its own goroutine, so configs landing together
+	// can both reach this. Closing twice would panic.
+	var closeOnce sync.Once
+	sub := events.Subscribe(func(config.NewConfigEvent) {
+		closeOnce.Do(func() { close(ready) })
+	})
 	defer sub.Unsubscribe()
 	// A config can land between the check above and the subscription.
 	if r.connectable(tag) {

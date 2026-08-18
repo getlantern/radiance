@@ -824,6 +824,36 @@ func TestAwaitConnectable(t *testing.T) {
 		assert.Less(t, time.Since(start), 3*time.Second, "must return on the config, not on the deadline")
 	})
 
+	// events.Emit runs each callback on its own goroutine and SubscribeOnce gates
+	// on a plain atomic load, not a CAS, so simultaneous configs can both reach
+	// the subscription. Closing the ready channel twice would panic the process.
+	t.Run("survives several configs landing at once", func(t *testing.T) {
+		r := newBackend(t, false)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var emitters sync.WaitGroup
+		emitters.Add(1)
+		go func() {
+			defer emitters.Done()
+			// Ordering, not a timing assertion: the emits have to land after
+			// awaitConnectable has subscribed.
+			time.Sleep(150 * time.Millisecond)
+			var burst sync.WaitGroup
+			for range 8 {
+				burst.Add(1)
+				go func() {
+					defer burst.Done()
+					events.Emit(config.NewConfigEvent{New: cachedConfig()})
+				}()
+			}
+			burst.Wait()
+		}()
+		t.Cleanup(emitters.Wait)
+
+		require.NoError(t, r.awaitConnectable(ctx, vpn.AutoSelectTag))
+	})
+
 	t.Run("gives up on the caller's deadline rather than blocking forever", func(t *testing.T) {
 		r := newBackend(t, false)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
