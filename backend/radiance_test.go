@@ -713,6 +713,9 @@ func TestLanternServerTags(t *testing.T) {
 	})
 }
 
+// TestSetTransportPolicy pins the ordering that lets a CN client build kindling
+// once rather than twice.
+//
 // A CN client must settle its transport policy before the first kindling build.
 // Correcting it afterwards costs a Close+Init rebuild that throws away a
 // finished transport bootstrap and pays for a second one — ~6.6s on a censored
@@ -773,6 +776,9 @@ func TestSetTransportPolicy(t *testing.T) {
 	})
 }
 
+// TestAwaitConnectable covers the gate that holds a too-early connect until
+// there is something to dial.
+//
 // A connect that arrives before the first config must wait for one instead of
 // failing. On iOS the process that reports "no outbounds" is the same process
 // hosting the config fetch, and its failure handler tears that process down —
