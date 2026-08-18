@@ -163,3 +163,51 @@ func TestUnsubscribe_StopsTheDeliveryGoroutine(t *testing.T) {
 		t.Fatal("delivery goroutine was never signalled to stop")
 	}
 }
+
+// Unsubscribe must stop delivery of events already sitting in the queue, not
+// just future ones. Once stopped is closed, it and a queued event are both
+// ready select cases and the choice is random — so without a second check
+// after dequeuing, a caller that unsubscribed could still be called back up to
+// a full queue's worth of times.
+//
+// SubscribeUntil does not expose this: it carries its own done flag, which
+// swallows the late delivery instead of preventing it. Only a plain Subscribe
+// shows the behaviour.
+//
+// Looped, because a single round can survive the random choice by luck.
+func TestUnsubscribe_DropsEventsAlreadyQueued(t *testing.T) {
+	for r := 0; r < 20; r++ {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var mu sync.Mutex
+		var got []int
+
+		sub := Subscribe(func(e orderedEvt) {
+			mu.Lock()
+			got = append(got, e.n)
+			first := len(got) == 1
+			mu.Unlock()
+			if first {
+				close(entered)
+				<-release // hold the goroutine inside the first delivery
+			}
+		})
+
+		// Emit never blocks, so all four are queued before the callback for
+		// the first one has finished.
+		for i := 0; i < 4; i++ {
+			Emit(orderedEvt{n: i})
+		}
+		<-entered
+		sub.Unsubscribe()
+		close(release)
+
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		delivered := append([]int(nil), got...)
+		mu.Unlock()
+		if len(delivered) != 1 {
+			t.Fatalf("round %d: delivered %v after Unsubscribe; want only [0]", r, delivered)
+		}
+	}
+}

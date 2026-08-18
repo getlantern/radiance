@@ -85,6 +85,18 @@ func (s *subscriber) run(key reflect.Type) {
 		case <-s.stopped:
 			return
 		case evt := <-s.queue:
+			// Re-checked, because reaching here does not mean the
+			// subscription is still live: once stopped is closed both cases
+			// are ready and select picks at random. Without this, up to a
+			// full queue of callbacks could still run after Unsubscribe had
+			// returned. SubscribeUntil only looks immune to that — it
+			// carries its own done flag, which swallows the late delivery
+			// rather than preventing it.
+			select {
+			case <-s.stopped:
+				return
+			default:
+			}
 			s.invoke(key, evt)
 		}
 	}
