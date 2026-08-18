@@ -103,6 +103,10 @@ type Status struct {
 	// Empty for every other phase; consumers should render this only when
 	// the UI is in the error state.
 	Error string `json:"error,omitempty"`
+	// Reason classifies Error for consumers that need to branch on the cause
+	// or localize it. Empty when the failure could not be named, in which
+	// case Error is the raw Go error and is not worth translating.
+	Reason Reason `json:"reason,omitempty"`
 	// Active is true only when Phase == PhaseServing. Kept distinct from
 	// Phase so subscribers that just want a boolean "is sharing?" don't
 	// have to switch on the phase enum.
@@ -310,15 +314,41 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		}
 		// Surface the failure to the UI. Emitted AFTER cleanup so the UI
 		// sees the error phase as the terminal state of this Start attempt,
-		// not as a transient between phases. retErr carries whichever
-		// fmt.Errorf the failing branch returned, which is the most
-		// human-readable diagnostic we have ("map port %d: ...",
-		// "register with lantern-cloud: ...", etc.).
+		// not as a transient between phases.
+		//
+		// This is the one place that sees both the failure and the phase it
+		// happened in, which is what makes the error nameable — so it is
+		// also the place that logs the full tree. Nothing downstream of here
+		// has the detail any more: the UI renders Error verbatim, and a
+		// named StartError's Error() is deliberately one sentence.
 		var errMsg string
+		var reason Reason
 		if retErr != nil {
+			failedPhase := c.currentPhase()
+			if named := classifyStartFailure(failedPhase, retErr); named != nil {
+				if named.Reason == ReasonCanceled {
+					// Not a failure: the user toggled sharing back off while
+					// it was still coming up. At Error this would put an
+					// expected click into the error rate, and the rate is
+					// only useful if everything in it is worth looking at.
+					slog.Info("peer: start canceled before it finished",
+						"phase", failedPhase, "err", retErr)
+				} else {
+					slog.Error("peer: start failed", "phase", failedPhase,
+						"reason", named.Reason, "err", retErr)
+				}
+				reason = named.Reason
+				retErr = named
+			} else {
+				// Unnamed, so the raw wrap is all the user gets — worth a
+				// log line of its own, since a reason we cannot classify is
+				// the signal that this list needs another entry.
+				slog.Error("peer: start failed with an unclassified error",
+					"phase", failedPhase, "err", retErr)
+			}
 			errMsg = retErr.Error()
 		}
-		c.emitPhase(PhaseError, errMsg)
+		c.emitError(reason, errMsg)
 	}()
 
 	c.emitPhase(PhaseMappingPort, "")
@@ -595,13 +625,33 @@ func (c *Client) CurrentStatus() Status {
 // subscribers using just the Active flag don't see e.g. "active=true with
 // Phase=verifying" mid-Start.
 func (c *Client) emitPhase(p Phase, errMsg string) {
+	c.emitStatus(p, errMsg, "")
+}
+
+func (c *Client) emitError(reason Reason, errMsg string) {
+	c.emitStatus(PhaseError, errMsg, reason)
+}
+
+func (c *Client) emitStatus(p Phase, errMsg string, reason Reason) {
 	c.mu.Lock()
 	c.status.Phase = p
 	c.status.Error = errMsg
+	// Cleared on every non-error phase, so a stale classification from a
+	// previous failed Start cannot ride along on the next attempt's progress
+	// events.
+	c.status.Reason = reason
 	c.status.Active = (p == PhaseServing)
 	snapshot := c.status
 	c.mu.Unlock()
 	events.Emit(StatusEvent{Status: snapshot})
+}
+
+// currentPhase reports the phase Start had reached, which is the phase a
+// failure happened in — read before emitError overwrites it.
+func (c *Client) currentPhase() Phase {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status.Phase
 }
 
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
