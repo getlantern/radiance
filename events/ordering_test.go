@@ -145,10 +145,11 @@ func TestSubscribeUntil_CanUnsubscribeFromInsideItsOwnCallback(t *testing.T) {
 	}
 }
 
-// Unsubscribe must stop delivery goroutines. Without this the package leaks
-// one goroutine per subscription for the process lifetime, which it did not
-// before ordering required a goroutine to exist at all.
-func TestUnsubscribe_StopsTheDeliveryGoroutine(t *testing.T) {
+// Unsubscribe must end the delivery goroutine, not merely signal it. Ordering
+// required a goroutine per subscription where the package previously held
+// none, so anything short of it actually returning is a leak for the process
+// lifetime — and observing the stop signal alone would not have shown that.
+func TestUnsubscribe_EndsTheDeliveryGoroutine(t *testing.T) {
 	sub := Subscribe(func(orderedEvt) {})
 	subscriptionsMu.RLock()
 	s := subscriptions[reflect.TypeFor[orderedEvt]()][(*Subscription[Event])(sub)]
@@ -158,9 +159,9 @@ func TestUnsubscribe_StopsTheDeliveryGoroutine(t *testing.T) {
 	}
 	sub.Unsubscribe()
 	select {
-	case <-s.stopped:
+	case <-s.exited:
 	case <-time.After(5 * time.Second):
-		t.Fatal("delivery goroutine was never signalled to stop")
+		t.Fatal("delivery goroutine never returned")
 	}
 }
 

@@ -63,9 +63,14 @@ const queueDepth = 256
 // which is how a peer that had finished registering kept reading
 // "discovering public IP".
 type subscriber struct {
-	deliver  func(any)
-	queue    chan any
-	stopped  chan struct{}
+	deliver func(any)
+	queue   chan any
+	stopped chan struct{}
+	// exited is closed when the delivery goroutine returns. Distinct from
+	// stopped, which only records that it was asked to: an in-flight callback
+	// still has to finish first, so the two are not the same moment and only
+	// this one means the goroutine is gone.
+	exited   chan struct{}
 	stopOnce sync.Once
 }
 
@@ -74,12 +79,14 @@ func newSubscriber(key reflect.Type, deliver func(any)) *subscriber {
 		deliver: deliver,
 		queue:   make(chan any, queueDepth),
 		stopped: make(chan struct{}),
+		exited:  make(chan struct{}),
 	}
 	go s.run(key)
 	return s
 }
 
 func (s *subscriber) run(key reflect.Type) {
+	defer close(s.exited)
 	for {
 		select {
 		case <-s.stopped:
