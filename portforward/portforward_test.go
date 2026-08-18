@@ -3,6 +3,8 @@ package portforward
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -378,4 +380,71 @@ func TestForwarder_MapPort_CancelledMidCall_RemovesAcceptedMapping(t *testing.T)
 	assert.Equal(t, int64(1), c.deleteCalls.Load(),
 		"the accepted-but-unreported mapping must be deleted, or it survives untracked")
 	assert.Equal(t, uint16(15100), c.lastDelete.externalPort)
+}
+
+// captureLogs redirects the default slog destination for one test and returns
+// the accumulated output.
+func captureLogs(t *testing.T) *strings.Builder {
+	t.Helper()
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// A mapping the gateway accepts and then does not honour is invisible without
+// this: the caller's success line never runs, because verification fails
+// afterwards, so the port and address we asked for — the two facts needed to
+// check the router's own table — appeared nowhere. That is the exact shape of
+// the "422 could not connect to peer port" reports this was added for.
+func TestForwarder_MapPort_LogsTheMappingOnSuccess(t *testing.T) {
+	buf := captureLogs(t)
+	f := newTestForwarder(t, &fakeIGD{})
+
+	m, err := f.MapPort(context.Background(), 41234, "test")
+	require.NoError(t, err)
+	require.NotNil(t, m)
+
+	out := buf.String()
+	assert.Contains(t, out, "mapping added")
+	assert.Contains(t, out, "external_port=41234", "the mapped port must be recoverable from the log")
+	assert.Contains(t, out, "internal_port=41234")
+	assert.Contains(t, out, "method=fake")
+	assert.Contains(t, out, "internal_ip=", "the address the gateway was told to forward to")
+}
+
+// A refusal previously returned a wrapped error and logged nothing, so a failed
+// share left no record of which port was even attempted.
+func TestForwarder_MapPort_LogsGatewayRefusal(t *testing.T) {
+	buf := captureLogs(t)
+	f := newTestForwarder(t, &fakeIGD{addErr: errors.New("ConflictInMappingEntry")})
+
+	_, err := f.MapPort(context.Background(), 41235, "test")
+	require.Error(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "gateway refused the mapping")
+	assert.Contains(t, out, "external_port=41235")
+	assert.Contains(t, out, "ConflictInMappingEntry", "the router's own reason is the actionable part")
+}
+
+// ExternalIP failing is the difference between "no gateway" and "a gateway that
+// will not say who it is", and the caller only ever saw a wrapped error.
+func TestForwarder_ExternalIP_LogsFailure(t *testing.T) {
+	buf := captureLogs(t)
+	f := &Forwarder{client: &fakeIGD{extIPErr: errors.New("SpecifiedArrayIndexInvalid")}, method: "fake"}
+
+	_, err := f.ExternalIP(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), "would not report its external address")
+	assert.Contains(t, buf.String(), "SpecifiedArrayIndexInvalid")
+}
+
+// errOrAbsent keeps "discovery completed, nothing answered" from rendering as
+// "<nil>", which reads as though no attempt was made.
+func TestErrOrAbsent(t *testing.T) {
+	assert.Equal(t, "boom", errOrAbsent(errors.New("boom"), nil))
+	assert.Equal(t, "no gateway responded", errOrAbsent(nil, nil))
+	assert.Equal(t, "ok", errOrAbsent(nil, &fakeIGD{}))
 }

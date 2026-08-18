@@ -74,7 +74,16 @@ type Forwarder struct {
 // without coordination.
 func ProbeUPnP(ctx context.Context) bool {
 	_, err := NewForwarder(ctx)
-	return err == nil
+	if err != nil {
+		// NewForwarder logs the specifics; this line exists so the probe's own
+		// verdict is greppable. A bare bool at the call site cannot say whether
+		// the answer was "no gateway" or "we ran out of time", and the UI that
+		// consumes it shows the same thing either way.
+		slog.Info("portforward: UPnP probe says this network cannot host a peer", "err", err)
+		return false
+	}
+	slog.Info("portforward: UPnP probe succeeded")
+	return true
 }
 
 // NewForwarder discovers the local gateway and returns a Forwarder bound to
@@ -86,16 +95,48 @@ func ProbeUPnP(ctx context.Context) bool {
 // discovery, the ctx error is returned verbatim so callers can distinguish
 // "this network can't host a peer" from "we ran out of time, retry later".
 func NewForwarder(ctx context.Context) (*Forwarder, error) {
-	if c, err := discoverIGDv2(ctx); err == nil && c != nil {
-		return &Forwarder{client: c, method: "upnp-igd2"}, nil
+	// Both discovery errors were previously discarded by the `err == nil &&
+	// c != nil` guards, which made a failure indistinguishable from "this
+	// network has no gateway" — and the success path logs the method it chose
+	// while the failure path logged nothing at all. Whether IGDv2 was refused
+	// or simply absent is the first thing anyone asks when a peer turns out to
+	// be unreachable.
+	c2, err2 := discoverIGDv2(ctx)
+	if err2 == nil && c2 != nil {
+		slog.Info("portforward: gateway discovered", "method", "upnp-igd2")
+		return &Forwarder{client: c2, method: "upnp-igd2"}, nil
 	}
-	if c, err := discoverIGDv1(ctx); err == nil && c != nil {
-		return &Forwarder{client: c, method: "upnp-igd1"}, nil
+	c1, err1 := discoverIGDv1(ctx)
+	if err1 == nil && c1 != nil {
+		slog.Info("portforward: gateway discovered", "method", "upnp-igd1",
+			// Worth knowing: a router that answers v1 but not v2 is common, and
+			// it is also the shape of a gateway with a partial UPnP stack.
+			"igd2_err", errOrAbsent(err2, c2))
+		return &Forwarder{client: c1, method: "upnp-igd1"}, nil
 	}
+
 	if err := ctx.Err(); err != nil {
+		slog.Warn("portforward: gateway discovery ran out of time",
+			"err", err, "igd2_err", errOrAbsent(err2, c2), "igd1_err", errOrAbsent(err1, c1))
 		return nil, err
 	}
+	slog.Warn("portforward: no UPnP gateway found; this network cannot host a peer",
+		"igd2_err", errOrAbsent(err2, c2), "igd1_err", errOrAbsent(err1, c1))
 	return nil, ErrNoPortForwarding
+}
+
+// errOrAbsent renders a discovery outcome for a log field. A nil error with a
+// nil client is not a failure — it means discovery completed and the network
+// simply has no gateway of that flavour — and reporting that as "<nil>" reads
+// as though nothing was attempted.
+func errOrAbsent(err error, c igdClient) string {
+	if err != nil {
+		return err.Error()
+	}
+	if c == nil {
+		return "no gateway responded"
+	}
+	return "ok"
 }
 
 // MapPort asks the gateway to forward externalPort → (LocalIP():internalPort)
@@ -119,6 +160,7 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 
 	internalIP, err := localIP()
 	if err != nil {
+		slog.Warn("portforward: could not determine the local address to map to", "err", err)
 		return nil, fmt.Errorf("determine local ip: %w", err)
 	}
 
@@ -150,6 +192,8 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 	if ctxErr := ctx.Err(); ctxErr != nil && addLanded {
 		// The caller gave up but the gateway accepted the mapping. Remove it —
 		// otherwise it survives with no Forwarder tracking it.
+		slog.Warn("portforward: caller gave up while the gateway was accepting the mapping; removing it",
+			"external_port", externalPort, "internal_port", internalPort, "err", ctxErr)
 		f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client)
 		return nil, fmt.Errorf("add port mapping: %w", ctxErr)
 	}
@@ -157,8 +201,14 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 		// Propagate ctx cancellation/deadline verbatim so callers can retry
 		// rather than treating it as a permanent "this network won't work".
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			slog.Warn("portforward: ran out of time adding the mapping",
+				"external_port", externalPort, "internal_port", internalPort,
+				"internal_ip", internalIP, "method", f.method, "err", ctxErr)
 			return nil, fmt.Errorf("add port mapping: %w", ctxErr)
 		}
+		slog.Warn("portforward: gateway refused the mapping",
+			"external_port", externalPort, "internal_port", internalPort,
+			"internal_ip", internalIP, "method", f.method, "err", err)
 		// Per the ErrNoPortForwarding docstring, a gateway refusing to map a
 		// port is the "this network can't host a peer" case. Join the
 		// sentinel so callers can detect it via errors.Is while still
@@ -174,6 +224,16 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 		LeaseDuration: time.Duration(requestedLease) * time.Second,
 		Method:        f.method,
 	}
+	// Logged here rather than only by the caller on full success. A mapping that
+	// the gateway accepts and then does not honour is invisible otherwise: the
+	// caller's success line never runs because verification fails afterwards, so
+	// the port and address we asked for — the two facts needed to check the
+	// router's own table — were nowhere in the log. That is exactly the shape of
+	// a 422 "could not connect to peer port".
+	slog.Info("portforward: mapping added",
+		"external_port", externalPort, "internal_port", internalPort,
+		"internal_ip", internalIP, "method", f.method,
+		"requested_lease_s", requestedLease)
 	return f.mapping, nil
 }
 
@@ -354,9 +414,12 @@ func (f *Forwarder) ExternalIP(ctx context.Context) (string, error) {
 		return nil
 	})
 	if err != nil {
+		slog.Warn("portforward: gateway would not report its external address",
+			"method", f.method, "err", err)
 		return "", fmt.Errorf("get external ip: %w", err)
 	}
 	if ip == "" {
+		slog.Warn("portforward: gateway reported an empty external address", "method", f.method)
 		return "", fmt.Errorf("gateway returned empty external ip")
 	}
 	return ip, nil
