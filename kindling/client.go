@@ -44,9 +44,13 @@ var (
 	k           *Client
 	// EnabledTransports gates which transports NewKindling wires up. Toggle it
 	// through EnableTransport, then rebuild via Close+Init to apply the change.
+	//
+	// AMP and DNS tunneling are parked off for every country. Their builders
+	// stay wired behind these flags so turning either back on is a one-line
+	// change.
 	EnabledTransports = map[kindling.TransportName]bool{
 		kindling.TransportDNSTunnel:   false,
-		kindling.TransportAMP:         true,
+		kindling.TransportAMP:         false,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
 	}

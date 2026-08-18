@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 
 	"time"
@@ -233,11 +232,6 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 }
 
 func (r *LocalBackend) Start() {
-	// Settle the country's transport policy before the first build. The country
-	// is already in settings from the previous session, so correcting it
-	// afterwards means discarding a finished transport bootstrap and paying for
-	// a second one — ~6.6s on a censored network (getlantern/engineering#3822).
-	setTransportPolicy()
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
 	go func() {
@@ -284,11 +278,9 @@ func (r *LocalBackend) Start() {
 	unbounded.InitSubscription(cachedCfg)
 
 	// The server derives the country from the client IP, so it's stable for the
-	// session: react once to record it for issue reports and to apply the
-	// country-specific transport policy (AMP is disabled in China).
+	// session: react once to record it for issue reports.
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
-		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -309,7 +301,6 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
-	applyTransportPolicy()
 	r.applyConfig(cfg)
 	return true
 }
@@ -362,34 +353,6 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 		slog.Error("failed to set country code in settings", "error", err)
 	}
 	slog.Info("Set country code from config", "country_code", cfg.Country)
-}
-
-// ampEnabledForCountry reports whether the AMP transport works from the given
-// country. AMP fronts through Google domains that are unreachable from China.
-func ampEnabledForCountry(country string) bool {
-	return !strings.EqualFold(country, "CN")
-}
-
-// setTransportPolicy enables or disables the AMP transport based on the user's
-// country and reports whether that changed the enabled set. The env override
-// takes precedence over the config-derived country in settings. Callers that
-// run before the first kindling.Init use this directly; there is nothing built
-// yet to rebuild.
-func setTransportPolicy() bool {
-	country := settings.GetString(settings.CountryCodeKey)
-	if override := env.GetString(env.Country); override != "" {
-		country = override
-	}
-	return kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country))
-}
-
-// applyTransportPolicy applies the country's transport policy, rebuilding
-// kindling when that changes the enabled set.
-func applyTransportPolicy() {
-	if setTransportPolicy() {
-		kindling.Close()
-		kindling.Init()
-	}
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed
