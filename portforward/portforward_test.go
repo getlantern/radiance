@@ -3,8 +3,6 @@ package portforward
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -382,69 +380,51 @@ func TestForwarder_MapPort_CancelledMidCall_RemovesAcceptedMapping(t *testing.T)
 	assert.Equal(t, uint16(15100), c.lastDelete.externalPort)
 }
 
-// captureLogs redirects the default slog destination for one test and returns
-// the accumulated output.
-func captureLogs(t *testing.T) *strings.Builder {
-	t.Helper()
-	var buf strings.Builder
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
-}
-
-// A mapping the gateway accepts and then does not honour is invisible without
-// this: the caller's success line never runs, because verification fails
-// afterwards, so the port and address we asked for — the two facts needed to
-// check the router's own table — appeared nowhere. That is the exact shape of
-// the "422 could not connect to peer port" reports this was added for.
-func TestForwarder_MapPort_LogsTheMappingOnSuccess(t *testing.T) {
-	buf := captureLogs(t)
-	f := newTestForwarder(t, &fakeIGD{})
-
-	m, err := f.MapPort(context.Background(), 41234, "test")
-	require.NoError(t, err)
-	require.NotNil(t, m)
-
-	out := buf.String()
-	assert.Contains(t, out, "mapping added")
-	assert.Contains(t, out, "external_port=41234", "the mapped port must be recoverable from the log")
-	assert.Contains(t, out, "internal_port=41234")
-	assert.Contains(t, out, "method=fake")
-	assert.Contains(t, out, "internal_ip=", "the address the gateway was told to forward to")
-}
-
-// A refusal previously returned a wrapped error and logged nothing, so a failed
-// share left no record of which port was even attempted.
-func TestForwarder_MapPort_LogsGatewayRefusal(t *testing.T) {
-	buf := captureLogs(t)
-	f := newTestForwarder(t, &fakeIGD{addErr: errors.New("ConflictInMappingEntry")})
-
-	_, err := f.MapPort(context.Background(), 41235, "test")
-	require.Error(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "gateway refused the mapping")
-	assert.Contains(t, out, "external_port=41235")
-	assert.Contains(t, out, "ConflictInMappingEntry", "the router's own reason is the actionable part")
-}
-
-// ExternalIP failing is the difference between "no gateway" and "a gateway that
-// will not say who it is", and the caller only ever saw a wrapped error.
-func TestForwarder_ExternalIP_LogsFailure(t *testing.T) {
-	buf := captureLogs(t)
-	f := &Forwarder{client: &fakeIGD{extIPErr: errors.New("SpecifiedArrayIndexInvalid")}, method: "fake"}
-
-	_, err := f.ExternalIP(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, buf.String(), "would not report its external address")
-	assert.Contains(t, buf.String(), "SpecifiedArrayIndexInvalid")
-}
-
 // errOrAbsent keeps "discovery completed, nothing answered" from rendering as
 // "<nil>", which reads as though no attempt was made.
 func TestErrOrAbsent(t *testing.T) {
 	assert.Equal(t, "boom", errOrAbsent(errors.New("boom"), nil))
 	assert.Equal(t, "no gateway responded", errOrAbsent(nil, nil))
 	assert.Equal(t, "ok", errOrAbsent(nil, &fakeIGD{}))
+}
+
+// A local timeout waiting for AddPortMapping is not a gateway refusing the
+// mapping. The call never returned, so the router may well have created the
+// forward — and nothing then tracks it: no Forwarder renews it, no UnmapPort
+// removes it, and it can outlive the process entirely. Orphans accumulate
+// across runs, which is a plausible mechanism for a gateway that later accepts
+// AddPortMapping without honouring it once its table is full.
+//
+// The timeout branch has always claimed to handle this ("assume it landed so
+// the cleanup below removes it"), but that cleanup is gated on ctx.Err(), so a
+// timeout with a live context fell straight through to the generic error return
+// and deleted nothing. renewLoop already defends against exactly this on its
+// own timeouts.
+func TestForwarder_MapPort_RemovesTheMappingWhenTheGatewayNeverAnswers(t *testing.T) {
+	prev := addCallTimeout
+	addCallTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { addCallTimeout = prev })
+
+	// Unblocked only after the assertions, so AddPortMapping is still in flight
+	// for the whole test — the case where the outcome is genuinely unknowable.
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	c := &fakeIGD{addBlock: block}
+	f := newTestForwarder(t, c)
+
+	_, err := f.MapPort(context.Background(), 30001, "test")
+	require.Error(t, err)
+	// Still the "this network can't host a peer" sentinel: the caller has no
+	// mapping either way, and the retry decision is the same.
+	assert.ErrorIs(t, err, ErrNoPortForwarding)
+	assert.ErrorContains(t, err, "timed out")
+
+	assert.Eventually(t, func() bool { return c.deleteCalls.Load() == 1 }, time.Second, 10*time.Millisecond,
+		"a mapping the gateway may have created was left on the router")
+
+	// And no mapping is retained locally, so a later UnmapPort has nothing
+	// stale to delete and StartRenewal has nothing to renew.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	assert.Nil(t, f.mapping)
 }

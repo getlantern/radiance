@@ -75,11 +75,20 @@ type Forwarder struct {
 func ProbeUPnP(ctx context.Context) bool {
 	_, err := NewForwarder(ctx)
 	if err != nil {
-		// NewForwarder logs the specifics; this line exists so the probe's own
+		// NewForwarder logs the specifics; these lines exist so the probe's own
 		// verdict is greppable. A bare bool at the call site cannot say whether
 		// the answer was "no gateway" or "we ran out of time", and the UI that
 		// consumes it shows the same thing either way.
-		slog.Info("portforward: UPnP probe says this network cannot host a peer", "err", err)
+		//
+		// The two are kept apart deliberately. The docstring above promises that
+		// false covers both, and calling a timeout "this network cannot host a
+		// peer" states a capability verdict the probe did not reach — which is
+		// the kind of thing an operator acts on once and does not revisit.
+		if ctx.Err() != nil {
+			slog.Info("portforward: UPnP probe ran out of time; capability unknown", "err", err)
+		} else {
+			slog.Info("portforward: UPnP probe found no gateway; this network cannot host a peer", "err", err)
+		}
 		return false
 	}
 	slog.Info("portforward: UPnP probe succeeded")
@@ -180,13 +189,14 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 	go func() {
 		addErrCh <- client.AddPortMapping("", externalPort, "TCP", internalPort, internalIP, true, description, requestedLease)
 	}()
-	var addLanded bool
+	var addLanded, addTimedOut bool
 	select {
 	case err = <-addErrCh:
 		addLanded = err == nil
 	case <-time.After(addCallTimeout):
 		// Outcome unknowable; assume it landed so the cleanup below removes it.
 		addLanded = true
+		addTimedOut = true
 		err = fmt.Errorf("add port mapping timed out after %s", addCallTimeout)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil && addLanded {
@@ -205,6 +215,20 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 				"external_port", externalPort, "internal_port", internalPort,
 				"internal_ip", internalIP, "method", f.method, "err", ctxErr)
 			return nil, fmt.Errorf("add port mapping: %w", ctxErr)
+		}
+		if addTimedOut {
+			// The call never returned, so the gateway may well have created the
+			// mapping — which is what the comment on the timeout branch above
+			// promises to clean up. It did not: that cleanup is gated on
+			// ctx.Err(), so a local timeout with a live context fell straight
+			// through to here and left an untracked forward on the router,
+			// possibly permanent, with no Forwarder holding it. Same leak
+			// renewLoop already defends against on its own timeouts.
+			slog.Warn("portforward: gateway did not answer in time; removing any mapping it may have created",
+				"external_port", externalPort, "internal_port", internalPort,
+				"internal_ip", internalIP, "method", f.method, "err", err)
+			f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client)
+			return nil, fmt.Errorf("add port mapping: %w", errors.Join(ErrNoPortForwarding, err))
 		}
 		slog.Warn("portforward: gateway refused the mapping",
 			"external_port", externalPort, "internal_port", internalPort,
@@ -296,9 +320,12 @@ const (
 	// giving up on learning whether the mapping was re-added. SOAP to a LAN
 	// gateway normally answers in milliseconds.
 	renewCallTimeout = 30 * time.Second
-	// addCallTimeout is the same bound for the initial MapPort call.
-	addCallTimeout = 30 * time.Second
 )
+
+// addCallTimeout is the same bound as renewCallTimeout for the initial MapPort
+// call. A var rather than a const only so tests can shorten it; nothing outside
+// this package writes it.
+var addCallTimeout = 30 * time.Second
 
 func (f *Forwarder) StartRenewal(ctx context.Context) {
 	f.mu.Lock()
