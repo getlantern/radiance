@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 
 	"time"
@@ -279,11 +278,9 @@ func (r *LocalBackend) Start() {
 	unbounded.InitSubscription(cachedCfg)
 
 	// The server derives the country from the client IP, so it's stable for the
-	// session: react once to record it for issue reports and to apply the
-	// country-specific transport policy (AMP is disabled in China).
+	// session: react once to record it for issue reports.
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
-		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -304,7 +301,6 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
-	applyTransportPolicy()
 	r.applyConfig(cfg)
 	return true
 }
@@ -357,26 +353,6 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 		slog.Error("failed to set country code in settings", "error", err)
 	}
 	slog.Info("Set country code from config", "country_code", cfg.Country)
-}
-
-// ampEnabledForCountry reports whether the AMP transport works from the given
-// country. AMP fronts through Google domains that are unreachable from China.
-func ampEnabledForCountry(country string) bool {
-	return !strings.EqualFold(country, "CN")
-}
-
-// applyTransportPolicy enables or disables the AMP transport based on the
-// user's country and rebuilds kindling when that changes the enabled set. The
-// env override takes precedence over the config-derived country in settings.
-func applyTransportPolicy() {
-	country := settings.GetString(settings.CountryCodeKey)
-	if override := env.GetString(env.Country); override != "" {
-		country = override
-	}
-	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
-		kindling.Close()
-		kindling.Init()
-	}
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed
@@ -1144,6 +1120,9 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
+	if err := r.awaitConnectable(ctx, tag); err != nil {
+		return err
+	}
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.srvManager.GetServerByTag(tag); !found {
 			return fmt.Errorf("no server found with tag %s", tag)
@@ -1156,6 +1135,53 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	r.persistSelection(tag)
 	return nil
+}
+
+// awaitConnectable blocks until the connect has something to dial, or ctx is
+// done. Connecting with neither a config nor a server of the user's own
+// produces "no outbounds or endpoints found", and on mobile the process that
+// reports that failure is the one hosting the config fetch it needed
+// (getlantern/engineering#3814), so failing fast deadlocks the first run.
+func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
+	if r.connectable(tag) {
+		return nil
+	}
+	slog.Info("Waiting for a config before connecting", "tag", tag)
+	ready := make(chan struct{})
+	// Subscribe, not SubscribeOnce: this unsubscribes on return anyway, and
+	// SubscribeUntil's self-referential `sub` capture is read from the callback
+	// goroutine without synchronization (events.go:78 vs :85).
+	//
+	// Emit runs each callback on its own goroutine, so configs landing together
+	// can both reach this. Closing twice would panic.
+	var closeOnce sync.Once
+	sub := events.Subscribe(func(config.NewConfigEvent) {
+		closeOnce.Do(func() { close(ready) })
+	})
+	defer sub.Unsubscribe()
+	// A config can land between the check above and the subscription.
+	if r.connectable(tag) {
+		return nil
+	}
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no config to connect with: %w", ctx.Err())
+	}
+}
+
+// connectable reports whether a connect can proceed right now: either a config
+// has been loaded, or the user has a server of their own to dial without one.
+func (r *LocalBackend) connectable(tag string) bool {
+	if _, err := r.confHandler.GetConfig(); err == nil {
+		return true
+	}
+	if tag != vpn.AutoSelectTag {
+		_, found := r.srvManager.GetServerByTag(tag)
+		return found
+	}
+	return len(r.srvManager.AllServers()) > 0
 }
 
 func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {

@@ -26,7 +26,7 @@ import (
 	"github.com/getlantern/radiance/traces"
 )
 
-// TransportName identifies a transport that can be toggled via EnableTransport.
+// TransportName identifies a transport in EnabledTransports.
 type TransportName = kindling.TransportName
 
 // Transport names re-exported so callers configure transports through this
@@ -42,11 +42,16 @@ var (
 	mu          sync.Mutex
 	initialized bool
 	k           *Client
-	// EnabledTransports gates which transports NewKindling wires up. Toggle it
-	// through EnableTransport, then rebuild via Close+Init to apply the change.
+	// EnabledTransports gates which transports NewKindling wires up. AMP and DNS
+	// tunneling are parked off for every country; their builders stay wired
+	// behind these flags so turning either back on is a one-line change.
+	//
+	// A var rather than constants because cmd/kindling-tester rewrites it to
+	// isolate a single transport, as does TestNewClient. Production code sets
+	// it once, here: nothing toggles a transport at runtime.
 	EnabledTransports = map[kindling.TransportName]bool{
 		kindling.TransportDNSTunnel:   false,
-		kindling.TransportAMP:         true,
+		kindling.TransportAMP:         false,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
 	}
@@ -54,18 +59,6 @@ var (
 
 	transport http.RoundTripper
 )
-
-// EnableTransport sets whether NewKindling wires up the given transport and
-// reports whether that changed the current setting. The change takes effect on
-// the next rebuild (Close then Init). Call it before rebuilding, not
-// concurrently with one.
-func EnableTransport(transport TransportName, enable bool) bool {
-	if EnabledTransports[transport] == enable {
-		return false
-	}
-	EnabledTransports[transport] = enable
-	return true
-}
 
 func initKindling() {
 	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
