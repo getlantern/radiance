@@ -66,12 +66,20 @@ func newSplitTunnel(path string, logger *slog.Logger) *SplitTunnel {
 	s.initRuleMap()
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
 		logger.Debug("Creating initial split tunnel rule file", "file", s.ruleFile)
-		s.saveToFile()
+		s.access.Lock()
+		if err := s.saveLocked(); err != nil {
+			logger.Error("Writing initial split tunnel rule file", "file", s.ruleFile, "error", err)
+		}
+		s.access.Unlock()
 	}
 	return s
 }
 
+// SetEnabled enables or disables split tunneling, persisting the change to
+// disk. It is a no-op when already in the requested state.
 func (s *SplitTunnel) SetEnabled(enabled bool) error {
+	s.access.Lock()
+	defer s.access.Unlock()
 	if s.enabled.Load() == enabled {
 		return nil
 	}
@@ -81,7 +89,7 @@ func (s *SplitTunnel) SetEnabled(enabled bool) error {
 	}
 	prev := s.rule.Mode
 	s.rule.Mode = mode
-	if err := s.saveToFile(); err != nil {
+	if err := s.saveLocked(); err != nil {
 		s.rule.Mode = prev
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -111,11 +119,13 @@ func (s *SplitTunnel) Filters() SplitTunnelFilter {
 
 // AddItem adds a new item to the filter of the given type.
 func (s *SplitTunnel) AddItem(filterType, item string) error {
-	if err := s.updateFilter(filterType, item, merge); err != nil {
+	s.access.Lock()
+	defer s.access.Unlock()
+	if err := s.updateFilterLocked(filterType, item, merge); err != nil {
 		return err
 	}
 	s.logger.Debug("added item to filter", "filterType", filterType, "item", item)
-	if err := s.saveToFile(); err != nil {
+	if err := s.saveLocked(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
 	return nil
@@ -123,11 +133,13 @@ func (s *SplitTunnel) AddItem(filterType, item string) error {
 
 // RemoveItem removes an item from the filter of the given type.
 func (s *SplitTunnel) RemoveItem(filterType, item string) error {
-	if err := s.updateFilter(filterType, item, remove); err != nil {
+	s.access.Lock()
+	defer s.access.Unlock()
+	if err := s.updateFilterLocked(filterType, item, remove); err != nil {
 		return err
 	}
 	s.logger.Debug("removed item from filter", "filterType", filterType, "item", item)
-	if err := s.saveToFile(); err != nil {
+	if err := s.saveLocked(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
 	return nil
@@ -135,23 +147,27 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 
 // AddItems adds multiple items to the filter.
 func (s *SplitTunnel) AddItems(items SplitTunnelFilter) error {
-	s.updateFilters(items, merge)
+	s.access.Lock()
+	defer s.access.Unlock()
+	s.updateFiltersLocked(items, merge)
 	s.logger.Debug("added items to filter", "items", items.String())
-	return s.saveToFile()
+	return s.saveLocked()
 }
 
 // RemoveItems removes multiple items from the filter.
 func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
-	s.updateFilters(items, remove)
+	s.access.Lock()
+	defer s.access.Unlock()
+	s.updateFiltersLocked(items, remove)
 	s.logger.Debug("removed items from filter", "items", items.String())
-	return s.saveToFile()
+	return s.saveLocked()
 }
 
 type actionFn func(slice []string, items []string) []string
 
-func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) error {
-	s.access.Lock()
-	defer s.access.Unlock()
+// updateFilterLocked applies fn to the filter of the given type. The caller
+// must hold s.access.
+func (s *SplitTunnel) updateFilterLocked(filterType string, item string, fn actionFn) error {
 	rule, exist := s.ruleMap[filterType]
 	if !exist {
 		return fmt.Errorf("unsupported filter type: %s", filterType)
@@ -179,10 +195,9 @@ func (s *SplitTunnel) updateFilter(filterType string, item string, fn actionFn) 
 	return nil
 }
 
-func (s *SplitTunnel) updateFilters(diff SplitTunnelFilter, fn actionFn) {
-	s.access.Lock()
-	defer s.access.Unlock()
-
+// updateFiltersLocked applies fn to every filter category present in diff. The
+// caller must hold s.access.
+func (s *SplitTunnel) updateFiltersLocked(diff SplitTunnelFilter, fn actionFn) {
 	s.ruleMap[TypeDomain].Domain = fn(s.ruleMap[TypeDomain].Domain, diff.Domain)
 	s.ruleMap[TypeDomainSuffix].DomainSuffix = fn(s.ruleMap[TypeDomainSuffix].DomainSuffix, diff.DomainSuffix)
 	s.ruleMap[TypeDomainKeyword].DomainKeyword = fn(s.ruleMap[TypeDomainKeyword].DomainKeyword, diff.DomainKeyword)
@@ -216,7 +231,11 @@ func remove(s []string, items []string) []string {
 	return s[:i]
 }
 
-func (s *SplitTunnel) saveToFile() error {
+// saveLocked serializes the current rule set to disk. The caller must hold
+// s.access: it reads activeFilter.Rules and rule.Mode, which the mutators
+// modify under the same lock, so an unsynchronized save can marshal a
+// half-updated rule set.
+func (s *SplitTunnel) saveLocked() error {
 	// Build a serialization-only copy of the rules, filtering out empty entries
 	// without mutating the live activeFilter/ruleMap state.
 	filterRules := make([]O.HeadlessRule, 0, len(s.activeFilter.Rules))

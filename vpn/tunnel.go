@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"sync"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
@@ -39,7 +40,10 @@ import (
 	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/vpn/memmon"
 )
+
+const defaultCloseTimeout = 10 * time.Second
 
 type tunnel struct {
 	ctx                  context.Context
@@ -59,9 +63,24 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
+	initialLanternTags []string
+
+	// memoryMonitor starts during tunnel init in visibility-only mode.
+	// On iOS, its executor is installed later, after the clash server exists.
+	memoryMonitor *memmon.Monitor
+
 	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
 	// connection-close pushes for telemetry.
 	connObserver ConnObserver
+
+	// outboundMu serializes the outbound mutators. Each does a read-modify-write
+	// over clientContextTracker.MatchBounds(), which clones on read, so
+	// concurrent mutators would silently drop each other's tag updates.
+	outboundMu sync.Mutex
+
+	// closeTimeout bounds how long close() waits for closers to finish; a zero
+	// value uses defaultCloseTimeout.
+	closeTimeout time.Duration
 
 	cancel  context.CancelFunc
 	closers []io.Closer
@@ -122,6 +141,18 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	experimental.RegisterClashServerConstructor(newClashServer)
 
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
+	if common.IsMobile() {
+		var monitorCloser io.Closer
+		t.memoryMonitor, monitorCloser = startMemoryMonitor(t.ctx)
+		t.closers = append(t.closers, monitorCloser)
+
+		if common.IsIOS() {
+			// Pin GOMEMLIMIT before the allocation-heavy libbox bring-up so GC
+			// gets its turn during it. Only iOS needs this: it silently kills the
+			// extension past a hard cap; Android applies no such restriction.
+			setMobileMemoryLimits()
+		}
+	}
 
 	// setup libbox service
 	dataPath := t.dataPath
@@ -185,7 +216,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 
 	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	clientContextInjector := newClientContextInjector(outboundMgr, dataPath)
+	clientContextInjector := newClientContextInjector(outboundMgr, dataPath, t.initialLanternTags)
 	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
 	t.clientContextTracker = clientContextInjector
 	router := service.FromContext[adapter.Router](t.ctx)
@@ -194,13 +225,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	t.closers = append(t.closers, instance)
 	t.boxInstance = instance
 
-	if common.IsIOS() {
-		// only set memory limits on iOS since Android doesn't appear to apply any restrictions.
-		// we still start the memory monitor on Android so we can log usage.
-		setMobileMemoryLimits()
-	}
-
-	slog.Info("Tunnel initializated")
+	slog.Info("Tunnel initialized")
 	return nil
 }
 
@@ -222,7 +247,7 @@ func setMobileMemoryLimits() {
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
 }
 
-func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
+func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string, lanternTags []string) *clientcontext.ClientContextInjector {
 	slog.Debug("Creating ClientContextInjector")
 	infoFn := func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
@@ -233,11 +258,11 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			Version:     common.GetVersion(),
 		}
 	}
-	// Outbound match bounds start empty and are populated when lantern servers are added via
-	// addOutbounds. Only lantern servers support client context tracking.
+	// Only lantern servers support client context tracking, so only their tags
+	// belong in the match bounds.
 	matchBounds := clientcontext.MatchBounds{
 		Inbound:  []string{"any"},
-		Outbound: []string{},
+		Outbound: slices.Clone(lanternTags),
 	}
 	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
 }
@@ -292,9 +317,10 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.clashServer.connTracker.SetObserver(t.connObserver)
 
-	if common.IsMobile() {
-		// still start the memory monitor on Android so we can still monitor and log usage
-		t.closers = append(t.closers, startMemoryMonitor(t.ctx, t.clashServer))
+	if common.IsIOS() {
+		// Only iOS enforces a hard memory cap, so only it gets reclaim and
+		// admission control. Android runs the monitor for visibility only.
+		initExecutor(t.memoryMonitor, t.clashServer)
 	}
 
 	var mutGrpMgr *groups.MutableGroupManager
@@ -305,7 +331,6 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 		)
 		return err
 	}); err != nil {
-		t.close()
 		return fmt.Errorf("creating mutable group manager: %w", err)
 	}
 	t.mutGrpMgr = mutGrpMgr
@@ -389,30 +414,46 @@ func (t *tunnel) close() error {
 		t.cancel()
 	}
 
+	closers := t.closers
+	t.closers = nil
+	t.boxInstance = nil
+
 	done := make(chan error, 1)
 	go func() {
 		var errs []error
-		for _, closer := range t.closers {
+		for _, closer := range closers {
 			slog.Log(nil, rlog.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
 			errs = append(errs, closer.Close())
 		}
-		done <- errors.Join(errs...)
+		err := errors.Join(errs...)
+		done <- err
+		slog.Log(nil, rlog.LevelTrace, "Tunnel closers finished", "error", err)
 	}()
-	var err error
-	select {
-	case <-time.After(10 * time.Second):
-		err = errors.New("timeout waiting for tunnel to close")
-	case err = <-done:
-	}
 
-	t.closers = nil
-	t.boxInstance = nil
-	return err
+	timeout := t.closeTimeout
+	if timeout == 0 {
+		timeout = defaultCloseTimeout
+	}
+	select {
+	case <-time.After(timeout):
+		slog.Warn("Timed out waiting for tunnel to close; closers still running")
+		return errors.New("timeout waiting for tunnel to close")
+	case err := <-done:
+		return err
+	}
 }
 
 var errLibboxClosed = errors.New("libbox closed")
 
-func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
+func (t *tunnel) addOutbounds(list servers.ServerList) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	return t.addOutboundsLocked(list)
+}
+
+// addOutboundsLocked adds the servers in list to the tunnel. The caller must
+// hold t.outboundMu.
+func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -431,18 +472,24 @@ func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
 
 	var errs []error
 	if t.clientContextTracker != nil {
-		// preemptively merge the new lantern tags into the clientContextInjector match bounds to
-		// capture any new connections before finished adding the servers.
-		lanternTags := make([]string, 0, len(newList.Servers))
-		for _, srv := range newList.Servers {
-			if srv.IsLantern {
+		// Iterate the full list, not the deduped newList: removeDuplicates drops
+		// startup lantern servers that must stay bound, and the append-if-absent
+		// guard below re-adds any the construction seed missed without regrowing
+		// Outbound.
+		lanternTags := make([]string, 0, len(list.Servers))
+		for _, srv := range list.Servers {
+			if srv.IsLantern && srv.Tag != "" {
 				lanternTags = append(lanternTags, srv.Tag)
 			}
 		}
 		if len(lanternTags) > 0 {
-			slog.Log(nil, rlog.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
+			slog.Log(nil, rlog.LevelTrace, "Merging lantern tags into ClientContextInjector")
 			matchBounds := t.clientContextTracker.MatchBounds()
-			matchBounds.Outbound = append(matchBounds.Outbound, lanternTags...)
+			for _, tag := range lanternTags {
+				if !slices.Contains(matchBounds.Outbound, tag) {
+					matchBounds.Outbound = append(matchBounds.Outbound, tag)
+				}
+			}
 			t.clientContextTracker.SetBounds(matchBounds)
 		}
 		defer func() {
@@ -540,6 +587,14 @@ func (t *tunnel) addOutbounds(list servers.ServerList) (err error) {
 }
 
 func (t *tunnel) removeOutbounds(tags []string) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	return t.removeOutboundsLocked(tags)
+}
+
+// removeOutboundsLocked removes the outbounds with the given tags from the
+// tunnel. The caller must hold t.outboundMu.
+func (t *tunnel) removeOutboundsLocked(tags []string) error {
 	var (
 		mutGrpMgr = t.mutGrpMgr
 		removed   []string
@@ -577,6 +632,9 @@ func (t *tunnel) removeOutbounds(tags []string) error {
 }
 
 func (t *tunnel) updateOutbounds(list servers.ServerList) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+
 	var errs []error
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
@@ -620,7 +678,7 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	// Add new outbounds first, before removing old ones. If all new
 	// outbounds fail to load (e.g. invalid config), we keep the old
 	// working outbounds to maintain connectivity.
-	addErr := t.addOutbounds(list)
+	addErr := t.addOutboundsLocked(list)
 	if errors.Is(addErr, errLibboxClosed) {
 		return addErr
 	}
@@ -638,7 +696,7 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	}
 
 	if hasNewOutbound {
-		if err := t.removeOutbounds(toRemove); errors.Is(err, errLibboxClosed) {
+		if err := t.removeOutboundsLocked(toRemove); errors.Is(err, errLibboxClosed) {
 			return err
 		} else if err != nil {
 			errs = append(errs, err)

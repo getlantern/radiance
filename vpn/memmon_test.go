@@ -54,12 +54,23 @@ func TestMemmonReclaimer(t *testing.T) {
 	r := &memoryReclaimer{tracker: ct}
 	base := time.Unix(1_700_000_000, 0)
 
-	// Joined out of creation order; ConnectionsOldestFirst must return oldest-first.
+	// Joined out of creation order; OldestConnections must return oldest-first.
 	c2 := joinClosable(ct, "vpn-b", base.Add(2*time.Second))
 	c1 := joinClosable(ct, "vpn-a", base.Add(1*time.Second))
 	c3 := joinClosable(ct, "vpn-c", base.Add(3*time.Second))
 
-	assert.Equal(t, []uuid.UUID{c1.id, c2.id, c3.id}, refIDs(r.ConnectionsOldestFirst()), "oldest-first by CreatedAt")
+	oldest, total := r.OldestConnections(10)
+	assert.Equal(t, []uuid.UUID{c1.id, c2.id, c3.id}, refIDs(oldest), "oldest-first by CreatedAt")
+	assert.Equal(t, 3, total, "total counts every active connection, not just the returned ones")
+
+	oldest, total = r.OldestConnections(2)
+	assert.Equal(t, []uuid.UUID{c1.id, c2.id}, refIDs(oldest), "limit keeps the oldest, dropping newer")
+	assert.Equal(t, 3, total, "total is independent of the limit")
+
+	oldest, total = r.OldestConnections(0)
+	assert.Empty(t, oldest, "a non-positive limit selects nothing")
+	assert.Equal(t, 3, total)
+
 	require.Equal(t, 3, r.OpenConnectionCount())
 	// conntrack is compiled out in the default test build, so TotalDialedConnections
 	// and CloseAllConnections take the tracker fallback rather than the conntrack path.

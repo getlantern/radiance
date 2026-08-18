@@ -112,7 +112,8 @@ func TestConnTracker_ObserverOnClose(t *testing.T) {
 	r := newRec("vpn-a")
 	r.createdAt = time.Now().Add(-2 * time.Second)
 	r.outboundType = "vmess"
-	r.inboundType, r.inboundName = "tun", "tun-in"
+	r.outboundLabel = "vmess/vpn-a"
+	r.inboundLabel = "tun/tun-in"
 
 	ct.join(r)
 	addBytes(ct, r, 300, 120)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,10 +50,28 @@ const (
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
 
 	// VPN related keys.
-	SmartRoutingKey   _key = "smart_routing"   // bool
-	SplitTunnelKey    _key = "split_tunnel"    // bool
-	AdBlockKey        _key = "ad_block"        // bool
-	AutoConnectKey    _key = "auto_connect"    // bool
+	SmartRoutingKey     _key = "smart_routing"      // bool
+	SplitTunnelKey      _key = "split_tunnel"       // bool
+	AdBlockKey          _key = "ad_block"           // bool
+	AutoConnectKey      _key = "auto_connect"       // bool
+	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	// PeerManualPortKey is the TCP port number the user has manually
+	// forwarded on their router for the peer-proxy inbound (single-
+	// port 1:1 NAT). Valid range is 1..65535; 0 means unset, in which
+	// case the peer falls back to UPnP discovery. Out-of-range values
+	// (negative, > 65535) are logged on read and treated as unset
+	// rather than silently wrapping to a wrong port. Surfaced as an
+	// Advanced setting in the Share My Connection UI for users on
+	// networks where UPnP is disabled or unavailable.
+	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
+	// UnboundedKey is the local opt-in for the broflake / Unbounded
+	// widget proxy. When true AND the server-side Features[unbounded]
+	// flag is on AND the server provides UnboundedConfig (discovery
+	// + egress URLs), the widget proxy starts. Surfaced as a "Basic
+	// mode" option in the Share My Connection UI for networks where
+	// UPnP isn't workable but the user still wants to contribute via
+	// the WebRTC-based donor path.
+	UnboundedKey      _key = "unbounded"       // bool
 	SelectedServerKey _key = "selected_server" // [servers.Server] Server.Options is not stored
 
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
@@ -267,16 +286,29 @@ func userLevelInJSON(contents []byte) string {
 	return s.UserLevel
 }
 
-func loadSettings(path string) error {
+// loadSettings applies the file to the in-memory settings.
+//
+// Koanf parses before taking its write lock, so malformed files leave the live settings untouched.
+// Without opts the file merges over current settings; pass replaceAll when omitted keys must be
+// dropped.
+func loadSettings(path string, opts ...koanf.Option) error {
 	contents, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	kk := koanf.New(".")
-	if err := kk.Load(rawbytes.Provider(contents), json.Parser()); err != nil {
+	if err := k.k.Load(rawbytes.Provider(contents), json.Parser(), opts...); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
-	k.k = kk
+	return nil
+}
+
+// replaceAll makes a koanf load overwrite rather than merge, so keys the source omits are dropped.
+//
+// Koanf re-flattens dest after this returns, so dest must be mutated in place; replacing the map
+// header would silently lose the load.
+func replaceAll(src, dest map[string]any) error {
+	clear(dest)
+	maps.Copy(dest, src)
 	return nil
 }
 
@@ -436,6 +468,27 @@ func Reset() {
 	defer k.mu.Unlock()
 	k.k = koanf.New(".")
 	k.initialized = false
+}
+
+// Reload re-reads the settings file, adopting values written by another process.
+//
+// Mobile keeps the tunnel in a separate process that persists to the same file, so long-lived
+// callers must reload before using cross-process metadata. The file supersedes memory rather than
+// merging over it, so keys removed by another process do not linger. A missing file is not an
+// error, and failed reloads leave the current settings untouched.
+func Reload() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if !k.initialized {
+		return errors.New("settings not initialized")
+	}
+	switch err := loadSettings(k.filePath, koanf.WithMergeFunc(replaceAll)); {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("reloading settings: %w", err)
+	}
+	return nil
 }
 
 func IsPro() bool {

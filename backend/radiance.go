@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 
 	"time"
@@ -38,6 +37,7 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
@@ -63,8 +63,16 @@ type LocalBackend struct {
 	splitTunnelMgr *vpn.SplitTunnel
 	sessionHistory *vpn.SessionHistory
 
+	peerClient   peerController
+	peerToggleMu sync.Mutex
+	peerWG       sync.WaitGroup
+
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
+
+	// Rejects overlapping ConnectVPN calls (TryLock) so a burst can't each
+	// drive a full tunnel bring-up.
+	connectMu sync.Mutex
 
 	deviceID string
 
@@ -182,6 +190,15 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
+
+	// Degraded, not fatal, per the invariant above: a nil peerClient only
+	// disables Share My Connection, and must not cost the user their ability
+	// to report an issue. applyPeerShare and PeerStatus handle nil.
+	peerClient, err := newPeerClient(platformDeviceID)
+	if err != nil {
+		slog.Error("Loading peer client", "error", err)
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
@@ -200,6 +217,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		srvManager:        svrMgr,
 		vpnClient:         vpnClient,
 		splitTunnelMgr:    splitTunnelMgr,
+		peerClient:        peerClient,
 		shutdownFuncs: []func() error{
 			telemetry.Close, kindling.Close,
 		},
@@ -228,7 +246,11 @@ func (r *LocalBackend) Start() {
 			slog.Warn("Failed to get public IP", "error", err)
 		} else {
 			common.SetPublicIP(result.IP.String())
-			slog.Debug("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
+			// IP intentionally omitted — Lantern users in censored regions
+			// can't safely have their public IP in routinely-collected
+			// client logs. Confidence + sources are enough for operator
+			// triage; the actual IP is correlated server-side via traces.
+			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
 		}
 	}()
 
@@ -241,12 +263,24 @@ func (r *LocalBackend) Start() {
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
+	r.resumePeerShareIfEnabled()
+
+	// Wire the broflake / Unbounded widget proxy lifecycle to config
+	// updates. This single subscription handles all three start/stop
+	// triggers (local toggle, server feature flag, server-supplied
+	// config); InitSubscription is sync.Once-guarded so a future Start
+	// retry after Close won't double-subscribe.
+	//
+	// Seed with the already-cached config (loaded from disk before
+	// Start runs) so an opted-in user auto-starts the widget on
+	// launch instead of waiting for the next config refresh.
+	cachedCfg, _ := r.confHandler.GetConfig()
+	unbounded.InitSubscription(cachedCfg)
+
 	// The server derives the country from the client IP, so it's stable for the
-	// session: react once to record it for issue reports and to apply the
-	// country-specific transport policy (AMP is disabled in China).
+	// session: react once to record it for issue reports.
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
-		applyTransportPolicy()
 	})
 	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -267,7 +301,6 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
-	applyTransportPolicy()
 	r.applyConfig(cfg)
 	return true
 }
@@ -322,26 +355,6 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 	slog.Info("Set country code from config", "country_code", cfg.Country)
 }
 
-// ampEnabledForCountry reports whether the AMP transport works from the given
-// country. AMP fronts through Google domains that are unreachable from China.
-func ampEnabledForCountry(country string) bool {
-	return !strings.EqualFold(country, "CN")
-}
-
-// applyTransportPolicy enables or disables the AMP transport based on the
-// user's country and rebuilds kindling when that changes the enabled set. The
-// env override takes precedence over the config-derived country in settings.
-func applyTransportPolicy() {
-	country := settings.GetString(settings.CountryCodeKey)
-	if override := env.GetString(env.Country); override != "" {
-		country = override
-	}
-	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
-		kindling.Close()
-		kindling.Init()
-	}
-}
-
 // serverListFromConfig converts config outbounds and endpoints into managed
 // Lantern servers while preserving location and bandit URL metadata.
 func serverListFromConfig(cfg *config.Config) servers.ServerList {
@@ -367,8 +380,26 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
-		if err := r.DisconnectVPN(); err != nil {
-			slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+		r.closePeerClient()
+		// unbounded.start spawns its worker on a context.Background-
+		// derived ctx (it has to outlive any single NewConfigEvent),
+		// so Close has to explicitly tell it to shut down — otherwise
+		// the broflake widget goroutine survives backend close and
+		// leaks until process exit. Use a fresh ctx so a cancelled
+		// shutdown path doesn't skip the Stop.
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := unbounded.Stop(stopCtx); err != nil {
+			slog.Warn("unbounded stop on backend close returned error", "error", err)
+		}
+		cancel()
+		// vpnClient is always set in production via NewLocalBackend, but
+		// peer-focused unit tests construct partial LocalBackends without
+		// one. Guard the call so Close stays robust under those paths
+		// rather than panicking in DisconnectVPN.
+		if r.vpnClient != nil {
+			if err := r.DisconnectVPN(); err != nil {
+				slog.Error("Failed to disconnect VPN on shutdown", "error", err)
+			}
 		}
 		r.cancel() // cancels context, unsubscribes all event listeners and stops child goroutines
 		for _, shutdown := range r.shutdownFuncs {
@@ -433,7 +464,9 @@ type issueReportMetadata struct {
 // report. It is safe to call with a nil or partially initialized backend.
 func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	meta := issueReportMetadata{
-		country: settings.GetString(settings.CountryCodeKey),
+		country:            settings.GetString(settings.CountryCodeKey),
+		deviceID:           settings.GetString(settings.DeviceIDKey),
+		splitTunnelEnabled: settings.GetBool(settings.SplitTunnelKey),
 	}
 
 	if r == nil {
@@ -445,9 +478,10 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	} else {
 		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
 	}
-	meta.deviceID = r.deviceID
+	if r.deviceID != "" {
+		meta.deviceID = r.deviceID
+	}
 
-	// get country from the config returned by the backend
 	if r.confHandler != nil {
 		if cfg, err := r.confHandler.GetConfig(); err != nil {
 			slog.Warn("failed to get config", "error", err)
@@ -465,13 +499,17 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	return meta
 }
 
-// ReportIssue allows the user to report an issue with the application. It collects relevant
-// information about the user's environment such as country, device ID, user ID, subscription level,
-// and locale, and log files to include in the report.
+// ReportIssue sends an issue report with current metadata and diagnostic attachments.
 //
-// ReportIssue is safe to call with a nil receiver.
-func (r *LocalBackend) ReportIssue(issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
-	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "report_issue")
+// ReportIssue is safe to call with a nil receiver; in that case it uses settings-backed metadata.
+func (r *LocalBackend) ReportIssue(
+	ctx context.Context,
+	issueType issue.IssueType,
+	description, email string,
+	additionalAttachments []string,
+	attachments []*issue.Attachment,
+) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "report_issue")
 	defer span.End()
 
 	meta := r.buildIssueReportMetadata()
@@ -579,7 +617,32 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[k]; ok {
 		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
 	}
-	return r.maybeRestartVPN(diff)
+	// settings.Patch above already persisted the whole diff, so an early
+	// return here would leave a persisted key that no runtime state matches —
+	// exactly the divergence applyPeerShare's rollback exists to prevent.
+	// Run both handlers and join their errors.
+	var errs error
+	if err := r.maybeRestartVPN(diff); err != nil {
+		errs = errors.Join(errs, err)
+	}
+	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
+		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	// Drive the Unbounded widget proxy off the toggle change immediately
+	// rather than waiting for the next NewConfigEvent to re-evaluate.
+	// settings.Patch above has already persisted the new value, so go
+	// straight to Apply() — SetEnabled would short-circuit on the
+	// already-matching persisted value and never re-evaluate the
+	// manager. Apply re-checks the three-condition predicate against
+	// the cached server-side state and starts or stops accordingly.
+	if _, ok := diff[settings.UnboundedKey]; ok {
+		if err := unbounded.Apply(); err != nil {
+			slog.Warn("unbounded apply failed", "error", err)
+		}
+	}
+	return errs
 }
 
 // maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings
@@ -1039,9 +1102,26 @@ func (r *LocalBackend) VPNStatus() vpn.VPNStatus {
 	return r.vpnClient.Status()
 }
 
-func (r *LocalBackend) ConnectVPN(tag string) error {
+// ErrConnectInProgress signals that a connect attempt is already running. It is
+// benign, not a failure: bursts of connect requests (e.g. rapid taps while every
+// attempt is blocked in a censored network) must not each drive a full tunnel
+// bring-up.
+var ErrConnectInProgress = errors.New("connect already in progress")
+
+func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
+	// Shed overlapping connects before getBoxOptions: it assembles the full
+	// outbound set, and without this each queued request also stacks a full
+	// sing-box bring-up behind vpnClient's mutex.
+	if !r.connectMu.TryLock() {
+		return ErrConnectInProgress
+	}
+	defer r.connectMu.Unlock()
+
 	if tag == "" {
 		tag = vpn.AutoSelectTag
+	}
+	if err := r.awaitConnectable(ctx, tag); err != nil {
+		return err
 	}
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.srvManager.GetServerByTag(tag); !found {
@@ -1050,11 +1130,58 @@ func (r *LocalBackend) ConnectVPN(tag string) error {
 	}
 	bOptions := r.getBoxOptions()
 	bOptions.InitialServer = tag
-	if err := r.vpnClient.Connect(bOptions); err != nil {
+	if err := r.vpnClient.Connect(ctx, bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
 	r.persistSelection(tag)
 	return nil
+}
+
+// awaitConnectable blocks until the connect has something to dial, or ctx is
+// done. Connecting with neither a config nor a server of the user's own
+// produces "no outbounds or endpoints found", and on mobile the process that
+// reports that failure is the one hosting the config fetch it needed
+// (getlantern/engineering#3814), so failing fast deadlocks the first run.
+func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
+	if r.connectable(tag) {
+		return nil
+	}
+	slog.Info("Waiting for a config before connecting", "tag", tag)
+	ready := make(chan struct{})
+	// Subscribe, not SubscribeOnce: this unsubscribes on return anyway, and
+	// SubscribeUntil's self-referential `sub` capture is read from the callback
+	// goroutine without synchronization (events.go:78 vs :85).
+	//
+	// Emit runs each callback on its own goroutine, so configs landing together
+	// can both reach this. Closing twice would panic.
+	var closeOnce sync.Once
+	sub := events.Subscribe(func(config.NewConfigEvent) {
+		closeOnce.Do(func() { close(ready) })
+	})
+	defer sub.Unsubscribe()
+	// A config can land between the check above and the subscription.
+	if r.connectable(tag) {
+		return nil
+	}
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no config to connect with: %w", ctx.Err())
+	}
+}
+
+// connectable reports whether a connect can proceed right now: either a config
+// has been loaded, or the user has a server of their own to dial without one.
+func (r *LocalBackend) connectable(tag string) bool {
+	if _, err := r.confHandler.GetConfig(); err == nil {
+		return true
+	}
+	if tag != vpn.AutoSelectTag {
+		_, found := r.srvManager.GetServerByTag(tag)
+		return found
+	}
+	return len(r.srvManager.AllServers()) > 0
 }
 
 func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
@@ -1076,6 +1203,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	}
 	managedServers := r.srvManager.AllServers()
 	appendManagedServerOptions(&bOptions.Options, managedServers)
+	bOptions.LanternServerTags = lanternServerTags(cfg, managedServers)
 
 	seed := make(map[string]lbA.TagHistory)
 	for _, srv := range managedServers {
@@ -1087,6 +1215,39 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.SelectionHistorySeed = seed
 	}
 	return bOptions
+}
+
+// lanternServerTags collects the tags of the Lantern servers in cfg and
+// managed, to seed the client-context injector's match bounds. Every cfg
+// outbound and endpoint is a Lantern server; managed servers carry the flag
+// explicitly.
+func lanternServerTags(cfg *config.Config, managed []*servers.Server) []string {
+	seen := make(map[string]struct{})
+	var tags []string
+	add := func(tag string) {
+		if tag == "" {
+			return
+		}
+		if _, ok := seen[tag]; ok {
+			return
+		}
+		seen[tag] = struct{}{}
+		tags = append(tags, tag)
+	}
+	if cfg != nil {
+		for _, out := range cfg.Options.Outbounds {
+			add(out.Tag)
+		}
+		for _, ep := range cfg.Options.Endpoints {
+			add(ep.Tag)
+		}
+	}
+	for _, srv := range managed {
+		if srv.IsLantern {
+			add(srv.Tag)
+		}
+	}
+	return tags
 }
 
 // appendManagedServerOptions adds server-manager options that are missing from

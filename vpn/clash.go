@@ -183,13 +183,14 @@ func (s *clashServer) newRecord(metadata A.InboundContext, matchedRule A.Rule, m
 	id, _ := uuid.NewV4()
 	outbound, outboundType, chain := s.resolveChain(matchOutbound)
 	return &record{
-		id:           id,
-		createdAt:    time.Now(),
-		outbound:     outbound,
-		outboundType: outboundType,
-		chain:        chain,
-		inboundType:  metadata.InboundType,
-		inboundName:  metadata.Inbound,
+		id:            id,
+		createdAt:     time.Now(),
+		outbound:      outbound,
+		outboundType:  outboundType,
+		chain:         chain,
+		outboundLabel: outboundType + "/" + outbound,
+		inboundLabel:  metadata.InboundType + "/" + metadata.Inbound,
+
 		ipVersion:    metadata.IPVersion,
 		network:      metadata.Network,
 		source:       metadata.Source.String(),

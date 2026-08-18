@@ -213,6 +213,52 @@ func TestConstructionStartsTheSearchWithoutBlocking(t *testing.T) {
 	}
 }
 
+// inFlightSearch reports ht's pending search, read under the lock that guards it.
+func inFlightSearch(ht *hostTransport) *pendingSearch {
+	ht.mu.Lock()
+	defer ht.mu.Unlock()
+	return ht.inFlight
+}
+
+func TestOnlyPrimarySearchesAtConstruction(t *testing.T) {
+	// Each search probes the whole strategy space at once; two of them running
+	// concurrently overran the iOS extension's 50 MB jetsam cap and the tunnel
+	// was killed seconds after connecting.
+	//
+	// beginSearch records inFlight under the lock before it spawns the search
+	// goroutine, so construction alone decides these values — no wall-clock wait
+	// can make a regression pass here. The search blocks until cleanup so that a
+	// mistakenly started one cannot finish and clear inFlight behind our back.
+	searching := make(chan struct{})
+	t.Cleanup(func() { close(searching) })
+	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
+		<-searching
+		return echoHostRoundTripper{host: host}, nil
+	})
+
+	lz, err := newLazyDialingRoundTripper(io.Discard,
+		"https://primary.example/config", "https://mirror.example/config")
+	require.NoError(t, err)
+
+	assert.NotNil(t, inFlightSearch(lz.byHost["primary.example"]),
+		"the primary has to search before a caller waits on it")
+	assert.Nil(t, inFlightSearch(lz.byHost["mirror.example"]),
+		"only the primary may search at construction")
+}
+
+func TestFallbackHostSearchesOnFirstUse(t *testing.T) {
+	stubSmartTransport(t, func(host string) (http.RoundTripper, error) {
+		return echoHostRoundTripper{host: host}, nil
+	})
+
+	client, err := NewHTTPClientWithSmartTransport(io.Discard,
+		"https://primary.example/config", "https://mirror.example/config")
+	require.NoError(t, err)
+
+	// Deferring the mirror's search must not cost it reachability.
+	assert.Equal(t, "mirror.example", getBody(t, client, "https://mirror.example/config"))
+}
+
 func TestRequestGivesUpOnSearchWhenItsContextEnds(t *testing.T) {
 	neverFinishes := make(chan struct{})
 	t.Cleanup(func() { close(neverFinishes) })

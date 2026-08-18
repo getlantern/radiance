@@ -28,7 +28,8 @@ func SetPublicIP(ip string) {
 }
 
 const (
-	// Required common headers to send to the proxy server.
+	// Common Lantern headers. All are request headers sent to the proxy server
+	// except OriginHeader, which the server sets on responses.
 	AppVersionHeader        = "X-Lantern-App-Version"
 	VersionHeader           = "X-Lantern-Version"
 	PlatformHeader          = "X-Lantern-Platform"
@@ -44,6 +45,11 @@ const (
 	ClientIPHeader          = "X-Lantern-Config-Client-IP"
 	ContentTypeHeader       = "content-type"
 	AcceptHeader            = "accept"
+
+	// OriginHeader is set by Lantern origins on every response. Fronted requests
+	// read it to tell an origin-issued status from a CDN edge's, which is
+	// otherwise impossible: a CDN relays the origin's response verbatim.
+	OriginHeader = "X-Lantern-Origin"
 )
 
 // NewRequestWithHeaders creates a new [http.Request] with the required headers.

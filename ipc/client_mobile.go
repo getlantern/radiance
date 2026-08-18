@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
 )
 
@@ -132,6 +134,25 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 		}
 	}
 	return respBody, nil
+}
+
+// reportIssue assembles and sends the report in this process rather than over IPC.
+//
+// Building the archive reads logs into memory. On iOS the IPC peer can be the network extension,
+// which the OS may kill for a footprint spike; the UI process has the roomier budget and can read
+// the shared logs and settings without starting a backend.
+func (c *Client) reportIssue(ctx context.Context, issueType issue.IssueType, description, email string, additionalAttachments []string, attachments []*issue.Attachment) error {
+	if err := settings.Reload(); err != nil {
+		slog.Warn("Reporting issue with possibly stale settings", "error", err)
+	}
+
+	var be *backend.LocalBackend
+	c.mu.RLock()
+	if c.localapi != nil {
+		be = c.localapi.be.Load()
+	}
+	c.mu.RUnlock()
+	return be.ReportIssue(ctx, issueType, description, email, additionalAttachments, attachments)
 }
 
 // doLocal serves the request through the given in-process handler.

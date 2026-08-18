@@ -39,8 +39,12 @@ type record struct {
 	outboundType string
 	chain        []string
 
-	inboundType  string
-	inboundName  string
+	// Labels are prejoined because IPC polling rebuilds Connection values for every live record.
+	// Keep outboundLabel aligned with outbound/outboundType so rendered labels and structured
+	// routing metadata describe the same path.
+	outboundLabel string
+	inboundLabel  string
+
 	ipVersion    uint8
 	network      string
 	source       string
@@ -54,10 +58,9 @@ type record struct {
 // attrs returns the telemetry attribute set for the connection.
 func (r *record) attrs() ConnAttrs {
 	return ConnAttrs{
-		ID:           r.id.String(),
 		FromOutbound: r.fromOutbound,
-		Outbound:     r.outboundType + "/" + r.outbound,
-		Inbound:      r.inboundType + "/" + r.inboundName,
+		Outbound:     r.outboundLabel,
+		Inbound:      r.inboundLabel,
 		Network:      r.network,
 		Protocol:     r.protocol,
 		IPVersion:    int(r.ipVersion),
@@ -84,7 +87,6 @@ func (r *record) trackerMetadata() trafficontrol.TrackerMetadata {
 
 // ConnAttrs is the attribute set describing a connection, carried on each ConnClose push.
 type ConnAttrs struct {
-	ID           string
 	FromOutbound string
 	Outbound     string
 	Inbound      string
@@ -185,7 +187,7 @@ func (m *connTracker) leave(r *record) {
 // Connections satisfies groups.ConnectionManager (github.com/getlantern/lantern-box/adapter/groups),
 // returning the active connections as synthesized trafficontrol.TrackerMetadata.
 func (m *connTracker) Connections() []trafficontrol.TrackerMetadata {
-	var out []trafficontrol.TrackerMetadata
+	out := make([]trafficontrol.TrackerMetadata, 0, m.activeCount.Load())
 	for _, r := range m.conns.Iter() {
 		out = append(out, r.trackerMetadata())
 	}
@@ -195,7 +197,7 @@ func (m *connTracker) Connections() []trafficontrol.TrackerMetadata {
 // activeConnections returns the current active connections as IPC Connection values. An empty
 // slice is returned if there are no active connections.
 func (m *connTracker) activeConnections() []Connection {
-	out := make([]Connection, 0)
+	out := make([]Connection, 0, m.activeCount.Load())
 	for _, r := range m.conns.Iter() {
 		out = append(out, newConnection(r))
 	}

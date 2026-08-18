@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 
@@ -34,16 +35,27 @@ type memoryReclaimer struct {
 	tracker *connTracker
 }
 
-func (r *memoryReclaimer) ConnectionsOldestFirst() []memmon.ConnectionRef {
-	metadata := r.tracker.Connections()
-	refs := make([]memmon.ConnectionRef, len(metadata))
-	for i, conn := range metadata {
-		refs[i] = memmon.ConnectionRef{ID: conn.ID, CreatedAt: conn.CreatedAt}
+func (r *memoryReclaimer) OldestConnections(limit int) (oldest []memmon.ConnectionRef, total int) {
+	oldest = make([]memmon.ConnectionRef, 0, max(limit, 0))
+	for id, rec := range r.tracker.conns.Iter() {
+		total++
+		createdAt := rec.createdAt
+		// A candidate that can't join the oldest-limit window is skipped, but the loop
+		// continues so total still counts every connection.
+		if limit <= 0 || (len(oldest) == limit && !createdAt.Before(oldest[limit-1].CreatedAt)) {
+			continue
+		}
+		i, _ := slices.BinarySearchFunc(oldest, createdAt, func(ref memmon.ConnectionRef, t time.Time) int {
+			return ref.CreatedAt.Compare(t)
+		})
+		if len(oldest) < limit {
+			oldest = append(oldest, memmon.ConnectionRef{})
+		}
+		// At limit, this evicts the newest kept entry to make room.
+		copy(oldest[i+1:], oldest[i:])
+		oldest[i] = memmon.ConnectionRef{ID: id, CreatedAt: createdAt}
 	}
-	slices.SortFunc(refs, func(a, b memmon.ConnectionRef) int {
-		return a.CreatedAt.Compare(b.CreatedAt)
-	})
-	return refs
+	return oldest, total
 }
 
 func (r *memoryReclaimer) FreeOSMemory() {
@@ -72,32 +84,26 @@ func closeAllRouted(tracker *connTracker) {
 	tracker.closeAllTracked()
 }
 
-func startMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
-	if common.IsIOS() {
-		return startIOSMemoryMonitor(ctx, server)
-	}
-
-	return startFixedMemoryMonitor(ctx)
-}
-
-func startFixedMemoryMonitor(ctx context.Context) io.Closer {
-	limit := memmon.FixedLimit(defaultNonIOSMemLimitBytes)
-	// Non-iOS uses the monitor for visibility only. Reclaim and admission
-	// control remain disabled by passing a nil executor.
+// startMemoryMonitor creates and starts a visibility-only memory monitor,
+// returning the monitor so an executor can be installed later and a Closer that
+// stops the run loop and waits for it to exit.
+func startMemoryMonitor(ctx context.Context) (*memmon.Monitor, io.Closer) {
+	limit := getLimit()
 	monitor := memmon.New(
 		memoryMonitorConfig(limit),
 		memmon.NewSensor(limit),
 		nil,
 	)
 
-	return runMonitor(ctx, monitor)
+	return monitor, runMonitor(ctx, monitor)
 }
 
-func startIOSMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
-	limit := memmon.FixedLimit(monitorLimitBytes())
-
+// initExecutor attaches reclaim and admission control after the clash server
+// becomes available. The monitor starts earlier in visibility-only mode.
+func initExecutor(monitor *memmon.Monitor, server *clashServer) {
 	// Use a dedicated sensor here. Sharing the monitor sensor would race its
 	// reused runtime/metrics buffers.
+	limit := getLimit()
 	gate := memmon.NewAdmissionGate(
 		memmon.AdmissionConfig{},
 		memmon.NewSensor(limit),
@@ -113,14 +119,14 @@ func startIOSMemoryMonitor(ctx context.Context, server *clashServer) io.Closer {
 		common.Version,
 		gate,
 	)
+	monitor.SetExecutor(executor)
+}
 
-	monitor := memmon.New(
-		memoryMonitorConfig(limit),
-		memmon.NewSensor(limit),
-		executor,
-	)
-
-	return runMonitor(ctx, monitor)
+func getLimit() memmon.LimitProvider {
+	if common.IsIOS() {
+		return memmon.FixedLimit(monitorLimitBytes())
+	}
+	return memmon.FixedLimit(defaultNonIOSMemLimitBytes)
 }
 
 func monitorLimitBytes() uint64 {

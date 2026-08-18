@@ -3,6 +3,7 @@ package memmon
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
@@ -85,7 +86,7 @@ type Executor interface {
 type Monitor struct {
 	engine       *DecisionEngine
 	readSample   func(now time.Time) Sample
-	executor     Executor
+	executor     atomic.Pointer[Executor]
 	baseInterval time.Duration
 
 	lastLevel   PressureLevel
@@ -105,12 +106,27 @@ const (
 // executor.
 func New(cfg Config, sampler Sampler, executor Executor) *Monitor {
 	engine := NewDecisionEngine(cfg)
-	return &Monitor{
+	m := &Monitor{
 		engine:       engine,
 		readSample:   sampler.Sample,
-		executor:     executor,
 		baseInterval: engine.cfg.BaseInterval,
 	}
+	m.SetExecutor(executor)
+	return m
+}
+
+// SetExecutor sets the executor consulted on each tick. A nil executor leaves
+// the monitor visibility-only (sample and log, no reclaim). Safe to call
+// concurrently with the run loop.
+func (m *Monitor) SetExecutor(executor Executor) {
+	if executor == nil {
+		// Storing &executor would wrap a nil interface in a non-nil *Executor,
+		// which Step then dereferences and calls, panicking. Store a nil pointer
+		// so the load-side guard skips it.
+		m.executor.Store(nil)
+		return
+	}
+	m.executor.Store(&executor)
 }
 
 // Run drives the loop until ctx is canceled. It blocks.
@@ -118,6 +134,7 @@ func (m *Monitor) Run(ctx context.Context) {
 	interval := m.baseInterval
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
+	m.Step(time.Now())
 	for {
 		select {
 		case <-ctx.Done():
@@ -140,8 +157,8 @@ func (m *Monitor) Step(now time.Time) Decision {
 	sample := m.readSample(now)
 	decision := m.engine.Decide(sample)
 	m.logTick(now, sample, decision)
-	if m.executor != nil {
-		m.executor.Apply(decision, now)
+	if executor := m.executor.Load(); executor != nil {
+		(*executor).Apply(decision, now)
 	}
 	return decision
 }

@@ -67,12 +67,13 @@ func (e *executor) Apply(decision Decision, now time.Time) {
 }
 
 func (e *executor) softEvict() (evicted, total int) {
-	refs := e.reclaimer.ConnectionsOldestFirst()
-	n := e.batchFor(len(refs))
-	for _, c := range refs[:n] {
+	// Request only the largest possible batch; batchFor may choose fewer after seeing total.
+	oldest, total := e.reclaimer.OldestConnections(e.cfg.SoftBatchMax)
+	n := min(e.batchFor(total), len(oldest))
+	for _, c := range oldest[:n] {
 		e.reclaimer.CloseConn(c.ID)
 	}
-	return n, len(refs)
+	return n, total
 }
 
 func (e *executor) batchFor(available int) int {

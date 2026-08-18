@@ -98,6 +98,10 @@ type DataCapInfo struct {
 	Enabled bool `json:"enabled"`
 	// Data cap usage details (only populated if enabled is true)
 	Usage *DataCapUsageDetails `json:"usage,omitempty"`
+	// Exhausted is set locally when the SSE stream emits cap_exhausted. It is not
+	// part of the server JSON payload. If present, the AllotmentEndTime at which
+	// the allotment resets is stored in Usage.AllotmentEndTime.
+	Exhausted bool `json:"exhausted,omitempty"`
 }
 
 type DataCapUsageDetails struct {
