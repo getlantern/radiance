@@ -1157,6 +1157,9 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
+	if err := r.awaitConnectable(ctx, tag); err != nil {
+		return err
+	}
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.srvManager.GetServerByTag(tag); !found {
 			return fmt.Errorf("no server found with tag %s", tag)
@@ -1169,6 +1172,44 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	r.persistSelection(tag)
 	return nil
+}
+
+// awaitConnectable blocks until the connect has something to dial, or ctx is
+// done. Connecting with neither a config nor a server of the user's own
+// produces "no outbounds or endpoints found", and on mobile the process that
+// reports that failure is the one hosting the config fetch it needed
+// (getlantern/engineering#3814), so failing fast deadlocks the first run.
+func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
+	if r.connectable(tag) {
+		return nil
+	}
+	slog.Info("Waiting for a config before connecting", "tag", tag)
+	ready := make(chan struct{})
+	sub := events.SubscribeOnce(func(config.NewConfigEvent) { close(ready) })
+	defer sub.Unsubscribe()
+	// A config can land between the check above and the subscription.
+	if r.connectable(tag) {
+		return nil
+	}
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no config to connect with: %w", ctx.Err())
+	}
+}
+
+// connectable reports whether a connect can proceed right now: either a config
+// has been loaded, or the user has a server of their own to dial without one.
+func (r *LocalBackend) connectable(tag string) bool {
+	if _, err := r.confHandler.GetConfig(); err == nil {
+		return true
+	}
+	if tag != vpn.AutoSelectTag {
+		_, found := r.srvManager.GetServerByTag(tag)
+		return found
+	}
+	return len(r.srvManager.AllServers()) > 0
 }
 
 func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {

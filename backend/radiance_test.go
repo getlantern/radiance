@@ -18,6 +18,7 @@ import (
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/log"
@@ -769,5 +770,92 @@ func TestSetTransportPolicy(t *testing.T) {
 
 		assert.True(t, setTransportPolicy(), "the override country must decide the policy")
 		assert.False(t, kindling.EnabledTransports[kindling.TransportAMP])
+	})
+}
+
+// A connect that arrives before the first config must wait for one instead of
+// failing. On iOS the process that reports "no outbounds" is the same process
+// hosting the config fetch, and its failure handler tears that process down —
+// a first-run deadlock on any slow network (getlantern/engineering#3814).
+func TestAwaitConnectable(t *testing.T) {
+	// newBackend builds a backend with only what awaitConnectable reads. A
+	// cached config on disk is how a returning user already has one at connect.
+	newBackend := func(t *testing.T, cached bool) *LocalBackend {
+		t.Helper()
+		dataDir := t.TempDir()
+		if cached {
+			buf, err := singjson.Marshal(cachedConfig())
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ConfigFileName), buf, 0o600))
+		}
+		settings.Reset()
+		t.Cleanup(settings.Reset)
+		require.NoError(t, settings.InitSettings(dataDir))
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
+		require.NoError(t, err)
+		return &LocalBackend{
+			ctx:         ctx,
+			confHandler: config.NewConfigHandler(ctx, config.Options{DataPath: dataDir, Logger: log.NoOpLogger()}),
+			srvManager:  srvMgr,
+		}
+	}
+
+	// The censored-network shape: the fetch completes, just not instantly.
+	t.Run("returns as soon as a config lands", func(t *testing.T) {
+		r := newBackend(t, false)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			events.Emit(config.NewConfigEvent{New: cachedConfig()})
+		}()
+
+		start := time.Now()
+		require.NoError(t, r.awaitConnectable(ctx, vpn.AutoSelectTag))
+		assert.Less(t, time.Since(start), 3*time.Second, "must return on the config, not on the deadline")
+	})
+
+	t.Run("gives up on the caller's deadline rather than blocking forever", func(t *testing.T) {
+		r := newBackend(t, false)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		err := r.awaitConnectable(ctx, vpn.AutoSelectTag)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	// A cached config on disk is enough to connect: NewConfigHandler loads it
+	// synchronously, so a returning user's tunnel comes up on it without waiting
+	// for any fetch. The already-expired context proves nothing waited, and the
+	// box options prove the tunnel actually gets the cached outbounds.
+	t.Run("connects straight off the cached config on disk", func(t *testing.T) {
+		r := newBackend(t, true)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.NoError(t, r.awaitConnectable(ctx, vpn.AutoSelectTag))
+
+		tags := make([]string, 0, len(r.getBoxOptions().Options.Outbounds))
+		for _, out := range r.getBoxOptions().Options.Outbounds {
+			tags = append(tags, out.Tag)
+		}
+		assert.Contains(t, tags, "cached-out", "the tunnel must be built from the cached config")
+	})
+
+	// A user with their own server can dial it without a Lantern config, so the
+	// gate must not hold that connect hostage to a fetch it does not need.
+	t.Run("does not wait when the user has a server of their own", func(t *testing.T) {
+		r := newBackend(t, false)
+		require.NoError(t, r.srvManager.AddServers(
+			servers.ServerList{Servers: []*servers.Server{{Tag: "mine", Type: "shadowsocks"}}}, true))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		assert.NoError(t, r.awaitConnectable(ctx, vpn.AutoSelectTag), "auto-select can use the managed server")
+		assert.NoError(t, r.awaitConnectable(ctx, "mine"), "an explicit tag resolves without a config")
 	})
 }
