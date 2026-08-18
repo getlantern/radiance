@@ -496,10 +496,10 @@ func (s *localapi) peerStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 // peerStatusEventsHandler streams peer.StatusEvent over SSE. The wire
 // payload is always the live snapshot from PeerStatus(), not the event's
-// captured value: events.Emit dispatches each callback on its own goroutine
-// so a quick start→stop pair can land out of order, and we'd send a stale
-// "active" after a "inactive". Reading the live snapshot when the trigger
-// fires guarantees the SSE consumer's last message reflects current state.
+// captured value: the trigger below coalesces, so a burst of phases becomes
+// one wakeup and the captured value could be one the consumer never needed.
+// Reading the live snapshot when the trigger fires guarantees the SSE
+// consumer's last message reflects current state.
 func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Request) {
 	flusher := sseWriter(w)
 	if flusher == nil {
@@ -538,9 +538,7 @@ func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Reques
 // each accept/close on the local samizdat-in. Unlike peerStatusEventsHandler
 // (which always sends the live snapshot), each emit's captured value is
 // what the consumer needs here — the Source IP and +1/-1 state ARE the
-// payload, not a periodic poll. Out-of-order +1/-1 from events.Emit's
-// per-callback goroutine is fine: the consumer (lantern-core's globe-arc
-// renderer) keys arcs by source, so it handles re-orderings naturally.
+// payload, not a periodic poll, so none may be collapsed into a wakeup.
 //
 // The events package lives in this process (lanternd); cross-process
 // consumers in Liblantern can only receive these via this SSE stream,

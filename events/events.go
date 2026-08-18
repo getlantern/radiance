@@ -218,9 +218,9 @@ func (e *Subscription[T]) Unsubscribe() {
 // own callbacks are serialized.
 func Emit[T Event](evt T) {
 	key := reflect.TypeFor[T]()
-	// Snapshot the callbacks into a slice under the RLock, then drop
+	// Snapshot the subscribers into a slice under the RLock, then drop
 	// the lock before doing anything that could block (the diagnostic
-	// log, the per-callback goroutine spawn). Iterating the underlying
+	// log, the enqueue to each one). Iterating the underlying
 	// map after releasing the lock would race against Unsubscribe's
 	// write lock — `concurrent map iteration and map write` panic
 	// territory under load.
