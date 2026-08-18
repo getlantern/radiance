@@ -19,6 +19,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
@@ -708,5 +709,65 @@ func TestLanternServerTags(t *testing.T) {
 
 	t.Run("nil config and managed yields no tags", func(t *testing.T) {
 		assert.Empty(t, lanternServerTags(nil, nil))
+	})
+}
+
+// A CN client must settle its transport policy before the first kindling build.
+// Correcting it afterwards costs a Close+Init rebuild that throws away a
+// finished transport bootstrap and pays for a second one — ~6.6s on a censored
+// network, which is what pushed the iOS tunnel past its start deadline in
+// getlantern/engineering#3822. applyTransportPolicy rebuilds exactly when
+// setTransportPolicy reports a change, so "reports no change" is "no rebuild".
+func TestSetTransportPolicy(t *testing.T) {
+	prevAMP := kindling.EnabledTransports[kindling.TransportAMP]
+	t.Cleanup(func() { kindling.EnabledTransports[kindling.TransportAMP] = prevAMP })
+
+	// withCountry gives the test a settings store holding just the country,
+	// plus kindling's default enabled set as NewKindling would see it.
+	withCountry := func(t *testing.T, country string) {
+		t.Helper()
+		settings.Reset()
+		t.Cleanup(settings.Reset)
+		require.NoError(t, settings.InitSettings(t.TempDir()))
+		if country != "" {
+			require.NoError(t, settings.Set(settings.CountryCodeKey, country))
+		}
+		kindling.EnabledTransports[kindling.TransportAMP] = true
+	}
+
+	t.Run("CN settles before the build and needs no rebuild afterwards", func(t *testing.T) {
+		withCountry(t, "CN")
+
+		require.True(t, setTransportPolicy(), "CN must disable AMP before the first build")
+		require.False(t, kindling.EnabledTransports[kindling.TransportAMP])
+
+		// The pass applyCurrentConfig makes once the cached config is read.
+		assert.False(t, setTransportPolicy(), "an already-settled policy must not trigger a rebuild")
+	})
+
+	t.Run("a country where AMP works never rebuilds", func(t *testing.T) {
+		withCountry(t, "US")
+
+		assert.False(t, setTransportPolicy(), "AMP is already enabled; nothing to change")
+		assert.True(t, kindling.EnabledTransports[kindling.TransportAMP])
+	})
+
+	t.Run("an unknown country keeps AMP and settles once the config names CN", func(t *testing.T) {
+		// First run: no country persisted yet, so the pre-build pass can only
+		// keep the default. The rebuild then happens off the start path, when
+		// the fetched config first names the country.
+		withCountry(t, "")
+		require.False(t, setTransportPolicy())
+
+		require.NoError(t, settings.Set(settings.CountryCodeKey, "CN"))
+		assert.True(t, setTransportPolicy(), "the config-time pass must correct the policy")
+	})
+
+	t.Run("the env override beats the country in settings", func(t *testing.T) {
+		withCountry(t, "US")
+		t.Setenv("RADIANCE_COUNTRY", "CN")
+
+		assert.True(t, setTransportPolicy(), "the override country must decide the policy")
+		assert.False(t, kindling.EnabledTransports[kindling.TransportAMP])
 	})
 }

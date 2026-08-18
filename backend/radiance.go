@@ -233,6 +233,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 }
 
 func (r *LocalBackend) Start() {
+	// Settle the country's transport policy before the first build. The country
+	// is already in settings from the previous session, so correcting it
+	// afterwards means discarding a finished transport bootstrap and paying for
+	// a second one — ~6.6s on a censored network (getlantern/engineering#3822).
+	setTransportPolicy()
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
 	go func() {
@@ -365,15 +370,23 @@ func ampEnabledForCountry(country string) bool {
 	return !strings.EqualFold(country, "CN")
 }
 
-// applyTransportPolicy enables or disables the AMP transport based on the
-// user's country and rebuilds kindling when that changes the enabled set. The
-// env override takes precedence over the config-derived country in settings.
-func applyTransportPolicy() {
+// setTransportPolicy enables or disables the AMP transport based on the user's
+// country and reports whether that changed the enabled set. The env override
+// takes precedence over the config-derived country in settings. Callers that
+// run before the first kindling.Init use this directly; there is nothing built
+// yet to rebuild.
+func setTransportPolicy() bool {
 	country := settings.GetString(settings.CountryCodeKey)
 	if override := env.GetString(env.Country); override != "" {
 		country = override
 	}
-	if kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country)) {
+	return kindling.EnableTransport(kindling.TransportAMP, ampEnabledForCountry(country))
+}
+
+// applyTransportPolicy applies the country's transport policy, rebuilding
+// kindling when that changes the enabled set.
+func applyTransportPolicy() {
+	if setTransportPolicy() {
 		kindling.Close()
 		kindling.Init()
 	}
