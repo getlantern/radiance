@@ -551,10 +551,11 @@ func (s *localapi) peerConnectionEventsHandler(w http.ResponseWriter, r *http.Re
 	if flusher == nil {
 		return
 	}
-	// Buffered channel so a slow SSE consumer doesn't apply backpressure
-	// to events.Emit (which spawns a goroutine per subscriber but blocks
-	// nothing). 64 holds ~one second of accept/close pairs under heavy
-	// load; beyond that we drop to avoid unbounded memory growth.
+	// Buffered channel so a slow SSE consumer doesn't stall this
+	// subscription's delivery goroutine, which would eventually fill the
+	// bus's own queue and start dropping. 64 holds ~one second of
+	// accept/close pairs under heavy load; beyond that we drop here to
+	// avoid unbounded memory growth.
 	queue := make(chan peer.ConnectionEvent, 64)
 	sub := events.Subscribe(func(evt peer.ConnectionEvent) {
 		select {
