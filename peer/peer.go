@@ -619,8 +619,6 @@ func (c *Client) emitPhase(p Phase, errMsg string) {
 	c.emitStatus(p, errMsg, "")
 }
 
-// emitError is emitPhase for the terminal failure, carrying the classification
-// alongside the message so consumers can branch on it.
 func (c *Client) emitError(reason Reason, errMsg string) {
 	c.emitStatus(PhaseError, errMsg, reason)
 }
