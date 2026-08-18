@@ -38,7 +38,7 @@ const (
 	// ReasonNoPortForwarding means the router declined to map a port.
 	ReasonNoPortForwarding Reason = "no_port_forwarding"
 	// ReasonPortUnreachable means the router accepted the mapping and then
-	// did not honour it: lantern-cloud's dial-back never arrived.
+	// did not honor it: lantern-cloud's dial-back never arrived.
 	ReasonPortUnreachable Reason = "port_unreachable"
 	// ReasonCanceled means the caller gave up — usually the user toggling
 	// sharing back off mid-start.
