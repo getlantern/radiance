@@ -60,6 +60,8 @@ type tunnel struct {
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
+	initialLanternTags []string
+
 	// memoryMonitor starts during tunnel init in visibility-only mode.
 	// On iOS, its executor is installed later, after the clash server exists.
 	memoryMonitor *memmon.Monitor
@@ -202,7 +204,7 @@ func (t *tunnel) init(ctx context.Context, options string, platformIfce libbox.P
 
 	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	clientContextInjector := newClientContextInjector(outboundMgr, dataPath)
+	clientContextInjector := newClientContextInjector(outboundMgr, dataPath, t.initialLanternTags)
 	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
 	t.clientContextTracker = clientContextInjector
 	router := service.FromContext[adapter.Router](t.ctx)
@@ -233,7 +235,7 @@ func setMobileMemoryLimits() {
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
 }
 
-func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string) *clientcontext.ClientContextInjector {
+func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string, lanternTags []string) *clientcontext.ClientContextInjector {
 	slog.Debug("Creating ClientContextInjector")
 	infoFn := func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
@@ -244,11 +246,11 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			Version:     common.GetVersion(),
 		}
 	}
-	// Outbound match bounds start empty and are populated when lantern servers are added via
-	// addOutbounds. Only lantern servers support client context tracking.
+	// Only lantern servers support client context tracking, so only their tags
+	// belong in the match bounds.
 	matchBounds := clientcontext.MatchBounds{
 		Inbound:  []string{"any"},
-		Outbound: []string{},
+		Outbound: slices.Clone(lanternTags),
 	}
 	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
 }
@@ -458,18 +460,24 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 
 	var errs []error
 	if t.clientContextTracker != nil {
-		// preemptively merge the new lantern tags into the clientContextInjector match bounds to
-		// capture any new connections before finished adding the servers.
-		lanternTags := make([]string, 0, len(newList.Servers))
-		for _, srv := range newList.Servers {
-			if srv.IsLantern {
+		// Iterate the full list, not the deduped newList: removeDuplicates drops
+		// startup lantern servers that must stay bound, and the append-if-absent
+		// guard below re-adds any the construction seed missed without regrowing
+		// Outbound.
+		lanternTags := make([]string, 0, len(list.Servers))
+		for _, srv := range list.Servers {
+			if srv.IsLantern && srv.Tag != "" {
 				lanternTags = append(lanternTags, srv.Tag)
 			}
 		}
 		if len(lanternTags) > 0 {
-			slog.Log(nil, rlog.LevelTrace, "Temporarily merging new lantern tags into ClientContextInjector")
+			slog.Log(nil, rlog.LevelTrace, "Merging lantern tags into ClientContextInjector")
 			matchBounds := t.clientContextTracker.MatchBounds()
-			matchBounds.Outbound = append(matchBounds.Outbound, lanternTags...)
+			for _, tag := range lanternTags {
+				if !slices.Contains(matchBounds.Outbound, tag) {
+					matchBounds.Outbound = append(matchBounds.Outbound, tag)
+				}
+			}
 			t.clientContextTracker.SetBounds(matchBounds)
 		}
 		defer func() {

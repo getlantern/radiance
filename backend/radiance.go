@@ -1177,6 +1177,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	}
 	managedServers := r.srvManager.AllServers()
 	appendManagedServerOptions(&bOptions.Options, managedServers)
+	bOptions.LanternServerTags = lanternServerTags(cfg, managedServers)
 
 	seed := make(map[string]lbA.TagHistory)
 	for _, srv := range managedServers {
@@ -1188,6 +1189,39 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.SelectionHistorySeed = seed
 	}
 	return bOptions
+}
+
+// lanternServerTags collects the tags of the Lantern servers in cfg and
+// managed, to seed the client-context injector's match bounds. Every cfg
+// outbound and endpoint is a Lantern server; managed servers carry the flag
+// explicitly.
+func lanternServerTags(cfg *config.Config, managed []*servers.Server) []string {
+	seen := make(map[string]struct{})
+	var tags []string
+	add := func(tag string) {
+		if tag == "" {
+			return
+		}
+		if _, ok := seen[tag]; ok {
+			return
+		}
+		seen[tag] = struct{}{}
+		tags = append(tags, tag)
+	}
+	if cfg != nil {
+		for _, out := range cfg.Options.Outbounds {
+			add(out.Tag)
+		}
+		for _, ep := range cfg.Options.Endpoints {
+			add(ep.Tag)
+		}
+	}
+	for _, srv := range managed {
+		if srv.IsLantern {
+			add(srv.Tag)
+		}
+	}
+	return tags
 }
 
 // appendManagedServerOptions adds server-manager options that are missing from

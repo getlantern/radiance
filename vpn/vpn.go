@@ -179,6 +179,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options st
 	t := tunnel{
 		dataPath:             boxOptions.BasePath,
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
+		initialLanternTags:   boxOptions.LanternServerTags,
 		connObserver:         c.connObserver,
 	}
 	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {

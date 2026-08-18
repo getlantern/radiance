@@ -669,3 +669,44 @@ func TestBuildIssueReportMetadataFallsBackToSettings(t *testing.T) {
 	assert.True(t, meta.splitTunnelEnabled, "split-tunnel state must survive a backendless report")
 	assert.NotNil(t, meta.reporter, "a reporter is always needed to upload the report")
 }
+
+func TestLanternServerTags(t *testing.T) {
+	cfg := &config.Config{
+		Options: option.Options{
+			Outbounds: []option.Outbound{{Tag: "out-1"}, {Tag: "out-2"}},
+			Endpoints: []option.Endpoint{{Tag: "ep-1"}},
+		},
+	}
+
+	t.Run("config outbounds and endpoints are all lantern", func(t *testing.T) {
+		assert.ElementsMatch(t, []string{"out-1", "out-2", "ep-1"}, lanternServerTags(cfg, nil))
+	})
+
+	t.Run("managed servers included only when lantern", func(t *testing.T) {
+		managed := []*servers.Server{
+			{Tag: "lan-1", IsLantern: true},
+			{Tag: "user-1", IsLantern: false},
+		}
+		assert.Equal(t, []string{"lan-1"}, lanternServerTags(nil, managed))
+	})
+
+	t.Run("config and managed lantern tags are unioned and deduped", func(t *testing.T) {
+		managed := []*servers.Server{
+			{Tag: "out-1", IsLantern: true}, // duplicate of a config tag
+			{Tag: "lan-2", IsLantern: true},
+			{Tag: "user-1", IsLantern: false},
+		}
+		got := lanternServerTags(cfg, managed)
+		assert.ElementsMatch(t, []string{"out-1", "out-2", "ep-1", "lan-2"}, got)
+		assert.Len(t, got, 4, "the tag shared by config and managed must appear once")
+	})
+
+	t.Run("empty tags are skipped", func(t *testing.T) {
+		emptyCfg := &config.Config{Options: option.Options{Outbounds: []option.Outbound{{Tag: ""}}}}
+		assert.Empty(t, lanternServerTags(emptyCfg, []*servers.Server{{Tag: "", IsLantern: true}}))
+	})
+
+	t.Run("nil config and managed yields no tags", func(t *testing.T) {
+		assert.Empty(t, lanternServerTags(nil, nil))
+	})
+}
