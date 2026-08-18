@@ -10,9 +10,9 @@ import (
 	"github.com/getlantern/radiance/portforward"
 )
 
-// Start's failures reach the user as raw Go error text. The share card renders
-// whatever string comes back from setPeerProxy, so a peer that failed because
-// the machine was offline showed this:
+// Start's failures reach the user as raw Go error text: the desktop share card
+// renders the returned error verbatim. A peer that failed because the machine
+// was offline showed this:
 //
 //	register with lantern-cloud: send: all transports failed: transport
 //	smart: timed out, transport errors: transport proxyless: dial tcp:
@@ -25,10 +25,10 @@ import (
 // Only failures we can actually name are rewritten. Everything else keeps its
 // original error, because a vague-but-honest wrap beats a confident guess.
 
-// Reason is a stable, machine-readable classification of a Start failure. The
-// Flutter card currently renders Error verbatim, so these exist to let it
-// localize later without another radiance release — the message strings here
-// are English and cannot be translated in the UI.
+// Reason is a stable, machine-readable classification of a Start failure. It
+// exists so the UI can localize these later without another radiance release:
+// the message strings below are English, and a UI that only has the string can
+// only display it.
 type Reason string
 
 const (
