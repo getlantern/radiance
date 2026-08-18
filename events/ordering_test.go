@@ -193,6 +193,9 @@ func TestUnsubscribe_DropsEventsAlreadyQueued(t *testing.T) {
 				<-release // hold the goroutine inside the first delivery
 			}
 		})
+		subscriptionsMu.RLock()
+		s := subscriptions[reflect.TypeFor[orderedEvt]()][(*Subscription[Event])(sub)]
+		subscriptionsMu.RUnlock()
 
 		// Emit never blocks, so all four are queued before the callback for
 		// the first one has finished.
@@ -203,7 +206,14 @@ func TestUnsubscribe_DropsEventsAlreadyQueued(t *testing.T) {
 		sub.Unsubscribe()
 		close(release)
 
-		time.Sleep(20 * time.Millisecond)
+		// Waiting for the goroutine to return is exact, where a sleep would
+		// only be probably-long-enough — and it cannot pass by finishing
+		// before a late delivery that was still coming.
+		select {
+		case <-s.exited:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: delivery goroutine never returned", r)
+		}
 		mu.Lock()
 		delivered := append([]int(nil), got...)
 		mu.Unlock()

@@ -562,7 +562,8 @@ func (s *localapi) peerConnectionEventsHandler(w http.ResponseWriter, r *http.Re
 		case queue <- evt:
 		default:
 			// queue full — drop. SSE consumer is too slow; better to
-			// lose this event than to back up the events.Emit goroutine.
+			// lose this event here than to stall this subscription's
+			// delivery goroutine and have the bus drop from further back.
 		}
 	})
 	defer sub.Unsubscribe()

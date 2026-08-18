@@ -50,18 +50,10 @@ var (
 // so reaching it means the callback is wedged, not busy.
 const queueDepth = 256
 
-// subscriber owns one subscription's delivery. Each has a single goroutine
-// draining a FIFO queue, which is what makes delivery ordered: Emit used to
-// spawn a fresh goroutine per event per callback, so two Emits raced and the
-// one that landed last was decided by the scheduler.
-//
-// That is not a rare interleaving. Emitting eight events to one subscriber
-// delivered them out of order in 200 of 200 runs, e.g. [0 3 1 2 7 6 5 4] —
-// so the *last* event a consumer saw was routinely not the last one sent.
-// Consumers that render the newest state (the share card renders the phase
-// from whichever frame arrived last) therefore settled on an arbitrary one,
-// which is how a peer that had finished registering kept reading
-// "discovering public IP".
+// subscriber owns one subscription's delivery: a single goroutine draining a
+// FIFO queue, which is what orders it. Emit previously spawned a goroutine per
+// event per callback, leaving the delivery order to the scheduler, so a
+// consumer that renders the newest event received an arbitrary one.
 type subscriber struct {
 	deliver func(any)
 	queue   chan any
