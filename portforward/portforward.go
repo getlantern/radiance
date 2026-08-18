@@ -85,7 +85,7 @@ func ProbeUPnP(ctx context.Context) bool {
 		// peer" states a capability verdict the probe did not reach — which is
 		// the kind of thing an operator acts on once and does not revisit.
 		if ctx.Err() != nil {
-			slog.Info("portforward: UPnP probe ran out of time; capability unknown", "err", err)
+			slog.Info("portforward: UPnP probe was canceled or timed out; capability unknown", "err", err)
 		} else {
 			slog.Info("portforward: UPnP probe found no gateway; this network cannot host a peer", "err", err)
 		}
@@ -125,7 +125,7 @@ func NewForwarder(ctx context.Context) (*Forwarder, error) {
 	}
 
 	if err := ctx.Err(); err != nil {
-		slog.Warn("portforward: gateway discovery ran out of time",
+		slog.Warn("portforward: gateway discovery was canceled or timed out",
 			"err", err, "igd2_err", errOrAbsent(err2, c2), "igd1_err", errOrAbsent(err1, c1))
 		return nil, err
 	}
@@ -204,14 +204,15 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 		// otherwise it survives with no Forwarder tracking it.
 		slog.Warn("portforward: caller gave up while the gateway was accepting the mapping; removing it",
 			"external_port", externalPort, "internal_port", internalPort, "err", ctxErr)
-		f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client)
+		f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client,
+			"caller gave up while the gateway was accepting it")
 		return nil, fmt.Errorf("add port mapping: %w", ctxErr)
 	}
 	if err != nil {
 		// Propagate ctx cancellation/deadline verbatim so callers can retry
 		// rather than treating it as a permanent "this network won't work".
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			slog.Warn("portforward: ran out of time adding the mapping",
+			slog.Warn("portforward: adding the mapping was canceled or timed out",
 				"external_port", externalPort, "internal_port", internalPort,
 				"internal_ip", internalIP, "method", f.method, "err", ctxErr)
 			return nil, fmt.Errorf("add port mapping: %w", ctxErr)
@@ -227,7 +228,8 @@ func (f *Forwarder) MapPort(ctx context.Context, internalPort uint16, descriptio
 			slog.Warn("portforward: gateway did not answer in time; removing any mapping it may have created",
 				"external_port", externalPort, "internal_port", internalPort,
 				"internal_ip", internalIP, "method", f.method, "err", err)
-			f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client)
+			f.deleteRacedMapping(&Mapping{ExternalPort: externalPort, Protocol: "TCP"}, client,
+				"gateway never answered the add")
 			return nil, fmt.Errorf("add port mapping: %w", errors.Join(ErrNoPortForwarding, err))
 		}
 		slog.Warn("portforward: gateway refused the mapping",
@@ -323,9 +325,10 @@ const (
 )
 
 // addCallTimeout is the same bound as renewCallTimeout for the initial MapPort
-// call. A var rather than a const only so tests can shorten it; nothing outside
-// this package writes it.
-var addCallTimeout = 30 * time.Second
+// call. Derived from it rather than repeating the literal, so the two cannot
+// drift. A var rather than a const only so tests can shorten it; nothing
+// outside this package writes it.
+var addCallTimeout = renewCallTimeout
 
 func (f *Forwarder) StartRenewal(ctx context.Context) {
 	f.mu.Lock()
@@ -345,22 +348,28 @@ func (f *Forwarder) StartRenewal(ctx context.Context) {
 	go f.renewLoop(renewCtx, interval)
 }
 
-// deleteRacedMapping removes a mapping that an in-flight renewal re-added
-// after UnmapPort had already deleted it. The renewal ctx is cancelled by
-// then, so this takes its own short deadline; best effort, since the only
-// remaining recourse is the router's own lease expiry.
-func (f *Forwarder) deleteRacedMapping(m *Mapping, client igdClient) {
+// deleteRacedMapping removes a mapping the Forwarder is not tracking and so
+// would never renew or delete: one an in-flight renewal re-added after
+// UnmapPort had already deleted it, or one the gateway may have created for an
+// add that was abandoned or never answered. why says which, because that is
+// the only place the three are distinguishable and they are diagnosed
+// differently.
+//
+// The calling ctx is typically already cancelled, so this takes its own short
+// deadline; best effort, since the only remaining recourse is the router's own
+// lease expiry.
+func (f *Forwarder) deleteRacedMapping(m *Mapping, client igdClient, why string) {
 	ctx, cancel := context.WithTimeout(context.Background(), racedUnmapTimeout)
 	defer cancel()
 	if err := runWithCtx(ctx, func() error {
 		return client.DeletePortMapping("", m.ExternalPort, m.Protocol)
 	}); err != nil {
-		slog.Warn("portforward: could not remove mapping re-added by an in-flight renewal",
-			"err", err, "external_port", m.ExternalPort)
+		slog.Warn("portforward: could not remove an untracked mapping",
+			"err", err, "external_port", m.ExternalPort, "why", why)
 		return
 	}
-	slog.Info("portforward: removed mapping re-added by an in-flight renewal",
-		"external_port", m.ExternalPort)
+	slog.Info("portforward: removed an untracked mapping",
+		"external_port", m.ExternalPort, "why", why)
 }
 
 func (f *Forwarder) renewLoop(ctx context.Context, interval time.Duration) {
@@ -417,7 +426,7 @@ func (f *Forwarder) renewLoop(ctx context.Context, interval time.Duration) {
 			f.mu.Unlock()
 			if teardownRaced {
 				if landed {
-					f.deleteRacedMapping(m, client)
+					f.deleteRacedMapping(m, client, "re-added by an in-flight renewal")
 				}
 				return
 			}
