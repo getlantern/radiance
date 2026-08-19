@@ -90,8 +90,15 @@ func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCap
 // → registering → verifying → serving on Start, stopping → idle on Stop,
 // error on failure). Each frame is a peer.StatusEvent JSON whose .Status
 // is the live snapshot at the moment the event fired — consumers SHOULD
-// re-render on every frame rather than diffing, since events.Emit's
-// per-callback goroutine can land Start phases out of order. Mobile builds
+// re-render on every frame rather than diffing.
+//
+// Frames from the event bus arrive in the order they were emitted, which was
+// not true before it serialized delivery per subscriber: a consumer rendering
+// the newest frame could settle on a stale phase. That guarantee covers the
+// bus only. This method can feed handler from two independent sources at once
+// (below), and nothing orders them against each other, so a delayed SSE frame
+// can still follow a newer local one.
+// Mobile builds
 // may share a process with radiance (localOnly), in which case
 // events.SubscribeContext delivers directly; otherwise the SSE retry loop
 // is used. Blocks until ctx is cancelled.
