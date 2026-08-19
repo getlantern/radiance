@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"github.com/getlantern/common"
+	wire "github.com/getlantern/common/usermessage"
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/issue"
@@ -116,6 +117,17 @@ type IssueReportRequest struct {
 	Attachments           []*issue.Attachment `json:"attachments"`
 }
 
+// UserMessageAcknowledgeRequest identifies the pending message displayed by the UI.
+type UserMessageAcknowledgeRequest struct {
+	DisplayID string `json:"displayID"`
+}
+
+// UserMessageActivityRequest reports whether foreground polling should run.
+type UserMessageActivityRequest struct {
+	Active bool `json:"active"`
+	Online bool `json:"online"`
+}
+
 // Shared response types used by both client and server.
 
 type SelectedServerResponse struct {
@@ -146,6 +158,11 @@ type SuccessResponse struct {
 
 type PlansResponse struct {
 	Plans string `json:"plans"`
+}
+
+// CurrentUserMessageResponse contains the pending message, if one exists.
+type CurrentUserMessageResponse struct {
+	Message *wire.ResolvedUserMessage `json:"message,omitempty"`
 }
 
 type ResultResponse struct {

@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	C "github.com/getlantern/common"
+	wire "github.com/getlantern/common/usermessage"
 	"github.com/getlantern/publicip"
 
 	"github.com/getlantern/radiance/account"
@@ -38,6 +39,7 @@ import (
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/unbounded"
+	clientmessage "github.com/getlantern/radiance/usermessage"
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
@@ -57,6 +59,7 @@ type LocalBackend struct {
 	confHandler   *config.ConfigHandler
 	issueReporter *issue.IssueReporter
 	accountClient *account.Client
+	userMessages  *clientmessage.Service
 
 	srvManager     *servers.Manager
 	vpnClient      *vpn.VPNClient
@@ -227,6 +230,27 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
+	userMessages, err := clientmessage.New(clientmessage.Options{
+		DataDir: dataDir,
+		Fetcher: clientmessage.NewHTTPFetcher(
+			kindling.HTTPClient(),
+			clientmessage.Endpoint(common.GetBaseURL()),
+		),
+		ContextProvider: func() clientmessage.ClientContext {
+			return clientmessage.ClientContext{
+				UserID:     settings.GetString(settings.UserIDKey),
+				ProToken:   settings.GetString(settings.TokenKey),
+				Locale:     clientmessage.NormalizeLocale(settings.GetString(settings.LocaleKey)),
+				Platform:   clientmessage.NormalizePlatform(common.Platform),
+				AppVersion: common.GetVersion(),
+			}
+		},
+	})
+	if err != nil {
+		slog.Error("Loading user-message state", "error", err)
+	} else {
+		r.userMessages = userMessages
+	}
 	r.clearSelectedIfMissing()
 	return r, nil
 }
@@ -234,6 +258,12 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
+	if r.userMessages != nil {
+		events.SubscribeContext(r.ctx, func(account.UserChangeEvent) {
+			r.userMessages.Refresh()
+		})
+		r.userMessages.Start(r.ctx)
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		result, err := publicip.Detect(ctx, &publicip.Config{
@@ -600,6 +630,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if err := settings.Patch(diff); err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
+	}
+	if _, ok := diff[settings.LocaleKey]; ok {
+		r.refreshUserMessages()
 	}
 	// telemetry settings
 	if _, ok := diff[settings.TelemetryKey]; ok {
@@ -1547,19 +1580,35 @@ func (r *LocalBackend) RemoveSplitTunnelItems(items vpn.SplitTunnelFilter) error
 /////////////
 
 func (r *LocalBackend) NewUser(ctx context.Context) (*account.UserData, error) {
-	return r.accountClient.NewUser(ctx)
+	userData, err := r.accountClient.NewUser(ctx)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return userData, err
 }
 
 func (r *LocalBackend) Login(ctx context.Context, email, password string) (*account.UserData, error) {
-	return r.accountClient.Login(ctx, email, password)
+	userData, err := r.accountClient.Login(ctx, email, password)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return userData, err
 }
 
 func (r *LocalBackend) Logout(ctx context.Context, email string) (*account.UserData, error) {
-	return r.accountClient.Logout(ctx, email)
+	userData, err := r.accountClient.Logout(ctx, email)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return userData, err
 }
 
 func (r *LocalBackend) FetchUserData(ctx context.Context) (*account.UserData, error) {
-	return r.accountClient.FetchUserData(ctx)
+	userData, err := r.accountClient.FetchUserData(ctx)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return userData, err
 }
 
 func (r *LocalBackend) VerifyPassword(ctx context.Context, email, password string) error {
@@ -1584,7 +1633,11 @@ func (r *LocalBackend) CompleteRecoveryByEmail(ctx context.Context, email, newPa
 }
 
 func (r *LocalBackend) DeleteAccount(ctx context.Context, email, password string) (*account.UserData, error) {
-	return r.accountClient.DeleteAccount(ctx, email, password)
+	userData, err := r.accountClient.DeleteAccount(ctx, email, password)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return userData, err
 }
 
 func (r *LocalBackend) SignUp(ctx context.Context, email, password string) ([]byte, *account.SignupResponse, error) {
@@ -1651,7 +1704,11 @@ func (r *LocalBackend) RemoveDevice(ctx context.Context, deviceID string) (*acco
 }
 
 func (r *LocalBackend) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*account.UserData, error) {
-	return r.accountClient.OAuthLoginCallback(ctx, oAuthToken)
+	userData, err := r.accountClient.OAuthLoginCallback(ctx, oAuthToken)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return userData, err
 }
 
 func (r *LocalBackend) OAuthLoginURL(ctx context.Context, provider string) (string, error) {
@@ -1668,6 +1725,40 @@ func (r *LocalBackend) UserData() (*account.UserData, error) {
 		return nil, fmt.Errorf("failed to get user data from settings: %w", err)
 	}
 	return &userData, nil
+}
+
+// CurrentUserMessage returns the current account's pending message.
+func (r *LocalBackend) CurrentUserMessage() (*wire.ResolvedUserMessage, error) {
+	if r.userMessages == nil {
+		return nil, nil
+	}
+	return r.userMessages.Current()
+}
+
+// RefreshUserMessages schedules an immediate eligibility refresh.
+func (r *LocalBackend) RefreshUserMessages() {
+	r.refreshUserMessages()
+}
+
+func (r *LocalBackend) refreshUserMessages() {
+	if r.userMessages != nil {
+		r.userMessages.Refresh()
+	}
+}
+
+// AcknowledgeUserMessage records that the UI displayed displayID.
+func (r *LocalBackend) AcknowledgeUserMessage(displayID string) error {
+	if r.userMessages == nil {
+		return clientmessage.ErrMessageNotPending
+	}
+	return r.userMessages.Acknowledge(displayID)
+}
+
+// SetUserMessageActivity adjusts polling for app and network lifecycle changes.
+func (r *LocalBackend) SetUserMessageActivity(active, online bool) {
+	if r.userMessages != nil {
+		r.userMessages.SetActivity(active, online)
+	}
 }
 
 ///////////////////
