@@ -180,7 +180,7 @@ func (c *VPNClient) Disconnect() error {
 
 func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options option.Options, isRestart bool) error {
 	configureBufPool()
-	c.logger.Debug("Starting tunnel", "options", options)
+	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
 	t := tunnel{
 		dataPath:             boxOptions.BasePath,
@@ -599,7 +599,8 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		c.mu.Unlock()
 		return nil, errors.New("offline tests already running")
 	}
-	ctx, cancel := context.WithCancel(box.BaseContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = box.Context(ctx)
 	c.offlineTestCancel = cancel
 	done := make(chan struct{})
 	c.offlineTestDone = done

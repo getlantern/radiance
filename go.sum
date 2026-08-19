@@ -260,6 +260,8 @@ github.com/getlantern/kindling v0.0.0-20260818180827-1583458ab9b7 h1:uQWqnkaLL5n
 github.com/getlantern/kindling v0.0.0-20260818180827-1583458ab9b7/go.mod h1:ZEPFiB6rH6MtMN1O7b5gE+LJpCsRFzAn4u8lbIxHh3w=
 github.com/getlantern/lantern-box v0.0.114-0.20260818211815-a7167f80fbf4 h1:J+r+a0T5GrlhafKqJ+I/sv+c4XXoP49sSR0cvQ38Z3k=
 github.com/getlantern/lantern-box v0.0.114-0.20260818211815-a7167f80fbf4/go.mod h1:h1MqQWvLkmsYpWKzK1bXOmN9lw26OsmRY87nWNTmzNQ=
+github.com/getlantern/lantern-box v0.0.114-0.20260818234917-250e50e709d4 h1:0Zpnxmed6a3c/c+arMiXGChzxO83z00Ol0WQQUpJbPM=
+github.com/getlantern/lantern-box v0.0.114-0.20260818234917-250e50e709d4/go.mod h1:h1MqQWvLkmsYpWKzK1bXOmN9lw26OsmRY87nWNTmzNQ=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 h1:grfGavAUp2E9w9ZoJuM3FyWyQ0sCJ64V4ZMKtZKRqTc=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNiMhCu4bf60nqcIuQpTYb00Ezm1ag=
@@ -274,8 +276,8 @@ github.com/getlantern/samizdat v0.0.3-0.20260724223841-a5ee9ab56830 h1:RZd3CELOt
 github.com/getlantern/samizdat v0.0.3-0.20260724223841-a5ee9ab56830/go.mod h1:uEeykQSW2/6rTjfPlj3MTTo59poSHXfAHTGgzYDkbr0=
 github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb h1:c5YM7b3a4r2J8Eh89KkI6M/iTFe6Bi+b8AJlfkKdFq4=
 github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb/go.mod h1:GkPT5P9JoOTIRXRmFWxYgu1hhXgTFFTNc2hoG7WQc3g=
-github.com/getlantern/sing-box-minimal v1.13.17-0.20260803225311-200bc2dd02a7 h1:zcredTaQzXn0NFoTRoyFFRvD2DuBc0op5nMY18zfR1k=
-github.com/getlantern/sing-box-minimal v1.13.17-0.20260803225311-200bc2dd02a7/go.mod h1:goKMrv+A5udmWiaiX2DNrdjfaZnSrN2Dev5/M7R/Gj0=
+github.com/getlantern/sing-box-minimal v1.13.19-lantern h1:dwVCskH9N3Q5a2wVELdyGDOHKvqWK0D9/rCM/VcaDF0=
+github.com/getlantern/sing-box-minimal v1.13.19-lantern/go.mod h1:4E8WvF7Vi60N1NtPw1CeG994J/yiJZZkty5dKKwG+V0=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9/go.mod h1:7uvbzuoOr3uYGHZx5QWlI8/C52XEf/aTb/tJFEe41Ak=
 github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa h1:goZee1cURbWPiqX1xyjfwLB/zByQ50hEwonnnyLmcJQ=

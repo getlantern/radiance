@@ -14,9 +14,12 @@ import (
 
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	singjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
@@ -631,26 +634,32 @@ func TestClient_Heartbeat_TransientErrorDoesNotStop(t *testing.T) {
 // "no route block at all" and "existing route block" cases get the flag set,
 // and that other route-level keys are preserved.
 func TestEnsurePeerOutboundsBypassVPN(t *testing.T) {
+	ctx := box.Context(context.Background())
+	parseOptions := func(t *testing.T, s string) option.Options {
+		t.Helper()
+		opts, err := singjson.UnmarshalExtendedContext[option.Options](ctx, []byte(s))
+		require.NoError(t, err)
+		return opts
+	}
+
 	t.Run("adds route block when missing", func(t *testing.T) {
 		in := `{"inbounds":[{"type":"samizdat","tag":"samizdat-in"}]}`
 		out, err := ensurePeerOutboundsBypassVPN(in)
 		require.NoError(t, err)
-		var parsed map[string]any
-		require.NoError(t, json.Unmarshal([]byte(out), &parsed))
-		route := parsed["route"].(map[string]any)
-		assert.Equal(t, true, route["auto_detect_interface"])
-		assert.Contains(t, parsed, "inbounds", "must preserve other top-level fields")
+		opts := parseOptions(t, out)
+		require.NotNil(t, opts.Route)
+		assert.True(t, opts.Route.AutoDetectInterface)
+		assert.NotEmpty(t, opts.Inbounds, "must preserve other top-level fields")
 	})
 	t.Run("preserves existing route fields", func(t *testing.T) {
 		in := `{"route":{"rules":[{"action":"sniff"}],"final":"direct"}}`
 		out, err := ensurePeerOutboundsBypassVPN(in)
 		require.NoError(t, err)
-		var parsed map[string]any
-		require.NoError(t, json.Unmarshal([]byte(out), &parsed))
-		route := parsed["route"].(map[string]any)
-		assert.Equal(t, true, route["auto_detect_interface"])
-		assert.Equal(t, "direct", route["final"])
-		assert.NotEmpty(t, route["rules"])
+		opts := parseOptions(t, out)
+		require.NotNil(t, opts.Route)
+		assert.True(t, opts.Route.AutoDetectInterface)
+		assert.Equal(t, "direct", opts.Route.Final)
+		assert.NotEmpty(t, opts.Route.Rules)
 	})
 	t.Run("rejects malformed json", func(t *testing.T) {
 		_, err := ensurePeerOutboundsBypassVPN(`{not json`)
@@ -947,20 +956,19 @@ var _ boxService = (*fakeBoxService)(nil)
 
 // TestDefaultBuildBoxService_DecodesSamizdatInbound is the regression net
 // for the "missing inbound fields registry in context" failure that bit
-// us live: defaultBuildBoxService used to call libbox.NewServiceWithContext
-// with a fresh ctx that didn't have the lantern-box protocol registries
-// (samizdat, reflex, …) plumbed in, so the JSON decoder couldn't resolve
-// inbounds[0].type="samizdat" → libbox.NewServiceWithContext returned an
-// error → applyPeerShare rolled the toggle back. The integration tests
-// stub BuildBoxService entirely, so neither the libbox setup nor the
-// samizdat decoder were exercised in CI.
+// us live: the peer box was built from a ctx that didn't have the
+// lantern-box protocol registries (samizdat, reflex, …) plumbed in, so the
+// JSON decoder couldn't resolve inbounds[0].type="samizdat" → the build
+// failed → applyPeerShare rolled the toggle back. The integration tests
+// stub BuildBoxService entirely, so the samizdat decode path was never
+// exercised in CI.
 //
 // Calling defaultBuildBoxService directly with a minimal samizdat-inbound
-// options JSON walks the actual decode path. If the registry is missing
-// in the ctx that defaultBuildBoxService produces, libbox returns the
-// "missing inbound fields registry" error and this test fails before any
-// of the runtime cycle (rebuild, redeploy, toggle UI, dial-back) — what
-// used to take a 5-minute round-trip is now a 0.1s test failure.
+// options JSON walks the actual decode path. If the registries are missing
+// from the ctx it produces, the decode fails with the "missing inbound
+// fields registry" error and this test fails before any of the runtime
+// cycle (rebuild, redeploy, toggle UI, dial-back) — what used to take a
+// 5-minute round-trip is now a 0.1s test failure.
 func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
 	// Minimal but complete samizdat inbound — every field that
 	// option.SamizdatInboundOptions's json tags require to round-trip.
@@ -984,8 +992,48 @@ func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
 		"the lantern-box protocol registries have to be in ctx")
 	require.NotNil(t, bs)
 	// We never call Start; just verifying the decode path. Close drops
-	// any background structures libbox might have stood up.
+	// any background structures the box might have stood up.
 	_ = bs.Close()
+}
+
+func TestNewPeerBoxContext_LogFactoryIsRetrievable(t *testing.T) {
+	ctx := newPeerBoxContext(context.Background())
+	require.NotNil(t, service.FromContext[sblog.Factory](ctx),
+		"the registered log factory must be readable from the box's context, "+
+			"or this box logs only to stderr")
+}
+
+func TestNewPeerBoxContext_ResolvesInboundRegistry(t *testing.T) {
+	ctx := newPeerBoxContext(context.Background())
+	assert.NotNil(t, service.FromContext[option.InboundOptionsRegistry](ctx),
+		"registering the log factory must not displace the protocol registries "+
+			"sing-box needs to decode the samizdat inbound")
+}
+
+func TestNewPeerBoxContext_InheritsCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	boxCtx := newPeerBoxContext(ctx)
+	require.NoError(t, boxCtx.Err())
+
+	cancel()
+
+	select {
+	case <-boxCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer box context did not observe the caller's cancel")
+	}
+	assert.ErrorIs(t, boxCtx.Err(), context.Canceled)
+}
+
+// service.MustRegister mutates whichever registry the context hands back, so
+// a per-lookup rebuild would write the log factory into an object discarded
+// before sing-box reads it. Pin that both lookups resolve to one registry.
+func TestNewPeerBoxContext_RegistryStableAcrossLookups(t *testing.T) {
+	ctx := newPeerBoxContext(context.Background())
+	first := service.RegistryFromContext(ctx)
+	second := service.RegistryFromContext(ctx)
+	require.NotNil(t, first)
+	assert.True(t, first == second, "every lookup must resolve to one registry")
 }
 
 // All four peer endpoints must carry the same standard header set as
@@ -1066,66 +1114,6 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 		assert.NotEmpty(t, c.platform, "%s must carry %s", path, common.PlatformHeader)
 		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
 	}
-}
-
-// The peer box's log factory has to survive the trip into libbox, and the
-// bug that made it not survive was invisible: box.BaseContext() mints a
-// fresh service registry per call, so a wrapper that rebuilt the base on
-// every Value lookup handed out a different registry each time. Reads kept
-// working (each fresh base carries the same protocol registrations), which
-// is why only a registration could expose it. These four tests pin the
-// properties that make the registration land.
-
-// A registration made against the context libbox receives must be
-// retrievable from that same context.
-func TestPeerBoxContext_LogFactoryIsRetrievable(t *testing.T) {
-	boxCtx := newPeerBoxContext(context.Background())
-
-	got := service.FromContext[sblog.Factory](boxCtx)
-	require.NotNil(t, got, "the registered sing-box log factory must be readable "+
-		"from the context handed to libbox, or this box logs only to stderr")
-}
-
-// Repeated registry lookups must return the same object. This is the
-// invariant the old wrapper broke: two lookups, two registries, so a write
-// through one was never seen through the other.
-func TestPeerBoxContext_RegistryIsStableAcrossLookups(t *testing.T) {
-	boxCtx := newPeerBoxContext(context.Background())
-
-	first := service.RegistryFromContext(boxCtx)
-	second := service.RegistryFromContext(boxCtx)
-	require.NotNil(t, first)
-	assert.True(t, first == second,
-		"every lookup must resolve to one registry; a per-lookup rebuild makes "+
-			"service.MustRegister write into an object that is immediately discarded")
-}
-
-// Cancellation still comes from the caller, so a Stop-induced cancel reaches
-// box internals rather than being swallowed by the base context.
-func TestPeerBoxContext_InheritsCallerCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	boxCtx := newPeerBoxContext(ctx)
-	require.NoError(t, boxCtx.Err())
-
-	cancel()
-
-	select {
-	case <-boxCtx.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("peer box context did not observe the caller's cancel")
-	}
-	assert.ErrorIs(t, boxCtx.Err(), context.Canceled)
-}
-
-// The lantern-box protocol registries must still resolve through the
-// wrapper. This is the registry libbox reports as "missing inbound fields
-// registry in context" when it is absent, which is what would break
-// decoding the samizdat inbound from /peer/register.
-func TestPeerBoxContext_StillResolvesInboundRegistry(t *testing.T) {
-	boxCtx := newPeerBoxContext(context.Background())
-
-	assert.NotNil(t, service.FromContext[option.InboundOptionsRegistry](boxCtx),
-		"registering the log factory must not displace the protocol registries")
 }
 
 // Rotation installs a freshly fetched launch_cfg on an already-running peer,

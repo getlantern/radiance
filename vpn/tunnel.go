@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"slices"
 	"sync"
@@ -141,6 +140,8 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	experimental.RegisterClashServerConstructor(newClashServer)
 
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
+
+	t.ctx, t.cancel = context.WithCancel(context.Background())
 	if common.IsMobile() {
 		var monitorCloser io.Closer
 		t.memoryMonitor, monitorCloser = startMemoryMonitor(t.ctx)
@@ -153,31 +154,11 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 			setMobileMemoryLimits()
 		}
 	}
-
-	// setup libbox service
-	dataPath := t.dataPath
-	setupOpts := &libbox.SetupOptions{
-		BasePath: dataPath,
-		TempPath: filepath.Join(dataPath, "temp"),
-	}
-	if !common.IsWindows() {
-		setupOpts.WorkingPath = dataPath
-	}
-	if common.Platform == "android" {
-		setupOpts.FixAndroidStack = true
+	if common.IsAndroid() {
+		libbox.Setup(&libbox.SetupOptions{FixAndroidStack: true})
 	}
 
-	slog.Log(nil, rlog.LevelTrace, "Setting up libbox", "setup_options", setupOpts)
-	if err := traceSpan(ctx, "libbox.Setup", func() error {
-		return libbox.Setup(setupOpts)
-	}); err != nil {
-		return fmt.Errorf("setup libbox: %w", err)
-	}
-
-	// box.Context calls libbox.BaseContext, which instantiates a sing/service/filemanager using
-	// the setup options, so we need to set those BEFORE calling box.BaseContext or re-instantiate
-	// the filemanager.
-	boxCtx := box.BaseContext()
+	boxCtx := box.Context(t.ctx)
 	if platformIfce != nil {
 		boxCtx = service.ContextWith[adapter.PlatformInterface](boxCtx, libbox.NewPlatformInterfaceWrapper(platformIfce))
 	}
@@ -186,8 +167,8 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	// recursively re-enters itself. streamingRoundTripper forces kindling to
 	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	boxCtx = lbA.ContextWithDirectTransport(boxCtx, streamingRoundTripper{inner: kindling.HTTPClient().Transport})
-	t.ctx, t.cancel = context.WithCancel(boxCtx)
 
+	t.ctx = boxCtx
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
@@ -216,7 +197,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 
 	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	clientContextInjector := newClientContextInjector(outboundMgr, dataPath, t.initialLanternTags)
+	clientContextInjector := newClientContextInjector(outboundMgr, t.dataPath, t.initialLanternTags)
 	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
 	t.clientContextTracker = clientContextInjector
 	router := service.FromContext[adapter.Router](t.ctx)

@@ -470,7 +470,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 // jsonRoundTrip marshals and unmarshals the options to let sing-box set defaults and validate it.
 func jsonRoundTrip(path string, opts O.Options) (O.Options, error) {
-	ctx := box.BaseContext()
+	ctx := box.Context(context.Background())
 	buf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return opts, fmt.Errorf("marshal options: %w", err)

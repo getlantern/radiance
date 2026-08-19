@@ -4,7 +4,7 @@ go 1.26.2
 
 // replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.13.17-0.20260803225311-200bc2dd02a7
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.13.19-lantern
 
 // replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4
 
@@ -45,7 +45,7 @@ require (
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
 	github.com/getlantern/kindling v0.0.0-20260818180827-1583458ab9b7
-	github.com/getlantern/lantern-box v0.0.114-0.20260818211815-a7167f80fbf4
+	github.com/getlantern/lantern-box v0.0.114-0.20260818234917-250e50e709d4
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb

@@ -1,9 +1,16 @@
 package peer
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
+
+	box "github.com/getlantern/lantern-box"
+	"github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 )
 
 // abuseRuleSetTags is the canonical list of abuse rule_set tags that
@@ -26,7 +33,7 @@ var abuseRuleSetTags = []string{
 // a full structural check would be brittle to upstream additions.
 const (
 	rfc1918CanaryCIDR = "10.0.0.0/8"
-	smtpCanaryPort    = float64(25)
+	smtpCanaryPort    = 25
 )
 
 // validateAbuseRules is a defence-in-depth check on the sing-box
@@ -38,7 +45,7 @@ const (
 // If a future server-side regression ships a launch_cfg without those
 // rules, every newly-registered peer would silently turn into an open
 // residential proxy until someone noticed. This validator blocks
-// Start before libbox runs an unsafe config; the peer prefers to fail
+// Start before sing-box runs an unsafe config; the peer prefers to fail
 // to share at all rather than share unsafely.
 //
 // The check is structural-only — it confirms the expected rule_set
@@ -49,23 +56,23 @@ const (
 // those are separate supply-chain concerns and are not in scope for
 // this gate.
 func validateAbuseRules(optionsJSON string) error {
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(optionsJSON), &raw); err != nil {
+	ctx := box.Context(context.Background())
+	options, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(optionsJSON))
+	if err != nil {
 		return fmt.Errorf("parse launch_cfg JSON: %w", err)
 	}
-	route, ok := raw["route"].(map[string]any)
-	if !ok {
+	if options.Route == nil {
 		return errors.New("launch_cfg is missing route block — peer would have no abuse blocking at all")
 	}
 
 	var errs []error
-	if err := validateAbuseRuleSetTags(route); err != nil {
+	if err := validateAbuseRuleSetTags(options.Route.RuleSet); err != nil {
 		errs = append(errs, err)
 	}
-	if err := validateAbuseRejectRules(route); err != nil {
+	if err := validateAbuseRejectRules(options.Route.Rules); err != nil {
 		errs = append(errs, err)
 	}
-	if err := validateStaticRejectCanaries(route); err != nil {
+	if err := validateStaticRejectCanaries(options.Route.Rules); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -74,22 +81,11 @@ func validateAbuseRules(optionsJSON string) error {
 // validateAbuseRuleSetTags asserts every entry in abuseRuleSetTags is
 // declared in route.rule_set. Missing entries mean sing-box won't even
 // download the abuse list, so no destination check ever happens.
-func validateAbuseRuleSetTags(route map[string]any) error {
-	rsList, _ := route["rule_set"].([]any)
-	got := map[string]bool{}
-	for _, rs := range rsList {
-		rsMap, ok := rs.(map[string]any)
-		if !ok {
-			continue
-		}
-		if tag, _ := rsMap["tag"].(string); tag != "" {
-			got[tag] = true
-		}
-	}
-	var missing []string
-	for _, want := range abuseRuleSetTags {
-		if !got[want] {
-			missing = append(missing, want)
+func validateAbuseRuleSetTags(rulesets []option.RuleSet) error {
+	missing := make([]string, 0, len(abuseRuleSetTags))
+	for _, tag := range abuseRuleSetTags {
+		if !slices.ContainsFunc(rulesets, func(rs option.RuleSet) bool { return rs.Tag == tag }) {
+			missing = append(missing, tag)
 		}
 	}
 	if len(missing) > 0 {
@@ -108,22 +104,17 @@ func validateAbuseRuleSetTags(route map[string]any) error {
 // IP, etc.) or with invert=true would let traffic in the abuse list
 // through under most conditions; counting it as covering the tag
 // would mask a misconfigured launch_cfg.
-func validateAbuseRejectRules(route map[string]any) error {
-	rules, _ := route["rules"].([]any)
+func validateAbuseRejectRules(rules []option.Rule) error {
 	rejectedTags := map[string]bool{}
 	for _, r := range rules {
-		body := ruleBody(r)
-		if body == nil {
+		if !isUnconditionalReject(r.DefaultOptions, "rule_set") {
 			continue
 		}
-		if !isUnconditionalReject(body, "rule_set") {
-			continue
-		}
-		for _, t := range asStringSlice(body["rule_set"]) {
-			rejectedTags[t] = true
+		for _, tag := range r.DefaultOptions.RuleSet {
+			rejectedTags[tag] = true
 		}
 	}
-	var missing []string
+	missing := make([]string, 0, len(abuseRuleSetTags))
 	for _, want := range abuseRuleSetTags {
 		if !rejectedTags[want] {
 			missing = append(missing, want)
@@ -140,32 +131,19 @@ func validateAbuseRejectRules(route map[string]any) error {
 // present. Picks one canary from each block rather than asserting the
 // full set so legitimate additions in samizdat.go don't break this
 // check.
-func validateStaticRejectCanaries(route map[string]any) error {
-	rules, _ := route["rules"].([]any)
+func validateStaticRejectCanaries(rules []option.Rule) error {
 	gotRFC1918 := false
 	gotSMTP := false
 	for _, r := range rules {
-		body := ruleBody(r)
-		if body == nil {
-			continue
+		if isUnconditionalReject(r.DefaultOptions, "ip_cidr") {
+			gotRFC1918 = gotRFC1918 || slices.ContainsFunc(r.DefaultOptions.IPCIDR,
+				func(cidr string) bool { return cidr == rfc1918CanaryCIDR },
+			)
 		}
-		// Each canary is checked against an unconditional reject scoped
-		// to its own match field. A reject that ANDs ip_cidr with a port
-		// or domain (or sets invert) would not actually cover the
-		// destination class the canary represents, so don't credit it.
-		if isUnconditionalReject(body, "ip_cidr") {
-			for _, cidr := range asStringSlice(body["ip_cidr"]) {
-				if cidr == rfc1918CanaryCIDR {
-					gotRFC1918 = true
-				}
-			}
-		}
-		if isUnconditionalReject(body, "port") {
-			for _, p := range asFloatSlice(body["port"]) {
-				if p == smtpCanaryPort {
-					gotSMTP = true
-				}
-			}
+		if isUnconditionalReject(r.DefaultOptions, "port") {
+			gotSMTP = gotSMTP || slices.ContainsFunc(r.DefaultOptions.Port,
+				func(p uint16) bool { return p == smtpCanaryPort },
+			)
 		}
 	}
 	var missing []string
@@ -173,7 +151,7 @@ func validateStaticRejectCanaries(route map[string]any) error {
 		missing = append(missing, fmt.Sprintf("RFC1918 reject (canary %s)", rfc1918CanaryCIDR))
 	}
 	if !gotSMTP {
-		missing = append(missing, fmt.Sprintf("SMTP-port reject (canary :%d)", int(smtpCanaryPort)))
+		missing = append(missing, fmt.Sprintf("SMTP-port reject (canary :%d)", smtpCanaryPort))
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("route.rules is missing static abuse blocks: %v", missing)
@@ -181,103 +159,32 @@ func validateStaticRejectCanaries(route map[string]any) error {
 	return nil
 }
 
-// isUnconditionalReject reports whether the rule body is a reject
-// action whose scope is defined solely by matchKey — no other match
-// fields and no invert. matchKey is the field expected to carry the
-// rule's scope ("rule_set", "ip_cidr", or "port").
+// isUnconditionalReject reports whether rule is a plain reject scoped by
+// onField alone — no other match field and no invert.
 //
-// The pure-reject shape we want for each abuse-block category is:
-//
-//	{"action": "reject", "<matchKey>": [...]}                    // canonical
-//	{"action": "reject", "<matchKey>": [...], "invert": false}   // explicit no-op
-//
-// Anything else either narrows the match (e.g. adding "port": 80
-// to a rule_set reject limits it to port-80 traffic) or inverts the
-// match (invert=true rejects everything OUTSIDE the matchKey). In
-// both cases the launch_cfg would not actually block the abuse
-// destination class the rule claims to cover, so callers must not
-// credit it as covering the tag.
-func isUnconditionalReject(body map[string]any, matchKey string) bool {
-	if action, _ := body["action"].(string); action != "reject" {
+// It builds the exact rule that a bare reject-on-onField would produce
+// (reject action, default method, only onField copied over) and compares
+// the whole struct with reflect.DeepEqual. Any extra match field, an
+// invert, or a non-default action/method leaves some other field non-zero,
+// so the structs differ and the rule is not credited as covering the abuse
+// class.
+func isUnconditionalReject(rule option.DefaultRule, onField string) bool {
+	var defaultValue option.DefaultRule
+	defaultValue.RuleAction = option.RuleAction{
+		Action: constant.RuleActionTypeReject,
+		RejectOptions: option.RejectActionOptions{
+			Method: constant.RuleActionRejectMethodDefault,
+		},
+	}
+	switch onField {
+	case "rule_set":
+		defaultValue.RuleSet = rule.RuleSet
+	case "ip_cidr":
+		defaultValue.IPCIDR = rule.IPCIDR
+	case "port":
+		defaultValue.Port = rule.Port
+	default:
 		return false
 	}
-	if invert, _ := body["invert"].(bool); invert {
-		return false
-	}
-	// "type" is a discriminator, not a matcher, so its presence must not make
-	// an otherwise-unconditional rule look scoped. sing-box's marshaller drops
-	// it for default rules, but its parser accepts "default" explicitly, and
-	// launch_cfg is authored server-side rather than round-tripped through
-	// sing-box — so an inlined rule can legitimately carry it. Only the
-	// default forms are tolerated: any other type (e.g. "logical") brings its
-	// own fields, which the allow-list below still rejects.
-	if t, ok := body["type"]; ok {
-		if s, isStr := t.(string); !isStr || (s != "" && s != "default") {
-			return false
-		}
-	}
-	allowed := map[string]bool{"action": true, "invert": true, "type": true, matchKey: true}
-	for k := range body {
-		if !allowed[k] {
-			return false
-		}
-	}
-	return true
-}
-
-// ruleBody returns the field-bearing inner object of a sing-box
-// route Rule. sing-box marshals "default" rules in two equivalent
-// shapes: inlined at the top level (no "default" wrapper) or nested
-// under "default". We accept both.
-func ruleBody(r any) map[string]any {
-	m, ok := r.(map[string]any)
-	if !ok {
-		return nil
-	}
-	if nested, ok := m["default"].(map[string]any); ok {
-		return nested
-	}
-	return m
-}
-
-// asStringSlice normalizes a sing-box rule field that can be encoded
-// as either a scalar string or a string array. Both forms appear in
-// practice: `{"rule_set": "sr-direct"}` and `{"rule_set": ["a","b"]}`
-// are equivalent at the route layer. Treating only the array form as
-// valid here would false-positive a launch_cfg that emits the scalar.
-func asStringSlice(v any) []string {
-	if s, ok := v.(string); ok {
-		return []string{s}
-	}
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, x := range arr {
-		if s, ok := x.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// asFloatSlice is the numeric counterpart of asStringSlice — fields
-// like `port` can come back as `25` or `[25, 587]`. JSON unmarshals
-// every number to float64, so the canary comparison uses float64 too.
-func asFloatSlice(v any) []float64 {
-	if f, ok := v.(float64); ok {
-		return []float64{f}
-	}
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]float64, 0, len(arr))
-	for _, x := range arr {
-		if f, ok := x.(float64); ok {
-			out = append(out, f)
-		}
-	}
-	return out
+	return reflect.DeepEqual(rule, defaultValue)
 }

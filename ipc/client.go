@@ -160,7 +160,9 @@ func (c *Client) RunOfflineURLTests(ctx context.Context) error {
 // Server selection  //
 ///////////////////////
 
-var boxCtx = box.BaseContext()
+// boxCtx holds the sing-box registries and should not be mutated. It is used
+// for JSON marshalling/unmarshalling of server options.
+var boxCtx = box.Context(context.Background())
 
 // SelectServer selects the server with the given tag.
 func (c *Client) SelectServer(ctx context.Context, tag string) error {
