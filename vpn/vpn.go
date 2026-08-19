@@ -584,9 +584,11 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 // RunOfflineURLTests will run URL tests for all outbounds if the tunnel is not currently connected.
 // This can improve initial connection times by pre-determining reachability and latency to servers.
 //
-// If [VPNClient.Connect] is called while RunOfflineURLTests is running, the tests will be cancelled and
-// any results will be discarded.
-func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
+// The tests are cancelled and any results discarded if ctx is cancelled or if [VPNClient.Connect]
+// is called while they are running. Callers should pass a context tied to the backend lifetime so
+// that closing the backend (e.g. when the tunnel comes up in the extension process) stops in-flight
+// probe dials rather than letting them route through the newly established tunnel.
+func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
 	c.mu.Lock()
 	if c.tunnel != nil {
 		c.mu.Unlock()
@@ -599,8 +601,9 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		c.mu.Unlock()
 		return nil, errors.New("offline tests already running")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = box.Context(ctx)
+
+	ctx, cancel := context.WithCancel(box.Context(ctx))
+	defer cancel()
 	c.offlineTestCancel = cancel
 	done := make(chan struct{})
 	c.offlineTestDone = done
