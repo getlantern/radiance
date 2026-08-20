@@ -164,7 +164,7 @@ type Client struct {
 	// before invoking it, so SetListener(nil) alone races against in-flight
 	// Notify calls — under load (real client traffic), Close fires N disconnect
 	// callbacks from N goroutines that have already snapshotted the listener,
-	// each then events.Emit spawns one more goroutine per subscriber. The
+	// each then emitting an event to every subscriber. The
 	// Flutter-side subscriber posts main-thread tasks per event, and a
 	// hundred-task flood against a Flutter engine that's simultaneously
 	// processing the SmC-off state change is the Flutter mutex crash we hit.
