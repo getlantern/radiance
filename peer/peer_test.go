@@ -1026,10 +1026,10 @@ func TestNewPeerBoxContext_InheritsCallerCancellation(t *testing.T) {
 	assert.ErrorIs(t, boxCtx.Err(), context.Canceled)
 }
 
-// service.MustRegister mutates whichever registry the context hands back, so
-// a per-lookup rebuild would write the log factory into an object discarded
-// before sing-box reads it. Pin that both lookups resolve to one registry.
 func TestNewPeerBoxContext_RegistryStableAcrossLookups(t *testing.T) {
+	// service.MustRegister mutates whichever registry the context hands back, so
+	// a per-lookup rebuild would write the log factory into an object discarded
+	// before sing-box reads it. Pin that both lookups resolve to one registry.
 	ctx := newPeerBoxContext(context.Background())
 	first := service.RegistryFromContext(ctx)
 	second := service.RegistryFromContext(ctx)

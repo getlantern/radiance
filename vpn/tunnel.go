@@ -190,7 +190,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 		})
 		return err
 	}); err != nil {
-		return fmt.Errorf("create libbox service: %w", err)
+		return fmt.Errorf("create box instance: %w", err)
 	}
 	cacheFile := service.FromContext[adapter.CacheFile](t.ctx)
 	service.MustRegister[adapter.CacheFile](t.ctx, &cacheFileWrapper{CacheFile: cacheFile})

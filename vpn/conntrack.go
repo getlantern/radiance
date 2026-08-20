@@ -234,8 +234,6 @@ func (m *connTracker) closeConn(id uuid.UUID) {
 	m.closeRecord(r)
 }
 
-// closeAllTracked closes every live connection. It is the hard-reclaim path when conntrack is
-// compiled out (otherwise conntrack.Close drains every dialed conn).
 func (m *connTracker) closeAllTracked() {
 	for _, r := range m.conns.Iter() {
 		m.closeRecord(r)
