@@ -664,8 +664,8 @@ func TestConnectionEventBridge(t *testing.T) {
 	cb := *captured.Load()
 	require.NotNil(t, cb, "OnConnectionChangeFunc must be installed on bfOpt")
 
-	// Buffered enough that events.Emit's per-callback goroutines
-	// can deposit before the test reads.
+	// Buffered so the subscription's delivery goroutine can deposit
+	// without blocking before the test reads.
 	ch := make(chan ConnectionEvent, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

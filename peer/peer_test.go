@@ -889,10 +889,11 @@ func TestClient_StatusEventEmittedOnStartAndStop(t *testing.T) {
 }
 
 // drainPhases reads up to n StatusEvents from got and returns them
-// keyed by Phase (last event per phase wins). Used by tests that need
-// set-membership semantics rather than strict ordering because
-// events.Emit's per-callback goroutines deliver out of order under
-// the runtime's scheduling.
+// keyed by Phase (last event per phase wins). Used by tests that care
+// which phases occurred rather than in what order. The bus does deliver
+// them in order now, so those tests could assert the sequence instead;
+// they do not, because the phase a given step emits is not what they are
+// pinning.
 func drainPhases(t *testing.T, got <-chan StatusEvent, n int) map[Phase]StatusEvent {
 	t.Helper()
 	out := make(map[Phase]StatusEvent, n)

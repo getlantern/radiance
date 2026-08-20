@@ -129,7 +129,7 @@ require (
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
-	github.com/getlantern/samizdat v0.0.3-0.20260724223841-a5ee9ab56830 // indirect
+	github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 // indirect
 	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
