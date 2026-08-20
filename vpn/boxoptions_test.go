@@ -147,6 +147,9 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			AdBlock:  cfg.AdBlock,
 		}
 		wantRule, wantRulesets := cfg.AdBlock.ToOptions()
+		// buildOptions round-trips the options through JSON, which lets sing-box
+		// fill in the reject action's default method; ToOptions leaves it unset.
+		wantRule.DefaultOptions.RejectOptions.Method = C.RuleActionRejectMethodDefault
 		options, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options

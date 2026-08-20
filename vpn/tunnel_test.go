@@ -25,7 +25,7 @@ func TestTunnelClose(t *testing.T) {
 		err := tun.close()
 		assert.NoError(t, err)
 		assert.Nil(t, tun.closers)
-		assert.Nil(t, tun.lbService)
+		assert.Nil(t, tun.boxInstance)
 	})
 
 	t.Run("cancels context", func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestTunnelClose(t *testing.T) {
 		err := tun.close()
 		require.Error(t, err, "close must report the timeout")
 		assert.Nil(t, tun.closers, "shared closers must be cleared before returning")
-		assert.Nil(t, tun.lbService)
+		assert.Nil(t, tun.boxInstance)
 
 		assert.NoError(t, tun.close(), "a second close must find no closers")
 

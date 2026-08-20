@@ -55,7 +55,7 @@ func buildDNSServers() []option.DNSServerOptions {
 						Server:     "9.9.9.9",
 						ServerPort: 443,
 					},
-					LocalDNSServerOptions: option.LocalDNSServerOptions{
+					RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{
 						DialerOptions: option.DialerOptions{
 							Detour: "auto",
 						},

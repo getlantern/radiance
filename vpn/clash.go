@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/observable"
 	"github.com/sagernet/sing/service"
 
 	A "github.com/sagernet/sing-box/adapter"
@@ -148,6 +149,10 @@ func (s *clashServer) SetAdmissionGate(gate dialAdmissionGate) {
 		s.admissionGate.Store(gate)
 	}
 }
+
+// SetModeUpdateHook is a no-op because clashServer does not support mode update hooks. This is
+// to satisfy [adapter.ClashServer].
+func (s *clashServer) SetModeUpdateHook(_ *observable.Subscriber[struct{}]) {}
 
 // setRejectMode enables or disables reject mode. Existing connections continue;
 // only new ones are refused.

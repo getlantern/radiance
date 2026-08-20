@@ -383,7 +383,7 @@ func load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
-	ctx := box.BaseContext()
+	ctx := box.Context(context.Background())
 	cfg, err := singjson.UnmarshalExtendedContext[*Config](ctx, rawConfig)
 	if err == nil {
 		return cfg, nil

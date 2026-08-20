@@ -12,7 +12,10 @@ import (
 	N "github.com/sagernet/sing/common/network"
 
 	lsync "github.com/getlantern/common/sync"
+	"github.com/getlantern/lantern-box/adapter/groups"
 )
+
+var _ groups.ConnectionManager = (*connTracker)(nil)
 
 // record holds the lean per-connection state radiance actually reads. It is built once when a
 // connection is routed and never retains the full adapter.InboundContext; the scalars below are
@@ -231,8 +234,6 @@ func (m *connTracker) closeConn(id uuid.UUID) {
 	m.closeRecord(r)
 }
 
-// closeAllTracked closes every live connection. It is the hard-reclaim path when conntrack is
-// compiled out (otherwise conntrack.Close drains every dialed conn).
 func (m *connTracker) closeAllTracked() {
 	for _, r := range m.conns.Iter() {
 		m.closeRecord(r)

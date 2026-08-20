@@ -126,11 +126,11 @@ func (s Server) MarshalJSON() ([]byte, error) {
 	case option.Endpoint:
 		sj.Endpoint = &opts
 	}
-	return json.MarshalContext(box.BaseContext(), sj)
+	return json.MarshalContext(box.Context(context.Background()), sj)
 }
 
 func (s *Server) UnmarshalJSON(data []byte) error {
-	sj, err := json.UnmarshalExtendedContext[serverJSON](box.BaseContext(), data)
+	sj, err := json.UnmarshalExtendedContext[serverJSON](box.Context(context.Background()), data)
 	if err != nil {
 		return err
 	}
@@ -211,6 +211,12 @@ type Manager struct {
 	logger      *slog.Logger
 	serversFile string
 	httpClient  *http.Client
+
+	// regCtx holds the sing-box registries and should not be mutated after
+	// initialization. It is used for JSON marshalling/unmarshalling of server
+	// options. Read it through regContext, which supplies a fallback when a
+	// Manager is built without NewManager.
+	regCtx context.Context
 }
 
 // NewManager creates a new Manager instance, loading server options from disk.
@@ -227,6 +233,7 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 		// Use the bypass proxy dialer to route requests outside the VPN tunnel.
 		// This client is only used to access private servers the user has created.
 		httpClient: retryableHTTPClient(logger).StandardClient(),
+		regCtx:     box.Context(context.Background()),
 	}
 
 	mgr.logger.Debug("Loading servers", "file", mgr.serversFile)
@@ -235,6 +242,17 @@ func NewManager(dataPath string, logger *slog.Logger) (*Manager, error) {
 	}
 	mgr.logger.Log(nil, log.LevelTrace, "Loaded servers")
 	return mgr, nil
+}
+
+// regContext returns the sing-box registry context used to (un)marshal server
+// options. It falls back to a fresh registry context when regCtx is unset, so
+// a Manager built without NewManager (e.g. in tests) still (un)marshals rather
+// than dereferencing a nil context.
+func (m *Manager) regContext() context.Context {
+	if m.regCtx != nil {
+		return m.regCtx
+	}
+	return box.Context(context.Background())
 }
 
 func retryableHTTPClient(logger *slog.Logger) *retryablehttp.Client {
@@ -412,7 +430,7 @@ func (m *Manager) saveServers() error {
 	for _, srv := range m.servers {
 		servers = append(servers, srv)
 	}
-	buf, err := json.MarshalContext(box.BaseContext(), servers)
+	buf, err := json.MarshalContext(m.regContext(), servers)
 	m.access.RUnlock()
 	marshalDur := time.Since(marshalStart) - rlockWait
 	if err != nil {
@@ -527,14 +545,13 @@ func (m *Manager) loadServerList(buf []byte) error {
 //
 // TODO: remove once the legacy map layout no longer appears on disk in the field.
 func (m *Manager) loadOldFormat(buf []byte) error {
-	ctx := box.BaseContext()
 	type oldOptions struct {
 		Outbounds   []option.Outbound            `json:"outbounds,omitempty"`
 		Endpoints   []option.Endpoint            `json:"endpoints,omitempty"`
 		Locations   map[string]C.ServerLocation  `json:"locations,omitempty"`
 		Credentials map[string]ServerCredentials `json:"credentials,omitempty"`
 	}
-	old, err := json.UnmarshalExtendedContext[map[string]oldOptions](ctx, buf)
+	old, err := json.UnmarshalExtendedContext[map[string]oldOptions](m.regContext(), buf)
 	if err != nil {
 		m.quarantineInvalidServers(buf)
 		return fmt.Errorf("unmarshal legacy server options: %w", err)
@@ -623,8 +640,7 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 		Outbounds []option.Outbound `json:"outbounds,omitempty"`
 		Endpoints []option.Endpoint `json:"endpoints,omitempty"`
 	}
-	ctx := box.BaseContext()
-	cfg, err := json.UnmarshalExtendedContext[remoteConfig](ctx, body)
+	cfg, err := json.UnmarshalExtendedContext[remoteConfig](m.regContext(), body)
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
@@ -698,7 +714,7 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 		Outbounds []option.Outbound `json:"outbounds,omitempty"`
 		Endpoints []option.Endpoint `json:"endpoints,omitempty"`
 	}
-	cfg, err := json.UnmarshalExtendedContext[singboxConfig](box.BaseContext(), config)
+	cfg, err := json.UnmarshalExtendedContext[singboxConfig](m.regContext(), config)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}

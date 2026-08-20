@@ -1459,6 +1459,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	svrs := r.srvManager.AllServers()
 	slog.Debug("Running offline URL tests", "server_count", len(svrs), "url_override_count", len(cfg.BanditURLOverrides))
 	results, err := r.vpnClient.RunOfflineURLTests(
+		r.ctx,
 		settings.GetString(settings.DataPathKey),
 		servers.ServerList{Servers: svrs}.Outbounds(),
 		cfg.BanditURLOverrides,

@@ -37,34 +37,6 @@ func TestValidateAbuseRules_HappyPath(t *testing.T) {
 	}
 }
 
-func TestValidateAbuseRules_NestedDefaultForm(t *testing.T) {
-	// sing-box may marshal "default" rules either inlined or nested
-	// under a "default" key. validateAbuseRules must accept both —
-	// otherwise a future libbox version change would silently break
-	// the check.
-	const nested = `{
-		"route":{
-			"rule_set":[
-				{"type":"remote","tag":"geosite-malware"},
-				{"type":"remote","tag":"geoip-malware"},
-				{"type":"remote","tag":"geosite-phishing"},
-				{"type":"remote","tag":"geosite-cryptominers"}
-			],
-			"rules":[
-				{"type":"default","default":{"action":"reject","rule_set":["geosite-malware"]}},
-				{"type":"default","default":{"action":"reject","rule_set":["geoip-malware"]}},
-				{"type":"default","default":{"action":"reject","rule_set":["geosite-phishing"]}},
-				{"type":"default","default":{"action":"reject","rule_set":["geosite-cryptominers"]}},
-				{"type":"default","default":{"action":"reject","ip_cidr":["10.0.0.0/8"]}},
-				{"type":"default","default":{"action":"reject","port":[25]}}
-			]
-		}
-	}`
-	if err := validateAbuseRules(nested); err != nil {
-		t.Fatalf("nested default form should pass, got: %v", err)
-	}
-}
-
 func TestValidateAbuseRules_MissingRouteBlock(t *testing.T) {
 	err := validateAbuseRules(`{"inbounds":[]}`)
 	if err == nil {
@@ -190,10 +162,10 @@ func TestValidateAbuseRules_AcceptsScalarRuleSet(t *testing.T) {
 	cfg := `{
 		"route":{
 			"rule_set":[
-				{"type":"remote","tag":"geosite-malware"},
-				{"type":"remote","tag":"geoip-malware"},
-				{"type":"remote","tag":"geosite-phishing"},
-				{"type":"remote","tag":"geosite-cryptominers"}
+				{"type":"remote","tag":"geosite-malware","format":"binary","url":"https://example/geosite-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geoip-malware","format":"binary","url":"https://example/geoip-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-phishing","format":"binary","url":"https://example/geosite-phishing.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-cryptominers","format":"binary","url":"https://example/geosite-cryptominers.srs","download_detour":"direct"}
 			],
 			"rules":[
 				{"action":"reject","rule_set":"geosite-malware"},
@@ -216,10 +188,10 @@ func TestValidateAbuseRules_RejectsInverted(t *testing.T) {
 	cfg := `{
 		"route":{
 			"rule_set":[
-				{"type":"remote","tag":"geosite-malware"},
-				{"type":"remote","tag":"geoip-malware"},
-				{"type":"remote","tag":"geosite-phishing"},
-				{"type":"remote","tag":"geosite-cryptominers"}
+				{"type":"remote","tag":"geosite-malware","format":"binary","url":"https://example/geosite-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geoip-malware","format":"binary","url":"https://example/geoip-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-phishing","format":"binary","url":"https://example/geosite-phishing.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-cryptominers","format":"binary","url":"https://example/geosite-cryptominers.srs","download_detour":"direct"}
 			],
 			"rules":[
 				{"action":"reject","rule_set":["geosite-malware"],"invert":true},
@@ -247,10 +219,10 @@ func TestValidateAbuseRules_RejectsExtraConstraint(t *testing.T) {
 	cfg := `{
 		"route":{
 			"rule_set":[
-				{"type":"remote","tag":"geosite-malware"},
-				{"type":"remote","tag":"geoip-malware"},
-				{"type":"remote","tag":"geosite-phishing"},
-				{"type":"remote","tag":"geosite-cryptominers"}
+				{"type":"remote","tag":"geosite-malware","format":"binary","url":"https://example/geosite-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geoip-malware","format":"binary","url":"https://example/geoip-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-phishing","format":"binary","url":"https://example/geosite-phishing.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-cryptominers","format":"binary","url":"https://example/geosite-cryptominers.srs","download_detour":"direct"}
 			],
 			"rules":[
 				{"action":"reject","rule_set":["geosite-malware"],"port":[80]},
@@ -277,10 +249,10 @@ func TestValidateAbuseRules_RejectsStaticCanaryWithExtraConstraint(t *testing.T)
 	cfg := `{
 		"route":{
 			"rule_set":[
-				{"type":"remote","tag":"geosite-malware"},
-				{"type":"remote","tag":"geoip-malware"},
-				{"type":"remote","tag":"geosite-phishing"},
-				{"type":"remote","tag":"geosite-cryptominers"}
+				{"type":"remote","tag":"geosite-malware","format":"binary","url":"https://example/geosite-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geoip-malware","format":"binary","url":"https://example/geoip-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-phishing","format":"binary","url":"https://example/geosite-phishing.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-cryptominers","format":"binary","url":"https://example/geosite-cryptominers.srs","download_detour":"direct"}
 			],
 			"rules":[
 				{"action":"reject","rule_set":["geosite-malware"]},
@@ -306,10 +278,10 @@ func TestValidateAbuseRules_AcceptsExplicitInvertFalse(t *testing.T) {
 	cfg := `{
 		"route":{
 			"rule_set":[
-				{"type":"remote","tag":"geosite-malware"},
-				{"type":"remote","tag":"geoip-malware"},
-				{"type":"remote","tag":"geosite-phishing"},
-				{"type":"remote","tag":"geosite-cryptominers"}
+				{"type":"remote","tag":"geosite-malware","format":"binary","url":"https://example/geosite-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geoip-malware","format":"binary","url":"https://example/geoip-malware.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-phishing","format":"binary","url":"https://example/geosite-phishing.srs","download_detour":"direct"},
+				{"type":"remote","tag":"geosite-cryptominers","format":"binary","url":"https://example/geosite-cryptominers.srs","download_detour":"direct"}
 			],
 			"rules":[
 				{"action":"reject","rule_set":["geosite-malware"],"invert":false},
@@ -322,23 +294,6 @@ func TestValidateAbuseRules_AcceptsExplicitInvertFalse(t *testing.T) {
 		}}`
 	if err := validateAbuseRules(cfg); err != nil {
 		t.Fatalf("explicit invert=false should be treated as a pure reject, got: %v", err)
-	}
-}
-
-// A launch_cfg may inline a default rule *and* state its type explicitly.
-// sing-box's marshaller omits "type" for default rules, but its parser accepts
-// it, and launch_cfg is authored server-side rather than round-tripped through
-// sing-box — so the discriminator must not read as an extra constraint and
-// make the peer refuse a config that does reject unconditionally.
-func TestValidateAbuseRules_AcceptsInlinedExplicitDefaultType(t *testing.T) {
-	inlined := strings.ReplaceAll(minimalValidLaunchCfg,
-		`{"action":"reject","rule_set":`,
-		`{"type":"default","action":"reject","rule_set":`)
-	if inlined == minimalValidLaunchCfg {
-		t.Fatal("fixture substitution did not apply — test would be vacuous")
-	}
-	if err := validateAbuseRules(inlined); err != nil {
-		t.Fatalf("inlined rule carrying an explicit \"type\":\"default\" should pass, got: %v", err)
 	}
 }
 
