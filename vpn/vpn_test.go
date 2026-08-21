@@ -254,7 +254,7 @@ func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
 	c.status.Store(Connected)
 	c.tunnel = &tunnel{}
 
-	_, err := c.RunOfflineURLTests("", nil, nil)
+	_, err := c.RunOfflineURLTests(t.Context(), "", nil, nil)
 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
 }
 

@@ -20,7 +20,6 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
-	sbjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
@@ -148,15 +147,17 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 		}
 	}
 
+	c.logger.Info("Connecting VPN")
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
-	opts, err := sbjson.Marshal(options)
-	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
+	if err := traces.RecordError(ctx, c.start(ctx, boxOptions, options, false)); err != nil {
+		c.logger.Error("Failed to connect VPN", "error", err)
+		return err
 	}
-	return traces.RecordError(ctx, c.start(ctx, boxOptions, string(opts), false))
+	c.logger.Info("VPN connected successfully")
+	return nil
 }
 
 // Disconnect closes the tunnel and all active connections.
@@ -169,12 +170,17 @@ func (c *VPNClient) Disconnect() error {
 		return nil
 	}
 	c.logger.Info("Disconnecting VPN")
-	return traces.RecordError(ctx, c.close())
+	if err := traces.RecordError(ctx, c.close()); err != nil {
+		c.logger.Error("Failed to disconnect VPN", "error", err)
+		return err
+	}
+	c.logger.Info("VPN disconnected successfully")
+	return nil
 }
 
-func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options string, isRestart bool) error {
+func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options option.Options, isRestart bool) error {
 	configureBufPool()
-	c.logger.Debug("Starting tunnel", "options", options)
+	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
 	t := tunnel{
 		dataPath:             boxOptions.BasePath,
@@ -188,6 +194,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options st
 	}
 	c.tunnel = &t
 	c.setStatus(Connected, nil)
+	c.logger.Debug("Tunnel started")
 	return nil
 }
 
@@ -195,7 +202,7 @@ func (c *VPNClient) close() error {
 	t := c.tunnel
 	c.tunnel = nil
 
-	c.logger.Info("Closing tunnel")
+	c.logger.Debug("Closing tunnel")
 	c.setStatus(Disconnecting, nil)
 	if err := t.close(); err != nil {
 		c.setStatus(ErrorStatus, err)
@@ -248,12 +255,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 		c.setStatus(ErrorStatus, err)
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
-	opts, err := sbjson.Marshal(options)
-	if err != nil {
-		c.setStatus(ErrorStatus, err)
-		return traces.RecordError(ctx, fmt.Errorf("failed to marshal options: %w", err))
-	}
-	if err := c.start(ctx, boxOptions, string(opts), true); err != nil {
+	if err := c.start(ctx, boxOptions, options, true); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
 		// c.start already set ErrorStatus; the guard lets Restarting→ErrorStatus through.
 		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
@@ -582,9 +584,11 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 // RunOfflineURLTests will run URL tests for all outbounds if the tunnel is not currently connected.
 // This can improve initial connection times by pre-determining reachability and latency to servers.
 //
-// If [VPNClient.Connect] is called while RunOfflineURLTests is running, the tests will be cancelled and
-// any results will be discarded.
-func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
+// The tests are cancelled and any results discarded if ctx is cancelled or if [VPNClient.Connect]
+// is called while they are running. Callers should pass a context tied to the backend lifetime so
+// that closing the backend (e.g. when the tunnel comes up in the extension process) stops in-flight
+// probe dials rather than letting them route through the newly established tunnel.
+func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
 	c.mu.Lock()
 	if c.tunnel != nil {
 		c.mu.Unlock()
@@ -597,7 +601,9 @@ func (c *VPNClient) RunOfflineURLTests(basePath string, outbounds []option.Outbo
 		c.mu.Unlock()
 		return nil, errors.New("offline tests already running")
 	}
-	ctx, cancel := context.WithCancel(box.BaseContext())
+
+	ctx, cancel := context.WithCancel(box.Context(ctx))
+	defer cancel()
 	c.offlineTestCancel = cancel
 	done := make(chan struct{})
 	c.offlineTestDone = done

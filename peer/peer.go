@@ -2,7 +2,6 @@ package peer
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,13 +12,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
+	sbox "github.com/sagernet/sing-box"
 	sblog "github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 
 	box "github.com/getlantern/lantern-box"
 	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
+
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
@@ -164,7 +166,7 @@ type Client struct {
 	// before invoking it, so SetListener(nil) alone races against in-flight
 	// Notify calls — under load (real client traffic), Close fires N disconnect
 	// callbacks from N goroutines that have already snapshotted the listener,
-	// each then events.Emit spawns one more goroutine per subscriber. The
+	// each then emitting an event to every subscriber. The
 	// Flutter-side subscriber posts main-thread tasks per event, and a
 	// hundred-task flood against a Flutter engine that's simultaneously
 	// processing the SmC-off state change is the Flutter mutex crash we hit.
@@ -424,6 +426,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// is fatal — the server has already deprecated the row, so the
 	// deferred cleanup tears the rest of the session down.
 	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
+		cancelRun()
 		return fmt.Errorf("verify with lantern-cloud: %w", err)
 	}
 
@@ -1068,17 +1071,16 @@ func startNewBoxWithRetry(ctx context.Context, newBox boxService) (retErr error)
 // VPN-bypass requirement is a property of the *client's* environment, not
 // the proxy track config.
 func ensurePeerOutboundsBypassVPN(options string) (string, error) {
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(options), &raw); err != nil {
+	ctx := box.Context(context.Background())
+	opts, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(options))
+	if err != nil {
 		return "", fmt.Errorf("decode options: %w", err)
 	}
-	route, _ := raw["route"].(map[string]any)
-	if route == nil {
-		route = map[string]any{}
-		raw["route"] = route
+	if opts.Route == nil {
+		opts.Route = &option.RouteOptions{}
 	}
-	route["auto_detect_interface"] = true
-	out, err := json.Marshal(raw)
+	opts.Route.AutoDetectInterface = true
+	out, err := json.MarshalContext(ctx, opts)
 	if err != nil {
 		return "", fmt.Errorf("encode options: %w", err)
 	}
@@ -1136,58 +1138,42 @@ func pickInternalPort() uint16 {
 	return uint16(internalPortMin + rand.IntN(internalPortMax-internalPortMin))
 }
 
-// We pass a nil PlatformInterface — peer-proxy inbounds don't need TUN /
-// platform-VPN integration the way the main VPN tunnel does. The samizdat
-// inbound is just an HTTPS server bound to a TCP port; sing-box's default
-// network stack handles it.
+// defaultBuildBoxService builds the sing-box service for one peer box.
 //
-// The registries newPeerBoxContext supplies are what let libbox decode the
-// inbounds[0].type="samizdat" stanza from /peer/register; without them it
-// fails with "missing inbound fields registry in context". They are scoped
-// to this box instance, so the peer and the main tunnel coexist without
-// stomping on each other.
+// A peer-proxy box needs no TUN / platform-VPN integration the way the main
+// VPN tunnel does: the samizdat inbound is just an HTTPS server bound to a
+// TCP port, which sing-box's default network stack handles.
 func defaultBuildBoxService(ctx context.Context, options string) (boxService, error) {
-	bs, err := libbox.NewServiceWithContext(newPeerBoxContext(ctx), options, nil)
+	ctx = newPeerBoxContext(ctx)
+	opts, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(options))
 	if err != nil {
-		return nil, fmt.Errorf("libbox.NewServiceWithContext: %w", err)
+		return nil, fmt.Errorf("decode sing-box options: %w", err)
+	}
+	bs, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: opts,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build sing-box: %w", err)
 	}
 	return bs, nil
 }
 
-// newPeerBoxContext assembles the context for one peer box: cancellation
-// from ctx, lantern-box's protocol registries and this box's log factory
-// from a single captured base context.
+// newPeerBoxContext augments ctx with everything one peer box needs: the
+// sing-box and lantern-box protocol registries plus this box's own sing-box
+// log factory. The caller's cancellation is preserved, so a Stop-induced
+// cancel still reaches the box.
 //
-// The base must be captured exactly once. box.BaseContext() builds a new
-// service registry on every call, and service.MustRegister mutates
-// whichever registry the context hands back, so registering through a
-// wrapper that rebuilds the base per lookup writes into a registry that
-// is discarded before libbox ever reads it — the registration silently
-// does nothing.
+// The registries are what let sing-box decode custom inbounds like the
+// samizdat stanza from /peer/register; without them the decode fails with
+// "missing inbound fields registry in context". Registering the log factory
+// routes this box's router and dial errors to lantern.log instead of
+// sing-box's stderr default. Both are scoped to the fresh registry
+// box.Context installs, so the peer and the main tunnel coexist without
+// stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
-	base := box.BaseContext()
-	// The peer runs a second box beside the main tunnel's. Absent its own
-	// factory it keeps sing-box's stderr-only default, so this box's
-	// router and dial errors never reach lantern.log — the signal that
-	// explains why a peer-share verify failed. Mirrors the main tunnel's
-	// registration.
-	service.MustRegister[sblog.Factory](base, lblog.NewFactory(slog.Default().Handler()))
-	return peerBoxContext{Context: ctx, base: base}
+	ctx = box.Context(ctx)
+	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
+	return ctx
 }
 
-// peerBoxContext resolves Deadline/Done/Err from the embedded caller
-// context so a Stop-induced cancel propagates into box internals. Values
-// come from the caller first and from base only as a fallback, so anything
-// the caller carries shadows base — which matters because base holds the one
-// captured registry instance libbox both registers into and reads back.
-type peerBoxContext struct {
-	context.Context
-	base context.Context
-}
-
-func (c peerBoxContext) Value(key any) any {
-	if v := c.Context.Value(key); v != nil {
-		return v
-	}
-	return c.base.Value(key)
-}

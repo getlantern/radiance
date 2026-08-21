@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid/v5"
-	"github.com/sagernet/sing-box/common/conntrack"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/env"
@@ -28,10 +27,7 @@ const (
 	maxMemLimitMB = 512
 )
 
-// memoryReclaimer implements memmon.Reclaimer. Soft eviction acts on the connection tracker
-// (oldest-first); the hard path prefers conntrack.Close, which drains every dialed conn under one
-// lock, and falls back to the tracker when conntrack is compiled out (without the with_conntrack
-// build tag conntrack.Close is a no-op) so a hard reclaim is never silently lost.
+// memoryReclaimer adapts connTracker to memmon.Reclaimer.
 type memoryReclaimer struct {
 	tracker *connTracker
 }
@@ -68,9 +64,6 @@ func (r *memoryReclaimer) OpenConnectionCount() int {
 }
 
 func (r *memoryReclaimer) TotalDialedConnections() int {
-	if conntrack.Enabled {
-		return conntrack.Count()
-	}
 	return int(r.tracker.activeConnectionCount())
 }
 
@@ -82,13 +75,7 @@ func (r *memoryReclaimer) CloseAllConnections() {
 	closeAllRouted(r.tracker)
 }
 
-// Prefer conntrack.Close when available, and fall back to tracked connections
-// when conntrack support is compiled out.
 func closeAllRouted(tracker *connTracker) {
-	if conntrack.Enabled {
-		conntrack.Close()
-		return
-	}
 	tracker.closeAllTracked()
 }
 

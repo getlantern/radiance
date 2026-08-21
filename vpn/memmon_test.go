@@ -72,15 +72,13 @@ func TestMemmonReclaimer(t *testing.T) {
 	assert.Equal(t, 3, total)
 
 	require.Equal(t, 3, r.OpenConnectionCount())
-	// conntrack is compiled out in the default test build, so TotalDialedConnections
-	// and CloseAllConnections take the tracker fallback rather than the conntrack path.
 	assert.Equal(t, 3, r.TotalDialedConnections())
 
 	r.CloseConn(c1.id)
 	assert.Equal(t, 2, r.OpenConnectionCount(), "closing one conn folds it out via leave")
 
 	r.CloseAllConnections()
-	assert.Zero(t, r.OpenConnectionCount(), "CloseAllConnections drains the tracker when conntrack is compiled out")
+	assert.Zero(t, r.OpenConnectionCount(), "CloseAllConnections drains the tracker")
 }
 
 func TestClashServerRejectMasksMode(t *testing.T) {

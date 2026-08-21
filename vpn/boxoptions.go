@@ -171,7 +171,7 @@ func baseOpts(basePath string) O.Options {
 	opts := O.Options{
 		Log: &O.LogOptions{
 			Level:        "debug",
-			Output:       "lantern-box.log",
+			Output:       "lantern.log",
 			Timestamp:    true,
 			DisableColor: true,
 		},
@@ -365,25 +365,6 @@ func consumeCacheClearMarker(basePath string) error {
 	return nil
 }
 
-// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
-// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
-// hints, apps using their own DNS). The default reject method (ICMP unreachable /
-// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
-// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
-func rejectIPv6Rule() O.Rule {
-	return O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{
-				IPCIDR: []string{"::/0"},
-			},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeReject,
-			},
-		},
-	}
-}
-
 // tunHasIPv6 reports whether a TUN inbound was given an IPv6 address, meaning v6
 // is captured into the tunnel and must be rejected rather than left to bypass.
 func tunHasIPv6(opts O.Options) bool {
@@ -478,22 +459,27 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
 	slog.Debug("Finished building options", "env", common.Env())
-	writeBoxOptions(bOptions.BasePath, opts)
+
+	opts, err := jsonRoundTrip(bOptions.BasePath, opts)
+	if err != nil {
+		return opts, fmt.Errorf("validating options: %w", err)
+	}
+
 	return opts, nil
 }
 
-// writeBoxOptions marshals the options as JSON and writes them to a file. we can ignore
-// errors here since the tunnel will error out anyway if something is wrong
-func writeBoxOptions(path string, opts O.Options) {
-	buf, err := json.MarshalContext(box.BaseContext(), opts)
+// jsonRoundTrip marshals and unmarshals the options to let sing-box set defaults and validate it.
+func jsonRoundTrip(path string, opts O.Options) (O.Options, error) {
+	ctx := box.Context(context.Background())
+	buf, err := json.MarshalContext(ctx, opts)
 	if err != nil {
-		slog.Warn("failed to marshal options while writing debug box options", "error", err)
-		return
+		return opts, fmt.Errorf("marshal options: %w", err)
 	}
-
-	if err := atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), buf, fileperm.File); err != nil {
-		slog.Warn("failed to write options file", "error", err)
+	err = atomicfile.WriteFile(filepath.Join(path, internal.DebugBoxOptionsFileName), buf, fileperm.File)
+	if err != nil {
+		slog.Warn("failed to write debug options", "error", err)
 	}
+	return json.UnmarshalExtendedContext[O.Options](ctx, buf)
 }
 
 //////////////////////
@@ -622,22 +608,36 @@ func selectModeRule(mode string) O.Rule {
 	}
 }
 
-func catchAllBlockerRule() O.Rule {
+func rejectRule(rule O.RawDefaultRule) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{},
+			RawDefaultRule: rule,
 			RuleAction: O.RuleAction{
 				Action: C.RuleActionTypeReject,
+				RejectOptions: O.RejectActionOptions{
+					Method: C.RuleActionRejectMethodDefault,
+				},
 			},
 		},
 	}
 }
 
+func catchAllBlockerRule() O.Rule {
+	return rejectRule(O.RawDefaultRule{})
+}
+
 func highMemoryRejectRule() O.Rule {
-	rule := catchAllBlockerRule()
-	rule.DefaultOptions.RawDefaultRule.ClashMode = rejectMode
-	return rule
+	return rejectRule(O.RawDefaultRule{ClashMode: rejectMode})
+}
+
+// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
+// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
+// hints, apps using their own DNS). The default reject method (ICMP unreachable /
+// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
+// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
+func rejectIPv6Rule() O.Rule {
+	return rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
 }
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
@@ -648,7 +648,7 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 		},
 	}
 	if domainResolver != "" {
-		remoteOpts.LocalDNSServerOptions = O.LocalDNSServerOptions{
+		remoteOpts.RawLocalDNSServerOptions = O.RawLocalDNSServerOptions{
 			DialerOptions: O.DialerOptions{
 				DomainResolver: &O.DomainResolveOptions{
 					Server: domainResolver,
