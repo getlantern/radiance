@@ -24,6 +24,7 @@ import (
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/unbounded"
+	clientmessage "github.com/getlantern/radiance/usermessage"
 	"github.com/getlantern/radiance/vpn"
 
 	sjson "github.com/sagernet/sing/common/json"
@@ -53,6 +54,11 @@ const (
 	// Config endpoints
 	configEventsEndpoint = "/config/events"
 	configUpdateEndpoint = "/config/update"
+
+	userMessageEndpoint            = "/user-messages"
+	userMessageRefreshEndpoint     = "/user-messages/refresh"
+	userMessageAcknowledgeEndpoint = "/user-messages/acknowledge"
+	userMessageActivityEndpoint    = "/user-messages/activity"
 
 	// Server management endpoints
 	serversEndpoint              = "/servers"
@@ -228,6 +234,11 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+serverURLTestEventsEndpoint, s.serverURLTestEventsHandler)
 	mux.HandleFunc("GET "+configEventsEndpoint, s.configEventsHandler)
 	mux.HandleFunc("POST "+configUpdateEndpoint, traced(s.configUpdateHandler))
+
+	mux.HandleFunc("GET "+userMessageEndpoint, traced(s.userMessageHandler))
+	mux.HandleFunc("POST "+userMessageRefreshEndpoint, traced(s.userMessageRefreshHandler))
+	mux.HandleFunc("POST "+userMessageAcknowledgeEndpoint, traced(s.userMessageAcknowledgeHandler))
+	mux.HandleFunc("PATCH "+userMessageActivityEndpoint, traced(s.userMessageActivityHandler))
 
 	// Server management
 	mux.HandleFunc("GET "+serversEndpoint, traced(s.serversHandler))
@@ -894,6 +905,47 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *localapi) userMessageHandler(w http.ResponseWriter, r *http.Request) {
+	message, err := s.backend(r.Context()).CurrentUserMessage()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, CurrentUserMessageResponse{Message: message})
+}
+
+func (s *localapi) userMessageRefreshHandler(w http.ResponseWriter, r *http.Request) {
+	s.backend(r.Context()).RefreshUserMessages()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *localapi) userMessageAcknowledgeHandler(w http.ResponseWriter, r *http.Request) {
+	var request UserMessageAcknowledgeRequest
+	if err := decodeJSON(r, &request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.backend(r.Context()).AcknowledgeUserMessage(request.DisplayID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, clientmessage.ErrMessageNotPending) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *localapi) userMessageActivityHandler(w http.ResponseWriter, r *http.Request) {
+	var request UserMessageActivityRequest
+	if err := decodeJSON(r, &request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.backend(r.Context()).SetUserMessageActivity(request.Active, request.Online)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
