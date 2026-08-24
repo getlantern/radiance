@@ -1,8 +1,12 @@
 package usermessage
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -169,6 +173,74 @@ func TestServiceCancelsFetchAfterAccountReplacement(t *testing.T) {
 	require.Nil(t, message)
 }
 
+func TestServiceWaitsForCompleteCredentials(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	var mu sync.Mutex
+	clientContext := ClientContext{}
+	provider := func() ClientContext {
+		mu.Lock()
+		defer mu.Unlock()
+		return clientContext
+	}
+	service := newTestService(t, clock, fetcher, provider)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	require.Never(t, func() bool {
+		select {
+		case <-fetcher.requests:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, time.Millisecond)
+
+	mu.Lock()
+	clientContext = testClientContext()
+	mu.Unlock()
+	service.Refresh()
+	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
+}
+
+func TestServiceLogsSafeFetchOutcomes(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	service, err := New(Options{
+		DataDir:         t.TempDir(),
+		Fetcher:         fetcher,
+		ContextProvider: func() ClientContext { return testClientContext() },
+		Clock:           clock,
+		Jitter:          func(delay time.Duration) time.Duration { return delay },
+		Logger:          logger,
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{err: &httpStatusError{statusCode: http.StatusUnauthorized}}
+	require.Equal(t, 5*time.Second, receiveTimer(t, clock))
+	require.Contains(t, logs.String(), "category=authentication")
+	require.Contains(t, logs.String(), "http_status=401")
+
+	clock.Advance(5 * time.Second)
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 300,
+		Message:             testMessage("display-1", clock.Now().Add(time.Hour)),
+	}}
+	require.Equal(t, 5*time.Minute, receiveTimer(t, clock))
+	require.Contains(t, logs.String(), "result=message_available")
+	require.NotContains(t, logs.String(), "12345")
+	require.NotContains(t, logs.String(), "secret-token")
+	require.NotContains(t, logs.String(), "A safe localized message")
+}
+
 func TestServiceStopsAfterParentContextCancellation(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fetcher := newScriptedFetcher()
@@ -257,6 +329,7 @@ func newTestService(
 		ContextProvider: provider,
 		Clock:           clock,
 		Jitter:          func(delay time.Duration) time.Duration { return delay },
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	require.NoError(t, err)
 	return service

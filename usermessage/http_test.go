@@ -79,12 +79,30 @@ func TestHTTPFetcherSafelyIgnoresUnsupportedMessages(t *testing.T) {
 }
 
 func TestHTTPFetcherRejectsNonCanonicalUserID(t *testing.T) {
-	clientContext := testClientContext()
-	clientContext.UserID = "not-a-number"
-	_, err := NewHTTPFetcher(http.DefaultClient, "https://example.com").Fetch(
-		context.Background(), clientContext, nil,
+	for _, userID := range []string{"not-a-number", "00123", "+123", "9223372036854775808"} {
+		t.Run(userID, func(t *testing.T) {
+			clientContext := testClientContext()
+			clientContext.UserID = userID
+			_, err := NewHTTPFetcher(http.DefaultClient, "https://example.com").Fetch(
+				context.Background(), clientContext, nil,
+			)
+			require.ErrorIs(t, err, errCredentialsUnavailable)
+		})
+	}
+}
+
+func TestHTTPFetcherReturnsStructuredStatusError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, err := NewHTTPFetcher(server.Client(), server.URL).Fetch(
+		context.Background(), testClientContext(), nil,
 	)
-	require.ErrorIs(t, err, errCredentialsUnavailable)
+	var statusErr *httpStatusError
+	require.ErrorAs(t, err, &statusErr)
+	require.Equal(t, http.StatusUnauthorized, statusErr.statusCode)
 }
 
 func writeWireResponse(t *testing.T, w http.ResponseWriter, response wire.UserMessageResponse) {

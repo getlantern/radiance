@@ -32,9 +32,18 @@ type ClientContext struct {
 }
 
 func (c ClientContext) valid() bool {
-	userID, err := strconv.ParseUint(c.UserID, 10, 64)
-	return err == nil && userID > 0 && c.ProToken != "" && len(c.ProToken) <= 4096 &&
+	userID, err := strconv.ParseInt(c.UserID, 10, 64)
+	return err == nil && userID > 0 && strconv.FormatInt(userID, 10) == c.UserID &&
+		c.ProToken != "" && len(c.ProToken) <= 4096 &&
 		c.Locale != "" && c.Platform != "" && c.AppVersion != ""
+}
+
+type httpStatusError struct {
+	statusCode int
+}
+
+func (err *httpStatusError) Error() string {
+	return fmt.Sprintf("unexpected status %d", err.statusCode)
 }
 
 // Fetcher resolves at most one message for a client context.
@@ -97,7 +106,9 @@ func (f *HTTPFetcher) Fetch(
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return wire.UserMessageResponse{}, fmt.Errorf("fetch user message: unexpected status %d", resp.StatusCode)
+		return wire.UserMessageResponse{}, fmt.Errorf(
+			"fetch user message: %w", &httpStatusError{statusCode: resp.StatusCode},
+		)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {

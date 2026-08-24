@@ -3,6 +3,7 @@ package usermessage
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
@@ -43,6 +44,7 @@ type Options struct {
 	ContextProvider func() ClientContext
 	Clock           Clock
 	Jitter          func(time.Duration) time.Duration
+	Logger          *slog.Logger
 }
 
 // Service owns polling, per-account presentation state, and display acknowledgment.
@@ -51,6 +53,7 @@ type Service struct {
 	contextProvider func() ClientContext
 	clock           Clock
 	jitter          func(time.Duration) time.Duration
+	logger          *slog.Logger
 	store           *store
 	wake            chan struct{}
 
@@ -83,11 +86,16 @@ func New(opts Options) (*Service, error) {
 	if jitter == nil {
 		jitter = defaultJitter
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default().With("service", "user_messages")
+	}
 	return &Service{
 		fetcher:         opts.Fetcher,
 		contextProvider: opts.ContextProvider,
 		clock:           clock,
 		jitter:          jitter,
+		logger:          logger,
 		store:           state,
 		wake:            make(chan struct{}, 1),
 		active:          true,
@@ -170,6 +178,16 @@ func (s *Service) run(ctx context.Context) {
 			continue
 		}
 		clientContext := s.contextProvider()
+		if !clientContext.valid() {
+			s.endRequest(requestID)
+			failures = 0
+			delay = 0
+			s.logger.Debug("User-message fetch deferred", "reason", "credentials_unavailable")
+			if !s.waitForRefresh(ctx) {
+				return
+			}
+			continue
+		}
 		seen := s.store.seen(clientContext.UserID)
 		response, err := s.fetcher.Fetch(requestContext, clientContext, seen)
 		s.endRequest(requestID)
@@ -182,13 +200,26 @@ func (s *Service) run(ctx context.Context) {
 			pollOnly := response
 			pollOnly.Message = nil
 			err = pollOnly.Validate()
-			if err == nil && response.Message != nil && response.Message.Validate() != nil {
+			if err != nil {
+				failures++
+				delay = s.jitter(failureBackoff(failures))
+				s.logger.Warn(
+					"User-message response rejected",
+					"category", "invalid_response",
+					"failure_count", failures,
+					"retry_in", delay,
+				)
+				continue
+			}
+			if response.Message != nil && response.Message.Validate() != nil {
+				s.logger.Warn("User-message response discarded", "category", "invalid_message")
 				response.Message = nil
 			}
 		}
 		if err != nil {
 			failures++
 			delay = s.jitter(failureBackoff(failures))
+			s.logFetchFailure(err, failures, delay)
 			continue
 		}
 		if s.generationChanged(generation) || s.contextProvider() != clientContext {
@@ -199,11 +230,91 @@ func (s *Service) run(ctx context.Context) {
 		if err := s.store.offer(clientContext.UserID, response.Message, s.clock.Now()); err != nil {
 			failures++
 			delay = s.jitter(failureBackoff(failures))
+			s.logger.Warn(
+				"User-message fetch result could not be persisted",
+				"category", "local_state",
+				"failure_count", failures,
+				"retry_in", delay,
+			)
 			continue
 		}
 		failures = 0
 		delay = s.jitter(time.Duration(response.PollIntervalSeconds) * time.Second)
+		s.logFetchResult(response.Message, delay)
 	}
+}
+
+func (s *Service) waitForRefresh(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-s.wake:
+		return true
+	}
+}
+
+func (s *Service) logFetchFailure(err error, failures uint, retryIn time.Duration) {
+	category, statusCode := fetchFailureDetails(err)
+	attributes := []any{
+		"category", category,
+		"failure_count", failures,
+		"retry_in", retryIn,
+	}
+	if statusCode != 0 {
+		attributes = append(attributes, "http_status", statusCode)
+	}
+	// Do not attach err here. Transport errors can contain request URLs, and
+	// future error wrappers might include credentials or localized content.
+	s.logger.Warn("User-message fetch failed", attributes...)
+}
+
+func fetchFailureDetails(err error) (category string, statusCode int) {
+	if errors.Is(err, errCredentialsUnavailable) {
+		return "credentials_unavailable", 0
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout", 0
+	}
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) {
+		return "transport", 0
+	}
+	statusCode = statusErr.statusCode
+	switch {
+	case statusCode == 400:
+		category = "request_rejected"
+	case statusCode == 401 || statusCode == 403:
+		category = "authentication"
+	case statusCode == 404:
+		category = "endpoint"
+	case statusCode == 408:
+		category = "timeout"
+	case statusCode == 429:
+		category = "rate_limited"
+	case statusCode >= 500:
+		category = "server"
+	default:
+		category = "http"
+	}
+	return category, statusCode
+}
+
+func (s *Service) logFetchResult(message *wire.ResolvedUserMessage, pollIn time.Duration) {
+	if message == nil {
+		s.logger.Debug("User-message fetch completed", "result", "no_message", "poll_in", pollIn)
+		return
+	}
+	s.logger.Info(
+		"User-message fetch completed",
+		"result", "message_available",
+		"campaign_id", message.CampaignID,
+		"revision_id", message.RevisionID,
+		"delivery_id", message.DeliveryID,
+		"surface", message.Surface,
+		"locale", message.Locale,
+		"expires_at", message.ExpiresAt,
+		"poll_in", pollIn,
+	)
 }
 
 func (s *Service) beginRequest(parent context.Context) (context.Context, uint64, uint64, bool) {
