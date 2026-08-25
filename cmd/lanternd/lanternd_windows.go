@@ -15,6 +15,32 @@ import (
 	"github.com/getlantern/radiance/common"
 )
 
+// serviceStopWait covers the supervisor's full shutdown path so the service
+// stop handler does not time out while babysit is still finishing.
+const serviceStopWait = gracefulShutdownTimeout + childWaitDelay + 5*time.Second
+
+// serviceRestartDelays defines the SCM restart policy for failures of the
+// supervising service process itself.
+var serviceRestartDelays = []time.Duration{
+	1 * time.Second,
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	32 * time.Second,
+	64 * time.Second,
+}
+
+// serviceFailureResetPeriod returns how long the service must run without
+// failing before the SCM resets its failure count.
+func serviceFailureResetPeriod() uint32 {
+	var span time.Duration
+	for _, delay := range serviceRestartDelays {
+		span += delay
+	}
+	return uint32((2 * span).Seconds())
+}
+
 const (
 	serviceName = "LanternSvc"
 	binPath     = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
@@ -69,25 +95,30 @@ func install(dataPath, logPath, logLevel string, environment daemonEnvironment) 
 	}).args()
 
 	slog.Info("Creating Windows service", "exe", exe, "args", args)
-	service, err := m.CreateService(serviceName, exe, config, args...)
+	svcHandle, err := m.CreateService(serviceName, exe, config, args...)
 	if err != nil {
 		return fmt.Errorf("failed to create %q service: %w", serviceName, err)
 	}
-	defer service.Close()
+	defer svcHandle.Close()
 
-	err = service.SetRecoveryActions([]mgr.RecoveryAction{
-		{Type: mgr.ServiceRestart, Delay: 1 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 4 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 8 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 16 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 32 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 64 * time.Second},
-	}, 60)
+	actions := make([]mgr.RecoveryAction, 0, len(serviceRestartDelays)+1)
+	for _, delay := range serviceRestartDelays {
+		actions = append(actions, mgr.RecoveryAction{Type: mgr.ServiceRestart, Delay: delay})
+	}
+	// The SCM repeats the final recovery action indefinitely, so append NoAction to
+	// make the retry ladder terminate.
+	actions = append(actions, mgr.RecoveryAction{Type: mgr.NoAction})
+
+	err = svcHandle.SetRecoveryActions(actions, serviceFailureResetPeriod())
 	if err != nil {
 		return fmt.Errorf("failed to set service recovery actions: %w", err)
 	}
-	if err := service.Start(); err != nil {
+	// Execute always reports SERVICE_STOPPED on return, so enable recovery actions
+	// for non-crash failures as well.
+	if err := svcHandle.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		return fmt.Errorf("failed to enable recovery actions on non-crash failures: %w", err)
+	}
+	if err := svcHandle.Start(); err != nil {
 		return fmt.Errorf("failed to start service: %w", err)
 	}
 
@@ -103,21 +134,25 @@ func uninstall() error {
 	}
 	defer m.Disconnect()
 
-	service, err := m.OpenService(serviceName)
+	svcHandle, err := m.OpenService(serviceName)
 	if err != nil {
 		return fmt.Errorf("failed to open %q service: %w", serviceName, err)
 	}
 
-	status, err := service.Query()
+	status, err := svcHandle.Query()
 	if err != nil {
-		service.Close()
+		svcHandle.Close()
 		return fmt.Errorf("failed to query service state: %w", err)
 	}
 	if status.State != svc.Stopped {
-		service.Control(svc.Stop)
+		// Continue with deletion even if stop fails; the service will be removed once
+		// its process exits.
+		if _, err := svcHandle.Control(svc.Stop); err != nil {
+			slog.Warn("Failed to stop service before deleting", "error", err)
+		}
 	}
-	err = service.Delete()
-	service.Close()
+	err = svcHandle.Delete()
+	svcHandle.Close()
 	if err != nil {
 		return fmt.Errorf("failed to delete service: %w", err)
 	}
@@ -130,14 +165,14 @@ func uninstall() error {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out waiting for service to be removed")
 		case <-time.After(100 * time.Millisecond):
-			if service, err = m.OpenService(serviceName); err != nil {
+			if svcHandle, err = m.OpenService(serviceName); err != nil {
 				slog.Info("Windows service uninstalled successfully")
 				if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("failed to remove binary: %w", err)
 				}
 				return nil
 			}
-			service.Close()
+			svcHandle.Close()
 		}
 	}
 }
@@ -170,33 +205,53 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 		slog.Error("Failed to parse service arguments", "error", err)
 		return true, 1
 	}
+	logger := newDaemonLogger(config.logPath, config.logLevel)
 
-	// Run the daemon as a child process so we can clean up network state if it crashes,
-	// regardless of whether the SCM is configured to restart the service.
-	childArgs := config.args()
-	child, err := spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
-	if err != nil {
-		slog.Error("Failed to start daemon", "error", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	supervisor := make(chan error, 1)
+	running := make(chan struct{})
+	go func() {
+		supervisor <- babysit(ctx, config.args(), logger, func() { close(running) })
+	}()
+
+	// Delay reporting Running until the first child starts, so startup failures are
+	// reported as service start failures.
+	select {
+	case <-running:
+	case err := <-supervisor:
+		logger.Error("Daemon failed to start", "error", err)
 		return true, 1
 	}
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	child.logger.Info("Running as Windows service")
+	logger.Info("Running as Windows service")
 
 	for {
 		select {
-		case err := <-child.Done():
-			if err != nil {
-				child.HandleCrash(err)
-			}
+		case err := <-supervisor:
+			logger.Error("Daemon supervisor exited, stopping service", "error", err)
 			return true, 1
 		case change := <-r:
 			switch change.Cmd {
 			case svc.Stop, svc.Shutdown:
-				status <- svc.Status{State: svc.StopPending}
-				child.logger.Info("Service stop requested")
-				child.RequestShutdown()
-				child.WaitOrKill(15 * time.Second)
+				status <- svc.Status{
+					State:      svc.StopPending,
+					CheckPoint: 1,
+					WaitHint:   uint32(serviceStopWait.Milliseconds()),
+				}
+				logger.Info("Service stop requested")
+				cancel()
+				select {
+				case err := <-supervisor:
+					if err != nil {
+						logger.Warn("Daemon did not stop cleanly", "error", err)
+					}
+				case <-time.After(serviceStopWait):
+					logger.Warn("Daemon supervisor did not exit in time", "wait", serviceStopWait)
+				}
+				// Report a clean stop even on timeout to avoid SCM-triggered restart racing a
+				// child process that may still be exiting.
 				return false, windows.NO_ERROR
 			case svc.Interrogate:
 				status <- change.CurrentStatus

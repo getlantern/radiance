@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +66,22 @@ func parseDaemonEnvironment(value string) (daemonEnvironment, error) {
 		return "", fmt.Errorf("unsupported environment %q (must be prod or staging)", value)
 	}
 }
+
+// gracefulShutdownTimeout is the maximum time the supervisor waits for a child
+// to exit after requesting a graceful shutdown.
+const gracefulShutdownTimeout = 15 * time.Second
+
+// childForceExitTimeout gives the child time to log a forced-exit reason before
+// the supervisor's shutdown deadline expires.
+const childForceExitTimeout = gracefulShutdownTimeout - 3*time.Second
+
+// childWaitDelay bounds how long Wait may block on inherited stdout/stderr
+// pipes after the child exits.
+const childWaitDelay = 5 * time.Second
+
+// childEnvMarker marks a supervised child process so main runs the daemon
+// directly instead of starting another supervisor.
+const childEnvMarker = "_LANTERND_CHILD"
 
 type serviceRunConfig struct {
 	dataPath    string
@@ -145,8 +161,15 @@ func main() {
 	switch {
 	case a.Run != nil:
 		config := a.Run.serviceConfig()
-		if os.Getenv("_LANTERND_CHILD") != "1" {
-			err = babysit(os.Args[1:], config.dataPath, config.logPath, config.logLevel)
+		if os.Getenv(childEnvMarker) != "1" {
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			logger := newDaemonLogger(config.logPath, config.logLevel)
+			err = babysit(ctx, os.Args[1:], logger, nil)
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				os.Exit(exitErr.ExitCode())
+			}
 			break
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -229,63 +252,58 @@ func copyBin() (string, error) {
 	return dst, nil
 }
 
-// childProcess manages a daemon child process. The parent spawns the child, drains its output,
-// and can signal graceful shutdown by closing its stdin pipe. If the child crashes, the parent
-// cleans up stale VPN network state immediately.
-type childProcess struct {
-	cmd      *exec.Cmd
-	stdin    io.Closer
-	done     chan error
-	dataPath string
-	logger   *slog.Logger
+// newDaemonLogger returns the supervisor logger for the daemon log file.
+func newDaemonLogger(logPath, logLevel string) *slog.Logger {
+	// The child creates this directory in common.Init, but the supervisor logs — and starts
+	// draining the child — before that. A failure is not fatal: lumberjack retries the MkdirAll on
+	// its first write, and refusing to run the daemon over its log directory would be worse.
+	if err := os.MkdirAll(logPath, 0o755); err != nil {
+		slog.Warn("Failed to create log directory", "error", err, "path", logPath)
+	}
+	return rlog.NewLogger(rlog.Config{
+		LogPath:          filepath.Join(logPath, internal.LogFileName),
+		Level:            logLevel,
+		Prod:             true,
+		DisablePublisher: true,
+	})
 }
 
-// spawnChild creates and starts a daemon child process with piped I/O. The child's stdout and
-// stderr are merged and drained through the provided logger (or os.Stdout as fallback).
-func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProcess, error) {
+type childProcess struct {
+	cmd    *exec.Cmd
+	stdin  io.Closer
+	done   chan error
+	logger *slog.Logger
+}
+
+func childEnv() []string {
+	return append(os.Environ(), childEnvMarker+"=1", commonenv.LogToStdout.String()+"=true")
+}
+
+// spawnChild starts the daemon as a supervised child process.
+// Child stdout and stderr are written directly to the supervisor's log writer.
+func spawnChild(args []string, logger *slog.Logger) (*childProcess, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get executable path: %w", err)
 	}
 
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(os.Environ(), "_LANTERND_CHILD=1")
+	cmd.Env = childEnv()
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	// The child writes preformatted log lines to stdout. Write them directly to
+	// the supervisor's output sink to avoid double formatting.
+	var w io.Writer = os.Stdout
+	if h, ok := logger.Handler().(*rlog.Handler); ok {
+		w = h.Writer()
 	}
-	cmd.Stderr = cmd.Stdout // merge stderr into the same pipe
-
-	logger := rlog.NewLogger(rlog.Config{
-		LogPath:          filepath.Join(logPath, internal.LogFileName),
-		Level:            logLevel,
-		Prod:             true,
-		DisablePublisher: true,
-	})
-
-	go func() {
-		defer stdoutPipe.Close()
-		var w io.Writer = os.Stdout
-		// TODO: the child process outputs to both stdout and the file logger, so we end up with
-		// 	duplicate log lines. we'll come back to this later and fix it, but for now just
-		// 	write to stdout to avoid the duplication.
-		// if h, ok := logger.Handler().(*rlog.Handler); ok {
-		// 	w = h.Writer()
-		// }
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			if s := scanner.Text(); s != "" {
-				w.Write([]byte(s + "\n"))
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			logger.Error("Error reading child process output", "error", err)
-		}
-	}()
+	// Same writer value for both streams so output stays serialized through one sink.
+	out := &bestEffortWriter{w: w}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	cmd.WaitDelay = childWaitDelay
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start daemon process: %w", err)
@@ -296,11 +314,10 @@ func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProces
 	go func() { done <- cmd.Wait() }()
 
 	return &childProcess{
-		cmd:      cmd,
-		stdin:    stdinPipe,
-		done:     done,
-		dataPath: dataPath,
-		logger:   logger,
+		cmd:    cmd,
+		stdin:  stdinPipe,
+		done:   done,
+		logger: logger,
 	}, nil
 }
 
@@ -327,73 +344,86 @@ func (c *childProcess) WaitOrKill(timeout time.Duration) error {
 	}
 }
 
+// childExitError treats ErrWaitDelay as non-fatal after process exit.
+func childExitError(err error) error {
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return nil
+	}
+	return err
+}
+
+// bestEffortWriter drops output rather than reporting a write error. [exec.Cmd] closes the child's
+// output pipe when its copy fails, and a Go program whose stdout or stderr pipe breaks exits on
+// SIGPIPE, so surfacing a log-sink failure here would crash-loop the daemon over unwritable logs.
+type bestEffortWriter struct {
+	w      io.Writer
+	failed atomic.Bool
+}
+
+func (b *bestEffortWriter) Write(p []byte) (int, error) {
+	if _, err := b.w.Write(p); err != nil && !b.failed.Swap(true) {
+		// Reported on stderr because the sink that just failed cannot report its own failure.
+		fmt.Fprintf(os.Stderr, "lanternd: dropping daemon output, log writer failed: %v\n", err)
+	}
+	return len(p), nil
+}
+
 // HandleCrash cleans up stale VPN network state left by a crashed child.
 func (c *childProcess) HandleCrash(err error) {
 	c.logger.Warn("Daemon process exited unexpectedly, cleaning up network state", "error", err)
 	vpn.AttemptFixNetState()
 }
 
-// babysit runs the daemon as a child process and monitors it. If the child exits unexpectedly
-// (crash, panic, etc.), the parent immediately cleans up any stale VPN network state and
-// automatically restarts the child process with exponential backoff.
+// babysit runs the daemon as a child process until ctx is canceled.
+// Unexpected exits trigger cleanup and restart with backoff.
 //
-// Graceful shutdown is signaled by closing the child's stdin pipe — this works cross-platform,
-// including inside a Windows service where there is no console for signal delivery.
-func babysit(args []string, dataPath, logPath, logLevel string) error {
-	// On termination signal, request graceful shutdown of the current child.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	stopping := false
-
+// Graceful shutdown is requested by closing the child's stdin, which works even
+// in service environments without console signal delivery.
+//
+// ready, if non-nil, is called after the first child starts.
+//
+// The returned error is nil, a spawn failure, or the last child exit error.
+func babysit(ctx context.Context, args []string, logger *slog.Logger, ready func()) error {
 	const resetAfter = 2 * time.Minute // reset backoff if child ran longer than this
 	bo := common.NewBackoff(60 * time.Second)
 
-	for {
-		child, err := spawnChild(args, dataPath, logPath, logLevel)
+	for ctx.Err() == nil {
+		child, err := spawnChild(args, logger)
 		if err != nil {
-			if stopping {
-				return nil
-			}
 			return err
 		}
-		child.logger.Info("Monitoring daemon process")
+		if ready != nil {
+			ready()
+			ready = nil
+		}
+		logger.Info("Monitoring daemon process")
 		startedAt := time.Now()
 
-		// Wait for either a termination signal or child exit.
 		select {
-		case sig := <-sigCh:
-			stopping = true
-			child.logger.Info("Received signal, shutting down child", "signal", sig)
+		case <-ctx.Done():
+			logger.Info("Shutdown requested, stopping daemon process")
 			child.RequestShutdown()
-			err = child.WaitOrKill(15 * time.Second)
+			return childExitError(child.WaitOrKill(gracefulShutdownTimeout))
 		case err = <-child.Done():
+			err = childExitError(err)
 		}
 
-		if stopping {
-			signal.Stop(sigCh)
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				os.Exit(exitErr.ExitCode())
-			}
-			return err
-		}
-
-		// Unexpected exit — clean up and restart.
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			child.HandleCrash(err)
 		}
 
-		// Reset backoff if the child ran for a while (i.e. it wasn't a fast crash loop).
 		if time.Since(startedAt) > resetAfter {
 			bo.Reset()
 		}
 
-		child.logger.Info("Restarting child process")
-		bo.Wait(context.Background())
+		logger.Info("Restarting child process")
+		bo.Wait(ctx)
 	}
+	return nil
 }
 
-// daemonBackendOptions overrides only staging so the production default preserves an externally configured development environment.
+// daemonBackendOptions overrides staging only, preserving any externally
+// configured development environment in production mode.
 func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemonEnvironment) backend.Options {
 	options := backend.Options{
 		DataDir:  dataPath,
@@ -441,12 +471,11 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 		return fmt.Errorf("failed to start IPC server: %w", err)
 	}
 
-	// Wait for context cancellation to gracefully shut down.
 	<-ctx.Done()
 
 	slog.Info("Shutting down...")
 
-	time.AfterFunc(15*time.Second, func() {
+	time.AfterFunc(childForceExitTimeout, func() {
 		slog.Error("Failed to shut down in time, forcing exit")
 		os.Exit(1)
 	})

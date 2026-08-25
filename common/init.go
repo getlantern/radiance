@@ -90,7 +90,7 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 	}
 
 	logger := log.NewLogger(log.Config{
-		LogPath: filepath.Join(logs, internal.LogFileName),
+		LogPath: loggerPath(logs),
 		Level:   logLevel,
 		Prod:    Prod(),
 	})
@@ -168,6 +168,13 @@ func createCrashReporter() {
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
 	}
+}
+
+func loggerPath(logs string) string {
+	if env.GetBool(env.LogToStdout) {
+		return log.StdoutPath
+	}
+	return filepath.Join(logs, internal.LogFileName)
 }
 
 // setupDirectories creates the data and logs directories, and needed subdirectories if they do

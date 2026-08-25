@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"text/template"
 
 	"github.com/getlantern/radiance/common"
@@ -20,14 +21,16 @@ func maybePlatformService() bool {
 	return false
 }
 
-var systemdUnitTmpl = template.Must(template.New("unit").Parse(`[Unit]
+var systemdUnitTmpl = template.Must(template.New("unit").Funcs(template.FuncMap{
+	"arg": systemdQuote,
+}).Parse(`[Unit]
 Description=Lantern VPN Daemon
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-ExecStart={{.ExePath}} run --data-path {{.DataPath}} --log-path {{.LogPath}} --log-level {{.LogLevel}} --environment {{.Environment}}
+ExecStart={{.ExePath}} run --data-path {{arg .DataPath}} --log-path {{arg .LogPath}} --log-level {{arg .LogLevel}} --environment {{arg .Environment}}
 Restart=on-failure
 RestartSec=5s
 
@@ -40,6 +43,10 @@ LogsDirectory=lantern
 [Install]
 WantedBy=multi-user.target
 `))
+
+func systemdQuote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
 
 func install(dataPath, logPath, logLevel string, environment daemonEnvironment) error {
 	slog.Info("Installing systemd service..", "version", common.Version)
@@ -62,9 +69,8 @@ func install(dataPath, logPath, logLevel string, environment daemonEnvironment) 
 	defer f.Close()
 
 	err = systemdUnitTmpl.Execute(f, struct {
-		ExePath, DataPath, LogPath, LogLevel string
-		Environment                          daemonEnvironment
-	}{exe, dataPath, logPath, logLevel, environment})
+		ExePath, DataPath, LogPath, LogLevel, Environment string
+	}{exe, dataPath, logPath, logLevel, string(environment)})
 	if err != nil {
 		return fmt.Errorf("failed to write unit file: %w", err)
 	}
