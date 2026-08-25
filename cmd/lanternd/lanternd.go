@@ -240,6 +240,11 @@ type childProcess struct {
 	logger   *slog.Logger
 }
 
+const (
+	daemonRestartBackoffMax        = 60 * time.Second
+	daemonRestartBackoffResetAfter = 2 * time.Minute
+)
+
 // spawnChild creates and starts a daemon child process with piped I/O. The child's stdout and
 // stderr are merged and drained through the provided logger (or os.Stdout as fallback).
 func spawnChild(args []string, dataPath, logPath, logLevel string) (*childProcess, error) {
@@ -345,8 +350,7 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	stopping := false
 
-	const resetAfter = 2 * time.Minute // reset backoff if child ran longer than this
-	bo := common.NewBackoff(60 * time.Second)
+	bo := common.NewBackoff(daemonRestartBackoffMax)
 
 	for {
 		child, err := spawnChild(args, dataPath, logPath, logLevel)
@@ -384,7 +388,7 @@ func babysit(args []string, dataPath, logPath, logLevel string) error {
 		}
 
 		// Reset backoff if the child ran for a while (i.e. it wasn't a fast crash loop).
-		if time.Since(startedAt) > resetAfter {
+		if time.Since(startedAt) > daemonRestartBackoffResetAfter {
 			bo.Reset()
 		}
 

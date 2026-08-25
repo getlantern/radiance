@@ -75,7 +75,24 @@ func install(dataPath, logPath, logLevel string, environment daemonEnvironment) 
 	}
 	defer service.Close()
 
-	err = service.SetRecoveryActions([]mgr.RecoveryAction{
+	if err := configureWindowsServiceRecovery(service); err != nil {
+		return err
+	}
+	if err := service.Start(); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
+	}
+
+	slog.Info("Windows service installed successfully")
+	return nil
+}
+
+type windowsServiceRecoveryConfigurer interface {
+	SetRecoveryActions([]mgr.RecoveryAction, uint32) error
+	SetRecoveryActionsOnNonCrashFailures(bool) error
+}
+
+func configureWindowsServiceRecovery(service windowsServiceRecoveryConfigurer) error {
+	if err := service.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 1 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 4 * time.Second},
@@ -83,15 +100,12 @@ func install(dataPath, logPath, logLevel string, environment daemonEnvironment) 
 		{Type: mgr.ServiceRestart, Delay: 16 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 32 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 64 * time.Second},
-	}, 60)
-	if err != nil {
+	}, 60); err != nil {
 		return fmt.Errorf("failed to set service recovery actions: %w", err)
 	}
-	if err := service.Start(); err != nil {
-		return fmt.Errorf("failed to start service: %w", err)
+	if err := service.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		return fmt.Errorf("failed to enable recovery actions for non-crash failures: %w", err)
 	}
-
-	slog.Info("Windows service installed successfully")
 	return nil
 }
 
@@ -152,10 +166,51 @@ func maybePlatformService() bool {
 	return true
 }
 
-type service struct{}
+type windowsServiceChild interface {
+	Done() <-chan error
+	RequestShutdown()
+	WaitOrKill(time.Duration) error
+	HandleCrash(error)
+	info(string, ...any)
+}
+
+type windowsServiceChildProcess struct {
+	*childProcess
+}
+
+func (c *windowsServiceChildProcess) info(message string, args ...any) {
+	c.logger.Info(message, args...)
+}
+
+type windowsServiceBackoff interface {
+	Wait(context.Context)
+	Reset()
+}
+
+type service struct {
+	spawnChild func([]string, string, string, string) (windowsServiceChild, error)
+	newBackoff func() windowsServiceBackoff
+}
+
+// newWindowsService returns a production service handler. Its injected process and backoff
+// functions keep supervision tests independent of OS processes and wall-clock delays.
+func newWindowsService() *service {
+	return &service{
+		spawnChild: func(args []string, dataPath, logPath, logLevel string) (windowsServiceChild, error) {
+			child, err := spawnChild(args, dataPath, logPath, logLevel)
+			if err != nil {
+				return nil, err
+			}
+			return &windowsServiceChildProcess{childProcess: child}, nil
+		},
+		newBackoff: func() windowsServiceBackoff {
+			return common.NewBackoff(daemonRestartBackoffMax)
+		},
+	}
+}
 
 func startWindowsService() error {
-	return svc.Run(serviceName, &service{})
+	return svc.Run(serviceName, newWindowsService())
 }
 
 func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
@@ -170,33 +225,71 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 		slog.Error("Failed to parse service arguments", "error", err)
 		return true, 1
 	}
+	return s.run(config, r, status)
+}
 
-	// Run the daemon as a child process so we can clean up network state if it crashes,
-	// regardless of whether the SCM is configured to restart the service.
+// run supervises the daemon child so crash cleanup and restart do not depend on SCM recovery.
+func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	childArgs := config.args()
-	child, err := spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
+	child, err := s.spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
 	if err != nil {
 		slog.Error("Failed to start daemon", "error", err)
 		return true, 1
 	}
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	child.logger.Info("Running as Windows service")
+	child.info("Running as Windows service")
+
+	backoff := s.newBackoff()
+	startedAt := time.Now()
+	childDone := child.Done()
+	var restartReady <-chan struct{}
+	serviceContext, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
 
 	for {
 		select {
-		case err := <-child.Done():
+		case err := <-childDone:
 			if err != nil {
 				child.HandleCrash(err)
 			}
-			return true, 1
+			if time.Since(startedAt) > daemonRestartBackoffResetAfter {
+				backoff.Reset()
+			}
+			child.info("Restarting daemon process")
+			child = nil
+			childDone = nil
+
+			restartDone := make(chan struct{})
+			restartReady = restartDone
+			go func() {
+				backoff.Wait(serviceContext)
+				close(restartDone)
+			}()
+		case <-restartReady:
+			restartReady = nil
+
+			child, err = s.spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
+			if err != nil {
+				slog.Error("Failed to restart daemon", "error", err)
+				return true, 1
+			}
+			startedAt = time.Now()
+			childDone = child.Done()
+			child.info("Running as Windows service")
 		case change := <-r:
 			switch change.Cmd {
 			case svc.Stop, svc.Shutdown:
 				status <- svc.Status{State: svc.StopPending}
-				child.logger.Info("Service stop requested")
-				child.RequestShutdown()
-				child.WaitOrKill(15 * time.Second)
+				cancelService()
+				if restartReady != nil {
+					<-restartReady
+				}
+				if child != nil {
+					child.info("Service stop requested")
+					child.RequestShutdown()
+					child.WaitOrKill(15 * time.Second)
+				}
 				return false, windows.NO_ERROR
 			case svc.Interrogate:
 				status <- change.CurrentStatus
