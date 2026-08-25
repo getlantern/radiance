@@ -340,7 +340,7 @@ func (c *childProcess) HandleCrash(err error) {
 
 // babysit runs the daemon as a child process and monitors it. If the child exits unexpectedly
 // (crash, panic, etc.), the parent immediately cleans up any stale VPN network state and
-// automatically restarts the child process with exponential backoff.
+// automatically restarts the child process with quadratic backoff and jitter.
 //
 // Graceful shutdown is signaled by closing the child's stdin pipe — this works cross-platform,
 // including inside a Windows service where there is no console for signal delivery.

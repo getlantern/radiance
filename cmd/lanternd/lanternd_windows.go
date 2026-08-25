@@ -288,7 +288,9 @@ func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, statu
 				if child != nil {
 					child.info("Service stop requested")
 					child.RequestShutdown()
-					child.WaitOrKill(15 * time.Second)
+					if err := child.WaitOrKill(15 * time.Second); err != nil {
+						slog.Warn("Daemon process did not stop cleanly", "error", err)
+					}
 				}
 				return false, windows.NO_ERROR
 			case svc.Interrogate:

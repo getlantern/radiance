@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ type fakeWindowsServiceChild struct {
 	crashes   chan error
 	shutdowns chan struct{}
 	waits     chan time.Duration
+	waitErr   error
 }
 
 func newFakeWindowsServiceChild() *fakeWindowsServiceChild {
@@ -38,7 +41,7 @@ func (c *fakeWindowsServiceChild) RequestShutdown() {
 
 func (c *fakeWindowsServiceChild) WaitOrKill(timeout time.Duration) error {
 	c.waits <- timeout
-	return nil
+	return c.waitErr
 }
 
 func (c *fakeWindowsServiceChild) HandleCrash(err error) {
@@ -153,6 +156,35 @@ func TestWindowsServiceStopsDuringRestartBackoff(t *testing.T) {
 		t.Fatalf("spawned child during service stop: %p", unexpected)
 	default:
 	}
+}
+
+func TestWindowsServiceLogsChildShutdownError(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	shutdownErr := errors.New("child exited unsuccessfully")
+	child := newFakeWindowsServiceChild()
+	child.waitErr = shutdownErr
+	windowsService := &service{
+		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
+			return child, nil
+		},
+		newBackoff: func() windowsServiceBackoff { return immediateWindowsServiceBackoff{} },
+	}
+
+	requests := make(chan svc.ChangeRequest, 1)
+	statuses := make(chan svc.Status, 2)
+	result := executeWindowsService(windowsService, requests, statuses)
+
+	require.Equal(t, svc.Running, receive(t, statuses).State)
+	requests <- svc.ChangeRequest{Cmd: svc.Stop}
+	require.Equal(t, svc.StopPending, receive(t, statuses).State)
+	require.Equal(t, 15*time.Second, receive(t, child.waits))
+	require.Equal(t, windowsServiceResult{false, windows.NO_ERROR}, receive(t, result))
+	require.Contains(t, logs.String(), "Daemon process did not stop cleanly")
+	require.Contains(t, logs.String(), shutdownErr.Error())
 }
 
 func TestWindowsServiceReturnsFailureWhenChildCannotRestart(t *testing.T) {
