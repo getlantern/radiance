@@ -52,8 +52,8 @@ type Config struct {
 // NewLogger returns a configured logger that writes to a rotating file and
 // optionally stdout, or to stdout only when LogPath is StdoutPath.
 //
-// When env.Testing is set, a no-op logger is returned.
-// the log file is still created.
+// When env.Testing is set, a no-op logger is returned before any file is created. A "disable"
+// level is different: it only filters records, so the log file is still created.
 func NewLogger(cfg Config) *slog.Logger {
 	if env.GetBool(env.Testing) {
 		return NoOpLogger()

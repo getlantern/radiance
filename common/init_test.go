@@ -12,6 +12,7 @@ import (
 )
 
 func TestLoggerPathUsesLogFileInDirectory(t *testing.T) {
+	t.Setenv(env.LogToStdout.String(), "false")
 	logs := t.TempDir()
 	require.Equal(t, filepath.Join(logs, internal.LogFileName), loggerPath(logs))
 }

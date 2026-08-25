@@ -44,8 +44,18 @@ LogsDirectory=lantern
 WantedBy=multi-user.target
 `))
 
+var systemdArgEscaper = strings.NewReplacer(
+	`\`, `\\`,
+	`"`, `\"`,
+	`%`, `%%`,
+	`$`, `$$`,
+)
+
+// systemdQuote renders s as a single systemd command-line argument. systemd splits a command line
+// on unquoted whitespace, and inside double quotes it still applies C-style escapes, % specifier
+// expansion and $ variable expansion, so each of those is escaped rather than left to expand.
 func systemdQuote(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+	return `"` + systemdArgEscaper.Replace(s) + `"`
 }
 
 func install(dataPath, logPath, logLevel string, environment daemonEnvironment) error {

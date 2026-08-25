@@ -62,6 +62,8 @@ func plistPath() string {
 	return fmt.Sprintf("/Library/LaunchDaemons/%s.plist", serviceName)
 }
 
+// plistString renders s as character data for a plist <string> element. An unescaped & or < in a
+// path yields XML that launchctl refuses to load.
 func plistString(s string) string {
 	var buf bytes.Buffer
 	xml.EscapeText(&buf, []byte(s))
