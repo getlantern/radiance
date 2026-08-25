@@ -18,6 +18,11 @@ import (
 const (
 	serviceName = "LanternSvc"
 	binPath     = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
+
+	// windowsServiceChildShutdownTimeout bounds the child's graceful shutdown period.
+	windowsServiceChildShutdownTimeout = 15 * time.Second
+	// windowsServiceStopWaitHint includes headroom for forced termination after that period.
+	windowsServiceStopWaitHint = 20 * time.Second
 )
 
 var isWindowsService bool
@@ -280,7 +285,11 @@ func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, statu
 		case change := <-r:
 			switch change.Cmd {
 			case svc.Stop, svc.Shutdown:
-				status <- svc.Status{State: svc.StopPending}
+				status <- svc.Status{
+					State:      svc.StopPending,
+					CheckPoint: 1,
+					WaitHint:   uint32(windowsServiceStopWaitHint / time.Millisecond),
+				}
 				cancelService()
 				if restartReady != nil {
 					<-restartReady
@@ -288,7 +297,7 @@ func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, statu
 				if child != nil {
 					child.info("Service stop requested")
 					child.RequestShutdown()
-					if err := child.WaitOrKill(15 * time.Second); err != nil {
+					if err := child.WaitOrKill(windowsServiceChildShutdownTimeout); err != nil {
 						slog.Warn("Daemon process did not stop cleanly", "error", err)
 					}
 				}

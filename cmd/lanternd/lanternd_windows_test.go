@@ -115,9 +115,12 @@ func TestWindowsServiceRestartsExitedChildren(t *testing.T) {
 	}
 
 	requests <- svc.ChangeRequest{Cmd: svc.Stop}
-	require.Equal(t, svc.StopPending, receive(t, statuses).State)
+	stopStatus := receive(t, statuses)
+	require.Equal(t, svc.StopPending, stopStatus.State)
+	require.Equal(t, uint32(1), stopStatus.CheckPoint)
+	require.Equal(t, uint32(windowsServiceStopWaitHint/time.Millisecond), stopStatus.WaitHint)
 	receive(t, children[2].shutdowns)
-	require.Equal(t, 15*time.Second, receive(t, children[2].waits))
+	require.Equal(t, windowsServiceChildShutdownTimeout, receive(t, children[2].waits))
 	require.Equal(t, windowsServiceResult{false, windows.NO_ERROR}, receive(t, result))
 }
 
@@ -181,7 +184,7 @@ func TestWindowsServiceLogsChildShutdownError(t *testing.T) {
 	require.Equal(t, svc.Running, receive(t, statuses).State)
 	requests <- svc.ChangeRequest{Cmd: svc.Stop}
 	require.Equal(t, svc.StopPending, receive(t, statuses).State)
-	require.Equal(t, 15*time.Second, receive(t, child.waits))
+	require.Equal(t, windowsServiceChildShutdownTimeout, receive(t, child.waits))
 	require.Equal(t, windowsServiceResult{false, windows.NO_ERROR}, receive(t, result))
 	require.Contains(t, logs.String(), "Daemon process did not stop cleanly")
 	require.Contains(t, logs.String(), shutdownErr.Error())
