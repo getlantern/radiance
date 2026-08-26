@@ -165,7 +165,7 @@ func main() {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 			logger := newDaemonLogger(config.logPath, config.logLevel)
-			err = babysit(ctx, os.Args[1:], logger, nil)
+			err = babysit(ctx, os.Args[1:], logger)
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
 				os.Exit(exitErr.ExitCode())
@@ -380,10 +380,8 @@ func (c *childProcess) HandleCrash(err error) {
 // Graceful shutdown is requested by closing the child's stdin, which works even
 // in service environments without console signal delivery.
 //
-// ready, if non-nil, is called after the first child starts.
-//
 // The returned error is nil, a spawn failure, or the last child exit error.
-func babysit(ctx context.Context, args []string, logger *slog.Logger, ready func()) error {
+func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
 	const resetAfter = 2 * time.Minute // reset backoff if child ran longer than this
 	bo := common.NewBackoff(60 * time.Second)
 
@@ -391,10 +389,6 @@ func babysit(ctx context.Context, args []string, logger *slog.Logger, ready func
 		child, err := spawnChild(args, logger)
 		if err != nil {
 			return err
-		}
-		if ready != nil {
-			ready()
-			ready = nil
 		}
 		logger.Info("Monitoring daemon process")
 		startedAt := time.Now()
