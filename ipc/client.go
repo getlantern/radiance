@@ -23,6 +23,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
 
@@ -85,6 +86,25 @@ func (e *Error) Error() string {
 func IsNotFound(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Status == http.StatusNotFound
+}
+
+///////////////////
+//   Peer share  //
+///////////////////
+
+// PeerStatus reads the peer client's current lifecycle state.
+//
+// The peer-status *events* stream is edge-triggered: it reports transitions,
+// so a consumer that attaches after the client is already running receives
+// nothing until the next one. That happens routinely — the peer client resumes
+// from persisted settings at process start, well before any UI subscribes, and
+// a UI restart leaves radiance running. Without a way to read the current
+// state, such a consumer has no way to learn it and sits on whatever it
+// assumed at startup.
+func (c *Client) PeerStatus(ctx context.Context) (peer.Status, error) {
+	var status peer.Status
+	err := c.doJSON(ctx, http.MethodGet, peerStatusEndpoint, nil, &status)
+	return status, err
 }
 
 /////////////
