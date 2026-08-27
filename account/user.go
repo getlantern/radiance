@@ -576,6 +576,29 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 	return user, nil
 }
 
+// OAuthDeviceLimitCallback stores the account identity carried by a
+// device-limit OAuth callback token, so the follow-up device removal
+// authenticates as that account — the same thing Login does when the email
+// flow hits the device limit. It does not log the user in: no user data is
+// fetched and no JWT or OAuth state is persisted; the client restarts the
+// OAuth flow once the user has freed up a device slot.
+func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
+	jwtUserInfo, err := decodeJWT(oAuthToken)
+	if err != nil {
+		return fmt.Errorf("error decoding JWT: %w", err)
+	}
+	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
+		return fmt.Errorf("device-limit token is missing the account identity")
+	}
+	// LegacyUserData stays nil so setData takes its identity-only branch
+	// instead of persisting a full login.
+	a.setData(&UserData{
+		LegacyID:    jwtUserInfo.LegacyUserID,
+		LegacyToken: jwtUserInfo.LegacyToken,
+	})
+	return nil
+}
+
 type LinkResponse struct {
 	*protos.BaseResponse `json:",inline"`
 	UserID               int    `json:"userID"`
