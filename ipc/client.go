@@ -24,6 +24,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
 
@@ -86,6 +87,27 @@ func (e *Error) Error() string {
 func IsNotFound(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Status == http.StatusNotFound
+}
+
+///////////////////
+//   Peer share  //
+///////////////////
+
+// PeerStatus reads the peer client's current lifecycle state.
+//
+// This seeds consumers that attach to the peer-status *events* stream after
+// the client is already running. The SSE handler replays a snapshot on
+// connect, so its consumers are covered; the in-process bus used by localOnly
+// builds is not — events.SubscribeContext is purely edge-triggered, so an
+// in-process subscriber sees nothing until the next transition. That gap is
+// routine, not rare: the peer client resumes from persisted settings at
+// process start, well before any UI subscribes, and a UI restart leaves
+// radiance running. Without reading the current state, such a consumer sits
+// on whatever it assumed at startup.
+func (c *Client) PeerStatus(ctx context.Context) (peer.Status, error) {
+	var status peer.Status
+	err := c.doJSON(ctx, http.MethodGet, peerStatusEndpoint, nil, &status)
+	return status, err
 }
 
 /////////////
