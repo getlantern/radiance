@@ -351,6 +351,20 @@ func newPeerTestBackend(t *testing.T, fake *fakePeerController) *LocalBackend {
 	return &LocalBackend{ctx: ctx, peerClient: fake}
 }
 
+func TestPatchSettings_RejectsInvalidSplitTunnelPolicy(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	r := &LocalBackend{ctx: ctx}
+
+	err := r.PatchSettings(settings.Settings{settings.SplitTunnelPolicyKey: "bogus"})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid")
+	assert.Empty(t, settings.GetString(settings.SplitTunnelPolicyKey),
+		"an invalid policy must not be persisted")
+}
+
 func TestApplyPeerShare_StartsOnEnable(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPeerTestBackend(t, fake)

@@ -603,6 +603,13 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if len(diff) == 0 {
 		return nil
 	}
+	// Reject an invalid split-tunnel policy before persisting, so settings.json
+	// can't hold a value the runtime would silently fall back to exclude for.
+	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
+		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
+			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
+		}
+	}
 	if err := settings.Patch(diff); err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
 	}

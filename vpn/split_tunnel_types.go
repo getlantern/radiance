@@ -13,7 +13,8 @@ const splitTunnelTag = "split-tunnel"
 // SplitTunnelPolicy selects how the split-tunnel filter list is interpreted.
 //
 // The values describe the user-facing behavior: whether matching filters are
-// excluded from the VPN tunnel or are the only traffic included in it.
+// excluded from the VPN tunnel or are the only traffic included in it. An empty
+// filter list keeps all traffic in the tunnel regardless of the policy.
 type SplitTunnelPolicy string
 
 const (

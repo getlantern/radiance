@@ -110,6 +110,9 @@ func (s *SplitTunnel) IsEnabled() bool {
 // Empty filters serialize without a filter rule, so traffic remains tunneled in
 // either policy.
 func (s *SplitTunnel) SetPolicy(policy SplitTunnelPolicy) error {
+	if !policy.Valid() {
+		policy = SplitTunnelPolicyExclude
+	}
 	invert := policy == SplitTunnelPolicyInclude
 	s.access.Lock()
 	defer s.access.Unlock()
