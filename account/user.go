@@ -576,12 +576,9 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 	return user, nil
 }
 
-// OAuthDeviceLimitCallback stores the account identity carried by a
-// device-limit OAuth callback token, so the follow-up device removal
-// authenticates as that account — the same thing Login does when the email
-// flow hits the device limit. It does not log the user in: no user data is
-// fetched and no JWT or OAuth state is persisted; the client restarts the
-// OAuth flow once the user has freed up a device slot.
+// OAuthDeviceLimitCallback stores the account identity from a device-limit
+// OAuth callback token so the follow-up device removal authenticates as that
+// account. It does not log the user in.
 func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
 	jwtUserInfo, err := decodeJWT(oAuthToken)
 	if err != nil {
