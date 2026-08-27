@@ -1195,8 +1195,16 @@ func (s *localapi) accountOAuthDeviceLimitHandler(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if req.OAuthToken == "" {
+		http.Error(w, "oAuthToken is required", http.StatusBadRequest)
+		return
+	}
 	if err := s.backend(r.Context()).OAuthDeviceLimitCallback(r.Context(), req.OAuthToken); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		status := http.StatusInternalServerError
+		if errors.Is(err, account.ErrInvalidToken) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

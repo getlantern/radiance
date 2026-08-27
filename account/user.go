@@ -585,19 +585,19 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
 	jwtUserInfo, err := decodeJWT(oAuthToken)
 	if err != nil {
-		return fmt.Errorf("error decoding JWT: %w", err)
+		return fmt.Errorf("%w: error decoding JWT: %w", ErrInvalidToken, err)
 	}
 	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
-		return fmt.Errorf("device-limit token is missing the account identity")
+		return fmt.Errorf("%w: device-limit token is missing the account identity", ErrInvalidToken)
 	}
-	// LegacyUserData stays nil so setData takes its identity-only branch
-	// instead of persisting a full login.
-	a.setData(&UserData{
-		LegacyID:    jwtUserInfo.LegacyUserID,
-		LegacyToken: jwtUserInfo.LegacyToken,
-	})
-	return nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken)
 }
+
+// ErrInvalidToken distinguishes an unusable OAuth callback token from a
+// failure persisting its claims, so transports can map it to a client error.
+var ErrInvalidToken = errors.New("invalid OAuth token")
 
 type LinkResponse struct {
 	*protos.BaseResponse `json:",inline"`
@@ -697,6 +697,22 @@ type UserChangeEvent struct {
 	events.Event
 }
 
+// storeIdentity persists just the account identity in a single atomic write,
+// so a failure can't leave the stored user ID and token inconsistent.
+func storeIdentity(id int64, token string) error {
+	updates := settings.Settings{}
+	if id != 0 {
+		updates[settings.UserIDKey] = id
+	}
+	if token != "" {
+		updates[settings.TokenKey] = token
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return settings.Patch(updates)
+}
+
 func (a *Client) setData(data *UserData) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -708,15 +724,8 @@ func (a *Client) setData(data *UserData) {
 	// This case when user hits device limit while login
 	if data.LegacyUserData == nil {
 		slog.Info("no user data to set, storing id and token only")
-		if data.LegacyID != 0 {
-			if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
-				slog.Error("failed to set user ID in settings", "error", err)
-			}
-		}
-		if data.LegacyToken != "" {
-			if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
-				slog.Error("failed to set token in settings", "error", err)
-			}
+		if err := storeIdentity(data.LegacyID, data.LegacyToken); err != nil {
+			slog.Error("failed to store account identity", "error", err)
 		}
 		return
 	}
