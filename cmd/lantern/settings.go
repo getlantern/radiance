@@ -8,6 +8,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/ipc"
 	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/vpn"
 )
 
 type FeaturesCmd struct{}
@@ -24,7 +25,7 @@ func runFeatures(ctx context.Context, c *ipc.Client) error {
 }
 
 var settingNames = []string{
-	"smart-routing", "ad-block", "telemetry", "split-tunnel",
+	"smart-routing", "ad-block", "telemetry", "split-tunnel", "split-tunnel-policy",
 	"fetch-config", "log-level", "feature-overrides", "country",
 }
 
@@ -38,6 +39,12 @@ func settingValue(name string, s settings.Settings) (any, bool) {
 		return orBool(s[settings.TelemetryKey]), true
 	case "split-tunnel":
 		return orBool(s[settings.SplitTunnelKey]), true
+	case "split-tunnel-policy":
+		p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", orString(s[settings.SplitTunnelPolicyKey])))
+		if !p.Valid() {
+			p = vpn.SplitTunnelPolicyExclude
+		}
+		return string(p), true
 	case "fetch-config":
 		return !toBool(s[settings.ConfigFetchDisabledKey]), true
 	case "log-level":
@@ -51,14 +58,15 @@ func settingValue(name string, s settings.Settings) (any, bool) {
 }
 
 type SetCmd struct {
-	SmartRouting     *bool   `arg:"--smart-routing" help:"enable or disable smart routing (true|false)"`
-	AdBlock          *bool   `arg:"--ad-block" help:"enable or disable ad blocking (true|false)"`
-	Telemetry        *bool   `arg:"--telemetry" help:"enable or disable telemetry (true|false)"`
-	SplitTunnel      *bool   `arg:"--split-tunnel" help:"enable or disable split tunneling (true|false)"`
-	FetchConfig      *bool   `arg:"--fetch-config" help:"enable or disable periodic config fetching (true|false)"`
-	LogLevel         *string `arg:"--log-level" help:"log level (trace|debug|info|warn|error|fatal|panic|disable)"`
-	FeatureOverrides *string `arg:"--feature-overrides" help:"comma-separated feature flags to force-enable via the X-Lantern-Feature-Override header (empty string clears)"`
-	Country          *string `arg:"--country" help:"override the client country code sent to the config server (empty string clears)"`
+	SmartRouting      *bool   `arg:"--smart-routing" help:"enable or disable smart routing (true|false)"`
+	AdBlock           *bool   `arg:"--ad-block" help:"enable or disable ad blocking (true|false)"`
+	Telemetry         *bool   `arg:"--telemetry" help:"enable or disable telemetry (true|false)"`
+	SplitTunnel       *bool   `arg:"--split-tunnel" help:"enable or disable split tunneling (true|false)"`
+	SplitTunnelPolicy *string `arg:"--split-tunnel-policy" help:"split-tunnel policy: exclude matches from the VPN, or include only matches in the VPN (exclude|include)"`
+	FetchConfig       *bool   `arg:"--fetch-config" help:"enable or disable periodic config fetching (true|false)"`
+	LogLevel          *string `arg:"--log-level" help:"log level (trace|debug|info|warn|error|fatal|panic|disable)"`
+	FeatureOverrides  *string `arg:"--feature-overrides" help:"comma-separated feature flags to force-enable via the X-Lantern-Feature-Override header (empty string clears)"`
+	Country           *string `arg:"--country" help:"override the client country code sent to the config server (empty string clears)"`
 }
 
 func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
@@ -74,6 +82,13 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 	}
 	if cmd.SplitTunnel != nil {
 		updates[settings.SplitTunnelKey] = *cmd.SplitTunnel
+	}
+	if cmd.SplitTunnelPolicy != nil {
+		policy := vpn.SplitTunnelPolicy(*cmd.SplitTunnelPolicy)
+		if !policy.Valid() {
+			return fmt.Errorf("invalid --split-tunnel-policy %q (want exclude|include)", *cmd.SplitTunnelPolicy)
+		}
+		updates[settings.SplitTunnelPolicyKey] = string(policy)
 	}
 	if cmd.FetchConfig != nil {
 		updates[settings.ConfigFetchDisabledKey] = !*cmd.FetchConfig
@@ -108,7 +123,7 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 }
 
 type GetCmd struct {
-	Name string `arg:"positional" help:"setting name (smart-routing, ad-block, telemetry, split-tunnel, fetch-config, log-level, feature-overrides, country); omit to list all"`
+	Name string `arg:"positional" help:"setting name (smart-routing, ad-block, telemetry, split-tunnel, split-tunnel-policy, fetch-config, log-level, feature-overrides, country); omit to list all"`
 }
 
 func runGet(ctx context.Context, c *ipc.Client, cmd *GetCmd) error {

@@ -17,6 +17,10 @@ func (s *SplitTunnel) IsEnabled() bool { return false }
 
 func (s *SplitTunnel) SetEnabled(_ bool) error { return nil }
 
+func (s *SplitTunnel) Policy() SplitTunnelPolicy { return SplitTunnelPolicyExclude }
+
+func (s *SplitTunnel) SetPolicy(_ SplitTunnelPolicy) error { return nil }
+
 func (s *SplitTunnel) Filters() SplitTunnelFilter { return SplitTunnelFilter{} }
 
 func (s *SplitTunnel) AddItems(_ SplitTunnelFilter) error { return nil }

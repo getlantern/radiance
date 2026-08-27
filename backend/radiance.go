@@ -188,6 +188,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if err != nil {
 		slog.Error("Loading split tunnel handler", "error", err)
 	}
+	// Empty filters do not persist the invert flag, so reload can reset the
+	// loaded policy. Re-apply the persisted setting as the source of truth.
+	if err := splitTunnelMgr.SetPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+		slog.Warn("Reconciling split-tunnel policy", "error", err)
+	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
 
@@ -613,15 +618,22 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 
 	// vpn settings
-	k := settings.SplitTunnelKey
-	if _, ok := diff[k]; ok {
-		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
-	}
-	// settings.Patch above already persisted the whole diff, so an early
-	// return here would leave a persisted key that no runtime state matches —
-	// exactly the divergence applyPeerShare's rollback exists to prevent.
-	// Run both handlers and join their errors.
+	//
+	// settings.Patch above already persisted the whole diff, so an early return
+	// on a handler error would leave a persisted key that no runtime state
+	// matches — the divergence applyPeerShare's rollback exists to prevent. Run
+	// every handler and join their errors so the caller sees write failures.
 	var errs error
+	if _, ok := diff[settings.SplitTunnelKey]; ok {
+		if err := r.splitTunnelMgr.SetEnabled(settings.GetBool(settings.SplitTunnelKey)); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("set split-tunnel enabled: %w", err))
+		}
+	}
+	if _, ok := diff[settings.SplitTunnelPolicyKey]; ok {
+		if err := r.splitTunnelMgr.SetPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("set split-tunnel policy: %w", err))
+		}
+	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
 	}
