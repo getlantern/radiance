@@ -10,6 +10,26 @@ import (
 // asserting the rule-set is absent.
 const splitTunnelTag = "split-tunnel"
 
+// SplitTunnelPolicy selects how the split-tunnel filter list is interpreted.
+//
+// The values describe the user-facing behavior: whether matching filters are
+// excluded from the VPN tunnel or are the only traffic included in it. An empty
+// filter list keeps all traffic in the tunnel regardless of the policy.
+type SplitTunnelPolicy string
+
+const (
+	// SplitTunnelPolicyExclude makes matching apps/domains bypass the VPN and
+	// routes everything else through it.
+	SplitTunnelPolicyExclude SplitTunnelPolicy = "exclude"
+	// SplitTunnelPolicyInclude routes only matching apps/domains through the VPN
+	// and sends everything else direct.
+	SplitTunnelPolicyInclude SplitTunnelPolicy = "include"
+)
+
+func (p SplitTunnelPolicy) Valid() bool {
+	return p == SplitTunnelPolicyExclude || p == SplitTunnelPolicyInclude
+}
+
 // Filter type identifiers accepted by SplitTunnel.AddItems/RemoveItems and exposed
 // through the backend and CLI. Defined here (rather than alongside the real
 // implementation) so the novpn build, which compiles an inert SplitTunnel, still
@@ -26,7 +46,7 @@ const (
 )
 
 // SplitTunnelFilter is the set of domains, processes, and packages a user has
-// configured to bypass (or be confined to) the tunnel.
+// configured for split-tunnel routing.
 type SplitTunnelFilter struct {
 	Domain           []string
 	DomainSuffix     []string

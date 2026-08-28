@@ -50,11 +50,12 @@ const (
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
 
 	// VPN related keys.
-	SmartRoutingKey     _key = "smart_routing"      // bool
-	SplitTunnelKey      _key = "split_tunnel"       // bool
-	AdBlockKey          _key = "ad_block"           // bool
-	AutoConnectKey      _key = "auto_connect"       // bool
-	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	SmartRoutingKey      _key = "smart_routing"       // bool
+	SplitTunnelKey       _key = "split_tunnel"        // bool
+	SplitTunnelPolicyKey _key = "split_tunnel_policy" // string ("exclude"|"include")
+	AdBlockKey           _key = "ad_block"            // bool
+	AutoConnectKey       _key = "auto_connect"        // bool
+	PeerShareEnabledKey  _key = "peer_share_enabled"  // bool
 	// PeerManualPortKey is the TCP port number the user has manually
 	// forwarded on their router for the peer-proxy inbound (single-
 	// port 1:1 NAT). Valid range is 1..65535; 0 means unset, in which
