@@ -375,6 +375,16 @@ func (c *Client) EnableSplitTunneling(ctx context.Context, enable bool) error {
 	return err
 }
 
+// SetSplitTunnelPolicy selects how the split-tunnel filter is interpreted (see
+// [vpn.SplitTunnelPolicy]).
+func (c *Client) SetSplitTunnelPolicy(ctx context.Context, policy vpn.SplitTunnelPolicy) error {
+	if !policy.Valid() {
+		return fmt.Errorf("invalid split-tunnel policy: %q", policy)
+	}
+	_, err := c.PatchSettings(ctx, settings.Settings{settings.SplitTunnelPolicyKey: string(policy)})
+	return err
+}
+
 func (c *Client) EnableSmartRouting(ctx context.Context, enable bool) error {
 	_, err := c.PatchSettings(ctx, settings.Settings{settings.SmartRoutingKey: enable})
 	return err

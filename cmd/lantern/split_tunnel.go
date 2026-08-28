@@ -49,6 +49,11 @@ func splitTunnelList(ctx context.Context, c *ipc.Client) error {
 	}
 	enabled, _ := strconv.ParseBool(fmt.Sprintf("%v", s[settings.SplitTunnelKey]))
 	fmt.Printf("Split tunneling: %v\n", enabled)
+	policy := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", orString(s[settings.SplitTunnelPolicyKey])))
+	if !policy.Valid() {
+		policy = vpn.SplitTunnelPolicyExclude
+	}
+	fmt.Printf("Policy: %v\n", policy)
 	filters, err := c.SplitTunnelFilters(ctx)
 	if err != nil {
 		return err

@@ -292,6 +292,140 @@ func (r *mockRouter) RuleSet(tag string) (adapter.RuleSet, bool) {
 	return r.ruleSet, true
 }
 
+// splitTunnelMatcher builds a live route rule from st's saved rule file.
+// waitReload blocks until the rule set reflects the latest saved state.
+// A match means the connection is routed direct.
+func splitTunnelMatcher(t *testing.T, st *SplitTunnel) (rule adapter.Rule, waitReload func()) {
+	t.Helper()
+	ruleOpts := O.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultRule{
+			RawDefaultRule: O.RawDefaultRule{RuleSet: []string{splitTunnelTag}},
+			RuleAction: O.RuleAction{
+				Action:       C.RuleActionTypeRoute,
+				RouteOptions: O.RouteActionOptions{Outbound: "direct"},
+			},
+		},
+	}
+	rsetOpts := O.RuleSet{
+		Type:         C.RuleSetTypeLocal,
+		Tag:          splitTunnelTag,
+		LocalOptions: O.LocalRuleSet{Path: st.ruleFile},
+		Format:       C.RuleSetFormatSource,
+	}
+
+	ctx := service.ContextWithDefaultRegistry(context.Background())
+	logger := log.NewNOPFactory().Logger()
+	router := &mockRouter{}
+	service.MustRegister[adapter.Router](ctx, router)
+	service.MustRegister(ctx, new(adapter.NetworkManager))
+
+	ruleSet, err := R.NewRuleSet(ctx, logger, rsetOpts)
+	require.NoError(t, err)
+	require.NoError(t, ruleSet.StartContext(ctx, new(adapter.HTTPStartContext)))
+	t.Cleanup(func() { ruleSet.Close() })
+	router.ruleSet = ruleSet
+
+	rule, err = R.NewRule(ctx, logger, ruleOpts, false)
+	require.NoError(t, err)
+	require.NoError(t, rule.Start())
+	t.Cleanup(func() { rule.Close() })
+
+	last := ruleSet.String()
+	waitReload = func() {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			return ruleSet.String() != last
+		}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
+		last = ruleSet.String()
+	}
+	return rule, waitReload
+}
+
+func TestPolicyInvertsMatch(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+
+	rule, waitReload := splitTunnelMatcher(t, st)
+	matched := &adapter.InboundContext{Domain: "example.com"}
+	unmatched := &adapter.InboundContext{Domain: "other.com"}
+
+	require.NoError(t, st.SetEnabled(true))
+	waitReload()
+
+	assert.True(t, rule.Match(matched), "exclude: matched should route direct")
+	assert.False(t, rule.Match(unmatched), "exclude: unmatched should stay tunneled")
+
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	waitReload()
+
+	assert.False(t, rule.Match(matched), "include: matched should stay tunneled")
+	assert.True(t, rule.Match(unmatched), "include: unmatched should route direct")
+}
+
+func TestEmptyFilterModeInert(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+
+	// Build the matcher after the state is set; an empty filter serializes to a
+	// disable-only rule set whose stringified form doesn't change on the
+	// enable/policy toggle, so there is no reload edge to wait on.
+	rule, _ := splitTunnelMatcher(t, st)
+
+	assert.False(t, rule.Match(&adapter.InboundContext{Domain: "anything.com"}),
+		"empty include filter should tunnel everything (route nothing direct)")
+}
+
+func TestPolicyPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.Equal(t, SplitTunnelPolicyExclude, st.Policy(), "default policy should be exclude")
+
+	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+
+	st2, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, SplitTunnelPolicyInclude, st2.Policy(), "policy should persist across reload")
+	assert.ElementsMatch(t, []string{"example.com"}, st2.Filters().Domain)
+}
+
+func TestEmptyFilterPolicyReloadAndReconcile(t *testing.T) {
+	tmpDir := t.TempDir()
+	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude)) // empty filter
+
+	st2, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.Equal(t, SplitTunnelPolicyExclude, st2.Policy(), "empty-filter policy is not persisted across reload")
+
+	// Reconcile from the durable intent, then add an item so it persists.
+	require.NoError(t, st2.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, st2.AddItem(TypeDomain, "example.com"))
+
+	st3, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, SplitTunnelPolicyInclude, st3.Policy(), "policy persists once the filter is non-empty")
+}
+
+func TestSetPolicyIdempotentAndDefaults(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	require.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude)) // no-op when already in policy
+	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyExclude))
+	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicy("bogus")), "unrecognized policy is treated as exclude")
+	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+}
+
 func TestMigration(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
