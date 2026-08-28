@@ -236,36 +236,41 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
-	if opts.UserMessageCapabilities.Version != "" {
-		if err := opts.UserMessageCapabilities.Validate(); err != nil {
-			slog.Warn("User messages disabled", "reason", "invalid_capabilities")
-		} else {
-			userMessages, err := clientmessage.New(clientmessage.Options{
-				DataDir: dataDir,
-				Fetcher: clientmessage.NewHTTPFetcher(
-					kindling.HTTPClient(),
-					clientmessage.Endpoint(common.GetBaseURL()),
-					opts.UserMessageCapabilities,
-				),
-				ContextProvider: func() clientmessage.ClientContext {
-					return clientmessage.ClientContext{
-						UserID:     settings.GetString(settings.UserIDKey),
-						ProToken:   settings.GetString(settings.TokenKey),
-						Locale:     clientmessage.NormalizeLocale(settings.GetString(settings.LocaleKey)),
-						Platform:   clientmessage.NormalizePlatform(common.Platform),
-						AppVersion: common.GetVersion(),
-					}
-				},
-			})
-			if err != nil {
-				slog.Error("Loading user-message state", "error", err)
-			} else {
-				r.userMessages = userMessages
-			}
-		}
-	}
+	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
 	r.clearSelectedIfMissing()
 	return r, nil
+}
+
+func loadUserMessageService(capabilities wire.ClientCapabilities, dataDir string) *clientmessage.Service {
+	if capabilities.Version == "" {
+		return nil
+	}
+	if err := capabilities.Validate(); err != nil {
+		slog.Warn("User messages disabled", "reason", "invalid_capabilities")
+		return nil
+	}
+	service, err := clientmessage.New(clientmessage.Options{
+		DataDir: dataDir,
+		Fetcher: clientmessage.NewHTTPFetcher(
+			kindling.HTTPClient(),
+			clientmessage.Endpoint(common.GetBaseURL()),
+			capabilities,
+		),
+		ContextProvider: func() clientmessage.ClientContext {
+			return clientmessage.ClientContext{
+				UserID:     settings.GetString(settings.UserIDKey),
+				ProToken:   settings.GetString(settings.TokenKey),
+				Locale:     clientmessage.NormalizeLocale(settings.GetString(settings.LocaleKey)),
+				Platform:   clientmessage.NormalizePlatform(common.Platform),
+				AppVersion: common.GetVersion(),
+			}
+		},
+	})
+	if err != nil {
+		slog.Error("Loading user-message state", "error", err)
+		return nil
+	}
+	return service
 }
 
 func (r *LocalBackend) Start() {
