@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"time"
 
@@ -20,14 +21,18 @@ const (
 	binPath     = "C:\\Program Files\\Lantern\\" + serviceName + ".exe"
 
 	windowsServiceChildShutdownTimeout = 15 * time.Second
-	// windowsServiceStopWaitHint leaves SCM time for forced termination after graceful shutdown
-	// times out.
+	// windowsServiceStopWaitHint leaves SCM time for forced termination after graceful shutdown times out.
 	windowsServiceStopWaitHint = 20 * time.Second
 
+	// windowsServiceRecoveryMaxDelay caps how long SCM waits before retrying a failed service host.
 	windowsServiceRecoveryMaxDelay = 64 * time.Second
-	// windowsServiceRecoveryResetPeriod keeps the failure count through the longest delay so SCM
-	// advances to the next recovery action.
+	// windowsServiceRecoveryResetPeriod keeps the failure count through the longest delay so SCM advances to the next recovery action.
 	windowsServiceRecoveryResetPeriod = 2 * windowsServiceRecoveryMaxDelay
+
+	// windowsServiceRestartBackoffInitial allows quick recovery from an isolated child failure.
+	windowsServiceRestartBackoffInitial = time.Second
+	// windowsServiceRestartBackoffJitter spreads restart attempts after failures that affect many clients.
+	windowsServiceRestartBackoffJitter = 0.2
 )
 
 var isWindowsService bool
@@ -179,8 +184,7 @@ func maybePlatformService() bool {
 	return true
 }
 
-// windowsServiceChild isolates supervision from OS process details so restart and shutdown paths
-// can be tested without launching a daemon.
+// windowsServiceChild isolates supervision from OS process details so restart and shutdown paths can be tested without launching a daemon.
 type windowsServiceChild interface {
 	Done() <-chan error
 	RequestShutdown()
@@ -203,8 +207,44 @@ type windowsServiceBackoff interface {
 	Reset()
 }
 
-// service runs the Windows SCM handler and supervises its daemon child. Dependencies are
-// injected to keep restart and shutdown tests isolated.
+// windowsServiceExponentialBackoff slows crash loops and spreads restart attempts across clients.
+type windowsServiceExponentialBackoff struct {
+	next time.Duration
+}
+
+func newWindowsServiceExponentialBackoff() *windowsServiceExponentialBackoff {
+	return &windowsServiceExponentialBackoff{next: windowsServiceRestartBackoffInitial}
+}
+
+func (b *windowsServiceExponentialBackoff) nextDelay() time.Duration {
+	delay := b.next
+	b.next = min(2*b.next, daemonRestartBackoffMax)
+	return delay
+}
+
+func jitterWindowsServiceRestartDelay(delay time.Duration, random float64) time.Duration {
+	factor := 1 - windowsServiceRestartBackoffJitter + 2*windowsServiceRestartBackoffJitter*random
+	return min(time.Duration(float64(delay)*factor), daemonRestartBackoffMax)
+}
+
+func (b *windowsServiceExponentialBackoff) Wait(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	timer := time.NewTimer(jitterWindowsServiceRestartDelay(b.nextDelay(), rand.Float64()))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func (b *windowsServiceExponentialBackoff) Reset() {
+	b.next = windowsServiceRestartBackoffInitial
+}
+
+// service runs the Windows SCM handler and supervises its daemon child. Dependencies are injected to keep restart and shutdown tests isolated.
 type service struct {
 	logger     *slog.Logger
 	spawnChild func([]string, string, string, string) (windowsServiceChild, error)
@@ -222,7 +262,7 @@ func newWindowsService() *service {
 			return &windowsServiceChildProcess{childProcess: child}, nil
 		},
 		newBackoff: func() windowsServiceBackoff {
-			return common.NewBackoff(daemonRestartBackoffMax)
+			return newWindowsServiceExponentialBackoff()
 		},
 	}
 }

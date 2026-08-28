@@ -340,8 +340,7 @@ func (c *childProcess) HandleCrash(err error) {
 	vpn.AttemptFixNetState()
 }
 
-// babysit keeps the parent alive across unexpected child exits, using the shared quadratic
-// backoff between restarts.
+// babysit keeps the parent alive across unexpected child exits, using quadratic backoff between restarts.
 //
 // Graceful shutdown closes stdin because the Windows service has no console for signal delivery.
 func babysit(args []string, dataPath, logPath, logLevel string) error {

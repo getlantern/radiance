@@ -71,6 +71,32 @@ func (b *blockingWindowsServiceBackoff) Reset() {
 	b.resets <- struct{}{}
 }
 
+func TestWindowsServiceExponentialBackoff(t *testing.T) {
+	backoff := newWindowsServiceExponentialBackoff()
+	for _, expected := range []time.Duration{
+		1 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		32 * time.Second,
+		60 * time.Second,
+		60 * time.Second,
+	} {
+		require.Equal(t, expected, backoff.nextDelay())
+	}
+
+	backoff.Reset()
+	require.Equal(t, windowsServiceRestartBackoffInitial, backoff.nextDelay())
+}
+
+func TestWindowsServiceRestartBackoffJitter(t *testing.T) {
+	require.Equal(t, 800*time.Millisecond, jitterWindowsServiceRestartDelay(time.Second, 0))
+	require.Equal(t, time.Second, jitterWindowsServiceRestartDelay(time.Second, 0.5))
+	require.Equal(t, 1200*time.Millisecond, jitterWindowsServiceRestartDelay(time.Second, 1))
+	require.Equal(t, daemonRestartBackoffMax, jitterWindowsServiceRestartDelay(daemonRestartBackoffMax, 1))
+}
+
 type windowsServiceResult struct {
 	serviceSpecificExitCode bool
 	exitCode                uint32
