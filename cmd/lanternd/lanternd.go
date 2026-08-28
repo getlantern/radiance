@@ -241,7 +241,9 @@ type childProcess struct {
 }
 
 const (
-	daemonRestartBackoffMax        = 60 * time.Second
+	// daemonRestartBackoffMax keeps repeated crashes from delaying recovery by more than a minute.
+	daemonRestartBackoffMax = 60 * time.Second
+	// daemonRestartBackoffResetAfter marks a child as stable so a later failure restarts promptly.
 	daemonRestartBackoffResetAfter = 2 * time.Minute
 )
 
@@ -338,12 +340,10 @@ func (c *childProcess) HandleCrash(err error) {
 	vpn.AttemptFixNetState()
 }
 
-// babysit runs the daemon as a child process and monitors it. If the child exits unexpectedly
-// (crash, panic, etc.), the parent immediately cleans up any stale VPN network state and
-// automatically restarts the child process with quadratic backoff and jitter.
+// babysit keeps the parent alive across unexpected child exits, using the shared quadratic
+// backoff between restarts.
 //
-// Graceful shutdown is signaled by closing the child's stdin pipe — this works cross-platform,
-// including inside a Windows service where there is no console for signal delivery.
+// Graceful shutdown closes stdin because the Windows service has no console for signal delivery.
 func babysit(args []string, dataPath, logPath, logLevel string) error {
 	// On termination signal, request graceful shutdown of the current child.
 	sigCh := make(chan os.Signal, 1)

@@ -85,6 +85,7 @@ func TestWindowsServiceRestartsExitedChildren(t *testing.T) {
 	spawned := make(chan *fakeWindowsServiceChild, len(children))
 	spawnIndex := 0
 	windowsService := &service{
+		logger: slog.New(slog.DiscardHandler),
 		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
 			child := children[spawnIndex]
 			spawnIndex++
@@ -133,6 +134,7 @@ func TestWindowsServiceStopsDuringRestartBackoff(t *testing.T) {
 		resets:  make(chan struct{}, 1),
 	}
 	windowsService := &service{
+		logger: slog.New(slog.DiscardHandler),
 		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
 			spawned <- child
 			return child, nil
@@ -163,14 +165,12 @@ func TestWindowsServiceStopsDuringRestartBackoff(t *testing.T) {
 
 func TestWindowsServiceLogsChildShutdownError(t *testing.T) {
 	var logs bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
 	shutdownErr := errors.New("child exited unsuccessfully")
 	child := newFakeWindowsServiceChild()
 	child.waitErr = shutdownErr
 	windowsService := &service{
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
 		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
 			return child, nil
 		},
@@ -195,6 +195,7 @@ func TestWindowsServiceReturnsFailureWhenChildCannotRestart(t *testing.T) {
 	spawnCalls := 0
 	restartErr := errors.New("restart failed")
 	windowsService := &service{
+		logger: slog.New(slog.DiscardHandler),
 		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
 			spawnCalls++
 			if spawnCalls == 1 {
@@ -236,7 +237,7 @@ func (f *fakeWindowsServiceRecoveryConfigurer) SetRecoveryActionsOnNonCrashFailu
 func TestConfigureWindowsServiceRecovery(t *testing.T) {
 	configured := &fakeWindowsServiceRecoveryConfigurer{}
 	require.NoError(t, configureWindowsServiceRecovery(configured))
-	require.Equal(t, uint32(60), configured.resetPeriod)
+	require.Equal(t, uint32(128), configured.resetPeriod)
 	require.Equal(t, []mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 1 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
