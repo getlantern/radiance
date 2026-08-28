@@ -106,8 +106,9 @@ type Options struct {
 	// own device ID and ignore this value
 	DeviceID string
 	// User choice for telemetry consent
-	TelemetryConsent  bool
-	PlatformInterface vpn.PlatformInterface
+	TelemetryConsent        bool
+	PlatformInterface       vpn.PlatformInterface
+	UserMessageCapabilities wire.ClientCapabilities
 	// EnvOverrides are applied via os.Setenv before common.Init so sandboxed
 	// system extensions (macOS/iOS), which don't inherit shell env, still see
 	// RADIANCE_* vars from the host process. Entries are set verbatim — no
@@ -235,26 +236,33 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
-	userMessages, err := clientmessage.New(clientmessage.Options{
-		DataDir: dataDir,
-		Fetcher: clientmessage.NewHTTPFetcher(
-			kindling.HTTPClient(),
-			clientmessage.Endpoint(common.GetBaseURL()),
-		),
-		ContextProvider: func() clientmessage.ClientContext {
-			return clientmessage.ClientContext{
-				UserID:     settings.GetString(settings.UserIDKey),
-				ProToken:   settings.GetString(settings.TokenKey),
-				Locale:     clientmessage.NormalizeLocale(settings.GetString(settings.LocaleKey)),
-				Platform:   clientmessage.NormalizePlatform(common.Platform),
-				AppVersion: common.GetVersion(),
+	if opts.UserMessageCapabilities.Version != "" {
+		if err := opts.UserMessageCapabilities.Validate(); err != nil {
+			slog.Warn("User messages disabled", "reason", "invalid_capabilities")
+		} else {
+			userMessages, err := clientmessage.New(clientmessage.Options{
+				DataDir: dataDir,
+				Fetcher: clientmessage.NewHTTPFetcher(
+					kindling.HTTPClient(),
+					clientmessage.Endpoint(common.GetBaseURL()),
+					opts.UserMessageCapabilities,
+				),
+				ContextProvider: func() clientmessage.ClientContext {
+					return clientmessage.ClientContext{
+						UserID:     settings.GetString(settings.UserIDKey),
+						ProToken:   settings.GetString(settings.TokenKey),
+						Locale:     clientmessage.NormalizeLocale(settings.GetString(settings.LocaleKey)),
+						Platform:   clientmessage.NormalizePlatform(common.Platform),
+						AppVersion: common.GetVersion(),
+					}
+				},
+			})
+			if err != nil {
+				slog.Error("Loading user-message state", "error", err)
+			} else {
+				r.userMessages = userMessages
 			}
-		},
-	})
-	if err != nil {
-		slog.Error("Loading user-message state", "error", err)
-	} else {
-		r.userMessages = userMessages
+		}
 	}
 	r.clearSelectedIfMissing()
 	return r, nil

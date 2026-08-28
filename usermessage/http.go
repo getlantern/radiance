@@ -53,13 +53,24 @@ type Fetcher interface {
 
 // HTTPFetcher implements Fetcher using Lantern Cloud's public endpoint.
 type HTTPFetcher struct {
-	client   *http.Client
-	endpoint string
+	client       *http.Client
+	endpoint     string
+	capabilities wire.ClientCapabilities
 }
 
 // NewHTTPFetcher creates a fetcher for endpoint.
-func NewHTTPFetcher(client *http.Client, endpoint string) *HTTPFetcher {
-	return &HTTPFetcher{client: client, endpoint: endpoint}
+func NewHTTPFetcher(
+	client *http.Client,
+	endpoint string,
+	capabilities wire.ClientCapabilities,
+) *HTTPFetcher {
+	capabilities.Surfaces = append([]wire.Surface(nil), capabilities.Surfaces...)
+	capabilities.Actions = append([]wire.ActionType(nil), capabilities.Actions...)
+	return &HTTPFetcher{
+		client:       client,
+		endpoint:     endpoint,
+		capabilities: capabilities,
+	}
 }
 
 // Fetch requests one resolved message. Unsupported or otherwise unsafe messages
@@ -76,7 +87,7 @@ func (f *HTTPFetcher) Fetch(
 		Locale:         clientContext.Locale,
 		Platform:       clientContext.Platform,
 		AppVersion:     clientContext.AppVersion,
-		Capability:     wire.CapabilityUserMessagesV1,
+		Capabilities:   f.capabilities,
 		SeenDisplayIDs: seenDisplayIDs,
 	}
 	if err := request.Validate(); err != nil {

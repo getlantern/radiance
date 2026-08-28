@@ -240,6 +240,8 @@ github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952 h1:nD8iJ4IpaTq
 github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952/go.mod h1:1+1kCIg9Zj+2CgN+vl868AlAZVUItuN4wLhFur5QakA=
 github.com/getlantern/common v1.2.1-0.20260818065623-10c2257aa54f h1:8iZqf4mUkFXKmUnDj2Iej0WySAzLuQmHOX736b4pCYU=
 github.com/getlantern/common v1.2.1-0.20260818065623-10c2257aa54f/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
+github.com/getlantern/common v1.2.1-0.20260828192811-1233a8417569 h1:NmEbD0kKiL7EDjR0vSvkW+xtKwocgDHMk4SzvKQh/lE=
+github.com/getlantern/common v1.2.1-0.20260828192811-1233a8417569/go.mod h1:eSSuV4bMPgQJnczBw+KWWqWNo1itzmVxC++qUBPRTt0=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 h1:oEZYEpZo28Wdx+5FZo4aU7JFXu0WG/4wJWese5reQSA=
 github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201/go.mod h1:Y9WZUHEb+mpra02CbQ/QczLUe6f0Dezxaw5DCJlJQGo=
 github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac h1:TMvkNgLVyIYAfu1dYrOuRPYMVY+cHEo1C0CYWhtSw2A=

@@ -29,7 +29,7 @@ func TestHTTPFetcherContractAndCredentials(t *testing.T) {
 
 		var request wire.UserMessageRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-		require.Equal(t, wire.CapabilityUserMessagesV1, request.Capability)
+		require.Equal(t, testCapabilities(), request.Capabilities)
 		require.Equal(t, "fa-IR", request.Locale)
 		require.Equal(t, []string{"seen-1"}, request.SeenDisplayIDs)
 
@@ -40,7 +40,11 @@ func TestHTTPFetcherContractAndCredentials(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := NewHTTPFetcher(server.Client(), server.URL+"/v1/user-messages")
+	fetcher := NewHTTPFetcher(
+		server.Client(),
+		server.URL+"/v1/user-messages",
+		testCapabilities(),
+	)
 	response, err := fetcher.Fetch(context.Background(), testClientContext(), []string{"seen-1"})
 	require.NoError(t, err)
 	require.Equal(t, "display-1", response.Message.DisplayID)
@@ -68,7 +72,7 @@ func TestHTTPFetcherSafelyIgnoresUnsupportedMessages(t *testing.T) {
 			}))
 			defer server.Close()
 
-			response, err := NewHTTPFetcher(server.Client(), server.URL).Fetch(
+			response, err := NewHTTPFetcher(server.Client(), server.URL, testCapabilities()).Fetch(
 				context.Background(), testClientContext(), nil,
 			)
 			require.NoError(t, err)
@@ -83,7 +87,11 @@ func TestHTTPFetcherRejectsNonCanonicalUserID(t *testing.T) {
 		t.Run(userID, func(t *testing.T) {
 			clientContext := testClientContext()
 			clientContext.UserID = userID
-			_, err := NewHTTPFetcher(http.DefaultClient, "https://example.com").Fetch(
+			_, err := NewHTTPFetcher(
+				http.DefaultClient,
+				"https://example.com",
+				testCapabilities(),
+			).Fetch(
 				context.Background(), clientContext, nil,
 			)
 			require.ErrorIs(t, err, errCredentialsUnavailable)
@@ -97,7 +105,7 @@ func TestHTTPFetcherReturnsStructuredStatusError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := NewHTTPFetcher(server.Client(), server.URL).Fetch(
+	_, err := NewHTTPFetcher(server.Client(), server.URL, testCapabilities()).Fetch(
 		context.Background(), testClientContext(), nil,
 	)
 	var statusErr *httpStatusError
@@ -118,6 +126,17 @@ func testClientContext() ClientContext {
 		Locale:     "fa-IR",
 		Platform:   "macos",
 		AppVersion: "9.2.0",
+	}
+}
+
+func testCapabilities() wire.ClientCapabilities {
+	return wire.ClientCapabilities{
+		Version:  wire.CapabilityUserMessagesV1,
+		Surfaces: []wire.Surface{wire.SurfaceSnackbar},
+		Actions: []wire.ActionType{
+			wire.ActionTypeOpenHTTPSURL,
+			wire.ActionTypeOpenPlans,
+		},
 	}
 }
 
