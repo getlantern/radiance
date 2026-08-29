@@ -67,21 +67,26 @@ func parseDaemonEnvironment(value string) (daemonEnvironment, error) {
 	}
 }
 
-// gracefulShutdownTimeout is the maximum time the supervisor waits for a child
-// to exit after requesting a graceful shutdown.
-const gracefulShutdownTimeout = 15 * time.Second
+const (
+	// gracefulShutdownTimeout is the maximum time the supervisor waits for a child
+	// to exit after requesting a graceful shutdown.
+	gracefulShutdownTimeout = 15 * time.Second
 
-// childForceExitTimeout gives the child time to log a forced-exit reason before
-// the supervisor's shutdown deadline expires.
-const childForceExitTimeout = gracefulShutdownTimeout - 3*time.Second
+	// childForceExitTimeout gives the child time to log a forced-exit reason before
+	// the supervisor's shutdown deadline expires.
+	childForceExitTimeout = gracefulShutdownTimeout - 3*time.Second
 
-// childWaitDelay bounds how long Wait may block on inherited stdout/stderr
-// pipes after the child exits.
-const childWaitDelay = 5 * time.Second
+	// childWaitDelay bounds how long Wait may block on inherited stdout/stderr
+	// pipes after the child exits.
+	childWaitDelay = 5 * time.Second
 
-// childEnvMarker marks a supervised child process so main runs the daemon
-// directly instead of starting another supervisor.
-const childEnvMarker = "_LANTERND_CHILD"
+	// childEnvMarker marks a supervised child process so main runs the daemon
+	// directly instead of starting another supervisor.
+	childEnvMarker = "_LANTERND_CHILD"
+
+	// babysitBackoffBase is the base wait time for the babysit backoff strategy.
+	babysitBackoffBase = time.Second
+)
 
 type serviceRunConfig struct {
 	dataPath    string
@@ -383,7 +388,7 @@ func (c *childProcess) HandleCrash(err error) {
 // The returned error is nil, a spawn failure, or the last child exit error.
 func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
 	const resetAfter = 2 * time.Minute // reset backoff if child ran longer than this
-	bo := common.NewBackoff(60 * time.Second)
+	bo := common.NewBackoff(babysitBackoffBase, 60*time.Second)
 
 	for ctx.Err() == nil {
 		child, err := spawnChild(args, logger)

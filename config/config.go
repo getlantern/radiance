@@ -300,7 +300,7 @@ func setWireGuardKeyInOptions(endpoints []option.Endpoint, privateKey wgtypes.Ke
 // back to the default pollInterval. This allows the bandit to control how
 // often the client re-fetches based on learning confidence.
 func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
-	backoff := common.NewBackoff(maxRetryDelay)
+	backoff := common.NewBackoff(0, maxRetryDelay)
 	for {
 		if err := ch.fetchConfig(); err != nil {
 			ch.logger.Error("Failed to fetch config. Retrying", "error", err)

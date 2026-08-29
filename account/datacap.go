@@ -139,7 +139,7 @@ func readSSE(ctx context.Context, body io.Reader) (<-chan sseEvent, func() error
 // stream errors. If the server closes with cap_exhausted, it waits for the
 // allotment reset instead of retrying immediately.
 func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) error {
-	bo := common.NewBackoff(2 * time.Minute)
+	bo := common.NewBackoff(0, 2*time.Minute)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
