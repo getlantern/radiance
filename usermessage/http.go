@@ -64,6 +64,9 @@ func NewHTTPFetcher(
 	endpoint string,
 	capabilities wire.ClientCapabilities,
 ) *HTTPFetcher {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	capabilities.Surfaces = append([]wire.Surface(nil), capabilities.Surfaces...)
 	capabilities.Actions = append([]wire.ActionType(nil), capabilities.Actions...)
 	return &HTTPFetcher{

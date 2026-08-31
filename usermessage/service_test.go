@@ -276,6 +276,14 @@ func TestPollingDelaysStayWithinSLAAndBackoffCap(t *testing.T) {
 	require.Equal(t, 5*time.Minute, failureBackoff(100))
 }
 
+func TestServiceRequiresDataDirectory(t *testing.T) {
+	_, err := New(Options{
+		Fetcher:         newScriptedFetcher(),
+		ContextProvider: func() ClientContext { return testClientContext() },
+	})
+	require.EqualError(t, err, "user-message data directory is required")
+}
+
 type fetchCall struct {
 	clientContext ClientContext
 	seen          []string

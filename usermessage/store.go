@@ -165,10 +165,6 @@ func touch(state *persistedState, userID string) {
 	}
 }
 
-func (s *store) saveLocked() error {
-	return writeState(s.path, s.state)
-}
-
 func (s *store) commitLocked(next persistedState) error {
 	if err := writeState(s.path, next); err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	wire "github.com/getlantern/common/usermessage"
@@ -19,29 +20,31 @@ import (
 func TestHTTPFetcherContractAndCredentials(t *testing.T) {
 	expiresAt := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/v1/user-messages", r.URL.Path)
-		require.Equal(t, "12345", r.Header.Get(common.UserIDHeader))
-		require.Equal(t, "secret-token", r.Header.Get(common.ProTokenHeader))
-		require.Equal(t, "macos", r.Header.Get(common.PlatformHeader))
-		require.Equal(t, "9.2.0", r.Header.Get(common.AppVersionHeader))
-		require.Equal(t, "1", r.Header.Get(kindling.IdempotentHeader))
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/v1/user-messages", r.URL.Path)
+		assert.Equal(t, "12345", r.Header.Get(common.UserIDHeader))
+		assert.Equal(t, "secret-token", r.Header.Get(common.ProTokenHeader))
+		assert.Equal(t, "macos", r.Header.Get(common.PlatformHeader))
+		assert.Equal(t, "9.2.0", r.Header.Get(common.AppVersionHeader))
+		assert.Equal(t, "1", r.Header.Get(kindling.IdempotentHeader))
 
 		var request wire.UserMessageRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-		require.Equal(t, testCapabilities(), request.Capabilities)
-		require.Equal(t, "fa-IR", request.Locale)
-		require.Equal(t, []string{"seen-1"}, request.SeenDisplayIDs)
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&request)) {
+			return
+		}
+		assert.Equal(t, testCapabilities(), request.Capabilities)
+		assert.Equal(t, "fa-IR", request.Locale)
+		assert.Equal(t, []string{"seen-1"}, request.SeenDisplayIDs)
 
 		writeWireResponse(t, w, wire.UserMessageResponse{
 			PollIntervalSeconds: wire.MaxPollIntervalSeconds,
 			Message:             testMessage("display-1", expiresAt),
 		})
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	fetcher := NewHTTPFetcher(
-		server.Client(),
+		nil,
 		server.URL+"/v1/user-messages",
 		testCapabilities(),
 	)
@@ -70,7 +73,7 @@ func TestHTTPFetcherSafelyIgnoresUnsupportedMessages(t *testing.T) {
 					Message:             message,
 				})
 			}))
-			defer server.Close()
+			t.Cleanup(server.Close)
 
 			response, err := NewHTTPFetcher(server.Client(), server.URL, testCapabilities()).Fetch(
 				context.Background(), testClientContext(), nil,
@@ -103,7 +106,7 @@ func TestHTTPFetcherReturnsStructuredStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	_, err := NewHTTPFetcher(server.Client(), server.URL, testCapabilities()).Fetch(
 		context.Background(), testClientContext(), nil,
@@ -116,7 +119,7 @@ func TestHTTPFetcherReturnsStructuredStatusError(t *testing.T) {
 func writeWireResponse(t *testing.T, w http.ResponseWriter, response wire.UserMessageResponse) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(response))
+	assert.NoError(t, json.NewEncoder(w).Encode(response))
 }
 
 func testClientContext() ClientContext {

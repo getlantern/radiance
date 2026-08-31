@@ -68,6 +68,9 @@ type Service struct {
 
 // New creates a user-message service and loads its durable state.
 func New(opts Options) (*Service, error) {
+	if opts.DataDir == "" {
+		return nil, errors.New("user-message data directory is required")
+	}
 	if opts.Fetcher == nil {
 		return nil, errors.New("user-message fetcher is required")
 	}

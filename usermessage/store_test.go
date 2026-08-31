@@ -1,9 +1,7 @@
 package usermessage
 
 import (
-	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -67,17 +65,18 @@ func TestStoreDoesNotReplaceUnacknowledgedMessage(t *testing.T) {
 	message, err := state.current("1", now)
 	require.NoError(t, err)
 	require.Equal(t, "first", message.DisplayID)
-	require.True(t, errors.Is(state.acknowledge("1", "second", now), ErrMessageNotPending))
+	require.ErrorIs(t, state.acknowledge("1", "second", now), ErrMessageNotPending)
 }
 
 func TestStoreSanitizesInvalidPersistedSeenIDs(t *testing.T) {
-	state, err := newStore(t.TempDir())
+	dir := t.TempDir()
+	state, err := newStore(dir)
 	require.NoError(t, err)
 	state.state.Users["1"] = &userState{Seen: []string{"valid-id", "invalid id", "valid-id"}}
 	state.state.Order = []string{"1"}
-	require.NoError(t, state.saveLocked())
+	require.NoError(t, writeState(state.path, state.state))
 
-	reloaded, err := newStore(filepath.Dir(state.path))
+	reloaded, err := newStore(dir)
 	require.NoError(t, err)
 	require.Equal(t, []string{"valid-id"}, reloaded.seen("1"))
 }
