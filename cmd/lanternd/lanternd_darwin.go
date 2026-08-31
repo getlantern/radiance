@@ -3,6 +3,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,39 +23,51 @@ func maybePlatformService() bool {
 	return false
 }
 
-var launchdPlistTmpl = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
+// launchdPlistTmpl discards stdout because the supervisor already captures the
+// daemon log stream. Stderr is kept for panics and fatal output that bypass slog.
+var launchdPlistTmpl = template.Must(template.New("plist").Funcs(template.FuncMap{
+	"str": plistString,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>{{.ServiceName}}</string>
+	<string>{{str .ServiceName}}</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>{{.ExePath}}</string>
+		<string>{{str .ExePath}}</string>
 		<string>run</string>
 		<string>--data-path</string>
-		<string>{{.DataPath}}</string>
+		<string>{{str .DataPath}}</string>
 		<string>--log-path</string>
-		<string>{{.LogPath}}</string>
+		<string>{{str .LogPath}}</string>
 		<string>--log-level</string>
-		<string>{{.LogLevel}}</string>
+		<string>{{str .LogLevel}}</string>
 		<string>--environment</string>
-		<string>{{.Environment}}</string>
+		<string>{{str .Environment}}</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>{{.LogPath}}/lanternd.stdout.log</string>
+	<string>/dev/null</string>
 	<key>StandardErrorPath</key>
-	<string>{{.LogPath}}/lanternd.stderr.log</string>
+	<string>{{str .LogPath}}/lanternd.stderr.log</string>
 </dict>
 </plist>
 `))
 
 func plistPath() string {
 	return fmt.Sprintf("/Library/LaunchDaemons/%s.plist", serviceName)
+}
+
+// plistString renders s as character data for a plist <string> element. An unescaped & or < in a
+// path yields XML that launchctl refuses to load.
+func plistString(s string) string {
+	var buf bytes.Buffer
+	xml.EscapeText(&buf, []byte(s))
+	return buf.String()
 }
 
 func install(dataPath, logPath, logLevel string, environment daemonEnvironment) error {
@@ -78,9 +92,8 @@ func install(dataPath, logPath, logLevel string, environment daemonEnvironment) 
 	defer f.Close()
 
 	err = launchdPlistTmpl.Execute(f, struct {
-		ServiceName, ExePath, DataPath, LogPath, LogLevel string
-		Environment                                       daemonEnvironment
-	}{serviceName, exe, dataPath, logPath, logLevel, environment})
+		ServiceName, ExePath, DataPath, LogPath, LogLevel, Environment string
+	}{serviceName, exe, dataPath, logPath, logLevel, string(environment)})
 	if err != nil {
 		return fmt.Errorf("failed to write plist: %w", err)
 	}

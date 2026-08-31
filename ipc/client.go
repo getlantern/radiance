@@ -608,6 +608,14 @@ func (c *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*ac
 	return &userData, nil
 }
 
+// OAuthDeviceLimitCallback stores the account identity from a device-limit
+// OAuth callback token without logging the user in; see account.Client.OAuthDeviceLimitCallback.
+func (c *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
+	_, err := c.do(ctx, http.MethodPost, accountOAuthDeviceLimitEndpoint,
+		OAuthTokenRequest{OAuthToken: oAuthToken})
+	return err
+}
+
 // DataCapInfo returns the current data cap information as a JSON string.
 func (c *Client) DataCapInfo(ctx context.Context) (*account.DataCapInfo, error) {
 	var resp account.DataCapInfo
@@ -719,7 +727,7 @@ func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, des
 
 // sseRetryLoop runs sseStream in a retry loop until ctx is cancelled.
 func (c *Client) sseRetryLoop(ctx context.Context, endpoint string, handler func([]byte)) error {
-	bo := common.NewBackoff(30 * time.Second)
+	bo := common.NewBackoff(0, 30*time.Second)
 	for ctx.Err() == nil {
 		err := c.sseStream(ctx, endpoint, handler)
 		if ctx.Err() != nil {

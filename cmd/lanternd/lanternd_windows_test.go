@@ -48,8 +48,6 @@ func (c *fakeWindowsServiceChild) HandleCrash(err error) {
 	c.crashes <- err
 }
 
-func (c *fakeWindowsServiceChild) info(string, ...any) {}
-
 type immediateWindowsServiceBackoff struct{}
 
 func (immediateWindowsServiceBackoff) Wait(context.Context) {}
@@ -109,12 +107,20 @@ func TestWindowsServiceRestartsExitedChildren(t *testing.T) {
 		newFakeWindowsServiceChild(),
 	}
 	spawned := make(chan *fakeWindowsServiceChild, len(children))
+	spawnLoggers := make(chan *slog.Logger, len(children))
+	createdLoggers := make(chan *slog.Logger, 2)
+	serviceLogger := slog.New(slog.DiscardHandler)
 	spawnIndex := 0
 	windowsService := &service{
 		logger: slog.New(slog.DiscardHandler),
-		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
+		loggerFactory: func(string, string) *slog.Logger {
+			createdLoggers <- serviceLogger
+			return serviceLogger
+		},
+		spawnChild: func(_ []string, logger *slog.Logger) (windowsServiceChild, error) {
 			child := children[spawnIndex]
 			spawnIndex++
+			spawnLoggers <- logger
 			spawned <- child
 			return child, nil
 		},
@@ -125,15 +131,19 @@ func TestWindowsServiceRestartsExitedChildren(t *testing.T) {
 	statuses := make(chan svc.Status, 2)
 	result := executeWindowsService(windowsService, requests, statuses)
 
+	require.Same(t, serviceLogger, receive(t, createdLoggers))
+	require.Same(t, serviceLogger, receive(t, spawnLoggers))
 	require.Same(t, children[0], receive(t, spawned))
 	require.Equal(t, svc.Running, receive(t, statuses).State)
 
 	crashErr := errors.New("daemon crashed")
 	children[0].done <- crashErr
 	require.ErrorIs(t, receive(t, children[0].crashes), crashErr)
+	require.Same(t, serviceLogger, receive(t, spawnLoggers))
 	require.Same(t, children[1], receive(t, spawned))
 
 	children[1].done <- nil
+	require.Same(t, serviceLogger, receive(t, spawnLoggers))
 	require.Same(t, children[2], receive(t, spawned))
 	select {
 	case err := <-children[1].crashes:
@@ -149,6 +159,11 @@ func TestWindowsServiceRestartsExitedChildren(t *testing.T) {
 	receive(t, children[2].shutdowns)
 	require.Equal(t, windowsServiceChildShutdownTimeout, receive(t, children[2].waits))
 	require.Equal(t, windowsServiceResult{false, windows.NO_ERROR}, receive(t, result))
+	select {
+	case <-createdLoggers:
+		t.Fatal("created more than one supervisor logger")
+	default:
+	}
 }
 
 func TestWindowsServiceStopsDuringRestartBackoff(t *testing.T) {
@@ -161,7 +176,7 @@ func TestWindowsServiceStopsDuringRestartBackoff(t *testing.T) {
 	}
 	windowsService := &service{
 		logger: slog.New(slog.DiscardHandler),
-		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
+		spawnChild: func([]string, *slog.Logger) (windowsServiceChild, error) {
 			spawned <- child
 			return child, nil
 		},
@@ -197,7 +212,7 @@ func TestWindowsServiceLogsChildShutdownError(t *testing.T) {
 	child.waitErr = shutdownErr
 	windowsService := &service{
 		logger: slog.New(slog.NewTextHandler(&logs, nil)),
-		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
+		spawnChild: func([]string, *slog.Logger) (windowsServiceChild, error) {
 			return child, nil
 		},
 		newBackoff: func() windowsServiceBackoff { return immediateWindowsServiceBackoff{} },
@@ -222,7 +237,7 @@ func TestWindowsServiceReturnsFailureWhenChildCannotRestart(t *testing.T) {
 	restartErr := errors.New("restart failed")
 	windowsService := &service{
 		logger: slog.New(slog.DiscardHandler),
-		spawnChild: func([]string, string, string, string) (windowsServiceChild, error) {
+		spawnChild: func([]string, *slog.Logger) (windowsServiceChild, error) {
 			spawnCalls++
 			if spawnCalls == 1 {
 				return child, nil

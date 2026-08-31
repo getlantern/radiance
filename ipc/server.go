@@ -81,19 +81,20 @@ const (
 	splitTunnelEndpoint = "/split-tunnel"
 
 	// Account endpoints
-	accountNewUserEndpoint        = "/account/new-user"
-	accountLoginEndpoint          = "/account/login"
-	accountLogoutEndpoint         = "/account/logout"
-	accountUserDataEndpoint       = "/account/user"
-	accountDevicesEndpoint        = "/account/devices/"
-	accountSignupEndpoint         = "/account/signup/"
-	accountVerifyPasswordEndpoint = "/account/verify-password"
-	accountEmailEndpoint          = "/account/email"
-	accountRecoveryEndpoint       = "/account/recovery"
-	accountDeleteEndpoint         = "/account/delete"
-	accountOAuthEndpoint          = "/account/oauth"
-	accountDataCapEndpoint        = "/account/datacap"
-	accountDataCapStreamEndpoint  = "/account/datacap/stream"
+	accountNewUserEndpoint          = "/account/new-user"
+	accountLoginEndpoint            = "/account/login"
+	accountLogoutEndpoint           = "/account/logout"
+	accountUserDataEndpoint         = "/account/user"
+	accountDevicesEndpoint          = "/account/devices/"
+	accountSignupEndpoint           = "/account/signup/"
+	accountVerifyPasswordEndpoint   = "/account/verify-password"
+	accountEmailEndpoint            = "/account/email"
+	accountRecoveryEndpoint         = "/account/recovery"
+	accountDeleteEndpoint           = "/account/delete"
+	accountOAuthEndpoint            = "/account/oauth"
+	accountOAuthDeviceLimitEndpoint = "/account/oauth/device-limit"
+	accountDataCapEndpoint          = "/account/datacap"
+	accountDataCapStreamEndpoint    = "/account/datacap/stream"
 
 	// Subscription endpoints
 	subscriptionActivationEndpoint         = "/subscription/activation"
@@ -264,6 +265,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+accountRecoveryEndpoint+"/{action}", traced(s.accountRecoveryHandler))
 	mux.HandleFunc("DELETE "+accountDeleteEndpoint, traced(s.accountDeleteHandler))
 	mux.HandleFunc(accountOAuthEndpoint, traced(s.accountOAuthHandler))
+	mux.HandleFunc("POST "+accountOAuthDeviceLimitEndpoint, traced(s.accountOAuthDeviceLimitHandler))
 	mux.HandleFunc("GET "+accountDataCapEndpoint, traced(s.accountDataCapHandler))
 
 	// SSE routes skip the tracer middleware since it buffers the entire response body.
@@ -1185,6 +1187,27 @@ func (s *localapi) accountOAuthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, URLResponse{URL: u})
+}
+
+func (s *localapi) accountOAuthDeviceLimitHandler(w http.ResponseWriter, r *http.Request) {
+	var req OAuthTokenRequest
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.OAuthToken == "" {
+		http.Error(w, "oAuthToken is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.backend(r.Context()).OAuthDeviceLimitCallback(r.Context(), req.OAuthToken); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, account.ErrInvalidToken) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *localapi) accountDataCapHandler(w http.ResponseWriter, r *http.Request) {

@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common"
 )
 
 func TestSubscriptionPaymentRedirect(t *testing.T) {
@@ -37,6 +39,8 @@ func TestPaymentRedirect(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, url)
 	assert.Equal(t, data.IdempotencyKey, ts.paymentRedirectIdempotencyKey)
+	assert.Equal(t, common.GetVersion(), ts.paymentRedirectAppVersion)
+	assert.Equal(t, common.GetVersion(), ts.paymentRedirectLibraryVersion)
 }
 
 func TestPaymentRedirectOmitsEmptyIdempotencyKey(t *testing.T) {

@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/account/protos"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -29,6 +31,8 @@ type testServer struct {
 	paymentRedirectHasIdempotencyKey             bool
 	paymentRedirectCouponCode                    string
 	paymentRedirectHasCouponCode                 bool
+	paymentRedirectAppVersion                    string
+	paymentRedirectLibraryVersion                string
 	subscriptionPaymentRedirectIdempotencyKey    string
 	subscriptionPaymentRedirectHasIdempotencyKey bool
 	subscriptionPaymentRedirectCouponCode        string
@@ -227,6 +231,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 
 	mux.HandleFunc("/payment-redirect", func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
+		state.paymentRedirectAppVersion = r.Header.Get(common.AppVersionHeader)
+		state.paymentRedirectLibraryVersion = r.Header.Get(common.VersionHeader)
 		state.paymentRedirectIdempotencyKey = values.Get("idempotencyKey")
 		_, state.paymentRedirectHasIdempotencyKey = values["idempotencyKey"]
 		state.paymentRedirectCouponCode = values.Get("couponCode")
@@ -432,6 +438,46 @@ func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
 	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error decoding JWT")
+}
+
+// mockJWT builds an unsigned JWT from the given claims; decodeJWT uses
+// ParseUnverified, so the fake signature is never checked.
+func mockJWT(t *testing.T, claims map[string]any) string {
+	payload, err := json.Marshal(claims)
+	require.NoError(t, err)
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".test"
+}
+
+func TestOAuthDeviceLimitCallback(t *testing.T) {
+	ac, _ := newTestClient(t)
+
+	token := mockJWT(t, map[string]any{
+		"email":          "test@example.com",
+		"legacy_user_id": 12345,
+		"legacy_token":   "test-token",
+	})
+	err := ac.OAuthDeviceLimitCallback(context.Background(), token)
+	assert.NoError(t, err)
+	assert.EqualValues(t, 12345, settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "test-token", settings.GetString(settings.TokenKey))
+}
+
+func TestOAuthDeviceLimitCallback_InvalidToken(t *testing.T) {
+	ac, _ := newTestClient(t)
+
+	err := ac.OAuthDeviceLimitCallback(context.Background(), "invalid-token")
+	assert.ErrorIs(t, err, ErrInvalidToken)
+	assert.Contains(t, err.Error(), "error decoding JWT")
+}
+
+func TestOAuthDeviceLimitCallback_MissingIdentity(t *testing.T) {
+	ac, _ := newTestClient(t)
+
+	token := mockJWT(t, map[string]any{"email": "test@example.com"})
+	err := ac.OAuthDeviceLimitCallback(context.Background(), token)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+	assert.Contains(t, err.Error(), "missing the account identity")
 }
 
 func TestReferralAttach_EmptyChannelUsesV1(t *testing.T) {

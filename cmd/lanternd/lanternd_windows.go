@@ -190,15 +190,6 @@ type windowsServiceChild interface {
 	RequestShutdown()
 	WaitOrKill(time.Duration) error
 	HandleCrash(error)
-	info(string, ...any)
-}
-
-type windowsServiceChildProcess struct {
-	*childProcess
-}
-
-func (c *windowsServiceChildProcess) info(message string, args ...any) {
-	c.logger.Info(message, args...)
 }
 
 // windowsServiceBackoff lets a service stop cancel a pending restart delay.
@@ -246,20 +237,22 @@ func (b *windowsServiceExponentialBackoff) Reset() {
 
 // service runs the Windows SCM handler and supervises its daemon child. Dependencies are injected to keep restart and shutdown tests isolated.
 type service struct {
-	logger     *slog.Logger
-	spawnChild func([]string, string, string, string) (windowsServiceChild, error)
-	newBackoff func() windowsServiceBackoff
+	logger        *slog.Logger
+	loggerFactory func(string, string) *slog.Logger
+	spawnChild    func([]string, *slog.Logger) (windowsServiceChild, error)
+	newBackoff    func() windowsServiceBackoff
 }
 
 func newWindowsService() *service {
 	return &service{
-		logger: slog.Default(),
-		spawnChild: func(args []string, dataPath, logPath, logLevel string) (windowsServiceChild, error) {
-			child, err := spawnChild(args, dataPath, logPath, logLevel)
+		logger:        slog.Default(),
+		loggerFactory: newDaemonLogger,
+		spawnChild: func(args []string, logger *slog.Logger) (windowsServiceChild, error) {
+			child, err := spawnChild(args, logger)
 			if err != nil {
 				return nil, err
 			}
-			return &windowsServiceChildProcess{childProcess: child}, nil
+			return child, nil
 		},
 		newBackoff: func() windowsServiceBackoff {
 			return newWindowsServiceExponentialBackoff()
@@ -289,14 +282,18 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 // run supervises the daemon child so crash cleanup and restart do not depend on SCM recovery.
 func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	childArgs := config.args()
-	child, err := s.spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
+	logger := s.logger
+	if s.loggerFactory != nil {
+		logger = s.loggerFactory(config.logPath, config.logLevel)
+	}
+	child, err := s.spawnChild(childArgs, logger)
 	if err != nil {
-		s.logger.Error("Failed to start daemon", "error", err)
+		logger.Error("Failed to start daemon", "error", err)
 		return true, 1
 	}
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	child.info("Running as Windows service")
+	logger.Info("Running as Windows service")
 
 	backoff := s.newBackoff()
 	startedAt := time.Now()
@@ -314,7 +311,7 @@ func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, statu
 			if time.Since(startedAt) > daemonRestartBackoffResetAfter {
 				backoff.Reset()
 			}
-			child.info("Restarting daemon process")
+			logger.Info("Restarting daemon process")
 			child = nil
 			childDone = nil
 
@@ -327,14 +324,14 @@ func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, statu
 		case <-restartReady:
 			restartReady = nil
 
-			child, err = s.spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
+			child, err = s.spawnChild(childArgs, logger)
 			if err != nil {
-				s.logger.Error("Failed to restart daemon", "error", err)
+				logger.Error("Failed to restart daemon", "error", err)
 				return true, 1
 			}
 			startedAt = time.Now()
 			childDone = child.Done()
-			child.info("Running as Windows service")
+			logger.Info("Running as Windows service")
 		case change := <-r:
 			switch change.Cmd {
 			case svc.Stop, svc.Shutdown:
@@ -348,10 +345,10 @@ func (s *service) run(config serviceRunConfig, r <-chan svc.ChangeRequest, statu
 					<-restartReady
 				}
 				if child != nil {
-					child.info("Service stop requested")
+					logger.Info("Service stop requested")
 					child.RequestShutdown()
 					if err := child.WaitOrKill(windowsServiceChildShutdownTimeout); err != nil {
-						s.logger.Warn("Daemon process did not stop cleanly", "error", err)
+						logger.Warn("Daemon process did not stop cleanly", "error", err)
 					}
 				}
 				return false, windows.NO_ERROR
