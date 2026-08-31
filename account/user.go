@@ -587,8 +587,6 @@ func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string
 	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
 		return fmt.Errorf("%w: device-limit token is missing the account identity", ErrInvalidToken)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	return storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken)
 }
 
