@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/getlantern/radiance/account/protos"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -30,6 +31,8 @@ type testServer struct {
 	paymentRedirectHasIdempotencyKey             bool
 	paymentRedirectCouponCode                    string
 	paymentRedirectHasCouponCode                 bool
+	paymentRedirectAppVersion                    string
+	paymentRedirectLibraryVersion                string
 	subscriptionPaymentRedirectIdempotencyKey    string
 	subscriptionPaymentRedirectHasIdempotencyKey bool
 	subscriptionPaymentRedirectCouponCode        string
@@ -228,6 +231,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 
 	mux.HandleFunc("/payment-redirect", func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
+		state.paymentRedirectAppVersion = r.Header.Get(common.AppVersionHeader)
+		state.paymentRedirectLibraryVersion = r.Header.Get(common.VersionHeader)
 		state.paymentRedirectIdempotencyKey = values.Get("idempotencyKey")
 		_, state.paymentRedirectHasIdempotencyKey = values["idempotencyKey"]
 		state.paymentRedirectCouponCode = values.Get("couponCode")
