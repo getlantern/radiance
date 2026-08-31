@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	initialFailureBackoff = 5 * time.Second
-	maxFailureBackoff     = 5 * time.Minute
+	credentialRecheckInterval = time.Second
+	initialFailureBackoff     = 5 * time.Second
+	maxFailureBackoff         = 5 * time.Minute
 )
 
 // Clock creates timers and reports the current time.
@@ -174,6 +175,7 @@ func (s *Service) SetActivity(active, online bool) {
 func (s *Service) run(ctx context.Context) {
 	var delay time.Duration
 	var failures uint
+	var credentialsDeferred bool
 	for s.wait(ctx, delay) {
 		requestContext, requestID, generation, ok := s.beginRequest(ctx)
 		if !ok {
@@ -184,13 +186,18 @@ func (s *Service) run(ctx context.Context) {
 		if !clientContext.valid() {
 			s.endRequest(requestID)
 			failures = 0
-			delay = 0
-			s.logger.Debug("User-message fetch deferred", "reason", "credentials_unavailable")
-			if !s.waitForRefresh(ctx) {
-				return
+			// Account creation normally wakes us through Refresh, but first-run
+			// identity creation has historically not emitted that signal. Recheck
+			// the in-memory context so a missed edge cannot stall messaging until
+			// the next app launch. No network request is made until it is valid.
+			delay = credentialRecheckInterval
+			if !credentialsDeferred {
+				s.logger.Debug("User-message fetch deferred", "reason", "credentials_unavailable")
+				credentialsDeferred = true
 			}
 			continue
 		}
+		credentialsDeferred = false
 		seen := s.store.seen(clientContext.UserID)
 		response, err := s.fetcher.Fetch(requestContext, clientContext, seen)
 		s.endRequest(requestID)
@@ -244,15 +251,6 @@ func (s *Service) run(ctx context.Context) {
 		failures = 0
 		delay = s.jitter(time.Duration(response.PollIntervalSeconds) * time.Second)
 		s.logFetchResult(response.Message, delay)
-	}
-}
-
-func (s *Service) waitForRefresh(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-s.wake:
-		return true
 	}
 }
 

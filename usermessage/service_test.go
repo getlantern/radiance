@@ -173,7 +173,7 @@ func TestServiceCancelsFetchAfterAccountReplacement(t *testing.T) {
 	require.Nil(t, message)
 }
 
-func TestServiceWaitsForCompleteCredentials(t *testing.T) {
+func TestServiceRechecksCredentialsWhenFirstRunSignalIsMissed(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fetcher := newScriptedFetcher()
 	var mu sync.Mutex
@@ -188,6 +188,7 @@ func TestServiceWaitsForCompleteCredentials(t *testing.T) {
 	t.Cleanup(cancel)
 	service.Start(ctx)
 
+	require.Equal(t, credentialRecheckInterval, receiveTimer(t, clock))
 	require.Never(t, func() bool {
 		select {
 		case <-fetcher.requests:
@@ -200,7 +201,31 @@ func TestServiceWaitsForCompleteCredentials(t *testing.T) {
 	mu.Lock()
 	clientContext = testClientContext()
 	mu.Unlock()
+	clock.Advance(credentialRecheckInterval)
+	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
+}
+
+func TestServiceStillRefreshesImmediatelyWhenCredentialsBecomeAvailable(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	var mu sync.Mutex
+	clientContext := ClientContext{}
+	provider := func() ClientContext {
+		mu.Lock()
+		defer mu.Unlock()
+		return clientContext
+	}
+	service := newTestService(t, clock, fetcher, provider)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	require.Equal(t, credentialRecheckInterval, receiveTimer(t, clock))
+	mu.Lock()
+	clientContext = testClientContext()
+	mu.Unlock()
 	service.Refresh()
+
 	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
 }
 
