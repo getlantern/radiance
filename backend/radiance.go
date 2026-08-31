@@ -1744,6 +1744,10 @@ func (r *LocalBackend) OAuthLoginCallback(ctx context.Context, oAuthToken string
 	return userData, err
 }
 
+func (r *LocalBackend) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
+	return r.accountClient.OAuthDeviceLimitCallback(ctx, oAuthToken)
+}
+
 func (r *LocalBackend) OAuthLoginURL(ctx context.Context, provider string) (string, error) {
 	return r.accountClient.OAuthLoginURL(ctx, provider)
 }

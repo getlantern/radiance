@@ -638,6 +638,14 @@ func (c *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*ac
 	return &userData, nil
 }
 
+// OAuthDeviceLimitCallback stores the account identity from a device-limit
+// OAuth callback token without logging the user in; see account.Client.OAuthDeviceLimitCallback.
+func (c *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
+	_, err := c.do(ctx, http.MethodPost, accountOAuthDeviceLimitEndpoint,
+		OAuthTokenRequest{OAuthToken: oAuthToken})
+	return err
+}
+
 // DataCapInfo returns the current data cap information as a JSON string.
 func (c *Client) DataCapInfo(ctx context.Context) (*account.DataCapInfo, error) {
 	var resp account.DataCapInfo
