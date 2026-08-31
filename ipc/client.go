@@ -727,7 +727,7 @@ func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, des
 
 // sseRetryLoop runs sseStream in a retry loop until ctx is cancelled.
 func (c *Client) sseRetryLoop(ctx context.Context, endpoint string, handler func([]byte)) error {
-	bo := common.NewBackoff(30 * time.Second)
+	bo := common.NewBackoff(0, 30*time.Second)
 	for ctx.Err() == nil {
 		err := c.sseStream(ctx, endpoint, handler)
 		if ctx.Err() != nil {

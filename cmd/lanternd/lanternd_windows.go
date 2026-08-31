@@ -174,7 +174,7 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 	// Run the daemon as a child process so we can clean up network state if it crashes,
 	// regardless of whether the SCM is configured to restart the service.
 	childArgs := config.args()
-	child, err := spawnChild(childArgs, config.dataPath, config.logPath, config.logLevel)
+	child, err := spawnChild(childArgs, newDaemonLogger(config.logPath, config.logLevel))
 	if err != nil {
 		slog.Error("Failed to start daemon", "error", err)
 		return true, 1

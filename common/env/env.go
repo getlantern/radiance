@@ -36,6 +36,10 @@ var (
 	// on the user's router (handy for eero / ISP CPE that don't expose UPnP).
 	PeerExternalPort _key = "RADIANCE_PEER_EXTERNAL_PORT"
 
+	// LogToStdout makes common.Init configure logging to stdout instead of a file.
+	// The log directory is still needed for crash dumps and support archives.
+	LogToStdout _key = "RADIANCE_LOG_TO_STDOUT"
+
 	Testing _key = "RADIANCE_TESTING"
 
 	mu     sync.RWMutex
