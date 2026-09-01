@@ -8,6 +8,9 @@
 - Delete or shorten verbose comments in code you touch.
 - Do not narrate code, repeat the identifier, list visible branches, mention tickets/people, or praise the implementation.
 - Documentation should only document the declaration's own contract: side effects, blocking/zero-value behavior, errors, ownership, cancellation, concurrency, or surprising pre/postconditions.
+- Document the caller-relevant semantics of a sentinel error, enum, status, or constant — retryability, permanence, lifecycle — as the value's own contract, phrased as what it means rather than advice: prefer "retryable only after …" over "callers should …". The consumer behavior to avoid is a separate component's policy, not the meaning of a value callers inspect.
+- Comment a literal value when it encodes a non-obvious protocol, compatibility, migration, or product invariant: say why this exact value is required and what breaks if it changes, not what the assignment does. Prefer a named constant when that rationale is reusable.
+- Document a contract at the narrowest declaration that depends on it — a sentinel's meaning on the sentinel or the function that returns it, a request-shape invariant at the request construction. If a comment reads as advice or sits on the wrong declaration, restate it as that declaration's contract and move it there.
 - Inline comments are for local traps only. Put them above the relevant line and keep them to one short sentence when possible.
 - TODOs must say what remains and why it is not done now.
 
