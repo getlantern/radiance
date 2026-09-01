@@ -186,6 +186,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 		dataPath:             boxOptions.BasePath,
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
 		initialLanternTags:   boxOptions.LanternServerTags,
+		initialNonSelectable: boxOptions.NonSelectableOutbounds,
 		connObserver:         c.connObserver,
 	}
 	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
@@ -344,6 +345,19 @@ func (c *VPNClient) AddOutbounds(list servers.ServerList) error {
 		return ErrTunnelNotConnected
 	}
 	return c.tunnel.addOutbounds(list)
+}
+
+// UpdateNonSelectableOutbounds reconciles the non-selectable outbounds on the running
+// tunnel. They are created directly through the outbound manager, never joined to a
+// selection group, so they are dialable by tag but never carry user traffic. Returns
+// ErrTunnelNotConnected when no tunnel is up.
+func (c *VPNClient) UpdateNonSelectableOutbounds(list servers.ServerList) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.updateNonSelectableOutbounds(list)
 }
 
 func (c *VPNClient) RemoveOutbounds(tags []string) error {

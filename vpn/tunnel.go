@@ -59,10 +59,18 @@ type tunnel struct {
 	optsMap     *lsync.TypedMap[string, []byte]
 	mutGrpMgr   *groups.MutableGroupManager
 	outboundMgr adapter.OutboundManager
+	// nonSelectableTags is the set of non-selectable outbound tags the tunnel manages
+	// directly through outboundMgr, never joined to a selection group, so a later
+	// reconcile can remove the ones a config drops. Guarded by outboundMu.
+	nonSelectableTags map[string]struct{}
 
 	clientContextTracker *clientcontext.ClientContextInjector
 
 	initialLanternTags []string
+	// initialNonSelectable is the config's non-selectable tags at connect. It seeds
+	// nonSelectableTags so an outbound dropped before the first reconcile is still
+	// torn down rather than left dialable.
+	initialNonSelectable []string
 
 	// memoryMonitor starts during tunnel init in visibility-only mode.
 	// On iOS, its executor is installed later, after the clash server exists.
@@ -105,6 +113,7 @@ func (t *tunnel) start(ctx context.Context, options O.Options, platformIfce libb
 		return fmt.Errorf("connecting tunnel: %w", err)
 	}
 	t.optsMap = makeOutboundOptsMap(t.ctx, options)
+	t.nonSelectableTags = makeNonSelectableTagSet(t.initialNonSelectable, options)
 	return nil
 }
 
@@ -567,6 +576,60 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	return errors.Join(errs...)
 }
 
+// updateNonSelectableOutbounds reconciles the tunnel's non-selectable outbounds
+// against list. Each is created directly through the outbound manager and never
+// joined to a selection group, so it is dialable by tag but can never carry user
+// traffic. Endpoints are out of scope; a non-selectable endpoint stays build-time
+// only.
+func (t *tunnel) updateNonSelectableOutbounds(list servers.ServerList) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	return t.updateNonSelectableOutboundsLocked(list)
+}
+
+// updateNonSelectableOutboundsLocked implements updateNonSelectableOutbounds. The
+// caller must hold t.outboundMu.
+func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) error {
+	ctx := t.ctx
+	router := service.FromContext[adapter.Router](ctx)
+
+	next := make(map[string]struct{}, len(list.Servers))
+	for _, srv := range list.Servers {
+		next[srv.Tag] = struct{}{}
+	}
+
+	var errs []error
+	for tag := range t.nonSelectableTags {
+		if _, keep := next[tag]; keep {
+			continue
+		}
+		if err := t.outboundMgr.Remove(tag); err != nil {
+			// Keep the tag tracked and its optsMap entry intact so the next
+			// reconcile retries the removal instead of leaking a stale outbound.
+			slog.Warn("Failed to remove non-selectable outbound", "tag", tag, "error", err)
+			errs = append(errs, err)
+			next[tag] = struct{}{}
+			continue
+		}
+		t.optsMap.Delete(tag)
+	}
+
+	for _, outbound := range removeDuplicates(ctx, t.optsMap, list).Outbounds() {
+		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
+		if err := t.outboundMgr.Create(ctx, router, logger, outbound.Tag, outbound.Type, outbound.Options); err != nil {
+			slog.Warn("Failed to load non-selectable outbound",
+				"tag", outbound.Tag, "type", outbound.Type, "error", err)
+			errs = append(errs, err)
+			continue
+		}
+		b, _ := json.MarshalContext(ctx, outbound)
+		t.optsMap.Store(outbound.Tag, b)
+	}
+
+	t.nonSelectableTags = next
+	return errors.Join(errs...)
+}
+
 func (t *tunnel) removeOutbounds(tags []string) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
@@ -723,6 +786,25 @@ func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap
 		optsMap.Store(ep.Tag, b)
 	}
 	return &optsMap
+}
+
+// makeNonSelectableTagSet returns the non-selectable tags that are outbounds in
+// options. Endpoints are excluded because the reconcile manages outbounds only.
+func makeNonSelectableTagSet(nonSelectable []string, options O.Options) map[string]struct{} {
+	if len(nonSelectable) == 0 {
+		return nil
+	}
+	want := make(map[string]struct{}, len(nonSelectable))
+	for _, tag := range nonSelectable {
+		want[tag] = struct{}{}
+	}
+	seeded := make(map[string]struct{})
+	for _, out := range options.Outbounds {
+		if _, ok := want[out.Tag]; ok {
+			seeded[out.Tag] = struct{}{}
+		}
+	}
+	return seeded
 }
 
 type closerFunc func() error

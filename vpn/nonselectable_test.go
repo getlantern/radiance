@@ -49,3 +49,20 @@ func TestMergeAndCollectTags_ExcludesNonSelectable(t *testing.T) {
 	assert.True(t, outMerged, "the non-selectable outbound must still be merged into the config")
 	assert.True(t, epMerged, "the non-selectable endpoint must still be merged into the config")
 }
+
+func TestMakeNonSelectableTagSet_OutboundsOnly(t *testing.T) {
+	options := O.Options{
+		Outbounds: []O.Outbound{
+			{Type: "shadowsocks", Tag: "proxy"},
+			{Type: "testing", Tag: "testing-out"},
+		},
+		Endpoints: []O.Endpoint{
+			{Type: "wireguard", Tag: "infra-ep"},
+		},
+	}
+
+	assert.Equal(t, map[string]struct{}{"testing-out": {}},
+		makeNonSelectableTagSet([]string{"testing-out", "infra-ep"}, options),
+		"only non-selectable outbounds are seeded; endpoints are managed elsewhere")
+	assert.Nil(t, makeNonSelectableTagSet(nil, options))
+}
