@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/alexflint/go-arg"
@@ -136,4 +137,33 @@ func TestProductionBackendOptionsPreserveDevelopmentEnvironment(t *testing.T) {
 	options := daemonBackendOptions("/data", "/logs", "debug", daemonEnvironmentProd)
 	require.NotContains(t, options.EnvOverrides, commonenv.ENV.String())
 	require.Equal(t, "dev", common.Env())
+}
+
+func TestChildEnvRedirectsLoggingToStdout(t *testing.T) {
+	env := childEnv()
+	require.Contains(t, env, childEnvMarker+"=1")
+	require.Contains(t, env, commonenv.LogToStdout.String()+"=true")
+}
+
+func TestChildForceExitPrecedesSupervisorKill(t *testing.T) {
+	require.Less(t, childForceExitTimeout, gracefulShutdownTimeout)
+}
+
+type failingWriter struct{ writes int }
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	f.writes++
+	return 0, errors.New("sink is broken")
+}
+
+func TestBestEffortWriterHidesSinkFailures(t *testing.T) {
+	sink := &failingWriter{}
+	w := &bestEffortWriter{w: sink}
+
+	for range 3 {
+		n, err := w.Write([]byte("line\n"))
+		require.NoError(t, err, "a write error would close the child's pipe and SIGPIPE it")
+		require.Equal(t, len("line\n"), n)
+	}
+	require.Equal(t, 3, sink.writes)
 }

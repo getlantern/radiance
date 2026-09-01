@@ -33,8 +33,12 @@ const (
 	Disable = slog.LevelInfo + 1000 // A level that disables logging, used for testing or no-op logger.
 )
 
+// StdoutPath makes Config.LogPath write to stdout instead of a file.
+// No file is opened and no rotation is performed.
+const StdoutPath = "stdout"
+
 type Config struct {
-	// LogPath is the full path to the log file.
+	// LogPath is the full path to the log file, or [StdoutPath].
 	LogPath string
 	// Level is the log level string (e.g., "info", "debug").
 	Level string
@@ -45,9 +49,11 @@ type Config struct {
 	DisablePublisher bool
 }
 
-// NewLogger creates and returns a configured *slog.Logger that writes to a rotating log file
-// and optionally to stdout.
-// Returns noop logger if log level is set to disable.
+// NewLogger returns a configured logger that writes to a rotating file and
+// optionally stdout, or to stdout only when LogPath is StdoutPath.
+//
+// When env.Testing is set, a no-op logger is returned before any file is created. A "disable"
+// level is different: it only filters records, so the log file is still created.
 func NewLogger(cfg Config) *slog.Logger {
 	if env.GetBool(env.Testing) {
 		return NoOpLogger()
@@ -66,42 +72,43 @@ func NewLogger(cfg Config) *slog.Logger {
 	slog.SetLogLoggerLevel(slevel)
 	leveler := settingsLeveler{fallback: slevel}
 
-	// lumberjack creates the log file with 0600 if it does not exist, otherwise it carries over
-	// the existing permissions. Pre-create with [fileperm.File] so the platform-appropriate mode is
-	// applied.
-	f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, fileperm.File)
-	if err != nil {
-		slog.Warn("Failed to pre-create log file", "error", err, "path", cfg.LogPath)
-	} else {
-		f.Close()
-	}
-
-	logRotator := &lumberjack.Logger{
-		Filename:   cfg.LogPath, // Log file path
-		MaxSize:    25,          // Rotate log when it reaches 25 MB
-		MaxBackups: 2,           // Keep up to 2 rotated log files
-		MaxAge:     30,          // Retain old log files for up to 30 days
-		Compress:   cfg.Prod,    // Compress rotated log files
-	}
-
 	isWindows := runtime.GOOS == "windows"
-	isWindowsProd := isWindows && cfg.Prod
+	toStdout := cfg.LogPath == StdoutPath
 
 	loggingToStdOut := true
 	var logWriter io.Writer
-	if env.GetBool(env.DisableStdout) {
-		logWriter = logRotator
-		loggingToStdOut = false
-	} else if isWindowsProd {
-		// For some reason, logging to both stdout and a file on Windows
-		// causes issues with some Windows services where the logs
-		// do not get written to the file. So in prod mode on Windows,
-		// we log to file only. See:
-		// https://www.reddit.com/r/golang/comments/1fpo3cg/golang_windows_service_cannot_write_log_files/
-		logWriter = logRotator
-		loggingToStdOut = false
+	if toStdout {
+		logWriter = os.Stdout
 	} else {
-		logWriter = io.MultiWriter(os.Stdout, logRotator)
+		// Pre-create the file so the intended platform-specific permissions apply
+		// before lumberjack reuses it.
+		f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, fileperm.File)
+		if err != nil {
+			slog.Warn("Failed to pre-create log file", "error", err, "path", cfg.LogPath)
+		} else {
+			f.Close()
+		}
+
+		logRotator := &lumberjack.Logger{
+			Filename:   cfg.LogPath,
+			MaxSize:    25, // Rotate log when it reaches 25 MB
+			MaxBackups: 2,  // Keep up to 2 rotated log files
+			MaxAge:     30, // Retain old log files for up to 30 days
+			Compress:   cfg.Prod,
+		}
+
+		switch {
+		case env.GetBool(env.DisableStdout):
+			logWriter = logRotator
+			loggingToStdOut = false
+		case isWindows && cfg.Prod:
+			// Windows services silently stop writing the file when the same logger also writes
+			// stdout, so prod on Windows is file-only.
+			logWriter = logRotator
+			loggingToStdOut = false
+		default:
+			logWriter = io.MultiWriter(os.Stdout, logRotator)
+		}
 	}
 	if !cfg.DisablePublisher {
 		logWriter = io.MultiWriter(logWriter, Publisher())
@@ -127,7 +134,9 @@ func NewLogger(cfg Config) *slog.Logger {
 	handler = newSourceHandler(handler)
 	handler = &Handler{Handler: handler, w: logWriter}
 	logger := slog.New(handler)
-	if !loggingToStdOut {
+	if toStdout {
+		fmt.Printf("Logging to stdout only, level: %s\n", FormatLogLevel(slevel))
+	} else if !loggingToStdOut {
 		if isWindows {
 			fmt.Printf("Logging to file only on Windows prod -- run with RADIANCE_ENV=dev to enable stdout path: %s, level: %s\n", cfg.LogPath, FormatLogLevel(slevel))
 		} else {
