@@ -47,7 +47,7 @@ const (
 )
 
 // errCapExhausted marks a deliberate server close after the daily allotment is
-// spent. Callers should wait for reset instead of reconnecting immediately.
+// spent.
 var errCapExhausted = errors.New("datacap exhausted")
 
 type dataCapStreamState struct {

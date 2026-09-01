@@ -92,7 +92,7 @@ func NewLogger(cfg Config) *slog.Logger {
 		logRotator := &lumberjack.Logger{
 			Filename:   cfg.LogPath,
 			MaxSize:    25, // Rotate log when it reaches 25 MB
-			MaxBackups: 2,  // Keep up to 2 rotated log files
+			MaxBackups: 2,
 			MaxAge:     30, // Retain old log files for up to 30 days
 			Compress:   cfg.Prod,
 		}
@@ -123,8 +123,7 @@ func NewLogger(cfg Config) *slog.Logger {
 				}
 				return a
 			case slog.LevelKey:
-				// format the log level to account for the custom levels defined in internal/util.go, i.e. trace
-				// otherwise, slog will print as "DEBUG-4" (trace) or similar
+				// slog renders custom levels like trace as "DEBUG-4"; FormatLogLevel gives them real names.
 				level := a.Value.Any().(slog.Level)
 				a.Value = slog.StringValue(FormatLogLevel(level))
 			}
@@ -319,9 +318,7 @@ func FormatLogLevel(level slog.Level) string {
 	}
 }
 
-// NoOpLogger returns a no-op logger that does not log anything.
 func NoOpLogger() *slog.Logger {
-	// Create a no-op logger that does nothing.
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
 		Level: Disable,
 	}))

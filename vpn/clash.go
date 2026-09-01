@@ -27,8 +27,7 @@ import (
 
 const rejectMode = "reject"
 
-// dialAdmissionGate is notified on each dial so the AdmissionGate can record
-// the dial and decide whether to reject new connections.
+// dialAdmissionGate is notified via RecordDial on each dial, with the dial time.
 type dialAdmissionGate interface {
 	RecordDial(time.Time)
 }

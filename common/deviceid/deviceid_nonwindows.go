@@ -51,7 +51,8 @@ func Get(path string) string {
 
 // migrateLegacyDeviceID copies a device ID from the pre-refactor location ($HOME/.lanternsecrets/.deviceid)
 // to dst, returning the migrated ID on success. The legacy file is left in place.
-// TODO(2026-04-20): remove this migration code after a few releases.
+// TODO: remove once clients predating the $HOME/.lanternsecrets location are no
+// longer in the field; kept so upgrades from those builds don't regenerate the device ID.
 func migrateLegacyDeviceID(dst string) (string, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {

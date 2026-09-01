@@ -29,19 +29,16 @@ import (
 )
 
 // StatusEvent fires whenever the Client's session state changes — successful
-// Start, user Stop, or auto-Stop on a 404 heartbeat.
+// Start, user Stop, or auto-Stop on a 404 heartbeat. Status is a full snapshot
+// of session state at emit time, not a delta.
 type StatusEvent struct {
 	events.Event
 	Status Status `json:"status"`
 }
 
 // ConnectionEvent fires every time a remote client opens or closes a
-// samizdat session against the local peer's inbound. Source carries the
-// remote "ip:port" string; consumers (the globe view, abuse aggregation)
-// extract the IP for geo-lookup or rate-limit attribution. Timestamp
-// is the emit time in Unix millis; consumers that aggregate across a
-// time window or that need to order events when the underlying
-// dispatch is async can compare it directly.
+// samizdat session against the local peer's inbound. Source is the remote
+// "ip:port" string; Timestamp is the emit time in Unix milliseconds.
 //
 //	State     +1 on accept, -1 on close
 //	Source    remote peer "ip:port"
@@ -102,16 +99,15 @@ const (
 type Status struct {
 	Phase Phase `json:"phase"`
 	// Error is the human-readable failure reason when Phase == PhaseError.
-	// Empty for every other phase; consumers should render this only when
-	// the UI is in the error state.
+	// Empty for every other phase.
 	Error string `json:"error,omitempty"`
 	// Reason classifies Error for consumers that need to branch on the cause
 	// or localize it. Empty when the failure could not be named, in which
 	// case Error is the raw Go error and is not worth translating.
 	Reason Reason `json:"reason,omitempty"`
-	// Active is true only when Phase == PhaseServing. Kept distinct from
-	// Phase so subscribers that just want a boolean "is sharing?" don't
-	// have to switch on the phase enum.
+	// Active is true only when Phase == PhaseServing; kept as a separate
+	// field so a boolean "is sharing?" check need not switch on the phase
+	// enum.
 	Active       bool      `json:"active"`
 	SharingSince time.Time `json:"sharing_since,omitempty"`
 	ExternalIP   string    `json:"external_ip,omitempty"`
@@ -657,9 +653,6 @@ func (c *Client) currentPhase() Phase {
 	return c.status.Phase
 }
 
-// heartbeatLoop closes done on exit so Stop can wait for the loop before
-// tearing down resources. The channel is passed in rather than read off the
-// Client because Stop nils c.runDone before waiting on its local copy.
 // trackConn maintains the per-IP open-connection tally behind ActiveClients.
 // A -1 for an IP with no recorded connection is ignored rather than allowed to
 // go negative: peerconn is process-wide and a disconnect for a connection
@@ -715,6 +708,9 @@ func (c *Client) resetConnTracking() {
 	c.connsByIP = nil
 }
 
+// heartbeatLoop closes done on exit so Stop can wait for the loop before
+// tearing down resources. The channel is passed in rather than read off the
+// Client because Stop nils c.runDone before waiting on its local copy.
 func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done chan struct{}) {
 	defer close(done)
 	t := time.NewTicker(interval)
@@ -1176,4 +1172,3 @@ func newPeerBoxContext(ctx context.Context) context.Context {
 	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
 	return ctx
 }
-

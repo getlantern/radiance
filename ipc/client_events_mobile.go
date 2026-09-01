@@ -50,8 +50,8 @@ func (c *Client) URLTestEvents(ctx context.Context, handler func(vpn.URLTestComp
 	})
 }
 
-// ConfigEvents streams config-updated notifications. Payloads are empty — callers should treat each
-// call as a "refresh" signal. Blocks until ctx is cancelled.
+// ConfigEvents streams config-updated notifications. Each event signals that
+// config changed and carries no payload. Blocks until ctx is cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 	// The bus subscription is not redundant with SSE: when the tunnel process is down,
 	// the client's fallback LocalBackend emits NewConfigEvents on the in-process bus.
@@ -86,22 +86,9 @@ func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCap
 	return c.dataCapStream(ctx, handler)
 }
 
-// PeerStatusEvents streams peer-share lifecycle phase changes (mapping_port
-// → registering → verifying → serving on Start, stopping → idle on Stop,
-// error on failure). Each frame is a peer.StatusEvent JSON whose .Status
-// is the live snapshot at the moment the event fired — consumers SHOULD
-// re-render on every frame rather than diffing.
-//
-// Frames from the event bus arrive in the order they were emitted, which was
-// not true before it serialized delivery per subscriber: a consumer rendering
-// the newest frame could settle on a stale phase. That guarantee covers the
-// bus only. This method can feed handler from two independent sources at once
-// (below), and nothing orders them against each other, so a delayed SSE frame
-// can still follow a newer local one.
-// Mobile builds
-// may share a process with radiance (localOnly), in which case
-// events.SubscribeContext delivers directly; otherwise the SSE retry loop
-// is used. Blocks until ctx is cancelled.
+// PeerStatusEvents streams peer-share lifecycle status changes. Frames may
+// arrive out of order — a delayed frame can follow a newer one — so do not
+// assume monotonic ordering. Blocks until ctx is cancelled.
 func (c *Client) PeerStatusEvents(ctx context.Context, handler func(peer.StatusEvent)) error {
 	events.SubscribeContext(ctx, handler)
 	if c.localOnly {
@@ -116,12 +103,8 @@ func (c *Client) PeerStatusEvents(ctx context.Context, handler func(peer.StatusE
 	})
 }
 
-// PeerConnectionEvents streams accept/close events for the local
-// samizdat-in inbound. State is +1 on accept and -1 on close; Source is
-// the remote "ip:port" string for geo-lookup / abuse attribution.
-// Same mobile dual-path as PeerStatusEvents (localOnly delivers via
-// the in-process event bus; otherwise the SSE retry loop is used).
-// Blocks until ctx is cancelled.
+// PeerConnectionEvents streams accept/close events for the local samizdat-in
+// inbound. Blocks until ctx is cancelled.
 func (c *Client) PeerConnectionEvents(ctx context.Context, handler func(peer.ConnectionEvent)) error {
 	events.SubscribeContext(ctx, handler)
 	if c.localOnly {
@@ -136,15 +119,8 @@ func (c *Client) PeerConnectionEvents(ctx context.Context, handler func(peer.Con
 	})
 }
 
-// UnboundedConnectionEvents streams accept/close events for the local
-// broflake widget proxy ("Unbounded" / Basic mode). The JSON shape
-// matches peer.ConnectionEvent but the Go type is distinct — in-process
-// subscribers must subscribe to both event types separately to see all
-// peer activity. State is +1 on consumer accept, -1 on close; Source
-// is the consumer's IP if broflake exposes it, otherwise empty. Same
-// mobile dual-path: localOnly subscribes directly to the in-process
-// event bus; otherwise the SSE retry loop is used. Blocks until ctx
-// is cancelled.
+// UnboundedConnectionEvents streams accept/close events for the local broflake
+// widget proxy ("Unbounded" / Basic mode). Blocks until ctx is cancelled.
 func (c *Client) UnboundedConnectionEvents(ctx context.Context, handler func(unbounded.ConnectionEvent)) error {
 	events.SubscribeContext(ctx, handler)
 	if c.localOnly {

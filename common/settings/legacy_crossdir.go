@@ -16,26 +16,12 @@ import (
 var windowsCrossDirCandidatesFn = windowsCrossDirCandidates
 
 // windowsCrossDirCandidates returns settings candidates from the v9.0.x
-// Windows data directory (${PUBLIC}\Lantern\data), which is no longer
-// scanned by the same-dir migration after PR #370 moved the lanternd
-// daemon to ${ProgramData}\Lantern.
+// Windows data directory (${PUBLIC}\Lantern\data), which the same-dir
+// migration doesn't cover: radiance's data dir moved to
+// ${ProgramData}\Lantern and the two directories don't share a parent, so
+// the same-dir candidates never see the v9.0.x file.
 //
-// On v9.0.x Windows, radiance was embedded in the Flutter app via FFI
-// and used the Dart-supplied data dir at C:\Users\Public\Lantern\data
-// (see lantern/lib/core/utils/storage_utils.dart). PR #370 (the same
-// commit that introduced cmd/lanternd/lanternd_windows.go) split radiance
-// off into a standalone Windows service that reads/writes under
-// internal.DefaultDataPath() = ${ProgramData}\Lantern. The two directories
-// don't share a parent, so the same-dir candidates in
-// migrateLegacySettingsIfNeeded never see the v9.0.x file and the user's
-// Pro state is lost on upgrade. See getlantern/engineering#3460 and
-// Freshdesk #174606.
-//
-// Returns nil on non-Windows hosts or when %PUBLIC% is unset. Both
-// known v9.0.x filenames are tried (local.json — the original — and
-// settings.json — what the file was renamed to in PR #370 for users who
-// upgraded through an intermediate build) so the recovery works
-// regardless of which v9.0.x release the user is coming from.
+// Returns nil on non-Windows hosts or when %PUBLIC% is unset.
 func windowsCrossDirCandidates(fileDir string) []candidateSource {
 	if runtime.GOOS != "windows" {
 		return nil

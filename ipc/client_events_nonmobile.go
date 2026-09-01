@@ -34,8 +34,8 @@ func (c *Client) URLTestEvents(ctx context.Context, handler func(vpn.URLTestComp
 	})
 }
 
-// ConfigEvents streams config-updated notifications. Payloads are empty — callers should treat each
-// call as a "refresh" signal. Blocks until ctx is cancelled.
+// ConfigEvents streams config-updated notifications. Each event signals that
+// config changed and carries no payload. Blocks until ctx is cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 	return c.sseRetryLoop(ctx, configEventsEndpoint, func([]byte) { handler() })
 }
@@ -55,12 +55,9 @@ func (c *Client) DataCapStream(ctx context.Context, handler func(account.DataCap
 	return c.dataCapStream(ctx, handler)
 }
 
-// PeerStatusEvents streams peer-share lifecycle phase changes (mapping_port
-// → registering → verifying → serving on Start, stopping → idle on Stop,
-// error on failure). Each frame is a peer.StatusEvent JSON whose .Status
-// is the live snapshot at the moment the event fired — consumers SHOULD
-// re-render on every frame rather than diffing. Frames arrive in order, so
-// the last one seen is the current phase. Blocks until ctx is cancelled.
+// PeerStatusEvents streams peer-share lifecycle status changes. Frames arrive
+// in order, so the last one seen is the current phase. Blocks until ctx is
+// cancelled.
 func (c *Client) PeerStatusEvents(ctx context.Context, handler func(peer.StatusEvent)) error {
 	return c.sseRetryLoop(ctx, peerStatusEventsEndpoint, func(data []byte) {
 		var evt peer.StatusEvent
@@ -71,9 +68,7 @@ func (c *Client) PeerStatusEvents(ctx context.Context, handler func(peer.StatusE
 }
 
 // PeerConnectionEvents streams accept/close events for the local
-// samizdat-in inbound. State is +1 on accept and -1 on close; Source
-// is the remote "ip:port" string for geo-lookup / abuse attribution.
-// Blocks until ctx is cancelled.
+// samizdat-in inbound. Blocks until ctx is cancelled.
 //
 // Why this exists alongside events.Subscribe[peer.ConnectionEvent]:
 // the events package's globals are process-scoped, so a subscriber in
@@ -87,13 +82,8 @@ func (c *Client) PeerConnectionEvents(ctx context.Context, handler func(peer.Con
 	})
 }
 
-// UnboundedConnectionEvents streams accept/close events for the
-// local broflake widget proxy ("Unbounded" / Basic mode). The JSON
-// shape matches peer.ConnectionEvent but the Go type is distinct —
-// in-process subscribers must subscribe to both event types separately
-// to see all peer activity. State is +1 on consumer accept, -1 on
-// close; Source is the consumer's IP if broflake exposes it,
-// otherwise empty. Blocks until ctx is cancelled.
+// UnboundedConnectionEvents streams accept/close events for the local broflake
+// widget proxy ("Unbounded" / Basic mode). Blocks until ctx is cancelled.
 func (c *Client) UnboundedConnectionEvents(ctx context.Context, handler func(unbounded.ConnectionEvent)) error {
 	return c.sseRetryLoop(ctx, unboundedConnectionEventsEndpoint, func(data []byte) {
 		var evt unbounded.ConnectionEvent
