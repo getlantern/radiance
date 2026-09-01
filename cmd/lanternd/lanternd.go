@@ -86,6 +86,12 @@ const (
 
 	// babysitBackoffBase is the base wait time for the babysit backoff strategy.
 	babysitBackoffBase = time.Second
+
+	// daemonRestartBackoffMax keeps repeated crashes from delaying recovery by more than a minute.
+	daemonRestartBackoffMax = 60 * time.Second
+
+	// daemonRestartBackoffResetAfter marks a child as stable so a later failure restarts promptly.
+	daemonRestartBackoffResetAfter = 2 * time.Minute
 )
 
 type serviceRunConfig struct {
@@ -387,8 +393,7 @@ func (c *childProcess) HandleCrash(err error) {
 //
 // The returned error is nil, a spawn failure, or the last child exit error.
 func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
-	const resetAfter = 2 * time.Minute // reset backoff if child ran longer than this
-	bo := common.NewBackoff(babysitBackoffBase, 60*time.Second)
+	bo := common.NewBackoff(babysitBackoffBase, daemonRestartBackoffMax)
 
 	for ctx.Err() == nil {
 		child, err := spawnChild(args, logger)
@@ -411,7 +416,7 @@ func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
 			child.HandleCrash(err)
 		}
 
-		if time.Since(startedAt) > resetAfter {
+		if time.Since(startedAt) > daemonRestartBackoffResetAfter {
 			bo.Reset()
 		}
 
