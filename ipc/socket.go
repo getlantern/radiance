@@ -19,6 +19,6 @@ func socketPath() string {
 
 func setPermissions() error {
 	// we set the socket as world accessible and authorize users on connect
-	// by checking if they're a suder instead.
+	// by checking if they're a sudoer instead.
 	return os.Chmod(socketPath(), 0666)
 }
