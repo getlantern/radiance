@@ -152,7 +152,8 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 		Salt:                  salt,
 		Verifier:              verifierKey.Bytes(),
 		SkipEmailConfirmation: true,
-		Temp:                  true,
+		// Always temporary so a user who hits an error mid-signup can sign up again.
+		Temp: true,
 	}
 
 	proToken := settings.GetString(settings.TokenKey)

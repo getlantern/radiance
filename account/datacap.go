@@ -46,9 +46,9 @@ const (
 	datacapDisabledRetry = time.Hour
 )
 
-// errCapExhausted marks a deliberate server close after the daily allotment is
+// ErrCapExhausted marks a deliberate server close after the daily allotment is
 // spent.
-var errCapExhausted = errors.New("datacap exhausted")
+var ErrCapExhausted = errors.New("datacap exhausted")
 
 type dataCapStreamState struct {
 	progressed   bool
@@ -156,7 +156,7 @@ func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) 
 			return err
 		}
 
-		if errors.Is(err, errCapExhausted) {
+		if errors.Is(err, ErrCapExhausted) {
 			if err := a.waitForAllotmentReset(ctx, state.allotmentEnd); err != nil {
 				return err
 			}
@@ -222,7 +222,9 @@ func waitOrDone(ctx context.Context, d time.Duration) error {
 }
 
 // connectDataCapSSE opens an SSE connection to the datacap stream endpoint and
-// processes events until the stream ends or ctx is cancelled.
+// processes events until the stream ends or ctx is cancelled. It returns
+// ErrCapExhausted when the server closes after the daily allotment is spent, so
+// the caller waits for the reset instead of reconnecting immediately.
 func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInfo)) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "datacap_sse")
 	defer span.End()
@@ -294,7 +296,7 @@ func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInf
 		return traces.RecordError(ctx, err)
 	}
 	if capExhausted {
-		return errCapExhausted
+		return ErrCapExhausted
 	}
 	if err := scanErr(); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("datacap SSE scanner: %w", err))
