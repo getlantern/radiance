@@ -38,6 +38,8 @@ func (c ClientContext) valid() bool {
 		c.Locale != "" && c.Platform != "" && c.AppVersion != ""
 }
 
+// httpStatusError lets the polling service distinguish endpoint status
+// failures from transport and decoding errors.
 type httpStatusError struct {
 	statusCode int
 }

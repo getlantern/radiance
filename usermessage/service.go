@@ -45,7 +45,9 @@ type Options struct {
 	ContextProvider func() ClientContext
 	Clock           Clock
 	Jitter          func(time.Duration) time.Duration
-	Logger          *slog.Logger
+	// Logger receives service diagnostics. New uses a service-scoped default
+	// logger when Logger is nil.
+	Logger *slog.Logger
 }
 
 // Service owns polling, per-account presentation state, and display acknowledgment.

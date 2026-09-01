@@ -1744,6 +1744,8 @@ func (r *LocalBackend) OAuthLoginCallback(ctx context.Context, oAuthToken string
 	return userData, err
 }
 
+// OAuthDeviceLimitCallback stores the account identity from a device-limit
+// OAuth token without logging the user in.
 func (r *LocalBackend) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
 	return r.accountClient.OAuthDeviceLimitCallback(ctx, oAuthToken)
 }
