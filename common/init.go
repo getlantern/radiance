@@ -198,8 +198,7 @@ func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 	// written settings.json under <caller-path>/, while v9.1.x reads from
 	// <caller-path>/data/, so every existing install lost its persisted
 	// user_id, device_id, jwt token, and user_level on upgrade — surfacing
-	// as "Pro is suddenly expired after the update." See ticket #174515
-	// and the "Pro lost on upgrade" memory note.
+	// as "Pro is suddenly expired after the update."
 	data, _ = filepath.Abs(data)
 	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {

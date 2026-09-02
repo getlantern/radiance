@@ -17,7 +17,6 @@ import (
 
 func logger(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Pull the trace ID from the request, if it exists.
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		r = r.WithContext(ctx)
 		span := trace.SpanFromContext(r.Context())

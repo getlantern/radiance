@@ -129,7 +129,7 @@ func validateAbuseRejectRules(rules []option.Rule) error {
 // validateStaticRejectCanaries spot-checks that the static
 // destination-based reject rules (RFC1918 CIDRs + abuse ports) are
 // present. Picks one canary from each block rather than asserting the
-// full set so legitimate additions in samizdat.go don't break this
+// full set so legitimate additions to the rules don't break this
 // check.
 func validateStaticRejectCanaries(rules []option.Rule) error {
 	gotRFC1918 := false

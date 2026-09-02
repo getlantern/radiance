@@ -186,7 +186,6 @@ func setupOTelSDK(ctx context.Context, attributes Attributes, cfg config.Config)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize tracer: %w", err)
 		}
-		// Successfully initialized tracer
 		shutdownFuncs = append(shutdownFuncs, shutdownFunc)
 		slog.Info("OpenTelemetry tracer initialized")
 	}
@@ -198,7 +197,6 @@ func setupOTelSDK(ctx context.Context, attributes Attributes, cfg config.Config)
 		if err != nil {
 			return shutdown, fmt.Errorf("failed to initialize meter provider: %w", err)
 		}
-		// Successfully initialized meter provider
 		shutdownFuncs = append(shutdownFuncs, mp)
 	}
 

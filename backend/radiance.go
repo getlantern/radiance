@@ -330,7 +330,6 @@ func (r *LocalBackend) Start() {
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
 	})
-	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		r.applyConfig(evt.New)
 		go r.prewarmOfflineURLTests("config update")
@@ -1205,8 +1204,8 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 // awaitConnectable blocks until the connect has something to dial, or ctx is
 // done. Connecting with neither a config nor a server of the user's own
 // produces "no outbounds or endpoints found", and on mobile the process that
-// reports that failure is the one hosting the config fetch it needed
-// (getlantern/engineering#3814), so failing fast deadlocks the first run.
+// reports that failure is the one hosting the config fetch it needed, so
+// failing fast deadlocks the first run.
 func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
 	if r.connectable(tag) {
 		return nil
@@ -1215,7 +1214,7 @@ func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
 	ready := make(chan struct{})
 	// Subscribe, not SubscribeOnce: this unsubscribes on return anyway, and
 	// SubscribeUntil's self-referential `sub` capture is read from the callback
-	// goroutine without synchronization (events.go:78 vs :85).
+	// goroutine without synchronization.
 	//
 	// Emit runs each callback on its own goroutine, so configs landing together
 	// can both reach this. Closing twice would panic.

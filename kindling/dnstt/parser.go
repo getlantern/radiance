@@ -62,13 +62,11 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		"DNSTTOptions",
 	)
 	defer span.End()
-	// parsing embedded configs and loading options
 	options, err := parseDNSTTConfigs(embeddedConfig)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse dnstt embedded config: %w", err))
 	}
 
-	// if local config is set and exists, parse, load the dnstt config and close the embedded dns tunnels
 	if localConfigFilepath != "" {
 		localConfigMutex.Lock()
 		defer localConfigMutex.Unlock()
@@ -103,7 +101,6 @@ func DNSTTOptions(ctx context.Context, localConfigFilepath string, logger io.Wri
 		}()
 	})
 
-	// starting config updater/fetcher
 	client, err := smart.NewHTTPClientWithSmartTransport(logger, dnsttConfigURL)
 	if err != nil {
 		span.RecordError(err)
@@ -396,8 +393,7 @@ func (m *multipleDNSTTTransport) RequestTimeout() time.Duration {
 
 // MaxLength returns the maximum request body size this transport supports.
 // DNS tunnels have a 135-byte MTU — a 10 KB body requires ~75 DNS queries
-// which already pushes the RequestTimeout budget. Larger bodies are routed
-// to a different transport.
+// which already pushes the RequestTimeout budget.
 func (m *multipleDNSTTTransport) MaxLength() int {
 	return 10_000
 }

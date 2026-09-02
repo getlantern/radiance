@@ -8,8 +8,7 @@ import (
 	"github.com/getlantern/radiance/events"
 )
 
-// AutoSelectHistoryStorage is an alias for the lantern-box adapter
-// interface used by MutableAutoSelect for per-tag history persistence.
+// AutoSelectHistoryStorage aliases the lantern-box per-tag history-storage interface.
 type AutoSelectHistoryStorage = lbA.AutoSelectHistoryStorage
 
 // StatusUpdateEvent is emitted when the VPN status changes.

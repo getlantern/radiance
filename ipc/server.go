@@ -1,6 +1,4 @@
-// Package ipc implements the IPC server for communicating between the client and the VPN service.
-// It provides HTTP endpoints for retrieving statistics, managing groups, selecting outbounds,
-// changing modes, and closing connections.
+// Package ipc implements the IPC server between the client and the VPN service (lanternd), exposing HTTP endpoints over a Unix socket (named pipe on Windows).
 package ipc
 
 import (
@@ -549,9 +547,9 @@ func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Reques
 
 // peerConnectionEventsHandler streams peer.ConnectionEvent over SSE for
 // each accept/close on the local samizdat-in. Unlike peerStatusEventsHandler
-// (which always sends the live snapshot), each emit's captured value is
-// what the consumer needs here — the Source IP and +1/-1 state ARE the
-// payload, not a periodic poll, so none may be collapsed into a wakeup.
+// (which always sends the live snapshot), each event's captured value is
+// load-bearing, not a resendable snapshot, so none may be collapsed into a
+// single wakeup.
 //
 // The events package lives in this process (lanternd); cross-process
 // consumers in Liblantern can only receive these via this SSE stream,

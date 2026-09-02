@@ -89,7 +89,6 @@ func (a *Client) sendRequest(
 	queryParams, headers map[string]string,
 	body any,
 ) ([]byte, error) {
-	// check if url is absolute, if not prepend base URL
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = a.baseURL() + url
 	}

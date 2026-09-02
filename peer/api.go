@@ -1,5 +1,5 @@
-// Package peer implements the client side of "Share My Connection". api.go
-// is the thin HTTP client for lantern-cloud's /v1/peer/* endpoints.
+// Package peer implements the client side of "Share My Connection",
+// including the thin HTTP client for the /v1/peer/* endpoints.
 package peer
 
 import (
@@ -42,9 +42,7 @@ type HeartbeatRequest struct {
 	ActiveClients int `json:"active_clients"`
 }
 
-// APIError carries the server's HTTP status and body. Callers map specific
-// statuses to user-facing errors (404 → not registered, 422 → not reachable
-// from the public internet, 503 → feature off).
+// APIError carries the server's HTTP status and body.
 type APIError struct {
 	Status int
 	Body   string
@@ -81,7 +79,7 @@ func (a *API) Register(ctx context.Context, req RegisterRequest) (*RegisterRespo
 // freshly-built samizdat client. Called after Start has finished bringing
 // up sing-box locally so the server's verifier hits a live listener with
 // the matching creds. Server-side failure deprecates the row + returns
-// 422; the caller treats that as a fatal Start error and tears down.
+// 422.
 func (a *API) Verify(ctx context.Context, routeID string) error {
 	if err := a.do(ctx, http.MethodPost, "/peer/verify", LifecycleRequest{RouteID: routeID}, nil); err != nil {
 		return fmt.Errorf("verify: %w", err)
@@ -141,11 +139,9 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 	// the API's bound deviceID for parity with the prior behavior in case
 	// the two ever diverge.
 	r.Header.Set(common.DeviceIDHeader, a.deviceID)
-	// Forward the same feature-override header that config/fetcher.go uses
-	// for /config-new requests, so QA can flip on `peer_proxy` ahead of the
-	// public-flag rollout via FeatureOverridesKey (RADIANCE_FEATURE_OVERRIDES).
-	// Without this the server-side gate rejects register/heartbeat/deregister
-	// regardless of the local toggle.
+	// The server-side gate rejects register/heartbeat/deregister regardless of
+	// the local toggle unless this header (fed by RADIANCE_FEATURE_OVERRIDES)
+	// is set.
 	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
 		r.Header.Set("X-Lantern-Feature-Override", val)
 	}

@@ -85,7 +85,6 @@ const (
 	// directly instead of starting another supervisor.
 	childEnvMarker = "_LANTERND_CHILD"
 
-	// babysitBackoffBase is the base wait time for the babysit backoff strategy.
 	babysitBackoffBase = time.Second
 
 	// daemonRestartBackoffMax keeps repeated crashes from delaying recovery by more than a minute.

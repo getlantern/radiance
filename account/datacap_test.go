@@ -124,7 +124,7 @@ func TestConnectDataCapSSE_CapExhausted(t *testing.T) {
 		got = append(got, *info)
 	})
 
-	assert.ErrorIs(t, err, errCapExhausted)
+	assert.ErrorIs(t, err, ErrCapExhausted)
 	require.Len(t, got, 2)
 	assert.False(t, got[0].Exhausted)
 	assert.True(t, got[1].Exhausted, "cap_exhausted must re-emit the info with Exhausted set")

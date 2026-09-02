@@ -114,11 +114,10 @@ func (s *subscriber) invoke(key reflect.Type, evt any) {
 }
 
 // enqueue never blocks. Emit has always returned without waiting on
-// subscribers, and callers depend on that — peer.Client emits lifecycle
-// phases from the same goroutine that is bringing the session up. A full
-// queue is therefore dropped rather than waited on, loudly, because by then
-// the subscriber has ignored 256 events and waiting would only spread its
-// problem to the emitter.
+// subscribers, and callers depend on that — emitters may call from a
+// goroutine mid-session-bringup. A full queue is therefore dropped rather
+// than waited on, loudly, because by then the subscriber has ignored 256
+// events and waiting would only spread its problem to the emitter.
 func (s *subscriber) enqueue(key reflect.Type, evt any) {
 	select {
 	case s.queue <- evt:
@@ -244,9 +243,9 @@ func Emit[T Event](evt T) {
 
 // emitDebugLogger holds the hook invoked once per Emit with the event type
 // and current subscriber count; nil means no-op. Held atomically because
-// Emit reads it from arbitrary goroutines — peer.Client's heartbeat and
-// rotation loops emit for the process lifetime, so any post-startup
-// SetEmitDebugLogger would otherwise race an in-flight Emit.
+// Emit reads it from arbitrary goroutines — long-lived emitters emit for the
+// process lifetime, so any post-startup SetEmitDebugLogger would otherwise
+// race an in-flight Emit.
 var emitDebugLogger atomic.Pointer[func(reflect.Type, int)]
 
 // SetEmitDebugLogger replaces the no-op diagnostic hook for the
