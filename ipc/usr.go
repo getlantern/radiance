@@ -13,7 +13,7 @@ var executable string
 func init() {
 	exe, err := os.Executable()
 	if err != nil {
-		// if by chance we can't get our executable path, default to 'ls'
+		// Fall back to a benign always-present binary so the sudo --list probe still works.
 		executable = "ls"
 	} else {
 		executable = exe

@@ -58,7 +58,8 @@ func runIP(ctx context.Context, cmd *IPCmd) error {
 // before the tunnel is fully established.
 var fakeIPRange = netip.MustParsePrefix("198.18.0.0/15")
 
-// getPublicIP fetches the public IP address
+// getPublicIP fetches the public IP address, rejecting private, loopback,
+// unspecified, and fake-ip results as not a valid public IP.
 func getPublicIP(ctx context.Context) (string, error) {
 	result, err := publicip.Detect(ctx, publicIPCfg)
 	if err != nil {

@@ -176,7 +176,6 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 		req.Header.Set("X-Lantern-Feature-Override", val)
 	}
 
-	// Add If-Modified-Since header to the request
 	// Note that on the first run, lastModified is zero, so the server will return the latest config.
 	req.Header.Set("If-Modified-Since", f.lastModified.Format(http.TimeFormat))
 	if f.etag != "" {
@@ -189,7 +188,6 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	// Update the etag from the response
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		f.etag = etag
 	}
@@ -201,17 +199,13 @@ func (f *fetcher) send(ctx context.Context, body io.Reader) ([]byte, error) {
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// 200 OK
 		return buf, nil
 	case http.StatusPartialContent:
-		// 206 Partial Content
 		return buf, nil
 	case http.StatusNotModified:
-		// 304 Not Modified
 		slog.Debug("Config is not modified")
 		return nil, nil
 	case http.StatusNoContent:
-		// 204 No Content
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unexpected status code: %d. %s", resp.StatusCode, buf)

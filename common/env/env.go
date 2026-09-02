@@ -31,9 +31,8 @@ var (
 	BufPoolBudgetMB  _key = "RADIANCE_BUF_POOL_BUDGET_MB"
 	MemoryLimitMB    _key = "RADIANCE_MEM_LIMIT_MB"
 
-	// PeerExternalPort, when set to a 1..65535 value, makes peer.Client.Start
-	// skip UPnP discovery and treat the value as a manually-forwarded port
-	// on the user's router (handy for eero / ISP CPE that don't expose UPnP).
+	// PeerExternalPort is a manually-forwarded router port (1..65535) for the
+	// peer inbound; empty/0 means unset.
 	PeerExternalPort _key = "RADIANCE_PEER_EXTERNAL_PORT"
 
 	// LogToStdout makes common.Init configure logging to stdout instead of a file.
@@ -53,7 +52,6 @@ func init() {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		slog.Error(".env file found, but failed to read", slog.Any("error", err))
 	} else if err == nil {
-		// Parse the .env file and populate envVars
 		lines := strings.SplitSeq(string(buf), "\n")
 		for line := range lines {
 			line = strings.TrimSpace(line)

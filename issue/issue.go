@@ -59,21 +59,8 @@ const (
 	UpdateFails
 )
 
-// // issue text to type mapping
-// var issueTypeMap = map[string]IssueType{
-// 	"Cannot complete purchase":    CannotCompletePurchase,
-// 	"Cannot sign in":              CannotSignIn,
-// 	"Spinner loads endlessly":     SpinnerLoadsEndlessly,
-// 	"Cannot access blocked sites": CannotAccessBlockedSites,
-// 	"Slow":                        Slow,
-// 	"Cannot link device":          CannotLinkDevice,
-// 	"Application crashes":         ApplicationCrashes,
-// 	"Other":                       Other,
-// 	"Update fails":                UpdateFails,
-// }
-
 type IssueReport struct {
-	// Type is one of the predefined issue type strings
+	// Type is one of the predefined IssueType constants.
 	Type        IssueType
 	Description string
 	Email       string
@@ -95,16 +82,14 @@ type IssueReport struct {
 	AdditionalAttachments []string
 }
 
-// Report sends an issue report to lantern-cloud/issue, which is then forwarded to ticket system via API
+// Report sends an issue report, substituting a random support address when report.Email is empty.
 func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Report")
 	defer span.End()
-	// set a random email if it's empty
 	if report.Email == "" {
 		report.Email = "support+" + randStr(8) + "@getlantern.org"
 	}
 
-	// userStatus := settings.GetString(settings.UserLevelKey)
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		slog.Error("Unable to get OS version", "error", err)
@@ -161,7 +146,6 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		})
 	}
 
-	// send message to lantern-cloud
 	out, err := proto.Marshal(r)
 	if err != nil {
 		slog.Error("unable to marshal issue report", "error", err)

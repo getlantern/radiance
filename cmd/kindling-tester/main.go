@@ -40,7 +40,6 @@ func performKindlingPing(urlToHit string, runID string, deviceID string, userID 
 	cli := kindling.HTTPClient()
 
 	t2 := time.Now()
-	// Run the command and capture the output
 	resp, err := cli.Get(urlToHit)
 	if err != nil {
 		slog.Error("failed on get request", slog.Any("error", err))
@@ -55,7 +54,7 @@ func performKindlingPing(urlToHit string, runID string, deviceID string, userID 
 	}
 	t3 := time.Now()
 	slog.Info("lantern ping completed successfully")
-	// create a marker file that will be used by the pinger to determine success
+	// empty marker file signals success to the pinger
 	if err := os.WriteFile(dataDir+"/success", []byte(""), 0o644); err != nil {
 		slog.Error("failed to write success file", slog.Any("error", err), slog.String("path", dataDir+"/success"))
 	}

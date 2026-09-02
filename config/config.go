@@ -224,11 +224,7 @@ func (ch *ConfigHandler) doFetchConfig() error {
 		ch.logger.Error("writing raw config file", "error", writeErr)
 	}
 
-	// Otherwise, we keep the previous config and store any error that might have occurred.
-	// We still want to keep the previous config if there was an error. This is important
-	// because the error could have been due to temporary network issues, such as brief
-	// power loss or internet disconnection.
-	// On the other hand, if we have a new config, we want to overwrite any previous error.
+	// On fetch/parse error, retain the last-good config since the failure is often transient.
 	confResp, err := singjson.UnmarshalExtendedContext[C.ConfigResponse](box.BaseContext(), resp)
 	if err != nil {
 		ch.logger.Error("failed to parse config", "error", err)
@@ -251,9 +247,9 @@ func setCustomProtocolOptions(outbounds []option.Outbound) {
 		switch opts := outbound.Options.(type) {
 		case *lbO.WATEROutboundOptions:
 			opts.Dir = filepath.Join(settings.GetString(settings.DataPathKey), "water")
-			// TODO: we need to measure the client upload and download metrics
-			// in order to set hysteria custom parameters and support brutal sender
-			// as congestion control
+			// TODO: set hysteria custom parameters and brutal congestion
+			// control; blocked on per-client upload/download measurements we
+			// don't collect yet.
 		default:
 		}
 	}
@@ -445,9 +441,6 @@ func migrateToNewFmt(data []byte) (*Config, error) {
 
 // saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
 func saveConfig(cfg *Config, path string) error {
-	// Marshal the config to bytes and write it to the config file.
-	// If the config is nil, we don't write anything.
-	// This is important because we don't want to overwrite the config file with an empty file.
 	buf, err := singjson.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)

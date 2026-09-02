@@ -23,7 +23,6 @@ func decodeJWT(tokenStr string) (*JWTUserInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Convert MapClaims to JSON
 	claimsJSON, err := json.Marshal(token.Claims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal claims: %v", err)
