@@ -65,6 +65,7 @@ type Service struct {
 	started           bool
 	active            bool
 	online            bool
+	// refreshGeneration lets us discard a response if a refresh arrived while it was in flight.
 	refreshGeneration uint64
 	requestID         uint64
 	requestCancel     context.CancelFunc
