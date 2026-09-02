@@ -188,6 +188,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if err != nil {
 		slog.Error("Loading split tunnel handler", "error", err)
 	}
+	// Empty filters do not persist the invert flag, so reload can reset the
+	// loaded policy. Re-apply the persisted setting as the source of truth.
+	if err := splitTunnelMgr.SetPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+		slog.Warn("Reconciling split-tunnel policy", "error", err)
+	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
 
@@ -282,7 +287,6 @@ func (r *LocalBackend) Start() {
 	events.SubscribeOnce(func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
 	})
-	// update VPN outbounds when new config is received
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		r.applyConfig(evt.New)
 		go r.prewarmOfflineURLTests("config update")
@@ -632,6 +636,13 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if len(diff) == 0 {
 		return nil
 	}
+	// Reject an invalid split-tunnel policy before persisting, so settings.json
+	// can't hold a value the runtime would silently fall back to exclude for.
+	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
+		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
+			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
+		}
+	}
 	if err := settings.Patch(diff); err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
 	}
@@ -647,15 +658,22 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 
 	// vpn settings
-	k := settings.SplitTunnelKey
-	if _, ok := diff[k]; ok {
-		r.splitTunnelMgr.SetEnabled(settings.GetBool(k))
-	}
-	// settings.Patch above already persisted the whole diff, so an early
-	// return here would leave a persisted key that no runtime state matches —
-	// exactly the divergence applyPeerShare's rollback exists to prevent.
-	// Run both handlers and join their errors.
+	//
+	// settings.Patch above already persisted the whole diff, so an early return
+	// on a handler error would leave a persisted key that no runtime state
+	// matches — the divergence applyPeerShare's rollback exists to prevent. Run
+	// every handler and join their errors so the caller sees write failures.
 	var errs error
+	if _, ok := diff[settings.SplitTunnelKey]; ok {
+		if err := r.splitTunnelMgr.SetEnabled(settings.GetBool(settings.SplitTunnelKey)); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("set split-tunnel enabled: %w", err))
+		}
+	}
+	if _, ok := diff[settings.SplitTunnelPolicyKey]; ok {
+		if err := r.splitTunnelMgr.SetPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("set split-tunnel policy: %w", err))
+		}
+	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
 	}
@@ -1174,8 +1192,8 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 // awaitConnectable blocks until the connect has something to dial, or ctx is
 // done. Connecting with neither a config nor a server of the user's own
 // produces "no outbounds or endpoints found", and on mobile the process that
-// reports that failure is the one hosting the config fetch it needed
-// (getlantern/engineering#3814), so failing fast deadlocks the first run.
+// reports that failure is the one hosting the config fetch it needed, so
+// failing fast deadlocks the first run.
 func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
 	if r.connectable(tag) {
 		return nil
@@ -1184,7 +1202,7 @@ func (r *LocalBackend) awaitConnectable(ctx context.Context, tag string) error {
 	ready := make(chan struct{})
 	// Subscribe, not SubscribeOnce: this unsubscribes on return anyway, and
 	// SubscribeUntil's self-referential `sub` capture is read from the callback
-	// goroutine without synchronization (events.go:78 vs :85).
+	// goroutine without synchronization.
 	//
 	// Emit runs each callback on its own goroutine, so configs landing together
 	// can both reach this. Closing twice would panic.
@@ -1687,6 +1705,10 @@ func (r *LocalBackend) RemoveDevice(ctx context.Context, deviceID string) (*acco
 
 func (r *LocalBackend) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*account.UserData, error) {
 	return r.accountClient.OAuthLoginCallback(ctx, oAuthToken)
+}
+
+func (r *LocalBackend) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
+	return r.accountClient.OAuthDeviceLimitCallback(ctx, oAuthToken)
 }
 
 func (r *LocalBackend) OAuthLoginURL(ctx context.Context, provider string) (string, error) {

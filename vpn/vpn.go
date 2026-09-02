@@ -94,8 +94,8 @@ type PlatformInterface interface {
 	PostServiceClose()
 }
 
-// NewVPNClient creates a new VPNClient instance with the provided configuration paths, log
-// level, and platform interface.
+// NewVPNClient creates a new VPNClient instance with the given data path, logger, and
+// platform interface.
 func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInterface) *VPNClient {
 	if logger == nil {
 		logger = slog.Default()
@@ -117,7 +117,6 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 	defer span.End()
 
 	c.mu.Lock()
-	// Cancel any running offline tests and wait for them to finish.
 	c.offlineTestCancel()
 	done := c.offlineTestDone
 	c.mu.Unlock()
@@ -283,9 +282,6 @@ func (c *VPNClient) setStatus(s VPNStatus, err error) {
 		return
 	}
 	c.status.Store(s)
-	// [vpn-state-trace] hop=daemon_setstatus — start of the status delivery chain.
-	// Pair this timestamp with hop=ssehandler_flushed / hop=ffi_to_port / hop=dart_applied
-	// to localize where Connecting/Disconnecting transitions stall on Windows.
 	// Use c.logger (not slog.Info) so this respects the VPNClient's configured
 	// logger — important for tests that pass NoOpLogger via WithLogger.
 	c.logger.Info("[vpn-state-trace]", "hop", "daemon_setstatus", "status", s, "ts_ms", time.Now().UnixMilli())
@@ -610,7 +606,6 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	}
 	select {
 	case <-c.offlineTestDone:
-		// no tests currently running, safe to start new tests
 	default:
 		c.mu.Unlock()
 		return nil, errors.New("offline tests already running")
@@ -652,8 +647,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 		Outbounds: outbounds,
 	}
 
-	// create offlineed box instance. we just use the standard box since we don't need a
-	// platform interface for testing.
+	// Standard box: the offline pre-warm needs no platform interface.
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 
 	// MutableAutoSelect probes outbounds with bounded concurrency, so the

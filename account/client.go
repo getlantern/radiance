@@ -89,7 +89,6 @@ func (a *Client) sendRequest(
 	queryParams, headers map[string]string,
 	body any,
 ) ([]byte, error) {
-	// check if url is absolute, if not prepend base URL
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = a.baseURL() + url
 	}
@@ -125,6 +124,7 @@ func (a *Client) sendRequest(
 		req.Header.Set(k, v)
 	}
 	req.Header.Set(common.AppNameHeader, common.Name)
+	req.Header.Set(common.AppVersionHeader, common.GetVersion())
 	req.Header.Set(common.VersionHeader, common.GetVersion())
 	req.Header.Set(common.PlatformHeader, common.Platform)
 	if contentType != "" {

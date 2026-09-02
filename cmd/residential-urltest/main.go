@@ -15,7 +15,7 @@
 //
 // Usage:
 //
-//	export OXY_USER=... OXY_PASS=...           # oxylabs residential creds (vault: secret/lantern_cloud/pinger)
+//	export OXY_USER=... OXY_PASS=...           # oxylabs residential creds
 //	go run ./cmd/residential-urltest --config /path/to/debug-box-options.json --country ru
 //
 // Input is either a marshaled sing-box options file (top-level "outbounds") or

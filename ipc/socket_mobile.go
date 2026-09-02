@@ -14,7 +14,8 @@ import (
 	"github.com/getlantern/radiance/log"
 )
 
-// this is a no-op on mobile
+// setSocketPathForTesting does nothing on mobile: the socket path is derived
+// from settings at runtime, so there is nothing to override.
 func setSocketPathForTesting(path string) {}
 
 func socketPath() string {

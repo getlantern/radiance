@@ -59,7 +59,7 @@ func (a *Client) FetchUserData(ctx context.Context) (*UserData, error) {
 	return a.fetchUserData(ctx)
 }
 
-// fetchUserData calls the /user-data endpoint and stores the result via storeData.
+// fetchUserData fetches the user's account data and stores it.
 func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
 	resp, err := a.sendProRequest(ctx, "GET", "/user-data", nil, nil, nil)
 	if err != nil {
@@ -99,8 +99,7 @@ type DataCapInfo struct {
 	// Data cap usage details (only populated if enabled is true)
 	Usage *DataCapUsageDetails `json:"usage,omitempty"`
 	// Exhausted is set locally when the SSE stream emits cap_exhausted. It is not
-	// part of the server JSON payload. If present, the AllotmentEndTime at which
-	// the allotment resets is stored in Usage.AllotmentEndTime.
+	// part of the server JSON payload.
 	Exhausted bool `json:"exhausted,omitempty"`
 }
 
@@ -153,8 +152,7 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 		Salt:                  salt,
 		Verifier:              verifierKey.Bytes(),
 		SkipEmailConfirmation: true,
-		// Set temp always to true for now
-		// If new user faces any issue while sign up user can sign up again
+		// Always temporary so a user who hits an error mid-signup can sign up again.
 		Temp: true,
 	}
 
@@ -249,7 +247,6 @@ func readSalt(path string) ([]byte, error) {
 
 // Login logs the user in.
 func (a *Client) Login(ctx context.Context, email, password string) (*UserData, error) {
-	// clear any previous salt value
 	a.setSalt(nil)
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
 	defer span.End()
@@ -547,7 +544,7 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 		return nil, fmt.Errorf("error decoding JWT: %w", err)
 	}
 
-	// Temporary  set user data to so api can read it
+	// Seed the identity first so the fetchUserData call below can authenticate.
 	login := &UserData{
 		LegacyID:    jwtUserInfo.LegacyUserID,
 		LegacyToken: jwtUserInfo.LegacyToken,
@@ -559,7 +556,6 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 		},
 	}
 	a.setData(login)
-	// Get user data from api this will also save data in user config
 	user, err := a.fetchUserData(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting user data: %w", err)
@@ -575,6 +571,24 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 	a.setData(user)
 	return user, nil
 }
+
+// OAuthDeviceLimitCallback stores the account identity from a device-limit
+// OAuth callback token so the follow-up device removal authenticates as that
+// account. It does not log the user in.
+func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
+	jwtUserInfo, err := decodeJWT(oAuthToken)
+	if err != nil {
+		return fmt.Errorf("%w: error decoding JWT: %w", ErrInvalidToken, err)
+	}
+	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
+		return fmt.Errorf("%w: device-limit token is missing the account identity", ErrInvalidToken)
+	}
+	return storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken)
+}
+
+// ErrInvalidToken distinguishes an unusable OAuth callback token from a
+// failure persisting its claims, so transports can map it to a client error.
+var ErrInvalidToken = errors.New("invalid OAuth token")
 
 type LinkResponse struct {
 	*protos.BaseResponse `json:",inline"`
@@ -674,6 +688,22 @@ type UserChangeEvent struct {
 	events.Event
 }
 
+// storeIdentity persists just the account identity in a single atomic write,
+// so a failure can't leave the stored user ID and token inconsistent.
+func storeIdentity(id int64, token string) error {
+	updates := settings.Settings{}
+	if id != 0 {
+		updates[settings.UserIDKey] = id
+	}
+	if token != "" {
+		updates[settings.TokenKey] = token
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return settings.Patch(updates)
+}
+
 func (a *Client) setData(data *UserData) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -682,18 +712,12 @@ func (a *Client) setData(data *UserData) {
 		return
 	}
 
-	// This case when user hits device limit while login
+	// A device-limit login carries only the identity, not full user data, so
+	// store the id and token alone.
 	if data.LegacyUserData == nil {
 		slog.Info("no user data to set, storing id and token only")
-		if data.LegacyID != 0 {
-			if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
-				slog.Error("failed to set user ID in settings", "error", err)
-			}
-		}
-		if data.LegacyToken != "" {
-			if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
-				slog.Error("failed to set token in settings", "error", err)
-			}
+		if err := storeIdentity(data.LegacyID, data.LegacyToken); err != nil {
+			slog.Error("failed to store account identity", "error", err)
 		}
 		return
 	}

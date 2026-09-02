@@ -62,7 +62,7 @@ type GoStats struct {
 	NumGC        uint64 // /gc/cycles/total:gc-cycles
 }
 
-// Sample is one point-in-time reading. At is supplied by the run loop rather
+// Sample is one point-in-time reading. Timestamp is supplied by the run loop rather
 // than read from the clock inside the Sensor or DecisionEngine, so both stay deterministic
 // under test.
 //
@@ -98,8 +98,8 @@ type LevelChange struct {
 }
 
 // Snapshot is the pre-assembled state the crash dump needs, built from the
-// core's ring with no allocation on the hot path beyond the copy. The executor
-// adds the open-connection count at write time and serializes.
+// core's ring with no allocation on the hot path beyond the copy. It does not
+// include the open-connection count.
 type Snapshot struct {
 	Samples []Sample
 	Levels  []LevelChange

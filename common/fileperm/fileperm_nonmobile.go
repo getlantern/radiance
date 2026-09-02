@@ -5,4 +5,4 @@ package fileperm
 
 import "os"
 
-const File os.FileMode = 0o644 // temporarily set to 644 to during developement, will be set to 600 for production builds.
+const File os.FileMode = 0o644 // temporarily set to 644 until full release, after which it will be set to 600.

@@ -26,14 +26,15 @@ import (
 
 const splitTunnelFile = internal.SplitTunnelFileName
 
-// SplitTunnel manages the split tunneling feature, allowing users to specify which domains,
-// processes, or packages should bypass the VPN tunnel.
+// SplitTunnel manages split tunneling for configured domains, processes, and
+// packages.
 type SplitTunnel struct {
 	rule         O.LogicalHeadlessRule
 	activeFilter *O.LogicalHeadlessRule
 	ruleFile     string
 	ruleMap      map[string]*O.DefaultHeadlessRule
 	enabled      *atomic.Bool
+	inverted     *atomic.Bool
 	access       sync.Mutex
 	logger       *slog.Logger
 }
@@ -61,6 +62,7 @@ func newSplitTunnel(path string, logger *slog.Logger) *SplitTunnel {
 		activeFilter: &(rule.Rules[1].LogicalOptions),
 		ruleMap:      make(map[string]*O.DefaultHeadlessRule),
 		enabled:      &atomic.Bool{},
+		inverted:     &atomic.Bool{},
 		logger:       logger,
 	}
 	s.initRuleMap()
@@ -100,6 +102,40 @@ func (s *SplitTunnel) SetEnabled(enabled bool) error {
 
 func (s *SplitTunnel) IsEnabled() bool {
 	return s.enabled.Load()
+}
+
+// SetPolicy changes how the split-tunnel filter is interpreted and persists it.
+// Invalid policies default to [SplitTunnelPolicyExclude].
+//
+// Empty filters serialize without a filter rule, so traffic remains tunneled in
+// either policy.
+func (s *SplitTunnel) SetPolicy(policy SplitTunnelPolicy) error {
+	if !policy.Valid() {
+		policy = SplitTunnelPolicyExclude
+	}
+	invert := policy == SplitTunnelPolicyInclude
+	s.access.Lock()
+	defer s.access.Unlock()
+	if s.inverted.Load() == invert {
+		return nil
+	}
+	prev := s.activeFilter.Invert
+	s.activeFilter.Invert = invert
+	if err := s.saveLocked(); err != nil {
+		s.activeFilter.Invert = prev
+		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
+	}
+	s.inverted.Store(invert)
+	s.logger.Log(context.Background(), log.LevelTrace, "Updated split-tunnel policy", "policy", policy)
+	return nil
+}
+
+// Policy reports the current split-tunnel filter interpretation.
+func (s *SplitTunnel) Policy() SplitTunnelPolicy {
+	if s.inverted.Load() {
+		return SplitTunnelPolicyInclude
+	}
+	return SplitTunnelPolicyExclude
 }
 
 func (s *SplitTunnel) Filters() SplitTunnelFilter {
@@ -250,8 +286,9 @@ func (s *SplitTunnel) saveLocked() error {
 		outerRules = append(outerRules, O.HeadlessRule{
 			Type: s.rule.Rules[1].Type,
 			LogicalOptions: O.LogicalHeadlessRule{
-				Mode:  s.activeFilter.Mode,
-				Rules: filterRules,
+				Mode:   s.activeFilter.Mode,
+				Rules:  filterRules,
+				Invert: s.activeFilter.Invert,
 			},
 		})
 	}
@@ -314,8 +351,8 @@ func (s *SplitTunnel) loadRule() error {
 			},
 		})
 	} else if len(s.rule.Rules) > 1 && s.rule.Rules[1].Type == C.RuleTypeDefault {
-		// Migrate legacy format: wrap DefaultOptions into LogicalOptions
-		// TODO(2/10): remove in future commit
+		// TODO: drop this migration once all persisted rules use the LogicalOptions
+		// format; kept for now to stay compatible with configs written by older builds.
 		s.logger.Debug("Migrating legacy split tunnel rule format")
 		legacyRule := s.rule.Rules[1].DefaultOptions
 		s.rule.Rules[1] = O.HeadlessRule{
@@ -375,9 +412,11 @@ func (s *SplitTunnel) loadRule() error {
 	s.activeFilter = &(s.rule.Rules[1].LogicalOptions)
 	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
+	s.inverted.Store(s.activeFilter.Invert)
 
 	s.logger.Log(context.Background(), log.LevelTrace, "loaded split tunnel rules",
-		"file", s.ruleFile, "filters", s.Filters().String(), "enabled", s.IsEnabled(),
+		"file", s.ruleFile, "filters", s.Filters().String(),
+		"enabled", s.IsEnabled(), "policy", s.Policy(),
 	)
 	return nil
 }

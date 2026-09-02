@@ -50,27 +50,17 @@ const (
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
 
 	// VPN related keys.
-	SmartRoutingKey     _key = "smart_routing"      // bool
-	SplitTunnelKey      _key = "split_tunnel"       // bool
-	AdBlockKey          _key = "ad_block"           // bool
-	AutoConnectKey      _key = "auto_connect"       // bool
-	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	SmartRoutingKey      _key = "smart_routing"       // bool
+	SplitTunnelKey       _key = "split_tunnel"        // bool
+	SplitTunnelPolicyKey _key = "split_tunnel_policy" // string ("exclude"|"include")
+	AdBlockKey           _key = "ad_block"            // bool
+	AutoConnectKey       _key = "auto_connect"        // bool
+	PeerShareEnabledKey  _key = "peer_share_enabled"  // bool
 	// PeerManualPortKey is the TCP port number the user has manually
 	// forwarded on their router for the peer-proxy inbound (single-
-	// port 1:1 NAT). Valid range is 1..65535; 0 means unset, in which
-	// case the peer falls back to UPnP discovery. Out-of-range values
-	// (negative, > 65535) are logged on read and treated as unset
-	// rather than silently wrapping to a wrong port. Surfaced as an
-	// Advanced setting in the Share My Connection UI for users on
-	// networks where UPnP is disabled or unavailable.
+	// port 1:1 NAT). Valid range is 1..65535; 0 means unset.
 	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
-	// UnboundedKey is the local opt-in for the broflake / Unbounded
-	// widget proxy. When true AND the server-side Features[unbounded]
-	// flag is on AND the server provides UnboundedConfig (discovery
-	// + egress URLs), the widget proxy starts. Surfaced as a "Basic
-	// mode" option in the Share My Connection UI for networks where
-	// UPnP isn't workable but the user still wants to contribute via
-	// the WebRTC-based donor path.
+	// UnboundedKey is the local opt-in (bool) for the Unbounded widget proxy.
 	UnboundedKey      _key = "unbounded"       // bool
 	SelectedServerKey _key = "selected_server" // [servers.Server] Server.Options is not stored
 
@@ -78,7 +68,7 @@ const (
 
 	settingsFileName = "settings.json"
 	// legacySettingsFileName is what v9.0.x called the same file (it was
-	// renamed in radiance PR #370). On upgrade from v9.0.x, the user's
+	// renamed). On upgrade from v9.0.x, the user's
 	// persisted user_id / token / user_level live at <dataDir>/local.json;
 	// migrateLegacySettingsIfNeeded reads it from there so Pro state
 	// survives the rename.
@@ -165,11 +155,11 @@ type candidateSource struct {
 // by older client versions. Candidates in priority order:
 //
 //  1. <fileDir>/settings.json                 — canonical
-//  2. <fileDir>/local.json                    — v9.0.x (renamed in #370)
-//  3. Windows ${PUBLIC}\Lantern\data\*        — v9.0.x cross-dir (#3460);
+//  2. <fileDir>/local.json                    — v9.0.x (renamed)
+//  3. Windows ${PUBLIC}\Lantern\data\*        — v9.0.x cross-dir;
 //     spliced in below, Windows only
-//  4. pre-9.x platform-specific YAML (legacy_yaml.go); spliced in below
-//  5. <fileDir>/data/settings.json            — v9.1.x (bugged: #370's
+//  4. pre-9.x platform-specific YAML; spliced in below
+//  5. <fileDir>/data/settings.json            — v9.1.x (bugged:
 //     setupDirectories appended an
 //     unconditional "/data" suffix)
 //
@@ -204,24 +194,15 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 			}
 		}
 	}
-	// Splice optional candidates in. Each splice inserts at index 2 (right
-	// after canonical and same-dir local.json), so doing them in order
-	// from oldest-priority to newest-priority gives the final ordering:
-	//
-	//   canonical > same-dir local.json
-	//     > Windows cross-dir (newest of the optional candidates)
-	//       > pre-9.x YAML (older than v9.0.x)
-	//         > v9.1.x nested (always last, the bug-victim case)
-	//
-	// Insert pre-9.x YAML first, then Windows cross-dir, so the Windows
-	// candidate ends up *before* (higher priority than) the YAML.
+	// Optional candidates splice in at index 2, inserted oldest-first so
+	// newer generations end up higher priority.
 	if yc := legacyYAMLCandidate(fileDir); yc.exists {
 		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
 	}
 	// Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data) are the
 	// same generation of state as the same-dir local.json, just stored
-	// under a different filesystem root because PR #370 moved lanternd's
-	// data dir to ${ProgramData}\Lantern. On every other GOOS / when the
+	// under a different filesystem root because lanternd's data dir moved
+	// to ${ProgramData}\Lantern. On every other GOOS / when the
 	// env is unset windowsCrossDirCandidatesFn returns nil and this is a
 	// no-op.
 	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {

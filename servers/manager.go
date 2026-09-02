@@ -48,10 +48,9 @@ import (
 
 // Thresholds for flagging slow operations on the servers Manager.
 //
-// These instrument the lock/marshal/disk path to help root-cause cases like
-// Freshdesk #172640, where saveServers held the write lock for 1+ minute
-// and starved cgo-callback readers in GetAvailableServers. See
-// getlantern/engineering#3176 for context.
+// These instrument the lock/marshal/disk path. saveServers must not hold the
+// write lock across disk I/O or it starves cgo-callback readers in
+// AllServers/GetServerByTag.
 const (
 	// saveSlowThreshold: log a WARN with per-phase breakdown if saveServers
 	// exceeds this. Normal operation is well under 100ms.
@@ -408,11 +407,10 @@ func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
 // around marshalling. saveMu serializes the full marshal+write sequence so
 // concurrent callers can't reorder and overwrite a newer snapshot with an
 // older one. Readers (e.g. AllServers) are not blocked by the disk write —
-// only by the brief marshal window (see getlantern/engineering#3176).
+// only by the brief marshal window.
 //
 // Each phase (saveMu wait, RLock+marshal, disk write) is timed so we can
-// root-cause any future slow case — we still don't have a definitive
-// explanation for the 1-minute hold observed in Freshdesk #172640.
+// root-cause any future slow case.
 func (m *Manager) saveServers() error {
 	start := time.Now()
 
@@ -648,7 +646,8 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 		return fmt.Errorf("no endpoints or outbounds in response")
 	}
 
-	// TODO: update when we support endpoints
+	// TODO: this assumes a single outbound; once we support endpoints it must
+	// also handle cfg.Endpoints instead of indexing Outbounds[0].
 	cfg.Outbounds[0].Tag = tag
 	srv := &Server{
 		Tag:       tag,

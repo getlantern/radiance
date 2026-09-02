@@ -69,10 +69,9 @@ func (r *record) attrs() ConnAttrs {
 	}
 }
 
-// trackerMetadata synthesizes the upstream metadata view required by the lantern-box group manager
-// (groups.ConnectionManager). That consumer reads only Outbound and ClosedAt.IsZero(); ClosedAt is
-// left zero because only active records are ever exposed. Upload/Download point at the live atomics
-// so any future consumer that converts or marshals the value does not dereference nil.
+// trackerMetadata synthesizes the upstream metadata view required by the lantern-box group manager.
+// ClosedAt is left zero because only active records are ever exposed.
+// Upload/Download point at the live atomics so the value is safe to marshal.
 func (r *record) trackerMetadata() trafficontrol.TrackerMetadata {
 	return trafficontrol.TrackerMetadata{
 		ID:           r.id,

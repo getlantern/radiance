@@ -17,7 +17,6 @@ import (
 
 const (
 	pipePath = `\\.\pipe\Lantern\lantern`
-	// pipePath = `\\.\pipe\ProtectedPrefix\Administrators\`
 
 	apiURL         = "http://pipe"
 	connectTimeout = 10 * time.Second
@@ -132,5 +131,6 @@ func getConnPeer(conn net.Conn) (p usr, err error) {
 	return usr, nil
 }
 
-// this is a no-op on windows
+// setSocketPathForTesting does nothing on Windows: the pipe path is a fixed
+// constant, so there is nothing to override.
 func setSocketPathForTesting(path string) {}

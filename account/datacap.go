@@ -46,9 +46,9 @@ const (
 	datacapDisabledRetry = time.Hour
 )
 
-// errCapExhausted marks a deliberate server close after the daily allotment is
-// spent. Callers should wait for reset instead of reconnecting immediately.
-var errCapExhausted = errors.New("datacap exhausted")
+// ErrCapExhausted marks a deliberate server close after the daily allotment is
+// spent.
+var ErrCapExhausted = errors.New("datacap exhausted")
 
 type dataCapStreamState struct {
 	progressed   bool
@@ -139,7 +139,7 @@ func readSSE(ctx context.Context, body io.Reader) (<-chan sseEvent, func() error
 // stream errors. If the server closes with cap_exhausted, it waits for the
 // allotment reset instead of retrying immediately.
 func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) error {
-	bo := common.NewBackoff(2 * time.Minute)
+	bo := common.NewBackoff(0, 2*time.Minute)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -156,7 +156,7 @@ func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) 
 			return err
 		}
 
-		if errors.Is(err, errCapExhausted) {
+		if errors.Is(err, ErrCapExhausted) {
 			if err := a.waitForAllotmentReset(ctx, state.allotmentEnd); err != nil {
 				return err
 			}
@@ -222,7 +222,9 @@ func waitOrDone(ctx context.Context, d time.Duration) error {
 }
 
 // connectDataCapSSE opens an SSE connection to the datacap stream endpoint and
-// processes events until the stream ends or ctx is cancelled.
+// processes events until the stream ends or ctx is cancelled. It returns
+// ErrCapExhausted when the server closes after the daily allotment is spent, so
+// the caller waits for the reset instead of reconnecting immediately.
 func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInfo)) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "datacap_sse")
 	defer span.End()
@@ -294,7 +296,7 @@ func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInf
 		return traces.RecordError(ctx, err)
 	}
 	if capExhausted {
-		return errCapExhausted
+		return ErrCapExhausted
 	}
 	if err := scanErr(); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("datacap SSE scanner: %w", err))

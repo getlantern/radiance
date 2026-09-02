@@ -204,7 +204,6 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	cacheFile := service.FromContext[adapter.CacheFile](t.ctx)
 	service.MustRegister[adapter.CacheFile](t.ctx, &cacheFileWrapper{CacheFile: cacheFile})
 
-	// setup client info tracker
 	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
 	clientContextInjector := newClientContextInjector(outboundMgr, t.dataPath, t.initialLanternTags)
 	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
@@ -452,7 +451,7 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	}
 
 	slog.Info("Adding servers", "tags", list.Tags())
-	// remove duplicates from newOpts before adding to avoid unnecessary reloads
+	// remove duplicates from list before adding to avoid unnecessary reloads
 	newList := removeDuplicates(t.ctx, t.optsMap, list)
 	newOutbounds := newList.Outbounds()
 	newEndpoints := newList.Endpoints()

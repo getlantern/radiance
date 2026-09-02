@@ -175,7 +175,6 @@ func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionSe
 }
 
 // StripeBillingPortalURL generates the Stripe billing portal URL for the given user ID.
-// baseURL = common.GetProServerURL
 func (a *Client) StripeBillingPortalURL(ctx context.Context, baseURL, userID, proToken string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "stripe_billing_portal_url")
 	defer span.End()
@@ -237,7 +236,6 @@ func (a *Client) SubscriptionPaymentRedirectURL(ctx context.Context, data Paymen
 }
 
 // PaymentRedirect is used to get the payment redirect URL with PaymentRedirectData.
-// This is used in the desktop and android apps.
 func (a *Client) PaymentRedirect(ctx context.Context, data PaymentRedirectData) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "payment_redirect")
 	defer span.End()

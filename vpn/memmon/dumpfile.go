@@ -48,7 +48,6 @@ func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platfo
 		nonGo = last.Footprint - last.GoBytes
 	}
 
-	// dump header
 	b := append(buf, "ts="...)
 	b = now.AppendFormat(b, time.RFC3339Nano)
 	b = appendKVStr(b, " platform", platform)
@@ -56,7 +55,6 @@ func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platfo
 	b = appendKVStr(b, " reason", a.Reason)
 	b = append(b, '\n')
 
-	// dump memory line
 	b = appendKVFloat(b, "pressure", last.PressureRatio())
 	b = appendKVU64(b, " footprint_bytes", last.Footprint)
 	b = appendKVU64(b, " avail_bytes", last.Available)
@@ -65,7 +63,6 @@ func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platfo
 	b = appendKVBool(b, " has_native_footprint", last.HasNativeFootprint)
 	b = append(b, '\n')
 
-	// dump go/connection line
 	b = append(b, "go"...)
 	b = appendKVU64(b, ".total_sys", last.GoStats.TotalSys)
 	b = appendKVU64(b, " heap_objects", last.GoStats.HeapObjects)
@@ -77,7 +74,6 @@ func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platfo
 	b = appendKVInt(b, " dialed_conns", dialed)
 	b = append(b, '\n')
 
-	// dump samples
 	b = append(b, "samples:\n"...)
 	for _, s := range samples {
 		b = append(b, "  at="...)
@@ -90,7 +86,6 @@ func buildDump(buf []byte, a Decision, routed, dialed int, now time.Time, platfo
 		b = append(b, '\n')
 	}
 
-	// dump levels
 	b = append(b, "levels:\n"...)
 	for _, l := range levels {
 		b = append(b, "  at="...)

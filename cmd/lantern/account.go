@@ -306,7 +306,6 @@ func accountDevices(ctx context.Context, c *ipc.Client, cmd *DevicesCmd) error {
 		fmt.Println("Device removed.")
 		return printJSON(resp)
 	default:
-		// Default to listing devices
 		devices, err := c.UserDevices(ctx)
 		if err != nil {
 			return err
@@ -315,7 +314,6 @@ func accountDevices(ctx context.Context, c *ipc.Client, cmd *DevicesCmd) error {
 	}
 }
 
-// prompt prints a prompt and reads a line of input from stdin.
 func prompt(label string) (string, error) {
 	fmt.Print(label)
 	return readLine()
