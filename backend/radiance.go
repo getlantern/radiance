@@ -345,6 +345,10 @@ func (r *LocalBackend) applyConfig(cfg *config.Config) {
 	if err := r.updateServers(list); err != nil {
 		slog.Error("updating servers in manager", "error", err)
 	}
+	if err := r.vpnClient.UpdateNonSelectableOutbounds(nonSelectableOutboundsFromConfig(cfg)); err != nil &&
+		!errors.Is(err, vpn.ErrTunnelNotConnected) {
+		slog.Error("updating non-selectable outbounds", "error", err)
+	}
 }
 
 // setCountryCodeFromConfig stores the config country for diagnostics unless
@@ -362,8 +366,15 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 // serverListFromConfig converts config outbounds and endpoints into managed
 // Lantern servers while preserving location and bandit URL metadata.
 func serverListFromConfig(cfg *config.Config) servers.ServerList {
+	nonSelectable := nonSelectableSet(cfg)
 	srvs := make([]*servers.Server, 0, len(cfg.Options.Outbounds)+len(cfg.Options.Endpoints))
 	addSvr := func(tag, typ string, opts any, loc *C.ServerLocation) {
+		// Non-selectable tags are merged into the box for dialing but must never
+		// become managed servers, or they surface in the server list, get probed by
+		// offline URL tests, and join the auto-select group on live update.
+		if _, ok := nonSelectable[tag]; ok {
+			return
+		}
 		s := &servers.Server{
 			Tag: tag, Type: typ, IsLantern: true, Options: opts,
 		}
@@ -379,6 +390,29 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 		addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
 	}
 	return servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
+}
+
+func nonSelectableSet(cfg *config.Config) map[string]struct{} {
+	set := make(map[string]struct{}, len(cfg.NonSelectableOutbounds))
+	for _, tag := range cfg.NonSelectableOutbounds {
+		set[tag] = struct{}{}
+	}
+	return set
+}
+
+// nonSelectableOutboundsFromConfig returns the config's non-selectable outbounds for
+// the tunnel to instantiate off the managed-server path. Endpoints are excluded: a
+// non-selectable endpoint stays build-time only.
+func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
+	nonSelectable := nonSelectableSet(cfg)
+	srvs := make([]*servers.Server, 0, len(nonSelectable))
+	for _, out := range cfg.Options.Outbounds {
+		if _, ok := nonSelectable[out.Tag]; !ok {
+			continue
+		}
+		srvs = append(srvs, &servers.Server{Tag: out.Tag, Type: out.Type, IsLantern: true, Options: out})
+	}
+	return servers.ServerList{Servers: srvs}
 }
 
 func (r *LocalBackend) Close() {
