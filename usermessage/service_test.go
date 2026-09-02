@@ -44,6 +44,32 @@ func TestServicePollingBackoffAndSuccessReset(t *testing.T) {
 	require.Equal(t, 5*time.Second, receiveTimer(t, clock))
 }
 
+func TestServiceRespectsSuccessfulPollIntervalWithoutJitter(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	service, err := New(Options{
+		DataDir:         t.TempDir(),
+		Fetcher:         fetcher,
+		ContextProvider: func() ClientContext { return testClientContext() },
+		Clock:           clock,
+		Jitter:          func(delay time.Duration) time.Duration { return delay / 2 },
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
+	require.Equal(t, 5*time.Minute, receiveTimer(t, clock))
+	clock.Advance(5 * time.Minute)
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{err: errors.New("offline")}
+	require.Equal(t, 2500*time.Millisecond, receiveTimer(t, clock))
+}
+
 func TestServiceImmediateRefreshForContextAndActivityChanges(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fetcher := newScriptedFetcher()
@@ -229,6 +255,28 @@ func TestServiceStillRefreshesImmediatelyWhenCredentialsBecomeAvailable(t *testi
 	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
 }
 
+func TestServiceUsesLocalStateRetryWithoutAdvancingFetchBackoff(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	service := newTestService(t, clock, fetcher, func() ClientContext { return testClientContext() })
+	service.store.path = t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 60,
+		Message:             testMessage("display-1", clock.Now().Add(time.Hour)),
+	}}
+	require.Equal(t, localStateRetryInterval, receiveTimer(t, clock))
+	clock.Advance(localStateRetryInterval)
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{err: errors.New("offline")}
+	require.Equal(t, initialFailureBackoff, receiveTimer(t, clock))
+}
+
 func TestServiceLogsSafeFetchOutcomes(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fetcher := newScriptedFetcher()
@@ -292,7 +340,7 @@ func TestContextNormalization(t *testing.T) {
 	require.Equal(t, "en-US", NormalizeLocale("not a locale"))
 }
 
-func TestPollingDelaysStayWithinSLAAndBackoffCap(t *testing.T) {
+func TestFailureJitterAndBackoffCap(t *testing.T) {
 	for range 100 {
 		delay := defaultJitter(5 * time.Minute)
 		require.GreaterOrEqual(t, delay, 270*time.Second)

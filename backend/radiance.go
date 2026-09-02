@@ -1674,7 +1674,11 @@ func (r *LocalBackend) DeleteAccount(ctx context.Context, email, password string
 }
 
 func (r *LocalBackend) SignUp(ctx context.Context, email, password string) ([]byte, *account.SignupResponse, error) {
-	return r.accountClient.SignUp(ctx, email, password)
+	salt, response, err := r.accountClient.SignUp(ctx, email, password)
+	if err == nil {
+		r.refreshUserMessages()
+	}
+	return salt, response, err
 }
 
 func (r *LocalBackend) SignupEmailConfirmation(ctx context.Context, email, code string) error {

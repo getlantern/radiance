@@ -2,6 +2,8 @@ package usermessage
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -79,6 +81,46 @@ func TestStoreSanitizesInvalidPersistedSeenIDs(t *testing.T) {
 	reloaded, err := newStore(dir)
 	require.NoError(t, err)
 	require.Equal(t, []string{"valid-id"}, reloaded.seen("1"))
+}
+
+func TestStoreQuarantinesInvalidPersistedState(t *testing.T) {
+	tests := map[string][]byte{
+		"invalid JSON":        []byte("not-json"),
+		"unsupported version": []byte(`{"version":2,"users":{"1":{"seen":["display-1"]}}}`),
+	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "user-messages.json")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+
+			state, err := newStore(dir)
+			require.NoError(t, err)
+			require.Empty(t, state.state.Users)
+			require.NoFileExists(t, path)
+			quarantined, err := os.ReadFile(filepath.Join(dir, invalidStateFileName))
+			require.NoError(t, err)
+			require.Equal(t, data, quarantined)
+
+			now := time.Now()
+			require.NoError(t, state.offer("1", testMessage("display-2", now.Add(time.Hour)), now))
+			require.FileExists(t, path)
+		})
+	}
+}
+
+func TestStoreTouchesExistingUserWhenAcceptingMessage(t *testing.T) {
+	now := time.Now()
+	state, err := newStore(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, state.offer("1", testMessage("display-1", now.Add(time.Hour)), now))
+	require.NoError(t, state.acknowledge("1", "display-1", now))
+	require.NoError(t, state.offer("2", testMessage("display-2", now.Add(time.Hour)), now))
+	require.NoError(t, state.acknowledge("2", "display-2", now))
+	require.Equal(t, []string{"1", "2"}, state.state.Order)
+
+	require.NoError(t, state.offer("1", testMessage("display-3", now.Add(time.Hour)), now))
+	require.Equal(t, []string{"2", "1"}, state.state.Order)
 }
 
 func TestStoreKeepsPendingWhenAcknowledgmentWriteFails(t *testing.T) {

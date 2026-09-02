@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	wire "github.com/getlantern/common/usermessage"
+
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/issue"
@@ -24,17 +26,22 @@ import (
 type Client struct {
 	http      *http.Client
 	localapi  *localapi
+	ctx       context.Context
+	opts      backend.Options
 	localOnly bool // when true, serve all requests in-process; never attempt the IPC socket
 	mu        sync.RWMutex
 }
 
 func NewClient(ctx context.Context, opts backend.Options) (*Client, error) {
+	opts = cloneBackendOptions(opts)
 	b, err := backend.NewLocalBackend(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("create local backend: %w", err)
 	}
 	b.Start()
 	c := newClient()
+	c.ctx = ctx
+	c.opts = opts
 	c.localapi = newLocalAPI(b, false)
 	return c, nil
 }
@@ -95,18 +102,12 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			if be := c.localapi.be.Load(); be == nil {
-				opts := backend.Options{
-					DataDir:          settings.GetString(settings.DataPathKey),
-					LogDir:           settings.GetString(settings.LogPathKey),
-					Locale:           settings.GetString(settings.LocaleKey),
-					DeviceID:         settings.GetString(settings.DeviceIDKey),
-					LogLevel:         settings.GetString(settings.LogLevelKey),
-					TelemetryConsent: settings.GetBool(settings.TelemetryKey),
-				}
-				be, err = backend.NewLocalBackend(ctx, opts)
+				opts := c.fallbackOptions()
+				be, err = backend.NewLocalBackend(c.ctx, opts)
 				if err != nil {
 					return nil, fmt.Errorf("create local backend: %w", err)
 				}
+				be.Start()
 				c.localapi.setBackend(be)
 			}
 			if br, ok := bodyReader.(*bytes.Reader); ok {
@@ -134,6 +135,34 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 		}
 	}
 	return respBody, nil
+}
+
+func (c *Client) fallbackOptions() backend.Options {
+	opts := cloneBackendOptions(c.opts)
+	opts.DataDir = settings.GetString(settings.DataPathKey)
+	opts.LogDir = settings.GetString(settings.LogPathKey)
+	opts.Locale = settings.GetString(settings.LocaleKey)
+	opts.DeviceID = settings.GetString(settings.DeviceIDKey)
+	opts.LogLevel = settings.GetString(settings.LogLevelKey)
+	opts.TelemetryConsent = settings.GetBool(settings.TelemetryKey)
+	return opts
+}
+
+func cloneBackendOptions(opts backend.Options) backend.Options {
+	cloned := opts
+	cloned.UserMessageCapabilities.Surfaces = append(
+		[]wire.Surface(nil), opts.UserMessageCapabilities.Surfaces...,
+	)
+	cloned.UserMessageCapabilities.Actions = append(
+		[]wire.ActionType(nil), opts.UserMessageCapabilities.Actions...,
+	)
+	if opts.EnvOverrides != nil {
+		cloned.EnvOverrides = make(map[string]string, len(opts.EnvOverrides))
+		for key, value := range opts.EnvOverrides {
+			cloned.EnvOverrides[key] = value
+		}
+	}
+	return cloned
 }
 
 // reportIssue assembles and sends the report in this process rather than over IPC.

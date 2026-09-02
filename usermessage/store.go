@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	stateVersion = 1
-	maxUsers     = 16
+	stateVersion         = 1
+	maxUsers             = 16
+	invalidStateFileName = "user-messages.invalid.json"
 )
 
 // ErrMessageNotPending indicates that a display ID cannot be acknowledged for the current account.
@@ -44,11 +46,8 @@ type store struct {
 
 func newStore(dataDir string) (*store, error) {
 	s := &store{
-		path: filepath.Join(dataDir, "user-messages.json"),
-		state: persistedState{
-			Version: stateVersion,
-			Users:   make(map[string]*userState),
-		},
+		path:  filepath.Join(dataDir, "user-messages.json"),
+		state: newPersistedState(),
 	}
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -58,16 +57,39 @@ func newStore(dataDir string) (*store, error) {
 		return nil, fmt.Errorf("read user-message state: %w", err)
 	}
 	if err := json.Unmarshal(data, &s.state); err != nil {
-		return nil, fmt.Errorf("decode user-message state: %w", err)
+		s.resetInvalidState(data, "invalid_json")
+		return s, nil
 	}
 	if s.state.Version != stateVersion {
-		return nil, fmt.Errorf("unsupported user-message state version %d", s.state.Version)
+		s.resetInvalidState(data, "unsupported_version")
+		return s, nil
 	}
 	if s.state.Users == nil {
 		s.state.Users = make(map[string]*userState)
 	}
 	s.sanitize()
 	return s, nil
+}
+
+func newPersistedState() persistedState {
+	return persistedState{
+		Version: stateVersion,
+		Users:   make(map[string]*userState),
+	}
+}
+
+func (s *store) resetInvalidState(data []byte, reason string) {
+	s.state = newPersistedState()
+	invalidPath := filepath.Join(filepath.Dir(s.path), invalidStateFileName)
+	if err := atomicfile.WriteFile(invalidPath, data, fileperm.File); err != nil {
+		slog.Warn("Could not quarantine invalid user-message state", "reason", reason, "error", err)
+		return
+	}
+	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("Could not remove invalid user-message state", "reason", reason, "error", err)
+		return
+	}
+	slog.Warn("Quarantined invalid user-message state", "reason", reason)
 }
 
 func (s *store) seen(userID string) []string {
@@ -122,6 +144,7 @@ func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time
 		return nil
 	}
 	state.Pending = cloneMessage(message)
+	touch(&next, userID)
 	return s.commitLocked(next)
 }
 

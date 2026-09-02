@@ -15,6 +15,7 @@ const (
 	credentialRecheckInterval = time.Second
 	initialFailureBackoff     = 5 * time.Second
 	maxFailureBackoff         = 5 * time.Minute
+	localStateRetryInterval   = 5 * time.Minute
 )
 
 // Clock creates timers and reports the current time.
@@ -60,13 +61,13 @@ type Service struct {
 	store           *store
 	wake            chan struct{}
 
-	mu            sync.Mutex
-	started       bool
-	active        bool
-	online        bool
-	generation    uint64
-	requestID     uint64
-	requestCancel context.CancelFunc
+	mu                sync.Mutex
+	started           bool
+	active            bool
+	online            bool
+	refreshGeneration uint64
+	requestID         uint64
+	requestCancel     context.CancelFunc
 }
 
 // New creates a user-message service and loads its durable state.
@@ -133,7 +134,7 @@ func (s *Service) Current() (*wire.ResolvedUserMessage, error) {
 // Refresh requests an immediate fetch. Concurrent requests are coalesced.
 func (s *Service) Refresh() {
 	s.mu.Lock()
-	s.generation++
+	s.refreshGeneration++
 	cancel := s.requestCancel
 	s.mu.Unlock()
 	if cancel != nil {
@@ -179,7 +180,7 @@ func (s *Service) run(ctx context.Context) {
 	var failures uint
 	var credentialsDeferred bool
 	for s.wait(ctx, delay) {
-		requestContext, requestID, generation, ok := s.beginRequest(ctx)
+		requestContext, requestID, refreshGeneration, ok := s.beginRequest(ctx)
 		if !ok {
 			delay = 0
 			continue
@@ -234,24 +235,23 @@ func (s *Service) run(ctx context.Context) {
 			s.logFetchFailure(err, failures, delay)
 			continue
 		}
-		if s.generationChanged(generation) || s.contextProvider() != clientContext {
+		if s.refreshGenerationChanged(refreshGeneration) || s.contextProvider() != clientContext {
 			s.consumeRefresh()
 			delay = 0
 			continue
 		}
 		if err := s.store.offer(clientContext.UserID, response.Message, s.clock.Now()); err != nil {
-			failures++
-			delay = s.jitter(failureBackoff(failures))
+			failures = 0
+			delay = localStateRetryInterval
 			s.logger.Warn(
 				"User-message fetch result could not be persisted",
 				"category", "local_state",
-				"failure_count", failures,
 				"retry_in", delay,
 			)
 			continue
 		}
 		failures = 0
-		delay = s.jitter(time.Duration(response.PollIntervalSeconds) * time.Second)
+		delay = time.Duration(response.PollIntervalSeconds) * time.Second
 		s.logFetchResult(response.Message, delay)
 	}
 }
@@ -330,7 +330,7 @@ func (s *Service) beginRequest(parent context.Context) (context.Context, uint64,
 	}
 	s.requestID++
 	s.requestCancel = cancel
-	return requestContext, s.requestID, s.generation, true
+	return requestContext, s.requestID, s.refreshGeneration, true
 }
 
 func (s *Service) endRequest(requestID uint64) {
@@ -346,10 +346,10 @@ func (s *Service) endRequest(requestID uint64) {
 	}
 }
 
-func (s *Service) generationChanged(generation uint64) bool {
+func (s *Service) refreshGenerationChanged(refreshGeneration uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.generation != generation
+	return s.refreshGeneration != refreshGeneration
 }
 
 func (s *Service) consumeRefresh() {
