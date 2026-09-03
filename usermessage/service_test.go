@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,280 +15,232 @@ import (
 	"github.com/stretchr/testify/require"
 
 	wire "github.com/getlantern/common/usermessage"
+
+	"github.com/getlantern/radiance/common"
 )
 
-func TestServicePollingBackoffAndSuccessReset(t *testing.T) {
-	clock := newFakeClock(time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC))
+func TestServiceBackoffAndReset(t *testing.T) {
+	backoff := newRecordingBackoff()
+	useFailureBackoff(t, backoff)
 	fetcher := newScriptedFetcher()
-	service := newTestService(t, clock, fetcher, func() ClientContext { return testClientContext() })
+	var logs safeBuffer
+	service := newTestServiceWithLogger(
+		t,
+		fetcher,
+		func() ClientContext { return testClientContext() },
+		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	service.Start(ctx)
 
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{err: errors.New("offline")}
-	require.Equal(t, 5*time.Second, receiveTimer(t, clock))
-	clock.Advance(5 * time.Second)
+	require.Equal(t, "wait", receiveBackoffCall(t, backoff))
+	requireLogContains(t, &logs, "failure_count=1")
 
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{err: errors.New("still offline")}
-	require.Equal(t, 10*time.Second, receiveTimer(t, clock))
-	clock.Advance(10 * time.Second)
+	require.Equal(t, "wait", receiveBackoffCall(t, backoff))
+	requireLogContains(t, &logs, "failure_count=2")
 
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
-	require.Equal(t, 5*time.Minute, receiveTimer(t, clock))
-	clock.Advance(5 * time.Minute)
+	require.Equal(t, "reset", receiveBackoffCall(t, backoff))
+	requireLogContains(t, &logs, "result=no_message")
+	logs.Reset()
 
+	// The success parked the loop on the server's interval, so wake it instead
+	// of waiting that out.
+	service.Refresh()
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{err: errors.New("failed after success")}
-	require.Equal(t, 5*time.Second, receiveTimer(t, clock))
+	require.Equal(t, "wait", receiveBackoffCall(t, backoff))
+	requireLogContains(t, &logs, "failure_count=1")
 }
 
-func TestServiceRespectsSuccessfulPollIntervalWithoutJitter(t *testing.T) {
-	clock := newFakeClock(time.Now())
+func TestServiceUsesServerInterval(t *testing.T) {
 	fetcher := newScriptedFetcher()
-	service, err := New(Options{
-		DataDir:         t.TempDir(),
-		Fetcher:         fetcher,
-		ContextProvider: func() ClientContext { return testClientContext() },
-		Clock:           clock,
-		Jitter:          func(delay time.Duration) time.Duration { return delay / 2 },
-		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
+	service := newTestService(t, fetcher, func() ClientContext { return testClientContext() })
 
-	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
-	require.Equal(t, 5*time.Minute, receiveTimer(t, clock))
-	clock.Advance(5 * time.Minute)
-
-	receiveFetch(t, fetcher)
-	fetcher.results <- fetchResult{err: errors.New("offline")}
-	require.Equal(t, 2500*time.Millisecond, receiveTimer(t, clock))
+	delay, err := service.fetchAndStore(context.Background())
+	require.NoError(t, err)
+	// Spreading load across clients is the server's job, so the interval is
+	// used as sent.
+	require.Equal(t, 5*time.Minute, delay)
 }
 
-func TestServiceImmediateRefreshForContextAndActivityChanges(t *testing.T) {
-	clock := newFakeClock(time.Now())
-	fetcher := newScriptedFetcher()
-	var mu sync.Mutex
-	clientContext := testClientContext()
-	provider := func() ClientContext {
-		mu.Lock()
-		defer mu.Unlock()
-		return clientContext
-	}
-	service := newTestService(t, clock, fetcher, provider)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
+func TestServiceRefreshAndActivity(t *testing.T) {
+	service, fetcher, setContext := startService(t, testClientContext())
 
 	require.Equal(t, "fa-IR", receiveFetch(t, fetcher).clientContext.Locale)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
-	receiveTimer(t, clock)
+	requireNoFetch(t, fetcher)
 
-	mu.Lock()
-	clientContext.Locale = "en-US"
-	mu.Unlock()
+	setContext(func(c *ClientContext) { c.Locale = "en-US" })
 	service.Refresh()
 	require.Equal(t, "en-US", receiveFetch(t, fetcher).clientContext.Locale)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
-	receiveTimer(t, clock)
 
 	service.SetActivity(false, true)
-	require.Never(t, func() bool {
-		select {
-		case <-fetcher.requests:
-			return true
-		default:
-			return false
-		}
-	}, 50*time.Millisecond, time.Millisecond)
+	requireNoFetch(t, fetcher)
 	service.SetActivity(true, true)
 	require.Equal(t, "en-US", receiveFetch(t, fetcher).clientContext.Locale)
 }
 
-func TestServiceSeenFilteringAccountSwitchAndExpiration(t *testing.T) {
-	clock := newFakeClock(time.Now())
-	fetcher := newScriptedFetcher()
-	var mu sync.Mutex
-	clientContext := testClientContext()
-	provider := func() ClientContext {
-		mu.Lock()
-		defer mu.Unlock()
-		return clientContext
-	}
-	service := newTestService(t, clock, fetcher, provider)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
+func TestServiceSeenAndExpiry(t *testing.T) {
+	service, fetcher, setContext := startService(t, testClientContext())
 
 	first := receiveFetch(t, fetcher)
 	require.Empty(t, first.seen)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
 		PollIntervalSeconds: 300,
-		Message:             testMessage("display-1", clock.Now().Add(time.Minute)),
+		Message:             testMessage("display-1", time.Now().Add(time.Hour)),
 	}}
-	receiveTimer(t, clock)
-	message, err := service.Current()
-	require.NoError(t, err)
-	require.Equal(t, "display-1", message.DisplayID)
+	requireCurrentDisplayID(t, service, "display-1")
 	require.NoError(t, service.Acknowledge("display-1"))
 	request := receiveFetch(t, fetcher)
 	require.Equal(t, []string{"display-1"}, request.seen)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
-	receiveTimer(t, clock)
 
-	mu.Lock()
-	clientContext.UserID = "67890"
-	mu.Unlock()
+	setContext(func(c *ClientContext) { c.UserID = "67890" })
 	service.Refresh()
 	request = receiveFetch(t, fetcher)
 	require.Empty(t, request.seen)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
 		PollIntervalSeconds: 300,
-		Message:             testMessage("display-2", clock.Now().Add(time.Minute)),
+		Message:             testMessage("display-2", time.Now().Add(50*time.Millisecond)),
 	}}
-	receiveTimer(t, clock)
-	clock.Advance(time.Minute)
+	requireCurrentDisplayID(t, service, "display-2")
+	require.Eventually(t, func() bool {
+		message, err := service.Current()
+		return err == nil && message == nil
+	}, time.Second, time.Millisecond)
+}
+
+func TestServiceDiscardsStaleResponse(t *testing.T) {
+	// Regression guard: a response fetched under one account must never be
+	// surfaced after the account changed while the fetch was in flight.
+	service, fetcher, setContext := startService(t, testClientContext())
+
+	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
+	setContext(func(c *ClientContext) { c.UserID = "67890" })
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 300,
+		Message:             testMessage("display-1", time.Now().Add(time.Hour)),
+	}}
+
+	require.Equal(t, "67890", receiveFetch(t, fetcher).clientContext.UserID)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
+	requireNoFetch(t, fetcher)
+
+	message, err := service.Current()
+	require.NoError(t, err)
+	require.Nil(t, message)
+
+	setContext(func(c *ClientContext) { c.UserID = "12345" })
 	message, err = service.Current()
 	require.NoError(t, err)
 	require.Nil(t, message)
 }
 
-func TestServiceCancelsFetchAfterAccountReplacement(t *testing.T) {
-	clock := newFakeClock(time.Now())
-	fetcher := newScriptedFetcher()
-	var mu sync.Mutex
-	clientContext := testClientContext()
-	provider := func() ClientContext {
-		mu.Lock()
-		defer mu.Unlock()
-		return clientContext
-	}
-	service := newTestService(t, clock, fetcher, provider)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
+func TestServiceRefreshCancelsInFlightFetch(t *testing.T) {
+	// Regression guard: Refresh must abort the in-flight fetch so a context
+	// change is picked up immediately, not after the current request returns.
+	service, fetcher, setContext := startService(t, testClientContext())
 
 	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
-	mu.Lock()
-	clientContext.UserID = "67890"
-	mu.Unlock()
+
+	// Refresh while the first fetch is still blocked: it must be cancelled, not
+	// awaited. The next fetch runs without any result delivered to the first.
+	setContext(func(c *ClientContext) { c.UserID = "67890" })
 	service.Refresh()
-
 	require.Equal(t, "67890", receiveFetch(t, fetcher).clientContext.UserID)
-	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
-	receiveTimer(t, clock)
-	require.Never(t, func() bool {
-		select {
-		case <-fetcher.requests:
-			return true
-		default:
-			return false
-		}
-	}, 50*time.Millisecond, time.Millisecond)
+}
 
-	mu.Lock()
-	clientContext.UserID = "12345"
-	mu.Unlock()
+func TestServiceDiscardsAckedReoffer(t *testing.T) {
+	// Regression guard: a message acknowledged while a fetch is in flight must
+	// not be resurfaced when that fetch re-offers it.
+	service, fetcher, _ := startService(t, testClientContext())
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 300,
+		Message:             testMessage("display-1", time.Now().Add(time.Hour)),
+	}}
+	requireCurrentDisplayID(t, service, "display-1")
+
+	// Put a second fetch in flight, then acknowledge display-1 before it returns.
+	service.Refresh()
+	require.Empty(t, receiveFetch(t, fetcher).seen)
+	require.NoError(t, service.Acknowledge("display-1"))
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 300,
+		Message:             testMessage("display-1", time.Now().Add(time.Hour)),
+	}}
+
+	// The ack's own refresh drives a third fetch that now reports display-1 seen.
+	require.Equal(t, []string{"display-1"}, receiveFetch(t, fetcher).seen)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
+
 	message, err := service.Current()
 	require.NoError(t, err)
 	require.Nil(t, message)
 }
 
-func TestServiceRechecksCredentialsWhenFirstRunSignalIsMissed(t *testing.T) {
-	clock := newFakeClock(time.Now())
-	fetcher := newScriptedFetcher()
-	var mu sync.Mutex
-	clientContext := ClientContext{}
-	provider := func() ClientContext {
-		mu.Lock()
-		defer mu.Unlock()
-		return clientContext
-	}
-	service := newTestService(t, clock, fetcher, provider)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
-
-	require.Equal(t, credentialRecheckInterval, receiveTimer(t, clock))
-	require.Never(t, func() bool {
-		select {
-		case <-fetcher.requests:
-			return true
-		default:
-			return false
+func TestServiceRecoversWhenCredentialsBecomeAvailable(t *testing.T) {
+	// Regression guard: while credentials are incomplete the loop issues no
+	// request; once they become valid it fetches — on its own with nothing
+	// waking it (self-recheck), and immediately on an explicit refresh.
+	for _, wake := range []bool{false, true} {
+		name := "self-recheck"
+		if wake {
+			name = "on refresh"
 		}
-	}, 50*time.Millisecond, time.Millisecond)
+		t.Run(name, func(t *testing.T) {
+			if !wake {
+				// Nothing wakes the loop, so a short backoff keeps the
+				// self-recheck from spinning on real time.
+				useFailureBackoff(t, common.NewBackoff(time.Millisecond, 10*time.Millisecond))
+			}
+			service, fetcher, setContext := startService(t, ClientContext{})
 
-	mu.Lock()
-	clientContext = testClientContext()
-	mu.Unlock()
-	clock.Advance(credentialRecheckInterval)
-	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
-}
+			// Invalid credentials short-circuit before the fetcher, so no
+			// request is made until they become valid.
+			requireNoFetch(t, fetcher)
 
-func TestServiceStillRefreshesImmediatelyWhenCredentialsBecomeAvailable(t *testing.T) {
-	clock := newFakeClock(time.Now())
-	fetcher := newScriptedFetcher()
-	var mu sync.Mutex
-	clientContext := ClientContext{}
-	provider := func() ClientContext {
-		mu.Lock()
-		defer mu.Unlock()
-		return clientContext
+			setContext(func(c *ClientContext) { *c = testClientContext() })
+			if wake {
+				service.Refresh()
+			}
+			require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
+		})
 	}
-	service := newTestService(t, clock, fetcher, provider)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
-
-	require.Equal(t, credentialRecheckInterval, receiveTimer(t, clock))
-	mu.Lock()
-	clientContext = testClientContext()
-	mu.Unlock()
-	service.Refresh()
-
-	require.Equal(t, "12345", receiveFetch(t, fetcher).clientContext.UserID)
 }
 
-func TestServiceUsesLocalStateRetryWithoutAdvancingFetchBackoff(t *testing.T) {
-	clock := newFakeClock(time.Now())
-	fetcher := newScriptedFetcher()
-	service := newTestService(t, clock, fetcher, func() ClientContext { return testClientContext() })
-	service.store.path = t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.Start(ctx)
-
-	receiveFetch(t, fetcher)
-	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
-		PollIntervalSeconds: 60,
-		Message:             testMessage("display-1", clock.Now().Add(time.Hour)),
-	}}
-	require.Equal(t, localStateRetryInterval, receiveTimer(t, clock))
-	clock.Advance(localStateRetryInterval)
+func TestServiceRefreshDuringBackoff(t *testing.T) {
+	service, fetcher, _ := startService(t, testClientContext())
 
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{err: errors.New("offline")}
-	require.Equal(t, initialFailureBackoff, receiveTimer(t, clock))
+
+	// The loop is now parked on the default ladder, whose first rung is far
+	// longer than this test waits.
+	requireNoFetch(t, fetcher)
+	service.Refresh()
+	receiveFetch(t, fetcher)
 }
 
-func TestServiceLogsSafeFetchOutcomes(t *testing.T) {
-	clock := newFakeClock(time.Now())
+func TestServiceSafeLogging(t *testing.T) {
+	useFailureBackoff(t, immediateBackoff{})
 	fetcher := newScriptedFetcher()
-	var logs bytes.Buffer
+	var logs safeBuffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	service, err := New(Options{
 		DataDir:         t.TempDir(),
 		Fetcher:         fetcher,
 		ContextProvider: func() ClientContext { return testClientContext() },
-		Clock:           clock,
-		Jitter:          func(delay time.Duration) time.Duration { return delay },
 		Logger:          logger,
 	})
 	require.NoError(t, err)
@@ -297,40 +250,30 @@ func TestServiceLogsSafeFetchOutcomes(t *testing.T) {
 
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{err: &httpStatusError{statusCode: http.StatusUnauthorized}}
-	require.Equal(t, 5*time.Second, receiveTimer(t, clock))
-	require.Contains(t, logs.String(), "category=authentication")
-	require.Contains(t, logs.String(), "http_status=401")
+	requireLogContains(t, &logs, "category=authentication")
+	requireLogContains(t, &logs, "http_status=401")
+	service.Refresh()
 
-	clock.Advance(5 * time.Second)
 	receiveFetch(t, fetcher)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
 		PollIntervalSeconds: 300,
-		Message:             testMessage("display-1", clock.Now().Add(time.Hour)),
+		Message:             testMessage("display-1", time.Now().Add(time.Hour)),
 	}}
-	require.Equal(t, 5*time.Minute, receiveTimer(t, clock))
-	require.Contains(t, logs.String(), "result=message_available")
+	requireLogContains(t, &logs, "result=message_available")
 	require.NotContains(t, logs.String(), "12345")
 	require.NotContains(t, logs.String(), "secret-token")
 	require.NotContains(t, logs.String(), "A safe localized message")
 }
 
-func TestServiceStopsAfterParentContextCancellation(t *testing.T) {
-	clock := newFakeClock(time.Now())
+func TestServiceStopsOnCancel(t *testing.T) {
 	fetcher := newScriptedFetcher()
-	service := newTestService(t, clock, fetcher, func() ClientContext { return testClientContext() })
+	service := newTestService(t, fetcher, func() ClientContext { return testClientContext() })
 	ctx, cancel := context.WithCancel(context.Background())
 	service.Start(ctx)
 	receiveFetch(t, fetcher)
 	cancel()
 
-	require.Never(t, func() bool {
-		select {
-		case <-fetcher.requests:
-			return true
-		default:
-			return false
-		}
-	}, 50*time.Millisecond, time.Millisecond)
+	requireNoFetch(t, fetcher)
 }
 
 func TestContextNormalization(t *testing.T) {
@@ -338,23 +281,6 @@ func TestContextNormalization(t *testing.T) {
 	require.Equal(t, "windows", NormalizePlatform(" Windows "))
 	require.Equal(t, "fa-IR", NormalizeLocale("fa-ir"))
 	require.Equal(t, "en-US", NormalizeLocale("not a locale"))
-}
-
-func TestFailureJitterAndBackoffCap(t *testing.T) {
-	for range 100 {
-		delay := defaultJitter(5 * time.Minute)
-		require.GreaterOrEqual(t, delay, 270*time.Second)
-		require.LessOrEqual(t, delay, 5*time.Minute)
-	}
-	require.Equal(t, 5*time.Minute, failureBackoff(100))
-}
-
-func TestServiceRequiresDataDirectory(t *testing.T) {
-	_, err := New(Options{
-		Fetcher:         newScriptedFetcher(),
-		ContextProvider: func() ClientContext { return testClientContext() },
-	})
-	require.EqualError(t, err, "user-message data directory is required")
 }
 
 type fetchCall struct {
@@ -399,18 +325,49 @@ func (f *scriptedFetcher) Fetch(
 
 func newTestService(
 	t *testing.T,
-	clock Clock,
 	fetcher Fetcher,
 	provider func() ClientContext,
+) *Service {
+	t.Helper()
+	return newTestServiceWithLogger(t, fetcher, provider, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// startService returns a started service and its scripted fetcher, with the
+// client context seeded to initial. setContext mutates that context under the
+// provider's lock, for tests that change account or credentials mid-run.
+func startService(t *testing.T, initial ClientContext) (*Service, *scriptedFetcher, func(func(*ClientContext))) {
+	t.Helper()
+	fetcher := newScriptedFetcher()
+	var mu sync.Mutex
+	current := initial
+	service := newTestService(t, fetcher, func() ClientContext {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	})
+	setContext := func(mutate func(*ClientContext)) {
+		mu.Lock()
+		mutate(&current)
+		mu.Unlock()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+	return service, fetcher, setContext
+}
+
+func newTestServiceWithLogger(
+	t *testing.T,
+	fetcher Fetcher,
+	provider func() ClientContext,
+	logger *slog.Logger,
 ) *Service {
 	t.Helper()
 	service, err := New(Options{
 		DataDir:         t.TempDir(),
 		Fetcher:         fetcher,
 		ContextProvider: provider,
-		Clock:           clock,
-		Jitter:          func(delay time.Duration) time.Duration { return delay },
-		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:          logger,
 	})
 	require.NoError(t, err)
 	return service
@@ -427,70 +384,87 @@ func receiveFetch(t *testing.T, fetcher *scriptedFetcher) fetchCall {
 	}
 }
 
-func receiveTimer(t *testing.T, clock *fakeClock) time.Duration {
+func requireNoFetch(t *testing.T, fetcher *scriptedFetcher) {
+	t.Helper()
+	require.Never(t, func() bool {
+		select {
+		case <-fetcher.requests:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, time.Millisecond)
+}
+
+func requireLogContains(t *testing.T, logs interface{ String() string }, substring string) {
+	t.Helper()
+	require.Eventuallyf(t, func() bool {
+		return strings.Contains(logs.String(), substring)
+	}, time.Second, time.Millisecond, "logs:\n%s", logs.String())
+}
+
+func requireCurrentDisplayID(t *testing.T, service *Service, displayID string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		message, err := service.Current()
+		return err == nil && message != nil && message.DisplayID == displayID
+	}, time.Second, time.Millisecond)
+}
+
+func useFailureBackoff(t *testing.T, backoff failureBackoff) {
+	t.Helper()
+	previous := newFailureBackoff
+	newFailureBackoff = func() failureBackoff { return backoff }
+	t.Cleanup(func() { newFailureBackoff = previous })
+}
+
+type immediateBackoff struct{}
+
+func (immediateBackoff) WaitOn(context.Context, <-chan struct{}) {}
+func (immediateBackoff) Reset()                                  {}
+
+type recordingBackoff struct {
+	calls chan string
+}
+
+func newRecordingBackoff() *recordingBackoff {
+	return &recordingBackoff{calls: make(chan string, 16)}
+}
+
+func (b *recordingBackoff) WaitOn(context.Context, <-chan struct{}) { b.calls <- "wait" }
+
+func (b *recordingBackoff) Reset() { b.calls <- "reset" }
+
+func receiveBackoffCall(t *testing.T, backoff *recordingBackoff) string {
 	t.Helper()
 	select {
-	case delay := <-clock.created:
-		return delay
+	case call := <-backoff.calls:
+		return call
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for timer")
-		return 0
+		t.Fatal("timed out waiting for backoff call")
+		return ""
 	}
 }
 
-type fakeClock struct {
-	mu      sync.Mutex
-	now     time.Time
-	timers  []*fakeTimer
-	created chan time.Duration
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
-func newFakeClock(now time.Time) *fakeClock {
-	return &fakeClock{now: now, created: make(chan time.Duration, 16)}
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
 }
 
-func (c *fakeClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
-func (c *fakeClock) NewTimer(delay time.Duration) Timer {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	timer := &fakeTimer{clock: c, due: c.now.Add(delay), ch: make(chan time.Time, 1)}
-	c.timers = append(c.timers, timer)
-	c.created <- delay
-	return timer
-}
-
-func (c *fakeClock) Advance(delay time.Duration) {
-	c.mu.Lock()
-	c.now = c.now.Add(delay)
-	now := c.now
-	for _, timer := range c.timers {
-		if !timer.stopped && !timer.fired && !timer.due.After(now) {
-			timer.fired = true
-			timer.ch <- now
-		}
-	}
-	c.mu.Unlock()
-}
-
-type fakeTimer struct {
-	clock   *fakeClock
-	due     time.Time
-	ch      chan time.Time
-	stopped bool
-	fired   bool
-}
-
-func (t *fakeTimer) C() <-chan time.Time { return t.ch }
-
-func (t *fakeTimer) Stop() bool {
-	t.clock.mu.Lock()
-	defer t.clock.mu.Unlock()
-	wasActive := !t.stopped && !t.fired
-	t.stopped = true
-	return wasActive
+func (b *safeBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
 }

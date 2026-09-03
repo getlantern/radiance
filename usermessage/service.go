@@ -4,71 +4,60 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math/rand"
 	"sync"
 	"time"
 
 	wire "github.com/getlantern/common/usermessage"
+
+	"github.com/getlantern/radiance/common"
 )
 
 const (
-	credentialRecheckInterval = time.Second
-	initialFailureBackoff     = 5 * time.Second
-	maxFailureBackoff         = 5 * time.Minute
-	localStateRetryInterval   = 5 * time.Minute
+	initialFailureBackoff = 5 * time.Second
+	maxFailureBackoff     = 5 * time.Minute
 )
 
-// Clock creates timers and reports the current time.
-type Clock interface {
-	Now() time.Time
-	NewTimer(time.Duration) Timer
+// failureBackoff paces retries between failed fetches. Used for
+// deterministic testing of the poll loop.
+type failureBackoff interface {
+	WaitOn(ctx context.Context, wake <-chan struct{})
+	Reset()
 }
 
-// Timer is the subset of time.Timer used by Service.
-type Timer interface {
-	C() <-chan time.Time
-	Stop() bool
+var newFailureBackoff = func() failureBackoff {
+	return common.NewBackoff(initialFailureBackoff, maxFailureBackoff)
 }
-
-type realClock struct{}
-
-func (realClock) Now() time.Time                 { return time.Now() }
-func (realClock) NewTimer(d time.Duration) Timer { return realTimer{time.NewTimer(d)} }
-
-type realTimer struct{ *time.Timer }
-
-func (t realTimer) C() <-chan time.Time { return t.Timer.C }
 
 // Options configures a Service.
 type Options struct {
 	DataDir         string
 	Fetcher         Fetcher
 	ContextProvider func() ClientContext
-	Clock           Clock
-	Jitter          func(time.Duration) time.Duration
-	// Logger receives service diagnostics. New uses a service-scoped default
-	// logger when Logger is nil.
-	Logger *slog.Logger
+	Logger          *slog.Logger
 }
 
 // Service owns polling, per-account presentation state, and display acknowledgment.
 type Service struct {
 	fetcher         Fetcher
 	contextProvider func() ClientContext
-	clock           Clock
-	jitter          func(time.Duration) time.Duration
 	logger          *slog.Logger
 	store           *store
-	wake            chan struct{}
 
-	mu      sync.Mutex
-	started bool
-	active  bool
-	online  bool
-	// refreshGeneration lets us discard a response if a refresh arrived while it was in flight.
-	refreshGeneration uint64
-	requestID         uint64
-	requestCancel     context.CancelFunc
+	// fetchMu keeps one fetch in flight at a time so the poll loop and a
+	// concurrent refresh do not issue duplicate requests off the same seen list.
+	fetchMu sync.Mutex
+
+	mu            sync.Mutex
+	started       bool
+	parent        context.Context
+	pollCtx       context.Context
+	cancelPolling context.CancelFunc
+	// fetchCancel aborts the in-flight fetch so a refresh re-fetches with fresh
+	// context instead of waiting for the current request to return.
+	fetchCancel context.CancelFunc
+	active      bool
+	online      bool
+	refresh     chan struct{}
 }
 
 // New creates a user-message service and loads its durable state.
@@ -86,14 +75,6 @@ func New(opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	clock := opts.Clock
-	if clock == nil {
-		clock = realClock{}
-	}
-	jitter := opts.Jitter
-	if jitter == nil {
-		jitter = defaultJitter
-	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default().With("service", "user_messages")
@@ -101,26 +82,25 @@ func New(opts Options) (*Service, error) {
 	return &Service{
 		fetcher:         opts.Fetcher,
 		contextProvider: opts.ContextProvider,
-		clock:           clock,
-		jitter:          jitter,
 		logger:          logger,
 		store:           state,
-		wake:            make(chan struct{}, 1),
 		active:          true,
 		online:          true,
+		refresh:         make(chan struct{}, 1),
 	}, nil
 }
 
-// Start begins with an immediate fetch and is idempotent.
+// Start begins with an immediate fetch and is idempotent. Polling runs only
+// while the host app is active and online; see [Service.SetActivity].
 func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.started {
-		s.mu.Unlock()
 		return
 	}
 	s.started = true
-	s.mu.Unlock()
-	go s.run(ctx)
+	s.parent = ctx
+	s.startPollingLocked()
 }
 
 // Current returns the pending, unexpired message for the current account.
@@ -129,24 +109,18 @@ func (s *Service) Current() (*wire.ResolvedUserMessage, error) {
 	if clientContext.UserID == "" {
 		return nil, nil
 	}
-	return s.store.current(clientContext.UserID, s.clock.Now())
+	return s.store.current(clientContext.UserID, time.Now())
 }
 
-// Refresh requests an immediate fetch. Concurrent requests are coalesced.
 func (s *Service) Refresh() {
 	s.mu.Lock()
-	s.refreshGeneration++
-	cancel := s.requestCancel
+	cancel := s.fetchCancel
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	s.signalRefresh()
-}
-
-func (s *Service) signalRefresh() {
 	select {
-	case s.wake <- struct{}{}:
+	case s.refresh <- struct{}{}:
 	default:
 	}
 }
@@ -157,7 +131,7 @@ func (s *Service) Acknowledge(displayID string) error {
 	if clientContext.UserID == "" {
 		return ErrMessageNotPending
 	}
-	if err := s.store.acknowledge(clientContext.UserID, displayID, s.clock.Now()); err != nil {
+	if err := s.store.acknowledge(clientContext.UserID, displayID, time.Now()); err != nil {
 		return err
 	}
 	s.Refresh()
@@ -165,114 +139,159 @@ func (s *Service) Acknowledge(displayID string) error {
 }
 
 // SetActivity controls polling while the host app is active and online.
+// Resuming begins with an immediate fetch; suspending cancels any request in
+// flight.
 func (s *Service) SetActivity(active, online bool) {
 	s.mu.Lock()
-	changed := s.active != active || s.online != online
+	defer s.mu.Unlock()
+	if s.active == active && s.online == online {
+		return
+	}
 	s.active = active
 	s.online = online
-	s.mu.Unlock()
-	if changed {
-		s.Refresh()
+	if active && online {
+		s.startPollingLocked()
+		return
 	}
+	s.stopPollingLocked()
+}
+
+func (s *Service) startPollingLocked() {
+	if !s.started || !s.active || !s.online || s.pollCtx != nil || s.parent.Err() != nil {
+		return
+	}
+	// Drop a refresh queued while stopped; the run below already fetches
+	// immediately, so a stale wake would only trigger a second fetch.
+	select {
+	case <-s.refresh:
+	default:
+	}
+	ctx, cancel := context.WithCancel(s.parent)
+	s.pollCtx, s.cancelPolling = ctx, cancel
+	go s.run(ctx)
+}
+
+func (s *Service) stopPollingLocked() {
+	if s.cancelPolling == nil {
+		return
+	}
+	s.cancelPolling()
+	s.pollCtx, s.cancelPolling = nil, nil
 }
 
 func (s *Service) run(ctx context.Context) {
-	var delay time.Duration
 	var failures uint
-	var credentialsDeferred bool
-	for s.wait(ctx, delay) {
-		requestContext, requestID, refreshGeneration, ok := s.beginRequest(ctx)
-		if !ok {
-			delay = 0
-			continue
+	backoff := newFailureBackoff()
+	for ctx.Err() == nil {
+		delay, err := s.fetchAndStore(ctx)
+		// Checked ahead of err so a fetch aborted by a stopped poll context
+		// (shutdown or suspend) is not counted as a fetch failure.
+		if ctx.Err() != nil {
+			break
 		}
-		clientContext := s.contextProvider()
-		if !clientContext.valid() {
-			s.endRequest(requestID)
-			failures = 0
-			// Account creation normally wakes us through Refresh, but first-run
-			// identity creation has historically not emitted that signal. Recheck
-			// the in-memory context so a missed edge cannot stall messaging until
-			// the next app launch. No network request is made until it is valid.
-			delay = credentialRecheckInterval
-			if !credentialsDeferred {
-				s.logger.Debug("User-message fetch deferred", "reason", "credentials_unavailable")
-				credentialsDeferred = true
-			}
-			continue
-		}
-		credentialsDeferred = false
-		seen := s.store.seen(clientContext.UserID)
-		response, err := s.fetcher.Fetch(requestContext, clientContext, seen)
-		s.endRequest(requestID)
 		if errors.Is(err, context.Canceled) {
-			s.consumeRefresh()
-			delay = 0
+			// A refresh aborted the in-flight fetch; drop its wake and re-fetch now.
+			select {
+			case <-s.refresh:
+			default:
+			}
 			continue
-		}
-		if err == nil {
-			pollOnly := response
-			pollOnly.Message = nil
-			err = pollOnly.Validate()
-			if err != nil {
-				failures++
-				delay = s.jitter(failureBackoff(failures))
-				s.logger.Warn(
-					"User-message response rejected",
-					"category", "invalid_response",
-					"failure_count", failures,
-					"retry_in", delay,
-				)
-				continue
-			}
-			if response.Message != nil && response.Message.Validate() != nil {
-				s.logger.Warn("User-message response discarded", "category", "invalid_message")
-				response.Message = nil
-			}
 		}
 		if err != nil {
 			failures++
-			delay = s.jitter(failureBackoff(failures))
-			s.logFetchFailure(err, failures, delay)
-			continue
-		}
-		if s.refreshGenerationChanged(refreshGeneration) || s.contextProvider() != clientContext {
-			s.consumeRefresh()
-			delay = 0
-			continue
-		}
-		if err := s.store.offer(clientContext.UserID, response.Message, s.clock.Now()); err != nil {
-			failures = 0
-			delay = localStateRetryInterval
-			s.logger.Warn(
-				"User-message fetch result could not be persisted",
-				"category", "local_state",
-				"retry_in", delay,
-			)
+			s.logFetchFailure(err, failures)
+			backoff.WaitOn(ctx, s.refresh)
 			continue
 		}
 		failures = 0
-		delay = time.Duration(response.PollIntervalSeconds) * time.Second
-		s.logFetchResult(response.Message, delay)
+		backoff.Reset()
+
+		select {
+		case <-ctx.Done():
+		case <-time.After(delay):
+		case <-s.refresh:
+		}
 	}
+	s.logger.Debug("User-message polling stopped", "reason", ctx.Err())
 }
 
-func (s *Service) logFetchFailure(err error, failures uint, retryIn time.Duration) {
+// fetchAndStore returns the delay the server recommends before the next fetch.
+// A zero delay with a nil error means the response was discarded because the
+// account changed while it was in flight.
+func (s *Service) fetchAndStore(ctx context.Context) (time.Duration, error) {
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
+
+	clientContext := s.contextProvider()
+	if !clientContext.valid() {
+		return 0, errCredentialsUnavailable
+	}
+	seen := s.store.seen(clientContext.UserID)
+
+	fetchCtx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.fetchCancel = cancel
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.fetchCancel = nil
+		s.mu.Unlock()
+		cancel()
+	}()
+
+	response, err := s.fetcher.Fetch(fetchCtx, clientContext, seen)
+	if err != nil {
+		return 0, err
+	}
+	pollOnly := response
+	pollOnly.Message = nil
+	if err := pollOnly.Validate(); err != nil {
+		return 0, invalidResponseError{err: err}
+	}
+	if response.Message != nil && response.Message.Validate() != nil {
+		s.logger.Warn("User-message response discarded", "category", "invalid_message")
+		response.Message = nil
+	}
+	if s.contextProvider() != clientContext {
+		return 0, nil
+	}
+	delay := time.Duration(response.PollIntervalSeconds) * time.Second
+	if err := s.store.offer(clientContext.UserID, response.Message, time.Now()); err != nil {
+		s.logger.Warn(
+			"User-message fetch result could not be persisted",
+			"category", "local_state",
+		)
+		return delay, nil
+	}
+	s.logFetchResult(response.Message, delay)
+	return delay, nil
+}
+
+func (s *Service) logFetchFailure(err error, failures uint) {
 	category, statusCode := fetchFailureDetails(err)
-	attributes := []any{
-		"category", category,
-		"failure_count", failures,
-		"retry_in", retryIn,
+	// Do not attach err here. Transport errors can contain request URLs, and
+	// future error wrappers might include credentials or localized content.
+	attributes := []any{"category", category}
+	if failures > 0 {
+		attributes = append(attributes, "failure_count", failures)
 	}
 	if statusCode != 0 {
 		attributes = append(attributes, "http_status", statusCode)
 	}
-	// Do not attach err here. Transport errors can contain request URLs, and
-	// future error wrappers might include credentials or localized content.
-	s.logger.Warn("User-message fetch failed", attributes...)
+	level := slog.LevelWarn
+	if errors.Is(err, errCredentialsUnavailable) {
+		// A signed-out client retries on the same ladder as a real failure, so
+		// this recurs indefinitely and is not actionable.
+		level = slog.LevelDebug
+	}
+	s.logger.Log(context.Background(), level, "User-message fetch failed", attributes...)
 }
 
 func fetchFailureDetails(err error) (category string, statusCode int) {
+	var invalidResponse invalidResponseError
+	if errors.As(err, &invalidResponse) {
+		return "invalid_response", 0
+	}
 	if errors.Is(err, errCredentialsUnavailable) {
 		return "credentials_unavailable", 0
 	}
@@ -321,101 +340,14 @@ func (s *Service) logFetchResult(message *wire.ResolvedUserMessage, pollIn time.
 	)
 }
 
-func (s *Service) beginRequest(parent context.Context) (context.Context, uint64, uint64, bool) {
-	requestContext, cancel := context.WithCancel(parent)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.active || !s.online {
-		cancel()
-		return nil, 0, 0, false
-	}
-	s.requestID++
-	s.requestCancel = cancel
-	return requestContext, s.requestID, s.refreshGeneration, true
+type invalidResponseError struct {
+	err error
 }
 
-func (s *Service) endRequest(requestID uint64) {
-	s.mu.Lock()
-	var cancel context.CancelFunc
-	if s.requestID == requestID {
-		cancel = s.requestCancel
-		s.requestCancel = nil
-	}
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+func (e invalidResponseError) Error() string {
+	return "invalid user-message response"
 }
 
-func (s *Service) refreshGenerationChanged(refreshGeneration uint64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.refreshGeneration != refreshGeneration
-}
-
-func (s *Service) consumeRefresh() {
-	select {
-	case <-s.wake:
-	default:
-	}
-}
-
-func (s *Service) wait(ctx context.Context, delay time.Duration) bool {
-	for {
-		if ctx.Err() != nil {
-			return false
-		}
-		if !s.ready() {
-			select {
-			case <-ctx.Done():
-				return false
-			case <-s.wake:
-				if s.ready() {
-					return true
-				}
-				continue
-			}
-		}
-		if delay <= 0 {
-			return true
-		}
-		timer := s.clock.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-s.wake:
-			timer.Stop()
-			if s.ready() {
-				return true
-			}
-			continue
-		case <-timer.C():
-			return true
-		}
-	}
-}
-
-func (s *Service) ready() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.active && s.online
-}
-
-func failureBackoff(failures uint) time.Duration {
-	delay := initialFailureBackoff
-	for i := uint(1); i < failures && delay < maxFailureBackoff; i++ {
-		delay *= 2
-		if delay >= maxFailureBackoff {
-			return maxFailureBackoff
-		}
-	}
-	return delay
-}
-
-func defaultJitter(delay time.Duration) time.Duration {
-	if delay <= 0 {
-		return 0
-	}
-	return time.Duration(float64(delay) * (0.9 + rand.Float64()*0.1))
+func (e invalidResponseError) Unwrap() error {
+	return e.err
 }
