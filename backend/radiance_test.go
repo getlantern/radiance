@@ -685,6 +685,56 @@ func TestBuildIssueReportMetadataFallsBackToSettings(t *testing.T) {
 	assert.NotNil(t, meta.reporter, "a reporter is always needed to upload the report")
 }
 
+func TestServerListFromConfig_ExcludesNonSelectable(t *testing.T) {
+	cfg := &config.Config{
+		Options: option.Options{
+			Outbounds: []option.Outbound{
+				{Tag: "proxy-1", Type: "shadowsocks"},
+				{Tag: "testing-out", Type: "testing"},
+			},
+			Endpoints: []option.Endpoint{
+				{Tag: "ep-1", Type: "wireguard"},
+				{Tag: "infra-ep", Type: "wireguard"},
+			},
+		},
+		NonSelectableOutbounds: []string{"testing-out", "infra-ep"},
+	}
+
+	list := serverListFromConfig(cfg)
+
+	gotTags := make([]string, 0, len(list.Servers))
+	for _, s := range list.Servers {
+		gotTags = append(gotTags, s.Tag)
+	}
+	assert.ElementsMatch(t, []string{"proxy-1", "ep-1"}, gotTags,
+		"non-selectable outbounds and endpoints must be excluded from the managed server list")
+}
+
+func TestNonSelectableOutboundsFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		Options: option.Options{
+			Outbounds: []option.Outbound{
+				{Tag: "proxy-1", Type: "shadowsocks"},
+				{Tag: "testing-out", Type: "testing"},
+			},
+			Endpoints: []option.Endpoint{
+				{Tag: "infra-ep", Type: "wireguard"},
+			},
+		},
+		NonSelectableOutbounds: []string{"testing-out", "infra-ep"},
+	}
+
+	list := nonSelectableOutboundsFromConfig(cfg)
+
+	gotTags := make([]string, 0, len(list.Servers))
+	for _, s := range list.Servers {
+		gotTags = append(gotTags, s.Tag)
+	}
+	assert.ElementsMatch(t, []string{"testing-out"}, gotTags,
+		"only non-selectable outbounds are returned; selectable outbounds and non-selectable endpoints are excluded")
+	require.Len(t, list.Outbounds(), 1, "the returned server must decode as an outbound for the tunnel")
+}
+
 func TestLanternServerTags(t *testing.T) {
 	cfg := &config.Config{
 		Options: option.Options{
