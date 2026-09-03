@@ -65,7 +65,7 @@ func TestHTTPFetcherLeavesResponseValidationToService(t *testing.T) {
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
-			message := testMessage("display-1", time.Now().Add(time.Hour))
+			message := testMessage("display-1", time.Now().UTC().Add(time.Hour))
 			mutate(message)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				writeWireResponse(t, w, wire.UserMessageResponse{
