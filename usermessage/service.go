@@ -150,6 +150,7 @@ func (s *Service) Refresh() {
 	s.signalRefresh()
 }
 
+// signalRefresh coalesces pending wakeups.
 func (s *Service) signalRefresh() {
 	select {
 	case s.wake <- struct{}{}:
@@ -181,6 +182,7 @@ func (s *Service) SetActivity(active bool) {
 	}
 }
 
+// run owns the polling loop and keeps at most one fetch in flight.
 func (s *Service) run(ctx context.Context) {
 	var delay time.Duration
 	var failures uint
@@ -330,6 +332,7 @@ func (s *Service) logFetchResult(message *wire.ResolvedUserMessage, pollIn time.
 	)
 }
 
+// beginRequest reports whether polling is active and, when active, registers the current request.
 func (s *Service) beginRequest(parent context.Context) (context.Context, uint64, bool) {
 	requestContext, cancel := context.WithCancel(parent)
 	s.mu.Lock()
@@ -358,6 +361,7 @@ func (s *Service) refreshGenerationChanged(refreshGeneration uint64) bool {
 	return s.refreshGeneration != refreshGeneration
 }
 
+// consumeRefresh drops a coalesced wake after its refresh has already been handled.
 func (s *Service) consumeRefresh() {
 	select {
 	case <-s.wake:
@@ -365,6 +369,7 @@ func (s *Service) consumeRefresh() {
 	}
 }
 
+// wait reports whether polling may proceed. It returns false when ctx is canceled.
 func (s *Service) wait(ctx context.Context, delay time.Duration) bool {
 	for {
 		if ctx.Err() != nil {

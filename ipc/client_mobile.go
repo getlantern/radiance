@@ -138,6 +138,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 	return respBody, nil
 }
 
+// fallbackOptions returns a copy of the client options with runtime settings refreshed for an in-process backend.
 func (c *Client) fallbackOptions() backend.Options {
 	opts := cloneBackendOptions(c.opts)
 	opts.DataDir = settings.GetString(settings.DataPathKey)
@@ -149,6 +150,7 @@ func (c *Client) fallbackOptions() backend.Options {
 	return opts
 }
 
+// cloneBackendOptions copies mutable map and slice fields so changes to them do not affect opts.
 func cloneBackendOptions(opts backend.Options) backend.Options {
 	cloned := opts
 	cloned.UserMessageCapabilities.Surfaces = append(

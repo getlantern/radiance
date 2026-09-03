@@ -241,6 +241,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	return r, nil
 }
 
+// loadUserMessageService returns nil when capabilities disable messaging or service initialization fails.
 func loadUserMessageService(capabilities wire.ClientCapabilities, dataDir string) *clientmessage.Service {
 	if capabilities.Version == "" {
 		return nil
@@ -1816,6 +1817,7 @@ func (r *LocalBackend) RefreshUserMessages() {
 	r.refreshUserMessages()
 }
 
+// refreshUserMessages is a no-op when the user-message service is unavailable.
 func (r *LocalBackend) refreshUserMessages() {
 	if r.userMessages != nil {
 		r.userMessages.Refresh()

@@ -44,6 +44,7 @@ type store struct {
 	state persistedState
 }
 
+// newStore loads persisted state, falling back to clean state when stored data is unusable.
 func newStore(dataDir string) (*store, error) {
 	s := &store{
 		path:  filepath.Join(dataDir, "user-messages.json"),
@@ -78,6 +79,7 @@ func newPersistedState() persistedState {
 	}
 }
 
+// resetInvalidState resets memory and attempts to quarantine invalid bytes before removing the active file.
 func (s *store) resetInvalidState(data []byte, reason string) {
 	s.state = newPersistedState()
 	invalidPath := filepath.Join(filepath.Dir(s.path), invalidStateFileName)
@@ -92,6 +94,7 @@ func (s *store) resetInvalidState(data []byte, reason string) {
 	slog.Warn("Quarantined invalid user-message state", "reason", reason)
 }
 
+// seen returns a copy so callers cannot mutate persisted state without a commit.
 func (s *store) seen(userID string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,6 +105,7 @@ func (s *store) seen(userID string) []string {
 	return slices.Clone(state.Seen)
 }
 
+// current returns a copy of the pending message and durably clears it after expiration.
 func (s *store) current(userID string, now time.Time) (*wire.ResolvedUserMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,6 +124,7 @@ func (s *store) current(userID string, now time.Time) (*wire.ResolvedUserMessage
 	return cloneMessage(state.Pending), nil
 }
 
+// offer reports whether an unseen, unexpired message became pending without replacing a valid pending message.
 func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,6 +156,7 @@ func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time
 	return true, nil
 }
 
+// acknowledge is idempotent for seen IDs and otherwise accepts only the current unexpired pending ID.
 func (s *store) acknowledge(userID, displayID string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -182,6 +188,7 @@ func (s *store) acknowledge(userID, displayID string, now time.Time) error {
 	return s.commitLocked(next)
 }
 
+// touch moves a user to the newest position and evicts the oldest retained accounts.
 func touch(state *persistedState, userID string) {
 	state.Order = slices.DeleteFunc(state.Order, func(id string) bool { return id == userID })
 	state.Order = append(state.Order, userID)
@@ -191,6 +198,7 @@ func touch(state *persistedState, userID string) {
 	}
 }
 
+// commitLocked publishes next in memory only after its durable write succeeds. The caller holds s.mu.
 func (s *store) commitLocked(next persistedState) error {
 	if err := writeState(s.path, next); err != nil {
 		return err
@@ -280,6 +288,7 @@ func validDisplayID(id string) bool {
 	return true
 }
 
+// cloneMessage gives callers ownership of the message and its optional action.
 func cloneMessage(message *wire.ResolvedUserMessage) *wire.ResolvedUserMessage {
 	if message == nil {
 		return nil
