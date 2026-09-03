@@ -50,7 +50,7 @@ func (b *Backoff) WaitOn(ctx context.Context, wake <-chan struct{}) {
 }
 
 // nextDelay counts a failure and returns the interval to wait for it, jittered
-// by random (expected in [0, 1)), capped at maxWait.
+// by random (expected in [0, 1]), capped at maxWait.
 func (b *Backoff) nextDelay(random float64) time.Duration {
 	b.n++
 	wait := b.baseWait * time.Duration(b.n*b.n)

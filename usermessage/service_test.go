@@ -110,7 +110,7 @@ func TestServiceSeenAndExpiry(t *testing.T) {
 	require.Empty(t, request.seen)
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
 		PollIntervalSeconds: 300,
-		Message:             testMessage("display-2", time.Now().Add(50*time.Millisecond)),
+		Message:             testMessage("display-2", time.Now().Add(200*time.Millisecond)),
 	}}
 	requireCurrentDisplayID(t, service, "display-2")
 	require.Eventually(t, func() bool {
