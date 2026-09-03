@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	wire "github.com/getlantern/common/usermessage"
+	"github.com/getlantern/radiance/events"
 )
 
 func TestServicePollingBackoffAndSuccessReset(t *testing.T) {
@@ -47,13 +48,14 @@ func TestServicePollingBackoffAndSuccessReset(t *testing.T) {
 func TestServiceRespectsSuccessfulPollIntervalWithoutJitter(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	fetcher := newScriptedFetcher()
-	service, err := New(Options{
+	service, err := newService(Options{
 		DataDir:         t.TempDir(),
 		Fetcher:         fetcher,
 		ContextProvider: func() ClientContext { return testClientContext() },
-		Clock:           clock,
-		Jitter:          func(delay time.Duration) time.Duration { return delay / 2 },
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, dependencies{
+		clock:  clock,
+		jitter: func(delay time.Duration) time.Duration { return delay / 2 },
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -97,7 +99,7 @@ func TestServiceImmediateRefreshForContextAndActivityChanges(t *testing.T) {
 	fetcher.results <- fetchResult{response: wire.UserMessageResponse{PollIntervalSeconds: 300}}
 	receiveTimer(t, clock)
 
-	service.SetActivity(false, true)
+	service.SetActivity(false)
 	require.Never(t, func() bool {
 		select {
 		case <-fetcher.requests:
@@ -106,7 +108,7 @@ func TestServiceImmediateRefreshForContextAndActivityChanges(t *testing.T) {
 			return false
 		}
 	}, 50*time.Millisecond, time.Millisecond)
-	service.SetActivity(true, true)
+	service.SetActivity(true)
 	require.Equal(t, "en-US", receiveFetch(t, fetcher).clientContext.Locale)
 }
 
@@ -156,6 +158,54 @@ func TestServiceSeenFilteringAccountSwitchAndExpiration(t *testing.T) {
 	message, err = service.Current()
 	require.NoError(t, err)
 	require.Nil(t, message)
+}
+
+func TestServiceEmitsAvailabilityAfterPersistingMessage(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	service := newTestService(t, clock, fetcher, func() ClientContext { return testClientContext() })
+	available := make(chan struct{}, 1)
+	sub := events.Subscribe(func(AvailableEvent) { available <- struct{}{} })
+	t.Cleanup(sub.Unsubscribe)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 300,
+		Message:             testMessage("display-1", clock.Now().Add(time.Hour)),
+	}}
+	receiveTimer(t, clock)
+	select {
+	case <-available:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for availability event")
+	}
+	message, err := service.Current()
+	require.NoError(t, err)
+	require.Equal(t, "display-1", message.DisplayID)
+}
+
+func TestServiceDiscardsUnsupportedMessage(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fetcher := newScriptedFetcher()
+	service := newTestService(t, clock, fetcher, func() ClientContext { return testClientContext() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	service.Start(ctx)
+
+	message := testMessage("display-1", clock.Now().Add(time.Hour))
+	message.Surface = "future_surface"
+	receiveFetch(t, fetcher)
+	fetcher.results <- fetchResult{response: wire.UserMessageResponse{
+		PollIntervalSeconds: 300,
+		Message:             message,
+	}}
+	receiveTimer(t, clock)
+	current, err := service.Current()
+	require.NoError(t, err)
+	require.Nil(t, current)
 }
 
 func TestServiceCancelsFetchAfterAccountReplacement(t *testing.T) {
@@ -282,13 +332,14 @@ func TestServiceLogsSafeFetchOutcomes(t *testing.T) {
 	fetcher := newScriptedFetcher()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	service, err := New(Options{
+	service, err := newService(Options{
 		DataDir:         t.TempDir(),
 		Fetcher:         fetcher,
 		ContextProvider: func() ClientContext { return testClientContext() },
-		Clock:           clock,
-		Jitter:          func(delay time.Duration) time.Duration { return delay },
 		Logger:          logger,
+	}, dependencies{
+		clock:  clock,
+		jitter: func(delay time.Duration) time.Duration { return delay },
 	})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -399,18 +450,19 @@ func (f *scriptedFetcher) Fetch(
 
 func newTestService(
 	t *testing.T,
-	clock Clock,
+	clock clock,
 	fetcher Fetcher,
 	provider func() ClientContext,
 ) *Service {
 	t.Helper()
-	service, err := New(Options{
+	service, err := newService(Options{
 		DataDir:         t.TempDir(),
 		Fetcher:         fetcher,
 		ContextProvider: provider,
-		Clock:           clock,
-		Jitter:          func(delay time.Duration) time.Duration { return delay },
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, dependencies{
+		clock:  clock,
+		jitter: func(delay time.Duration) time.Duration { return delay },
 	})
 	require.NoError(t, err)
 	return service
@@ -455,7 +507,7 @@ func (c *fakeClock) Now() time.Time {
 	return c.now
 }
 
-func (c *fakeClock) NewTimer(delay time.Duration) Timer {
+func (c *fakeClock) NewTimer(delay time.Duration) timer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	timer := &fakeTimer{clock: c, due: c.now.Add(delay), ch: make(chan time.Time, 1)}

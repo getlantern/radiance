@@ -1830,10 +1830,10 @@ func (r *LocalBackend) AcknowledgeUserMessage(displayID string) error {
 	return r.userMessages.Acknowledge(displayID)
 }
 
-// SetUserMessageActivity adjusts polling for app and network lifecycle changes.
-func (r *LocalBackend) SetUserMessageActivity(active, online bool) {
+// SetUserMessageActivity adjusts polling for the app lifecycle.
+func (r *LocalBackend) SetUserMessageActivity(active bool) {
 	if r.userMessages != nil {
-		r.userMessages.SetActivity(active, online)
+		r.userMessages.SetActivity(active)
 	}
 }
 

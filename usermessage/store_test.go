@@ -17,8 +17,8 @@ func TestStorePersistsPendingAndSeenByUser(t *testing.T) {
 	dir := t.TempDir()
 	state, err := newStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, state.offer("1", testMessage("display-1", now.Add(time.Hour)), now))
-	require.NoError(t, state.offer("2", testMessage("display-2", now.Add(time.Hour)), now))
+	requireOffer(t, state, "1", testMessage("display-1", now.Add(time.Hour)), now)
+	requireOffer(t, state, "2", testMessage("display-2", now.Add(time.Hour)), now)
 
 	reloaded, err := newStore(dir)
 	require.NoError(t, err)
@@ -44,14 +44,14 @@ func TestStoreBoundsSeenIDsAndExpiresPending(t *testing.T) {
 	require.NoError(t, err)
 	for i := 0; i < wire.MaxSeenDisplayIDs+3; i++ {
 		id := fmt.Sprintf("display-%d", i)
-		require.NoError(t, state.offer("1", testMessage(id, now.Add(time.Hour)), now))
+		requireOffer(t, state, "1", testMessage(id, now.Add(time.Hour)), now)
 		require.NoError(t, state.acknowledge("1", id, now))
 	}
 	seen := state.seen("1")
 	require.Len(t, seen, wire.MaxSeenDisplayIDs)
 	require.Equal(t, "display-3", seen[0])
 
-	require.NoError(t, state.offer("1", testMessage("expiring", now.Add(time.Minute)), now))
+	requireOffer(t, state, "1", testMessage("expiring", now.Add(time.Minute)), now)
 	message, err := state.current("1", now.Add(time.Minute))
 	require.NoError(t, err)
 	require.Nil(t, message)
@@ -62,8 +62,8 @@ func TestStoreDoesNotReplaceUnacknowledgedMessage(t *testing.T) {
 	now := time.Now()
 	state, err := newStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, state.offer("1", testMessage("first", now.Add(time.Hour)), now))
-	require.NoError(t, state.offer("1", testMessage("second", now.Add(time.Hour)), now))
+	require.True(t, requireOffer(t, state, "1", testMessage("first", now.Add(time.Hour)), now))
+	require.False(t, requireOffer(t, state, "1", testMessage("second", now.Add(time.Hour)), now))
 	message, err := state.current("1", now)
 	require.NoError(t, err)
 	require.Equal(t, "first", message.DisplayID)
@@ -103,7 +103,7 @@ func TestStoreQuarantinesInvalidPersistedState(t *testing.T) {
 			require.Equal(t, data, quarantined)
 
 			now := time.Now()
-			require.NoError(t, state.offer("1", testMessage("display-2", now.Add(time.Hour)), now))
+			requireOffer(t, state, "1", testMessage("display-2", now.Add(time.Hour)), now)
 			require.FileExists(t, path)
 		})
 	}
@@ -113,13 +113,13 @@ func TestStoreTouchesExistingUserWhenAcceptingMessage(t *testing.T) {
 	now := time.Now()
 	state, err := newStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, state.offer("1", testMessage("display-1", now.Add(time.Hour)), now))
+	requireOffer(t, state, "1", testMessage("display-1", now.Add(time.Hour)), now)
 	require.NoError(t, state.acknowledge("1", "display-1", now))
-	require.NoError(t, state.offer("2", testMessage("display-2", now.Add(time.Hour)), now))
+	requireOffer(t, state, "2", testMessage("display-2", now.Add(time.Hour)), now)
 	require.NoError(t, state.acknowledge("2", "display-2", now))
 	require.Equal(t, []string{"1", "2"}, state.state.Order)
 
-	require.NoError(t, state.offer("1", testMessage("display-3", now.Add(time.Hour)), now))
+	requireOffer(t, state, "1", testMessage("display-3", now.Add(time.Hour)), now)
 	require.Equal(t, []string{"2", "1"}, state.state.Order)
 }
 
@@ -128,7 +128,7 @@ func TestStoreKeepsPendingWhenAcknowledgmentWriteFails(t *testing.T) {
 	dir := t.TempDir()
 	state, err := newStore(dir)
 	require.NoError(t, err)
-	require.NoError(t, state.offer("1", testMessage("display-1", now.Add(time.Hour)), now))
+	requireOffer(t, state, "1", testMessage("display-1", now.Add(time.Hour)), now)
 
 	validPath := state.path
 	state.path = dir
@@ -138,4 +138,11 @@ func TestStoreKeepsPendingWhenAcknowledgmentWriteFails(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "display-1", message.DisplayID)
 	require.Empty(t, state.seen("1"))
+}
+
+func requireOffer(t *testing.T, state *store, userID string, message *wire.ResolvedUserMessage, now time.Time) bool {
+	t.Helper()
+	accepted, err := state.offer(userID, message, now)
+	require.NoError(t, err)
+	return accepted
 }

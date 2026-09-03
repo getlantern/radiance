@@ -54,6 +54,7 @@ const (
 	configUpdateEndpoint = "/config/update"
 
 	userMessageEndpoint            = "/user-messages"
+	userMessageEventsEndpoint      = "/user-messages/events"
 	userMessageRefreshEndpoint     = "/user-messages/refresh"
 	userMessageAcknowledgeEndpoint = "/user-messages/acknowledge"
 	userMessageActivityEndpoint    = "/user-messages/activity"
@@ -235,6 +236,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+configUpdateEndpoint, traced(s.configUpdateHandler))
 
 	mux.HandleFunc("GET "+userMessageEndpoint, traced(s.userMessageHandler))
+	mux.HandleFunc("GET "+userMessageEventsEndpoint, s.userMessageEventsHandler)
 	mux.HandleFunc("POST "+userMessageRefreshEndpoint, traced(s.userMessageRefreshHandler))
 	mux.HandleFunc("POST "+userMessageAcknowledgeEndpoint, traced(s.userMessageAcknowledgeHandler))
 	mux.HandleFunc("PATCH "+userMessageActivityEndpoint, traced(s.userMessageActivityHandler))
@@ -916,6 +918,30 @@ func (s *localapi) userMessageHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, CurrentUserMessageResponse{Message: message})
 }
 
+func (s *localapi) userMessageEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan struct{}, 1)
+	sub := events.Subscribe(func(clientmessage.AvailableEvent) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case <-ch:
+			fmt.Fprint(w, "data: {}\n\n")
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 func (s *localapi) userMessageRefreshHandler(w http.ResponseWriter, r *http.Request) {
 	s.backend(r.Context()).RefreshUserMessages()
 	w.WriteHeader(http.StatusNoContent)
@@ -944,7 +970,7 @@ func (s *localapi) userMessageActivityHandler(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.backend(r.Context()).SetUserMessageActivity(request.Active, request.Online)
+	s.backend(r.Context()).SetUserMessageActivity(request.Active)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -125,7 +125,6 @@ type UserMessageAcknowledgeRequest struct {
 // UserMessageActivityRequest reports whether foreground polling should run.
 type UserMessageActivityRequest struct {
 	Active bool `json:"active"`
-	Online bool `json:"online"`
 }
 
 // Shared response types used by both client and server.

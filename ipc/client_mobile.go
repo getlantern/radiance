@@ -32,6 +32,7 @@ type Client struct {
 	mu        sync.RWMutex
 }
 
+// NewClient creates an IPC client with an in-process backend fallback.
 func NewClient(ctx context.Context, opts backend.Options) (*Client, error) {
 	opts = cloneBackendOptions(opts)
 	b, err := backend.NewLocalBackend(ctx, opts)

@@ -40,6 +40,11 @@ func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 	return c.sseRetryLoop(ctx, configEventsEndpoint, func([]byte) { handler() })
 }
 
+// UserMessageEvents streams pending-message notifications until ctx is canceled.
+func (c *Client) UserMessageEvents(ctx context.Context, handler func()) error {
+	return c.sseRetryLoop(ctx, userMessageEventsEndpoint, func([]byte) { handler() })
+}
+
 // VPNStatusEvents streams VPN status changes. Blocks until ctx is cancelled.
 func (c *Client) VPNStatusEvents(ctx context.Context, handler func(vpn.StatusUpdateEvent)) error {
 	return c.sseRetryLoop(ctx, vpnStatusEventsEndpoint, func(data []byte) {

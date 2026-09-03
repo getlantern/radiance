@@ -25,7 +25,7 @@ func TestUserMessageRoutes(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, response.Code)
 
 	response = serveUserMessageRequest(t, api, http.MethodPatch, userMessageActivityEndpoint,
-		UserMessageActivityRequest{Active: true, Online: true})
+		UserMessageActivityRequest{Active: true})
 	require.Equal(t, http.StatusNoContent, response.Code)
 
 	response = serveUserMessageRequest(t, api, http.MethodPost, userMessageAcknowledgeEndpoint,

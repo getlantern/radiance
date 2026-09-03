@@ -53,7 +53,7 @@ func TestHTTPFetcherContractAndCredentials(t *testing.T) {
 	require.Equal(t, "display-1", response.Message.DisplayID)
 }
 
-func TestHTTPFetcherSafelyIgnoresUnsupportedMessages(t *testing.T) {
+func TestHTTPFetcherLeavesResponseValidationToService(t *testing.T) {
 	tests := map[string]func(*wire.ResolvedUserMessage){
 		"surface": func(message *wire.ResolvedUserMessage) {
 			message.Surface = "future_surface"
@@ -79,7 +79,7 @@ func TestHTTPFetcherSafelyIgnoresUnsupportedMessages(t *testing.T) {
 				context.Background(), testClientContext(), nil,
 			)
 			require.NoError(t, err)
-			require.Nil(t, response.Message)
+			require.Equal(t, message, response.Message)
 			require.Equal(t, 60, response.PollIntervalSeconds)
 		})
 	}

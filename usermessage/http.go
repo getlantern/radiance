@@ -78,8 +78,7 @@ func NewHTTPFetcher(
 	}
 }
 
-// Fetch requests one resolved message. Unsupported or otherwise unsafe messages
-// are discarded while a valid polling recommendation is retained.
+// Fetch returns the decoded response without applying presentation policy.
 func (f *HTTPFetcher) Fetch(
 	ctx context.Context,
 	clientContext ClientContext,
@@ -136,14 +135,6 @@ func (f *HTTPFetcher) Fetch(
 	var response wire.UserMessageResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		return wire.UserMessageResponse{}, fmt.Errorf("decode user-message response: %w", err)
-	}
-	pollOnly := response
-	pollOnly.Message = nil
-	if err := pollOnly.Validate(); err != nil {
-		return wire.UserMessageResponse{}, fmt.Errorf("validate user-message response: %w", err)
-	}
-	if response.Message != nil && response.Message.Validate() != nil {
-		response.Message = nil
 	}
 	return response, nil
 }

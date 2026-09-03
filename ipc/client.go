@@ -250,10 +250,10 @@ func (c *Client) AcknowledgeUserMessage(ctx context.Context, displayID string) e
 	return err
 }
 
-// SetUserMessageActivity updates the app and connectivity lifecycle used by polling.
-func (c *Client) SetUserMessageActivity(ctx context.Context, active, online bool) error {
+// SetUserMessageActivity updates the app lifecycle used by polling.
+func (c *Client) SetUserMessageActivity(ctx context.Context, active bool) error {
 	_, err := c.do(ctx, http.MethodPatch, userMessageActivityEndpoint,
-		UserMessageActivityRequest{Active: active, Online: online})
+		UserMessageActivityRequest{Active: active})
 	return err
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	wire "github.com/getlantern/common/usermessage"
+	"github.com/getlantern/radiance/events"
 )
 
 const (
@@ -18,14 +19,12 @@ const (
 	localStateRetryInterval   = 5 * time.Minute
 )
 
-// Clock creates timers and reports the current time.
-type Clock interface {
+type clock interface {
 	Now() time.Time
-	NewTimer(time.Duration) Timer
+	NewTimer(time.Duration) timer
 }
 
-// Timer is the subset of time.Timer used by Service.
-type Timer interface {
+type timer interface {
 	C() <-chan time.Time
 	Stop() bool
 }
@@ -33,7 +32,7 @@ type Timer interface {
 type realClock struct{}
 
 func (realClock) Now() time.Time                 { return time.Now() }
-func (realClock) NewTimer(d time.Duration) Timer { return realTimer{time.NewTimer(d)} }
+func (realClock) NewTimer(d time.Duration) timer { return realTimer{time.NewTimer(d)} }
 
 type realTimer struct{ *time.Timer }
 
@@ -44,18 +43,26 @@ type Options struct {
 	DataDir         string
 	Fetcher         Fetcher
 	ContextProvider func() ClientContext
-	Clock           Clock
-	Jitter          func(time.Duration) time.Duration
 	// Logger receives service diagnostics. New uses a service-scoped default
 	// logger when Logger is nil.
 	Logger *slog.Logger
+}
+
+type dependencies struct {
+	clock  clock
+	jitter func(time.Duration) time.Duration
+}
+
+// AvailableEvent signals that a new message is pending without carrying its content.
+type AvailableEvent struct {
+	events.Event
 }
 
 // Service owns polling, per-account presentation state, and display acknowledgment.
 type Service struct {
 	fetcher         Fetcher
 	contextProvider func() ClientContext
-	clock           Clock
+	clock           clock
 	jitter          func(time.Duration) time.Duration
 	logger          *slog.Logger
 	store           *store
@@ -64,15 +71,17 @@ type Service struct {
 	mu      sync.Mutex
 	started bool
 	active  bool
-	online  bool
 	// refreshGeneration lets us discard a response if a refresh arrived while it was in flight.
 	refreshGeneration uint64
-	requestID         uint64
 	requestCancel     context.CancelFunc
 }
 
 // New creates a user-message service and loads its durable state.
 func New(opts Options) (*Service, error) {
+	return newService(opts, dependencies{})
+}
+
+func newService(opts Options, deps dependencies) (*Service, error) {
 	if opts.DataDir == "" {
 		return nil, errors.New("user-message data directory is required")
 	}
@@ -86,13 +95,11 @@ func New(opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	clock := opts.Clock
-	if clock == nil {
-		clock = realClock{}
+	if deps.clock == nil {
+		deps.clock = realClock{}
 	}
-	jitter := opts.Jitter
-	if jitter == nil {
-		jitter = defaultJitter
+	if deps.jitter == nil {
+		deps.jitter = defaultJitter
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -101,13 +108,12 @@ func New(opts Options) (*Service, error) {
 	return &Service{
 		fetcher:         opts.Fetcher,
 		contextProvider: opts.ContextProvider,
-		clock:           clock,
-		jitter:          jitter,
+		clock:           deps.clock,
+		jitter:          deps.jitter,
 		logger:          logger,
 		store:           state,
 		wake:            make(chan struct{}, 1),
 		active:          true,
-		online:          true,
 	}, nil
 }
 
@@ -164,12 +170,11 @@ func (s *Service) Acknowledge(displayID string) error {
 	return nil
 }
 
-// SetActivity controls polling while the host app is active and online.
-func (s *Service) SetActivity(active, online bool) {
+// SetActivity controls polling while the host app is active.
+func (s *Service) SetActivity(active bool) {
 	s.mu.Lock()
-	changed := s.active != active || s.online != online
+	changed := s.active != active
 	s.active = active
-	s.online = online
 	s.mu.Unlock()
 	if changed {
 		s.Refresh()
@@ -181,14 +186,14 @@ func (s *Service) run(ctx context.Context) {
 	var failures uint
 	var credentialsDeferred bool
 	for s.wait(ctx, delay) {
-		requestContext, requestID, refreshGeneration, ok := s.beginRequest(ctx)
+		requestContext, refreshGeneration, ok := s.beginRequest(ctx)
 		if !ok {
 			delay = 0
 			continue
 		}
 		clientContext := s.contextProvider()
 		if !clientContext.valid() {
-			s.endRequest(requestID)
+			s.endRequest()
 			failures = 0
 			// Account creation normally wakes us through Refresh, but first-run
 			// identity creation has historically not emitted that signal. Recheck
@@ -204,7 +209,7 @@ func (s *Service) run(ctx context.Context) {
 		credentialsDeferred = false
 		seen := s.store.seen(clientContext.UserID)
 		response, err := s.fetcher.Fetch(requestContext, clientContext, seen)
-		s.endRequest(requestID)
+		s.endRequest()
 		if errors.Is(err, context.Canceled) {
 			s.consumeRefresh()
 			delay = 0
@@ -241,7 +246,8 @@ func (s *Service) run(ctx context.Context) {
 			delay = 0
 			continue
 		}
-		if err := s.store.offer(clientContext.UserID, response.Message, s.clock.Now()); err != nil {
+		available, err := s.store.offer(clientContext.UserID, response.Message, s.clock.Now())
+		if err != nil {
 			failures = 0
 			delay = localStateRetryInterval
 			s.logger.Warn(
@@ -250,6 +256,9 @@ func (s *Service) run(ctx context.Context) {
 				"retry_in", delay,
 			)
 			continue
+		}
+		if available {
+			events.Emit(AvailableEvent{})
 		}
 		failures = 0
 		delay = time.Duration(response.PollIntervalSeconds) * time.Second
@@ -321,26 +330,22 @@ func (s *Service) logFetchResult(message *wire.ResolvedUserMessage, pollIn time.
 	)
 }
 
-func (s *Service) beginRequest(parent context.Context) (context.Context, uint64, uint64, bool) {
+func (s *Service) beginRequest(parent context.Context) (context.Context, uint64, bool) {
 	requestContext, cancel := context.WithCancel(parent)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.active || !s.online {
+	if !s.active {
 		cancel()
-		return nil, 0, 0, false
+		return nil, 0, false
 	}
-	s.requestID++
 	s.requestCancel = cancel
-	return requestContext, s.requestID, s.refreshGeneration, true
+	return requestContext, s.refreshGeneration, true
 }
 
-func (s *Service) endRequest(requestID uint64) {
+func (s *Service) endRequest() {
 	s.mu.Lock()
-	var cancel context.CancelFunc
-	if s.requestID == requestID {
-		cancel = s.requestCancel
-		s.requestCancel = nil
-	}
+	cancel := s.requestCancel
+	s.requestCancel = nil
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -399,7 +404,7 @@ func (s *Service) wait(ctx context.Context, delay time.Duration) bool {
 func (s *Service) ready() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active && s.online
+	return s.active
 }
 
 func failureBackoff(failures uint) time.Duration {

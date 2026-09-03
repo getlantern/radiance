@@ -120,7 +120,7 @@ func (s *store) current(userID string, now time.Time) (*wire.ResolvedUserMessage
 	return cloneMessage(state.Pending), nil
 }
 
-func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time.Time) error {
+func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := cloneState(s.state)
@@ -131,9 +131,9 @@ func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time
 	}
 	if message == nil || !now.Before(message.ExpiresAt) {
 		if expired {
-			return s.commitLocked(next)
+			return false, s.commitLocked(next)
 		}
-		return nil
+		return false, nil
 	}
 	if state == nil {
 		state = &userState{}
@@ -141,11 +141,14 @@ func (s *store) offer(userID string, message *wire.ResolvedUserMessage, now time
 		touch(&next, userID)
 	}
 	if slices.Contains(state.Seen, message.DisplayID) || state.Pending != nil {
-		return nil
+		return false, nil
 	}
 	state.Pending = cloneMessage(message)
 	touch(&next, userID)
-	return s.commitLocked(next)
+	if err := s.commitLocked(next); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *store) acknowledge(userID, displayID string, now time.Time) error {
