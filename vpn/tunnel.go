@@ -21,6 +21,7 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -305,6 +306,23 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashServer)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.clashServer.connTracker.SetObserver(t.connObserver)
+	if pm := service.FromContext[pause.Manager](t.ctx); pm != nil {
+		cb := pm.RegisterCallback(t.onPauseUpdate)
+		// A pause can already be in effect before this registration, so seed it
+		// once. Only the paused case is emitted: not emitting a wake keeps this
+		// off-lock read from racing a real pause into the wrong final state.
+		if pm.IsDevicePaused() || pm.IsNetworkPaused() {
+			events.Emit(NetworkEvent{EventType: NetworkEventPaused})
+		}
+		t.closers = append(t.closers, closerFunc(func() error {
+			pm.UnregisterCallback(cb)
+			// No further events arrive after unregister, so force a wake to release
+			// a consumer left paused at teardown. UnregisterCallback serializes
+			// with in-flight callbacks via the manager lock, so this wake lands last.
+			events.Emit(NetworkEvent{EventType: NetworkEventWake})
+			return nil
+		}))
+	}
 
 	if common.IsIOS() {
 		// Only iOS enforces a hard memory cap, so only it gets reclaim and
@@ -332,6 +350,18 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	slog.Info("Tunnel connection established")
 	return nil
+}
+
+// onPauseUpdate mirrors the pause manager's transitions onto NetworkEvent.
+// Only NetworkWake emits a wake: it confirms the default route is back, whereas
+// a DeviceWake says only that the device resumed.
+func (t *tunnel) onPauseUpdate(evt int) {
+	switch evt {
+	case pause.EventDevicePaused, pause.EventNetworkPause:
+		events.Emit(NetworkEvent{EventType: NetworkEventPaused})
+	case pause.EventNetworkWake:
+		events.Emit(NetworkEvent{EventType: NetworkEventWake})
+	}
 }
 
 // subscribeExhaustionSignal bridges the auto group's exhaustion
