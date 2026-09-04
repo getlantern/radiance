@@ -6,6 +6,7 @@
 
 - Prefer clearer names and smaller functions over explanatory comments.
 - Delete or shorten verbose comments in code you touch.
+- A comment that documents a real invariant, race, or rationale still fails if it includes more detail than needed to preserve that contract.
 - Do not narrate code, repeat the identifier, list visible branches, mention tickets/people, or praise the implementation.
 - Documentation should only document the declaration's own contract: side effects, blocking/zero-value behavior, errors, ownership, cancellation, concurrency, or surprising pre/postconditions.
 - Document the caller-relevant semantics of a sentinel error, enum, status, or constant — retryability, permanence, lifecycle — as the value's own contract, phrased as what it means rather than advice: prefer "retryable only after …" over "callers should …". The consumer behavior to avoid is a separate component's policy, not the meaning of a value callers inspect.
