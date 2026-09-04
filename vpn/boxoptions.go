@@ -613,6 +613,7 @@ func rejectRule(rule O.RawDefaultRule) O.Rule {
 				Action: C.RuleActionTypeReject,
 				RejectOptions: O.RejectActionOptions{
 					Method: C.RuleActionRejectMethodDefault,
+					NoDrop: true,
 				},
 			},
 		},
