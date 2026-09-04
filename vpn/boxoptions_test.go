@@ -526,6 +526,8 @@ func TestRejectIPv6Rule(t *testing.T) {
 	assert.Equal(t, []string{"::/0"}, []string(r.DefaultOptions.RawDefaultRule.IPCIDR))
 	assert.NotEqual(t, C.RuleActionRejectMethodDrop, r.DefaultOptions.RuleAction.RejectOptions.Method,
 		"must not use the drop method — a silent blackhole stalls instead of failing over to IPv4")
+	assert.True(t, r.DefaultOptions.RuleAction.RejectOptions.NoDrop,
+		"NoDrop must be set so the reject returns unreachable instead of dropping")
 }
 
 func TestTunHasIPv6(t *testing.T) {

@@ -613,7 +613,6 @@ func rejectRule(rule O.RawDefaultRule) O.Rule {
 				Action: C.RuleActionTypeReject,
 				RejectOptions: O.RejectActionOptions{
 					Method: C.RuleActionRejectMethodDefault,
-					NoDrop: true,
 				},
 			},
 		},
@@ -634,7 +633,9 @@ func highMemoryRejectRule() O.Rule {
 // RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
 // Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
 func rejectIPv6Rule() O.Rule {
-	return rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
+	rule := rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
+	rule.DefaultOptions.RuleAction.RejectOptions.NoDrop = true
+	return rule
 }
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
