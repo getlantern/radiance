@@ -46,3 +46,27 @@ func TestNewClient(t *testing.T) {
 		})
 	}
 }
+
+type fakePausable struct{ paused, resumed int }
+
+func (f *fakePausable) Pause()  { f.paused++ }
+func (f *fakePausable) Resume() { f.resumed++ }
+
+func TestClientPauseResumeDelegates(t *testing.T) {
+	p := &fakePausable{}
+	c := &Client{pausers: []pausable{p}}
+
+	c.Pause()
+	c.Pause()
+	c.Resume()
+
+	assert.Equal(t, 2, p.paused)
+	assert.Equal(t, 1, p.resumed)
+}
+
+func TestClientPauseResumeNoPausers(t *testing.T) {
+	c := &Client{}
+	// Must not panic with no pausable transports (e.g. the staging, proxyless build).
+	c.Pause()
+	c.Resume()
+}

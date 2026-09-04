@@ -121,7 +121,33 @@ func Close() error {
 	return nil
 }
 
+// Pause suspends background work in the shared kindling instance's pausable
+// transports. No-op if kindling isn't initialized. Safe to call while paused.
+func Pause() {
+	mu.Lock()
+	defer mu.Unlock()
+	if k != nil {
+		k.Pause()
+	}
+}
+
+// Resume restarts the background work suspended by Pause. No-op if kindling
+// isn't initialized.
+func Resume() {
+	mu.Lock()
+	defer mu.Unlock()
+	if k != nil {
+		k.Resume()
+	}
+}
+
 const tracerName = "github.com/getlantern/radiance/kindling"
+
+// pausable is a transport whose background work can be suspended and resumed.
+type pausable interface {
+	Pause()
+	Resume()
+}
 
 // Client is a kindling instance together with the transport resources its
 // construction created (config updaters, fronted/dnstt state).
@@ -129,7 +155,23 @@ type Client struct {
 	kindling.Kindling
 	cancel    context.CancelFunc
 	closers   []func() error
+	pausers   []pausable
 	closeOnce sync.Once
+}
+
+// Pause suspends the pausable transports' background work. Safe to call while
+// paused; a matching Resume restarts them.
+func (c *Client) Pause() {
+	for _, p := range c.pausers {
+		p.Pause()
+	}
+}
+
+// Resume restarts the background work suspended by Pause.
+func (c *Client) Resume() {
+	for _, p := range c.pausers {
+		p.Resume()
+	}
 }
 
 // Close cancels the transports' config updaters and releases their resources.
@@ -179,6 +221,7 @@ func NewKindling(dataDir string) (*Client, error) {
 	}
 
 	var closers []func() error
+	var pausers []pausable
 	kindlingOptions := []kindling.Option{
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
@@ -195,6 +238,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 		if f != nil {
 			closers = append(closers, func() error { f.Close(); return nil })
+			pausers = append(pausers, f)
 			kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
 		}
 	}
@@ -237,7 +281,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 		return nil, errors.Join(errs...)
 	}
-	return &Client{Kindling: newK, cancel: cancel, closers: closers}, nil
+	return &Client{Kindling: newK, cancel: cancel, closers: closers, pausers: pausers}, nil
 }
 
 type slogWriter struct {
