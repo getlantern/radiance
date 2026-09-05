@@ -152,7 +152,7 @@ require (
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/libdns/acmedns v0.5.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/metacubex/utls v1.8.4 // indirect
+	github.com/metacubex/utls v1.8.7 // indirect
 	github.com/mholt/acmez/v3 v3.1.6 // indirect
 	github.com/mholt/archives v0.1.5 // indirect
 	github.com/mikelolasagasti/xz v1.0.1 // indirect
