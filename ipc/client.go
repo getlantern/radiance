@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	wire "github.com/getlantern/common/usermessage"
 	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/account"
@@ -224,6 +225,35 @@ func (c *Client) AutoSelected(ctx context.Context) (*servers.Server, error) {
 // if config fetching is disabled.
 func (c *Client) UpdateConfig(ctx context.Context) error {
 	_, err := c.do(ctx, http.MethodPost, configUpdateEndpoint, nil)
+	return err
+}
+
+// CurrentUserMessage returns the pending message for the current account.
+func (c *Client) CurrentUserMessage(ctx context.Context) (*wire.ResolvedUserMessage, error) {
+	var response CurrentUserMessageResponse
+	if err := c.doJSON(ctx, http.MethodGet, userMessageEndpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Message, nil
+}
+
+// RefreshUserMessages schedules an immediate server eligibility refresh.
+func (c *Client) RefreshUserMessages(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, userMessageRefreshEndpoint, nil)
+	return err
+}
+
+// AcknowledgeUserMessage records that the UI displayed displayID.
+func (c *Client) AcknowledgeUserMessage(ctx context.Context, displayID string) error {
+	_, err := c.do(ctx, http.MethodPost, userMessageAcknowledgeEndpoint,
+		UserMessageAcknowledgeRequest{DisplayID: displayID})
+	return err
+}
+
+// SetUserMessageActivity updates the app lifecycle used by polling.
+func (c *Client) SetUserMessageActivity(ctx context.Context, active bool) error {
+	_, err := c.do(ctx, http.MethodPatch, userMessageActivityEndpoint,
+		UserMessageActivityRequest{Active: active})
 	return err
 }
 

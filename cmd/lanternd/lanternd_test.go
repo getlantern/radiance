@@ -120,6 +120,7 @@ func TestStagingServiceRunConfigSelectsStagingAccountEndpoints(t *testing.T) {
 	require.NoError(t, err)
 
 	options := daemonBackendOptions(parsed.dataPath, parsed.logPath, parsed.logLevel, parsed.environment)
+	require.Equal(t, userMessageCapabilities(), options.UserMessageCapabilities)
 	require.Equal(t, "staging", options.EnvOverrides[commonenv.ENV.String()])
 	t.Setenv(commonenv.ENV.String(), options.EnvOverrides[commonenv.ENV.String()])
 	require.Equal(t, common.StageBaseURL, common.GetBaseURL())

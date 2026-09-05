@@ -11,6 +11,7 @@ import (
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/unbounded"
+	"github.com/getlantern/radiance/usermessage"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -61,6 +62,16 @@ func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 		return ctx.Err()
 	}
 	return c.sseRetryLoop(ctx, configEventsEndpoint, func([]byte) { handler() })
+}
+
+// UserMessageEvents streams pending-message notifications until ctx is canceled.
+func (c *Client) UserMessageEvents(ctx context.Context, handler func()) error {
+	events.SubscribeContext(ctx, func(usermessage.AvailableEvent) { handler() })
+	if c.localOnly {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.sseRetryLoop(ctx, userMessageEventsEndpoint, func([]byte) { handler() })
 }
 
 // VPNStatusEvents streams VPN status changes. Blocks until ctx is cancelled.

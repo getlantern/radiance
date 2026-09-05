@@ -40,7 +40,7 @@ require (
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952
-	github.com/getlantern/common v1.2.1-0.20260708083946-cc657b08792c
+	github.com/getlantern/common v1.2.1-0.20260828200436-eb05c571820d
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
@@ -67,6 +67,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/sdk/metric v1.43.0
 	golang.org/x/term v0.41.0
+	golang.org/x/text v0.35.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -262,7 +263,6 @@ require (
 	golang.getoutline.org/sdk v0.0.21 // indirect
 	golang.getoutline.org/sdk/x v0.1.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260504160031-60b97b32f348 // indirect
 	modernc.org/libc v1.22.3 // indirect

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/alexflint/go-arg"
+	wire "github.com/getlantern/common/usermessage"
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
@@ -429,9 +430,10 @@ func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
 // configured development environment in production mode.
 func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemonEnvironment) backend.Options {
 	options := backend.Options{
-		DataDir:  dataPath,
-		LogDir:   logPath,
-		LogLevel: logLevel,
+		DataDir:                 dataPath,
+		LogDir:                  logPath,
+		LogLevel:                logLevel,
+		UserMessageCapabilities: userMessageCapabilities(),
 	}
 	if environment == daemonEnvironmentStaging {
 		options.EnvOverrides = map[string]string{
@@ -439,6 +441,17 @@ func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemon
 		}
 	}
 	return options
+}
+
+func userMessageCapabilities() wire.ClientCapabilities {
+	return wire.ClientCapabilities{
+		Version:  wire.CapabilityUserMessagesV1,
+		Surfaces: []wire.Surface{wire.SurfaceSnackbar},
+		Actions: []wire.ActionType{
+			wire.ActionTypeOpenHTTPSURL,
+			wire.ActionTypeOpenPlans,
+		},
+	}
 }
 
 func daemonBackendURLs(environment daemonEnvironment) (authURL, proServerURL string) {
