@@ -45,7 +45,7 @@ require (
 	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
 	github.com/getlantern/kindling v0.0.0-20260818180827-1583458ab9b7
-	github.com/getlantern/lantern-box v0.0.119
+	github.com/getlantern/lantern-box v0.0.128
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb
@@ -127,9 +127,10 @@ require (
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/gaissmai/bart v0.18.0 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
-	github.com/getlantern/algeneva v0.0.0-20250307163401-1824e7b54f52 // indirect
+	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 // indirect
+	github.com/getlantern/twiddle v0.0.0-20260907083007-7261fa53edc2 // indirect
 	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
