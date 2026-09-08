@@ -27,14 +27,8 @@ type boxNetwork interface {
 	ResetNetwork()
 }
 
-// netRecovery re-seeds the interface list while the network stays paused.
-//
-// A platform default-interface monitor can report an unsatisfied path and then
-// never fire again, leaving the box network-paused with no default route. A dial
-// falls back to the interface list when there is no default interface, so while
-// paused netRecovery re-polls that list on a backoff to surface a route that
-// returned without a fresh platform callback. On the empty→refilled transition it
-// resets the network once to rebind stale connections, then stops.
+// netRecovery re-polls interfaces while the pause manager reports the network paused.
+// When the interface list transitions from empty to non-empty, it resets the network once and disarms.
 type netRecovery struct {
 	network       boxNetwork
 	networkPaused func() bool // authoritative pause state
