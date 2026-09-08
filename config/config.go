@@ -127,13 +127,18 @@ func (ch *ConfigHandler) Start() {
 		ch.ftr = newFetcher(ch.options.Locale, ch.options.AccountClient, ch.options.HTTPClient)
 		ch.started.Store(true)
 		go ch.fetchLoop(ch.pollInterval)
-		events.SubscribeContext(ch.ctx, func(evt account.UserChangeEvent) {
-			ch.logger.Debug("User change detected that requires config refetch")
-			if err := ch.fetchConfig(); err != nil {
-				ch.logger.Error("Failed to fetch config", "error", err)
-			}
-		})
+		events.SubscribeContext(ch.ctx, ch.onUserChange)
 	})
+}
+
+func (ch *ConfigHandler) onUserChange(account.UserChangeEvent) {
+	// Clearing an account must not trigger ensureUser during logout.
+	if settings.GetInt64(settings.UserIDKey) == 0 || settings.GetString(settings.TokenKey) == "" {
+		return
+	}
+	if err := ch.fetchConfig(); err != nil {
+		ch.logger.Error("Failed to fetch config after account change", "error", err)
+	}
 }
 
 var ErrNoWGKey = errors.New("no wg key")

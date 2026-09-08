@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	C "github.com/getlantern/common"
+	wire "github.com/getlantern/common/usermessage"
 	"github.com/getlantern/publicip"
 
 	"github.com/getlantern/radiance/account"
@@ -38,6 +39,7 @@ import (
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/unbounded"
+	clientmessage "github.com/getlantern/radiance/usermessage"
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
@@ -57,6 +59,7 @@ type LocalBackend struct {
 	confHandler   *config.ConfigHandler
 	issueReporter *issue.IssueReporter
 	accountClient *account.Client
+	userMessages  *clientmessage.Service
 
 	srvManager     *servers.Manager
 	vpnClient      *vpn.VPNClient
@@ -103,8 +106,9 @@ type Options struct {
 	// own device ID and ignore this value
 	DeviceID string
 	// User choice for telemetry consent
-	TelemetryConsent  bool
-	PlatformInterface vpn.PlatformInterface
+	TelemetryConsent        bool
+	PlatformInterface       vpn.PlatformInterface
+	UserMessageCapabilities wire.ClientCapabilities
 	// EnvOverrides are applied via os.Setenv before common.Init so sandboxed
 	// system extensions (macOS/iOS), which don't inherit shell env, still see
 	// RADIANCE_* vars from the host process. Entries are set verbatim — no
@@ -232,13 +236,48 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
+	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
 	r.clearSelectedIfMissing()
 	return r, nil
+}
+
+// loadUserMessageService returns nil when capabilities disable messaging or service initialization fails.
+func loadUserMessageService(capabilities wire.ClientCapabilities, dataDir string) *clientmessage.Service {
+	if capabilities.Version == "" {
+		return nil
+	}
+	if err := capabilities.Validate(); err != nil {
+		slog.Warn("User messages disabled", "reason", "invalid_capabilities")
+		return nil
+	}
+	service, err := clientmessage.New(clientmessage.Options{
+		DataDir: dataDir,
+		Fetcher: clientmessage.NewHTTPFetcher(
+			kindling.HTTPClient(),
+			clientmessage.Endpoint(common.GetBaseURL()),
+			capabilities,
+		),
+		ContextProvider: func() clientmessage.ClientContext {
+			return clientmessage.ClientContext{
+				UserID:     settings.GetString(settings.UserIDKey),
+				ProToken:   settings.GetString(settings.TokenKey),
+				Locale:     clientmessage.NormalizeLocale(settings.GetString(settings.LocaleKey)),
+				Platform:   clientmessage.NormalizePlatform(common.Platform),
+				AppVersion: common.GetVersion(),
+			}
+		},
+	})
+	if err != nil {
+		slog.Error("Loading user-message state", "error", err)
+		return nil
+	}
+	return service
 }
 
 func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
+	r.startUserMessages()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		result, err := publicip.Detect(ctx, &publicip.Config{
@@ -645,6 +684,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if err := settings.Patch(diff); err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
+	}
+	if _, ok := diff[settings.LocaleKey]; ok {
+		r.RefreshUserMessages()
 	}
 	// telemetry settings
 	if _, ok := diff[settings.TelemetryKey]; ok {
@@ -1707,6 +1749,8 @@ func (r *LocalBackend) OAuthLoginCallback(ctx context.Context, oAuthToken string
 	return r.accountClient.OAuthLoginCallback(ctx, oAuthToken)
 }
 
+// OAuthDeviceLimitCallback stores the account identity from a device-limit
+// OAuth token without logging the user in.
 func (r *LocalBackend) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string) error {
 	return r.accountClient.OAuthDeviceLimitCallback(ctx, oAuthToken)
 }
@@ -1725,6 +1769,46 @@ func (r *LocalBackend) UserData() (*account.UserData, error) {
 		return nil, fmt.Errorf("failed to get user data from settings: %w", err)
 	}
 	return &userData, nil
+}
+
+// CurrentUserMessage returns the current account's pending message.
+func (r *LocalBackend) CurrentUserMessage() (*clientmessage.Message, error) {
+	if r.userMessages == nil {
+		return nil, nil
+	}
+	return r.userMessages.Current()
+}
+
+func (r *LocalBackend) startUserMessages() {
+	if r.userMessages == nil {
+		return
+	}
+	events.SubscribeContext(r.ctx, func(account.UserChangeEvent) {
+		r.userMessages.Refresh()
+	})
+	r.userMessages.Start(r.ctx)
+}
+
+// RefreshUserMessages schedules an immediate eligibility refresh when messaging is enabled.
+func (r *LocalBackend) RefreshUserMessages() {
+	if r.userMessages != nil {
+		r.userMessages.Refresh()
+	}
+}
+
+// AcknowledgeUserMessage records that the UI displayed displayID.
+func (r *LocalBackend) AcknowledgeUserMessage(displayID, accountID string) error {
+	if r.userMessages == nil {
+		return clientmessage.ErrMessageNotPending
+	}
+	return r.userMessages.Acknowledge(displayID, accountID)
+}
+
+// SetUserMessageActivity adjusts polling for the app lifecycle.
+func (r *LocalBackend) SetUserMessageActivity(active bool) {
+	if r.userMessages != nil {
+		r.userMessages.SetActivity(active)
+	}
 }
 
 ///////////////////
