@@ -24,6 +24,24 @@ type ExhaustionEvent struct {
 	events.Event
 }
 
+// NetworkEventType is the availability state carried by a NetworkEvent.
+type NetworkEventType string
+
+const (
+	// NetworkEventPaused means the network is unusable: no default route, or the
+	// device suspended.
+	NetworkEventPaused NetworkEventType = "network_paused"
+	// NetworkEventWake means the default route is back.
+	NetworkEventWake NetworkEventType = "network_wake"
+)
+
+// NetworkEvent reports a change in network availability derived from the tunnel's
+// pause manager.
+type NetworkEvent struct {
+	events.Event
+	EventType NetworkEventType `json:"event_type"`
+}
+
 // Selector is helper interface to check if an outbound is a selector or wrapper of selector.
 type Selector interface {
 	adapter.OutboundGroup

@@ -9,11 +9,38 @@ import (
 	box "github.com/getlantern/lantern-box"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 )
+
+// TestTunnelDevicePauseWake covers the non-iOS path: devicePause pauses the
+// manager and deviceWake resumes it. The iOS timer branch depends on
+// common.IsIOS() and is not exercised off-device.
+func TestTunnelDevicePauseWake(t *testing.T) {
+	ctx := pause.WithDefaultManager(context.Background())
+	mgr := service.FromContext[pause.Manager](ctx)
+	require.NotNil(t, mgr)
+
+	tn := &tunnel{pauseManager: mgr}
+	tn.devicePause()
+	require.True(t, mgr.IsDevicePaused())
+	tn.deviceWake()
+	require.False(t, mgr.IsDevicePaused())
+}
+
+func TestTunnelLifecycleNilManager(t *testing.T) {
+	tn := &tunnel{}
+	require.NotPanics(t, func() {
+		tn.devicePause()
+		tn.deviceWake()
+		tn.resetNetwork()
+	})
+}
 
 type errCloser struct{ err error }
 
@@ -164,4 +191,44 @@ func TestNewClientContextInjectorSeedsLanternTags(t *testing.T) {
 		tags[0] = "mutated"
 		assert.Equal(t, []string{"a", "b"}, inj.MatchBounds().Outbound)
 	})
+}
+
+func TestOnPauseUpdate(t *testing.T) {
+	// want == "" means no NetworkEvent should be emitted.
+	cases := []struct {
+		name string
+		evt  int
+		want NetworkEventType
+	}{
+		{"device paused ignored", pause.EventDevicePaused, ""},
+		{"network paused", pause.EventNetworkPause, NetworkEventPaused},
+		{"network wake", pause.EventNetworkWake, NetworkEventWake},
+		{"device wake ignored", pause.EventDeviceWake, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			got := make(chan NetworkEventType, 1)
+			events.SubscribeContext(ctx, func(evt NetworkEvent) { got <- evt.EventType })
+
+			(&tunnel{}).onPauseUpdate(tc.evt)
+
+			if tc.want == "" {
+				select {
+				case ev := <-got:
+					t.Fatalf("expected no NetworkEvent, got %q", ev)
+				case <-time.After(100 * time.Millisecond):
+				}
+				return
+			}
+			select {
+			case ev := <-got:
+				require.Equal(t, tc.want, ev)
+			case <-time.After(2 * time.Second):
+				t.Fatal("no NetworkEvent emitted")
+			}
+		})
+	}
 }

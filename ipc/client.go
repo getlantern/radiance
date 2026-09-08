@@ -138,6 +138,24 @@ func (c *Client) RestartVPN(ctx context.Context) error {
 	return err
 }
 
+// ResetNetwork asks the daemon to drop VPN connections and re-seed interface state.
+func (c *Client) ResetNetwork(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, vpnResetNetworkEndpoint, nil)
+	return err
+}
+
+// Pause asks the daemon to pause the VPN for a device sleep.
+func (c *Client) Pause(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, vpnPauseEndpoint, nil)
+	return err
+}
+
+// Wake asks the daemon to wake the VPN after a device sleep.
+func (c *Client) Wake(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, vpnWakeEndpoint, nil)
+	return err
+}
+
 // VPNConnections returns the active VPN connections.
 func (c *Client) VPNConnections(ctx context.Context) ([]vpn.Connection, error) {
 	var conns []vpn.Connection
