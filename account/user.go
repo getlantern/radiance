@@ -177,13 +177,8 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 	if err := proto.Unmarshal(resp, &signupData); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling sign up response: %w", err))
 	}
-	idErr := settings.Set(settings.UserIDKey, signupData.LegacyID)
-	if idErr != nil {
-		return nil, nil, traces.RecordError(ctx, fmt.Errorf("could not save user id: %w", idErr))
-	}
-	proTokenErr := settings.Set(settings.TokenKey, signupData.ProToken)
-	if proTokenErr != nil {
-		return nil, nil, traces.RecordError(ctx, fmt.Errorf("could not save token: %w", proTokenErr))
+	if err := storeIdentity(signupData.LegacyID, signupData.ProToken); err != nil {
+		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
 	}
 	jwtTokenErr := settings.Set(settings.JwtTokenKey, signupData.Token)
 	if jwtTokenErr != nil {
@@ -684,6 +679,7 @@ func (a *Client) referralAttachV2(ctx context.Context, code, channel string) (*R
 	return &referral, nil
 }
 
+// UserChangeEvent signals account changes, including initial creation and clearing.
 type UserChangeEvent struct {
 	events.Event
 }
@@ -691,6 +687,8 @@ type UserChangeEvent struct {
 // storeIdentity persists just the account identity in a single atomic write,
 // so a failure can't leave the stored user ID and token inconsistent.
 func storeIdentity(id int64, token string) error {
+	previousID := settings.GetInt64(settings.UserIDKey)
+	previousToken := settings.GetString(settings.TokenKey)
 	updates := settings.Settings{}
 	if id != 0 {
 		updates[settings.UserIDKey] = id
@@ -701,7 +699,11 @@ func storeIdentity(id int64, token string) error {
 	if len(updates) == 0 {
 		return nil
 	}
-	return settings.Patch(updates)
+	err := settings.Patch(updates)
+	if settings.GetInt64(settings.UserIDKey) != previousID || settings.GetString(settings.TokenKey) != previousToken {
+		events.Emit(UserChangeEvent{})
+	}
+	return err
 }
 
 func (a *Client) setData(data *UserData) {
@@ -721,8 +723,6 @@ func (a *Client) setData(data *UserData) {
 		}
 		return
 	}
-
-	existingUser := settings.GetInt64(settings.UserIDKey) != 0
 
 	var changed bool
 	if data.LegacyUserData.UserLevel != "" {
@@ -778,13 +778,13 @@ func (a *Client) setData(data *UserData) {
 		slog.Error("failed to set login response in settings", "error", err)
 	}
 
-	// We only consider the user to have changed if there was a previous user.
-	if existingUser && changed {
+	if changed {
 		events.Emit(UserChangeEvent{})
 	}
 }
 
 func (a *Client) ClearUser() {
+	hadIdentity := settings.GetInt64(settings.UserIDKey) != 0 || settings.GetString(settings.TokenKey) != ""
 	err := settings.Clear(
 		settings.UserIDKey,
 		settings.TokenKey,
@@ -796,5 +796,8 @@ func (a *Client) ClearUser() {
 	)
 	if err != nil {
 		slog.Warn("failed to clear user info", "error", err)
+	}
+	if hadIdentity {
+		events.Emit(UserChangeEvent{})
 	}
 }

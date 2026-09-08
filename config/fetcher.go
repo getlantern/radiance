@@ -99,7 +99,13 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 	}
 	addPayloadToSpan(ctx, confReq)
 
-	slog.Debug("sending config request", "request", string(buf))
+	slog.Debug(
+		"sending config request",
+		"platform", confReq.Platform,
+		"locale", confReq.Locale,
+		"protocol_count", len(confReq.Protocols),
+		"capability_count", len(confReq.Capabilities),
+	)
 	buf, err = f.send(ctx, bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -108,7 +114,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 	if buf == nil { // no new config available
 		return nil, nil
 	}
-	slog.Log(nil, log.LevelTrace, "received config", "config", string(buf))
+	slog.Log(nil, log.LevelTrace, "received config", "bytes", len(buf))
 
 	f.lastModified = time.Now()
 	return buf, nil
@@ -116,12 +122,13 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 
 func addPayloadToSpan(ctx context.Context, req C.ConfigRequest) {
 	span := trace.SpanFromContext(ctx)
-	if len(req.UserID) > 5 {
-		req.UserID = fmt.Sprintf("%s...", req.UserID[0:5])
-	}
-	if len(req.ProToken) > 5 {
-		req.ProToken = fmt.Sprintf("%s...", req.ProToken[0:5])
-	}
+	// IDs, account tokens, device IDs, and WireGuard keys do not belong in
+	// traces, even in abbreviated form. The remaining fields are enough to
+	// diagnose client compatibility and request-shaping problems.
+	req.UserID = ""
+	req.ProToken = ""
+	req.DeviceID = ""
+	req.WGPublicKey = ""
 
 	b, _ := json.Marshal(req)
 	span.SetAttributes(attribute.String("http.request.body", string(b)))

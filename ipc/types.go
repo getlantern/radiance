@@ -6,6 +6,7 @@ import (
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/usermessage"
 )
 
 // Shared request types used by both client and server.
@@ -116,6 +117,17 @@ type IssueReportRequest struct {
 	Attachments           []*issue.Attachment `json:"attachments"`
 }
 
+// UserMessageAcknowledgeRequest identifies the pending message displayed by the UI.
+type UserMessageAcknowledgeRequest struct {
+	DisplayID string `json:"displayID"`
+	AccountID string `json:"accountID"`
+}
+
+// UserMessageActivityRequest reports whether foreground polling should run.
+type UserMessageActivityRequest struct {
+	Active bool `json:"active"`
+}
+
 // Shared response types used by both client and server.
 
 type SelectedServerResponse struct {
@@ -146,6 +158,11 @@ type SuccessResponse struct {
 
 type PlansResponse struct {
 	Plans string `json:"plans"`
+}
+
+// CurrentUserMessageResponse contains the pending message, if one exists.
+type CurrentUserMessageResponse struct {
+	Message *usermessage.Message `json:"message,omitempty"`
 }
 
 type ResultResponse struct {

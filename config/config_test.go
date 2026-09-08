@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/account"
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 )
@@ -266,3 +271,66 @@ func (bf *BlockingFetcher) fetchConfig(ctx context.Context, preferred C.ServerLo
 	return bf.response, bf.err
 }
 
+func TestUserChangeSkipsConfigFetchWithoutCredentials(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	release := make(chan struct{})
+	close(release)
+	fetcher := &BlockingFetcher{release: release}
+	ch := NewConfigHandler(context.Background(), Options{DataPath: t.TempDir(), Logger: log.NoOpLogger()})
+	defer ch.cancel()
+	ch.ftr = fetcher
+
+	ch.onUserChange(account.UserChangeEvent{})
+	require.Zero(t, fetcher.calls.Load())
+	require.NoError(t, settings.Set(settings.UserIDKey, 123))
+	ch.onUserChange(account.UserChangeEvent{})
+	require.Zero(t, fetcher.calls.Load())
+	require.NoError(t, settings.Set(settings.TokenKey, "test-token"))
+	ch.onUserChange(account.UserChangeEvent{})
+	require.EqualValues(t, 1, fetcher.calls.Load())
+
+	a := &account.Client{}
+	a.ClearUser()
+	ch.onUserChange(account.UserChangeEvent{})
+	require.EqualValues(t, 1, fetcher.calls.Load())
+	require.Zero(t, settings.GetInt64(settings.UserIDKey))
+
+	require.NoError(t, settings.Patch(settings.Settings{settings.UserIDKey: 456, settings.TokenKey: "new-token"}))
+	ch.onUserChange(account.UserChangeEvent{})
+	require.EqualValues(t, 2, fetcher.calls.Load())
+}
+
+type accountCreationTransport func(*http.Request) (*http.Response, error)
+
+func (f accountCreationTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestInitialAccountEventDoesNotLoopConfigCreation(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	var created, fetched atomic.Int32
+	client := &http.Client{Transport: accountCreationTransport(func(req *http.Request) (*http.Response, error) {
+		status, body := http.StatusNoContent, ""
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/user-create"):
+			created.Add(1)
+			status, body = http.StatusOK, `{"userId":123,"token":"test-token"}`
+		case strings.HasSuffix(req.URL.Path, "/config-new"):
+			fetched.Add(1)
+		default:
+			return nil, errors.New("unexpected test request")
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+	})}
+	ch := NewConfigHandler(context.Background(), Options{
+		DataPath: t.TempDir(), Logger: log.NoOpLogger(), HTTPClient: client,
+		AccountClient: account.NewClient(client, t.TempDir()),
+	})
+	defer ch.cancel()
+	ch.Start()
+	require.Eventually(t, func() bool { return fetched.Load() > 0 }, 3*time.Second, time.Millisecond)
+	require.Never(t, func() bool { return created.Load() > 1 || fetched.Load() > 2 }, 100*time.Millisecond, time.Millisecond)
+	require.EqualValues(t, 1, created.Load())
+}
