@@ -462,9 +462,6 @@ func (t *tunnel) close() error {
 	if t.cancel != nil {
 		t.cancel()
 	}
-	if t.netRecovery != nil {
-		t.netRecovery.stop()
-	}
 	t.pauseMu.Lock()
 	if t.endPauseTimer != nil {
 		t.endPauseTimer.Stop()
@@ -472,11 +469,15 @@ func (t *tunnel) close() error {
 	t.pauseMu.Unlock()
 
 	closers := t.closers
+	recovery := t.netRecovery
 	t.closers = nil
 	t.boxInstance = nil
 
 	done := make(chan error, 1)
 	go func() {
+		if recovery != nil {
+			recovery.stop()
+		}
 		var errs []error
 		for _, closer := range closers {
 			slog.Log(nil, rlog.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))

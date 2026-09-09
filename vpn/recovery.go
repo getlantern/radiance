@@ -15,9 +15,6 @@ const (
 	// attempts while the network stays paused.
 	recoveryBaseWait = 3 * time.Second
 	recoveryMaxWait  = 30 * time.Second
-	// recoveryStopTimeout bounds how long stop waits for an in-flight attempt so
-	// teardown cannot hang on one.
-	recoveryStopTimeout = 5 * time.Second
 )
 
 // boxNetwork is the subset of the box's network manager that netRecovery drives.
@@ -116,11 +113,7 @@ func (r *netRecovery) attempt() (recovered bool) {
 	return false
 }
 
-// stop waits for an in-flight attempt to finish. The caller must cancel run's
-// context first; stop only bounds the wait so teardown cannot hang.
+// stop waits for run to exit after its context is canceled.
 func (r *netRecovery) stop() {
-	select {
-	case <-r.done:
-	case <-time.After(recoveryStopTimeout):
-	}
+	<-r.done
 }

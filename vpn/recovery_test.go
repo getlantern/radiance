@@ -49,6 +49,69 @@ func (f *fakeNetwork) setPending(n int) {
 	f.mu.Unlock()
 }
 
+type blockedRecoveryNetwork struct {
+	fakeNetwork
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (n *blockedRecoveryNetwork) UpdateInterfaces() error {
+	close(n.entered)
+	<-n.release
+	return n.fakeNetwork.UpdateInterfaces()
+}
+
+func TestNetRecovery_TunnelCloseWaitsForBlockedUpdate(t *testing.T) {
+	net := &blockedRecoveryNetwork{
+		fakeNetwork: fakeNetwork{pending: 1},
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	rec := newTestRecovery(net, alwaysPaused, time.Millisecond, time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	release := sync.OnceFunc(func() { close(net.release) })
+	go rec.run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		release()
+		rec.stop()
+	})
+	rec.pause()
+	select {
+	case <-net.entered:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start updating interfaces")
+	}
+
+	closed := make(chan struct{})
+	tn := &tunnel{cancel: cancel, netRecovery: rec, closeTimeout: 20 * time.Millisecond}
+	tn.closers = append(tn.closers, closerFunc(func() error {
+		close(closed)
+		return nil
+	}))
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- tn.close() }()
+	select {
+	case err := <-closeResult:
+		require.ErrorContains(t, err, "timeout waiting for tunnel to close")
+	case <-time.After(time.Second):
+		t.Fatal("tunnel close did not honor its timeout")
+	}
+	select {
+	case <-closed:
+		t.Fatal("box resources closed while recovery was still using them")
+	default:
+	}
+
+	release()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("box resources did not close after recovery exited")
+	}
+	require.EqualValues(t, 1, net.resets.Load())
+}
+
 func newTestRecovery(net boxNetwork, paused func() bool, base, max time.Duration) *netRecovery {
 	return &netRecovery{
 		network:       net,
