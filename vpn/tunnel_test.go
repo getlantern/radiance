@@ -207,25 +207,20 @@ func TestOnPauseUpdate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			got := make(chan NetworkEventType, 1)
-			events.SubscribeContext(ctx, func(evt NetworkEvent) { got <- evt.EventType })
+			got := make(chan NetworkEventType, 2)
+			sub := events.Subscribe(func(evt NetworkEvent) { got <- evt.EventType })
+			defer sub.Unsubscribe()
 
 			(&tunnel{}).onPauseUpdate(tc.evt)
 
-			if tc.want == "" {
-				select {
-				case ev := <-got:
-					t.Fatalf("expected no NetworkEvent, got %q", ev)
-				case <-time.After(100 * time.Millisecond):
-				}
-				return
+			want := tc.want
+			if want == "" {
+				want = NetworkEventType("test_barrier")
+				events.Emit(NetworkEvent{EventType: want})
 			}
 			select {
 			case ev := <-got:
-				require.Equal(t, tc.want, ev)
+				require.Equal(t, want, ev)
 			case <-time.After(2 * time.Second):
 				t.Fatal("no NetworkEvent emitted")
 			}
