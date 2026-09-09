@@ -46,3 +46,95 @@ func TestNewClient(t *testing.T) {
 		})
 	}
 }
+
+type fakePausable struct{ paused, resumed int }
+
+func (f *fakePausable) Pause()  { f.paused++ }
+func (f *fakePausable) Resume() { f.resumed++ }
+
+func TestClientPauseResumeDelegates(t *testing.T) {
+	p := &fakePausable{}
+	c := &Client{pausers: []pausable{p}}
+
+	c.Pause()
+	c.Pause()
+	c.Resume()
+
+	assert.Equal(t, 2, p.paused)
+	assert.Equal(t, 1, p.resumed)
+}
+
+func TestClientPauseResumeNoPausers(t *testing.T) {
+	c := &Client{}
+	// Must not panic with no pausable transports.
+	c.Pause()
+	c.Resume()
+}
+
+// restorePackageState isolates tests that touch the shared instance and its
+// held pause state.
+func restorePackageState(t *testing.T) {
+	t.Helper()
+	mu.Lock()
+	prevK, prevPaused := k, paused
+	k, paused = nil, false
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		k, paused = prevK, prevPaused
+		mu.Unlock()
+	})
+}
+
+func TestPauseHeldForClientInstalledLater(t *testing.T) {
+	restorePackageState(t)
+	p := &fakePausable{}
+
+	// No shared instance yet, so this only records the state.
+	Pause()
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}})
+	mu.Unlock()
+
+	assert.Equal(t, 1, p.paused, "a client installed while paused must start paused")
+}
+
+func TestPauseResumeDelegateToLiveClient(t *testing.T) {
+	restorePackageState(t)
+	p := &fakePausable{}
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}})
+	mu.Unlock()
+
+	Pause()
+	Resume()
+
+	assert.Equal(t, 1, p.paused)
+	assert.Equal(t, 1, p.resumed)
+}
+
+func TestCloseClearsHeldPause(t *testing.T) {
+	restorePackageState(t)
+	p := &fakePausable{}
+
+	Pause()
+	require.NoError(t, Close())
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}})
+	mu.Unlock()
+
+	assert.Equal(t, 0, p.paused, "Close must not leak the pause into the next instance")
+}
+
+func TestResumeClearsHeldPause(t *testing.T) {
+	restorePackageState(t)
+	p := &fakePausable{}
+
+	Pause()
+	Resume()
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}})
+	mu.Unlock()
+
+	assert.Equal(t, 0, p.paused, "a client installed after resume must start running")
+}
