@@ -1398,6 +1398,15 @@ func (r *LocalBackend) RestartVPN() error {
 	return r.vpnClient.Restart(bOptions)
 }
 
+// ResetNetwork drops the VPN's connections and re-seeds its interface state.
+func (r *LocalBackend) ResetNetwork() { r.vpnClient.ResetNetwork() }
+
+// Pause pauses the VPN for a device sleep.
+func (r *LocalBackend) Pause() { r.vpnClient.Pause() }
+
+// Wake wakes the VPN after a device sleep.
+func (r *LocalBackend) Wake() { r.vpnClient.Wake() }
+
 // SelectServer selects the server identified by tag. The empty string is treated as [vpn.AutoSelectTag].
 func (r *LocalBackend) SelectServer(tag string) error {
 	if tag == "" {

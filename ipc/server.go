@@ -42,6 +42,9 @@ const (
 	vpnStatusEventsEndpoint     = "/vpn/status/events"
 	vpnSessionsEndpoint         = "/vpn/sessions"
 	vpnClearTunnelCacheEndpoint = "/vpn/cache/clear"
+	vpnResetNetworkEndpoint     = "/vpn/network/reset"
+	vpnPauseEndpoint            = "/vpn/pause"
+	vpnWakeEndpoint             = "/vpn/wake"
 
 	// Server selection endpoints
 	serverSelectedEndpoint           = "/server/selected"
@@ -224,6 +227,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+vpnOfflineTestsEndpoint, traced(s.vpnOfflineTestsHandler))
 	mux.HandleFunc("GET "+vpnSessionsEndpoint, traced(s.vpnSessionsHandler))
 	mux.HandleFunc("POST "+vpnClearTunnelCacheEndpoint, traced(s.vpnClearTunnelCacheHandler))
+	mux.HandleFunc("POST "+vpnResetNetworkEndpoint, traced(s.vpnResetNetworkHandler))
+	mux.HandleFunc("POST "+vpnPauseEndpoint, traced(s.vpnPauseHandler))
+	mux.HandleFunc("POST "+vpnWakeEndpoint, traced(s.vpnWakeHandler))
 
 	// SSE routes skip the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+vpnStatusEventsEndpoint, s.vpnStatusEventsHandler)
@@ -408,6 +414,21 @@ func (s *localapi) vpnRestartHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *localapi) vpnResetNetworkHandler(w http.ResponseWriter, r *http.Request) {
+	s.backend(r.Context()).ResetNetwork()
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *localapi) vpnPauseHandler(w http.ResponseWriter, r *http.Request) {
+	s.backend(r.Context()).Pause()
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *localapi) vpnWakeHandler(w http.ResponseWriter, r *http.Request) {
+	s.backend(r.Context()).Wake()
 	w.WriteHeader(http.StatusOK)
 }
 

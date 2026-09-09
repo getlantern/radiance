@@ -21,6 +21,7 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -43,6 +44,10 @@ import (
 )
 
 const defaultCloseTimeout = 10 * time.Second
+
+// devicePauseTimeout bounds an iOS device pause; iOS may never deliver a wake
+// event to the extension.
+const devicePauseTimeout = time.Minute
 
 type tunnel struct {
 	ctx                  context.Context
@@ -91,6 +96,17 @@ type tunnel struct {
 
 	cancel  context.CancelFunc
 	closers []io.Closer
+
+	// netRecovery re-seeds network state while the pause manager reports the
+	// network paused. Nil when no pause manager is present.
+	netRecovery *netRecovery
+
+	// pauseManager, if non-nil, is retained so the device-lifecycle hooks can
+	// pause and wake the tunnel.
+	pauseManager pause.Manager
+	// endPauseTimer force-wakes an iOS device pause; see devicePause. Guarded by pauseMu.
+	endPauseTimer *time.Timer
+	pauseMu       sync.Mutex
 }
 
 func (t *tunnel) start(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface, isRestart bool) error {
@@ -305,6 +321,37 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashServer)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.clashServer.connTracker.SetObserver(t.connObserver)
+	if pm := service.FromContext[pause.Manager](t.ctx); pm != nil {
+		t.pauseManager = pm
+		t.netRecovery = newNetRecovery(t.boxInstance.Network(), pm.IsNetworkPaused)
+		go t.netRecovery.run(t.ctx)
+		slog.Debug("Network recovery supervisor started")
+		events.SubscribeContext(t.ctx, func(evt NetworkEvent) {
+			switch evt.EventType {
+			case NetworkEventPaused:
+				t.netRecovery.pause()
+			case NetworkEventWake:
+				t.netRecovery.wake()
+			}
+		})
+
+		cb := pm.RegisterCallback(t.onPauseUpdate)
+		// A network pause can already be in effect before this registration, so
+		// seed it once. Only the paused case is emitted: not emitting a wake keeps
+		// this off-lock read from racing a real pause into the wrong final state.
+		if pm.IsNetworkPaused() {
+			events.Emit(NetworkEvent{EventType: NetworkEventPaused})
+		}
+		t.closers = append(t.closers, closerFunc(func() error {
+			pm.UnregisterCallback(cb)
+			// No further events arrive after unregister, so force a wake to release
+			// a NetworkEvent consumer left paused at teardown. UnregisterCallback
+			// serializes with in-flight callbacks via the manager lock, so this
+			// wake lands last.
+			events.Emit(NetworkEvent{EventType: NetworkEventWake})
+			return nil
+		}))
+	}
 
 	if common.IsIOS() {
 		// Only iOS enforces a hard memory cap, so only it gets reclaim and
@@ -332,6 +379,19 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	slog.Info("Tunnel connection established")
 	return nil
+}
+
+// onPauseUpdate mirrors the pause manager's network-axis transitions onto
+// NetworkEvent. Device-axis events are ignored: only a missing default route
+// (NetworkPause) leaves the tunnel unable to dial, and on resume the box already
+// resets the network itself.
+func (t *tunnel) onPauseUpdate(evt int) {
+	switch evt {
+	case pause.EventNetworkPause:
+		events.Emit(NetworkEvent{EventType: NetworkEventPaused})
+	case pause.EventNetworkWake:
+		events.Emit(NetworkEvent{EventType: NetworkEventWake})
+	}
 }
 
 // subscribeExhaustionSignal bridges the auto group's exhaustion
@@ -402,13 +462,22 @@ func (t *tunnel) close() error {
 	if t.cancel != nil {
 		t.cancel()
 	}
+	t.pauseMu.Lock()
+	if t.endPauseTimer != nil {
+		t.endPauseTimer.Stop()
+	}
+	t.pauseMu.Unlock()
 
 	closers := t.closers
+	recovery := t.netRecovery
 	t.closers = nil
 	t.boxInstance = nil
 
 	done := make(chan error, 1)
 	go func() {
+		if recovery != nil {
+			recovery.stop()
+		}
 		var errs []error
 		for _, closer := range closers {
 			slog.Log(nil, rlog.LevelTrace, "Closing tunnel resource", "type", fmt.Sprintf("%T", closer))
@@ -429,6 +498,41 @@ func (t *tunnel) close() error {
 		return errors.New("timeout waiting for tunnel to close")
 	case err := <-done:
 		return err
+	}
+}
+
+// devicePause pauses the tunnel for a device sleep. On iOS it also arms a timer to
+// wake after devicePauseTimeout.
+func (t *tunnel) devicePause() {
+	if t.pauseManager == nil {
+		return
+	}
+	t.pauseManager.DevicePause()
+	if common.IsIOS() {
+		t.pauseMu.Lock()
+		if t.endPauseTimer == nil {
+			t.endPauseTimer = time.AfterFunc(devicePauseTimeout, t.pauseManager.DeviceWake)
+		} else {
+			t.endPauseTimer.Reset(devicePauseTimeout)
+		}
+		t.pauseMu.Unlock()
+	}
+}
+
+// deviceWake wakes the tunnel after a device sleep. On iOS the wake is driven by
+// devicePause's timer, so this is a no-op there.
+func (t *tunnel) deviceWake() {
+	if t.pauseManager == nil {
+		return
+	}
+	if !common.IsIOS() {
+		t.pauseManager.DeviceWake()
+	}
+}
+
+func (t *tunnel) resetNetwork() {
+	if t.boxInstance != nil {
+		t.boxInstance.Network().ResetNetwork()
 	}
 }
 

@@ -264,6 +264,34 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	return nil
 }
 
+// ResetNetwork drops the tunnel's connections and re-seeds its interface state,
+// for a platform to call on a network change. No-op if the tunnel is not running.
+func (c *VPNClient) ResetNetwork() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel != nil {
+		c.tunnel.resetNetwork()
+	}
+}
+
+// Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
+func (c *VPNClient) Pause() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel != nil {
+		c.tunnel.devicePause()
+	}
+}
+
+// Wake wakes the tunnel after a device sleep. No-op if the tunnel is not running.
+func (c *VPNClient) Wake() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel != nil {
+		c.tunnel.deviceWake()
+	}
+}
+
 // isOpen returns true if the tunnel is open, false otherwise.
 // Note, this does not check if the tunnel can connect to a server.
 func (c *VPNClient) isOpen() bool {
