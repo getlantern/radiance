@@ -178,6 +178,9 @@ type unboundedManager struct {
 	// differ, with the predicate still otherwise satisfied. Nil
 	// whenever cancel is nil.
 	runningCfg *C.UnboundedConfig
+	running    bool
+	peers      map[int]string
+	arrivals   uint64
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -438,6 +441,10 @@ func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
 		return nil
 	}
 	cancel()
+	m.mu.Lock()
+	m.running = false
+	m.peers = nil
+	m.mu.Unlock()
 	select {
 	case <-done:
 		return nil
@@ -498,6 +505,7 @@ func (m *unboundedManager) start() {
 	// lastCfg is also a pointer and equality is value-based via
 	// cfgEqual.
 	m.runningCfg = ucfg
+	m.peers = make(map[int]string)
 	m.mu.Unlock()
 
 	go func() {
@@ -529,15 +537,7 @@ func (m *unboundedManager) start() {
 		// off. broflake exposes no registration point we could
 		// disarm directly (the callback IS the registration), so the
 		// inline ctx check is the next-best place.
-		// broflake hands us the consumer's addr on accept but a nil addr on
-		// close (the WebRTC session is already torn down, so the remote IP is
-		// gone). Consumers of ConnectionEvent identify a connection by its
-		// Source: the Flutter globe matches a close to the arc it should
-		// remove by source IP, and decrements its "people helped" counter the
-		// same way. A close with an empty Source can't be matched, so the arc
-		// orphans and the counter never comes back down. sources remembers
-		// each slot's addr on accept and restores it on close so every -1
-		// carries the same Source its +1 did.
+		// Close callbacks omit the address; preserve it for connection-event subscribers.
 		sources := newConnSources()
 		bfOpt.OnConnectionChangeFunc = func(state int, workerIdx int, addr net.IP) {
 			if ctx.Err() != nil {
@@ -548,6 +548,7 @@ func (m *unboundedManager) start() {
 				addrStr = addr.String()
 			}
 			addrStr = sources.resolve(state, workerIdx, addrStr)
+			m.recordConnection(ctx, state, workerIdx, addrStr)
 			slog.Debug("Unbounded: consumer connection change",
 				"state", state, "workerIdx", workerIdx, "source", addrStr)
 			events.Emit(ConnectionEvent{
@@ -589,6 +590,9 @@ func (m *unboundedManager) start() {
 			return
 		}
 
+		m.mu.Lock()
+		m.running = ctx.Err() == nil
+		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy started")
 		<-ctx.Done()
 		slog.Info("Unbounded: stopping broflake widget proxy")
