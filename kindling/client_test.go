@@ -76,12 +76,12 @@ func TestClientPauseResumeNoPausers(t *testing.T) {
 func restorePackageState(t *testing.T) {
 	t.Helper()
 	mu.Lock()
-	prevK, prevPaused := k, paused
-	k, paused = nil, false
+	prevK, prevPaused, prevInitialized, prevTransport := k, paused, initialized, transport
+	k, paused, initialized, transport = nil, false, false, nil
 	mu.Unlock()
 	t.Cleanup(func() {
 		mu.Lock()
-		k, paused = prevK, prevPaused
+		k, paused, initialized, transport = prevK, prevPaused, prevInitialized, prevTransport
 		mu.Unlock()
 	})
 }
@@ -111,6 +111,22 @@ func TestPauseResumeDelegateToLiveClient(t *testing.T) {
 
 	assert.Equal(t, 1, p.paused)
 	assert.Equal(t, 1, p.resumed)
+}
+
+func TestPauseResumeIgnoreRedundantCalls(t *testing.T) {
+	restorePackageState(t)
+	p := &fakePausable{}
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}})
+	mu.Unlock()
+
+	Pause()
+	Pause()
+	Resume()
+	Resume()
+
+	assert.Equal(t, 1, p.paused, "a redundant Pause must not reach the transports")
+	assert.Equal(t, 1, p.resumed, "a redundant Resume must not reach the transports")
 }
 
 func TestCloseClearsHeldPause(t *testing.T) {

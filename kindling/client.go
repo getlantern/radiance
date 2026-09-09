@@ -127,11 +127,14 @@ func Close() error {
 }
 
 // Pause suspends background work in the shared instance's pausable transports
-// and applies to the next instance installed. Pauses do not nest: one Resume
-// resumes regardless of how many Pause calls preceded it.
+// and applies to the next instance installed. Redundant calls are dropped, so
+// duplicate events never reach a transport and one Resume always resumes.
 func Pause() {
 	mu.Lock()
 	defer mu.Unlock()
+	if paused {
+		return
+	}
 	paused = true
 	if k != nil {
 		k.Pause()
@@ -142,6 +145,9 @@ func Pause() {
 func Resume() {
 	mu.Lock()
 	defer mu.Unlock()
+	if !paused {
+		return
+	}
 	paused = false
 	if k != nil {
 		k.Resume()
@@ -159,6 +165,7 @@ func setClient(c *Client) {
 
 const tracerName = "github.com/getlantern/radiance/kindling"
 
+// pausable transports must tolerate repeated Pause and Resume calls.
 type pausable interface {
 	Pause()
 	Resume()
@@ -174,8 +181,7 @@ type Client struct {
 	closeOnce sync.Once
 }
 
-// Pause suspends the pausable transports' background work. Safe to call while
-// paused.
+// Pause suspends the pausable transports' background work.
 func (c *Client) Pause() {
 	for _, p := range c.pausers {
 		p.Pause()
