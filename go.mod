@@ -42,9 +42,9 @@ require (
 	github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952
 	github.com/getlantern/common v1.2.1-0.20260828200436-eb05c571820d
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
-	github.com/getlantern/domainfront v0.0.0-20260722204513-8c1f8acfa715
+	github.com/getlantern/domainfront v0.0.0-20260909200720-c902df092c5f
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
-	github.com/getlantern/kindling v0.0.0-20260818180827-1583458ab9b7
+	github.com/getlantern/kindling v0.0.0-20260909201237-3484cdc8202f
 	github.com/getlantern/lantern-box v0.0.128
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
