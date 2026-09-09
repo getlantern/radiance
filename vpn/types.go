@@ -28,15 +28,13 @@ type ExhaustionEvent struct {
 type NetworkEventType string
 
 const (
-	// NetworkEventPaused means the network is unusable: no default route, or the
-	// device suspended.
+	// NetworkEventPaused means the pause manager reports a missing default route.
 	NetworkEventPaused NetworkEventType = "network_paused"
-	// NetworkEventWake means the default route is back.
+	// NetworkEventWake means the network pause ended or the tunnel is closing.
 	NetworkEventWake NetworkEventType = "network_wake"
 )
 
-// NetworkEvent reports a change in network availability derived from the tunnel's
-// pause manager.
+// NetworkEvent reports network pause transitions and tunnel teardown.
 type NetworkEvent struct {
 	events.Event
 	EventType NetworkEventType `json:"event_type"`
