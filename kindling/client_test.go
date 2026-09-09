@@ -76,12 +76,17 @@ func TestClientPauseResumeNoPausers(t *testing.T) {
 func restorePackageState(t *testing.T) {
 	t.Helper()
 	mu.Lock()
-	prevK, prevPaused, prevInitialized, prevTransport := k, paused, initialized, transport
-	k, paused, initialized, transport = nil, false, false, nil
+	pauseMu.Lock()
+	prevK, prevPaused, prevPauseApplied, prevInitialized, prevTransport := k, paused, pauseApplied, initialized, transport
+	k, paused, pauseApplied, initialized, transport = nil, false, false, false, nil
+	pauseMu.Unlock()
 	mu.Unlock()
 	t.Cleanup(func() {
 		mu.Lock()
-		k, paused, initialized, transport = prevK, prevPaused, prevInitialized, prevTransport
+		pauseMu.Lock()
+		k, pauseApplied, initialized, transport = prevK, prevPauseApplied, prevInitialized, prevTransport
+		paused = prevPaused
+		pauseMu.Unlock()
 		mu.Unlock()
 	})
 }
@@ -97,6 +102,20 @@ func TestPauseHeldForClientInstalledLater(t *testing.T) {
 	mu.Unlock()
 
 	assert.Equal(t, 1, p.paused, "a client installed while paused must start paused")
+}
+
+func TestSetClientSkipsAlreadyAppliedHeldPause(t *testing.T) {
+	restorePackageState(t)
+	p := &fakePausable{paused: 1}
+	Pause()
+
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}, pauseApplied: true})
+	mu.Unlock()
+	Resume()
+
+	assert.Equal(t, 1, p.paused, "a construction-applied pause must not be applied again")
+	assert.Equal(t, 1, p.resumed)
 }
 
 func TestPauseResumeDelegateToLiveClient(t *testing.T) {
