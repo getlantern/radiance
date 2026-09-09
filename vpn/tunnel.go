@@ -462,8 +462,6 @@ func (t *tunnel) close() error {
 	if t.cancel != nil {
 		t.cancel()
 	}
-	// t.cancel stopped the supervisor's context above; wait for any in-flight
-	// re-seed to finish before closing the box it operates on.
 	if t.netRecovery != nil {
 		t.netRecovery.stop()
 	}
