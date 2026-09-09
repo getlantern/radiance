@@ -81,6 +81,7 @@ const (
 	// JSON shape as /peer/connection/events but are emitted from a
 	// different in-process event type, so they need their own SSE bridge.
 	unboundedConnectionEventsEndpoint = "/unbounded/connection/events"
+	unboundedSnapshotEndpoint         = "/unbounded/snapshot"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -261,9 +262,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+peerConnectionEventsEndpoint, s.peerConnectionEventsHandler)
 	mux.HandleFunc("GET "+unboundedConnectionEventsEndpoint, s.unboundedConnectionEventsHandler)
 
-	mux.HandleFunc("GET /unbounded/snapshot", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+unboundedSnapshotEndpoint, traced(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unbounded.CurrentSnapshot())
-	})
+	}))
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))

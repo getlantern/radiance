@@ -854,7 +854,7 @@ func isConnectionError(err error) bool {
 
 // UnboundedSnapshot reads status and peers from the backend that owns the widget.
 func (c *Client) UnboundedSnapshot(ctx context.Context) (unbounded.Snapshot, error) {
-	data, err := c.do(ctx, http.MethodGet, "/unbounded/snapshot", nil)
+	data, err := c.do(ctx, http.MethodGet, unboundedSnapshotEndpoint, nil)
 	if err != nil {
 		return unbounded.Snapshot{}, err
 	}
