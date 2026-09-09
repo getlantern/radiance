@@ -25,6 +25,7 @@ import (
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
+	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/usermessage"
 	"github.com/getlantern/radiance/vpn"
 
@@ -849,4 +850,15 @@ func isConnectionError(err error) bool {
 	}
 	// Also check the unwrapped error directly for cases where the wrapping differs by platform
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT)
+}
+
+// UnboundedSnapshot reads status and peers from the backend that owns the widget.
+func (c *Client) UnboundedSnapshot(ctx context.Context) (unbounded.Snapshot, error) {
+	data, err := c.do(ctx, http.MethodGet, "/unbounded/snapshot", nil)
+	if err != nil {
+		return unbounded.Snapshot{}, err
+	}
+	var s unbounded.Snapshot
+	err = json.Unmarshal(data, &s)
+	return s, err
 }

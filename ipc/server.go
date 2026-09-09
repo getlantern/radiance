@@ -261,6 +261,10 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+peerConnectionEventsEndpoint, s.peerConnectionEventsHandler)
 	mux.HandleFunc("GET "+unboundedConnectionEventsEndpoint, s.unboundedConnectionEventsHandler)
 
+	mux.HandleFunc("GET /unbounded/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, unbounded.CurrentSnapshot())
+	})
+
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
 
