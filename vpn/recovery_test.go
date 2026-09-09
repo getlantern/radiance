@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common"
@@ -98,6 +100,55 @@ func TestNetRecovery_ResetsOnceWhenInterfacesReturn(t *testing.T) {
 	require.Never(t, func() bool {
 		return net.resets.Load() > 1
 	}, 300*time.Millisecond, 20*time.Millisecond, "must not keep resetting after recovery")
+}
+
+func TestNetRecovery_RecoversAgainWhilePauseRemainsLatched(t *testing.T) {
+	ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+	mgr := service.FromContext[pause.Manager](ctx)
+	net := &fakeNetwork{pending: 1}
+	rec := newTestRecovery(net, mgr.IsNetworkPaused, 10*time.Millisecond, 50*time.Millisecond)
+	var pauseEvents atomic.Int32
+	cb := mgr.RegisterCallback(func(evt int) {
+		switch evt {
+		case pause.EventNetworkPause:
+			pauseEvents.Add(1)
+			rec.pause()
+		case pause.EventNetworkWake:
+			rec.wake()
+		}
+	})
+	go rec.run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		rec.stop()
+		mgr.UnregisterCallback(cb)
+	})
+
+	mgr.NetworkPause()
+	require.Eventually(t, func() bool {
+		return net.resets.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond)
+	require.True(t, mgr.IsNetworkPaused())
+
+	net.setPending(0)
+	mgr.NetworkPause()
+	require.EqualValues(t, 1, pauseEvents.Load())
+	require.Eventually(t, func() bool {
+		return len(net.NetworkInterfaces()) == 0
+	}, 2*time.Second, 20*time.Millisecond, "polling must continue while the pause remains latched")
+	net.setPending(1)
+	require.Eventually(t, func() bool {
+		return net.resets.Load() == 2
+	}, 2*time.Second, 20*time.Millisecond, "a second outage must recover without another pause event")
+	require.Never(t, func() bool {
+		return net.resets.Load() > 2
+	}, 300*time.Millisecond, 20*time.Millisecond, "stable interfaces must not trigger repeated resets")
+
+	mgr.NetworkWake()
+	settled := stableCount(t, net.updates.Load)
+	require.Never(t, func() bool {
+		return net.updates.Load() > settled
+	}, 300*time.Millisecond, 20*time.Millisecond, "an actual network wake must stop polling")
 }
 
 func TestNetRecovery_StopsWhenUnpaused(t *testing.T) {

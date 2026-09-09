@@ -28,7 +28,6 @@ type boxNetwork interface {
 }
 
 // netRecovery re-polls interfaces while the pause manager reports the network paused.
-// When the interface list transitions from empty to non-empty, it resets the network once and disarms.
 type netRecovery struct {
 	network       boxNetwork
 	networkPaused func() bool // authoritative pause state
@@ -96,7 +95,6 @@ func (r *netRecovery) run(ctx context.Context) {
 			}
 			if r.attempt() {
 				slog.Debug("Network recovery: interfaces returned, network reset")
-				break
 			}
 		}
 	}
