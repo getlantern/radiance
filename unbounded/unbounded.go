@@ -235,8 +235,9 @@ func donorSTUNPool(servers []string) []string {
 		}
 	}
 	if len(pool) == 0 {
-		return C.DefaultDonorSTUNServers()
+		pool = C.DefaultDonorSTUNServers()
 	}
+	slices.Sort(pool)
 	return pool
 }
 

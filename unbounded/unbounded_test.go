@@ -818,3 +818,27 @@ func TestApplyConfigRestartsOnSTUNChange(t *testing.T) {
 	}
 	require.True(t, cfgEqual(&C.UnboundedConfig{}, &C.UnboundedConfig{STUNServers: C.DefaultDonorSTUNServers()}))
 }
+
+func TestApplyConfigDoesNotRestartOnSTUNReorder(t *testing.T) {
+	starts := atomic.Int32{}
+	resetManager(t, func(_ *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		starts.Add(1)
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	cfg := testCfg()
+	cfg.STUNServers = []string{"stun:192.0.2.1:3478", "stun:192.0.2.2:3478"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	waitForCount(t, &starts, 1, time.Second)
+	manager.mu.Lock()
+	originalDone := manager.done
+	manager.mu.Unlock()
+	cfg.STUNServers = []string{"stun:192.0.2.2:3478", " stun:192.0.2.1:3478 ", "stun:192.0.2.2:3478"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	manager.mu.Lock()
+	currentDone := manager.done
+	manager.mu.Unlock()
+	require.Equal(t, originalDone, currentDone)
+	require.Equal(t, int32(1), starts.Load())
+}
