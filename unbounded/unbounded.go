@@ -29,7 +29,6 @@ import (
 	"math/rand"
 	"net"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -213,36 +212,8 @@ func cfgUsable(cfg *C.UnboundedConfig) bool {
 		cfg.EgressAddr != "" && cfg.EgressEndpoint != ""
 }
 
-func cfgEqual(a, b *C.UnboundedConfig) bool {
-	if a == b {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.DiscoverySrv == b.DiscoverySrv && a.DiscoveryEndpoint == b.DiscoveryEndpoint &&
-		a.EgressAddr == b.EgressAddr && a.EgressEndpoint == b.EgressEndpoint &&
-		a.CTableSize == b.CTableSize && a.PTableSize == b.PTableSize &&
-		slices.Equal(donorSTUNPool(a.STUNServers), donorSTUNPool(b.STUNServers))
-}
-
-func donorSTUNPool(servers []string) []string {
-	pool := make([]string, 0, len(servers))
-	for _, server := range servers {
-		server = strings.TrimSpace(server)
-		if server != "" && !slices.Contains(pool, server) {
-			pool = append(pool, server)
-		}
-	}
-	if len(pool) == 0 {
-		pool = C.DefaultDonorSTUNServers()
-	}
-	slices.Sort(pool)
-	return pool
-}
-
 func donorSTUNBatch(servers []string) func(uint32) ([]string, error) {
-	pool := donorSTUNPool(servers)
+	pool := C.NormalizeDonorSTUNServers(servers)
 	return func(size uint32) ([]string, error) {
 		batch := slices.Clone(pool)
 		rand.Shuffle(len(batch), func(i, j int) { batch[i], batch[j] = batch[j], batch[i] })
@@ -371,7 +342,7 @@ func applyConfig(cfg config.Config) {
 	shouldRun := manager.shouldStart()
 	running := manager.cancel != nil
 	ucfg := manager.lastCfg
-	cfgChanged := running && !cfgEqual(manager.runningCfg, ucfg)
+	cfgChanged := running && !manager.runningCfg.Equal(ucfg)
 	manager.mu.Unlock()
 
 	switch {
@@ -524,11 +495,7 @@ func (m *unboundedManager) start() {
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.done = done
-	// Snapshot the config the worker is being started with so a
-	// later applyConfig can detect parameter changes and restart.
-	// Pointer-stored (not value-stored) because the upstream
-	// lastCfg is also a pointer and equality is value-based via
-	// cfgEqual.
+	// Retain the immutable config snapshot to detect changes while this worker runs.
 	m.runningCfg = ucfg
 	m.peers = make(map[int]string)
 	m.mu.Unlock()

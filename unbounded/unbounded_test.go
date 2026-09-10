@@ -762,7 +762,7 @@ func TestDonorSTUNConfiguration(t *testing.T) {
 			manager.start()
 			select {
 			case batch := <-received:
-				require.ElementsMatch(t, donorSTUNPool(servers), batch)
+				require.ElementsMatch(t, C.NormalizeDonorSTUNServers(servers), batch)
 				require.NotEmpty(t, batch)
 			case <-time.After(time.Second):
 				t.Fatal("donor startup blocked")
@@ -816,7 +816,6 @@ func TestApplyConfigRestartsOnSTUNChange(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("STUN change did not restart donor")
 	}
-	require.True(t, cfgEqual(&C.UnboundedConfig{}, &C.UnboundedConfig{STUNServers: C.DefaultDonorSTUNServers()}))
 }
 
 func TestApplyConfigDoesNotRestartOnSTUNReorder(t *testing.T) {
