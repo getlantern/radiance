@@ -3,6 +3,11 @@
 package ipc
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,4 +37,39 @@ func TestFallbackOptionsPreserveUserMessageCapabilities(t *testing.T) {
 	fallback.EnvOverrides["RADIANCE_ENV"] = "changed"
 	require.Equal(t, wire.SurfaceSnackbar, client.opts.UserMessageCapabilities.Surfaces[0])
 	require.Equal(t, "staging", client.opts.EnvOverrides["RADIANCE_ENV"])
+}
+
+type remoteTransport func(*http.Request) (*http.Response, error)
+
+func (f remoteTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRemoteClientNeverCreatesFallback(t *testing.T) {
+	client := NewRemoteClient()
+	require.Nil(t, client.localapi)
+	defer client.Close()
+	for _, connectionErr := range []error{syscall.ENOENT, syscall.ECONNREFUSED} {
+		client.http.Transport = remoteTransport(func(*http.Request) (*http.Response, error) {
+			return nil, connectionErr
+		})
+		_, err := client.do(context.Background(), http.MethodGet, "/settings", nil)
+		require.ErrorIs(t, err, ErrIPCNotRunning)
+		require.ErrorIs(t, err, connectionErr)
+		require.ErrorIs(t, client.sseStream(context.Background(), "/config/events", func([]byte) {}), ErrIPCNotRunning)
+		require.Nil(t, client.localapi)
+	}
+	client.http.Transport = remoteTransport(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		if r.Header.Get("Accept") == "text/event-stream" {
+			body = "data: connected\n\n"
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})
+	body, err := client.do(context.Background(), http.MethodGet, "/settings", nil)
+	require.NoError(t, err)
+	require.Equal(t, "{}", string(body))
+	var event string
+	require.NoError(t, client.sseStream(context.Background(), "/config/events", func(data []byte) { event = string(data) }))
+	require.Equal(t, "connected", event)
+	client.Close()
+	require.Nil(t, client.localapi)
 }
