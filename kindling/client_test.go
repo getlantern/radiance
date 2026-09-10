@@ -52,23 +52,13 @@ type fakePausable struct{ paused, resumed int }
 func (f *fakePausable) Pause()  { f.paused++ }
 func (f *fakePausable) Resume() { f.resumed++ }
 
-func TestClientPauseResumeDelegates(t *testing.T) {
-	p := &fakePausable{}
-	c := &Client{pausers: []pausable{p}}
-
-	c.Pause()
-	c.Pause()
-	c.Resume()
-
-	assert.Equal(t, 2, p.paused)
-	assert.Equal(t, 1, p.resumed)
-}
-
-func TestClientPauseResumeNoPausers(t *testing.T) {
+func TestApplyPauseNoPausers(t *testing.T) {
 	c := &Client{}
+	pauseMu.Lock()
+	defer pauseMu.Unlock()
 	// Must not panic with no pausable transports.
-	c.Pause()
-	c.Resume()
+	c.applyPause(true)
+	c.applyPause(false)
 }
 
 // restorePackageState isolates tests that touch the shared instance and its
@@ -77,15 +67,14 @@ func restorePackageState(t *testing.T) {
 	t.Helper()
 	mu.Lock()
 	pauseMu.Lock()
-	prevK, prevPaused, prevPauseApplied, prevInitialized, prevTransport := k, paused, pauseApplied, initialized, transport
-	k, paused, pauseApplied, initialized, transport = nil, false, false, false, nil
+	prevK, prevPaused, prevInitialized, prevTransport := k, paused, initialized, transport
+	k, paused, initialized, transport = nil, false, false, nil
 	pauseMu.Unlock()
 	mu.Unlock()
 	t.Cleanup(func() {
 		mu.Lock()
 		pauseMu.Lock()
-		k, pauseApplied, initialized, transport = prevK, prevPauseApplied, prevInitialized, prevTransport
-		paused = prevPaused
+		k, paused, initialized, transport = prevK, prevPaused, prevInitialized, prevTransport
 		pauseMu.Unlock()
 		mu.Unlock()
 	})
@@ -104,32 +93,20 @@ func TestPauseHeldForClientInstalledLater(t *testing.T) {
 	assert.Equal(t, 1, p.paused, "a client installed while paused must start paused")
 }
 
-func TestSetClientSkipsAlreadyAppliedHeldPause(t *testing.T) {
-	restorePackageState(t)
-	p := &fakePausable{paused: 1}
-	Pause()
-
-	mu.Lock()
-	setClient(&Client{pausers: []pausable{p}, pauseApplied: true})
-	mu.Unlock()
-	Resume()
-
-	assert.Equal(t, 1, p.paused, "a construction-applied pause must not be applied again")
-	assert.Equal(t, 1, p.resumed)
-}
-
 func TestPauseResumeDelegateToLiveClient(t *testing.T) {
 	restorePackageState(t)
-	p := &fakePausable{}
+	first, second := &fakePausable{}, &fakePausable{}
 	mu.Lock()
-	setClient(&Client{pausers: []pausable{p}})
+	setClient(&Client{pausers: []pausable{first, second}})
 	mu.Unlock()
 
 	Pause()
 	Resume()
 
-	assert.Equal(t, 1, p.paused)
-	assert.Equal(t, 1, p.resumed)
+	for _, p := range []*fakePausable{first, second} {
+		assert.Equal(t, 1, p.paused, "every pauser must receive the pause")
+		assert.Equal(t, 1, p.resumed, "every pauser must receive the resume")
+	}
 }
 
 func TestPauseResumeIgnoreRedundantCalls(t *testing.T) {
@@ -172,4 +149,5 @@ func TestResumeClearsHeldPause(t *testing.T) {
 	mu.Unlock()
 
 	assert.Equal(t, 0, p.paused, "a client installed after resume must start running")
+	assert.Equal(t, 0, p.resumed, "a client installed unpaused must not be touched")
 }

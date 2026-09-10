@@ -43,10 +43,9 @@ var (
 	pauseMu     sync.Mutex
 	initialized bool
 	k           *Client
-	// paused is separate from init state so pause events can land while the
-	// shared instance is still being built.
-	paused       bool
-	pauseApplied bool
+	// paused is the current pause state, kept here because a pause can arrive
+	// with no client to receive it.
+	paused bool
 	// EnabledTransports gates which transports NewKindling wires up. AMP and DNS
 	// tunneling are parked off for every country; their builders stay wired
 	// behind these flags so turning either back on is a one-line change.
@@ -66,7 +65,7 @@ var (
 )
 
 func initKindling() {
-	newK, err := newKindling(settings.GetString(settings.DataPathKey), isPaused)
+	newK, err := NewKindling(settings.GetString(settings.DataPathKey))
 	if err != nil {
 		slog.Error("failed to create kindling client", slog.Any("error", err))
 	}
@@ -127,7 +126,6 @@ func Close() error {
 	initialized = false
 	// Wakes only ever come from a live tunnel, so a pause must not outlive one.
 	paused = false
-	pauseApplied = false
 	return nil
 }
 
@@ -141,9 +139,8 @@ func Pause() {
 		return
 	}
 	paused = true
-	if k != nil && !pauseApplied {
-		k.Pause()
-		pauseApplied = true
+	if k != nil {
+		k.applyPause(true)
 	}
 }
 
@@ -156,31 +153,19 @@ func Resume() {
 	}
 	paused = false
 	if k != nil {
-		k.Resume()
+		k.applyPause(false)
 	}
-	pauseApplied = false
 }
 
-// setClient installs c as the shared instance, applying any pause that arrived
-// before it existed. The caller must hold mu.
+// setClient installs c as the shared instance, applying any pause held at
+// install time. The caller must hold mu.
 func setClient(c *Client) {
 	pauseMu.Lock()
 	defer pauseMu.Unlock()
 	k = c
-	pauseApplied = false
-	if c == nil || !paused {
-		return
+	if c != nil && paused {
+		c.applyPause(true)
 	}
-	if !c.pauseApplied {
-		c.Pause()
-	}
-	pauseApplied = true
-}
-
-func isPaused() bool {
-	pauseMu.Lock()
-	defer pauseMu.Unlock()
-	return paused
 }
 
 const tracerName = "github.com/getlantern/radiance/kindling"
@@ -195,24 +180,20 @@ type pausable interface {
 // construction created (config updaters, fronted/dnstt state).
 type Client struct {
 	kindling.Kindling
-	cancel       context.CancelFunc
-	closers      []func() error
-	pausers      []pausable
-	pauseApplied bool
-	closeOnce    sync.Once
+	cancel    context.CancelFunc
+	closers   []func() error
+	pausers   []pausable
+	closeOnce sync.Once
 }
 
-// Pause suspends the pausable transports' background work.
-func (c *Client) Pause() {
+// applyPause must be called with pauseMu held.
+func (c *Client) applyPause(pause bool) {
 	for _, p := range c.pausers {
-		p.Pause()
-	}
-}
-
-// Resume restarts the background work suspended by Pause.
-func (c *Client) Resume() {
-	for _, p := range c.pausers {
-		p.Resume()
+		if pause {
+			p.Pause()
+		} else {
+			p.Resume()
+		}
 	}
 }
 
@@ -235,10 +216,6 @@ func (c *Client) Close() error {
 // NewKindling builds a kindling client. On error, any partially built
 // transport state is released before returning.
 func NewKindling(dataDir string) (*Client, error) {
-	return newKindling(dataDir, func() bool { return false })
-}
-
-func newKindling(dataDir string, startPaused func() bool) (*Client, error) {
 	logger := &slogWriter{Logger: slog.Default()}
 
 	ctx, span := otel.Tracer(tracerName).Start(
@@ -276,23 +253,13 @@ func newKindling(dataDir string, startPaused func() bool) (*Client, error) {
 	}
 
 	updaterCtx, cancel := context.WithCancel(ctx)
-	initialPauseApplied := false
 	if enabled := EnabledTransports[kindling.TransportDomainfront]; enabled {
-		frontedPauseApplied := false
-		f, err := fronted.NewFronted(updaterCtx, filepath.Join(dataDir, "fronted_cache.json"), logger, func() bool {
-			frontedPauseApplied = startPaused()
-			return frontedPauseApplied
-		})
+		f, err := fronted.NewFronted(updaterCtx, filepath.Join(dataDir, "fronted_cache.json"), logger)
 		if err != nil {
 			slog.Error("failed to create fronted client", slog.Any("error", err))
 			span.RecordError(err)
 		}
 		if f != nil {
-			if startPaused() && !frontedPauseApplied {
-				f.Pause()
-				frontedPauseApplied = true
-			}
-			initialPauseApplied = frontedPauseApplied
 			closers = append(closers, func() error { f.Close(); return nil })
 			pausers = append(pausers, f)
 			kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
@@ -338,11 +305,10 @@ func newKindling(dataDir string, startPaused func() bool) (*Client, error) {
 		return nil, errors.Join(errs...)
 	}
 	return &Client{
-		Kindling:     newK,
-		cancel:       cancel,
-		closers:      closers,
-		pausers:      pausers,
-		pauseApplied: initialPauseApplied,
+		Kindling: newK,
+		cancel:   cancel,
+		closers:  closers,
+		pausers:  pausers,
 	}, nil
 }
 

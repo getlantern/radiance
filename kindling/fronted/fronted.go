@@ -74,9 +74,8 @@ func retryableResponse(resp *http.Response) bool {
 // valid response wins. domainfront's config updater (WithConfigURL) fetches them
 // off the critical path, persists the result (WithConfigCacheFile), and
 // bootstraps from that persisted copy on the next start in preference to the
-// embedded seed. The smart HTTP client is tuned for both hosts. If startPaused
-// reports true during construction, background work starts paused.
-func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer, startPaused func() bool) (*domainfront.Client, error) {
+// embedded seed. The smart HTTP client is tuned for both hosts.
+func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer) (*domainfront.Client, error) {
 	_, span := otel.Tracer(tracerName).Start(ctx, "NewFronted")
 	defer span.End()
 
@@ -100,13 +99,6 @@ func NewFronted(ctx context.Context, cacheFile string, logWriter io.Writer, star
 		domainfront.WithConfigURL(configURL, mirrorConfigURL),
 		domainfront.WithHTTPClient(smartClient),
 		domainfront.WithRetryableResponse(retryableResponse),
-	}
-	if startPaused != nil {
-		opts = append(opts, func(c *domainfront.Client) {
-			if startPaused() {
-				c.Pause()
-			}
-		})
 	}
 	return domainfront.New(ctx, seed, opts...)
 }
