@@ -21,6 +21,10 @@ message ReportIssueRequest {
         CRASHES = 6;
         OTHER = 9;
         UPDATE_FAIL = 10;
+        SPLIT_TUNNEL = 11;
+        SMART_ROUTING = 12;
+        SERVER_SELECTION = 13;
+        UPGRADE_FAIL = 14;
     }
     
 	ISSUE_TYPE type = 1;

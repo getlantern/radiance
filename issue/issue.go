@@ -57,6 +57,10 @@ const (
 	ApplicationCrashes
 	Other IssueType = iota + 2
 	UpdateFails
+	SplitTunnel
+	SmartRouting
+	ServerSelection
+	UpgradeFail
 )
 
 type IssueReport struct {
