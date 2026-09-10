@@ -26,7 +26,10 @@ package unbounded
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"net"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -210,11 +213,6 @@ func cfgUsable(cfg *C.UnboundedConfig) bool {
 		cfg.EgressAddr != "" && cfg.EgressEndpoint != ""
 }
 
-// cfgEqual reports whether two UnboundedConfig pointers refer to
-// configurations broflake would consume identically. UnboundedConfig
-// is a flat struct of strings and ints, so value equality is well-
-// defined. Nil pointers compare equal to themselves and unequal to
-// any non-nil pointer.
 func cfgEqual(a, b *C.UnboundedConfig) bool {
 	if a == b {
 		return true
@@ -222,7 +220,36 @@ func cfgEqual(a, b *C.UnboundedConfig) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return *a == *b
+	return a.DiscoverySrv == b.DiscoverySrv && a.DiscoveryEndpoint == b.DiscoveryEndpoint &&
+		a.EgressAddr == b.EgressAddr && a.EgressEndpoint == b.EgressEndpoint &&
+		a.CTableSize == b.CTableSize && a.PTableSize == b.PTableSize &&
+		slices.Equal(donorSTUNPool(a.STUNServers), donorSTUNPool(b.STUNServers))
+}
+
+func donorSTUNPool(servers []string) []string {
+	pool := make([]string, 0, len(servers))
+	for _, server := range servers {
+		server = strings.TrimSpace(server)
+		if server != "" && !slices.Contains(pool, server) {
+			pool = append(pool, server)
+		}
+	}
+	if len(pool) == 0 {
+		return C.DefaultDonorSTUNServers()
+	}
+	return pool
+}
+
+func donorSTUNBatch(servers []string) func(uint32) ([]string, error) {
+	pool := donorSTUNPool(servers)
+	return func(size uint32) ([]string, error) {
+		batch := slices.Clone(pool)
+		rand.Shuffle(len(batch), func(i, j int) { batch[i], batch[j] = batch[j], batch[i] })
+		if uint64(size) < uint64(len(batch)) {
+			batch = batch[:size]
+		}
+		return batch, nil
+	}
 }
 
 // Enabled reports whether the local opt-in is set. Doesn't say whether
@@ -326,22 +353,19 @@ func InitSubscription(initial *config.Config) {
 	}
 }
 
-// applyConfig caches the server-side half of the start predicate and
-// transitions the manager start/stop accordingly. Shared by
-// InitSubscription's NewConfigEvent handler and the initial-config
-// seeding path so cached and live configs follow identical logic.
-// No-op when the manager is disarmed (post-Stop) so a late event
-// arriving after backend shutdown doesn't revive the widget.
+// applyConfig ignores updates after Stop so late events cannot restart the widget.
 func applyConfig(cfg config.Config) {
 	manager.mu.Lock()
 	if !manager.armed {
 		manager.mu.Unlock()
 		return
 	}
-	// config.Config is a type alias for C.ConfigResponse on the
-	// current radiance branch — no nested .ConfigResponse field,
-	// just dereference and use directly.
 	manager.lastCfg = cfg.Unbounded
+	if cfg.Unbounded != nil {
+		copied := *cfg.Unbounded
+		copied.STUNServers = slices.Clone(cfg.Unbounded.STUNServers)
+		manager.lastCfg = &copied
+	}
 	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
 	shouldRun := manager.shouldStart()
 	running := manager.cancel != nil
@@ -559,7 +583,9 @@ func (m *unboundedManager) start() {
 		}
 
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
+		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		if ucfg != nil {
+			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
 			if ucfg.DiscoverySrv != "" {
 				rtcOpt.DiscoverySrv = ucfg.DiscoverySrv
 			}
