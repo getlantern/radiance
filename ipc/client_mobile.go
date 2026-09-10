@@ -47,6 +47,12 @@ func NewClient(ctx context.Context, opts backend.Options) (*Client, error) {
 	return c, nil
 }
 
+// NewRemoteClient creates a socket-only client that never starts or owns a backend.
+// An unavailable IPC server produces ErrIPCNotRunning instead of a local fallback.
+func NewRemoteClient() *Client {
+	return newClient()
+}
+
 // NewLoopbackClient creates a Client that serves all requests in-process
 // through the given LocalBackend without attempting IPC socket connections.
 // The backend is NOT owned by this client — Close will not shut it down.
@@ -71,6 +77,9 @@ func (c *Client) Close() {
 func (c *Client) stopLocal() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.localapi == nil {
+		return
+	}
 	if be := c.localapi.setBackend(nil); be != nil {
 		be.Close()
 	}
@@ -100,6 +109,9 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) ([]b
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if isConnectionError(err) {
+			if c.localapi == nil {
+				return nil, fmt.Errorf("ipc request %s %s: %w: %w", method, endpoint, ErrIPCNotRunning, err)
+			}
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			if be := c.localapi.be.Load(); be == nil {
@@ -266,11 +278,8 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		c.mu.RLock()
-		hasFallback := c.localapi != nil
-		c.mu.RUnlock()
-		if hasFallback && isConnectionError(err) {
-			return ErrIPCNotRunning
+		if isConnectionError(err) {
+			return fmt.Errorf("SSE connect %s: %w: %w", endpoint, ErrIPCNotRunning, err)
 		}
 		return fmt.Errorf("SSE connect %s: %w", endpoint, err)
 	}
