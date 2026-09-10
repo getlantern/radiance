@@ -279,7 +279,7 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if isConnectionError(err) {
-			return ErrIPCNotRunning
+			return fmt.Errorf("SSE connect %s: %w: %w", endpoint, ErrIPCNotRunning, err)
 		}
 		return fmt.Errorf("SSE connect %s: %w", endpoint, err)
 	}

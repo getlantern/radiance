@@ -54,7 +54,9 @@ func TestRemoteClientNeverCreatesFallback(t *testing.T) {
 		_, err := client.do(context.Background(), http.MethodGet, "/settings", nil)
 		require.ErrorIs(t, err, ErrIPCNotRunning)
 		require.ErrorIs(t, err, connectionErr)
-		require.ErrorIs(t, client.sseStream(context.Background(), "/config/events", func([]byte) {}), ErrIPCNotRunning)
+		err = client.sseStream(context.Background(), "/config/events", func([]byte) {})
+		require.ErrorIs(t, err, ErrIPCNotRunning)
+		require.ErrorIs(t, err, connectionErr)
 		require.Nil(t, client.localapi)
 	}
 	client.http.Transport = remoteTransport(func(r *http.Request) (*http.Response, error) {
