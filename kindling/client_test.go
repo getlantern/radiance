@@ -1,6 +1,7 @@
 package kindling
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -54,28 +55,21 @@ func (f *fakePausable) Resume() { f.resumed++ }
 
 func TestApplyPauseNoPausers(t *testing.T) {
 	c := &Client{}
-	pauseMu.Lock()
-	defer pauseMu.Unlock()
-	// Must not panic with no pausable transports.
-	c.applyPause(true)
-	c.applyPause(false)
+	mu.Lock()
+	defer mu.Unlock()
+	c.applyPauseLocked(true)
+	c.applyPauseLocked(false)
 }
 
-// restorePackageState isolates tests that touch the shared instance and its
-// held pause state.
 func restorePackageState(t *testing.T) {
 	t.Helper()
 	mu.Lock()
-	pauseMu.Lock()
 	prevK, prevPaused, prevInitialized, prevTransport := k, paused, initialized, transport
 	k, paused, initialized, transport = nil, false, false, nil
-	pauseMu.Unlock()
 	mu.Unlock()
 	t.Cleanup(func() {
 		mu.Lock()
-		pauseMu.Lock()
 		k, paused, initialized, transport = prevK, prevPaused, prevInitialized, prevTransport
-		pauseMu.Unlock()
 		mu.Unlock()
 	})
 }
@@ -84,8 +78,7 @@ func TestPauseHeldForClientInstalledLater(t *testing.T) {
 	restorePackageState(t)
 	p := &fakePausable{}
 
-	// No shared instance yet, so this only records the state.
-	Pause()
+	SetNetworkPaused(t.Context(), true)
 	mu.Lock()
 	setClient(&Client{pausers: []pausable{p}})
 	mu.Unlock()
@@ -100,8 +93,8 @@ func TestPauseResumeDelegateToLiveClient(t *testing.T) {
 	setClient(&Client{pausers: []pausable{first, second}})
 	mu.Unlock()
 
-	Pause()
-	Resume()
+	SetNetworkPaused(t.Context(), true)
+	SetNetworkPaused(t.Context(), false)
 
 	for _, p := range []*fakePausable{first, second} {
 		assert.Equal(t, 1, p.paused, "every pauser must receive the pause")
@@ -116,10 +109,10 @@ func TestPauseResumeIgnoreRedundantCalls(t *testing.T) {
 	setClient(&Client{pausers: []pausable{p}})
 	mu.Unlock()
 
-	Pause()
-	Pause()
-	Resume()
-	Resume()
+	SetNetworkPaused(t.Context(), true)
+	SetNetworkPaused(t.Context(), true)
+	SetNetworkPaused(t.Context(), false)
+	SetNetworkPaused(t.Context(), false)
 
 	assert.Equal(t, 1, p.paused, "a redundant Pause must not reach the transports")
 	assert.Equal(t, 1, p.resumed, "a redundant Resume must not reach the transports")
@@ -129,7 +122,7 @@ func TestCloseClearsHeldPause(t *testing.T) {
 	restorePackageState(t)
 	p := &fakePausable{}
 
-	Pause()
+	SetNetworkPaused(t.Context(), true)
 	require.NoError(t, Close())
 	mu.Lock()
 	setClient(&Client{pausers: []pausable{p}})
@@ -142,12 +135,57 @@ func TestResumeClearsHeldPause(t *testing.T) {
 	restorePackageState(t)
 	p := &fakePausable{}
 
-	Pause()
-	Resume()
+	SetNetworkPaused(t.Context(), true)
+	SetNetworkPaused(t.Context(), false)
 	mu.Lock()
 	setClient(&Client{pausers: []pausable{p}})
 	mu.Unlock()
 
 	assert.Equal(t, 0, p.paused, "a client installed after resume must start running")
 	assert.Equal(t, 0, p.resumed, "a client installed unpaused must not be touched")
+}
+
+func TestSetNetworkPausedIgnoresCanceledUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		next bool
+	}{
+		{name: "pause", next: true},
+		{name: "wake", next: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restorePackageState(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			SetNetworkPaused(t.Context(), !tc.next)
+			p := &fakePausable{}
+			mu.Lock()
+			setClient(&Client{pausers: []pausable{p}})
+			mu.Unlock()
+			before := *p
+
+			SetNetworkPaused(ctx, tc.next)
+
+			assert.Equal(t, before, *p, "canceled updates must not reach a live transport")
+			assert.Equal(t, !tc.next, paused, "canceled updates must not change the held state")
+		})
+	}
+}
+
+func TestSetNetworkPausedCanceledPauseAfterClose(t *testing.T) {
+	restorePackageState(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	SetNetworkPaused(ctx, true)
+	cancel()
+	require.NoError(t, Close())
+
+	SetNetworkPaused(ctx, true)
+	p := &fakePausable{}
+	mu.Lock()
+	setClient(&Client{pausers: []pausable{p}})
+	mu.Unlock()
+
+	assert.Zero(t, p.paused, "a canceled backend must not pause the next client")
+	SetNetworkPaused(t.Context(), true)
+	assert.Equal(t, 1, p.paused, "the next backend must still be able to pause")
 }

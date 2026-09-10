@@ -40,7 +40,6 @@ const (
 
 var (
 	mu          sync.Mutex
-	pauseMu     sync.Mutex
 	initialized bool
 	k           *Client
 	// paused is the current pause state, kept here because a pause can arrive
@@ -114,8 +113,6 @@ func Close() error {
 	// extension stops, so Close must not be terminal.
 	mu.Lock()
 	defer mu.Unlock()
-	pauseMu.Lock()
-	defer pauseMu.Unlock()
 	if k != nil {
 		if err := k.Close(); err != nil {
 			slog.Error("failed to close kindling transports", slog.Any("error", err))
@@ -129,42 +126,29 @@ func Close() error {
 	return nil
 }
 
-// Pause suspends background work in the shared instance's pausable transports
-// and applies to the next instance installed. Redundant calls are dropped, so
-// duplicate events never reach a transport and one Resume always resumes.
-func Pause() {
-	pauseMu.Lock()
-	defer pauseMu.Unlock()
-	if paused {
+// SetNetworkPaused sets whether the shared transports' background work is paused.
+//
+// The state also applies to clients installed later, until Close resets it.
+// Updates from canceled contexts are ignored.
+func SetNetworkPaused(ctx context.Context, next bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	// Cancellation must be checked under mu to reject updates arriving after teardown.
+	if ctx.Err() != nil || paused == next {
 		return
 	}
-	paused = true
+	paused = next
 	if k != nil {
-		k.applyPause(true)
-	}
-}
-
-// Resume restarts the background work suspended by Pause.
-func Resume() {
-	pauseMu.Lock()
-	defer pauseMu.Unlock()
-	if !paused {
-		return
-	}
-	paused = false
-	if k != nil {
-		k.applyPause(false)
+		k.applyPauseLocked(next)
 	}
 }
 
 // setClient installs c as the shared instance, applying any pause held at
 // install time. The caller must hold mu.
 func setClient(c *Client) {
-	pauseMu.Lock()
-	defer pauseMu.Unlock()
 	k = c
 	if c != nil && paused {
-		c.applyPause(true)
+		c.applyPauseLocked(true)
 	}
 }
 
@@ -186,8 +170,8 @@ type Client struct {
 	closeOnce sync.Once
 }
 
-// applyPause must be called with pauseMu held.
-func (c *Client) applyPause(pause bool) {
+// applyPauseLocked must be called with mu held.
+func (c *Client) applyPauseLocked(pause bool) {
 	for _, p := range c.pausers {
 		if pause {
 			p.Pause()

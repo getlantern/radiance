@@ -503,9 +503,9 @@ func (r *LocalBackend) startVPNStatusListeners() {
 	events.SubscribeContext(r.ctx, func(evt vpn.NetworkEvent) {
 		switch evt.EventType {
 		case vpn.NetworkEventPaused:
-			kindling.Pause()
+			kindling.SetNetworkPaused(r.ctx, true)
 		case vpn.NetworkEventWake:
-			kindling.Resume()
+			kindling.SetNetworkPaused(r.ctx, false)
 		}
 	})
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
