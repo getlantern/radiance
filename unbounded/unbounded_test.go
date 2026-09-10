@@ -2,6 +2,7 @@ package unbounded
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -743,4 +744,100 @@ func TestInternalStop_TimesOut(t *testing.T) {
 
 	// Release the worker so the test's cleanup wait completes.
 	close(block)
+}
+
+func TestDonorSTUNConfiguration(t *testing.T) {
+	for _, servers := range [][]string{nil, {}, {" ", ""}, {"stun:192.0.2.1:3478", "stun:192.0.2.2:3478"}} {
+		t.Run(fmt.Sprint(servers), func(t *testing.T) {
+			received := make(chan []string, 1)
+			resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+				batch, err := rtc.STUNBatch(100)
+				received <- batch
+				return &fakeWidget{}, err
+			})
+			defer manager.stop()
+			cfg := testCfg()
+			cfg.STUNServers = servers
+			primeManager(t, cfg)
+			manager.start()
+			select {
+			case batch := <-received:
+				require.ElementsMatch(t, C.NormalizeDonorSTUNServers(servers), batch)
+				require.NotEmpty(t, batch)
+			case <-time.After(time.Second):
+				t.Fatal("donor startup blocked")
+			}
+		})
+	}
+}
+
+func TestDonorSTUNBatchIsolation(t *testing.T) {
+	pool := []string{" stun:192.0.2.1:3478 ", "stun:192.0.2.1:3478", "stun:192.0.2.2:3478"}
+	sample := donorSTUNBatch(pool)
+	pool[0] = "changed"
+	batch, err := sample(100)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"stun:192.0.2.1:3478", "stun:192.0.2.2:3478"}, batch)
+	batch[0] = "changed"
+	next, err := sample(100)
+	require.NoError(t, err)
+	require.NotContains(t, next, "changed")
+	empty, err := sample(0)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	one, err := sample(1)
+	require.NoError(t, err)
+	require.Len(t, one, 1)
+}
+
+func TestApplyConfigRestartsOnSTUNChange(t *testing.T) {
+	received := make(chan []string, 3)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		batch, err := rtc.STUNBatch(100)
+		received <- batch
+		return &fakeWidget{}, err
+	})
+	defer manager.stop()
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	cfg := testCfg()
+	cfg.STUNServers = []string{"stun:192.0.2.1:3478"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	select {
+	case batch := <-received:
+		require.Equal(t, cfg.STUNServers, batch)
+	case <-time.After(time.Second):
+		t.Fatal("first donor did not start")
+	}
+	cfg.STUNServers[0] = "stun:192.0.2.2:3478"
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	select {
+	case batch := <-received:
+		require.Equal(t, cfg.STUNServers, batch)
+	case <-time.After(time.Second):
+		t.Fatal("STUN change did not restart donor")
+	}
+}
+
+func TestApplyConfigDoesNotRestartOnSTUNReorder(t *testing.T) {
+	starts := atomic.Int32{}
+	resetManager(t, func(_ *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		starts.Add(1)
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	cfg := testCfg()
+	cfg.STUNServers = []string{"stun:192.0.2.1:3478", "stun:192.0.2.2:3478"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	waitForCount(t, &starts, 1, time.Second)
+	manager.mu.Lock()
+	originalDone := manager.done
+	manager.mu.Unlock()
+	cfg.STUNServers = []string{"stun:192.0.2.2:3478", " stun:192.0.2.1:3478 ", "stun:192.0.2.2:3478"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	manager.mu.Lock()
+	currentDone := manager.done
+	manager.mu.Unlock()
+	require.Equal(t, originalDone, currentDone)
+	require.Equal(t, int32(1), starts.Load())
 }

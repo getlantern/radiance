@@ -26,7 +26,9 @@ package unbounded
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -210,19 +212,16 @@ func cfgUsable(cfg *C.UnboundedConfig) bool {
 		cfg.EgressAddr != "" && cfg.EgressEndpoint != ""
 }
 
-// cfgEqual reports whether two UnboundedConfig pointers refer to
-// configurations broflake would consume identically. UnboundedConfig
-// is a flat struct of strings and ints, so value equality is well-
-// defined. Nil pointers compare equal to themselves and unequal to
-// any non-nil pointer.
-func cfgEqual(a, b *C.UnboundedConfig) bool {
-	if a == b {
-		return true
+func donorSTUNBatch(servers []string) func(uint32) ([]string, error) {
+	pool := C.NormalizeDonorSTUNServers(servers)
+	return func(size uint32) ([]string, error) {
+		batch := slices.Clone(pool)
+		rand.Shuffle(len(batch), func(i, j int) { batch[i], batch[j] = batch[j], batch[i] })
+		if uint64(size) < uint64(len(batch)) {
+			batch = batch[:size]
+		}
+		return batch, nil
 	}
-	if a == nil || b == nil {
-		return false
-	}
-	return *a == *b
 }
 
 // Enabled reports whether the local opt-in is set. Doesn't say whether
@@ -326,27 +325,24 @@ func InitSubscription(initial *config.Config) {
 	}
 }
 
-// applyConfig caches the server-side half of the start predicate and
-// transitions the manager start/stop accordingly. Shared by
-// InitSubscription's NewConfigEvent handler and the initial-config
-// seeding path so cached and live configs follow identical logic.
-// No-op when the manager is disarmed (post-Stop) so a late event
-// arriving after backend shutdown doesn't revive the widget.
+// applyConfig ignores updates after Stop so late events cannot restart the widget.
 func applyConfig(cfg config.Config) {
 	manager.mu.Lock()
 	if !manager.armed {
 		manager.mu.Unlock()
 		return
 	}
-	// config.Config is a type alias for C.ConfigResponse on the
-	// current radiance branch — no nested .ConfigResponse field,
-	// just dereference and use directly.
 	manager.lastCfg = cfg.Unbounded
+	if cfg.Unbounded != nil {
+		copied := *cfg.Unbounded
+		copied.STUNServers = slices.Clone(cfg.Unbounded.STUNServers)
+		manager.lastCfg = &copied
+	}
 	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
 	shouldRun := manager.shouldStart()
 	running := manager.cancel != nil
 	ucfg := manager.lastCfg
-	cfgChanged := running && !cfgEqual(manager.runningCfg, ucfg)
+	cfgChanged := running && !manager.runningCfg.Equal(ucfg)
 	manager.mu.Unlock()
 
 	switch {
@@ -499,11 +495,7 @@ func (m *unboundedManager) start() {
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.done = done
-	// Snapshot the config the worker is being started with so a
-	// later applyConfig can detect parameter changes and restart.
-	// Pointer-stored (not value-stored) because the upstream
-	// lastCfg is also a pointer and equality is value-based via
-	// cfgEqual.
+	// Retain the immutable config snapshot to detect changes while this worker runs.
 	m.runningCfg = ucfg
 	m.peers = make(map[int]string)
 	m.mu.Unlock()
@@ -559,7 +551,9 @@ func (m *unboundedManager) start() {
 		}
 
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
+		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		if ucfg != nil {
+			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
 			if ucfg.DiscoverySrv != "" {
 				rtcOpt.DiscoverySrv = ucfg.DiscoverySrv
 			}
