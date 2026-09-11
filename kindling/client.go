@@ -42,6 +42,9 @@ var (
 	mu          sync.Mutex
 	initialized bool
 	k           *Client
+	// paused is the current pause state, kept here because a pause can arrive
+	// with no client to receive it.
+	paused bool
 	// EnabledTransports gates which transports NewKindling wires up. AMP and DNS
 	// tunneling are parked off for every country; their builders stay wired
 	// behind these flags so turning either back on is a one-line change.
@@ -66,7 +69,7 @@ func initKindling() {
 		slog.Error("failed to create kindling client", slog.Any("error", err))
 	}
 	if newK != nil {
-		k = newK
+		setClient(newK)
 		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(newK.NewHTTPClient().Transport))
 	} else {
 		slog.Warn("kindling unavailable, using default transport clone")
@@ -118,10 +121,44 @@ func Close() error {
 	}
 	transport = nil
 	initialized = false
+	// Wakes only ever come from a live tunnel, so a pause must not outlive one.
+	paused = false
 	return nil
 }
 
+// SetNetworkPaused sets whether the shared transports' background work is paused.
+//
+// The state also applies to clients installed later, until Close resets it.
+// Updates from canceled contexts are ignored.
+func SetNetworkPaused(ctx context.Context, next bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	// Cancellation must be checked under mu to reject updates arriving after teardown.
+	if ctx.Err() != nil || paused == next {
+		return
+	}
+	paused = next
+	if k != nil {
+		k.applyPauseLocked(next)
+	}
+}
+
+// setClient installs c as the shared instance, applying any pause held at
+// install time. The caller must hold mu.
+func setClient(c *Client) {
+	k = c
+	if c != nil && paused {
+		c.applyPauseLocked(true)
+	}
+}
+
 const tracerName = "github.com/getlantern/radiance/kindling"
+
+// pausable transports must tolerate repeated Pause and Resume calls.
+type pausable interface {
+	Pause()
+	Resume()
+}
 
 // Client is a kindling instance together with the transport resources its
 // construction created (config updaters, fronted/dnstt state).
@@ -129,7 +166,19 @@ type Client struct {
 	kindling.Kindling
 	cancel    context.CancelFunc
 	closers   []func() error
+	pausers   []pausable
 	closeOnce sync.Once
+}
+
+// applyPauseLocked must be called with mu held.
+func (c *Client) applyPauseLocked(pause bool) {
+	for _, p := range c.pausers {
+		if pause {
+			p.Pause()
+		} else {
+			p.Resume()
+		}
+	}
 }
 
 // Close cancels the transports' config updaters and releases their resources.
@@ -179,6 +228,7 @@ func NewKindling(dataDir string) (*Client, error) {
 	}
 
 	var closers []func() error
+	var pausers []pausable
 	kindlingOptions := []kindling.Option{
 		kindling.WithPanicListener(reporting.PanicListener),
 		kindling.WithLogWriter(logger),
@@ -195,6 +245,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 		if f != nil {
 			closers = append(closers, func() error { f.Close(); return nil })
+			pausers = append(pausers, f)
 			kindlingOptions = append(kindlingOptions, kindling.WithDomainFronting(f))
 		}
 	}
@@ -237,7 +288,12 @@ func NewKindling(dataDir string) (*Client, error) {
 		}
 		return nil, errors.Join(errs...)
 	}
-	return &Client{Kindling: newK, cancel: cancel, closers: closers}, nil
+	return &Client{
+		Kindling: newK,
+		cancel:   cancel,
+		closers:  closers,
+		pausers:  pausers,
+	}, nil
 }
 
 type slogWriter struct {
@@ -260,7 +316,7 @@ func SetKindling(c *Client) {
 	if initialized {
 		return
 	}
-	k = c
+	setClient(c)
 	if c != nil {
 		transport = traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(c.NewHTTPClient().Transport))
 	} else {
