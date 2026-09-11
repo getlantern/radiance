@@ -47,16 +47,23 @@ type Attachment struct {
 	Data []byte
 }
 
+// Values are wire format: they are cast directly to
+// ReportIssueRequest_ISSUE_TYPE, so they must stay in sync with
+// issue.proto and must never be renumbered.
 const (
-	CannotCompletePurchase IssueType = iota
-	CannotSignIn
-	SpinnerLoadsEndlessly
-	CannotAccessBlockedSites
-	Slow
-	CannotLinkDevice
-	ApplicationCrashes
-	Other IssueType = iota + 2
-	UpdateFails
+	CannotCompletePurchase   IssueType = 0
+	CannotSignIn             IssueType = 1
+	SpinnerLoadsEndlessly    IssueType = 2
+	CannotAccessBlockedSites IssueType = 3
+	Slow                     IssueType = 4
+	CannotLinkDevice         IssueType = 5
+	ApplicationCrashes       IssueType = 6
+	Other                    IssueType = 9
+	UpdateFails              IssueType = 10
+	SplitTunnel              IssueType = 11
+	SmartRouting             IssueType = 12
+	ServerSelection          IssueType = 13
+	UpgradeFail              IssueType = 14
 )
 
 type IssueReport struct {
