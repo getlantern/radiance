@@ -8,8 +8,7 @@ concurrency:
 jobs:
   docker_push:
     name: docker push
-    runs-on:
-      group: large-runners
+    runs-on: ubuntu-latest
     permissions:
       contents: "read"
       id-token: "write"
