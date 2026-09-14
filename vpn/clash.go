@@ -35,6 +35,9 @@ type dialAdmissionGate interface {
 
 var _ A.ClashServer = (*clashServer)(nil)
 
+// clashServer is a stub A.ClashServer: it exposes the traffic manager
+// and URL-test history hook the rest of the tunnel depends on, but does not
+// run the Clash HTTP API.
 type clashServer struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
