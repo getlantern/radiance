@@ -929,7 +929,7 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 
 // maxRetainedLanternServers caps the number of working Lantern servers retained
 // across config updates.
-const maxRetainedLanternServers = 60
+const maxRetainedLanternServers = 12
 
 func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	existing := r.srvManager.AllServers()
@@ -939,6 +939,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 		return exists
 	})
 
+	list.Servers = list.Servers[:min(len(list.Servers), maxRetainedLanternServers)]
 	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers)
 
 	if len(tagsToEvict) > 0 {
@@ -1304,6 +1305,9 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		}
 	}
 	managedServers := r.srvManager.AllServers()
+	if cfg != nil {
+		filterUnmanagedConfigOptions(&bOptions.Options, cfg, managedServers)
+	}
 	appendManagedServerOptions(&bOptions.Options, managedServers)
 	bOptions.LanternServerTags = lanternServerTags(cfg, managedServers)
 
@@ -1317,6 +1321,27 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.SelectionHistorySeed = seed
 	}
 	return bOptions
+}
+
+func filterUnmanagedConfigOptions(options *option.Options, cfg *config.Config, managed []*servers.Server) {
+	managedTags := serverTagSet(managed)
+	nonSelectable := nonSelectableSet(cfg)
+	hasManagedLantern := slices.ContainsFunc(managed, func(srv *servers.Server) bool { return srv.IsLantern })
+	coldStartCount := 0
+	keep := func(tag string) bool {
+		_, retained := managedTags[tag]
+		_, infrastructure := nonSelectable[tag]
+		if retained || infrastructure {
+			return true
+		}
+		if !hasManagedLantern && coldStartCount < maxRetainedLanternServers {
+			coldStartCount++
+			return true
+		}
+		return false
+	}
+	options.Outbounds = slices.DeleteFunc(slices.Clone(options.Outbounds), func(out option.Outbound) bool { return !keep(out.Tag) })
+	options.Endpoints = slices.DeleteFunc(slices.Clone(options.Endpoints), func(ep option.Endpoint) bool { return !keep(ep.Tag) })
 }
 
 // lanternServerTags collects the tags of the Lantern servers in cfg and
