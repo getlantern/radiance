@@ -841,3 +841,54 @@ func TestApplyConfigDoesNotRestartOnSTUNReorder(t *testing.T) {
 	require.Equal(t, originalDone, currentDone)
 	require.Equal(t, int32(1), starts.Load())
 }
+
+// TestUnsupportedPlatformNeverStarts: on a platform that can't host the
+// widget proxy (iOS, where the Go backend shares the network extension's
+// fatal 50 MB jetsam cap with the tunnel), the donor path stays off even
+// with all three start conditions satisfied — local toggle, server feature
+// flag, and a fully populated server config. A donor must never be one
+// stale cached config away from taking down a user's VPN.
+func TestUnsupportedPlatformNeverStarts(t *testing.T) {
+	starts := atomic.Int32{}
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		starts.Add(1)
+		return &fakeWidget{}, nil
+	})
+
+	// Cleanups run LIFO, so this lands before resetManager's wait on done.
+	// If the gate ever regresses a worker will be live here, and that wait
+	// would otherwise hang the whole suite instead of just failing this test.
+	t.Cleanup(func() {
+		manager.mu.Lock()
+		cancel := manager.cancel
+		manager.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	})
+
+	prev := platformSupported
+	platformSupported = false
+	t.Cleanup(func() { platformSupported = prev })
+
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	manager.mu.Lock()
+	manager.lastFeatureOn = true
+	manager.lastCfg = testCfg()
+	got := manager.shouldStart()
+	manager.mu.Unlock()
+	assert.False(t, got, "shouldStart must be false on an unsupported platform")
+
+	// Apply() and a direct start() are the two ways in; neither may
+	// construct a widget. start() re-checks shouldStart under the lock,
+	// so the single gate has to cover both.
+	require.NoError(t, Apply())
+	manager.start()
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(0), starts.Load(), "no widget may be built on an unsupported platform")
+
+	manager.mu.Lock()
+	running := manager.cancel != nil
+	manager.mu.Unlock()
+	assert.False(t, running, "no worker may be left running")
+}
