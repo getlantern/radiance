@@ -131,7 +131,7 @@ require (
 	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 // indirect
-	github.com/getlantern/twiddle v0.0.0-20260907083007-7261fa53edc2 // indirect
+	github.com/getlantern/twiddle v0.0.0-20260914193623-e6e3f315cb7d // indirect
 	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230927005056-7f5ce7f0c916 // indirect
