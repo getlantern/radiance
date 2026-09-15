@@ -21,6 +21,16 @@ func TestEmbeddedConfigValid(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.NotEmpty(t, cfg.Providers, "embedded fronted config must contain providers")
+	_, err = cfg.CertPool()
+	require.NoError(t, err)
+	for name, provider := range cfg.Providers {
+		assert.NotEmpty(t, provider.Masquerades, name)
+		assert.LessOrEqual(t, len(provider.Masquerades), 200, name)
+		for country, config := range provider.FrontingSNIs {
+			assert.LessOrEqual(t, len(config.ArbitrarySNIs), 256, name+"/"+country)
+		}
+	}
+
 }
 
 // TestRetryableResponse pins the origin-vs-edge distinction: an origin-issued
