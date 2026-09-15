@@ -36,6 +36,7 @@ import (
 
 	"github.com/getlantern/broflake/clientcore"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
@@ -185,11 +186,33 @@ type unboundedManager struct {
 	arrivals   uint64
 }
 
-// shouldStart reports whether all three start conditions hold. Caller
-// must hold m.mu.
+// shouldStart reports whether all three start conditions hold, and that
+// the platform can host the widget proxy at all. Caller must hold m.mu.
 func (m *unboundedManager) shouldStart() bool {
+	if !platformSupported {
+		return false
+	}
 	return settings.GetBool(settings.UnboundedKey) && m.lastFeatureOn && cfgUsable(m.lastCfg)
 }
+
+// platformSupported reports whether this platform can host the widget proxy.
+//
+// iOS cannot. The whole Go backend runs inside the network extension
+// (ExtensionProvider.swift starts it via MobileStartIPCServer/MobileStartVPN),
+// and that process is held to a fatal 50 MB jetsam cap — exceeding it kills the
+// tunnel outright rather than returning an error. Broflake's WebRTC stack
+// allocates into the same budget as sing-box: field captures show 5 concurrent
+// RTCPeerConnections and 10 WorkerFSMs coming up in the same second as box
+// bring-up, on a process that already plateaus near 40 MB. The VPN has to win
+// that contention, so the donor path stays off.
+//
+// This is deliberately not a server-side-only decision. The server also
+// withholds the config from iOS, but a donor must never be one stale cached
+// config or one flipped local toggle away from taking down a user's tunnel.
+//
+// A var rather than a constant only so tests can exercise the unsupported path
+// on a development machine; nothing outside this package can change it.
+var platformSupported = !common.IsIOS()
 
 // cfgUsable reports whether the cached UnboundedConfig supplies the
 // minimum fields broflake needs to route real consumer traffic:
