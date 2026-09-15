@@ -21,8 +21,11 @@ func TestEmbeddedConfigValid(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.NotEmpty(t, cfg.Providers, "embedded fronted config must contain providers")
+	require.NotEmpty(t, cfg.TrustedCAs)
 	_, err = cfg.CertPool()
 	require.NoError(t, err)
+	// These limits mirror lantern-cloud publishedconfig/compact.go so an
+	// oversized artifact fails the daily refresh before it can ship.
 	for name, provider := range cfg.Providers {
 		assert.NotEmpty(t, provider.Masquerades, name)
 		assert.LessOrEqual(t, len(provider.Masquerades), 200, name)
@@ -30,7 +33,6 @@ func TestEmbeddedConfigValid(t *testing.T) {
 			assert.LessOrEqual(t, len(config.ArbitrarySNIs), 256, name+"/"+country)
 		}
 	}
-
 }
 
 // TestRetryableResponse pins the origin-vs-edge distinction: an origin-issued
