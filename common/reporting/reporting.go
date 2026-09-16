@@ -10,7 +10,7 @@ import (
 	"github.com/getlantern/radiance/log"
 )
 
-// Init enables local connection diagnostics and logs the build version.
+// Init enables bounded, in-memory connection diagnostics and logs the build version.
 func Init(version string) {
 	connectiondiag.Enable(false)
 	slog.Info("reporting initialized", "version", version)

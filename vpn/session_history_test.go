@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getlantern/lantern-box/connectiondiag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -275,4 +276,13 @@ func TestSessionHistory_Storage(t *testing.T) {
 		}
 		assert.LessOrEqual(t, len(h.stored), maxSessions)
 	})
+}
+
+func TestSessionSocketDiagnosticCorrelation(t *testing.T) {
+	connectiondiag.Enable(false)
+	h := &SessionHistory{info: SessionInfo{Bytes: func() (int64, int64, bool) { return 0, 0, false }}}
+	h.startSessionLocked("route-tag", "", "")
+	h.stopPollLocked()
+	require.Equal(t, connectiondiag.OutboundID("route-tag"), h.current.Server.DiagnosticOutboundID)
+	require.NotEmpty(t, h.current.Server.DiagnosticOutboundID)
 }
