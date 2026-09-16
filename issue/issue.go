@@ -12,9 +12,9 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/getlantern/lantern-box/connectiondiag"
 	"github.com/getlantern/osversion"
 	"github.com/getlantern/timezone"
-	"github.com/sagernet/sing-box/common/connectiondiag"
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/common"

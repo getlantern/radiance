@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"runtime/debug"
 
+	"github.com/getlantern/lantern-box/connectiondiag"
 	"github.com/getlantern/radiance/log"
-	"github.com/sagernet/sing-box/common/connectiondiag"
 )
 
 // Init enables local connection diagnostics and logs the build version.

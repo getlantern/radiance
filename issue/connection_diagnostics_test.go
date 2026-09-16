@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/sagernet/sing-box/common/connectiondiag"
+	"github.com/getlantern/lantern-box/connectiondiag"
 	"github.com/stretchr/testify/require"
 )
 
