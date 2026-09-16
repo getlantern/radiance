@@ -14,6 +14,7 @@ import (
 
 	"github.com/getlantern/osversion"
 	"github.com/getlantern/timezone"
+	"github.com/sagernet/sing-box/common/connectiondiag"
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/common"
@@ -141,7 +142,11 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	archiveBudget = max(archiveBudget, 0)
 
 	logDir := settings.GetString(settings.LogPathKey)
-	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, archiveBudget)
+	var diagnosticFiles []extraFile
+	if data, err := connectiondiag.Snapshot(); err == nil {
+		diagnosticFiles = append(diagnosticFiles, extraFile{name: "connection-diagnostics.json", data: data})
+	}
+	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, archiveBudget, diagnosticFiles...)
 	if err != nil {
 		slog.Error("failed to build issue archive", "error", err)
 	}

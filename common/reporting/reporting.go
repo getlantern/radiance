@@ -7,10 +7,12 @@ import (
 	"runtime/debug"
 
 	"github.com/getlantern/radiance/log"
+	"github.com/sagernet/sing-box/common/connectiondiag"
 )
 
-// Init records the build version in the log.
+// Init enables local connection diagnostics and logs the build version.
 func Init(version string) {
+	connectiondiag.Enable(false)
 	slog.Info("reporting initialized", "version", version)
 }
 

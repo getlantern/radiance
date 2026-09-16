@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	// Even an empty ZIP needs its end-of-central-directory record.
+	minimumZIPBytes int64 = 22
 	// maxLogReadFactor bounds how much uncompressed log to read toward an archive:
 	// maxArchiveSize * maxLogReadFactor bytes. Logs compress by at most roughly this
 	// factor, so reading more than this can never be needed to reach the compressed
@@ -28,11 +30,11 @@ const (
 )
 
 // buildIssueArchive creates a zip archive containing all .log files found in
-// logDir plus additional attachment files. The primary log (lantern.log) is
+// logDir plus on-disk and generated attachments. The primary log (lantern.log) is
 // given truncation priority; secondary log files and attachments are included
 // greedily if space permits. The total compressed archive size will not exceed
 // maxSize bytes.
-func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) ([]byte, error) {
+func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64, generated ...extraFile) ([]byte, error) {
 	logFiles := globFiles(logDir, "*.log")
 
 	var primaryLogData []byte
@@ -57,7 +59,7 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 		}
 	}
 
-	attachments := readExtraFiles(additionalFiles)
+	attachments := append(generated, readExtraFiles(additionalFiles)...)
 
 	primaryPath := filepath.Join(logDir, logArchiveName)
 	primaryLogData = prependMostRecentBackup(primaryPath, primaryLogData, maxSize)
@@ -242,6 +244,9 @@ func readExtraFiles(paths []string) []extraFile {
 // (lantern.log) is given truncation priority, followed by secondary log files,
 // then attachments.
 func fitArchive(primaryLog []byte, secondaryLogs []extraFile, attachments []extraFile, maxSize int64) ([]byte, error) {
+	if maxSize < minimumZIPBytes {
+		return nil, nil
+	}
 	allLogs := logsFromPrimary(primaryLog, secondaryLogs)
 
 	if len(allLogs) == 0 && len(attachments) == 0 {
