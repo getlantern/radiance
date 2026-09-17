@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"runtime/debug"
 
+	"github.com/getlantern/lantern-box/connectiondiag"
 	"github.com/getlantern/radiance/log"
 )
 
-// Init records the build version in the log.
+// Init enables bounded, in-memory connection diagnostics and logs the build version.
 func Init(version string) {
+	connectiondiag.Enable(false)
 	slog.Info("reporting initialized", "version", version)
 }
 

@@ -166,6 +166,13 @@ func newMultipartTestClient(t *testing.T, want *ReportIssueRequest, wantFile mul
 			require.True(t, strings.HasPrefix(req.Header.Get("Content-Type"), "multipart/form-data"))
 
 			got, files := decodeMultipartRequest(t, req)
+			require.Len(t, got.Attachments, 1)
+			require.Equal(t, "logs.zip", got.Attachments[0].Name)
+			zr, err := zip.NewReader(bytes.NewReader(got.Attachments[0].Content), int64(len(got.Attachments[0].Content)))
+			require.NoError(t, err)
+			_, err = zr.Open("attachments/connection-diagnostics.json")
+			require.NoError(t, err)
+			got.Attachments = nil
 			require.True(t, proto.Equal(want, got), "received report should match expected report")
 			require.Len(t, files, 1)
 			assert.Equal(t, wantFile, files[0])

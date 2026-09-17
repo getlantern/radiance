@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getlantern/lantern-box/connectiondiag"
 	"github.com/getlantern/radiance/events"
 )
 
@@ -29,9 +30,11 @@ type Session struct {
 }
 
 type SessionServer struct {
-	Tag     string `json:"tag,omitempty"`
-	City    string `json:"city,omitempty"`
-	Country string `json:"country,omitempty"`
+	// DiagnosticOutboundID joins socket diagnostics within this process.
+	DiagnosticOutboundID string `json:"diagnostic_outbound_id,omitempty"`
+	Tag                  string `json:"tag,omitempty"`
+	City                 string `json:"city,omitempty"`
+	Country              string `json:"country,omitempty"`
 }
 
 // Duration returns the session length.
@@ -155,9 +158,10 @@ func (h *SessionHistory) startSessionLocked(tag, city, country string) {
 	h.current = &Session{
 		ConnectedAt: time.Now(),
 		Server: SessionServer{
-			Tag:     tag,
-			City:    city,
-			Country: country,
+			Tag:                  tag,
+			DiagnosticOutboundID: connectiondiag.OutboundID(tag),
+			City:                 city,
+			Country:              country,
 		},
 	}
 	h.snapshotStartBytesLocked()

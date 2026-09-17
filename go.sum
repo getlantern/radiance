@@ -258,8 +258,8 @@ github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3 h1:YPBbuyvd
 github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3/go.mod h1:ag5g9aWUw2FJcX5RVRpJ9EBQBy5yJuy2WXDouIn/m4w=
 github.com/getlantern/kindling v0.0.0-20260915174455-ef1078a2dd49 h1:rM3vrUhVKbes/IPV34kITyHElHs42mVYTsa/3T5u1VA=
 github.com/getlantern/kindling v0.0.0-20260915174455-ef1078a2dd49/go.mod h1:oTrH1E+hE8FutAW/41hxcLmyMOT4PHqmJ19FL89DT1A=
-github.com/getlantern/lantern-box v0.0.130 h1:1wGFZVs9EenKWM7FzH/Eu/t4R80rXgY8Ajui4cb8Nug=
-github.com/getlantern/lantern-box v0.0.130/go.mod h1:OQwWLSsdcggef5a2TLACBersnAs2ERTx5SoqC8JFqqw=
+github.com/getlantern/lantern-box v0.0.131-0.20260917175732-b637794d5a6f h1:K9M+Xyfbe09w7STNTBrcn3ZU+dS7I1CNA/HeJWW0p5o=
+github.com/getlantern/lantern-box v0.0.131-0.20260917175732-b637794d5a6f/go.mod h1:+ADCfU7SdoE/2TqpocM3YIpOG6BbCRzo+4cqwHjF6YY=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 h1:grfGavAUp2E9w9ZoJuM3FyWyQ0sCJ64V4ZMKtZKRqTc=
 github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395/go.mod h1:3JpJgwi4KEI6rS9loOAvcBp+F2jP65d0tTg2GQcTPBU=
 github.com/getlantern/ops v0.0.0-20231025133620-f368ab734534 h1:3BwvWj0JZzFEvNNiMhCu4bf60nqcIuQpTYb00Ezm1ag=
@@ -274,8 +274,8 @@ github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 h1:NhCyQAWGE
 github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064/go.mod h1:uEeykQSW2/6rTjfPlj3MTTo59poSHXfAHTGgzYDkbr0=
 github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb h1:c5YM7b3a4r2J8Eh89KkI6M/iTFe6Bi+b8AJlfkKdFq4=
 github.com/getlantern/semconv v0.0.0-20260327040646-21845dda05cb/go.mod h1:GkPT5P9JoOTIRXRmFWxYgu1hhXgTFFTNc2hoG7WQc3g=
-github.com/getlantern/sing-box-minimal v1.13.19-lantern h1:dwVCskH9N3Q5a2wVELdyGDOHKvqWK0D9/rCM/VcaDF0=
-github.com/getlantern/sing-box-minimal v1.13.19-lantern/go.mod h1:4E8WvF7Vi60N1NtPw1CeG994J/yiJZZkty5dKKwG+V0=
+github.com/getlantern/sing-box-minimal v1.13.20-0.20260917175630-ae1e4a309932 h1:D3KZPWPLrl3IeRCEiv0eztnU0FMQnMAaQv3pTvO+NgY=
+github.com/getlantern/sing-box-minimal v1.13.20-0.20260917175630-ae1e4a309932/go.mod h1:4E8WvF7Vi60N1NtPw1CeG994J/yiJZZkty5dKKwG+V0=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9 h1:VTNjZxSuAHUzu13lYpEVB8gc3xz5hZePGNHG5enHYLY=
 github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9/go.mod h1:7uvbzuoOr3uYGHZx5QWlI8/C52XEf/aTb/tJFEe41Ak=
 github.com/getlantern/twiddle v0.0.0-20260914204124-f698a0d67d2f h1:8WL/o8hKl27jpHunB4nO5dJZKSTfyMwvS7J72ix6vqQ=
