@@ -37,7 +37,7 @@ func baseInbounds() []O.Inbound {
 	tunAddress := []netip.Prefix{
 		netip.MustParsePrefix("10.10.1.1/30"),
 	}
-	if hasGlobalIPv6() {
+	if common.HasGlobalIPv6() {
 		tunAddress = append(tunAddress, netip.MustParsePrefix("fdfe:dcba:9876::1/126"))
 		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
 	} else {

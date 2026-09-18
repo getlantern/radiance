@@ -8,6 +8,8 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common"
 )
 
 func TestBaseOpts_TunIPv6Address(t *testing.T) {
@@ -27,7 +29,7 @@ func TestBaseOpts_TunIPv6Address(t *testing.T) {
 	require.NotEmpty(t, tunOpts.Address, "expected at least the v4 TUN address")
 	assert.Equal(t, "10.10.1.1/30", tunOpts.Address[0].String(), "first TUN address should be the v4 prefix")
 
-	if hasGlobalIPv6() {
+	if common.HasGlobalIPv6() {
 		require.Len(t, tunOpts.Address, 2, "expected v4 + v6 ULA on TUN when system has global v6")
 		assert.Equal(t, "fdfe:dcba:9876::1/126", tunOpts.Address[1].String(),
 			"v6 ULA should be appended after the v4 address")

@@ -40,7 +40,7 @@ require (
 	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/broflake v0.0.0-20260810172605-bef5e5234952
-	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
+	github.com/getlantern/common v1.2.1-0.20260918110857-e539e34c6a11
 	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
