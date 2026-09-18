@@ -57,7 +57,7 @@ func baseInbounds() []O.Inbound {
 	// ULA-only interfaces don't indicate real public v6, so gate the TUN v6 address
 	// on genuine global v6 connectivity.
 	tunAddress := []netip.Prefix{tunPrefix4}
-	if hasGlobalIPv6() {
+	if common.HasGlobalIPv6() {
 		tunAddress = append(tunAddress, tunPrefix6)
 		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
 	} else {
