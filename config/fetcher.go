@@ -74,6 +74,18 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 	if err := f.ensureUser(ctx); err != nil {
 		return nil, fmt.Errorf("error creating user: %w", err)
 	}
+	// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
+	// outbounds but keep them out of the proxy-selection groups) so the server can
+	// gate such outbounds on the capability rather than the client version.
+	capabilities := []string{C.CapabilityNonSelectableOutbounds}
+	// CapabilityIPv6 tells the server this device has a real route to the v6
+	// internet, not just a v6-capable OS, so it's safe to assign a proxy route
+	// whose address is IPv6-only (no v4 fallback). Reuses the same interface
+	// check vpn already trusts to decide whether the TUN itself gets a v6
+	// address, rather than a second, differently-tuned heuristic.
+	if common.HasGlobalIPv6() {
+		capabilities = append(capabilities, C.CapabilityIPv6)
+	}
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
 		Platform:       common.Platform,
@@ -85,10 +97,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
 		Protocols:      protocol.SupportedProtocols(),
-		// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
-		// outbounds but keep them out of the proxy-selection groups) so the server can
-		// gate such outbounds on the capability rather than the client version.
-		Capabilities: []string{C.CapabilityNonSelectableOutbounds},
+		Capabilities:   capabilities,
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred
