@@ -349,4 +349,6 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
 
+// Downstream main modules must repeat this replacement; Go does not inherit
+// replace directives from dependencies.
 replace github.com/quic-go/quic-go => github.com/getlantern/quic-go-unbounded-fork v0.62.1-unbounded
