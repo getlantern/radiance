@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"os"
@@ -37,6 +38,25 @@ func isTUNIdentityCollision(err error) bool {
 // naming starts at tun0 and cannot see the orphan, so step past it explicitly.
 func tunIdentityName(attempt int) string {
 	return fmt.Sprintf("tun%d", attempt)
+}
+
+// tunIdentityCandidates lists every adapter name a bring-up can use, so cleanup
+// recognises an orphan holding any of them. A failed start doesn't report which
+// name it chose, and sing-box picks the first itself, so tun0 is included.
+func tunIdentityCandidates() []string {
+	names := make([]string, 0, maxTUNIdentityRetries+1)
+	for attempt := 0; attempt <= maxTUNIdentityRetries; attempt++ {
+		names = append(names, tunIdentityName(attempt))
+	}
+	return names
+}
+
+// wintunAdapterGUID derives the adapter GUID sing-tun computes for name, in the
+// byte order it reinterprets as a windows.GUID. Mirrors generateGUIDByDeviceName
+// (sing-tun tun_windows.go:636); the two must stay identical or cleanup matches
+// nothing. MD5 is required for that compatibility, not used as a digest.
+func wintunAdapterGUID(name string) [16]byte {
+	return md5.Sum([]byte("wintun" + name))
 }
 
 // setTUNInterfaceName pins the TUN inbound's adapter name, which is what the
