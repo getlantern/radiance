@@ -181,21 +181,35 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 	configureBufPool()
 	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
-	t := tunnel{
-		dataPath:             boxOptions.BasePath,
-		selectionHistorySeed: boxOptions.SelectionHistorySeed,
-		initialLanternTags:   boxOptions.LanternServerTags,
-		initialNonSelectable: boxOptions.NonSelectableOutbounds,
-		connObserver:         c.connObserver,
+	for attempt := 1; ; attempt++ {
+		t := tunnel{
+			dataPath:             boxOptions.BasePath,
+			selectionHistorySeed: boxOptions.SelectionHistorySeed,
+			initialLanternTags:   boxOptions.LanternServerTags,
+			initialNonSelectable: boxOptions.NonSelectableOutbounds,
+			connObserver:         c.connObserver,
+		}
+		err := t.start(ctx, options, c.platformIfce, isRestart)
+		if err == nil {
+			c.tunnel = &t
+			c.setStatus(Connected, nil)
+			c.logger.Debug("Tunnel started")
+			return nil
+		}
+		// An orphaned Wintun devnode claims the derived adapter identity forever,
+		// so retrying the same name can only fail again. Move to a fresh identity.
+		if attempt > maxTUNIdentityRetries || !isTUNIdentityCollision(err) {
+			c.setStatus(ErrorStatus, err)
+			return err
+		}
+		name := tunIdentityName(attempt)
+		if !setTUNInterfaceName(options, name) {
+			c.setStatus(ErrorStatus, err)
+			return err
+		}
+		c.logger.Warn("TUN adapter identity claimed by an orphaned device, retrying under a new name",
+			"interface_name", name, "attempt", attempt, "error", err)
 	}
-	if err := t.start(ctx, options, c.platformIfce, isRestart); err != nil {
-		c.setStatus(ErrorStatus, err)
-		return err
-	}
-	c.tunnel = &t
-	c.setStatus(Connected, nil)
-	c.logger.Debug("Tunnel started")
-	return nil
 }
 
 func (c *VPNClient) close() error {
