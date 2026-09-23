@@ -127,13 +127,37 @@ func TestLoginReplacesCachedFields(t *testing.T) {
 	assert.True(t, proto.Equal(server.loginResponse, &stored))
 }
 
-func TestFetchUserDataInvalidCache(t *testing.T) {
-	ac, _ := newTestClient(t)
-	require.NoError(t, settings.Set(settings.UserDataKey, "invalid"))
-	user, err := ac.FetchUserData(context.Background())
-	require.ErrorContains(t, err, "reading cached user data")
-	assert.Nil(t, user)
-	assert.Equal(t, "invalid", settings.GetString(settings.UserDataKey))
+func TestFetchUserDataReplacesInvalidCache(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		cached any
+	}{
+		{name: "invalid object", cached: "invalid"},
+		{name: "partially decoded object", cached: map[string]any{
+			"legacyID":       123,
+			"id":             "old-id",
+			"emailConfirmed": true,
+			"Success":        true,
+			"legacyUserData": "invalid",
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ac, _ := newTestClient(t)
+			require.NoError(t, settings.Set(settings.UserDataKey, tt.cached))
+			got, err := ac.FetchUserData(context.Background())
+			require.NoError(t, err)
+			want := &UserData{
+				LegacyID:       123,
+				LegacyToken:    "test-token",
+				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "test-token"},
+			}
+			assert.True(t, proto.Equal(want, got), "want %v, got %v", want, got)
+			require.NoError(t, settings.Reload())
+			var stored UserData
+			require.NoError(t, settings.GetStruct(settings.UserDataKey, &stored))
+			assert.True(t, proto.Equal(want, &stored), "want %v, stored %v", want, &stored)
+		})
+	}
 }
 
 func TestSetDataNilClearsCachedUser(t *testing.T) {
@@ -143,4 +167,26 @@ func TestSetDataNilClearsCachedUser(t *testing.T) {
 	ac.setData(nil)
 	assert.False(t, settings.Exists(settings.UserDataKey))
 	assert.Empty(t, settings.GetString(settings.TokenKey))
+}
+
+func TestFetchUserDataDoesNotReplayLoginSettings(t *testing.T) {
+	ac, _ := newTestClient(t)
+	ac.setData(&UserData{
+		LegacyID:       123,
+		Token:          "old-jwt",
+		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 123},
+	})
+	devices := []settings.Device{{ID: "new-device", Name: "Laptop"}}
+	require.NoError(t, settings.Patch(settings.Settings{
+		settings.JwtTokenKey: "new-jwt",
+		settings.DevicesKey:  devices,
+	}))
+	_, err := ac.FetchUserData(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "new-jwt", settings.GetString(settings.JwtTokenKey))
+	storedDevices, err := settings.Devices()
+	require.NoError(t, err)
+	assert.Equal(t, devices, storedDevices)
+	assert.Equal(t, "test-token", settings.GetString(settings.TokenKey))
 }

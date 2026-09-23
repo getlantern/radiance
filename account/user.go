@@ -87,20 +87,12 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	login := new(UserData)
-	if err := settings.GetStruct(settings.UserDataKey, login); err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("reading cached user data: %w", err))
+	login := &UserData{
+		LegacyID:       resp.UserId,
+		LegacyToken:    resp.Token,
+		LegacyUserData: resp.LoginResponse_UserData,
 	}
-	// Legacy responses omit login-only fields; retain them only for the same account.
-	if resp.UserId == 0 || login.LegacyID != resp.UserId {
-		login = new(UserData)
-	}
-	login.LegacyID = resp.UserId
-	login.LegacyToken = resp.Token
-	login.LegacyUserData = resp.LoginResponse_UserData
-
-	a.setDataLocked(login)
-	return login, nil
+	return a.setDataLocked(login, true), nil
 }
 
 type DataCapInfo struct {
@@ -723,11 +715,11 @@ func (a *Client) setData(data *UserData) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.setDataLocked(data)
+	a.setDataLocked(data, false)
 }
 
 // setDataLocked requires a.mu to be held and data to be non-nil.
-func (a *Client) setDataLocked(data *UserData) {
+func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserData {
 	// A device-limit login carries only the identity, not full user data, so
 	// store the id and token alone.
 	if data.LegacyUserData == nil {
@@ -735,7 +727,7 @@ func (a *Client) setDataLocked(data *UserData) {
 		if err := storeIdentity(data.LegacyID, data.LegacyToken); err != nil {
 			slog.Error("failed to store account identity", "error", err)
 		}
-		return
+		return data
 	}
 
 	var changed bool
@@ -788,6 +780,17 @@ func (a *Client) setDataLocked(data *UserData) {
 		}
 	}
 
+	if preserveLoginFields {
+		// Merge only the cached response so old login fields cannot overwrite newer settings.
+		cached := new(UserData)
+		if err := settings.GetStruct(settings.UserDataKey, cached); err != nil {
+			slog.Warn("ignoring invalid cached user data", "error", err)
+		} else if data.LegacyID != 0 && cached.LegacyID == data.LegacyID {
+			cached.LegacyToken = data.LegacyToken
+			cached.LegacyUserData = data.LegacyUserData
+			data = cached
+		}
+	}
 	if err := settings.Set(settings.UserDataKey, data); err != nil {
 		slog.Error("failed to set login response in settings", "error", err)
 	}
@@ -795,6 +798,7 @@ func (a *Client) setDataLocked(data *UserData) {
 	if changed {
 		events.Emit(UserChangeEvent{})
 	}
+	return data
 }
 
 // ClearUser removes the cached account and its credentials.
