@@ -213,6 +213,7 @@ func TestFetchUserDataReplacesInvalidCache(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ac, _ := newTestClient(t)
+			require.NoError(t, settings.Set(settings.UserIDKey, int64(123)))
 			require.NoError(t, settings.Set(settings.UserDataKey, tt.cached))
 			got, err := ac.FetchUserData(context.Background())
 			require.NoError(t, err)
