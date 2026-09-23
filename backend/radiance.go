@@ -969,12 +969,14 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
-	if err := r.vpnClient.UpdateOutbounds(allList); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		return fmt.Errorf("failed to update VPN outbounds: %w", err)
-	}
+	outboundErr := r.vpnClient.UpdateOutbounds(allList)
 	// This update preserves the selected server unless hard-demoted, so clearing
-	// an evicted selection is safe even while connected.
+	// an evicted selection is safe even while connected. Run it even when the
+	// outbound update failed, since an evicted pin is already gone from the manager.
 	r.clearSelectedIfMissing()
+	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
+	}
 	return nil
 }
 
@@ -1007,6 +1009,8 @@ func lanternServersToEvict(
 			continue
 		}
 		if srv.Tag == selectedTag {
+			// The retained selection occupies one retention slot.
+			limit--
 			continue
 		}
 		retentionCandidates = append(retentionCandidates, srv)

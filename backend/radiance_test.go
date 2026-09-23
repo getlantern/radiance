@@ -205,7 +205,7 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:     []string{"a", "b"},
 		},
 		{
-			name: "selected working server is exempt, evicting the next-oldest instead",
+			name: "selected working server is exempt but counts toward the limit",
 			existing: []*servers.Server{
 				newTestServer("old-selected", true, false, baseTime.Add(1*time.Hour)),
 				newTestServer("a", true, false, baseTime.Add(2*time.Hour)),
@@ -215,7 +215,7 @@ func TestLanternServersToEvict(t *testing.T) {
 			incoming: 1,
 			limit:    3,
 			selected: "old-selected",
-			want:     []string{"a"},
+			want:     []string{"a", "b"},
 		},
 		{
 			name: "selected server is still evicted when hard-demoted",
