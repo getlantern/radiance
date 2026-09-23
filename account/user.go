@@ -87,6 +87,9 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if resp.Token == "" && resp.UserId != 0 && resp.UserId == settings.GetInt64(settings.UserIDKey) {
+		resp.Token = settings.GetString(settings.TokenKey)
+	}
 	login := &UserData{
 		LegacyID:       resp.UserId,
 		LegacyToken:    resp.Token,
@@ -179,7 +182,7 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 	if err := proto.Unmarshal(resp, &signupData); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling sign up response: %w", err))
 	}
-	if err := storeIdentity(signupData.LegacyID, signupData.ProToken); err != nil {
+	if err := a.storeIdentity(signupData.LegacyID, signupData.ProToken); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
 	}
 	jwtTokenErr := settings.Set(settings.JwtTokenKey, signupData.Token)
@@ -580,7 +583,7 @@ func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string
 	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
 		return fmt.Errorf("%w: device-limit token is missing the account identity", ErrInvalidToken)
 	}
-	return storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken)
+	return a.storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken)
 }
 
 // ErrInvalidToken distinguishes an unusable OAuth callback token from a
@@ -686,12 +689,30 @@ type UserChangeEvent struct {
 	events.Event
 }
 
-// storeIdentity persists just the account identity in a single atomic write,
-// so a failure can't leave the stored user ID and token inconsistent.
-func storeIdentity(id int64, token string) error {
+func (a *Client) storeIdentity(id int64, token string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	changed, err := a.storeIdentityLocked(id, token)
+	if changed {
+		events.Emit(UserChangeEvent{})
+	}
+	return err
+}
+
+// storeIdentityLocked requires a.mu to be held.
+func (a *Client) storeIdentityLocked(id int64, token string) (bool, error) {
 	previousID := settings.GetInt64(settings.UserIDKey)
 	previousToken := settings.GetString(settings.TokenKey)
 	updates := settings.Settings{}
+	// The cached response can lag behind signup or OAuth, so compare the active identity.
+	if id != 0 && id != previousID {
+		updates[settings.TokenKey] = ""
+		updates[settings.JwtTokenKey] = ""
+		updates[settings.EmailKey] = ""
+		updates[settings.UserLevelKey] = ""
+		updates[settings.DevicesKey] = []settings.Device{}
+		updates[settings.UserDataKey] = nil
+	}
 	if id != 0 {
 		updates[settings.UserIDKey] = id
 	}
@@ -699,13 +720,11 @@ func storeIdentity(id int64, token string) error {
 		updates[settings.TokenKey] = token
 	}
 	if len(updates) == 0 {
-		return nil
+		return false, nil
 	}
 	err := settings.Patch(updates)
-	if settings.GetInt64(settings.UserIDKey) != previousID || settings.GetString(settings.TokenKey) != previousToken {
-		events.Emit(UserChangeEvent{})
-	}
-	return err
+	changed := settings.GetInt64(settings.UserIDKey) != previousID || settings.GetString(settings.TokenKey) != previousToken
+	return changed, err
 }
 
 func (a *Client) setData(data *UserData) {
@@ -720,17 +739,20 @@ func (a *Client) setData(data *UserData) {
 
 // setDataLocked requires a.mu to be held and data to be non-nil.
 func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserData {
-	// A device-limit login carries only the identity, not full user data, so
-	// store the id and token alone.
+	changed, err := a.storeIdentityLocked(data.LegacyID, data.LegacyToken)
+	if err != nil {
+		slog.Error("failed to store account identity", "error", err)
+	}
+	defer func() {
+		if changed {
+			events.Emit(UserChangeEvent{})
+		}
+	}()
 	if data.LegacyUserData == nil {
 		slog.Info("no user data to set, storing id and token only")
-		if err := storeIdentity(data.LegacyID, data.LegacyToken); err != nil {
-			slog.Error("failed to store account identity", "error", err)
-		}
 		return data
 	}
 
-	var changed bool
 	if data.LegacyUserData.UserLevel != "" {
 		oldUserLevel := settings.GetString(settings.UserLevelKey)
 		changed = changed || oldUserLevel != data.LegacyUserData.UserLevel
@@ -743,20 +765,6 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		changed = changed || oldEmail != data.LegacyUserData.Email
 		if err := settings.Set(settings.EmailKey, data.LegacyUserData.Email); err != nil {
 			slog.Error("failed to set email in settings", "error", err)
-		}
-	}
-	if data.LegacyID != 0 {
-		oldUserID := settings.GetInt64(settings.UserIDKey)
-		changed = changed || oldUserID != data.LegacyID
-		if err := settings.Set(settings.UserIDKey, data.LegacyID); err != nil {
-			slog.Error("failed to set user ID in settings", "error", err)
-		}
-	}
-	if data.LegacyToken != "" {
-		oldToken := settings.GetString(settings.TokenKey)
-		changed = changed || oldToken != data.LegacyToken
-		if err := settings.Set(settings.TokenKey, data.LegacyToken); err != nil {
-			slog.Error("failed to set token in settings", "error", err)
 		}
 	}
 	if data.Token != "" {
@@ -795,9 +803,6 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		slog.Error("failed to set login response in settings", "error", err)
 	}
 
-	if changed {
-		events.Emit(UserChangeEvent{})
-	}
 	return data
 }
 

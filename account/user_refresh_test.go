@@ -2,6 +2,9 @@ package account
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -86,7 +89,9 @@ func TestFetchUserDataWithoutMatchingLogin(t *testing.T) {
 					Success:        true,
 					Token:          "previous-jwt",
 					Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
-					LegacyUserData: &protos.LoginResponse_UserData{UserId: tt.cachedID},
+					LegacyUserData: &protos.LoginResponse_UserData{
+						UserId: tt.cachedID, Email: "old@example.com", UserLevel: "pro",
+					},
 				})
 			}
 			got, err := ac.FetchUserData(context.Background())
@@ -100,8 +105,73 @@ func TestFetchUserDataWithoutMatchingLogin(t *testing.T) {
 			var stored UserData
 			require.NoError(t, settings.GetStruct(settings.UserDataKey, &stored))
 			assert.True(t, proto.Equal(want, &stored), "want %v, stored %v", want, &stored)
+			assert.Empty(t, settings.GetString(settings.JwtTokenKey))
+			assert.Empty(t, settings.GetString(settings.EmailKey))
+			assert.False(t, settings.IsPro())
+			devices, err := settings.Devices()
+			require.NoError(t, err)
+			assert.Empty(t, devices)
 		})
 	}
+}
+
+func TestFetchUserDataWithoutToken(t *testing.T) {
+	for _, id := range []int64{123, 456, 0} {
+		t.Run(fmt.Sprint(id), func(t *testing.T) {
+			ac, _ := newTestClient(t)
+			ac.setData(&UserData{
+				LegacyID: 123, LegacyToken: "cached-token", Id: "account-id",
+				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "cached-token"},
+			})
+			require.NoError(t, settings.Set(settings.TokenKey, "current-token"))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSONResponse(w, UserDataResponse{
+					LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: id, UserLevel: "free"},
+				})
+			}))
+			defer server.Close()
+			ac.proURL = server.URL
+
+			got, err := ac.FetchUserData(context.Background())
+			require.NoError(t, err)
+			wantToken := ""
+			if id == 123 {
+				wantToken = "current-token"
+				assert.Equal(t, "account-id", got.Id)
+			}
+			assert.Equal(t, wantToken, got.LegacyToken)
+			assert.Equal(t, wantToken, got.LegacyUserData.Token)
+			require.NoError(t, settings.Reload())
+			var stored UserData
+			require.NoError(t, settings.GetStruct(settings.UserDataKey, &stored))
+			assert.True(t, proto.Equal(got, &stored))
+			if id != 0 {
+				assert.Equal(t, wantToken, settings.GetString(settings.TokenKey))
+			}
+		})
+	}
+}
+
+func TestSignupSwitchesAccountBeforeRefresh(t *testing.T) {
+	ac, _ := newTestClient(t)
+	ac.setData(&UserData{
+		LegacyID: 456, LegacyToken: "old-token", Token: "old-jwt",
+		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 456},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeProtoResponse(w, &protos.SignupResponse{LegacyID: 123, ProToken: "signup-token", Token: "signup-jwt"})
+	}))
+	defer server.Close()
+	ac.authURL = server.URL
+	_, _, err := ac.SignUp(context.Background(), "new@example.com", "password")
+	require.NoError(t, err)
+	_, err = ac.FetchUserData(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "signup-jwt", settings.GetString(settings.JwtTokenKey))
+	devices, err := settings.Devices()
+	require.NoError(t, err)
+	assert.Empty(t, devices)
 }
 
 func TestLoginReplacesCachedFields(t *testing.T) {
@@ -189,4 +259,12 @@ func TestFetchUserDataDoesNotReplayLoginSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, devices, storedDevices)
 	assert.Equal(t, "test-token", settings.GetString(settings.TokenKey))
+
+	require.NoError(t, settings.Set(settings.UserDataKey, &UserData{LegacyID: 456, Token: "old-jwt"}))
+	_, err = ac.FetchUserData(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "new-jwt", settings.GetString(settings.JwtTokenKey))
+	storedDevices, err = settings.Devices()
+	require.NoError(t, err)
+	assert.Equal(t, devices, storedDevices)
 }

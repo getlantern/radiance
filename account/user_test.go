@@ -423,6 +423,11 @@ func TestOAuthLoginUrl(t *testing.T) {
 func TestOAuthLoginCallback(t *testing.T) {
 	ac, _ := newTestClient(t)
 	settings.Set(settings.DeviceIDKey, "deviceId")
+	ac.setData(&UserData{
+		LegacyID: 456, Token: "old-jwt",
+		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 456},
+	})
 
 	// Mock JWT with unverified signature — decodeJWT uses ParseUnverified so this succeeds.
 	mockToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJsZWdhY3lfdXNlcl9pZCI6MTIzNDUsImxlZ2FjeV90b2tlbiI6InRlc3QtdG9rZW4ifQ.test"
@@ -430,6 +435,10 @@ func TestOAuthLoginCallback(t *testing.T) {
 	data, err := ac.OAuthLoginCallback(context.Background(), mockToken)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, data)
+	assert.Equal(t, mockToken, settings.GetString(settings.JwtTokenKey))
+	devices, err := settings.Devices()
+	require.NoError(t, err)
+	assert.Empty(t, devices)
 }
 
 func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
