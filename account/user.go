@@ -84,12 +84,22 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	resp.DeviceID = settings.GetString(settings.DeviceIDKey)
-	login := &UserData{
-		LegacyID:       resp.UserId,
-		LegacyToken:    resp.Token,
-		LegacyUserData: resp.LoginResponse_UserData,
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	login := new(UserData)
+	if err := settings.GetStruct(settings.UserDataKey, login); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("reading cached user data: %w", err))
 	}
-	a.setData(login)
+	// Legacy responses omit login-only fields; retain them only for the same account.
+	if resp.UserId == 0 || login.LegacyID != resp.UserId {
+		login = new(UserData)
+	}
+	login.LegacyID = resp.UserId
+	login.LegacyToken = resp.Token
+	login.LegacyUserData = resp.LoginResponse_UserData
+
+	a.setDataLocked(login)
 	return login, nil
 }
 
@@ -707,13 +717,17 @@ func storeIdentity(id int64, token string) error {
 }
 
 func (a *Client) setData(data *UserData) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	if data == nil {
 		a.ClearUser()
 		return
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.setDataLocked(data)
+}
 
+// setDataLocked requires a.mu to be held and data to be non-nil.
+func (a *Client) setDataLocked(data *UserData) {
 	// A device-limit login carries only the identity, not full user data, so
 	// store the id and token alone.
 	if data.LegacyUserData == nil {
@@ -783,7 +797,10 @@ func (a *Client) setData(data *UserData) {
 	}
 }
 
+// ClearUser removes the cached account and its credentials.
 func (a *Client) ClearUser() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	hadIdentity := settings.GetInt64(settings.UserIDKey) != 0 || settings.GetString(settings.TokenKey) != ""
 	err := settings.Clear(
 		settings.UserIDKey,

@@ -24,6 +24,7 @@ import (
 
 // testServer holds server-side SRP state for the mock auth server.
 type testServer struct {
+	loginResponse                                *protos.LoginResponse
 	salt                                         map[string][]byte
 	verifier                                     []byte
 	cache                                        map[string]string
@@ -74,6 +75,9 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	state := &testServer{
 		salt:  make(map[string][]byte),
 		cache: make(map[string]string),
+		loginResponse: &protos.LoginResponse{
+			LegacyUserData: &protos.LoginResponse_UserData{DeviceID: "deviceId"},
+		},
 	}
 	mux := http.NewServeMux()
 
@@ -131,11 +135,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/users/login", func(w http.ResponseWriter, r *http.Request) {
-		writeProtoResponse(w, &protos.LoginResponse{
-			LegacyUserData: &protos.LoginResponse_UserData{
-				DeviceID: "deviceId",
-			},
-		})
+		writeProtoResponse(w, state.loginResponse)
 	})
 
 	// Simple auth endpoints that return empty responses
