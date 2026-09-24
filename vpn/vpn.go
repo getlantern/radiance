@@ -181,7 +181,6 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 	configureBufPool()
 	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
-	cleaned := false
 	for attempt := 1; ; attempt++ {
 		t := tunnel{
 			dataPath:             boxOptions.BasePath,
@@ -198,26 +197,10 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 			return nil
 		}
 		// An orphaned Wintun devnode claims the derived adapter identity forever,
-		// so retrying the same name can only fail again.
+		// so retrying the same name can only fail again. Move to a fresh identity.
 		if attempt > maxTUNIdentityRetries || !isTUNIdentityCollision(err) {
 			c.setStatus(ErrorStatus, err)
 			return err
-		}
-		// Removing the orphan is the real repair: it keeps the canonical identity
-		// working and leaves the host clean. Drifting to a new name is the fallback
-		// for a devnode that won't come out.
-		if !cleaned {
-			cleaned = true
-			// Removal is per-devnode, so a partial failure can still have freed the
-			// identity we need. Report the error but act on what came out.
-			removed, rmErr := removeOrphanedTUNAdapters(tunIdentityCandidates())
-			if rmErr != nil {
-				c.logger.Warn("Failed to remove orphaned TUN adapters", "removed", removed, "error", rmErr)
-			}
-			if removed > 0 {
-				c.logger.Info("Removed orphaned TUN adapters, retrying bring-up", "count", removed)
-				continue
-			}
 		}
 		name := tunIdentityName(attempt)
 		if !setTUNInterfaceName(options, name) {

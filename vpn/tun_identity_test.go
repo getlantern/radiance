@@ -1,7 +1,6 @@
 package vpn
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -92,39 +91,6 @@ func TestTunIdentityNameSkipsDefault(t *testing.T) {
 	}
 	assert.Equal(t, "tun1", tunIdentityName(1))
 	assert.Equal(t, "tun2", tunIdentityName(2))
-}
-
-// The derivation must stay byte-identical to sing-tun's generateGUIDByDeviceName
-// or cleanup targets a devnode that doesn't exist and silently removes nothing.
-// Goldens are md5("wintun"+name), which is what sing-tun reinterprets as a GUID.
-func TestWintunAdapterGUIDMatchesSingTun(t *testing.T) {
-	tests := map[string]string{
-		"tun0": "3ec6cc0d225680381e097cc9c46ad7b4",
-		"tun1": "a950e228515ba379c81addbd57e6205d",
-	}
-	for name, want := range tests {
-		t.Run(name, func(t *testing.T) {
-			sum := wintunAdapterGUID(name)
-			assert.Equal(t, want, hex.EncodeToString(sum[:]))
-		})
-	}
-}
-
-// Every name a bring-up can land on must be a cleanup candidate, including the
-// tun0 that sing-box picks on its own — a failed start never reports its name.
-func TestTunIdentityCandidatesCoverEveryAttempt(t *testing.T) {
-	candidates := tunIdentityCandidates()
-	assert.Contains(t, candidates, "tun0")
-	for attempt := 1; attempt <= maxTUNIdentityRetries; attempt++ {
-		assert.Contains(t, candidates, tunIdentityName(attempt))
-	}
-	assert.Len(t, candidates, maxTUNIdentityRetries+1)
-
-	seen := map[string]bool{}
-	for _, name := range candidates {
-		require.False(t, seen[name], "duplicate candidate %q", name)
-		seen[name] = true
-	}
 }
 
 func TestSetTUNInterfaceName(t *testing.T) {
