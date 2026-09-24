@@ -196,8 +196,8 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 			c.logger.Debug("Tunnel started")
 			return nil
 		}
-		// An orphaned Wintun devnode claims the derived adapter identity forever,
-		// so retrying the same name can only fail again. Move to a fresh identity.
+		// Wintun derives the adapter's device identity from its name, so only a new
+		// name escapes the collision.
 		if attempt > maxTUNIdentityRetries || !isTUNIdentityCollision(err) {
 			c.setStatus(ErrorStatus, err)
 			return err
@@ -207,7 +207,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 			c.setStatus(ErrorStatus, err)
 			return err
 		}
-		c.logger.Warn("TUN adapter identity claimed by an orphaned device, retrying under a new name",
+		c.logger.Warn("TUN adapter identity already exists, retrying under a new name",
 			"interface_name", name, "attempt", attempt, "error", err)
 	}
 }
