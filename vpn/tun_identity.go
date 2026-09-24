@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/sagernet/sing-box/option"
+
+	"github.com/getlantern/radiance/common"
 )
 
 const maxTUNIdentityRetries = 3
@@ -25,6 +27,9 @@ func isTUNIdentityCollision(err error) bool {
 // falls back to opening an existing adapter by name, so a retry landing on
 // another app's live adapter would try to take it over.
 func tunIdentityName(attempt int) string {
+	if common.IsMacOS() || common.IsIOS() {
+		return fmt.Sprintf("utun%d", attempt)
+	}
 	return fmt.Sprintf("lantern%d", attempt)
 }
 
