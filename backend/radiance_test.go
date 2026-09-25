@@ -152,6 +152,7 @@ func TestLanternServersToEvict(t *testing.T) {
 		existing []*servers.Server
 		incoming int
 		limit    int
+		selected string
 		want     []string
 	}{
 		{
@@ -204,6 +205,29 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:     []string{"a", "b"},
 		},
 		{
+			name: "selected working server is exempt but counts toward the limit",
+			existing: []*servers.Server{
+				newTestServer("old-selected", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("a", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(3*time.Hour)),
+				newTestServer("c", true, false, baseTime.Add(4*time.Hour)),
+			},
+			incoming: 1,
+			limit:    3,
+			selected: "old-selected",
+			want:     []string{"a", "b"},
+		},
+		{
+			name: "selected server is still evicted when hard-demoted",
+			existing: []*servers.Server{
+				newTestServer("selected-demoted", true, true, baseTime),
+				newTestServer("working", true, false, baseTime),
+			},
+			limit:    60,
+			selected: "selected-demoted",
+			want:     []string{"selected-demoted"},
+		},
+		{
 			name: "server with no selection history sorts oldest",
 			existing: []*servers.Server{
 				newTestServer("no-history", true, false, time.Time{}),
@@ -218,7 +242,7 @@ func TestLanternServersToEvict(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit)
+			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
