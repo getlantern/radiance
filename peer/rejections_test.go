@@ -76,18 +76,51 @@ func TestRejectionTally_PersistsAcrossRestarts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &onDisk))
 	assert.Equal(t, int64(3), onDisk.Hosts["pbs.twimg.com"].Count)
 
-	leftovers, err := filepath.Glob(path + ".*.tmp")
+	leftovers, err := filepath.Glob(path + ".tmp*")
 	require.NoError(t, err)
 	assert.Empty(t, leftovers)
 }
 
 func TestRejectionTally_CorruptFileStartsFresh(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "peer-rejections.json")
-	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
-	tally := newRejectionTally(path)
-	tally.record("example.com:443")
-	_, total := tally.summary()
-	assert.Equal(t, int64(1), total)
+	tooMany := `{"hosts":{`
+	for i := range maxRejectedHosts + 1 {
+		if i > 0 {
+			tooMany += ","
+		}
+		tooMany += fmt.Sprintf(`"h%d.example.com":{"count":1,"ports":{}}`, i)
+	}
+	tooMany += `}}`
+	for name, saved := range map[string]string{
+		"not json":       `{not json`,
+		"null host":      `{"hosts":{"x.example.com":null}}`,
+		"null ports":     `{"hosts":{"x.example.com":{"count":3,"ports":null}}}`,
+		"negative count": `{"hosts":{"x.example.com":{"count":-1,"ports":{}}}}`,
+		"too many hosts": tooMany,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "peer-rejections.json")
+			require.NoError(t, os.WriteFile(path, []byte(saved), 0o600))
+			tally := newRejectionTally(path)
+			tally.record("x.example.com:443")
+			domains, total := tally.summary()
+			assert.Equal(t, int64(1), total)
+			assert.Equal(t, []rejectedDomain{{Domain: "example.com", Count: 1, Hosts: 1}}, domains)
+		})
+	}
+}
+
+// A port scan against one host must not grow its breakdown without bound.
+func TestRejectionTally_CapsPortsPerHost(t *testing.T) {
+	tally := newRejectionTally("")
+	for port := range maxPortsPerHost + 10 {
+		tally.record(fmt.Sprintf("scanned.example.com:%d", 1000+port))
+	}
+	tally.record("scanned.example.com:1000")
+	h := tally.state.Hosts["scanned.example.com"]
+	assert.Len(t, h.Ports, maxPortsPerHost+1)
+	assert.Equal(t, int64(10), h.Ports[otherPorts])
+	assert.Equal(t, int64(2), h.Ports["1000"], "known ports still count past the cap")
+	assert.Equal(t, int64(maxPortsPerHost+11), h.Count)
 }
 
 func TestRejectionTally_FailedWriteRetriesOnNextFlush(t *testing.T) {
