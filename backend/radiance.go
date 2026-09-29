@@ -939,7 +939,13 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 		return exists
 	})
 
-	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers)
+	var selectedTag string
+	var selected servers.Server
+	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil {
+		selectedTag = selected.Tag
+	}
+
+	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
 
 	if len(tagsToEvict) > 0 {
 		slog.Debug(
@@ -963,11 +969,13 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
-	if err := r.vpnClient.UpdateOutbounds(allList); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		return fmt.Errorf("failed to update VPN outbounds: %w", err)
-	}
-	if r.vpnClient.Status() != vpn.Connected {
-		r.clearSelectedIfMissing()
+	outboundErr := r.vpnClient.UpdateOutbounds(allList)
+	// This update preserves the selected server unless hard-demoted, so clearing
+	// an evicted selection is safe even while connected. Run it even when the
+	// outbound update failed, since an evicted pin is already gone from the manager.
+	r.clearSelectedIfMissing()
+	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
 	}
 	return nil
 }
@@ -980,14 +988,13 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 	return tags
 }
 
-// lanternServersToEvict returns the Lantern server tags to remove before the
-// next config batch is added. Hard-demoted servers are always evicted so a
-// later re-offer is treated as a fresh candidate and re-probed. Remaining
-// candidates are evicted oldest-first by SelectionHistory.UpdatedAt; missing
-// history sorts oldest.
+// lanternServersToEvict returns Lantern server tags to evict, always including
+// hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
+// are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
 func lanternServersToEvict(
 	existing []*servers.Server,
 	incomingCount, limit int,
+	selectedTag string,
 ) []string {
 	tagsToEvict := make([]string, 0)
 	retentionCandidates := make([]*servers.Server, 0, len(existing))
@@ -999,6 +1006,11 @@ func lanternServersToEvict(
 		// Always evict hard-demoted servers.
 		if isHardDemoted(srv) {
 			tagsToEvict = append(tagsToEvict, srv.Tag)
+			continue
+		}
+		if srv.Tag == selectedTag {
+			// The retained selection occupies one retention slot.
+			limit--
 			continue
 		}
 		retentionCandidates = append(retentionCandidates, srv)
