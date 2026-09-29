@@ -125,6 +125,9 @@ type Config struct {
 	HeartbeatInterval    time.Duration
 	HeartbeatTimeout     time.Duration
 	CredRotationInterval time.Duration
+	// RejectionsPath is where the tally of refused destinations persists.
+	// Empty keeps the tally in memory only.
+	RejectionsPath string
 }
 
 // Client orchestrates one peer-proxy session: open UPnP port → register with
@@ -178,6 +181,11 @@ type Client struct {
 	// contend with Start/Stop holding c.mu.
 	connsMu   sync.Mutex
 	connsByIP map[string]int
+
+	// rejections tallies destinations refused by reject rules, across
+	// sessions, so allowlist gaps are visible. Flushed on each heartbeat and
+	// at Stop.
+	rejections *rejectionTally
 
 	// externalPort / internalPort persist the port mapping picked at
 	// Start so the cred-rotation loop can re-register against the same
@@ -246,7 +254,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.HeartbeatTimeout == 0 {
 		cfg.HeartbeatTimeout = 30 * time.Second
 	}
-	return &Client{cfg: cfg}, nil
+	return &Client{cfg: cfg, rejections: newRejectionTally(cfg.RejectionsPath)}, nil
 }
 
 // Start opens the peer-proxy session. On success a background heartbeat
@@ -456,6 +464,9 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		slog.Debug("peer listener: forwarding connection event",
 			"state", state, "source", source)
 		c.trackConn(state, source)
+		if evt.Rejected {
+			c.rejections.record(evt.Destination)
+		}
 		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
@@ -596,6 +607,7 @@ func (c *Client) Stop(ctx context.Context) error {
 		}
 		slog.Warn("peer client unmap port failed", "err", err)
 	}
+	c.rejections.flush()
 	slog.Info("peer client stopped", "route_id", routeID)
 	c.mu.Lock()
 	c.status = Status{Phase: PhaseIdle}
@@ -720,6 +732,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			c.rejections.flush()
 			c.mu.Lock()
 			routeID := c.routeID
 			c.mu.Unlock()
