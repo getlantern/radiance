@@ -30,7 +30,6 @@ const maxPortsPerHost = 16
 
 const otherPorts = "other"
 
-// rejectionSummarySize is how many registrable domains the summary log names.
 const rejectionSummarySize = 15
 
 // rejectionTally counts destinations this peer refused by a reject rule — the
@@ -105,8 +104,18 @@ func validRejectionState(s rejectionState) bool {
 		return false
 	}
 	for _, h := range s.Hosts {
-		if h == nil || h.Ports == nil || h.Count < 0 || len(h.Ports) > maxPortsPerHost+1 {
+		if h == nil || h.Ports == nil || h.Count < 0 {
 			return false
+		}
+		// record only exceeds maxPortsPerHost named ports by adding otherPorts.
+		if _, other := h.Ports[otherPorts]; len(h.Ports) > maxPortsPerHost+1 ||
+			len(h.Ports) == maxPortsPerHost+1 && !other {
+			return false
+		}
+		for _, n := range h.Ports {
+			if n < 0 {
+				return false
+			}
 		}
 	}
 	return true
@@ -145,7 +154,7 @@ func (t *rejectionTally) record(destination string) {
 	h.Ports[port]++
 }
 
-// summary groups the tally by registrable domain, most refused first.
+// summary is ordered most refused first; flush logs its head.
 func (t *rejectionTally) summary() (domains []rejectedDomain, total int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

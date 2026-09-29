@@ -91,11 +91,13 @@ func TestRejectionTally_CorruptFileStartsFresh(t *testing.T) {
 	}
 	tooMany += `}}`
 	for name, saved := range map[string]string{
-		"not json":       `{not json`,
-		"null host":      `{"hosts":{"x.example.com":null}}`,
-		"null ports":     `{"hosts":{"x.example.com":{"count":3,"ports":null}}}`,
-		"negative count": `{"hosts":{"x.example.com":{"count":-1,"ports":{}}}}`,
-		"too many hosts": tooMany,
+		"not json":                     `{not json`,
+		"null host":                    `{"hosts":{"x.example.com":null}}`,
+		"null ports":                   `{"hosts":{"x.example.com":{"count":3,"ports":null}}}`,
+		"negative count":               `{"hosts":{"x.example.com":{"count":-1,"ports":{}}}}`,
+		"too many hosts":               tooMany,
+		"negative port":                `{"hosts":{"x.example.com":{"count":1,"ports":{"443":-1}}}}`,
+		"ports past cap without other": `{"hosts":{"x.example.com":{"count":17,"ports":{"1000":1,"1001":1,"1002":1,"1003":1,"1004":1,"1005":1,"1006":1,"1007":1,"1008":1,"1009":1,"1010":1,"1011":1,"1012":1,"1013":1,"1014":1,"1015":1,"1016":1}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "peer-rejections.json")
@@ -121,6 +123,13 @@ func TestRejectionTally_CapsPortsPerHost(t *testing.T) {
 	assert.Equal(t, int64(10), h.Ports[otherPorts])
 	assert.Equal(t, int64(2), h.Ports["1000"], "known ports still count past the cap")
 	assert.Equal(t, int64(maxPortsPerHost+11), h.Count)
+
+	// The capped breakdown must survive a restart.
+	path := filepath.Join(t.TempDir(), "peer-rejections.json")
+	tally.path = path
+	tally.flush()
+	reloaded := newRejectionTally(path)
+	assert.Equal(t, h.Ports, reloaded.state.Hosts["scanned.example.com"].Ports)
 }
 
 func TestRejectionTally_FailedWriteRetriesOnNextFlush(t *testing.T) {
