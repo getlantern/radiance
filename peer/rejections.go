@@ -16,7 +16,6 @@ import (
 	"golang.org/x/net/publicsuffix"
 
 	"github.com/getlantern/radiance/common/atomicfile"
-	"github.com/getlantern/radiance/common/fileperm"
 )
 
 // maxRejectedHosts bounds the tally file. Sharded CDN hostnames are unbounded
@@ -29,6 +28,11 @@ const maxRejectedHosts = 2000
 const maxPortsPerHost = 16
 
 const otherPorts = "other"
+
+// rejectionsFileMode is owner-only rather than fileperm.File: the file lists
+// hosts people in censored countries asked for, and the data directory is
+// world-readable.
+const rejectionsFileMode os.FileMode = 0o600
 
 const rejectionSummarySize = 15
 
@@ -208,7 +212,7 @@ func (t *rejectionTally) flush() {
 	if t.path == "" {
 		return
 	}
-	if err := atomicfile.WriteFile(t.path, raw, fileperm.File); err != nil {
+	if err := atomicfile.WriteFile(t.path, raw, rejectionsFileMode); err != nil {
 		slog.Warn("peer: writing rejection tally", "path", t.path, "err", err)
 		t.mu.Lock()
 		t.dirty = true

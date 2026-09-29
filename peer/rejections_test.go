@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/getlantern/lantern-box/tracker/peerconn"
@@ -75,6 +76,12 @@ func TestRejectionTally_PersistsAcrossRestarts(t *testing.T) {
 	var onDisk rejectionState
 	require.NoError(t, json.Unmarshal(raw, &onDisk))
 	assert.Equal(t, int64(3), onDisk.Hosts["pbs.twimg.com"].Count)
+
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 
 	leftovers, err := filepath.Glob(path + ".tmp*")
 	require.NoError(t, err)
