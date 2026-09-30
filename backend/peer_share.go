@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/getlantern/radiance/common"
@@ -47,7 +48,10 @@ var peerShareUnsupported = common.IsIOS
 // NewLocalBackend so the construction site is a one-liner.
 func newPeerClient(platformDeviceID string) (*peer.Client, error) {
 	api := peer.NewAPI(kindling.HTTPClient(), common.GetBaseURL(), platformDeviceID)
-	client, err := peer.NewClient(peer.Config{API: api})
+	client, err := peer.NewClient(peer.Config{
+		API:            api,
+		RejectionsPath: filepath.Join(settings.GetString(settings.DataPathKey), "peer-rejections.json"),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer client: %w", err)
 	}
