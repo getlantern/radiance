@@ -198,13 +198,13 @@ func TestClient_StaleSelfStopSparesReplacementSession(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, c.Start(ctx))
 	c.mu.Lock()
-	oldSession := c.runCtx
+	oldSession, oldRegistration := c.runCtx, c.registration
 	c.mu.Unlock()
 	require.NoError(t, c.Stop(ctx))
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() { _ = c.Stop(ctx) })
 
-	c.stopSelf(oldSession, errors.New("old session's rotation failed"))
+	c.stopSelf(oldSession, oldRegistration, errors.New("old session's rotation failed"))
 	time.Sleep(100 * time.Millisecond)
 	assert.True(t, c.IsActive(), "the replacement session keeps running")
 	assert.Zero(t, selfStops.Load())
@@ -272,4 +272,72 @@ func (b *panicBox) Start() error {
 		panic("libbox start")
 	}
 	return b.fakeBoxService.Start()
+}
+
+// Start, Stop and rotation hold one lifecycle slot, so a Start issued while a
+// Stop is still tearing down waits for it instead of registering a route the
+// old Stop then deregisters.
+func TestClient_StartWaitsForInFlightStop(t *testing.T) {
+	srv := newStubServer(t)
+	release := make(chan struct{})
+	var deregistering sync.WaitGroup
+	deregistering.Add(1)
+	srv.onDeregister = func() {
+		deregistering.Done()
+		<-release
+	}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- c.Stop(ctx) }()
+	deregistering.Wait()
+
+	started := make(chan error, 1)
+	go func() { started <- c.Start(ctx) }()
+	select {
+	case <-started:
+		t.Fatal("Start must wait for the in-flight Stop")
+	case <-time.After(100 * time.Millisecond):
+	}
+	srv.onDeregister = nil
+	close(release)
+	require.NoError(t, <-stopped)
+	require.NoError(t, <-started)
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	assert.True(t, c.IsActive())
+	assert.Equal(t, int64(2), srv.registerCount.Load())
+	assert.Equal(t, int64(1), srv.deregisterCount.Load(), "the new session's route is not deregistered")
+}
+
+// A user Stop cancels the session before waiting for the lifecycle slot, so
+// a rotation stuck in its re-register doesn't hold Stop up.
+func TestClient_StopDuringHungRotationRegisterReturnsPromptly(t *testing.T) {
+	srv := newStubServer(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	var registers atomic.Int64
+	inRotation := make(chan struct{}, 1)
+	srv.registerRespFn = func() RegisterResponse {
+		if registers.Add(1) > 1 {
+			inRotation <- struct{}{}
+			<-hang
+		}
+		return srv.registerResp
+	}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.CredRotationInterval = 20 * time.Millisecond
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	<-inRotation
+
+	start := time.Now()
+	require.NoError(t, c.Stop(ctx))
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.False(t, c.IsActive())
 }

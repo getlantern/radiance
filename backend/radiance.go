@@ -689,6 +689,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	diff := updates.Diff(curr)
 	slog.Log(nil, log.LevelTrace, "Patching settings", "updates", updates, "current", curr, "diff", diff)
 	restartPeer := r.restartsStoppedPeer(updates, diff)
+	peerValue, peerChanged := diff[settings.PeerShareEnabledKey]
 	if len(diff) == 0 {
 		if restartPeer {
 			return r.applyPeerShare(true)
@@ -702,7 +703,15 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
 		}
 	}
-	if err := settings.Patch(diff); err != nil {
+	// applyPeerShare persists the peer toggle itself, under the lock that
+	// orders toggles, so an earlier "on" still starting can't land after a
+	// later "off".
+	persist := diff
+	if peerChanged {
+		persist = maps.Clone(diff)
+		delete(persist, settings.PeerShareEnabledKey)
+	}
+	if err := settings.Patch(persist); err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
@@ -739,8 +748,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
 	}
-	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
-		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
+	if peerChanged {
+		on, _ := peerValue.(bool)
+		if err := r.applyPeerShare(on); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	} else if restartPeer {

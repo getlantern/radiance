@@ -59,74 +59,69 @@ func newPeerClient(platformDeviceID string, onSelfStop func(error)) (*peer.Clien
 	return client, nil
 }
 
-// applyPeerShare drives peerClient to match the toggle. On Start failure the
-// persisted setting is rolled back so reads of PeerShareEnabledKey reflect
-// runtime state. Stop errors are logged because a partial teardown shouldn't
-// keep the toggle on.
-//
-// peerToggleMu serializes concurrent toggles: without it, a fast off→on→off
-// sequence could see the second call's "already active" rollback racing the
-// third call's Stop.
+// applyPeerShare drives peerClient to match the toggle and is the only writer
+// of PeerShareEnabledKey. Persisting and acting happen together under
+// peerToggleMu, the same lock the self-stop callback takes, so toggles apply
+// in order and the setting always ends up describing the runtime state: "on"
+// is rolled back if Start fails. Stop errors are logged because a partial
+// teardown shouldn't keep the toggle on.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	if peerShareUnsupported() {
+		// A persisted "on" would otherwise survive every restart with nothing
+		// behind it.
+		persistErr := persistPeerShare(false)
 		if enabled {
-			// Same reason as the nil-client path below: a persisted "on"
-			// would otherwise survive every restart with nothing behind it.
-			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
-				slog.Error("peer share rollback failed on unsupported platform", "error", rbErr)
-			}
-			return fmt.Errorf("peer share is not supported on %s", common.Platform)
+			return errors.Join(fmt.Errorf("peer share is not supported on %s", common.Platform), persistErr)
 		}
-		return nil
+		return persistErr
 	}
 	// Construction degrades to a nil client rather than failing (the backend
 	// must always come up so a user can report an issue), so the toggle
-	// reports the outage instead of panicking. Roll the setting back, or a
-	// persisted "on" would survive with nothing behind it.
+	// reports the outage instead of panicking.
 	if r.peerClient == nil {
+		persistErr := persistPeerShare(false)
 		if enabled {
-			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
-				slog.Error("peer share rollback failed with no peer client", "error", rbErr)
-			}
-			return errors.New("peer share unavailable: peer client failed to initialize")
+			return errors.Join(errors.New("peer share unavailable: peer client failed to initialize"), persistErr)
 		}
-		return nil
+		return persistErr
 	}
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()
 	toggleCtx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
-	if enabled {
-		// A second "on" that queued behind an in-flight Start must not fail on
-		// "already active", or the rollback below would clear the toggle under
-		// a running peer.
-		if r.peerClient.IsActive() {
-			return nil
+	if !enabled {
+		persistErr := persistPeerShare(false)
+		if err := r.peerClient.Stop(toggleCtx); err != nil {
+			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
 		}
-		if err := r.peerClient.Start(toggleCtx); err != nil {
-			// Surface the underlying Start error so operators can see it
-			// in the daemon log (UPnP failure, registration 4xx, etc.)
-			// rather than only via the IPC HTTP response.
-			slog.Error("peer share start failed", "error", err)
-			if rbErr := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); rbErr != nil {
-				slog.Error("peer share rollback failed after Start error",
-					"start_error", err, "rollback_error", rbErr)
-			}
-			return fmt.Errorf("start peer share: %w", err)
-		}
-		slog.Info("peer share start succeeded")
-		// A self-stop callback may have cleared the toggle between the caller
-		// deciding to start and this Start; it runs under peerToggleMu too, so
-		// the running peer's state is re-asserted here.
-		if !settings.GetBool(settings.PeerShareEnabledKey) {
-			if err := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}); err != nil {
-				slog.Error("re-asserting peer share toggle after start", "error", err)
-			}
-		}
+		return persistErr
+	}
+	if err := persistPeerShare(true); err != nil {
+		return err
+	}
+	// A second "on" that queued behind an in-flight Start must not fail on
+	// "already active" and roll the toggle back under a running peer.
+	if r.peerClient.IsActive() {
 		return nil
 	}
-	if err := r.peerClient.Stop(toggleCtx); err != nil {
-		slog.Warn("peer share stop returned error (toggle still off)", "error", err)
+	if err := r.peerClient.Start(toggleCtx); err != nil {
+		// Surface the underlying Start error so operators can see it in the
+		// daemon log (UPnP failure, registration 4xx, etc.) rather than only
+		// via the IPC HTTP response.
+		slog.Error("peer share start failed", "error", err)
+		if rbErr := persistPeerShare(false); rbErr != nil {
+			slog.Error("peer share rollback failed after Start error",
+				"start_error", err, "rollback_error", rbErr)
+		}
+		return fmt.Errorf("start peer share: %w", err)
+	}
+	slog.Info("peer share start succeeded")
+	return nil
+}
+
+func persistPeerShare(on bool) error {
+	if err := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: on}); err != nil {
+		return fmt.Errorf("persist %s: %w", settings.PeerShareEnabledKey, err)
 	}
 	return nil
 }
@@ -142,7 +137,7 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 		return
 	}
 	slog.Warn("peer share stopped itself; turning the toggle off", "reason", reason)
-	if err := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); err != nil {
+	if err := persistPeerShare(false); err != nil {
 		slog.Error("clearing peer share toggle after self-stop", "error", err)
 	}
 }

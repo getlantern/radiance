@@ -154,8 +154,9 @@ type stubServer struct {
 	// each time). When non-nil, takes precedence over registerResp.
 	registerRespFn  func() RegisterResponse
 	heartbeatStatus int
-	// onHeartbeat runs before a heartbeat is answered.
+	// onHeartbeat and onDeregister run before the request is answered.
 	onHeartbeat        func()
+	onDeregister       func()
 	deregisterStatus   int
 	registerCount      atomic.Int64
 	verifyCount        atomic.Int64
@@ -231,6 +232,9 @@ func newStubServer(t *testing.T) *stubServer {
 	mux.HandleFunc("/v1/peer/deregister", func(w http.ResponseWriter, r *http.Request) {
 		s.deregisterCount.Add(1)
 		s.deregisterDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
+		if s.onDeregister != nil {
+			s.onDeregister()
+		}
 		if s.deregisterStatus != http.StatusOK {
 			http.Error(w, "deregister failed", s.deregisterStatus)
 			return

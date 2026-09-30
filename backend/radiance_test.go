@@ -435,9 +435,9 @@ func TestPatchSettings_ToggleOnWithOtherChangesRestartsStoppedPeer(t *testing.T)
 	assert.Equal(t, "fa-IR", settings.GetString(settings.LocaleKey))
 }
 
-// A self-stop that cleared the toggle between the decision to start and the
-// Start itself must not leave a running peer with the toggle off.
-func TestApplyPeerShare_StartReassertsToggle(t *testing.T) {
+// applyPeerShare persists the toggle it applies, so a self-stop that cleared
+// it before this Start doesn't leave a running peer with the toggle off.
+func TestApplyPeerShare_StartPersistsToggle(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPeerTestBackend(t, fake)
 	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}))
@@ -445,6 +445,38 @@ func TestApplyPeerShare_StartReassertsToggle(t *testing.T) {
 	require.NoError(t, r.applyPeerShare(true))
 	assert.True(t, fake.IsActive())
 	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// An "off" queued behind an "on" that is still starting must win: the setting
+// ends off and the peer stopped, in the order the toggles arrived.
+func TestPatchSettings_OffQueuedBehindStartingOnWins(t *testing.T) {
+	fake := &blockingStartPeer{release: make(chan struct{}), entered: make(chan struct{})}
+	r := newPeerTestBackend(t, &fake.fakePeerController)
+	r.peerClient = fake
+
+	onDone := make(chan error, 1)
+	go func() { onDone <- r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: true}) }()
+	<-fake.entered
+	offDone := make(chan error, 1)
+	go func() { offDone <- r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}) }()
+	time.Sleep(50 * time.Millisecond) // let the off queue on peerToggleMu
+	close(fake.release)
+	require.NoError(t, <-onDone)
+	require.NoError(t, <-offDone)
+
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+	assert.False(t, fake.IsActive())
+}
+
+type blockingStartPeer struct {
+	fakePeerController
+	release, entered chan struct{}
+}
+
+func (b *blockingStartPeer) Start(ctx context.Context) error {
+	close(b.entered)
+	<-b.release
+	return b.fakePeerController.Start(ctx)
 }
 
 // A second "on" that queued behind a Start must not fail with "already
