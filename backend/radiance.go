@@ -688,10 +688,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
 	diff := updates.Diff(curr)
 	slog.Log(nil, log.LevelTrace, "Patching settings", "updates", updates, "current", curr, "diff", diff)
-	if r.restartsStoppedPeer(updates, diff) {
-		return r.applyPeerShare(true)
-	}
+	restartPeer := r.restartsStoppedPeer(updates, diff)
 	if len(diff) == 0 {
+		if restartPeer {
+			return r.applyPeerShare(true)
+		}
 		return nil
 	}
 	// Reject an invalid split-tunnel policy before persisting, so settings.json
@@ -740,6 +741,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
 		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	} else if restartPeer {
+		if err := r.applyPeerShare(true); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}

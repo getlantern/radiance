@@ -152,8 +152,10 @@ type stubServer struct {
 	// registerRespFn lets a test return a different response per
 	// register call (e.g. cred-rotation tests need a fresh route_id
 	// each time). When non-nil, takes precedence over registerResp.
-	registerRespFn     func() RegisterResponse
-	heartbeatStatus    int
+	registerRespFn  func() RegisterResponse
+	heartbeatStatus int
+	// onHeartbeat runs before a heartbeat is answered.
+	onHeartbeat        func()
 	deregisterStatus   int
 	registerCount      atomic.Int64
 	verifyCount        atomic.Int64
@@ -217,6 +219,9 @@ func newStubServer(t *testing.T) *stubServer {
 	mux.HandleFunc("/v1/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatCount.Add(1)
 		s.heartbeatDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
+		if s.onHeartbeat != nil {
+			s.onHeartbeat()
+		}
 		if s.heartbeatStatus != http.StatusOK {
 			http.Error(w, "heartbeat failed", s.heartbeatStatus)
 			return

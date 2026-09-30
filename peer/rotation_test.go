@@ -186,3 +186,90 @@ func (b *drainingBox) Close() error {
 	<-b.release
 	return b.fakeBoxService.Close()
 }
+
+// A self-stop decided by one session must not stop the session a user
+// started after it.
+func TestClient_StaleSelfStopSparesReplacementSession(t *testing.T) {
+	var selfStops atomic.Int64
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t), func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.OnSelfStop = func(error) { selfStops.Add(1) }
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	c.mu.Lock()
+	oldSession := c.runCtx
+	c.mu.Unlock()
+	require.NoError(t, c.Stop(ctx))
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+
+	c.stopSelf(oldSession, errors.New("old session's rotation failed"))
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, c.IsActive(), "the replacement session keeps running")
+	assert.Zero(t, selfStops.Load())
+}
+
+// The server reuses the route_id across re-registrations, so a 404 for the
+// registration a rotation just replaced must not stop the peer.
+func TestClient_HeartbeatNotFoundForReplacedRegistrationIsIgnored(t *testing.T) {
+	srv := newStubServer(t)
+	srv.heartbeatStatus = http.StatusNotFound
+	var selfStops atomic.Int64
+	var c *Client
+	var calls atomic.Int64
+	srv.onHeartbeat = func() {
+		switch calls.Add(1) {
+		case 1:
+			// A rotation on the same route_id completes while this heartbeat
+			// is in flight; the heartbeat still gets its 404.
+			c.mu.Lock()
+			c.registration++
+			c.mu.Unlock()
+		case 2:
+			srv.heartbeatStatus = http.StatusOK
+		}
+	}
+	c = newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = 20 * time.Millisecond
+		cfg.OnSelfStop = func(error) { selfStops.Add(1) }
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool { return srv.heartbeatCount.Load() >= 3 }, 2*time.Second, 10*time.Millisecond)
+	assert.True(t, c.IsActive())
+	assert.Zero(t, selfStops.Load())
+}
+
+// A box that was built, and so holds the port, but panicked or failed on
+// Start is closed before giving up, with the bounded close.
+func TestBuildAndStartWithRetry_ClosesBoxThatFailedToStart(t *testing.T) {
+	var closed []*fakeBoxService
+	closeBox := func(b boxService) error {
+		closed = append(closed, b.(*panicBox).fakeBoxService)
+		return nil
+	}
+	panicking := &panicBox{fakeBoxService: &fakeBoxService{}, panicOnStart: true}
+	_, err := buildAndStartWithRetry(context.Background(), func() (boxService, error) { return panicking, nil }, closeBox)
+	require.ErrorContains(t, err, "panicked")
+	require.Len(t, closed, 1)
+
+	closed = nil
+	failing := &panicBox{fakeBoxService: &fakeBoxService{startErr: errors.New("start failed")}}
+	_, err = buildAndStartWithRetry(context.Background(), func() (boxService, error) { return failing, nil }, closeBox)
+	require.ErrorContains(t, err, "start failed")
+	assert.Len(t, closed, 5, "every failed attempt releases its box")
+}
+
+type panicBox struct {
+	*fakeBoxService
+	panicOnStart bool
+}
+
+func (b *panicBox) Start() error {
+	if b.panicOnStart {
+		panic("libbox start")
+	}
+	return b.fakeBoxService.Start()
+}

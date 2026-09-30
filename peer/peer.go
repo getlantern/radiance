@@ -216,6 +216,16 @@ type Client struct {
 	// the new libbox lifetime to the same context as the original Start.
 	// Stop's cancelRun() teardown still applies to the rebuilt box.
 	runCtx context.Context
+	// registration counts successful registrations. The server reuses a
+	// peer's route_id across re-registrations, so a heartbeat 404 is only
+	// attributable to the current registration by this, not by route_id.
+	registration uint64
+
+	// regMu serializes registrations. A register is an upsert on the peer's
+	// (address, port), so one landing after a Stop→Start would overwrite the
+	// new session's credentials; rotation checks its session while holding
+	// it on both sides of its call.
+	regMu sync.Mutex
 }
 
 // peerCredRotationInterval bounds how long a leaked samizdat
@@ -392,11 +402,13 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	}
 
 	c.emitPhase(PhaseRegistering, "")
+	c.regMu.Lock()
 	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
 	})
+	c.regMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
 	}
@@ -505,6 +517,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 
 	c.mu.Lock()
 	c.active = true
+	c.registration++
 	c.forwarder = fwd
 	c.box = box
 	c.routeID = regResp.RouteID
@@ -557,6 +570,14 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 // rollback path is designed to prevent. The wait honors ctx so a cancellable
 // caller still has an exit door if Start hangs.
 func (c *Client) Stop(ctx context.Context) error {
+	_, err := c.stopSession(ctx, nil)
+	return err
+}
+
+// stopSession stops the client if session is nil or is still the running
+// session's runCtx, checked under c.mu together with the transition to
+// stopping. It reports whether it stopped anything.
+func (c *Client) stopSession(ctx context.Context, session context.Context) (bool, error) {
 	c.mu.Lock()
 	for c.starting {
 		done := c.startingDone
@@ -564,13 +585,13 @@ func (c *Client) Stop(ctx context.Context) error {
 		select {
 		case <-done:
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 		c.mu.Lock()
 	}
-	if !c.active {
+	if !c.active || session != nil && c.runCtx != session {
 		c.mu.Unlock()
-		return nil
+		return false, nil
 	}
 	cancel := c.cancelRun
 	done := c.runDone
@@ -631,7 +652,7 @@ func (c *Client) Stop(ctx context.Context) error {
 	idleSnapshot := c.status
 	c.mu.Unlock()
 	events.Emit(StatusEvent{Status: idleSnapshot})
-	return firstErr
+	return true, firstErr
 }
 
 func (c *Client) IsActive() bool {
@@ -751,7 +772,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 		case <-t.C:
 			c.rejections.flush()
 			c.mu.Lock()
-			routeID := c.routeID
+			routeID, registration := c.routeID, c.registration
 			c.mu.Unlock()
 			if routeID == "" {
 				return
@@ -773,15 +794,15 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 					// to stop. Skip the auto-Stop and let the next tick
 					// heartbeat the new route.
 					c.mu.Lock()
-					currentRouteID := c.routeID
+					currentRouteID, currentRegistration := c.routeID, c.registration
 					c.mu.Unlock()
-					if currentRouteID != routeID {
-						slog.Info("peer heartbeat 404 on stale route_id; rotation in flight, continuing",
+					if currentRouteID != routeID || currentRegistration != registration {
+						slog.Info("peer heartbeat 404 predates a re-registration; continuing",
 							"stale_route_id", routeID, "current_route_id", currentRouteID)
 						continue
 					}
 					slog.Info("peer route no longer registered server-side, stopping client")
-					c.stopSelf(fmt.Errorf("route %s no longer registered: %w", routeID, err))
+					c.stopSelf(ctx, fmt.Errorf("route %s no longer registered: %w", routeID, err))
 					return
 				}
 			}
@@ -894,14 +915,39 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
+	sessionCurrent := func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.active && c.runCtx == sessionRunCtx
+	}
+	c.regMu.Lock()
+	if !sessionCurrent() {
+		c.regMu.Unlock()
+		return errors.New("client stopped before rotation re-registered")
+	}
 	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
 	})
 	if err != nil {
+		c.regMu.Unlock()
 		return fmt.Errorf("re-register: %w", err)
 	}
+	if !sessionCurrent() {
+		// Stop ran while this register was in flight, so it may have landed
+		// after Stop's deregister and recreated the route. A replacement
+		// session registers only after regMu is released, so no live session
+		// owns this route_id yet: deregister it, same route_id or not.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
+		if dErr := c.cfg.API.Deregister(cleanupCtx, regResp.RouteID); dErr != nil {
+			slog.Warn("deregister route registered after Stop", "err", dErr, "route_id", regResp.RouteID)
+		}
+		cancel()
+		c.regMu.Unlock()
+		return errors.New("client stopped during rotation re-register")
+	}
+	c.regMu.Unlock()
 	sameRoute := regResp.RouteID == oldRouteID
 	// abandon undoes a registration this rotation can no longer use. A new
 	// route_id is deregistered so the bandit doesn't hand out creds for a box
@@ -925,7 +971,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	fail := func(err error, servingOld bool) error {
 		abandon(err)
 		if sameRoute || !servingOld {
-			c.stopSelf(fmt.Errorf("credential rotation left nothing serving the advertised route: %w", err))
+			c.stopSelf(sessionRunCtx, fmt.Errorf("credential rotation left nothing serving the advertised route: %w", err))
 		}
 		return err
 	}
@@ -960,7 +1006,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 	newBox, err := buildAndStartWithRetry(ctx, func() (boxService, error) {
 		return c.cfg.BuildBoxService(sessionRunCtx, options)
-	})
+	}, c.closeBox)
 	if err != nil {
 		// The old box is closed and the new one isn't up: nothing listens.
 		// Leave c.box pointing at oldBox so Stop's close stays idempotent.
@@ -990,6 +1036,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 	c.box = newBox
 	c.routeID = regResp.RouteID
+	c.registration++
 	c.boxOptions = options
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
@@ -1022,10 +1069,15 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 // (50+100+200+400 across 4 sleeps; no sleep after the final attempt).
 //
 // Building or starting libbox can panic; that is converted to an error so the
-// caller's failure handling still runs.
-func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error)) (box boxService, retErr error) {
+// caller's failure handling still runs. A box that was built but failed or
+// panicked on Start holds the port, so it is closed with closeBox.
+func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error), closeBox func(boxService) error) (box boxService, retErr error) {
+	var inFlight boxService
 	defer func() {
 		if r := recover(); r != nil {
+			if inFlight != nil {
+				_ = closeBox(inFlight)
+			}
 			box, retErr = nil, fmt.Errorf("build or start new sing-box panicked: %v", r)
 		}
 	}()
@@ -1035,10 +1087,12 @@ func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error
 	for i := 0; i < attempts; i++ {
 		b, err := build()
 		if err == nil {
+			inFlight = b
 			if err = b.Start(); err == nil {
 				return b, nil
 			}
-			_ = b.Close()
+			_ = closeBox(b)
+			inFlight = nil
 		}
 		lastErr = err
 		if i == attempts-1 {
@@ -1070,15 +1124,15 @@ func (c *Client) closeBox(box boxService) error {
 	}
 }
 
-// stopSelf stops the client from inside one of its own loops, then reports
-// the reason to Config.OnSelfStop. Stop runs on a new goroutine because it
-// waits for those loops to exit.
-func (c *Client) stopSelf(reason error) {
+// stopSelf stops session from inside one of its own loops, then reports the
+// reason to Config.OnSelfStop. It stops nothing, and reports nothing, if a
+// Stop→Start has replaced session by then. Stop runs on a new goroutine
+// because it waits for those loops to exit.
+func (c *Client) stopSelf(session context.Context, reason error) {
 	go func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
-		_ = c.Stop(stopCtx)
-		if c.cfg.OnSelfStop != nil {
+		if stopped, _ := c.stopSession(stopCtx, session); stopped && c.cfg.OnSelfStop != nil {
 			c.cfg.OnSelfStop(reason)
 		}
 	}()

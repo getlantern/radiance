@@ -420,6 +420,33 @@ func TestPatchSettings_ToggleOnRestartsStoppedPeer(t *testing.T) {
 	assert.Equal(t, int64(1), fake.startCalls.Load(), "a running peer is not restarted")
 }
 
+// A PATCH that turns peer share on alongside another change still restarts a
+// stopped peer, even though the peer key itself is unchanged.
+func TestPatchSettings_ToggleOnWithOtherChangesRestartsStoppedPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true,
+		settings.LocaleKey:           "fa-IR",
+	}))
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.Equal(t, "fa-IR", settings.GetString(settings.LocaleKey))
+}
+
+// A self-stop that cleared the toggle between the decision to start and the
+// Start itself must not leave a running peer with the toggle off.
+func TestApplyPeerShare_StartReassertsToggle(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}))
+
+	require.NoError(t, r.applyPeerShare(true))
+	assert.True(t, fake.IsActive())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
 // A second "on" that queued behind a Start must not fail with "already
 // active" and roll the toggle back under a running peer.
 func TestApplyPeerShare_EnableWhenActiveKeepsToggle(t *testing.T) {
