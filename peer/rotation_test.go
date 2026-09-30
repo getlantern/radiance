@@ -377,9 +377,10 @@ func TestClient_DelayedNotFoundForOldRouteSparesNewRoute(t *testing.T) {
 	assert.Zero(t, selfStops.Load())
 }
 
-// A Stop that gives up waiting for the lifecycle slot has already cancelled
-// the session's loops, so its teardown still has to happen.
-func TestClient_TimedOutStopStillTearsDown(t *testing.T) {
+// Stop waits out a rotation holding the lifecycle slot and then completes its
+// teardown, even when its own ctx has long expired: giving up would leave the
+// session registered and listening with its loops cancelled.
+func TestClient_StopCompletesAfterRotationReleasesSlot(t *testing.T) {
 	srv := newStubServer(t)
 	release := make(chan struct{})
 	var builds atomic.Int64
@@ -400,10 +401,15 @@ func TestClient_TimedOutStopStillTearsDown(t *testing.T) {
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	require.ErrorIs(t, c.Stop(stopCtx), context.DeadlineExceeded)
+	stopped := make(chan error, 1)
+	go func() { stopped <- c.Stop(stopCtx) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop must wait for the rotation holding the slot")
+	case <-time.After(200 * time.Millisecond):
+	}
 	close(release)
-
-	require.Eventually(t, func() bool { return !c.IsActive() }, 3*time.Second, 10*time.Millisecond,
-		"the timed-out Stop's teardown should finish in the background")
-	assert.GreaterOrEqual(t, srv.deregisterCount.Load(), int64(1))
+	require.NoError(t, <-stopped)
+	assert.False(t, c.IsActive())
+	assert.GreaterOrEqual(t, srv.deregisterCount.Load(), int64(1), "teardown runs on its own context, not the expired one")
 }

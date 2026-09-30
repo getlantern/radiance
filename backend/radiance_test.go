@@ -460,6 +460,21 @@ func TestPatchSettings_UnchangedOffStillStopsPeer(t *testing.T) {
 	assert.False(t, fake.IsActive())
 }
 
+// A non-boolean toggle is rejected rather than read as "off".
+func TestPatchSettings_NonBoolToggleRejected(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	for _, v := range []any{"true", nil, 1} {
+		require.Error(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: v}), "%v", v)
+	}
+	assert.Zero(t, fake.stopCalls.Load())
+	assert.True(t, fake.IsActive())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
 // An invalid setting in the same PATCH is rejected before the toggle applies.
 func TestPatchSettings_InvalidPatchDoesNotToggle(t *testing.T) {
 	fake := &fakePeerController{}

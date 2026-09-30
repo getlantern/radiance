@@ -702,7 +702,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
 	if peerRequested {
-		on, _ := peerValue.(bool)
+		on, ok := peerValue.(bool)
+		if !ok {
+			return fmt.Errorf("invalid %s: %v", settings.PeerShareEnabledKey, peerValue)
+		}
 		if err := r.applyPeerShare(on); err != nil {
 			errs = errors.Join(errs, err)
 		}

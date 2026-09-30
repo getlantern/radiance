@@ -579,37 +579,36 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	return nil
 }
 
-// Stop tears down an active session. Idempotent. Blocks until the heartbeat
-// goroutine has exited and all teardown calls have completed (or timed out).
+// Stop tears down the session running when it is called. Idempotent.
 //
-// If a Start is in flight when Stop is called, Stop waits for that Start to
-// finish (success or fail) before proceeding. Without this, a Stop arriving
-// while starting=true would return nil and let the racing Start leave the
-// client active afterward — exactly the orphaned-session shape Start's own
-// rollback path is designed to prevent. The wait honors ctx so a cancellable
-// caller still has an exit door if Start hangs.
+// With a session running, Stop always completes. It cancels that session
+// first, so a rotation holding the lifecycle slot aborts its network calls,
+// then waits for the slot however long ctx allows or not: giving up would
+// leave a session whose loops are cancelled but which is still registered
+// and listening. Only work bounded by that cancelled session can hold the
+// slot then. Teardown runs on its own bounded context.
+//
+// With no session yet, because a Start is in flight, Stop waits for that
+// Start and stops what it started, but honors ctx while waiting, so a caller
+// has an exit if the Start hangs (UPnP discovery, say). Giving up then
+// leaves nothing half-cancelled.
+//
+// Stop targets the session it cancelled, so it never tears down a session a
+// later Start begins.
 func (c *Client) Stop(ctx context.Context) error {
-	// Cancel the session before waiting for the lifecycle slot, so an
-	// in-flight rotation holding it aborts its network calls promptly.
 	c.mu.Lock()
 	cancelRun, session := c.cancelRun, c.runCtx
 	c.mu.Unlock()
-	if cancelRun != nil {
+	if session != nil {
 		cancelRun()
+		c.lifecycle <- struct{}{}
+	} else if err := c.acquireLifecycle(ctx); err != nil {
+		return err
 	}
-	_, err := c.stopTarget(ctx, stopTarget{})
-	if err != nil && session != nil {
-		// The session's loops are already cancelled, so giving up here would
-		// leave it registered and listening with nothing heartbeating it.
-		// Finish its teardown in the background instead.
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
-			defer cancel()
-			if _, bgErr := c.stopTarget(bgCtx, stopTarget{session: session}); bgErr != nil {
-				slog.Warn("peer teardown after a timed-out Stop failed", "err", bgErr)
-			}
-		}()
-	}
+	defer c.releaseLifecycle()
+	teardownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), peerCleanupTimeout)
+	defer cancel()
+	_, err := c.stopHeld(teardownCtx, stopTarget{session: session})
 	return err
 }
 
