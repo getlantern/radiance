@@ -46,11 +46,12 @@ var peerShareUnsupported = common.IsIOS
 // newPeerClient constructs the production peer.Client wired against the
 // shared kindling HTTP client and the platform device ID. Pulled out of
 // NewLocalBackend so the construction site is a one-liner.
-func newPeerClient(platformDeviceID string) (*peer.Client, error) {
+func newPeerClient(platformDeviceID string, onSelfStop func(error)) (*peer.Client, error) {
 	api := peer.NewAPI(kindling.HTTPClient(), common.GetBaseURL(), platformDeviceID)
 	client, err := peer.NewClient(peer.Config{
 		API:            api,
 		RejectionsPath: filepath.Join(settings.GetString(settings.DataPathKey), "peer-rejections.json"),
+		OnSelfStop:     onSelfStop,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer client: %w", err)
@@ -96,6 +97,12 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	toggleCtx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
 	if enabled {
+		// A second "on" that queued behind an in-flight Start must not fail on
+		// "already active", or the rollback below would clear the toggle under
+		// a running peer.
+		if r.peerClient.IsActive() {
+			return nil
+		}
 		if err := r.peerClient.Start(toggleCtx); err != nil {
 			// Surface the underlying Start error so operators can see it
 			// in the daemon log (UPnP failure, registration 4xx, etc.)
@@ -114,6 +121,22 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 		slog.Warn("peer share stop returned error (toggle still off)", "error", err)
 	}
 	return nil
+}
+
+// onPeerSelfStop clears the persisted toggle when the peer client stopped
+// itself, so the setting keeps reflecting runtime state. Left on, it would make
+// the next "on" a no-op, since PatchSettings only acts on changed keys. A
+// toggle that restarted the client in the meantime wins.
+func (r *LocalBackend) onPeerSelfStop(reason error) {
+	r.peerToggleMu.Lock()
+	defer r.peerToggleMu.Unlock()
+	if r.peerClient == nil || r.peerClient.IsActive() {
+		return
+	}
+	slog.Warn("peer share stopped itself; turning the toggle off", "reason", reason)
+	if err := settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}); err != nil {
+		slog.Error("clearing peer share toggle after self-stop", "error", err)
+	}
 }
 
 // resumePeerShareIfEnabled re-Starts the peer client if the user left the
@@ -170,4 +193,16 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 		return peer.Status{}
 	}
 	return r.peerClient.CurrentStatus()
+}
+
+// restartsStoppedPeer reports whether a settings patch is asking for peer share
+// while it is persisted on but not running, which the diff alone can't see.
+// Only a patch that changes nothing else qualifies, so other keys still go
+// through PatchSettings' handlers.
+func (r *LocalBackend) restartsStoppedPeer(updates, diff settings.Settings) bool {
+	on, ok := updates[settings.PeerShareEnabledKey].(bool)
+	if !ok || !on || len(diff) != 0 || r.peerClient == nil {
+		return false
+	}
+	return !r.peerClient.IsActive()
 }

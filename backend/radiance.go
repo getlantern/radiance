@@ -203,7 +203,14 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	// Degraded, not fatal, per the invariant above: a nil peerClient only
 	// disables Share My Connection, and must not cost the user their ability
 	// to report an issue. applyPeerShare and PeerStatus handle nil.
-	peerClient, err := newPeerClient(platformDeviceID)
+	// The peer client outlives this function, and self-stops only after a
+	// Start, which needs r; the closure reads r once it exists.
+	var backend *LocalBackend
+	peerClient, err := newPeerClient(platformDeviceID, func(reason error) {
+		if backend != nil {
+			backend.onPeerSelfStop(reason)
+		}
+	})
 	if err != nil {
 		slog.Error("Loading peer client", "error", err)
 	}
@@ -234,6 +241,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
+	backend = r
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
@@ -680,6 +688,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
 	diff := updates.Diff(curr)
 	slog.Log(nil, log.LevelTrace, "Patching settings", "updates", updates, "current", curr, "diff", diff)
+	if r.restartsStoppedPeer(updates, diff) {
+		return r.applyPeerShare(true)
+	}
 	if len(diff) == 0 {
 		return nil
 	}

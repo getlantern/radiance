@@ -404,6 +404,49 @@ func TestApplyPeerShare_StartFailureRollsBackSetting(t *testing.T) {
 	assert.False(t, fake.IsActive())
 }
 
+// The toggle is persisted "on" but the client stopped itself (the production
+// case: a heartbeat 404 after a failed rotation). The next "on" changes no
+// setting, and must still start the client.
+func TestPatchSettings_ToggleOnRestartsStoppedPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: true}))
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.True(t, fake.IsActive())
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: true}))
+	assert.Equal(t, int64(1), fake.startCalls.Load(), "a running peer is not restarted")
+}
+
+// A second "on" that queued behind a Start must not fail with "already
+// active" and roll the toggle back under a running peer.
+func TestApplyPeerShare_EnableWhenActiveKeepsToggle(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+	fake.active.Store(true)
+
+	require.NoError(t, r.applyPeerShare(true))
+	assert.Zero(t, fake.startCalls.Load())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+func TestOnPeerSelfStop_ClearsToggleUnlessRestarted(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	fake.active.Store(true)
+	r.onPeerSelfStop(errors.New("route gone"))
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey), "a peer restarted since the self-stop keeps the toggle")
+
+	fake.active.Store(false)
+	r.onPeerSelfStop(errors.New("route gone"))
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
 func TestPeerStatus_Accessor(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPeerTestBackend(t, fake)

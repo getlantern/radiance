@@ -128,7 +128,21 @@ type Config struct {
 	// RejectionsPath is where the tally of refused destinations persists.
 	// Empty keeps the tally in memory only.
 	RejectionsPath string
+	// BoxCloseTimeout bounds how long teardown waits for a sing-box Close.
+	// Zero means defaultBoxCloseTimeout.
+	BoxCloseTimeout time.Duration
+	// OnSelfStop is called after the client stops itself, rather than on a
+	// caller's Stop: the server dropped its route, or a credential rotation
+	// left nothing serving what the server advertises. It runs on its own
+	// goroutine after Stop returns, with the reason.
+	OnSelfStop func(reason error)
 }
+
+// defaultBoxCloseTimeout: samizdat's Close releases the listening port at once
+// but then waits for every open client connection to end, which with
+// long-lived clients has taken 18 minutes. Nothing teardown does next depends
+// on that drain.
+const defaultBoxCloseTimeout = 5 * time.Second
 
 // Client orchestrates one peer-proxy session: open UPnP port → register with
 // lantern-cloud → run a sing-box samizdat inbound on the forwarded port →
@@ -251,6 +265,9 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.BuildBoxService == nil {
 		cfg.BuildBoxService = defaultBuildBoxService
 	}
+	if cfg.BoxCloseTimeout == 0 {
+		cfg.BoxCloseTimeout = defaultBoxCloseTimeout
+	}
 	if cfg.HeartbeatTimeout == 0 {
 		cfg.HeartbeatTimeout = 30 * time.Second
 	}
@@ -307,7 +324,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		peerconn.SetListener(nil)
 		c.resetConnTracking()
 		if box != nil {
-			_ = box.Close()
+			_ = c.closeBox(box)
 		}
 		if cancelRun != nil {
 			cancelRun()
@@ -595,7 +612,7 @@ func (c *Client) Stop(ctx context.Context) error {
 		firstErr = fmt.Errorf("deregister: %w", err)
 		slog.Warn("peer client deregister failed (continuing teardown)", "err", err)
 	}
-	if err := box.Close(); err != nil {
+	if err := c.closeBox(box); err != nil {
 		if firstErr == nil {
 			firstErr = fmt.Errorf("close sing-box: %w", err)
 		}
@@ -764,13 +781,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 						continue
 					}
 					slog.Info("peer route no longer registered server-side, stopping client")
-					// Stop runs in a separate goroutine to avoid the cyclic
-					// Stop → cancelRun → loop-exit deadlock.
-					go func() {
-						stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer cancel()
-						_ = c.Stop(stopCtx)
-					}()
+					c.stopSelf(fmt.Errorf("route %s no longer registered: %w", routeID, err))
 					return
 				}
 			}
@@ -838,40 +849,22 @@ func (c *Client) runRotation(ctx context.Context) {
 	}
 }
 
-// rotateCreds atomically swaps the peer's samizdat credentials. On
-// success: a fresh route_id and keypair are in use, the libbox inbound
-// has been rebuilt against the new options, the prior route is
-// deregistered server-side, and the FlutterEvent stream sees no gap.
+// rotateCreds swaps the peer's samizdat credentials by re-registering and
+// rebuilding the libbox inbound against the new launch config.
 //
-// On failure, behavior depends on where rotation aborted:
-//   - Before oldBox.Close (Register, options patch, BuildBoxService,
-//     stop-raced-rotation paths) — the prior box keeps serving with
-//     its existing creds; the newly-registered route (if any) is
-//     deregistered via cleanupNewRoute.
-//   - After oldBox.Close (startNewBoxWithRetry exhausts retries or
-//     panics) — the listener is down until the next rotation tick
-//     successfully rebinds. The router-side port mapping survives;
-//     only the in-process listener is gone. The new route is
-//     deregistered so the bandit doesn't hand its creds out for a
-//     non-listening port.
+// The server keys a peer's route on (address, port) and upserts it, so a
+// re-register from the same peer returns the same route_id with new
+// credentials. Rotation therefore never deregisters a route_id it is still
+// using: that would unregister the live route. Once the re-register succeeds
+// on the same route_id the server advertises only the new credentials, so any
+// failure after that point leaves nothing serving what clients are handed, and
+// the client stops itself (see stopSelf) rather than keep heartbeating a dead
+// route. A different route_id keeps the older behavior: the new route is
+// deregistered on failure and the old box keeps serving.
 //
-// In both cases the router-side port mapping is preserved; only the
-// in-process samizdat state changes.
-//
-// Sequence:
-//  1. Re-register with the same (externalIP, externalPort) as Start.
-//  2. Patch the new server-supplied options for VPN bypass.
-//  3. Build a new libbox service against the new options.
-//  4. Close the old box (releases the listening port).
-//  5. Start the new box (re-binds the same port, now with new creds).
-//  6. Atomic swap: c.box, c.routeID, c.boxOptions point at the new box.
-//  7. Best-effort deregister of the prior route_id so the bandit
-//     catalog stops handing the old (now-invalid) creds to clients.
-//
-// Steps 4-5 leave a brief (~hundreds of ms) window where the port
-// isn't bound; samizdat clients see TCP RST and reconnect. Acceptable
-// trade-off vs. the security cost of holding the same cred for the
-// peer process lifetime.
+// The old box is closed before the new one is built, because building the
+// samizdat inbound binds the listening port. Close releases the port at once;
+// closeBox does not wait for its client connections to drain.
 func (c *Client) rotateCreds(ctx context.Context) error {
 	c.mu.Lock()
 	if !c.active {
@@ -909,11 +902,15 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
 	}
-	// From here on, any error path must deregister regResp.RouteID —
-	// otherwise the newly-created server-side row leaks until TTL expiry
-	// and the bandit catalog may briefly hand out creds for a route
-	// whose box never came up.
-	cleanupNewRoute := func(reason error) {
+	sameRoute := regResp.RouteID == oldRouteID
+	// abandon undoes a registration this rotation can no longer use. A new
+	// route_id is deregistered so the bandit doesn't hand out creds for a box
+	// that never came up. The same route_id is the live route, now advertising
+	// the new creds, so it is left to stopSelf.
+	abandon := func(reason error) {
+		if sameRoute {
+			return
+		}
 		// Use a fresh ctx so a cancelled rotation ctx doesn't skip the
 		// cleanup we just made necessary.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
@@ -923,21 +920,27 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 				"reason", reason, "err", dErr, "orphan_route_id", regResp.RouteID)
 		}
 	}
+	// fail reports a rotation failure. servingOld says whether the old box
+	// still serves creds the server hands out.
+	fail := func(err error, servingOld bool) error {
+		abandon(err)
+		if sameRoute || !servingOld {
+			c.stopSelf(fmt.Errorf("credential rotation left nothing serving the advertised route: %w", err))
+		}
+		return err
+	}
 
 	// Same defence-in-depth gate Start applies, because rotation installs a
 	// freshly fetched launch_cfg on an already-running peer. Validating only
 	// at Start would let a server-side regression reach every long-lived peer
-	// on its next hourly rotation. Failing here keeps the current, already
-	// validated box serving.
+	// on its next hourly rotation.
 	if err := validateAbuseRules(regResp.ServerConfig); err != nil {
-		cleanupNewRoute(err)
-		return fmt.Errorf("rotated launch_cfg failed abuse-rule sanity check: %w", err)
+		return fail(fmt.Errorf("rotated launch_cfg failed abuse-rule sanity check: %w", err), true)
 	}
 
 	options, err := ensurePeerOutboundsBypassVPN(regResp.ServerConfig)
 	if err != nil {
-		cleanupNewRoute(err)
-		return fmt.Errorf("patch sing-box options: %w", err)
+		return fail(fmt.Errorf("patch sing-box options: %w", err), true)
 	}
 
 	c.mu.Lock()
@@ -946,31 +949,22 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if currentRunCtx == nil || currentRunCtx != sessionRunCtx {
 		// Stop ran (runCtx==nil), or a Stop→Start cycle replaced the
 		// session (runCtx pointer differs from the one captured at the
-		// top). Either way the build below would tie a libbox to the
-		// wrong session; skip it and clean up the just-created route.
-		cleanupNewRoute(errors.New("client stopped during rotation"))
+		// top). The session this rotation belongs to is gone, so there is
+		// nothing to stop; only a separate new route needs cleaning up.
+		abandon(errors.New("client stopped during rotation"))
 		return errors.New("client stopped during rotation")
 	}
-	newBox, err := c.cfg.BuildBoxService(sessionRunCtx, options)
-	if err != nil {
-		cleanupNewRoute(err)
-		return fmt.Errorf("build new sing-box: %w", err)
-	}
 
-	// Close old, start new. Order matters — both want the same port.
-	// If newBox.Start fails after oldBox.Close, retry briefly to absorb
-	// router-side TIME_WAIT / EADDRINUSE windows before giving up.
-	if closeErr := oldBox.Close(); closeErr != nil {
+	if closeErr := c.closeBox(oldBox); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
-	if err := startNewBoxWithRetry(ctx, newBox); err != nil {
-		// Catastrophic: port is now unbound. Leave c.box pointing at
-		// oldBox so a future Stop tries to close it (idempotent on
-		// already-closed); the next rotation tick will try again. Also
-		// deregister the now-orphan new route so the bandit doesn't
-		// hand its creds out for a non-listening port.
-		cleanupNewRoute(err)
-		return fmt.Errorf("start new sing-box: %w", err)
+	newBox, err := buildAndStartWithRetry(ctx, func() (boxService, error) {
+		return c.cfg.BuildBoxService(sessionRunCtx, options)
+	})
+	if err != nil {
+		// The old box is closed and the new one isn't up: nothing listens.
+		// Leave c.box pointing at oldBox so Stop's close stays idempotent.
+		return fail(fmt.Errorf("start new sing-box: %w", err), false)
 	}
 
 	// Final swap under lock. Re-check that the session is still the
@@ -984,14 +978,14 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		c.mu.Unlock()
 		// Either Stop cleared state, or Stop→Start replaced the session.
 		// Close the new box we just brought up (the current session has
-		// no reference to it) and deregister the new route. Don't touch
-		// the prior route: in the Stop-only case, Stop already
+		// no reference to it) and clean up a separate new route. Don't
+		// touch the prior route: in the Stop-only case, Stop already
 		// deregistered it; in the Stop→Start case, deregistering it
 		// would defeat the rotation point of cutting off the old creds.
-		if err := newBox.Close(); err != nil {
+		if err := c.closeBox(newBox); err != nil {
 			slog.Warn("close new box after session changed during rotation", "err", err)
 		}
-		cleanupNewRoute(errors.New("session changed during rotation swap"))
+		abandon(errors.New("session changed during rotation swap"))
 		return errors.New("session changed during rotation")
 	}
 	c.box = newBox
@@ -1001,18 +995,18 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
 
-	// Deregister the prior route so the bandit stops handing the old
-	// (now-invalid) creds to clients. Use a fresh ctx so a Stop that
-	// races us between the swap above and the deregister doesn't cancel
-	// the cleanup — leaving the old (now-invalid-locally) route in the
-	// server catalog until TTL would defeat the rotation's stale-cred
-	// cap, which is the whole point of the feature.
-	deregCtx, cancelDereg := context.WithTimeout(context.Background(), peerCleanupTimeout)
-	if err := c.cfg.API.Deregister(deregCtx, oldRouteID); err != nil {
-		slog.Warn("deregister prior route after rotation",
-			"err", err, "old_route_id", oldRouteID)
+	if !sameRoute {
+		// Deregister the prior route so the bandit stops handing the old
+		// (now-invalid) creds to clients. Use a fresh ctx so a Stop that
+		// races us between the swap above and the deregister doesn't
+		// cancel the cleanup.
+		deregCtx, cancelDereg := context.WithTimeout(context.Background(), peerCleanupTimeout)
+		if err := c.cfg.API.Deregister(deregCtx, oldRouteID); err != nil {
+			slog.Warn("deregister prior route after rotation",
+				"err", err, "old_route_id", oldRouteID)
+		}
+		cancelDereg()
 	}
-	cancelDereg()
 
 	slog.Info("peer cred rotation succeeded",
 		"new_route_id", regResp.RouteID,
@@ -1021,50 +1015,73 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	return nil
 }
 
-// startNewBoxWithRetry retries newBox.Start a handful of times with a
-// short backoff to absorb router-side TIME_WAIT / EADDRINUSE between
-// oldBox.Close releasing the port and newBox.Start re-binding it.
-// Inter-attempt backoff totals 750ms (50+100+200+400 across 4 sleeps;
-// no sleep after the final attempt) so a healthy rotation isn't
-// delayed noticeably; the alternative is leaving the peer's listener
-// down for the full rotation interval (default 1h) on a transient
-// bind failure.
+// buildAndStartWithRetry builds and starts a box, retrying a handful of times
+// with a short backoff to absorb EADDRINUSE while the old box's listening port
+// is released. Building is retried along with starting because building the
+// samizdat inbound is what binds the port. Inter-attempt backoff totals 750ms
+// (50+100+200+400 across 4 sleeps; no sleep after the final attempt).
 //
-// libbox.Start can panic; convert that to an error here rather than
-// letting it propagate. Without this, the recover in runRotation would
-// catch the panic but only after rotateCreds' cleanupNewRoute path
-// has been skipped — leaving the freshly-registered route orphaned
-// and the port unbound until next rotation. Returning the panic as
-// an error lets rotateCreds' deferred cleanup deregister the orphan.
-func startNewBoxWithRetry(ctx context.Context, newBox boxService) (retErr error) {
+// Building or starting libbox can panic; that is converted to an error so the
+// caller's failure handling still runs.
+func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error)) (box boxService, retErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			retErr = fmt.Errorf("start new sing-box panicked: %v", r)
+			box, retErr = nil, fmt.Errorf("build or start new sing-box panicked: %v", r)
 		}
 	}()
 	const attempts = 5
 	backoff := 50 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		if err := newBox.Start(); err == nil {
-			return nil
-		} else {
-			lastErr = err
+		b, err := build()
+		if err == nil {
+			if err = b.Start(); err == nil {
+				return b, nil
+			}
+			_ = b.Close()
 		}
-		// Skip the sleep on the final attempt — we won't try again,
-		// so the wait is pure latency that would push total backoff
-		// above the documented sub-1s budget.
+		lastErr = err
 		if i == attempts-1 {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("start new sing-box (ctx cancelled after %d attempts): %w", i+1, lastErr)
+			return nil, fmt.Errorf("ctx cancelled after %d attempts: %w", i+1, lastErr)
 		case <-time.After(backoff):
 		}
 		backoff *= 2
 	}
-	return fmt.Errorf("start new sing-box (%d attempts): %w", attempts, lastErr)
+	return nil, fmt.Errorf("%d attempts: %w", attempts, lastErr)
+}
+
+// closeBox closes box, waiting at most cfg.BoxCloseTimeout for it to return.
+// A Close still draining client connections keeps running in the background;
+// by then the listening port is already released, so the peer can rebind it.
+func (c *Client) closeBox(box boxService) error {
+	done := make(chan error, 1)
+	go func() { done <- box.Close() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(c.cfg.BoxCloseTimeout):
+		slog.Warn("peer sing-box close still draining client connections; continuing",
+			"timeout", c.cfg.BoxCloseTimeout)
+		return nil
+	}
+}
+
+// stopSelf stops the client from inside one of its own loops, then reports
+// the reason to Config.OnSelfStop. Stop runs on a new goroutine because it
+// waits for those loops to exit.
+func (c *Client) stopSelf(reason error) {
+	go func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
+		defer cancel()
+		_ = c.Stop(stopCtx)
+		if c.cfg.OnSelfStop != nil {
+			c.cfg.OnSelfStop(reason)
+		}
+	}()
 }
 
 // ensurePeerOutboundsBypassVPN guarantees the peer sing-box's outbound dials
