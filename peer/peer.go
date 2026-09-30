@@ -592,29 +592,53 @@ func (c *Client) Stop(ctx context.Context) error {
 	// Cancel the session before waiting for the lifecycle slot, so an
 	// in-flight rotation holding it aborts its network calls promptly.
 	c.mu.Lock()
-	cancelRun := c.cancelRun
+	cancelRun, session := c.cancelRun, c.runCtx
 	c.mu.Unlock()
 	if cancelRun != nil {
 		cancelRun()
 	}
-	_, err := c.stopSession(ctx, nil, 0)
+	_, err := c.stopTarget(ctx, stopTarget{})
+	if err != nil && session != nil {
+		// The session's loops are already cancelled, so giving up here would
+		// leave it registered and listening with nothing heartbeating it.
+		// Finish its teardown in the background instead.
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
+			defer cancel()
+			if _, bgErr := c.stopTarget(bgCtx, stopTarget{session: session}); bgErr != nil {
+				slog.Warn("peer teardown after a timed-out Stop failed", "err", bgErr)
+			}
+		}()
+	}
 	return err
 }
 
-// stopSession stops the client if session is nil, or if session is still the
-// running session's runCtx and registration its current registration. The
-// check runs under the lifecycle slot, so no rotation or Start can change
-// either before the stop. It reports whether it stopped anything.
-func (c *Client) stopSession(ctx context.Context, session context.Context, registration uint64) (bool, error) {
+// stopTarget identifies what a stop is for. A zero field matches anything, so
+// the zero stopTarget stops whatever is running.
+type stopTarget struct {
+	// session is the runCtx of the session to stop.
+	session context.Context
+	// routeID and registration identify the registration the stop was decided
+	// on. The server reuses a route_id across re-registrations, and a rotation
+	// advances registration before it swaps in a different route_id, so both
+	// are needed.
+	routeID      string
+	registration uint64
+}
+
+// stopTarget stops the client if it still matches target, checked under the
+// lifecycle slot so no rotation or Start can change it before the stop. It
+// reports whether it stopped anything.
+func (c *Client) stopTarget(ctx context.Context, target stopTarget) (bool, error) {
 	if err := c.acquireLifecycle(ctx); err != nil {
 		return false, err
 	}
 	defer c.releaseLifecycle()
-	return c.stopHeld(ctx, session, registration)
+	return c.stopHeld(ctx, target)
 }
 
-// stopHeld is stopSession for a caller already holding the lifecycle slot.
-func (c *Client) stopHeld(ctx context.Context, session context.Context, registration uint64) (bool, error) {
+// stopHeld is stopTarget for a caller already holding the lifecycle slot.
+func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) {
 	c.mu.Lock()
 	for c.starting {
 		done := c.startingDone
@@ -626,7 +650,10 @@ func (c *Client) stopHeld(ctx context.Context, session context.Context, registra
 		}
 		c.mu.Lock()
 	}
-	if !c.active || session != nil && (c.runCtx != session || c.registration != registration) {
+	if !c.active ||
+		target.session != nil && c.runCtx != target.session ||
+		target.routeID != "" && c.routeID != target.routeID ||
+		target.registration != 0 && c.registration != target.registration {
 		c.mu.Unlock()
 		return false, nil
 	}
@@ -834,7 +861,8 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 					// in flight; stopSelf stops only if this registration is
 					// still current, and the loop keeps running otherwise.
 					slog.Info("peer route no longer registered server-side, stopping client", "route_id", routeID)
-					c.stopSelf(ctx, registration, fmt.Errorf("route %s no longer registered: %w", routeID, err))
+					c.stopSelf(stopTarget{session: ctx, routeID: routeID, registration: registration},
+						fmt.Errorf("route %s no longer registered: %w", routeID, err))
 					continue
 				}
 			}
@@ -993,7 +1021,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 			// rotation, whose re-register would make it look stale.
 			reason := fmt.Errorf("credential rotation left nothing serving the advertised route: %w", err)
 			stopCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
-			stopped, _ := c.stopHeld(stopCtx, sessionRunCtx, registration)
+			stopped, _ := c.stopHeld(stopCtx, stopTarget{session: sessionRunCtx, routeID: oldRouteID, registration: registration})
 			cancel()
 			if stopped && c.cfg.OnSelfStop != nil {
 				go c.cfg.OnSelfStop(reason)
@@ -1149,15 +1177,15 @@ func (c *Client) closeBox(box boxService) error {
 	}
 }
 
-// stopSelf stops session from inside one of its own loops, then reports the
-// reason to Config.OnSelfStop. It stops nothing, and reports nothing, if a
-// Stop→Start has replaced session or a rotation has re-registered by then. Stop runs on a new goroutine
+// stopSelf stops target from inside one of the client's own loops, then reports
+// the reason to Config.OnSelfStop. It stops nothing, and reports nothing, if a
+// Stop→Start or a re-registration has replaced target by then. Stop runs on a new goroutine
 // because it waits for those loops to exit.
-func (c *Client) stopSelf(session context.Context, registration uint64, reason error) {
+func (c *Client) stopSelf(target stopTarget, reason error) {
 	go func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
-		if stopped, _ := c.stopSession(stopCtx, session, registration); stopped && c.cfg.OnSelfStop != nil {
+		if stopped, _ := c.stopTarget(stopCtx, target); stopped && c.cfg.OnSelfStop != nil {
 			c.cfg.OnSelfStop(reason)
 		}
 	}()

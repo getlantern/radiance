@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -204,7 +205,7 @@ func TestClient_StaleSelfStopSparesReplacementSession(t *testing.T) {
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() { _ = c.Stop(ctx) })
 
-	c.stopSelf(oldSession, oldRegistration, errors.New("old session's rotation failed"))
+	c.stopSelf(stopTarget{session: oldSession, registration: oldRegistration}, errors.New("old session's rotation failed"))
 	time.Sleep(100 * time.Millisecond)
 	assert.True(t, c.IsActive(), "the replacement session keeps running")
 	assert.Zero(t, selfStops.Load())
@@ -340,4 +341,69 @@ func TestClient_StopDuringHungRotationRegisterReturnsPromptly(t *testing.T) {
 	require.NoError(t, c.Stop(ctx))
 	assert.Less(t, time.Since(start), 2*time.Second)
 	assert.False(t, c.IsActive())
+}
+
+// A rotation to a different route_id advances the registration before it
+// swaps the route in, so a delayed 404 for the old route must not stop the
+// session that replaced it.
+func TestClient_DelayedNotFoundForOldRouteSparesNewRoute(t *testing.T) {
+	srv := newStubServer(t)
+	var seq atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		return RegisterResponse{
+			RouteID:                  fmt.Sprintf("00000000-0000-0000-0000-%012d", seq.Add(1)),
+			ServerConfig:             minimalValidLaunchCfg,
+			HeartbeatIntervalSeconds: 60,
+		}
+	}
+	var selfStops atomic.Int64
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.CredRotationInterval = 30 * time.Millisecond
+		cfg.OnSelfStop = func(error) { selfStops.Add(1) }
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	firstRoute := c.CurrentStatus().RouteID
+	require.Eventually(t, func() bool { return c.CurrentStatus().RouteID != firstRoute }, 2*time.Second, 10*time.Millisecond)
+
+	c.mu.Lock()
+	session, registration := c.runCtx, c.registration
+	c.mu.Unlock()
+	c.stopSelf(stopTarget{session: session, routeID: firstRoute, registration: registration}, errors.New("404 for the old route"))
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, c.IsActive())
+	assert.Zero(t, selfStops.Load())
+}
+
+// A Stop that gives up waiting for the lifecycle slot has already cancelled
+// the session's loops, so its teardown still has to happen.
+func TestClient_TimedOutStopStillTearsDown(t *testing.T) {
+	srv := newStubServer(t)
+	release := make(chan struct{})
+	var builds atomic.Int64
+	inBuild := make(chan struct{})
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.CredRotationInterval = 20 * time.Millisecond
+		cfg.BuildBoxService = func(context.Context, string) (boxService, error) {
+			if builds.Add(1) == 2 {
+				close(inBuild)
+				<-release // the rotation's rebuild holds the lifecycle slot
+			}
+			return &fakeBoxService{}, nil
+		}
+	})
+	require.NoError(t, c.Start(context.Background()))
+	<-inBuild
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, c.Stop(stopCtx), context.DeadlineExceeded)
+	close(release)
+
+	require.Eventually(t, func() bool { return !c.IsActive() }, 3*time.Second, 10*time.Millisecond,
+		"the timed-out Stop's teardown should finish in the background")
+	assert.GreaterOrEqual(t, srv.deregisterCount.Load(), int64(1))
 }

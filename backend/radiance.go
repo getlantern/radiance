@@ -688,31 +688,32 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
 	diff := updates.Diff(curr)
 	slog.Log(nil, log.LevelTrace, "Patching settings", "updates", updates, "current", curr, "diff", diff)
-	restartPeer := r.restartsStoppedPeer(updates, diff)
-	peerValue, peerChanged := diff[settings.PeerShareEnabledKey]
-	if len(diff) == 0 {
-		if restartPeer {
-			return r.applyPeerShare(true)
-		}
-		return nil
-	}
-	// Reject an invalid split-tunnel policy before persisting, so settings.json
+	// Reject an invalid split-tunnel policy before applying or persisting anything, so settings.json
 	// can't hold a value the runtime would silently fall back to exclude for.
 	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
 		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
 			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
 		}
 	}
-	// applyPeerShare persists the peer toggle itself, under the lock that
-	// orders toggles, so an earlier "on" still starting can't land after a
-	// later "off".
-	persist := diff
-	if peerChanged {
-		persist = maps.Clone(diff)
-		delete(persist, settings.PeerShareEnabledKey)
+	// An explicit peer toggle is applied whether or not it changes the stored
+	// value, and before any other handler: the stored value can lag the
+	// runtime (a peer that stopped itself, or an "on" still starting), and
+	// applyPeerShare, which persists it, is what orders toggles.
+	var errs error
+	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
+	if peerRequested {
+		on, _ := peerValue.(bool)
+		if err := r.applyPeerShare(on); err != nil {
+			errs = errors.Join(errs, err)
+		}
+		diff = maps.Clone(diff)
+		delete(diff, settings.PeerShareEnabledKey)
 	}
-	if err := settings.Patch(persist); err != nil {
-		return fmt.Errorf("failed to update settings: %w", err)
+	if len(diff) == 0 {
+		return errs
+	}
+	if err := settings.Patch(diff); err != nil {
+		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", err))
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
 		r.RefreshUserMessages()
@@ -734,7 +735,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// on a handler error would leave a persisted key that no runtime state
 	// matches — the divergence applyPeerShare's rollback exists to prevent. Run
 	// every handler and join their errors so the caller sees write failures.
-	var errs error
 	if _, ok := diff[settings.SplitTunnelKey]; ok {
 		if err := r.splitTunnelMgr.SetEnabled(settings.GetBool(settings.SplitTunnelKey)); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("set split-tunnel enabled: %w", err))
@@ -747,16 +747,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
-	}
-	if peerChanged {
-		on, _ := peerValue.(bool)
-		if err := r.applyPeerShare(on); err != nil {
-			errs = errors.Join(errs, err)
-		}
-	} else if restartPeer {
-		if err := r.applyPeerShare(true); err != nil {
-			errs = errors.Join(errs, err)
-		}
 	}
 	// Drive the Unbounded widget proxy off the toggle change immediately
 	// rather than waiting for the next NewConfigEvent to re-evaluate.

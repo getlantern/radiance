@@ -447,6 +447,33 @@ func TestApplyPeerShare_StartPersistsToggle(t *testing.T) {
 	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
 }
 
+// An explicit "off" is applied even when the stored value already reads off,
+// which it does while an earlier "on" is still on its way to applyPeerShare.
+func TestPatchSettings_UnchangedOffStillStopsPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}))
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}))
+	assert.Equal(t, int64(1), fake.stopCalls.Load())
+	assert.False(t, fake.IsActive())
+}
+
+// An invalid setting in the same PATCH is rejected before the toggle applies.
+func TestPatchSettings_InvalidPatchDoesNotToggle(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+
+	err := r.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey:  true,
+		settings.SplitTunnelPolicyKey: "bogus",
+	})
+	require.Error(t, err)
+	assert.Zero(t, fake.startCalls.Load())
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
 // An "off" queued behind an "on" that is still starting must win: the setting
 // ends off and the peer stopped, in the order the toggles arrived.
 func TestPatchSettings_OffQueuedBehindStartingOnWins(t *testing.T) {

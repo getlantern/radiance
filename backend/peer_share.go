@@ -197,13 +197,3 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 	}
 	return r.peerClient.CurrentStatus()
 }
-
-// restartsStoppedPeer reports whether a settings patch asks for peer share
-// while it is persisted on but not running, which the diff alone can't see.
-func (r *LocalBackend) restartsStoppedPeer(updates, diff settings.Settings) bool {
-	on, ok := updates[settings.PeerShareEnabledKey].(bool)
-	if _, changed := diff[settings.PeerShareEnabledKey]; !ok || !on || changed || r.peerClient == nil {
-		return false
-	}
-	return !r.peerClient.IsActive()
-}
