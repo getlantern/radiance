@@ -127,9 +127,9 @@ func persistPeerShare(on bool) error {
 }
 
 // onPeerSelfStop clears the persisted toggle when the peer client stopped
-// itself, so the setting keeps reflecting runtime state. Left on, it would make
-// the next "on" a no-op, since PatchSettings only acts on changed keys. A
-// toggle that restarted the client in the meantime wins.
+// itself, so the setting keeps reflecting runtime state and a restart of the
+// app doesn't resume a peer that isn't running. A toggle that restarted the
+// client in the meantime wins.
 func (r *LocalBackend) onPeerSelfStop(reason error) {
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()

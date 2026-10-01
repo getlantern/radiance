@@ -859,7 +859,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 					// A rotation may have re-registered while this heartbeat was
 					// in flight; stopSelf stops only if this registration is
 					// still current, and the loop keeps running otherwise.
-					slog.Info("peer route no longer registered server-side, stopping client", "route_id", routeID)
+					slog.Info("peer heartbeat 404; stopping unless a re-registration replaced the route", "route_id", routeID)
 					c.stopSelf(stopTarget{session: ctx, routeID: routeID, registration: registration},
 						fmt.Errorf("route %s no longer registered: %w", routeID, err))
 					continue
@@ -923,9 +923,14 @@ func (c *Client) runRotation(ctx context.Context) {
 		}
 	}()
 	if err := c.rotateCreds(ctx); err != nil {
-		// Don't kill the loop on a single failure — current
-		// box / route is still serving. Try again next tick.
-		slog.Warn("peer cred rotation failed; current creds remain in use", "err", err)
+		// A failure that left nothing serving has already stopped the
+		// client; otherwise the current box and route still serve and the
+		// next tick retries.
+		if c.IsActive() {
+			slog.Warn("peer cred rotation failed; current creds remain in use", "err", err)
+		} else {
+			slog.Warn("peer cred rotation failed; client stopped", "err", err)
+		}
 	}
 }
 
@@ -1184,8 +1189,11 @@ func (c *Client) stopSelf(target stopTarget, reason error) {
 	go func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
-		if stopped, _ := c.stopTarget(stopCtx, target); stopped && c.cfg.OnSelfStop != nil {
-			c.cfg.OnSelfStop(reason)
+		if stopped, _ := c.stopTarget(stopCtx, target); stopped {
+			slog.Info("peer client stopped itself", "reason", reason)
+			if c.cfg.OnSelfStop != nil {
+				c.cfg.OnSelfStop(reason)
+			}
 		}
 	}()
 }
