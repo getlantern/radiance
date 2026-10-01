@@ -404,6 +404,150 @@ func TestApplyPeerShare_StartFailureRollsBackSetting(t *testing.T) {
 	assert.False(t, fake.IsActive())
 }
 
+// The toggle is persisted "on" but the client stopped itself (the production
+// case: a heartbeat 404 after a failed rotation). The next "on" changes no
+// setting, and must still start the client.
+func TestPatchSettings_ToggleOnRestartsStoppedPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: true}))
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.True(t, fake.IsActive())
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: true}))
+	assert.Equal(t, int64(1), fake.startCalls.Load(), "a running peer is not restarted")
+}
+
+// A PATCH that turns peer share on alongside another change still restarts a
+// stopped peer, even though the peer key itself is unchanged.
+func TestPatchSettings_ToggleOnWithOtherChangesRestartsStoppedPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true,
+		settings.LocaleKey:           "fa-IR",
+	}))
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.Equal(t, "fa-IR", settings.GetString(settings.LocaleKey))
+}
+
+// applyPeerShare persists the toggle it applies, so a self-stop that cleared
+// it before this Start doesn't leave a running peer with the toggle off.
+func TestApplyPeerShare_StartPersistsToggle(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}))
+
+	require.NoError(t, r.applyPeerShare(true))
+	assert.True(t, fake.IsActive())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// An explicit "off" is applied even when the stored value already reads off,
+// which it does while an earlier "on" is still on its way to applyPeerShare.
+func TestPatchSettings_UnchangedOffStillStopsPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: false}))
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}))
+	assert.Equal(t, int64(1), fake.stopCalls.Load())
+	assert.False(t, fake.IsActive())
+}
+
+// A non-boolean toggle is rejected rather than read as "off".
+func TestPatchSettings_NonBoolToggleRejected(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	for _, v := range []any{"true", nil, 1} {
+		require.Error(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: v}), "%v", v)
+	}
+	assert.Zero(t, fake.stopCalls.Load())
+	assert.True(t, fake.IsActive())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// An invalid setting in the same PATCH is rejected before the toggle applies.
+func TestPatchSettings_InvalidPatchDoesNotToggle(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+
+	err := r.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey:  true,
+		settings.SplitTunnelPolicyKey: "bogus",
+	})
+	require.Error(t, err)
+	assert.Zero(t, fake.startCalls.Load())
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// An "off" queued behind an "on" that is still starting must win: the setting
+// ends off and the peer stopped, in the order the toggles arrived.
+func TestPatchSettings_OffQueuedBehindStartingOnWins(t *testing.T) {
+	fake := &blockingStartPeer{release: make(chan struct{}), entered: make(chan struct{})}
+	r := newPeerTestBackend(t, &fake.fakePeerController)
+	r.peerClient = fake
+
+	onDone := make(chan error, 1)
+	go func() { onDone <- r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: true}) }()
+	<-fake.entered
+	offDone := make(chan error, 1)
+	go func() { offDone <- r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}) }()
+	time.Sleep(50 * time.Millisecond) // let the off queue on peerToggleMu
+	close(fake.release)
+	require.NoError(t, <-onDone)
+	require.NoError(t, <-offDone)
+
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+	assert.False(t, fake.IsActive())
+}
+
+type blockingStartPeer struct {
+	fakePeerController
+	release, entered chan struct{}
+}
+
+func (b *blockingStartPeer) Start(ctx context.Context) error {
+	close(b.entered)
+	<-b.release
+	return b.fakePeerController.Start(ctx)
+}
+
+// A second "on" that queued behind a Start must not fail with "already
+// active" and roll the toggle back under a running peer.
+func TestApplyPeerShare_EnableWhenActiveKeepsToggle(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+	fake.active.Store(true)
+
+	require.NoError(t, r.applyPeerShare(true))
+	assert.Zero(t, fake.startCalls.Load())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+func TestOnPeerSelfStop_ClearsToggleUnlessRestarted(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+	require.NoError(t, settings.Patch(settings.Settings{settings.PeerShareEnabledKey: true}))
+
+	fake.active.Store(true)
+	r.onPeerSelfStop(errors.New("route gone"))
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey), "a peer restarted since the self-stop keeps the toggle")
+
+	fake.active.Store(false)
+	r.onPeerSelfStop(errors.New("route gone"))
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
 func TestPeerStatus_Accessor(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPeerTestBackend(t, fake)
