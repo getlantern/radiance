@@ -7,22 +7,18 @@ import (
 	"math/big"
 	"net/http"
 	"sync/atomic"
-	"time"
-
-	"github.com/getlantern/timezone"
 
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// publicIP holds the detected public IP address, set once at startup.
+// publicIP holds the most recently detected public IP address.
 var publicIP atomic.Value // string
 
 func init() {
 	publicIP.Store("") // ensure publicIP is type string
 }
 
-// SetPublicIP stores the detected public IP for inclusion in API requests. It should only be called
-// once at startup after successfully detecting the public IP.
+// SetPublicIP stores the detected public IP for inclusion in API requests.
 func SetPublicIP(ip string) {
 	publicIP.Store(ip)
 }
@@ -68,7 +64,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	req.Header.Set(PlatformHeader, Platform)
 	req.Header.Set(AppNameHeader, Name)
 	req.Header.Set(DeviceIDHeader, settings.GetString(settings.DeviceIDKey))
-	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
+	if tz := LocalTimeZone(); tz != "" {
 		req.Header.Set(TimeZoneHeader, tz)
 	}
 	if ip := publicIP.Load().(string); ip != "" {

@@ -33,6 +33,7 @@ const (
 	LogLevelKey    _key = "log_level"    // string
 	CountryCodeKey _key = "country_code" // string
 	LocaleKey      _key = "locale"       // string
+	TimeZoneKey    _key = "time_zone"    // string, IANA name reported by the host app
 	DeviceIDKey    _key = "device_id"    // string/int
 
 	// Application behavior related keys.

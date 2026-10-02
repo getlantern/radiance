@@ -1,0 +1,104 @@
+package common
+
+import (
+	"os"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/tkuchiki/go-timezone"
+
+	"github.com/getlantern/radiance/common/settings"
+)
+
+// LocalTimeZone returns the device's IANA time zone name (e.g. "Asia/Tehran"), or "" when it
+// can't be determined without guessing.
+//
+// The API treats this value as stronger evidence of the user's country than their IP address, so
+// a wrong zone is worse than none.
+func LocalTimeZone() string {
+	return tzSources{
+		host:      settings.GetString(settings.TimeZoneKey),
+		env:       os.Getenv("TZ"),
+		goLocal:   time.Local.String(),
+		localtime: func() (string, error) { return os.Readlink("/etc/localtime") },
+		now:       time.Now(),
+	}.resolve()
+}
+
+type tzSources struct {
+	host      string
+	env       string
+	goLocal   string
+	localtime func() (string, error)
+	now       time.Time
+}
+
+// ianaName matches zone names such as "UTC", "Asia/Tehran" and "America/Argentina/Buenos_Aires".
+var ianaName = regexp.MustCompile(`^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+)+)$`)
+
+func (s tzSources) resolve() string {
+	// Mobile Go runtimes may lack tzdata, so the host app's zone is trusted without loading it.
+	if ianaName.MatchString(s.host) {
+		return s.host
+	}
+	if name := strings.TrimPrefix(s.env, ":"); loadable(name) {
+		return name
+	}
+	// Go reports "UTC" for time.Local when it couldn't find the zone, as on Android.
+	if strings.Contains(s.goLocal, "/") && loadable(s.goLocal) {
+		return s.goLocal
+	}
+	if s.localtime != nil {
+		if target, err := s.localtime(); err == nil {
+			if name := zoneFromPath(target); loadable(name) {
+				return name
+			}
+		}
+	}
+	return uniqueZoneForAbbreviation(s.now)
+}
+
+func loadable(name string) bool {
+	if name == "" || name == "Local" {
+		return false
+	}
+	_, err := time.LoadLocation(name)
+	return err == nil
+}
+
+// zoneFromPath extracts the zone name from a zoneinfo path such as
+// /usr/share/zoneinfo/Asia/Tehran or /var/db/timezone/zoneinfo/Asia/Tehran.
+func zoneFromPath(path string) string {
+	_, name, ok := strings.Cut(path, "zoneinfo/")
+	if !ok {
+		return ""
+	}
+	name = strings.TrimPrefix(name, "posix/")
+	return strings.TrimPrefix(name, "right/")
+}
+
+// uniqueZoneForAbbreviation returns the only zone using now's abbreviation and offset, or "" if
+// there is none or several (e.g. CST at +08:00 is used by Shanghai, Macau and Taipei).
+func uniqueZoneForAbbreviation(now time.Time) string {
+	abbr, offset := now.Zone()
+	candidates, err := timezone.New().GetTimezones(abbr)
+	if err != nil {
+		return ""
+	}
+	match := ""
+	for _, name := range candidates {
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			continue
+		}
+		if a, o := now.In(loc).Zone(); a != abbr || o != offset {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = name
+	}
+	return match
+}
