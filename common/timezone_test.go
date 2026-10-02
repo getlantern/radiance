@@ -42,8 +42,9 @@ func TestResolveTimeZone_HostZoneWins(t *testing.T) {
 func TestResolveTimeZone_NamedSources(t *testing.T) {
 	for _, zone := range testZones {
 		now := testDates[0]
-		assert.Equal(t, zone, tzSources{env: zone, goLocal: "Local", localtime: noLink, now: now}.resolve(), "TZ=%s", zone)
-		assert.Equal(t, zone, tzSources{env: ":" + zone, goLocal: "Local", localtime: noLink, now: now}.resolve(), "TZ=:%s", zone)
+		assert.Equal(t, zone, tzSources{env: zone, envSet: true, goLocal: "Local", localtime: noLink, now: now}.resolve(), "TZ=%s", zone)
+		assert.Equal(t, zone, tzSources{env: ":" + zone, envSet: true, goLocal: "Local", localtime: noLink, now: now}.resolve(), "TZ=:%s", zone)
+		assert.Equal(t, zone, tzSources{env: "/usr/share/zoneinfo/" + zone, envSet: true, goLocal: "Local", localtime: noLink, now: now}.resolve(), "TZ=path %s", zone)
 
 		link := func() (string, error) { return "/usr/share/zoneinfo/" + zone, nil }
 		assert.Equal(t, zone, tzSources{goLocal: "Local", localtime: link, now: now}.resolve(), "linux link %s", zone)
@@ -89,7 +90,7 @@ func TestResolveTimeZone_IgnoresUnreliableSources(t *testing.T) {
 	for _, s := range []tzSources{
 		{host: "Local", goLocal: "Local", localtime: noLink, now: now},
 		{host: "not a zone", goLocal: "Local", localtime: noLink, now: now},
-		{env: "Mars/Olympus_Mons", goLocal: "Local", localtime: noLink, now: now},
+		{env: "Mars/Olympus_Mons", envSet: true, goLocal: "Local", localtime: noLink, now: now},
 		// Go reports UTC for time.Local when it can't find the device's zone.
 		{goLocal: "UTC", localtime: noLink, now: now},
 		{goLocal: "Local", localtime: func() (string, error) { return "/etc/zoneinfo-missing", nil }, now: now},
@@ -132,4 +133,16 @@ func TestUniqueZoneForAbbreviation_IncompleteTzdata(t *testing.T) {
 	}
 	assert.Empty(t, uniqueZoneForAbbreviation(now, onlyParis))
 	assert.Empty(t, uniqueZoneForAbbreviation(now, time.LoadLocation), "CET is shared, so never unique")
+}
+
+func TestResolveTimeZone_ExplicitTZBeatsLocaltimeLink(t *testing.T) {
+	tehranLink := func() (string, error) { return "/usr/share/zoneinfo/Asia/Tehran", nil }
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	now := testDates[0].In(shanghai)
+
+	// An explicit TZ the resolver can't name must not fall back to /etc/localtime.
+	assert.Empty(t, tzSources{env: "CST-8", envSet: true, goLocal: "Local", localtime: tehranLink, now: now}.resolve())
+	assert.Empty(t, tzSources{env: "", envSet: true, goLocal: "UTC", localtime: tehranLink, now: testDates[0]}.resolve())
+	assert.Equal(t, "Asia/Tehran", tzSources{goLocal: "Local", localtime: tehranLink, now: now}.resolve(), "unset TZ uses the link")
 }

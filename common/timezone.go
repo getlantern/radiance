@@ -17,9 +17,11 @@ import (
 // The API treats this value as stronger evidence of the user's country than their IP address, so
 // a wrong zone is worse than none.
 func LocalTimeZone() string {
+	env, envSet := os.LookupEnv("TZ")
 	return tzSources{
 		host:      settings.GetString(settings.TimeZoneKey),
-		env:       os.Getenv("TZ"),
+		env:       env,
+		envSet:    envSet,
 		goLocal:   time.Local.String(),
 		localtime: func() (string, error) { return os.Readlink("/etc/localtime") },
 		now:       time.Now(),
@@ -29,6 +31,7 @@ func LocalTimeZone() string {
 type tzSources struct {
 	host      string
 	env       string
+	envSet    bool
 	goLocal   string
 	localtime func() (string, error)
 	now       time.Time
@@ -42,8 +45,16 @@ func (s tzSources) resolve() string {
 	if ianaName.MatchString(s.host) {
 		return s.host
 	}
-	if name := strings.TrimPrefix(s.env, ":"); loadable(name) {
-		return name
+	if s.envSet {
+		name := strings.TrimPrefix(s.env, ":")
+		if loadable(name) {
+			return name
+		}
+		if name := zoneFromPath(name); loadable(name) {
+			return name
+		}
+		// TZ overrides /etc/localtime, so only the configured zone's abbreviation is left.
+		return uniqueZoneForAbbreviation(s.now, time.LoadLocation)
 	}
 	// Go reports "UTC" for time.Local when it couldn't find the zone, as on Android.
 	if strings.Contains(s.goLocal, "/") && loadable(s.goLocal) {
