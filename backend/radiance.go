@@ -1886,21 +1886,30 @@ const (
 	publicIPAttemptTimeout = 5 * time.Second
 )
 
+// publicIPDirectPoll is how often detectPublicIP checks whether traffic leaves directly again.
+var publicIPDirectPoll = 30 * time.Second
+
 // detectPublicIP records the device's public IP for API requests, retrying with backoff because
 // the lookup services are often slow or blocked where Lantern is used most. Without the IP, the
-// API geolocates whichever relay delivered the request. It gives up after publicIPAttempts, when
-// ctx is done, or once direct reports false: the lookups don't bypass the VPN, so a result taken
-// while the tunnel is up could be the VPN exit and is discarded.
+// API geolocates whichever relay delivered the request. The lookups don't bypass the VPN, so it
+// only looks up while direct reports true and discards a result if the tunnel came up during the
+// lookup. It gives up after publicIPAttempts lookups or when ctx is done.
 func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) {
 	backoff := common.NewBackoff(2*time.Second, 2*time.Minute)
-	for attempt := 1; attempt <= publicIPAttempts && ctx.Err() == nil && direct(); attempt++ {
+	for attempt := 1; attempt <= publicIPAttempts; attempt++ {
+		if !waitForDirect(ctx, direct) {
+			return
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
 		result, err := lookup(attemptCtx)
 		cancel()
-		if err == nil {
-			if !direct() {
-				return
-			}
+		switch {
+		case err != nil:
+			slog.Warn("Failed to get public IP", "error", err, "attempt", attempt)
+		case !direct():
+			slog.Debug("Discarded public IP looked up while the VPN came up", "attempt", attempt)
+			continue
+		default:
 			common.SetPublicIP(result.IP.String())
 			// IP intentionally omitted — Lantern users in censored regions
 			// can't safely have their public IP in routinely-collected
@@ -1909,11 +1918,22 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources, "attempt", attempt)
 			return
 		}
-		slog.Warn("Failed to get public IP", "error", err, "attempt", attempt)
 		if attempt < publicIPAttempts {
 			backoff.Wait(ctx)
 		}
 	}
+}
+
+// waitForDirect blocks until direct reports true, and reports false if ctx ends first.
+func waitForDirect(ctx context.Context, direct func() bool) bool {
+	for !direct() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(publicIPDirectPoll):
+		}
+	}
+	return ctx.Err() == nil
 }
 
 func lookupPublicIP(ctx context.Context) (*publicip.DetectResult, error) {
