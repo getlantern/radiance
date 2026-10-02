@@ -296,7 +296,7 @@ func (r *LocalBackend) Start() {
 	go detectPublicIP(r.ctx, func() bool {
 		s := r.VPNStatus()
 		return s == "" || s == vpn.Disconnected
-	})
+	}, lookupPublicIP)
 
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
@@ -1891,15 +1891,11 @@ const (
 // API geolocates whichever relay delivered the request. It gives up after publicIPAttempts, when
 // ctx is done, or once direct reports false: the lookups don't bypass the VPN, so a result taken
 // while the tunnel is up could be the VPN exit and is discarded.
-func detectPublicIP(ctx context.Context, direct func() bool) {
+func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) {
 	backoff := common.NewBackoff(2*time.Second, 2*time.Minute)
 	for attempt := 1; attempt <= publicIPAttempts && ctx.Err() == nil && direct(); attempt++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
-		result, err := publicip.Detect(attemptCtx, &publicip.Config{
-			Timeout:      publicIPAttemptTimeout,
-			MinConsensus: 1,
-			Methods:      publicip.DefaultMethods(),
-		})
+		result, err := lookup(attemptCtx)
 		cancel()
 		if err == nil {
 			if !direct() {
@@ -1914,6 +1910,16 @@ func detectPublicIP(ctx context.Context, direct func() bool) {
 			return
 		}
 		slog.Warn("Failed to get public IP", "error", err, "attempt", attempt)
-		backoff.Wait(ctx)
+		if attempt < publicIPAttempts {
+			backoff.Wait(ctx)
+		}
 	}
+}
+
+func lookupPublicIP(ctx context.Context) (*publicip.DetectResult, error) {
+	return publicip.Detect(ctx, &publicip.Config{
+		Timeout:      publicIPAttemptTimeout,
+		MinConsensus: 1,
+		Methods:      publicip.DefaultMethods(),
+	})
 }

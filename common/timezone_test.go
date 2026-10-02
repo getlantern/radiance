@@ -33,8 +33,8 @@ var testDates = []time.Time{
 func noLink() (string, error) { return "", errors.New("no /etc/localtime") }
 
 func TestResolveTimeZone_HostZoneWins(t *testing.T) {
-	for _, zone := range testZones {
-		got := tzSources{host: zone, env: "Europe/Paris", goLocal: "Asia/Tokyo", localtime: noLink, now: testDates[0]}.resolve()
+	for _, zone := range append(testZones, "Iran", "Japan", "Singapore", "America/Argentina/Buenos_Aires", "Etc/GMT+3") {
+		got := tzSources{host: zone, env: "Europe/Paris", envSet: true, goLocal: "Asia/Tokyo", localtime: noLink, now: testDates[0]}.resolve()
 		assert.Equal(t, zone, got)
 	}
 }

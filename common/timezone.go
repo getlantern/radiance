@@ -37,12 +37,13 @@ type tzSources struct {
 	now       time.Time
 }
 
-// ianaName matches zone names such as "UTC", "Asia/Tehran" and "America/Argentina/Buenos_Aires".
-var ianaName = regexp.MustCompile(`^(UTC|[A-Za-z_]+(/[A-Za-z0-9_+-]+)+)$`)
+// ianaName matches zone names such as "UTC", "Iran", "Asia/Tehran" and
+// "America/Argentina/Buenos_Aires".
+var ianaName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$`)
 
 func (s tzSources) resolve() string {
 	// Mobile Go runtimes may lack tzdata, so the host app's zone is trusted without loading it.
-	if ianaName.MatchString(s.host) {
+	if s.host != "Local" && ianaName.MatchString(s.host) {
 		return s.host
 	}
 	if s.envSet {
