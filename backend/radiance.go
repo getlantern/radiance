@@ -293,7 +293,10 @@ func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
 	r.startUserMessages()
-	go detectPublicIP(r.ctx)
+	go detectPublicIP(r.ctx, func() bool {
+		s := r.VPNStatus()
+		return s == "" || s == vpn.Disconnected
+	})
 
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
@@ -1885,11 +1888,12 @@ const (
 
 // detectPublicIP records the device's public IP for API requests, retrying with backoff because
 // the lookup services are often slow or blocked where Lantern is used most. Without the IP, the
-// API geolocates whichever relay delivered the request. It gives up after publicIPAttempts or
-// when ctx is done.
-func detectPublicIP(ctx context.Context) {
+// API geolocates whichever relay delivered the request. It gives up after publicIPAttempts, when
+// ctx is done, or once direct reports false: the lookups don't bypass the VPN, so a result taken
+// while the tunnel is up could be the VPN exit and is discarded.
+func detectPublicIP(ctx context.Context, direct func() bool) {
 	backoff := common.NewBackoff(2*time.Second, 2*time.Minute)
-	for attempt := 1; attempt <= publicIPAttempts && ctx.Err() == nil; attempt++ {
+	for attempt := 1; attempt <= publicIPAttempts && ctx.Err() == nil && direct(); attempt++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
 		result, err := publicip.Detect(attemptCtx, &publicip.Config{
 			Timeout:      publicIPAttemptTimeout,
@@ -1898,6 +1902,9 @@ func detectPublicIP(ctx context.Context) {
 		})
 		cancel()
 		if err == nil {
+			if !direct() {
+				return
+			}
 			common.SetPublicIP(result.IP.String())
 			// IP intentionally omitted — Lantern users in censored regions
 			// can't safely have their public IP in routinely-collected
