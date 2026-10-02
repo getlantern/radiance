@@ -119,3 +119,17 @@ func TestNewRequestWithHeaders_TimeZone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Asia/Tehran", req.Header.Get(TimeZoneHeader))
 }
+
+func TestUniqueZoneForAbbreviation_IncompleteTzdata(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+	now := testDates[0].In(berlin) // CET, shared by many zones
+	onlyParis := func(name string) (*time.Location, error) {
+		if name == "Europe/Paris" {
+			return time.LoadLocation(name)
+		}
+		return nil, errors.New("not installed")
+	}
+	assert.Empty(t, uniqueZoneForAbbreviation(now, onlyParis))
+	assert.Empty(t, uniqueZoneForAbbreviation(now, time.LoadLocation), "CET is shared, so never unique")
+}

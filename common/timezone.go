@@ -56,7 +56,7 @@ func (s tzSources) resolve() string {
 			}
 		}
 	}
-	return uniqueZoneForAbbreviation(s.now)
+	return uniqueZoneForAbbreviation(s.now, time.LoadLocation)
 }
 
 func loadable(name string) bool {
@@ -79,8 +79,9 @@ func zoneFromPath(path string) string {
 }
 
 // uniqueZoneForAbbreviation returns the only zone using now's abbreviation and offset, or "" if
-// there is none or several (e.g. CST at +08:00 is used by Shanghai, Macau and Taipei).
-func uniqueZoneForAbbreviation(now time.Time) string {
+// there is none or several (e.g. CST at +08:00 is used by Shanghai, Macau and Taipei). It also
+// returns "" if any candidate can't be loaded, since that candidate might be the device's zone.
+func uniqueZoneForAbbreviation(now time.Time, load func(string) (*time.Location, error)) string {
 	abbr, offset := now.Zone()
 	candidates, err := timezone.New().GetTimezones(abbr)
 	if err != nil {
@@ -88,9 +89,9 @@ func uniqueZoneForAbbreviation(now time.Time) string {
 	}
 	match := ""
 	for _, name := range candidates {
-		loc, err := time.LoadLocation(name)
+		loc, err := load(name)
 		if err != nil {
-			continue
+			return ""
 		}
 		if a, o := now.In(loc).Zone(); a != abbr || o != offset {
 			continue
