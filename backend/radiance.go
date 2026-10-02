@@ -1886,8 +1886,11 @@ const (
 	publicIPAttemptTimeout = 5 * time.Second
 )
 
-// publicIPDirectPoll is how often detectPublicIP checks whether traffic leaves directly again.
-var publicIPDirectPoll = 30 * time.Second
+var (
+	// publicIPDirectPoll is how often detectPublicIP checks whether traffic leaves directly again.
+	publicIPDirectPoll = 30 * time.Second
+	publicIPBackoff    = func() *common.Backoff { return common.NewBackoff(2*time.Second, 2*time.Minute) }
+)
 
 // detectPublicIP records the device's public IP for API requests, retrying with backoff because
 // the lookup services are often slow or blocked where Lantern is used most. Without the IP, the
@@ -1895,7 +1898,7 @@ var publicIPDirectPoll = 30 * time.Second
 // only looks up while direct reports true and discards a result if the tunnel came up during the
 // lookup. It gives up after publicIPAttempts lookups or when ctx is done.
 func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) {
-	backoff := common.NewBackoff(2*time.Second, 2*time.Minute)
+	backoff := publicIPBackoff()
 	for attempt := 1; attempt <= publicIPAttempts; attempt++ {
 		if !waitForDirect(ctx, direct) {
 			return

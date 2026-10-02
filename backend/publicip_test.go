@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -32,9 +33,10 @@ func fixedLookup(ip string, calls *atomic.Int32) func(context.Context) (*publici
 // runDetect runs detectPublicIP until it returns or until stopAfter elapses, when it cancels ctx.
 func runDetect(t *testing.T, stopAfter time.Duration, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) {
 	t.Helper()
-	prev := publicIPDirectPoll
+	prevPoll, prevBackoff := publicIPDirectPoll, publicIPBackoff
 	publicIPDirectPoll = 10 * time.Millisecond
-	t.Cleanup(func() { publicIPDirectPoll = prev })
+	publicIPBackoff = func() *common.Backoff { return common.NewBackoff(time.Millisecond, time.Millisecond) }
+	t.Cleanup(func() { publicIPDirectPoll, publicIPBackoff = prevPoll, prevBackoff })
 
 	ctx, cancel := context.WithTimeout(context.Background(), stopAfter)
 	defer cancel()
@@ -85,4 +87,30 @@ func TestDetectPublicIPDiscardsResultIfTunnelCameUp(t *testing.T) {
 	}
 	runDetect(t, 100*time.Millisecond, func() bool { return !tunnelUp.Load() }, lookup)
 	assert.Empty(t, recordedPublicIP(t), "a result that may be the VPN exit must not be recorded")
+}
+
+func TestDetectPublicIPRetriesAfterFailure(t *testing.T) {
+	common.SetPublicIP("")
+	var calls atomic.Int32
+	lookup := func(context.Context) (*publicip.DetectResult, error) {
+		if calls.Add(1) == 1 {
+			return nil, errors.New("lookup blocked")
+		}
+		return &publicip.DetectResult{IP: net.ParseIP("203.0.113.7")}, nil
+	}
+	runDetect(t, 5*time.Second, func() bool { return true }, lookup)
+	assert.Equal(t, "203.0.113.7", recordedPublicIP(t))
+	assert.EqualValues(t, 2, calls.Load())
+}
+
+func TestDetectPublicIPStopsAfterAttemptLimit(t *testing.T) {
+	common.SetPublicIP("")
+	var calls atomic.Int32
+	lookup := func(context.Context) (*publicip.DetectResult, error) {
+		calls.Add(1)
+		return nil, errors.New("lookup blocked")
+	}
+	runDetect(t, 5*time.Second, func() bool { return true }, lookup)
+	assert.Empty(t, recordedPublicIP(t))
+	assert.EqualValues(t, publicIPAttempts, calls.Load())
 }
