@@ -10,10 +10,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"runtime"
-	"time"
 
 	"github.com/getlantern/osversion"
-	"github.com/getlantern/timezone"
 	"go.opentelemetry.io/otel"
 
 	"github.com/getlantern/radiance/common"
@@ -216,9 +214,6 @@ func newIssueRequest(ctx context.Context, method, url string, body io.Reader, co
 	}
 	req.Header.Set(common.ContentTypeHeader, contentType)
 	req.Header.Set(common.SupportedDataCapsHeader, "monthly,weekly,daily")
-	if tz, err := timezone.IANANameForTime(time.Now()); err == nil {
-		req.Header.Set(common.TimeZoneHeader, tz)
-	}
 
 	return req, nil
 }

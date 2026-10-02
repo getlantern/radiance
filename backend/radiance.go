@@ -102,6 +102,9 @@ type Options struct {
 	LogDir   string
 	Locale   string
 	LogLevel string
+	// TimeZone is the device's IANA time zone name (e.g. "Asia/Tehran"). Empty keeps the
+	// previously stored zone.
+	TimeZone string
 	// this should be the platform device ID on mobile devices, desktop platforms will generate their
 	// own device ID and ignore this value
 	DeviceID string
@@ -170,12 +173,16 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 
 	dataDir := settings.GetString(settings.DataPathKey)
 	disableFetch := env.GetBool(env.DisableFetch)
-	settings.Patch(settings.Settings{
+	startup := settings.Settings{
 		settings.LocaleKey:              opts.Locale,
 		settings.DeviceIDKey:            platformDeviceID,
 		settings.ConfigFetchDisabledKey: disableFetch,
 		settings.TelemetryKey:           opts.TelemetryConsent,
-	})
+	}
+	if opts.TimeZone != "" {
+		startup[settings.TimeZoneKey] = opts.TimeZone
+	}
+	settings.Patch(startup)
 
 	accountClient := account.NewClient(kindling.HTTPClient(), dataDir)
 
@@ -286,25 +293,10 @@ func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
 	r.startUserMessages()
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		result, err := publicip.Detect(ctx, &publicip.Config{
-			Timeout:      2 * time.Second,
-			MinConsensus: 1,
-			Methods:      publicip.DefaultMethods(),
-		})
-		cancel()
-		if err != nil {
-			slog.Warn("Failed to get public IP", "error", err)
-		} else {
-			common.SetPublicIP(result.IP.String())
-			// IP intentionally omitted — Lantern users in censored regions
-			// can't safely have their public IP in routinely-collected
-			// client logs. Confidence + sources are enough for operator
-			// triage; the actual IP is correlated server-side via traces.
-			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources)
-		}
-	}()
+	go detectPublicIP(r.ctx, func() bool {
+		s := r.VPNStatus()
+		return s == "" || s == vpn.Disconnected
+	}, lookupPublicIP)
 
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
@@ -1887,4 +1879,70 @@ func (r *LocalBackend) VerifySubscription(ctx context.Context, service account.S
 
 func (r *LocalBackend) RestoreSubscription(ctx context.Context, service account.SubscriptionService, data map[string]string) (*account.RestoreSubscriptionResponse, error) {
 	return r.accountClient.RestoreSubscription(ctx, service, data)
+}
+
+const (
+	publicIPAttempts       = 8
+	publicIPAttemptTimeout = 5 * time.Second
+)
+
+var (
+	// publicIPDirectPoll is how often detectPublicIP checks whether traffic leaves directly again.
+	publicIPDirectPoll = 30 * time.Second
+	publicIPBackoff    = func() *common.Backoff { return common.NewBackoff(2*time.Second, 2*time.Minute) }
+)
+
+// detectPublicIP records the device's public IP for API requests, retrying with backoff because
+// the lookup services are often slow or blocked where Lantern is used most. Without the IP, the
+// API geolocates whichever relay delivered the request. The lookups don't bypass the VPN, so it
+// only looks up while direct reports true and discards a result if the tunnel came up during the
+// lookup. It gives up after publicIPAttempts lookups or when ctx is done.
+func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) {
+	backoff := publicIPBackoff()
+	for attempt := 1; attempt <= publicIPAttempts; attempt++ {
+		if !waitForDirect(ctx, direct) {
+			return
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
+		result, err := lookup(attemptCtx)
+		cancel()
+		switch {
+		case err != nil:
+			slog.Warn("Failed to get public IP", "error", err, "attempt", attempt)
+		case !direct():
+			slog.Debug("Discarded public IP looked up while the VPN came up", "attempt", attempt)
+			continue
+		default:
+			common.SetPublicIP(result.IP.String())
+			// IP intentionally omitted — Lantern users in censored regions
+			// can't safely have their public IP in routinely-collected
+			// client logs. Confidence + sources are enough for operator
+			// triage; the actual IP is correlated server-side via traces.
+			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources, "attempt", attempt)
+			return
+		}
+		if attempt < publicIPAttempts {
+			backoff.Wait(ctx)
+		}
+	}
+}
+
+// waitForDirect blocks until direct reports true, and reports false if ctx ends first.
+func waitForDirect(ctx context.Context, direct func() bool) bool {
+	for !direct() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(publicIPDirectPoll):
+		}
+	}
+	return ctx.Err() == nil
+}
+
+func lookupPublicIP(ctx context.Context) (*publicip.DetectResult, error) {
+	return publicip.Detect(ctx, &publicip.Config{
+		Timeout:      publicIPAttemptTimeout,
+		MinConsensus: 1,
+		Methods:      publicip.DefaultMethods(),
+	})
 }
