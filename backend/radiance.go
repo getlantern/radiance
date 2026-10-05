@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -293,10 +294,21 @@ func (r *LocalBackend) Start() {
 	// eagerly start kindling so it's ready by the time we need to make network requests
 	kindling.Init()
 	r.startUserMessages()
-	go detectPublicIP(r.ctx, func() bool {
-		s := r.VPNStatus()
-		return s == "" || s == vpn.Disconnected
-	}, lookupPublicIP)
+	stored := loadStoredPublicIP()
+	go func() {
+		ip := detectPublicIP(r.ctx, func() bool {
+			s := r.VPNStatus()
+			return s == "" || s == vpn.Disconnected
+		}, lookupPublicIP)
+		if ip == nil || !storePublicIP(ip, stored) {
+			return
+		}
+		// Fetches until now carried no IP or one from another network, so the API may have
+		// geolocated a relay. Don't wait for the next poll to correct the assignment.
+		if err := r.confHandler.Fetch(); err != nil && !errors.Is(err, config.ErrConfigFetchDisabled) {
+			slog.Warn("Failed to refetch config after detecting public IP", "error", err)
+		}
+	}()
 
 	if settings.GetBool(settings.TelemetryKey) {
 		if err := r.startTelemetry(); err != nil {
@@ -1892,16 +1904,17 @@ var (
 	publicIPBackoff    = func() *common.Backoff { return common.NewBackoff(2*time.Second, 2*time.Minute) }
 )
 
-// detectPublicIP records the device's public IP for API requests, retrying with backoff because
-// the lookup services are often slow or blocked where Lantern is used most. Without the IP, the
-// API geolocates whichever relay delivered the request. The lookups don't bypass the VPN, so it
-// only looks up while direct reports true and discards a result if the tunnel came up during the
-// lookup. It gives up after publicIPAttempts lookups or when ctx is done.
-func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) {
+// detectPublicIP records the device's public IP for API requests and returns it, or nil if it
+// gave up. It retries with backoff because the lookup services are often slow or blocked where
+// Lantern is used most. Without the IP, the API geolocates whichever relay delivered the request.
+// The lookups don't bypass the VPN, so it only looks up while direct reports true and discards a
+// result if the tunnel came up during the lookup. It gives up after publicIPAttempts lookups or
+// when ctx is done.
+func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) net.IP {
 	backoff := publicIPBackoff()
 	for attempt := 1; attempt <= publicIPAttempts; attempt++ {
 		if !waitForDirect(ctx, direct) {
-			return
+			return nil
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
 		result, err := lookup(attemptCtx)
@@ -1919,11 +1932,61 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 			// client logs. Confidence + sources are enough for operator
 			// triage; the actual IP is correlated server-side via traces.
 			slog.Info("Detected public IP", "confidence", result.Confidence, "sources", result.Sources, "attempt", attempt)
-			return
+			return result.IP
 		}
 		if attempt < publicIPAttempts {
 			backoff.Wait(ctx)
 		}
+	}
+	return nil
+}
+
+// loadStoredPublicIP makes the IP stored by a previous session available to API requests, so
+// requests sent before detection completes (or while the VPN is up and detection can't run) still
+// carry it. It returns the stored IP, or "" if there is none.
+func loadStoredPublicIP() string {
+	stored := settings.GetString(settings.PublicIPKey)
+	if net.ParseIP(stored) == nil {
+		return ""
+	}
+	common.SetPublicIP(stored)
+	return stored
+}
+
+// storePublicIP persists ip, truncated, for future sessions and reports whether it is
+// significantly different from stored, the value requests have carried so far.
+func storePublicIP(ip net.IP, stored string) bool {
+	if err := settings.Set(settings.PublicIPKey, truncatePublicIP(ip).String()); err != nil {
+		slog.Warn("Failed to store public IP", "error", err)
+	}
+	return publicIPDiffers(net.ParseIP(stored), ip)
+}
+
+func truncatePublicIP(ip net.IP) net.IP {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.Mask(net.CIDRMask(24, 32))
+	}
+	return ip.Mask(net.CIDRMask(32, 128))
+}
+
+// publicIPDiffers reports whether ip falls outside prev's /16 (IPv4) or /32 (IPv6), roughly the
+// span of one ISP allocation, so an address rotating within a carrier's pool doesn't count. A
+// change of address family doesn't count either: dual-stack devices can detect either family, and
+// the two can't be compared.
+func publicIPDiffers(prev, ip net.IP) bool {
+	if prev == nil {
+		return true
+	}
+	prev4, ip4 := prev.To4(), ip.To4()
+	switch {
+	case (prev4 == nil) != (ip4 == nil):
+		return false
+	case ip4 != nil:
+		mask := net.CIDRMask(16, 32)
+		return !prev4.Mask(mask).Equal(ip4.Mask(mask))
+	default:
+		mask := net.CIDRMask(32, 128)
+		return !prev.Mask(mask).Equal(ip.Mask(mask))
 	}
 }
 

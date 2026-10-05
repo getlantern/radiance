@@ -35,6 +35,9 @@ const (
 	LocaleKey      _key = "locale"       // string
 	TimeZoneKey    _key = "time_zone"    // string, IANA name reported by the host app
 	DeviceIDKey    _key = "device_id"    // string/int
+	// PublicIPKey is the device's last detected public IP, truncated to its /24 (IPv4) or /32
+	// (IPv6) so the stored value is enough for geolocation but doesn't identify the device.
+	PublicIPKey _key = "public_ip" // string
 
 	// Application behavior related keys.
 	TelemetryKey _key = "telemetry_enabled" // bool

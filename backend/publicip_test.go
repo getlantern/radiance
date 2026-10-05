@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func recordedPublicIP(t *testing.T) string {
@@ -113,4 +114,62 @@ func TestDetectPublicIPStopsAfterAttemptLimit(t *testing.T) {
 	runDetect(t, 5*time.Second, func() bool { return true }, lookup)
 	assert.Empty(t, recordedPublicIP(t))
 	assert.EqualValues(t, publicIPAttempts, calls.Load())
+}
+
+func TestTruncatePublicIP(t *testing.T) {
+	assert.Equal(t, "203.0.113.0", truncatePublicIP(net.ParseIP("203.0.113.7")).String())
+	assert.Equal(t, "2001:db8::", truncatePublicIP(net.ParseIP("2001:db8:1:2:3:4:5:6")).String())
+}
+
+func TestPublicIPDiffers(t *testing.T) {
+	tests := []struct {
+		name     string
+		prev, ip string
+		want     bool
+	}{
+		{"nothing stored", "", "203.0.113.7", true},
+		{"same /16", "203.0.113.0", "203.0.42.9", false},
+		{"other /16", "203.0.113.0", "198.51.100.9", true},
+		{"same IPv6 /32", "2001:db8:1::", "2001:db8:ffff::1", false},
+		{"other IPv6 /32", "2001:db8:1::", "2001:db9::1", true},
+		{"family change", "203.0.113.0", "2001:db8::1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, publicIPDiffers(net.ParseIP(tt.prev), net.ParseIP(tt.ip)))
+		})
+	}
+}
+
+func TestStoredPublicIPRoundTrip(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	common.SetPublicIP("")
+	t.Cleanup(func() { common.SetPublicIP("") })
+
+	assert.Empty(t, loadStoredPublicIP())
+	assert.Empty(t, recordedPublicIP(t))
+
+	assert.True(t, storePublicIP(net.ParseIP("203.0.113.7"), ""), "first detection must refetch")
+	assert.Equal(t, "203.0.113.0", settings.GetString(settings.PublicIPKey), "only the /24 is stored")
+
+	stored := loadStoredPublicIP()
+	assert.Equal(t, "203.0.113.0", stored)
+	assert.Equal(t, "203.0.113.0", recordedPublicIP(t), "the stored IP is sent before detection completes")
+
+	assert.False(t, storePublicIP(net.ParseIP("203.0.200.1"), stored))
+	assert.True(t, storePublicIP(net.ParseIP("198.51.100.9"), stored))
+	assert.Equal(t, "198.51.100.0", settings.GetString(settings.PublicIPKey))
+}
+
+func TestDetectPublicIPReturnsIP(t *testing.T) {
+	common.SetPublicIP("")
+	var calls atomic.Int32
+	got := detectPublicIP(context.Background(), func() bool { return true }, fixedLookup("203.0.113.7", &calls))
+	assert.Equal(t, "203.0.113.7", got.String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.Nil(t, detectPublicIP(ctx, func() bool { return true }, fixedLookup("203.0.113.7", &calls)))
 }
