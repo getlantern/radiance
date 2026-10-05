@@ -203,7 +203,14 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	// Degraded, not fatal, per the invariant above: a nil peerClient only
 	// disables Share My Connection, and must not cost the user their ability
 	// to report an issue. applyPeerShare and PeerStatus handle nil.
-	peerClient, err := newPeerClient(platformDeviceID)
+	// The peer client outlives this function, and self-stops only after a
+	// Start, which needs r; the closure reads r once it exists.
+	var backend *LocalBackend
+	peerClient, err := newPeerClient(platformDeviceID, func(reason error) {
+		if backend != nil {
+			backend.onPeerSelfStop(reason)
+		}
+	})
 	if err != nil {
 		slog.Error("Loading peer client", "error", err)
 	}
@@ -234,6 +241,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
+	backend = r
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
@@ -680,18 +688,35 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
 	diff := updates.Diff(curr)
 	slog.Log(nil, log.LevelTrace, "Patching settings", "updates", updates, "current", curr, "diff", diff)
-	if len(diff) == 0 {
-		return nil
-	}
-	// Reject an invalid split-tunnel policy before persisting, so settings.json
+	// Reject an invalid split-tunnel policy before applying or persisting anything, so settings.json
 	// can't hold a value the runtime would silently fall back to exclude for.
 	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
 		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
 			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
 		}
 	}
+	// An explicit peer toggle is applied whether or not it changes the stored
+	// value, and before any other handler: the stored value can lag the
+	// runtime (a peer that stopped itself, or an "on" still starting), and
+	// applyPeerShare, which persists it, is what orders toggles.
+	var errs error
+	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
+	if peerRequested {
+		on, ok := peerValue.(bool)
+		if !ok {
+			return fmt.Errorf("invalid %s: %v", settings.PeerShareEnabledKey, peerValue)
+		}
+		if err := r.applyPeerShare(on); err != nil {
+			errs = errors.Join(errs, err)
+		}
+		diff = maps.Clone(diff)
+		delete(diff, settings.PeerShareEnabledKey)
+	}
+	if len(diff) == 0 {
+		return errs
+	}
 	if err := settings.Patch(diff); err != nil {
-		return fmt.Errorf("failed to update settings: %w", err)
+		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", err))
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
 		r.RefreshUserMessages()
@@ -713,7 +738,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// on a handler error would leave a persisted key that no runtime state
 	// matches — the divergence applyPeerShare's rollback exists to prevent. Run
 	// every handler and join their errors so the caller sees write failures.
-	var errs error
 	if _, ok := diff[settings.SplitTunnelKey]; ok {
 		if err := r.splitTunnelMgr.SetEnabled(settings.GetBool(settings.SplitTunnelKey)); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("set split-tunnel enabled: %w", err))
@@ -726,11 +750,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
-	}
-	if _, ok := diff[settings.PeerShareEnabledKey]; ok {
-		if err := r.applyPeerShare(settings.GetBool(settings.PeerShareEnabledKey)); err != nil {
-			errs = errors.Join(errs, err)
-		}
 	}
 	// Drive the Unbounded widget proxy off the toggle change immediately
 	// rather than waiting for the next NewConfigEvent to re-evaluate.
