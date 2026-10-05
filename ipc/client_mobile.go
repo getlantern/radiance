@@ -156,6 +156,7 @@ func (c *Client) fallbackOptions() backend.Options {
 	opts.DataDir = settings.GetString(settings.DataPathKey)
 	opts.LogDir = settings.GetString(settings.LogPathKey)
 	opts.Locale = settings.GetString(settings.LocaleKey)
+	opts.TimeZone = settings.GetString(settings.TimeZoneKey)
 	opts.DeviceID = settings.GetString(settings.DeviceIDKey)
 	opts.LogLevel = settings.GetString(settings.LogLevelKey)
 	opts.TelemetryConsent = settings.GetBool(settings.TelemetryKey)

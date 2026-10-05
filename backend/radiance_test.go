@@ -1063,3 +1063,18 @@ func TestAwaitConnectable(t *testing.T) {
 		assert.NoError(t, r.awaitConnectable(ctx, "mine"), "an explicit tag resolves without a config")
 	})
 }
+
+func TestSetCountryCodeFromConfigFollowsCorrections(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+
+	setCountryCodeFromConfig(&config.Config{Country: "US"})
+	assert.Equal(t, "US", settings.GetString(settings.CountryCodeKey))
+
+	setCountryCodeFromConfig(&config.Config{Country: "IR"})
+	assert.Equal(t, "IR", settings.GetString(settings.CountryCodeKey), "a later config corrects the country")
+
+	setCountryCodeFromConfig(&config.Config{})
+	assert.Equal(t, "IR", settings.GetString(settings.CountryCodeKey), "a config without a country keeps the last one")
+}

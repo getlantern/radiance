@@ -49,7 +49,6 @@ require (
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20261003143130-94b11ff9bfeb
-	github.com/getlantern/timezone v0.0.0-20210901200113-3f9de9d360c9
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
@@ -61,6 +60,7 @@ require (
 	github.com/sagernet/sing v0.8.13
 	github.com/sagernet/sing-box v1.13.19
 	github.com/stretchr/testify v1.12.1
+	github.com/tkuchiki/go-timezone v0.2.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.66.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.41.0
@@ -247,7 +247,6 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
-	github.com/tkuchiki/go-timezone v0.2.0 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
