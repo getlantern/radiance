@@ -333,12 +333,8 @@ func (r *LocalBackend) Start() {
 	cachedCfg, _ := r.confHandler.GetConfig()
 	unbounded.InitSubscription(cachedCfg)
 
-	// The server derives the country from the client IP, so it's stable for the
-	// session: react once to record it for issue reports.
-	events.SubscribeOnce(func(evt config.NewConfigEvent) {
-		setCountryCodeFromConfig(evt.New)
-	})
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
+		setCountryCodeFromConfig(evt.New)
 		r.applyConfig(evt.New)
 		go r.prewarmOfflineURLTests("config update")
 	})
@@ -402,10 +398,14 @@ func (r *LocalBackend) applyConfig(cfg *config.Config) {
 	}
 }
 
-// setCountryCodeFromConfig stores the config country for diagnostics unless
-// an explicit country override is active.
+// setCountryCodeFromConfig records the API-assigned country for issue reports
+// and the tunnel's client info unless an explicit country override is active.
+// Callers apply it to every config, not once per session, because a later
+// fetch can correct the country, e.g. once the public IP is detected and the
+// API stops geolocating a relay.
 func setCountryCodeFromConfig(cfg *config.Config) {
-	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" {
+	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" ||
+		cfg.Country == settings.GetString(settings.CountryCodeKey) {
 		return
 	}
 	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
