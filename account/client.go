@@ -88,6 +88,8 @@ func (a *Client) baseURL() string {
 
 // sendRequest sends an HTTP request to the specified URL with the given method, query parameters,
 // headers, and body. If the URL is relative, the base URL will be prepended.
+//
+// A non-2xx response returns an error whose message includes the response body.
 func (a *Client) sendRequest(
 	ctx context.Context,
 	method, url string,
@@ -160,9 +162,8 @@ func (a *Client) sendRequest(
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		sanitized := sanitizeResponseBody(respBody)
-		a.logger.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode, "body", string(sanitized))
-		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitized)
+		a.logger.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitizeResponseBody(respBody))
 	}
 
 	if len(respBody) == 0 {

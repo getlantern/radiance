@@ -1,8 +1,12 @@
 package account
 
 import (
+	"bytes"
+	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -52,4 +56,23 @@ func TestCurlFromRequestOmitsBody(t *testing.T) {
 	body, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 	assert.Equal(t, recoveryCode, string(body), "request body changed after building the curl command")
+}
+
+func TestErrorResponseBodyOmittedFromLog(t *testing.T) {
+	const echoed = "recovery-code-value"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "invalid_code: "+echoed, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	a := &Client{
+		httpClient: srv.Client(),
+		logger:     slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+	_, err := a.sendRequest(context.Background(), http.MethodPost, srv.URL+"/users/recovery/validate/email", nil, nil, nil)
+	require.Error(t, err)
+	assert.NotContains(t, buf.String(), echoed, "echoed response body reached the log")
+	assert.Contains(t, buf.String(), "status=400", "error log dropped the status")
+	assert.Contains(t, err.Error(), "invalid_code", "returned error dropped the server error code")
 }
