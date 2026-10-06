@@ -27,28 +27,38 @@ import (
 	"github.com/getlantern/radiance/vpn"
 )
 
-func TestApplyCurrentConfigLoadsCachedServers(t *testing.T) {
-	t.Setenv("RADIANCE_COUNTRY", "US")
-	dataDir := t.TempDir()
-	cfg := cachedConfig()
-	buf, err := singjson.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ConfigFileName), buf, 0o600))
-
+// newCachedConfigBackend returns a backend loading its config and servers
+// from dataDir, as at startup.
+func newCachedConfigBackend(t *testing.T, dataDir string) *LocalBackend {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	ch := config.NewConfigHandler(ctx, config.Options{
 		DataPath: dataDir,
 		Logger:   log.NoOpLogger(),
 	})
 	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
 	require.NoError(t, err)
-	r := &LocalBackend{
+	return &LocalBackend{
 		ctx:         ctx,
 		confHandler: ch,
 		srvManager:  srvMgr,
 		vpnClient:   vpn.NewVPNClient(dataDir, log.NoOpLogger(), nil),
 	}
+}
+
+func writeCachedConfig(t *testing.T, dataDir string, cfg *config.Config) {
+	t.Helper()
+	buf, err := singjson.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ConfigFileName), buf, 0o600))
+}
+
+func TestApplyCurrentConfigLoadsCachedServers(t *testing.T) {
+	t.Setenv("RADIANCE_COUNTRY", "US")
+	dataDir := t.TempDir()
+	writeCachedConfig(t, dataDir, cachedConfig())
+	r := newCachedConfigBackend(t, dataDir)
 
 	r.applyCurrentConfig()
 
@@ -58,6 +68,30 @@ func TestApplyCurrentConfigLoadsCachedServers(t *testing.T) {
 	assert.Equal(t, "shadowsocks", server.Type)
 	assert.Equal(t, "Shanghai", server.Location.City)
 	assert.Equal(t, "CN", server.Location.CountryCode)
+}
+
+func TestApplyCurrentConfigKeepsHardDemotedServers(t *testing.T) {
+	t.Setenv("RADIANCE_COUNTRY", "US")
+	dataDir := t.TempDir()
+	cfg := cachedConfig()
+	writeCachedConfig(t, dataDir, cfg)
+	r := newCachedConfigBackend(t, dataDir)
+	r.applyCurrentConfig()
+	require.NoError(t, r.srvManager.UpdateSelectionHistory(map[string]servers.SelectionHistory{
+		"cached-out": {HardDemoted: true},
+	}))
+
+	// Restart: the cached config was already applied when it was received.
+	r = newCachedConfigBackend(t, dataDir)
+	r.applyCurrentConfig()
+	server, found := r.GetServerByTag("cached-out")
+	require.True(t, found, "applying the cached config at startup must not evict")
+	require.NotNil(t, server.SelectionHistory)
+	assert.True(t, server.SelectionHistory.HardDemoted)
+
+	r.applyConfig(cfg, true)
+	_, found = r.GetServerByTag("cached-out")
+	assert.False(t, found, "a newly received config still evicts hard-demoted servers")
 }
 
 func cachedConfig() *config.Config {
