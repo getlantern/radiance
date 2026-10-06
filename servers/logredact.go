@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"errors"
 	"log/slog"
 	"regexp"
 )
@@ -49,17 +50,9 @@ func stripQueries(s string) string {
 	return queryComponent.ReplaceAllString(s, "")
 }
 
-// redactedError reports cause's message with URL query components removed.
-// Unwrap returns the unredacted cause, which may still carry the private-server
-// access token.
-type redactedError struct {
-	cause error
-}
-
-func (e redactedError) Error() string {
-	return stripQueries(e.cause.Error())
-}
-
-func (e redactedError) Unwrap() error {
-	return e.cause
+// redactError returns an error carrying err's message with URL query components
+// removed. The result does not wrap err, whose chain may still carry the access
+// token.
+func redactError(err error) error {
+	return errors.New(stripQueries(err.Error()))
 }

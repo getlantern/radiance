@@ -2,6 +2,7 @@ package servers
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -55,4 +56,6 @@ func TestPrivateServerErrorOmitsAccessToken(t *testing.T) {
 	require.Error(t, err, "expected a dial failure")
 	assert.NotContains(t, err.Error(), accessToken, "access token leaked through the returned error")
 	assert.Contains(t, err.Error(), "share-link", "redaction removed the request path, leaving an undiagnosable error")
+	var urlErr *url.Error
+	assert.False(t, errors.As(err, &urlErr), "the token-bearing *url.Error is reachable through the error chain")
 }

@@ -3,6 +3,7 @@ package account
 import (
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -24,6 +25,18 @@ func TestCurlFromRequestRedactsSecretHeaders(t *testing.T) {
 	curl := curlFromRequest(req)
 	assert.NotContains(t, curl, token, "credential leaked into curl command")
 	assert.Contains(t, curl, "device-id-value", "redaction dropped a non-secret header")
+}
+
+func TestCurlFromRequestRedactsQueryValues(t *testing.T) {
+	const email = "user@example.com"
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/users/salt?email="+url.QueryEscape(email), nil)
+	require.NoError(t, err)
+	original := req.URL.String()
+
+	curl := curlFromRequest(req)
+	assert.NotContains(t, curl, url.QueryEscape(email), "query value leaked into curl command")
+	assert.Contains(t, curl, "email=redacted", "curl command dropped the query key")
+	assert.Equal(t, original, req.URL.String(), "request URL changed after building the curl command")
 }
 
 func TestCurlFromRequestOmitsBody(t *testing.T) {

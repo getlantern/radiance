@@ -698,7 +698,7 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 }
 
 // privateServerRequest sends a bodyless request to the server manager at
-// ip:port. Returned error messages omit the access token.
+// ip:port. Returned errors omit the access token.
 func (m *Manager) privateServerRequest(method, ip string, port int, path, accessToken string) (*http.Response, error) {
 	u := &url.URL{
 		Scheme:   "https",
@@ -708,14 +708,14 @@ func (m *Manager) privateServerRequest(method, ip string, port int, path, access
 	}
 	req, err := http.NewRequest(method, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", redactedError{err})
+		return nil, fmt.Errorf("failed to create request: %w", redactError(err))
 	}
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", redactedError{err})
+		return nil, fmt.Errorf("failed to send request: %w", redactError(err))
 	}
 	return resp, nil
 }

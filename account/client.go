@@ -199,8 +199,8 @@ func (a *Client) sendProRequest(
 	return a.sendRequest(ctx, method, url, queryParams, headers, body)
 }
 
-// curlFromRequest renders req as a curl command with the body and credential
-// header values redacted.
+// curlFromRequest renders req as a curl command with the body, query values,
+// and credential header values redacted.
 func curlFromRequest(req *http.Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "curl -X %s", req.Method)
@@ -225,7 +225,15 @@ func curlFromRequest(req *http.Request) string {
 		b.WriteString(" -d '<redacted>'")
 	}
 
-	fmt.Fprintf(&b, " '%s'", req.URL.String())
+	u := *req.URL
+	q := u.Query()
+	for _, values := range q {
+		for i := range values {
+			values[i] = "redacted"
+		}
+	}
+	u.RawQuery = q.Encode()
+	fmt.Fprintf(&b, " '%s'", u.String())
 	return b.String()
 }
 
