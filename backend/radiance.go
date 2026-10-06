@@ -335,7 +335,7 @@ func (r *LocalBackend) Start() {
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
 		setCountryCodeFromConfig(evt.New)
-		r.applyConfig(evt.New)
+		r.applyConfig(evt.New, true)
 		go r.prewarmOfflineURLTests("config update")
 	})
 	if r.applyCurrentConfig() {
@@ -352,7 +352,7 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 		return false
 	}
 	setCountryCodeFromConfig(cfg)
-	r.applyConfig(cfg)
+	r.applyConfig(cfg, false)
 	return true
 }
 
@@ -370,8 +370,9 @@ func (r *LocalBackend) prewarmOfflineURLTests(source string) {
 }
 
 // applyConfig updates the runtime server state from a config snapshot.
-// Startup-loaded cached configs and freshly fetched configs both use this path.
-func (r *LocalBackend) applyConfig(cfg *config.Config) {
+// Startup-loaded cached configs and freshly fetched configs both use this
+// path; evict is passed to updateServers.
+func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 	if cfg == nil {
 		return
 	}
@@ -389,7 +390,7 @@ func (r *LocalBackend) applyConfig(cfg *config.Config) {
 			span.End()
 		}
 	}
-	if err := r.updateServers(list); err != nil {
+	if err := r.updateServers(list, evict); err != nil {
 		slog.Error("updating servers in manager", "error", err)
 	}
 	if err := r.vpnClient.UpdateNonSelectableOutbounds(nonSelectableOutboundsFromConfig(cfg)); err != nil &&
@@ -954,7 +955,12 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // across config updates.
 const maxRetainedLanternServers = 60
 
-func (r *LocalBackend) updateServers(list servers.ServerList) error {
+// updateServers adds the servers in list that are not already present. When
+// evict is set it first evicts retained Lantern servers (see
+// lanternServersToEvict). Only a newly received config may evict: a config
+// that was already applied, such as the cached one at startup, would judge
+// its own offers a second time.
+func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
@@ -962,22 +968,24 @@ func (r *LocalBackend) updateServers(list servers.ServerList) error {
 		return exists
 	})
 
-	var selectedTag string
-	var selected servers.Server
-	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil {
-		selectedTag = selected.Tag
-	}
+	if evict {
+		var selectedTag string
+		var selected servers.Server
+		if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil {
+			selectedTag = selected.Tag
+		}
 
-	tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
+		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
 
-	if len(tagsToEvict) > 0 {
-		slog.Debug(
-			"Evicting retained Lantern servers to make room for new config batch",
-			"count", len(tagsToEvict),
-			"tags", tagsToEvict,
-		)
-		if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
-			return fmt.Errorf("remove retained Lantern servers: %w", err)
+		if len(tagsToEvict) > 0 {
+			slog.Debug(
+				"Evicting retained Lantern servers to make room for new config batch",
+				"count", len(tagsToEvict),
+				"tags", tagsToEvict,
+			)
+			if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
+				return fmt.Errorf("remove retained Lantern servers: %w", err)
+			}
 		}
 	}
 
