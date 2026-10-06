@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"net/http/httputil"
 	"runtime"
 
 	"github.com/getlantern/osversion"
@@ -29,12 +28,16 @@ const (
 // IssueReporter is used to send issue reports to backend.
 type IssueReporter struct {
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
-// NewIssueReporter creates a new IssueReporter that can be used to send issue reports
-// to the backend.
-func NewIssueReporter(httpClient *http.Client) *IssueReporter {
-	return &IssueReporter{httpClient: httpClient}
+// NewIssueReporter returns an IssueReporter that sends reports with httpClient.
+// A nil logger uses [slog.Default].
+func NewIssueReporter(httpClient *http.Client, logger *slog.Logger) *IssueReporter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &IssueReporter{httpClient: httpClient, logger: logger}
 }
 
 type IssueType int
@@ -97,7 +100,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
-		slog.Error("Unable to get OS version", "error", err)
+		ir.logger.Error("Unable to get OS version", "error", err)
 		osVersion = runtime.GOOS + " " + runtime.GOARCH
 	}
 	r := &ReportIssueRequest{
@@ -126,7 +129,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 
 	if len(firstClassAttachments) > 0 {
 		if err := validateFirstClassAttachments(firstClassAttachments); err != nil {
-			slog.Error("invalid issue attachments", "error", err)
+			ir.logger.Error("invalid issue attachments", "error", err)
 			return err
 		}
 	}
@@ -139,9 +142,9 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	archiveBudget = max(archiveBudget, 0)
 
 	logDir := settings.GetString(settings.LogPathKey)
-	archive, err := buildIssueArchive(logDir, report.AdditionalAttachments, archiveBudget)
+	archive, err := buildIssueArchive(ir.logger, logDir, report.AdditionalAttachments, archiveBudget)
 	if err != nil {
-		slog.Error("failed to build issue archive", "error", err)
+		ir.logger.Error("failed to build issue archive", "error", err)
 	}
 	if len(archive) > 0 {
 		r.Attachments = append(r.Attachments, &ReportIssueRequest_Attachment{
@@ -153,7 +156,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 
 	out, err := proto.Marshal(r)
 	if err != nil {
-		slog.Error("unable to marshal issue report", "error", err)
+		ir.logger.Error("unable to marshal issue report", "error", err)
 		return fmt.Errorf("error marshaling proto: %w", err)
 	}
 
@@ -162,7 +165,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	if len(firstClassAttachments) > 0 {
 		multipartBody, multipartContentType, err := buildMultipartIssueBody(out, firstClassAttachments)
 		if err != nil {
-			slog.Error("unable to build multipart issue report", "error", err)
+			ir.logger.Error("unable to build multipart issue report", "error", err)
 			return fmt.Errorf("build multipart issue report: %w", err)
 		}
 		body = bytes.NewReader(multipartBody.Bytes())
@@ -178,27 +181,24 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		contentType,
 	)
 	if err != nil {
-		slog.Error("unable to create issue report request", "error", err)
+		ir.logger.Error("unable to create issue report request", "error", err)
 		return traces.RecordError(ctx, err)
 	}
 
 	resp, err := ir.httpClient.Do(req)
 	if err != nil {
-		slog.Error("failed to send issue report", "error", err, "requestURL", issueURL)
+		ir.logger.Error("failed to send issue report", "error", err, "requestURL", issueURL)
 		return traces.RecordError(ctx, err)
 	}
 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, err := httputil.DumpResponse(resp, true)
-		if err != nil {
-			slog.Debug("failed to dump response", "error", err, "responseStatus", resp.StatusCode)
-		}
-		slog.Error("issue report failed", "statusCode", resp.StatusCode, "response", string(b))
+		// The remote body may echo submitted report fields.
+		ir.logger.Error("issue report failed", "statusCode", resp.StatusCode)
 		return traces.RecordError(ctx, fmt.Errorf("issue report failed with status code %d", resp.StatusCode))
 	}
 
-	slog.Debug("issue report sent")
+	ir.logger.Debug("issue report sent")
 	return nil
 }
 

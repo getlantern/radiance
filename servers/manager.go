@@ -273,7 +273,7 @@ func retryableHTTPClient(logger *slog.Logger) *retryablehttp.Client {
 	client.RetryMax = 10
 	client.RetryWaitMin = 1 * time.Second
 	client.RetryWaitMax = 10 * time.Second
-	client.Logger = logger
+	client.Logger = redactingLogger{logger: logger}
 	return client
 }
 
@@ -613,17 +613,9 @@ func (m *Manager) quarantineInvalidServers(buf []byte) {
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
 func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
-	u := &url.URL{
-		Scheme: "https",
-		Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
-		Path:   "/api/v1/connect-config",
-	}
-	q := u.Query()
-	q.Set("token", accessToken)
-	u.RawQuery = q.Encode()
-	resp, err := m.httpClient.Get(u.String())
+	resp, err := m.privateServerRequest(http.MethodGet, ip, port, "/api/v1/connect-config", accessToken)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -667,9 +659,9 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 // InviteToPrivateServer invites another user to the server manager instance and returns a connection
 // token. The server must be added to the user's servers first.
 func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
-	resp, err := m.httpClient.Get(fmt.Sprintf("https://%s:%d/api/v1/share-link/%s?token=%s", ip, port, inviteName, accessToken))
+	resp, err := m.privateServerRequest(http.MethodGet, ip, port, "/api/v1/share-link/"+inviteName, accessToken)
 	if err != nil {
-		return "", fmt.Errorf("failed to send request: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -694,15 +686,38 @@ func (m *Manager) InviteToPrivateServer(ip string, port int, accessToken string,
 // RevokePrivateServerInvite will revoke an invite to the server manager instance. The server must
 // be added to the user's servers first.
 func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken string, inviteName string) error {
-	resp, err := m.httpClient.Post(fmt.Sprintf("https://%s:%d/api/v1/revoke/%s?token=%s", ip, port, inviteName, accessToken), "application/json", nil)
+	resp, err := m.privateServerRequest(http.MethodPost, ip, port, "/api/v1/revoke/"+inviteName, accessToken)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("failed to revoke invite, invalid status code: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// privateServerRequest sends a bodyless request to the server manager at
+// ip:port. Returned error messages omit the access token.
+func (m *Manager) privateServerRequest(method, ip string, port int, path, accessToken string) (*http.Response, error) {
+	u := &url.URL{
+		Scheme:   "https",
+		Host:     net.JoinHostPort(ip, strconv.Itoa(port)),
+		Path:     path,
+		RawQuery: url.Values{"token": {accessToken}}.Encode(),
+	}
+	req, err := http.NewRequest(method, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", redactedError{err})
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", redactedError{err})
+	}
+	return resp, nil
 }
 
 // AddServersByJSON adds any outbounds and endpoints defined in the provided sing-box JSON config.
