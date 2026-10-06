@@ -370,8 +370,6 @@ func (r *LocalBackend) prewarmOfflineURLTests(source string) {
 }
 
 // applyConfig updates the runtime server state from a config snapshot.
-// Startup-loaded cached configs and freshly fetched configs both use this
-// path; evict is passed to updateServers.
 func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 	if cfg == nil {
 		return
