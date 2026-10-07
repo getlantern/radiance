@@ -69,7 +69,8 @@ type tunnel struct {
 	// reconcile can remove the ones a config drops. Guarded by outboundMu.
 	nonSelectableTags map[string]struct{}
 
-	clientContextTracker *clientcontext.ClientContextInjector
+	// injector sends client info on dials through lantern servers' outbounds.
+	injector *clientcontext.Injector
 
 	initialLanternTags []string
 	// initialNonSelectable is the config's non-selectable tags at connect. It seeds
@@ -85,9 +86,7 @@ type tunnel struct {
 	// connection-close pushes for telemetry.
 	connObserver ConnObserver
 
-	// outboundMu serializes the outbound mutators. Each does a read-modify-write
-	// over clientContextTracker.MatchBounds(), which clones on read, so
-	// concurrent mutators would silently drop each other's tag updates.
+	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
 
 	// closeTimeout bounds how long close() waits for closers to finish; a zero
@@ -205,6 +204,15 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	service.MustRegister[lbA.AutoSelectHistoryStorage](t.ctx, t.selectionHistory)
 	t.closers = append(t.closers, t.selectionHistory)
 
+	// Must install before sbox.New, which creates the outbounds.
+	// Non-selectable outbounds are infrastructure, never user traffic, so they
+	// never send client info.
+	tags := filterNonSelectableTags(t.initialLanternTags, t.initialNonSelectable)
+	t.injector = newClientInfoInjector(tags)
+	if err := t.injector.Install(t.ctx); err != nil {
+		return fmt.Errorf("install client info injector: %w", err)
+	}
+
 	slog.Log(nil, rlog.LevelTrace, "Creating box instance")
 	var instance *sbox.Box
 	if err := traceSpan(ctx, "sbox.New", func() error {
@@ -219,13 +227,6 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	}
 	cacheFile := service.FromContext[adapter.CacheFile](t.ctx)
 	service.MustRegister[adapter.CacheFile](t.ctx, &cacheFileWrapper{CacheFile: cacheFile})
-
-	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	clientContextInjector := newClientContextInjector(outboundMgr, t.dataPath, t.initialLanternTags)
-	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
-	t.clientContextTracker = clientContextInjector
-	router := service.FromContext[adapter.Router](t.ctx)
-	router.AppendTracker(clientContextInjector)
 
 	t.closers = append(t.closers, instance)
 	t.boxInstance = instance
@@ -252,9 +253,10 @@ func setMobileMemoryLimits() {
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
 }
 
-func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string, lanternTags []string) *clientcontext.ClientContextInjector {
-	slog.Debug("Creating ClientContextInjector")
-	infoFn := func() clientcontext.ClientInfo {
+// newClientInfoInjector returns an Injector enabled for lanternTags. Only lantern
+// servers support the client-info exchange.
+func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
+	return clientcontext.NewInjector(func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
 			DeviceID:    settings.GetString(settings.DeviceIDKey),
 			Platform:    common.Platform,
@@ -262,14 +264,20 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			CountryCode: settings.GetString(settings.CountryCodeKey),
 			Version:     common.GetVersion(),
 		}
+	}, lanternTags...)
+}
+
+func filterNonSelectableTags(tags, nonSelectable []string) []string {
+	if len(nonSelectable) == 0 {
+		return tags
 	}
-	// Only lantern servers support client context tracking, so only their tags
-	// belong in the match bounds.
-	matchBounds := clientcontext.MatchBounds{
-		Inbound:  []string{"any"},
-		Outbound: slices.Clone(lanternTags),
+	var filtered []string
+	for _, tag := range tags {
+		if !slices.Contains(nonSelectable, tag) {
+			filtered = append(filtered, tag)
+		}
 	}
-	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
+	return filtered
 }
 
 func newMutableGroupManager(
@@ -564,38 +572,25 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	router := service.FromContext[adapter.Router](ctx)
 
 	var errs []error
-	if t.clientContextTracker != nil {
+	if t.injector != nil {
 		// Iterate the full list, not the deduped newList: removeDuplicates drops
-		// startup lantern servers that must stay bound, and the append-if-absent
-		// guard below re-adds any the construction seed missed without regrowing
-		// Outbound.
+		// startup lantern servers that must stay enabled.
 		lanternTags := make([]string, 0, len(list.Servers))
 		for _, srv := range list.Servers {
 			if srv.IsLantern && srv.Tag != "" {
 				lanternTags = append(lanternTags, srv.Tag)
 			}
 		}
-		if len(lanternTags) > 0 {
-			slog.Log(nil, rlog.LevelTrace, "Merging lantern tags into ClientContextInjector")
-			matchBounds := t.clientContextTracker.MatchBounds()
-			for _, tag := range lanternTags {
-				if !slices.Contains(matchBounds.Outbound, tag) {
-					matchBounds.Outbound = append(matchBounds.Outbound, tag)
-				}
-			}
-			t.clientContextTracker.SetBounds(matchBounds)
-		}
+		t.injector.AddOutboundTags(lanternTags...)
 		defer func() {
 			if errors.Is(err, errLibboxClosed) {
 				return
 			}
-			// Remove any lantern tags that failed to load from the match bounds.
-			mb := t.clientContextTracker.MatchBounds()
-			mb.Outbound = slices.DeleteFunc(mb.Outbound, func(tag string) bool {
+			failed := slices.DeleteFunc(lanternTags, func(tag string) bool {
 				_, loaded := t.optsMap.Load(tag)
-				return slices.Contains(lanternTags, tag) && !loaded
+				return loaded
 			})
-			t.clientContextTracker.SetBounds(mb)
+			t.injector.RemoveOutboundTags(failed...)
 		}()
 	}
 
@@ -767,12 +762,8 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 			removed = append(removed, tag)
 		}
 	}
-	if t.clientContextTracker != nil && len(removed) > 0 {
-		mb := t.clientContextTracker.MatchBounds()
-		mb.Outbound = slices.DeleteFunc(mb.Outbound, func(s string) bool {
-			return slices.Contains(removed, s)
-		})
-		t.clientContextTracker.SetBounds(mb)
+	if t.injector != nil {
+		t.injector.RemoveOutboundTags(removed...)
 	}
 	slog.Debug("Removed servers", "removed", len(removed))
 	return errors.Join(errs...)
