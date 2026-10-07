@@ -252,7 +252,6 @@ func setMobileMemoryLimits() {
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
 }
 
-// newClientInfoInjector returns an Injector enabled for lanternTags.
 func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
 	return clientcontext.NewInjector(func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
@@ -602,6 +601,9 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
+		// Before the auto-select group gets the outbound: it probes new members
+		// immediately, and those probes must go through the exchange.
+		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
 		if err == nil {
 			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
 		}
@@ -619,7 +621,6 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 			t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 			added++
 		}
-		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
 	}
 
 	if contextDone(ctx) {
@@ -866,7 +867,6 @@ func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap
 	return &optsMap
 }
 
-// marshalOptions marshals an outbound or endpoint.
 func marshalOptions(ctx context.Context, opts any) []byte {
 	switch o := opts.(type) {
 	case O.Outbound:
