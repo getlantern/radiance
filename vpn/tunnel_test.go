@@ -1,14 +1,30 @@
 package vpn
 
 import (
+	"bufio"
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"path/filepath"
 	"testing"
 	"time"
 
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
+	"github.com/getlantern/lantern-box/tracker/clientcontext"
+	sbox "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 	"github.com/stretchr/testify/assert"
@@ -172,24 +188,164 @@ func TestMobileMemoryLimitsOrdering(t *testing.T) {
 	assert.Less(t, defaultIOSMemLimitBytes, iOSFootprintCap, "monitor budget must be below the iOS cap")
 }
 
-func TestNewClientContextInjectorSeedsLanternTags(t *testing.T) {
-	t.Run("seeds outbound bounds with the given lantern tags", func(t *testing.T) {
-		inj := newClientContextInjector(nil, "", []string{"a", "b"})
-		bounds := inj.MatchBounds()
-		assert.Equal(t, []string{"a", "b"}, bounds.Outbound)
-		assert.Equal(t, []string{"any"}, bounds.Inbound)
-	})
+// infoRecorder records whether each routed connection to dest carries client
+// info.
+type infoRecorder struct {
+	dest string
+	seen chan bool
+}
 
-	t.Run("nil tags yield empty outbound bounds", func(t *testing.T) {
-		inj := newClientContextInjector(nil, "", nil)
-		assert.Empty(t, inj.MatchBounds().Outbound)
-	})
+func (r *infoRecorder) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) net.Conn {
+	if metadata.Destination.String() == r.dest {
+		_, ok := clientcontext.InfoFromConn(conn)
+		r.seen <- ok
+	}
+	return conn
+}
 
-	t.Run("clones input so later caller mutation does not alias the bounds", func(t *testing.T) {
-		tags := []string{"a", "b"}
-		inj := newClientContextInjector(nil, "", tags)
-		tags[0] = "mutated"
-		assert.Equal(t, []string{"a", "b"}, inj.MatchBounds().Outbound)
+func (r *infoRecorder) RoutedPacketConnection(_ context.Context, conn N.PacketConn, _ adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
+	return conn
+}
+
+// startInfoServer starts an HTTP proxy that decodes client info like a lantern
+// server, and returns its port and a recorder of connections routed to dest.
+func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := uint16(l.Addr().(*net.TCPAddr).Port)
+	require.NoError(t, l.Close())
+
+	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	server, err := sbox.New(sbox.Options{Context: box.Context(t.Context()), Options: O.Options{
+		Log: &O.LogOptions{Disabled: true},
+		Inbounds: []O.Inbound{{Type: C.TypeHTTP, Tag: "http-in", Options: &O.HTTPMixedInboundOptions{
+			ListenOptions: O.ListenOptions{Listen: &listen, ListenPort: port},
+		}}},
+	}})
+	require.NoError(t, err)
+	recorder := &infoRecorder{dest: dest, seen: make(chan bool, 4)}
+	server.Router().AppendTracker(clientcontext.NewManager(clientcontext.MatchBounds{Inbound: []string{"any"}, Outbound: []string{"any"}}, sblog.NewNOPFactory().NewLogger("")))
+	server.Router().AppendTracker(recorder)
+	require.NoError(t, server.Start())
+	t.Cleanup(func() { server.Close() })
+	return port, recorder
+}
+
+// The tunnel sends client info through lantern servers only, including on
+// dials made directly through their outbounds rather than the router, and
+// follows servers as they are added and removed.
+func TestTunnelClientInfo(t *testing.T) {
+	dest := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(dest.Close)
+	// The auto group's probes go here, so they stay offline and apart from dest.
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(probe.Close)
+	port, recorder := startInfoServer(t, dest.Listener.Addr().String())
+
+	proxyOutbound := func(tag string) O.Outbound {
+		return O.Outbound{Type: C.TypeHTTP, Tag: tag, Options: &O.HTTPOutboundOptions{
+			ServerOptions: O.ServerOptions{Server: "127.0.0.1", ServerPort: port},
+		}}
+	}
+	options := O.Options{
+		Log: &O.LogOptions{Disabled: true},
+		Outbounds: []O.Outbound{
+			proxyOutbound("lantern"),
+			proxyOutbound("other"),
+			proxyOutbound("infra"),
+			{Type: lbC.TypeMutableSelector, Tag: ManualSelectTag, Options: &lbO.MutableSelectorOutboundOptions{
+				Outbounds: []string{"lantern", "other"},
+			}},
+			{Type: lbC.TypeMutableAutoSelect, Tag: AutoSelectTag, Options: &lbO.MutableAutoSelectOutboundOptions{
+				Outbounds: []string{"lantern", "other"},
+				URL:       probe.URL,
+			}},
+		},
+		// The clash server needs at least one clash mode.
+		Route: &O.RouteOptions{Rules: []O.Rule{{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{ClashMode: "rule"},
+				RuleAction: O.RuleAction{
+					Action:       C.RuleActionTypeRoute,
+					RouteOptions: O.RouteActionOptions{Outbound: ManualSelectTag},
+				},
+			},
+		}}},
+		Experimental: &O.ExperimentalOptions{
+			ClashAPI:  &O.ClashAPIOptions{DefaultMode: "rule"},
+			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
+		},
+	}
+	// infra is a lantern server declared non-selectable.
+	tun := &tunnel{
+		dataPath:             t.TempDir(),
+		initialLanternTags:   []string{"lantern", "infra"},
+		initialNonSelectable: []string{"infra"},
+	}
+	t.Cleanup(func() { assert.NoError(t, tun.close()) })
+	require.NoError(t, tun.init(t.Context(), options, nil))
+	require.NoError(t, tun.boxInstance.Start())
+	tun.optsMap = makeOutboundOptsMap(tun.ctx, options)
+	tun.nonSelectableTags = makeNonSelectableTagSet(tun.initialNonSelectable, options)
+	clash := service.FromContext[adapter.ClashServer](tun.ctx).(*clashServer)
+	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), clash.connTracker)
+	require.NoError(t, err)
+	tun.mutGrpMgr = mutGrpMgr
+	t.Cleanup(mutGrpMgr.Close)
+
+	requireInfo := func(t *testing.T, tag string, want bool) {
+		t.Helper()
+		out, ok := service.FromContext[adapter.OutboundManager](tun.ctx).Outbound(tag)
+		require.True(t, ok)
+		conn, err := out.DialContext(t.Context(), N.NetworkTCP, M.ParseSocksaddr(recorder.dest))
+		require.NoError(t, err)
+		defer conn.Close()
+
+		req, err := http.NewRequest(http.MethodGet, dest.URL, nil)
+		require.NoError(t, err)
+		require.NoError(t, req.Write(conn))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+		require.NoError(t, err, "the frame must not corrupt the stream")
+		resp.Body.Close()
+		select {
+		case got := <-recorder.seen:
+			assert.Equal(t, want, got)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the server routed no connection")
+		}
+	}
+	addServer := func(t *testing.T, tag string, lantern bool) {
+		t.Helper()
+		require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{{
+			Tag: tag, Type: C.TypeHTTP, IsLantern: lantern, Options: proxyOutbound(tag),
+		}}}))
+	}
+
+	t.Run("initial", func(t *testing.T) {
+		requireInfo(t, "lantern", true)
+		requireInfo(t, "other", false)
+		requireInfo(t, "infra", false)
+	})
+	t.Run("added", func(t *testing.T) {
+		addServer(t, "added", true)
+		requireInfo(t, "added", true)
+	})
+	// A tag reused by a server that is not a lantern server must not inherit
+	// the removed one's injection.
+	t.Run("removed", func(t *testing.T) {
+		require.NoError(t, tun.removeOutbounds([]string{"added"}))
+		// The group manager removes the outbound on its next poll; reusing the
+		// tag before then races that removal.
+		require.Eventually(t, func() bool {
+			_, found := service.FromContext[adapter.OutboundManager](tun.ctx).Outbound("added")
+			return !found
+		}, 10*time.Second, 50*time.Millisecond)
+		addServer(t, "added", false)
+		requireInfo(t, "added", false)
 	})
 }
 
