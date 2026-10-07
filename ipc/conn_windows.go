@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -21,16 +22,17 @@ const (
 	apiURL         = "http://pipe"
 	connectTimeout = 10 * time.Second
 
-	sddl = `D:P(A;;GA;;;SY)(A;;GRGW;;;BA)(A;;GRGW;;;IU)`
+	// The interactive-user ACE excludes pipe-instance creation rights.
+	sddl             = `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;IU)`
+	pipeClientAccess = 0x12019b
 )
 
 func dialContext(ctx context.Context, _, _ string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	return winio.DialPipeAccessImpLevel(ctx, pipePath, windows.GENERIC_READ|windows.GENERIC_WRITE, winio.PipeImpLevelIdentification)
+	return winio.DialPipeAccessImpLevel(ctx, pipePath, pipeClientAccess, winio.PipeImpLevelIdentification)
 }
 
-// listen creates a named pipe listener at a predefined path.
 func listen() (net.Listener, error) {
 	ln, err := winio.ListenPipe(
 		pipePath,
@@ -46,8 +48,6 @@ func listen() (net.Listener, error) {
 	return &winioListener{ln}, nil
 }
 
-// winioConn is a helper interface to access the underlying file descriptor of a winio.Conn. This
-// is needed to call Windows API functions that require a handle.
 type winioConn interface {
 	net.Conn
 	Fd() uintptr
@@ -59,64 +59,83 @@ type winioListener struct {
 
 type winconn struct {
 	winioConn
-	token windows.Token
+	once  sync.Once
+	peer  usr
+	err   error
+	ready chan struct{}
 }
 
-func (c *winconn) Close() error {
-	c.token.Close()
-	return c.winioConn.Close()
+func (c *winconn) Read(buffer []byte) (int, error) {
+	n, err := c.winioConn.Read(buffer)
+	if n > 0 {
+		c.once.Do(func() {
+			defer close(c.ready)
+			token, err := getPipeClientToken(c.winioConn)
+			if err != nil {
+				c.err = err
+				return
+			}
+			defer token.Close()
+			c.peer, c.err = usrFromToken(token)
+		})
+		if c.err != nil {
+			c.Close()
+			return 0, c.err
+		}
+	}
+	return n, err
 }
 
-// Accept waits for and returns the next connection to the listener, verifying the client identity.
-func (l *winioListener) Accept() (conn net.Conn, err error) {
+// Accept defers client authentication until the connection has read request data.
+func (l *winioListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			c.Close()
-		}
-	}()
-
-	// verify that the pipe client is the same user as the process that created the pipe.
 	wc, ok := c.(winioConn)
 	if !ok {
+		c.Close()
 		return nil, fmt.Errorf("expected winio.Conn, got %T", c)
-	}
-	token, err := getPipeClientToken(wc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pipe client token: %w", err)
 	}
 	return &winconn{
 		winioConn: wc,
-		token:     token,
+		ready:     make(chan struct{}),
 	}, nil
 }
 
-// getPipeClientToken retrieves the impersonation token for the pipe client.
 func getPipeClientToken(conn winioConn) (windows.Token, error) {
 	ph := windows.Handle(conn.Fd())
 	if ph == 0 {
 		return 0, fmt.Errorf("invalid pipe handle")
 	}
 
-	// Impersonation functions require the current thread to be locked to an OS thread.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	err := impersonateNamedPipeClient(ph)
-	if err != nil {
-		return 0, fmt.Errorf("failed to impersonate client: %w", err)
+	type tokenResult struct {
+		token windows.Token
+		err   error
 	}
-	defer windows.RevertToSelf()
-
-	var token windows.Token
-	err = windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY, true, &token)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open thread token: %w", err)
-	}
-	return token, nil
+	results := make(chan tokenResult, 1)
+	go func() {
+		runtime.LockOSThread()
+		if err := impersonateNamedPipeClient(ph); err != nil {
+			runtime.UnlockOSThread()
+			results <- tokenResult{err: fmt.Errorf("failed to impersonate client: %w", err)}
+			return
+		}
+		var token windows.Token
+		err := windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_QUERY, true, &token)
+		if revertErr := windows.RevertToSelf(); revertErr != nil {
+			if token != 0 {
+				token.Close()
+			}
+			results <- tokenResult{err: fmt.Errorf("failed to revert client impersonation: %w", revertErr)}
+			// Exiting while locked prevents Go from reusing an impersonating OS thread.
+			return
+		}
+		runtime.UnlockOSThread()
+		results <- tokenResult{token: token, err: err}
+	}()
+	result := <-results
+	return result.token, result.err
 }
 
 func getConnPeer(conn net.Conn) (p usr, err error) {
@@ -124,13 +143,13 @@ func getConnPeer(conn net.Conn) (p usr, err error) {
 	if !ok {
 		return p, fmt.Errorf("expected *winconn, got %T", conn)
 	}
-	usr, err := usrFromToken(wc.token)
-	if err != nil {
-		return usr, fmt.Errorf("failed to get user from token: %w", err)
+	select {
+	case <-wc.ready:
+		return wc.peer, wc.err
+	default:
+		return p, fmt.Errorf("pipe client identity is unavailable before a request read")
 	}
-	return usr, nil
 }
 
-// setSocketPathForTesting does nothing on Windows: the pipe path is a fixed
-// constant, so there is nothing to override.
+// setSocketPathForTesting is a no-op because Windows uses a fixed pipe path.
 func setSocketPathForTesting(path string) {}

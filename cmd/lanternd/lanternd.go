@@ -139,11 +139,18 @@ type uninstallCmd struct{}
 
 type versionCmd struct{}
 
+type prepareLegacyMigrationCmd struct {
+	SID         string `arg:"--sid,required"`
+	Source      string `arg:"--source,required"`
+	MigrationID string `arg:"--migration-id,required"`
+}
+
 type daemonArgs struct {
-	Run       *runCmd       `arg:"subcommand:run" help:"run the daemon"`
-	Install   *installCmd   `arg:"subcommand:install" help:"install as system service"`
-	Uninstall *uninstallCmd `arg:"subcommand:uninstall" help:"uninstall system service"`
-	Version   *versionCmd   `arg:"subcommand:version" help:"print version"`
+	Run                    *runCmd                    `arg:"subcommand:run" help:"run the daemon"`
+	Install                *installCmd                `arg:"subcommand:install" help:"install as system service"`
+	Uninstall              *uninstallCmd              `arg:"subcommand:uninstall" help:"uninstall system service"`
+	Version                *versionCmd                `arg:"subcommand:version" help:"print version"`
+	PrepareLegacyMigration *prepareLegacyMigrationCmd `arg:"subcommand:prepare-legacy-migration" help:"enroll a legacy Windows user"`
 }
 
 func (daemonArgs) Description() string {
@@ -209,6 +216,8 @@ func main() {
 		err = uninstall()
 	case a.Version != nil:
 		fmt.Println(common.Version)
+	case a.PrepareLegacyMigration != nil:
+		err = prepareLegacyMigration(a.PrepareLegacyMigration)
 	}
 	if err != nil {
 		log.Fatalf("Error: %v\n", err)
@@ -467,6 +476,11 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 
 	authURL, proServerURL := daemonBackendURLs(environment)
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath, "environment", environment, "authURL", authURL, "proServerURL", proServerURL)
+	migration, closeMigration, err := bootstrapLegacyMigration(ctx, dataPath, proServerURL)
+	if err != nil {
+		return fmt.Errorf("initialize legacy migration: %w", err)
+	}
+	defer closeMigration()
 	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel, environment))
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
@@ -476,6 +490,9 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 		return fmt.Errorf("failed to get current data: %w", err)
 	}
 	if user == nil {
+		if migration != nil && !migration.Completed() {
+			return errors.New("adopted account is unavailable")
+		}
 		if _, err := be.NewUser(ctx); err != nil {
 			return fmt.Errorf("failed to create new user: %w", err)
 		}
@@ -485,6 +502,14 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	server := ipc.NewServer(be, !common.IsMobile())
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("failed to start IPC server: %w", err)
+	}
+	if migration != nil {
+		if err := completeLegacyMigration(migration, server, be); err != nil {
+			if !migration.Completed() {
+				return errors.New("legacy migration readiness could not be committed")
+			}
+			slog.Warn("Legacy migration is not ready")
+		}
 	}
 
 	<-ctx.Done()

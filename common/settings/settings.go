@@ -52,6 +52,8 @@ const (
 	UserDataKey      _key = "user_data"      // [account.UserData]
 	OAuthLoginKey    _key = "oauth_login"    // bool
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
+	// LegacyAutoLaunchKey retains the original user's startup preference for migration verification.
+	LegacyAutoLaunchKey _key = "legacy_auto_launch"
 
 	// VPN related keys.
 	SmartRoutingKey      _key = "smart_routing"       // bool
@@ -172,6 +174,14 @@ type candidateSource struct {
 // recoverable; losing the device registration creates server-side
 // orphans, so identifier continuity wins ties.
 func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
+	if raw, err := os.ReadFile(canonicalPath); err == nil {
+		var binding struct {
+			MigrationID string `json:"legacy_migration_id"`
+		}
+		if jsonpkg.Unmarshal(raw, &binding) == nil && binding.MigrationID != "" {
+			return
+		}
+	}
 	candidates := []candidateSource{
 		{path: canonicalPath, label: "canonical settings.json"},
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
@@ -281,7 +291,7 @@ func loadSettings(path string, opts ...koanf.Option) error {
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	if err := k.k.Load(rawbytes.Provider(contents), json.Parser(), opts...); err != nil {
+	if err := k.k.Load(rawbytes.Provider(contents), &migrationJSON{}, opts...); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
 	return nil

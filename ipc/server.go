@@ -140,8 +140,9 @@ var (
 // Server represents the IPC server that communicates over a Unix domain socket for Unix-like
 // systems, and a named pipe for Windows.
 type Server struct {
-	svr    *http.Server
-	closed atomic.Bool
+	svr     *http.Server
+	closed  atomic.Bool
+	running atomic.Bool
 }
 
 // NewServer returns an IPC server backed by b. When withAuth is true, the
@@ -154,11 +155,7 @@ func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
 	}
 	if withAuth {
 		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
-			peer, err := getConnPeer(c)
-			if err != nil {
-				slog.Error("Failed to get peer credentials", "error", err)
-			}
-			return contextWithUsr(ctx, peer)
+			return context.WithValue(ctx, peerConnectionKey{}, c)
 		}
 	}
 	return &Server{svr: svr}
@@ -173,7 +170,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("IPC server: listen: %w", err)
 	}
+	s.running.Store(true)
 	go func() {
+		defer s.running.Store(false)
 		slog.Info("IPC server started", "address", l.Addr().String())
 		if err := s.svr.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("IPC server error", "error", err)
@@ -185,11 +184,17 @@ func (s *Server) Start() error {
 
 // Close shuts down the IPC server.
 func (s *Server) Close() error {
+	s.running.Store(false)
 	if s.closed.Swap(true) {
 		return nil
 	}
 	slog.Info("Closing IPC server")
 	return s.svr.Close()
+}
+
+// Running reports whether the IPC listener has started and has not stopped.
+func (s *Server) Running() bool {
+	return s.running.Load()
 }
 
 type backendKey struct{}

@@ -29,6 +29,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/deviceid"
 	"github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/legacymigration"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
@@ -123,12 +124,8 @@ type Options struct {
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
-	// Invariant: a user must always be able to construct a backend and report an
-	// issue, even when on-disk state is unreadable or incompatible (e.g. after a
-	// downgrade). Failures loading the server manager, split tunnel, and config
-	// are logged and degraded, never returned. The only fatal path is
-	// common.Init, which fails only when the data directory or settings file
-	// can't be created or read — i.e. the app genuinely cannot run.
+	// Initialization degrades to preserve issue reporting, except when settings
+	// cannot initialize or a protected migration identity cannot be preserved.
 
 	// Must run before common.Init: it reads RADIANCE_VERSION once and
 	// freezes it, so a later Setenv is ignored by the header-fill path.
@@ -152,6 +149,13 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		}
 	}
 
+	adoption, err := legacymigration.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load protected migration identity: %w", err)
+	}
+	if adoption != nil && adoption.Request == nil {
+		return nil, errors.New("legacy identity adoption is pending")
+	}
 	var platformDeviceID string
 	switch common.Platform {
 	case "ios", "android":
@@ -169,7 +173,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 			slog.Warn("No device ID was found")
 		}
 	default:
-		platformDeviceID = deviceid.Get(settings.GetString(settings.DataPathKey))
+		if adoption != nil {
+			platformDeviceID = adoption.Request.DeviceID
+		} else {
+			platformDeviceID = deviceid.Get(settings.GetString(settings.DataPathKey))
+		}
 	}
 
 	dataDir := settings.GetString(settings.DataPathKey)
@@ -183,7 +191,16 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if opts.TimeZone != "" {
 		startup[settings.TimeZoneKey] = opts.TimeZone
 	}
-	settings.Patch(startup)
+	if adoption != nil {
+		delete(startup, settings.LocaleKey)
+		delete(startup, settings.TelemetryKey)
+	}
+	if err := settings.Patch(startup); err != nil {
+		if adoption != nil {
+			return nil, fmt.Errorf("persist migration startup settings: %w", err)
+		}
+		slog.Warn("Persisting startup settings", "error", err)
+	}
 
 	accountClient := account.NewClient(kindling.HTTPClient(), dataDir)
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,6 +129,9 @@ func cachedConfig() *config.Config {
 func TestNewLocalBackendToleratesInvalidOnDiskState(t *testing.T) {
 	dataDir := t.TempDir()
 	logDir := t.TempDir()
+	t.Cleanup(func() {
+		assert.NoError(t, debug.SetCrashOutput(nil, debug.CrashOptions{}))
+	})
 	// setupDirectories honors these env vars over the Options paths; pin them so
 	// the resolved data dir is exactly where the invalid files are staged.
 	t.Setenv("RADIANCE_DATA_PATH", dataDir)

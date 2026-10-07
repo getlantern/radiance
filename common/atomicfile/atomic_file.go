@@ -36,11 +36,7 @@ func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	// os.Rename will fail on Windows if the target file already exists so we remove it first.
-	if runtime.GOOS == "windows" {
-		_ = os.Remove(filename)
-	}
-	return os.Rename(f.Name(), filename)
+	return replace(f.Name(), filename)
 }
 
 func ReadFile(filename string) ([]byte, error) {

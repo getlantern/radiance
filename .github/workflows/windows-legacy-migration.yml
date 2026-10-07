@@ -1,0 +1,46 @@
+name: Windows legacy identity migration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [atavism/issue-3959]
+  pull_request:
+    paths:
+      - "common/legacymigration/**"
+      - "common/atomicfile/**"
+      - "common/settings/**"
+      - "backend/**"
+      - "account/**"
+      - "ipc/**"
+      - "cmd/lanternd/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/windows-legacy-migration.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-legacy-migration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: "0"
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exercise Windows migration authorization and recovery
+        shell: pwsh
+        run: |
+          go test -v -tags with_clash_api ./common/legacymigration ./common/atomicfile ./common/settings ./account ./backend ./ipc ./cmd/lanternd
+          if ($LASTEXITCODE -ne 0) { throw 'Windows identity migration tests failed' }

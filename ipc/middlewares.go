@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 
+	"github.com/getlantern/radiance/common/legacymigration"
+
+	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel/trace"
 
 	rlog "github.com/getlantern/radiance/log"
@@ -69,9 +72,19 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+type peerConnectionKey struct{}
+
 func authPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer := usrFromContext(r.Context())
+		if connection, ok := r.Context().Value(peerConnectionKey{}).(net.Conn); ok {
+			var err error
+			peer, err = getConnPeer(connection)
+			if err != nil {
+				http.Error(w, "could not get credentials", http.StatusUnauthorized)
+				return
+			}
+		}
 		if peer.uid == "" {
 			http.Error(w, "could not get credentials", http.StatusUnauthorized)
 			return
@@ -85,5 +98,5 @@ func authPeer(next http.Handler) http.Handler {
 }
 
 func peerCanAccess(peer usr) bool {
-	return peer.isAdmin
+	return peer.isAdmin || (peer.uid != "" && peer.uid == legacymigration.OwnerSID())
 }
