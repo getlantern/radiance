@@ -69,7 +69,6 @@ type tunnel struct {
 	// reconcile can remove the ones a config drops. Guarded by outboundMu.
 	nonSelectableTags map[string]struct{}
 
-	// injector sends client info on dials through lantern servers' outbounds.
 	injector *clientcontext.Injector
 
 	initialLanternTags []string
@@ -253,8 +252,7 @@ func setMobileMemoryLimits() {
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
 }
 
-// newClientInfoInjector returns an Injector enabled for lanternTags. Only lantern
-// servers support the client-info exchange.
+// newClientInfoInjector returns an Injector enabled for lanternTags.
 func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
 	return clientcontext.NewInjector(func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
@@ -265,6 +263,24 @@ func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
 			Version:     common.GetVersion(),
 		}
 	}, lanternTags...)
+}
+
+// updateInjectionLocked enables client info injection only for selectable
+// Lantern outbounds that load successfully.
+//
+// The caller must hold t.outboundMu.
+func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
+	if t.injector == nil {
+		return
+	}
+	_, nonSelectable := t.nonSelectableTags[tag]
+	switch {
+	case !lantern || nonSelectable:
+		t.injector.RemoveOutboundTags(tag)
+	case loaded:
+		// Failed loads leave the tag unchanged.
+		t.injector.AddOutboundTags(tag)
+	}
 }
 
 func filterNonSelectableTags(tags, nonSelectable []string) []string {
@@ -554,7 +570,7 @@ func (t *tunnel) addOutbounds(list servers.ServerList) error {
 
 // addOutboundsLocked adds the servers in list to the tunnel. The caller must
 // hold t.outboundMu.
-func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
+func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -571,29 +587,12 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	ctx := t.ctx
 	router := service.FromContext[adapter.Router](ctx)
 
-	var errs []error
-	if t.injector != nil {
-		// Iterate the full list, not the deduped newList: removeDuplicates drops
-		// startup lantern servers that must stay enabled.
-		lanternTags := make([]string, 0, len(list.Servers))
-		for _, srv := range list.Servers {
-			if srv.IsLantern && srv.Tag != "" {
-				lanternTags = append(lanternTags, srv.Tag)
-			}
-		}
-		t.injector.AddOutboundTags(lanternTags...)
-		defer func() {
-			if errors.Is(err, errLibboxClosed) {
-				return
-			}
-			failed := slices.DeleteFunc(lanternTags, func(tag string) bool {
-				_, loaded := t.optsMap.Load(tag)
-				return loaded
-			})
-			t.injector.RemoveOutboundTags(failed...)
-		}()
+	isLantern := make(map[string]bool, len(newList.Servers))
+	for _, srv := range newList.Servers {
+		isLantern[srv.Tag] = srv.IsLantern
 	}
 
+	var errs []error
 	var (
 		mutGrpMgr = t.mutGrpMgr
 		added     = 0
@@ -617,10 +616,10 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 			)
 			errs = append(errs, err)
 		} else {
-			b, _ := json.MarshalContext(ctx, outbound)
-			t.optsMap.Store(outbound.Tag, b)
+			t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 			added++
 		}
+		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
 	}
 
 	if contextDone(ctx) {
@@ -646,8 +645,7 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 			)
 			errs = append(errs, err)
 		} else {
-			b, _ := json.MarshalContext(ctx, endpoint)
-			t.optsMap.Store(endpoint.Tag, b)
+			t.optsMap.Store(endpoint.Tag, marshalOptions(ctx, endpoint))
 			added++
 		}
 	}
@@ -720,8 +718,7 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 			errs = append(errs, err)
 			continue
 		}
-		b, _ := json.MarshalContext(ctx, outbound)
-		t.optsMap.Store(outbound.Tag, b)
+		t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 	}
 
 	t.nonSelectableTags = next
@@ -842,7 +839,7 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 	var dropped []string
 	for _, srv := range list.Servers {
 		if currOpts, exists := curr.Load(srv.Tag); exists {
-			if srvBytes, _ := json.MarshalContext(ctx, srv.Options); bytes.Equal(currOpts, srvBytes) {
+			if bytes.Equal(currOpts, marshalOptions(ctx, srv.Options)) {
 				dropped = append(dropped, srv.Tag)
 				continue
 			}
@@ -861,14 +858,24 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap[string, []byte] {
 	var optsMap lsync.TypedMap[string, []byte]
 	for _, out := range options.Outbounds {
-		b, _ := json.MarshalContext(ctx, out)
-		optsMap.Store(out.Tag, b)
+		optsMap.Store(out.Tag, marshalOptions(ctx, out))
 	}
 	for _, ep := range options.Endpoints {
-		b, _ := json.MarshalContext(ctx, ep)
-		optsMap.Store(ep.Tag, b)
+		optsMap.Store(ep.Tag, marshalOptions(ctx, ep))
 	}
 	return &optsMap
+}
+
+// marshalOptions marshals an outbound or endpoint.
+func marshalOptions(ctx context.Context, opts any) []byte {
+	switch o := opts.(type) {
+	case O.Outbound:
+		opts = &o
+	case O.Endpoint:
+		opts = &o
+	}
+	b, _ := json.MarshalContext(ctx, opts)
+	return b
 }
 
 // makeNonSelectableTagSet returns the non-selectable tags that are outbounds in

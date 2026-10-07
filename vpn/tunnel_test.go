@@ -21,7 +21,6 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -128,17 +127,17 @@ func TestSelectMode_NotConnected(t *testing.T) {
 
 func TestRemoveDuplicates(t *testing.T) {
 	ctx := box.BaseContext()
-	out1 := O.Outbound{Type: "http", Tag: "http-1", Options: &O.HTTPOutboundOptions{}}
+	out1 := O.Outbound{Type: "http", Tag: "http-1", Options: &O.HTTPOutboundOptions{
+		ServerOptions: O.ServerOptions{Server: "10.0.0.1", ServerPort: 8080},
+	}}
 	out2 := O.Outbound{Type: "http", Tag: "http-2", Options: &O.HTTPOutboundOptions{}}
 	socks := O.Outbound{Type: "socks", Tag: "socks-1", Options: &O.SOCKSOutboundOptions{}}
 	ep1 := O.Endpoint{Type: "wireguard", Tag: "wg-1", Options: &O.WireGuardEndpointOptions{}}
 
+	// The map is built as at tunnel start, so this also checks that startup
+	// entries and incoming servers are marshaled the same way.
 	t.Run("drops duplicates against current map", func(t *testing.T) {
-		var curr lsync.TypedMap[string, []byte]
-		b1, _ := json.MarshalContext(ctx, out1)
-		curr.Store(out1.Tag, b1)
-		bEp1, _ := json.MarshalContext(ctx, ep1)
-		curr.Store(ep1.Tag, bEp1)
+		curr := makeOutboundOptsMap(ctx, O.Options{Outbounds: []O.Outbound{out1}, Endpoints: []O.Endpoint{ep1}})
 
 		list := servers.ServerList{
 			Servers: []*servers.Server{
@@ -148,9 +147,21 @@ func TestRemoveDuplicates(t *testing.T) {
 			},
 		}
 
-		result := removeDuplicates(ctx, &curr, list)
+		result := removeDuplicates(ctx, curr, list)
 		assert.Len(t, result.Servers, 1)
 		assert.Equal(t, "http-2", result.Servers[0].Tag)
+	})
+
+	t.Run("keeps a server whose options changed", func(t *testing.T) {
+		curr := makeOutboundOptsMap(ctx, O.Options{Outbounds: []O.Outbound{out1}})
+		changed := O.Outbound{Type: out1.Type, Tag: out1.Tag, Options: &O.HTTPOutboundOptions{
+			ServerOptions: O.ServerOptions{Server: "10.0.0.1", ServerPort: 8081},
+		}}
+
+		result := removeDuplicates(ctx, curr, servers.ServerList{Servers: []*servers.Server{
+			{Tag: changed.Tag, Type: changed.Type, Options: changed},
+		}})
+		assert.Len(t, result.Servers, 1)
 	})
 
 	t.Run("keeps all servers when none are duplicates", func(t *testing.T) {
@@ -207,7 +218,7 @@ func (r *infoRecorder) RoutedPacketConnection(_ context.Context, conn N.PacketCo
 	return conn
 }
 
-// startInfoServer starts an HTTP proxy that decodes client info like a lantern
+// startInfoServer starts an HTTP and SOCKS proxy that decodes client info like a lantern
 // server, and returns its port and a recorder of connections routed to dest.
 func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
 	t.Helper()
@@ -219,7 +230,7 @@ func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	server, err := sbox.New(sbox.Options{Context: box.Context(t.Context()), Options: O.Options{
 		Log: &O.LogOptions{Disabled: true},
-		Inbounds: []O.Inbound{{Type: C.TypeHTTP, Tag: "http-in", Options: &O.HTTPMixedInboundOptions{
+		Inbounds: []O.Inbound{{Type: C.TypeMixed, Tag: "mixed-in", Options: &O.HTTPMixedInboundOptions{
 			ListenOptions: O.ListenOptions{Listen: &listen, ListenPort: port},
 		}}},
 	}})
@@ -232,9 +243,10 @@ func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
 	return port, recorder
 }
 
-// The tunnel sends client info through lantern servers only, including on
-// dials made directly through their outbounds rather than the router, and
-// follows servers as they are added and removed.
+// TestTunnelClientInfo checks that the tunnel sends client info through
+// selectable lantern servers only, including on dials made directly through
+// their outbounds rather than the router, as servers are added, replaced and
+// removed.
 func TestTunnelClientInfo(t *testing.T) {
 	dest := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(dest.Close)
@@ -324,6 +336,28 @@ func TestTunnelClientInfo(t *testing.T) {
 			Tag: tag, Type: C.TypeHTTP, IsLantern: lantern, Options: proxyOutbound(tag),
 		}}}))
 	}
+	// replaceServer loads a SOCKS server under an existing tag, so its options
+	// differ and it isn't dropped as a duplicate. Replacing a group member's
+	// outbound reports an error once the new outbound is already in place, so
+	// only the outcome is checked.
+	replaceServer := func(t *testing.T, tag string, lantern bool) {
+		t.Helper()
+		out := O.Outbound{Type: C.TypeSOCKS, Tag: tag, Options: &O.SOCKSOutboundOptions{
+			ServerOptions: O.ServerOptions{Server: "127.0.0.1", ServerPort: port},
+		}}
+		_ = tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{{
+			Tag: tag, Type: C.TypeSOCKS, IsLantern: lantern, Options: out,
+		}}})
+		got, ok := service.FromContext[adapter.OutboundManager](tun.ctx).Outbound(tag)
+		require.True(t, ok)
+		require.Equal(t, C.TypeSOCKS, got.Type(), "the replacement must be in place")
+	}
+	addBrokenLantern := func(t *testing.T, tag string) {
+		t.Helper()
+		require.Error(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{{
+			Tag: tag, Type: "broken", IsLantern: true, Options: O.Outbound{Type: "broken", Tag: tag},
+		}}}))
+	}
 
 	t.Run("initial", func(t *testing.T) {
 		requireInfo(t, "lantern", true)
@@ -334,8 +368,8 @@ func TestTunnelClientInfo(t *testing.T) {
 		addServer(t, "added", true)
 		requireInfo(t, "added", true)
 	})
-	// A tag reused by a server that is not a lantern server must not inherit
-	// the removed one's injection.
+	// Removing a server disables its tag. Lantern servers never reuse tags, so
+	// the only way to observe that is to reuse it for a server that isn't one.
 	t.Run("removed", func(t *testing.T) {
 		require.NoError(t, tun.removeOutbounds([]string{"added"}))
 		// The group manager removes the outbound on its next poll; reusing the
@@ -346,6 +380,29 @@ func TestTunnelClientInfo(t *testing.T) {
 		}, 10*time.Second, 50*time.Millisecond)
 		addServer(t, "added", false)
 		requireInfo(t, "added", false)
+	})
+	// Lantern servers never reuse tags. The cases below reuse them anyway, to
+	// check that injection never reaches a peer that doesn't support it.
+	t.Run("replaced", func(t *testing.T) {
+		addServer(t, "swap", true)
+		requireInfo(t, "swap", true)
+		replaceServer(t, "swap", false)
+		requireInfo(t, "swap", false)
+	})
+	// A lantern server whose type fails to build leaves the previous outbound
+	// registered.
+	t.Run("failed over other", func(t *testing.T) {
+		addBrokenLantern(t, "other")
+		requireInfo(t, "other", false)
+	})
+	t.Run("failed then reused", func(t *testing.T) {
+		addBrokenLantern(t, "fresh")
+		addServer(t, "fresh", false)
+		requireInfo(t, "fresh", false)
+	})
+	t.Run("non-selectable tag", func(t *testing.T) {
+		replaceServer(t, "infra", true)
+		requireInfo(t, "infra", false)
 	})
 }
 
