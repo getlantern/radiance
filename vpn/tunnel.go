@@ -69,7 +69,7 @@ type tunnel struct {
 	// reconcile can remove the ones a config drops. Guarded by outboundMu.
 	nonSelectableTags map[string]struct{}
 
-	clientContextTracker *clientcontext.ClientContextInjector
+	injector *clientcontext.Injector
 
 	initialLanternTags []string
 	// initialNonSelectable is the config's non-selectable tags at connect. It seeds
@@ -85,9 +85,7 @@ type tunnel struct {
 	// connection-close pushes for telemetry.
 	connObserver ConnObserver
 
-	// outboundMu serializes the outbound mutators. Each does a read-modify-write
-	// over clientContextTracker.MatchBounds(), which clones on read, so
-	// concurrent mutators would silently drop each other's tag updates.
+	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
 
 	// closeTimeout bounds how long close() waits for closers to finish; a zero
@@ -205,6 +203,15 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	service.MustRegister[lbA.AutoSelectHistoryStorage](t.ctx, t.selectionHistory)
 	t.closers = append(t.closers, t.selectionHistory)
 
+	// Must install before sbox.New, which creates the outbounds.
+	// Non-selectable outbounds are infrastructure, never user traffic, so they
+	// never send client info.
+	tags := filterNonSelectableTags(t.initialLanternTags, t.initialNonSelectable)
+	t.injector = newClientInfoInjector(tags)
+	if err := t.injector.Install(t.ctx); err != nil {
+		return fmt.Errorf("install client info injector: %w", err)
+	}
+
 	slog.Log(nil, rlog.LevelTrace, "Creating box instance")
 	var instance *sbox.Box
 	if err := traceSpan(ctx, "sbox.New", func() error {
@@ -219,13 +226,6 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	}
 	cacheFile := service.FromContext[adapter.CacheFile](t.ctx)
 	service.MustRegister[adapter.CacheFile](t.ctx, &cacheFileWrapper{CacheFile: cacheFile})
-
-	outboundMgr := service.FromContext[adapter.OutboundManager](t.ctx)
-	clientContextInjector := newClientContextInjector(outboundMgr, t.dataPath, t.initialLanternTags)
-	service.MustRegisterPtr[clientcontext.ClientContextInjector](t.ctx, clientContextInjector)
-	t.clientContextTracker = clientContextInjector
-	router := service.FromContext[adapter.Router](t.ctx)
-	router.AppendTracker(clientContextInjector)
 
 	t.closers = append(t.closers, instance)
 	t.boxInstance = instance
@@ -252,9 +252,8 @@ func setMobileMemoryLimits() {
 	runtimeDebug.SetMemoryLimit(mobileMemoryLimit)
 }
 
-func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath string, lanternTags []string) *clientcontext.ClientContextInjector {
-	slog.Debug("Creating ClientContextInjector")
-	infoFn := func() clientcontext.ClientInfo {
+func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
+	return clientcontext.NewInjector(func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
 			DeviceID:    settings.GetString(settings.DeviceIDKey),
 			Platform:    common.Platform,
@@ -262,14 +261,38 @@ func newClientContextInjector(outboundMgr adapter.OutboundManager, dataPath stri
 			CountryCode: settings.GetString(settings.CountryCodeKey),
 			Version:     common.GetVersion(),
 		}
+	}, lanternTags...)
+}
+
+// updateInjectionLocked enables client info injection only for selectable
+// Lantern outbounds that load successfully.
+//
+// The caller must hold t.outboundMu.
+func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
+	if t.injector == nil {
+		return
 	}
-	// Only lantern servers support client context tracking, so only their tags
-	// belong in the match bounds.
-	matchBounds := clientcontext.MatchBounds{
-		Inbound:  []string{"any"},
-		Outbound: slices.Clone(lanternTags),
+	_, nonSelectable := t.nonSelectableTags[tag]
+	switch {
+	case !lantern || nonSelectable:
+		t.injector.RemoveOutboundTags(tag)
+	case loaded:
+		// Failed loads leave the tag unchanged.
+		t.injector.AddOutboundTags(tag)
 	}
-	return clientcontext.NewClientContextInjector(infoFn, matchBounds)
+}
+
+func filterNonSelectableTags(tags, nonSelectable []string) []string {
+	if len(nonSelectable) == 0 {
+		return tags
+	}
+	var filtered []string
+	for _, tag := range tags {
+		if !slices.Contains(nonSelectable, tag) {
+			filtered = append(filtered, tag)
+		}
+	}
+	return filtered
 }
 
 func newMutableGroupManager(
@@ -546,7 +569,7 @@ func (t *tunnel) addOutbounds(list servers.ServerList) error {
 
 // addOutboundsLocked adds the servers in list to the tunnel. The caller must
 // hold t.outboundMu.
-func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
+func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -563,42 +586,12 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 	ctx := t.ctx
 	router := service.FromContext[adapter.Router](ctx)
 
-	var errs []error
-	if t.clientContextTracker != nil {
-		// Iterate the full list, not the deduped newList: removeDuplicates drops
-		// startup lantern servers that must stay bound, and the append-if-absent
-		// guard below re-adds any the construction seed missed without regrowing
-		// Outbound.
-		lanternTags := make([]string, 0, len(list.Servers))
-		for _, srv := range list.Servers {
-			if srv.IsLantern && srv.Tag != "" {
-				lanternTags = append(lanternTags, srv.Tag)
-			}
-		}
-		if len(lanternTags) > 0 {
-			slog.Log(nil, rlog.LevelTrace, "Merging lantern tags into ClientContextInjector")
-			matchBounds := t.clientContextTracker.MatchBounds()
-			for _, tag := range lanternTags {
-				if !slices.Contains(matchBounds.Outbound, tag) {
-					matchBounds.Outbound = append(matchBounds.Outbound, tag)
-				}
-			}
-			t.clientContextTracker.SetBounds(matchBounds)
-		}
-		defer func() {
-			if errors.Is(err, errLibboxClosed) {
-				return
-			}
-			// Remove any lantern tags that failed to load from the match bounds.
-			mb := t.clientContextTracker.MatchBounds()
-			mb.Outbound = slices.DeleteFunc(mb.Outbound, func(tag string) bool {
-				_, loaded := t.optsMap.Load(tag)
-				return slices.Contains(lanternTags, tag) && !loaded
-			})
-			t.clientContextTracker.SetBounds(mb)
-		}()
+	isLantern := make(map[string]bool, len(newList.Servers))
+	for _, srv := range newList.Servers {
+		isLantern[srv.Tag] = srv.IsLantern
 	}
 
+	var errs []error
 	var (
 		mutGrpMgr = t.mutGrpMgr
 		added     = 0
@@ -608,6 +601,9 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
+		// Before the auto-select group gets the outbound: it probes new members
+		// immediately, and those probes must go through the exchange.
+		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
 		if err == nil {
 			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
 		}
@@ -622,8 +618,7 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 			)
 			errs = append(errs, err)
 		} else {
-			b, _ := json.MarshalContext(ctx, outbound)
-			t.optsMap.Store(outbound.Tag, b)
+			t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 			added++
 		}
 	}
@@ -651,8 +646,7 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) (err error) {
 			)
 			errs = append(errs, err)
 		} else {
-			b, _ := json.MarshalContext(ctx, endpoint)
-			t.optsMap.Store(endpoint.Tag, b)
+			t.optsMap.Store(endpoint.Tag, marshalOptions(ctx, endpoint))
 			added++
 		}
 	}
@@ -725,8 +719,7 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 			errs = append(errs, err)
 			continue
 		}
-		b, _ := json.MarshalContext(ctx, outbound)
-		t.optsMap.Store(outbound.Tag, b)
+		t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 	}
 
 	t.nonSelectableTags = next
@@ -767,12 +760,8 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 			removed = append(removed, tag)
 		}
 	}
-	if t.clientContextTracker != nil && len(removed) > 0 {
-		mb := t.clientContextTracker.MatchBounds()
-		mb.Outbound = slices.DeleteFunc(mb.Outbound, func(s string) bool {
-			return slices.Contains(removed, s)
-		})
-		t.clientContextTracker.SetBounds(mb)
+	if t.injector != nil {
+		t.injector.RemoveOutboundTags(removed...)
 	}
 	slog.Debug("Removed servers", "removed", len(removed))
 	return errors.Join(errs...)
@@ -851,7 +840,7 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 	var dropped []string
 	for _, srv := range list.Servers {
 		if currOpts, exists := curr.Load(srv.Tag); exists {
-			if srvBytes, _ := json.MarshalContext(ctx, srv.Options); bytes.Equal(currOpts, srvBytes) {
+			if bytes.Equal(currOpts, marshalOptions(ctx, srv.Options)) {
 				dropped = append(dropped, srv.Tag)
 				continue
 			}
@@ -870,14 +859,23 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap[string, []byte] {
 	var optsMap lsync.TypedMap[string, []byte]
 	for _, out := range options.Outbounds {
-		b, _ := json.MarshalContext(ctx, out)
-		optsMap.Store(out.Tag, b)
+		optsMap.Store(out.Tag, marshalOptions(ctx, out))
 	}
 	for _, ep := range options.Endpoints {
-		b, _ := json.MarshalContext(ctx, ep)
-		optsMap.Store(ep.Tag, b)
+		optsMap.Store(ep.Tag, marshalOptions(ctx, ep))
 	}
 	return &optsMap
+}
+
+func marshalOptions(ctx context.Context, opts any) []byte {
+	switch o := opts.(type) {
+	case O.Outbound:
+		opts = &o
+	case O.Endpoint:
+		opts = &o
+	}
+	b, _ := json.MarshalContext(ctx, opts)
+	return b
 }
 
 // makeNonSelectableTagSet returns the non-selectable tags that are outbounds in

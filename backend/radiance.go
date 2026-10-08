@@ -1361,9 +1361,9 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 }
 
 // lanternServerTags collects the tags of the Lantern servers in cfg and
-// managed, to seed the client-context injector's match bounds. Every cfg
-// outbound and endpoint is a Lantern server; managed servers carry the flag
-// explicitly.
+// managed, to seed the tunnel's client-info Injector, which covers outbounds
+// only. Every cfg outbound and endpoint is a Lantern server; managed servers
+// carry the flag explicitly.
 func lanternServerTags(cfg *config.Config, managed []*servers.Server) []string {
 	seen := make(map[string]struct{})
 	var tags []string
