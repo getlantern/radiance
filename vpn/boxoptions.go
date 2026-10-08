@@ -510,6 +510,10 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 		dst.DNS = &dns
 	}
 
+	if src.Services != nil {
+		dst.Services = append([]O.Service{}, src.Services...)
+	}
+
 	skip := func(tag string) bool {
 		return slices.Contains(reservedTags, tag) || slices.Contains(nonSelectable, tag)
 	}

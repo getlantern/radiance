@@ -99,6 +99,7 @@ func TestFetchConfig(t *testing.T) {
 			assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
 			assert.Contains(t, confReq.Capabilities, C.CapabilityNonSelectableOutbounds,
 				"server-side infra-outbound gating depends on this advertisement")
+			assert.Contains(t, confReq.Capabilities, C.CapabilityOutboundEvaluation)
 			if tt.preferredServerLoc != nil {
 				assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 			}
