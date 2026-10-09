@@ -123,10 +123,9 @@ type Options struct {
 
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
+// Initialization tolerates failures to preserve issue reporting, except when settings
+// cannot initialize or a protected migration identity cannot be preserved.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
-	// Initialization degrades to preserve issue reporting, except when settings
-	// cannot initialize or a protected migration identity cannot be preserved.
-
 	// Must run before common.Init: it reads RADIANCE_VERSION once and
 	// freezes it, so a later Setenv is ignored by the header-fill path.
 	var envOverrideErrs error
@@ -243,7 +242,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
-		Locale:        opts.Locale,
+		Locale:        settings.GetString(settings.LocaleKey),
 		AccountClient: accountClient,
 		HTTPClient:    kindling.HTTPClient(),
 		Logger:        slog.Default().With("service", "config_handler"),

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 
 	"github.com/getlantern/radiance/common/legacymigration"
@@ -72,20 +71,17 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
-type peerConnectionKey struct{}
+type peerLookupKey struct{}
 
 func authPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peer := usrFromContext(r.Context())
-		if connection, ok := r.Context().Value(peerConnectionKey{}).(net.Conn); ok {
-			var err error
-			peer, err = getConnPeer(connection)
-			if err != nil {
-				http.Error(w, "could not get credentials", http.StatusUnauthorized)
-				return
-			}
+		lookup, ok := r.Context().Value(peerLookupKey{}).(func() (usr, error))
+		if !ok {
+			http.Error(w, "could not get credentials", http.StatusUnauthorized)
+			return
 		}
-		if peer.uid == "" {
+		peer, err := lookup()
+		if err != nil || peer.uid == "" {
 			http.Error(w, "could not get credentials", http.StatusUnauthorized)
 			return
 		}

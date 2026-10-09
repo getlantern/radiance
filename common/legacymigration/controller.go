@@ -250,7 +250,7 @@ func (c *Controller) Rollback(ctx context.Context, sid, migrationID, requestSHA2
 
 type connKey struct{}
 
-// Start serves the dedicated local pipe until ctx is canceled or its listener fails.
+// Start serves migration requests asynchronously until ctx is canceled or the returned stop function is called.
 func (c *Controller) Start(ctx context.Context) (func() error, error) {
 	listener, err := Listen()
 	if err != nil {

@@ -39,7 +39,12 @@ func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string) (*le
 		return nil, closeNothing, err
 	}
 	controller, err := legacymigration.NewController(store, func(ctx context.Context, request legacymigration.Request) (json.RawMessage, string, error) {
-		data, err := account.VerifyLegacyIdentity(ctx, kindling.HTTPClient(), proURL, request.UserID, request.Token, request.DeviceID)
+		client, err := kindling.NewKindling(dataPath)
+		if err != nil {
+			return nil, "", err
+		}
+		defer client.Close()
+		data, err := account.VerifyLegacyIdentity(ctx, client.NewHTTPClient(), proURL, request.UserID, request.Token, request.DeviceID)
 		if err != nil {
 			return nil, "", err
 		}

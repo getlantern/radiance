@@ -435,21 +435,20 @@ func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
 	return nil
 }
 
-// daemonBackendOptions overrides staging only, preserving any externally
-// configured development environment in production mode.
-func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemonEnvironment) backend.Options {
-	options := backend.Options{
+func configureDaemonEnvironment(environment daemonEnvironment) error {
+	if environment == daemonEnvironmentStaging {
+		return os.Setenv(commonenv.ENV.String(), string(environment))
+	}
+	return nil
+}
+
+func daemonBackendOptions(dataPath, logPath, logLevel string) backend.Options {
+	return backend.Options{
 		DataDir:                 dataPath,
 		LogDir:                  logPath,
 		LogLevel:                logLevel,
 		UserMessageCapabilities: userMessageCapabilities(),
 	}
-	if environment == daemonEnvironmentStaging {
-		options.EnvOverrides = map[string]string{
-			commonenv.ENV.String(): string(environment),
-		}
-	}
-	return options
 }
 
 func userMessageCapabilities() wire.ClientCapabilities {
@@ -474,6 +473,9 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if err := configureDaemonEnvironment(environment); err != nil {
+		return fmt.Errorf("configure daemon environment: %w", err)
+	}
 	authURL, proServerURL := daemonBackendURLs(environment)
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath, "environment", environment, "authURL", authURL, "proServerURL", proServerURL)
 	migration, closeMigration, err := bootstrapLegacyMigration(ctx, dataPath, proServerURL)
@@ -481,7 +483,7 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 		return fmt.Errorf("initialize legacy migration: %w", err)
 	}
 	defer closeMigration()
-	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel, environment))
+	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel))
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
 	}

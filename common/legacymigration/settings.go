@@ -47,7 +47,9 @@ func WriteSettings(dataDir string, record *Record) error {
 		"user_id": request.UserID, "token": request.Token, "device_id": request.DeviceID,
 		"user_level": record.Receipt.UserLevel, "user_data": record.UserData,
 		"locale": request.Locale, "telemetry_enabled": request.AutoReport,
-		"smart_routing": !request.ProxyAll, "auto_connect": false,
+		"smart_routing": !request.ProxyAll,
+		// The destination must stay disconnected while the legacy app is active.
+		"auto_connect":        false,
 		"legacy_migration_id": record.MigrationID, "legacy_migration_sha256": record.RequestSHA256,
 		"legacy_auto_launch": request.AutoLaunch,
 	}

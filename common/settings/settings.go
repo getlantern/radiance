@@ -52,7 +52,7 @@ const (
 	UserDataKey      _key = "user_data"      // [account.UserData]
 	OAuthLoginKey    _key = "oauth_login"    // bool
 	OAuthProviderKey _key = "oauth_provider" // string (e.g. "google", "apple", "email")
-	// LegacyAutoLaunchKey retains the original user's startup preference for migration verification.
+	// LegacyAutoLaunchKey retains the original user's startup preference.
 	LegacyAutoLaunchKey _key = "legacy_auto_launch"
 
 	// VPN related keys.
