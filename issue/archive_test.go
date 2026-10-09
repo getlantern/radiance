@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/log"
 )
 
 func TestSnapshotLogFile(t *testing.T) {
@@ -91,7 +93,7 @@ func TestGlobFiles(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash.log"), []byte("crash"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("not a log"), 0644))
 
-		files := globFiles(dir, "*.log")
+		files := globFiles(log.NoOpLogger(), dir, "*.log")
 		require.Len(t, files, 2)
 		bases := make([]string, len(files))
 		for i, f := range files {
@@ -102,12 +104,12 @@ func TestGlobFiles(t *testing.T) {
 
 	t.Run("returns nil for empty dir", func(t *testing.T) {
 		dir := t.TempDir()
-		files := globFiles(dir, "*.log")
+		files := globFiles(log.NoOpLogger(), dir, "*.log")
 		assert.Nil(t, files)
 	})
 
 	t.Run("returns nil for nonexistent dir", func(t *testing.T) {
-		files := globFiles("/nonexistent/dir", "*.log")
+		files := globFiles(log.NoOpLogger(), "/nonexistent/dir", "*.log")
 		assert.Nil(t, files)
 	})
 }
@@ -120,7 +122,7 @@ func TestReadExtraFiles(t *testing.T) {
 		require.NoError(t, os.WriteFile(f1, []byte("aaa"), 0644))
 		require.NoError(t, os.WriteFile(f2, []byte("bbb"), 0644))
 
-		files := readExtraFiles([]string{f1, f2})
+		files := readExtraFiles(log.NoOpLogger(), []string{f1, f2})
 		require.Len(t, files, 2)
 		assert.Equal(t, "a.txt", files[0].name)
 		assert.Equal(t, "aaa", string(files[0].data))
@@ -133,13 +135,13 @@ func TestReadExtraFiles(t *testing.T) {
 		existing := filepath.Join(dir, "exists.txt")
 		require.NoError(t, os.WriteFile(existing, []byte("data"), 0644))
 
-		files := readExtraFiles([]string{"/no/such/file", existing})
+		files := readExtraFiles(log.NoOpLogger(), []string{"/no/such/file", existing})
 		require.Len(t, files, 1)
 		assert.Equal(t, "exists.txt", files[0].name)
 	})
 
 	t.Run("nil input returns nil", func(t *testing.T) {
-		files := readExtraFiles(nil)
+		files := readExtraFiles(log.NoOpLogger(), nil)
 		assert.Nil(t, files)
 	})
 }
@@ -342,7 +344,7 @@ func TestBuildIssueArchive(t *testing.T) {
 		extra := filepath.Join(dir, "extra.txt")
 		require.NoError(t, os.WriteFile(extra, []byte("extra content"), 0644))
 
-		result, err := buildIssueArchive(dir, []string{extra}, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, []string{extra}, 1024*1024)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -358,7 +360,7 @@ func TestBuildIssueArchive(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("main log"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash.log"), []byte("crash log"), 0644))
 
-		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, 1024*1024)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -377,7 +379,7 @@ func TestBuildIssueArchive(t *testing.T) {
 		extra := filepath.Join(dir, "extra.txt")
 		require.NoError(t, os.WriteFile(extra, []byte("data"), 0644))
 
-		result, err := buildIssueArchive(filepath.Join(dir, "nonexistent"), []string{extra}, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), filepath.Join(dir, "nonexistent"), []string{extra}, 1024*1024)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -393,7 +395,7 @@ func TestBuildIssueArchive(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), logData, 0644))
 
 		maxSize := int64(512 * 1024)
-		result, err := buildIssueArchive(dir, nil, maxSize)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, maxSize)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, int64(len(result)), maxSize)
 
@@ -468,7 +470,7 @@ func TestMostRecentCompressedBackup(t *testing.T) {
 		newest := filepath.Join(dir, "lantern-2026-06-15T16-02-44.000.log.gz")
 		require.NoError(t, os.WriteFile(newest, nil, 0644))
 
-		got, ok := findMostRecentCompressedBackup(primary)
+		got, ok := findMostRecentCompressedBackup(log.NoOpLogger(), primary)
 		require.True(t, ok)
 		assert.Equal(t, newest, got)
 	})
@@ -477,7 +479,7 @@ func TestMostRecentCompressedBackup(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log"), nil, 0644))
 
-		_, ok := findMostRecentCompressedBackup(filepath.Join(dir, "lantern.log"))
+		_, ok := findMostRecentCompressedBackup(log.NoOpLogger(), filepath.Join(dir, "lantern.log"))
 		assert.False(t, ok)
 	})
 
@@ -491,7 +493,7 @@ func TestMostRecentCompressedBackup(t *testing.T) {
 		// rotation of lantern.log and must be rejected.
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-crash-2026-06-15T16-00-00.000.log.gz"), nil, 0644))
 
-		got, ok := findMostRecentCompressedBackup(primary)
+		got, ok := findMostRecentCompressedBackup(log.NoOpLogger(), primary)
 		require.True(t, ok)
 		assert.Equal(t, backup, got)
 	})
@@ -556,7 +558,7 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
 		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), []byte("rotated line\n"))
 
-		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, 1024*1024)
 		require.NoError(t, err)
 		assert.Equal(t, "rotated line\ncurrent line\n", primaryContent(t, result))
 	})
@@ -566,7 +568,7 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
 		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), []byte("rotated line"))
 
-		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, 1024*1024)
 		require.NoError(t, err)
 		assert.Equal(t, "rotated line\ncurrent line\n", primaryContent(t, result))
 	})
@@ -576,7 +578,7 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), []byte("not gzip"), 0644))
 
-		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, 1024*1024)
 		require.NoError(t, err)
 		assert.Equal(t, "current line\n", primaryContent(t, result))
 	})
@@ -586,7 +588,7 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"), []byte("current line\n"), 0644))
 		writeGzipFile(t, filepath.Join(dir, "lantern-2026-06-15T15-31-02.000.log.gz"), nil)
 
-		result, err := buildIssueArchive(dir, nil, 1024*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, 1024*1024)
 		require.NoError(t, err)
 		assert.Equal(t, "current line\n", primaryContent(t, result))
 	})
@@ -604,7 +606,7 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 		// 200 KiB current + 400 KiB backup (incompressible) exceed the 384 KiB
 		// budget, so the tail-trim must drop the prepended backup (oldest) and
 		// keep the current log (newest).
-		result, err := buildIssueArchive(dir, nil, 384*1024)
+		result, err := buildIssueArchive(log.NoOpLogger(), dir, nil, 384*1024)
 		require.NoError(t, err)
 		primary := primaryContent(t, result)
 		assert.Contains(t, primary, "CURRENTTAILMARKER")

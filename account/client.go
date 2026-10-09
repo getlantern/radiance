@@ -31,6 +31,7 @@ const tracerName = "github.com/getlantern/radiance/account"
 // user authentication, subscription management, and account information retrieval.
 type Client struct {
 	httpClient *http.Client
+	logger     *slog.Logger
 	// proURL and authURL override the default server URLs. Used for testing.
 	proURL  string
 	authURL string
@@ -40,16 +41,20 @@ type Client struct {
 	mu       sync.RWMutex
 }
 
-// NewClient creates a new account client with the given HTTP client and data directory for caching
-// the salt value.
-func NewClient(httpClient *http.Client, dataDir string) *Client {
+// NewClient returns a Client that caches its salt under dataDir. A nil logger
+// uses [slog.Default].
+func NewClient(httpClient *http.Client, dataDir string, logger *slog.Logger) *Client {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	path := filepath.Join(dataDir, saltFileName)
 	salt, err := readSalt(path)
 	if err != nil {
-		slog.Warn("failed to read salt", "error", err)
+		logger.Warn("failed to read salt", "error", err)
 	}
 	return &Client{
 		httpClient: httpClient,
+		logger:     logger,
 		salt:       salt,
 		saltPath:   path,
 	}
@@ -83,6 +88,8 @@ func (a *Client) baseURL() string {
 
 // sendRequest sends an HTTP request to the specified URL with the given method, query parameters,
 // headers, and body. If the URL is relative, the base URL will be prepended.
+//
+// A non-2xx response returns an error whose message includes the response body.
 func (a *Client) sendRequest(
 	ctx context.Context,
 	method, url string,
@@ -139,8 +146,8 @@ func (a *Client) sendRequest(
 		req.URL.RawQuery = q.Encode()
 	}
 
-	if env.GetBool(env.PrintCurl) {
-		slog.Debug("CURL command", "curl", curlFromRequest(req))
+	if env.GetBool(env.PrintCurl) && common.Stage() {
+		a.logger.Debug("CURL command", "curl", curlFromRequest(req))
 	}
 
 	resp, err := a.httpClient.Do(req)
@@ -155,9 +162,8 @@ func (a *Client) sendRequest(
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		sanitized := sanitizeResponseBody(respBody)
-		slog.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode, "body", string(sanitized))
-		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitized)
+		a.logger.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitizeResponseBody(respBody))
 	}
 
 	if len(respBody) == 0 {
@@ -194,7 +200,8 @@ func (a *Client) sendProRequest(
 	return a.sendRequest(ctx, method, url, queryParams, headers, body)
 }
 
-// curlFromRequest generates a curl command string from an [http.Request].
+// curlFromRequest renders req as a curl command, replacing req.Body with an
+// unread copy of the same bytes.
 func curlFromRequest(req *http.Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "curl -X %s", req.Method)
@@ -212,7 +219,6 @@ func curlFromRequest(req *http.Request) string {
 
 	if req.Body != nil {
 		buf, _ := io.ReadAll(req.Body)
-		// Important! we need to reset the body since it can only be read once.
 		req.Body = io.NopCloser(bytes.NewBuffer(buf))
 		fmt.Fprintf(&b, " -d '%s'", shellEscape(string(buf)))
 	}

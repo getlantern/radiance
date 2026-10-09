@@ -48,7 +48,7 @@ func TestUserMessagesFollowAccountEvents(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(fmt.Sprintf(`{"userId":%d,"token":"test-token","userLevel":"free"}`, userID.Load()))),
 			Request:    req,
 		}, nil
-	})}, t.TempDir())
+	})}, t.TempDir(), log.NoOpLogger())
 	var calls atomic.Int32
 	contexts := make(chan usermessage.ClientContext, 8)
 	checkedCredentials := make(chan struct{})
