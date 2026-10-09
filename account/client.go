@@ -146,7 +146,7 @@ func (a *Client) sendRequest(
 		req.URL.RawQuery = q.Encode()
 	}
 
-	if env.GetBool(env.PrintCurl) {
+	if env.GetBool(env.PrintCurl) && common.Stage() {
 		a.logger.Debug("CURL command", "curl", curlFromRequest(req))
 	}
 
@@ -200,8 +200,8 @@ func (a *Client) sendProRequest(
 	return a.sendRequest(ctx, method, url, queryParams, headers, body)
 }
 
-// curlFromRequest renders req as a curl command with the body, query values,
-// and credential header values redacted.
+// curlFromRequest renders req as a curl command, replacing req.Body with an
+// unread copy of the same bytes.
 func curlFromRequest(req *http.Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "curl -X %s", req.Method)
@@ -213,29 +213,22 @@ func curlFromRequest(req *http.Request) string {
 	sort.Strings(keys)
 	for _, k := range keys {
 		for _, v := range req.Header[k] {
-			switch k {
-			case common.ProTokenHeader, "Authorization", "Cookie":
-				v = "<redacted>"
-			}
 			fmt.Fprintf(&b, " -H '%s: %s'", k, v)
 		}
 	}
 
-	// Bodies carry recovery codes, reseller codes, and SRP verifiers.
 	if req.Body != nil {
-		b.WriteString(" -d '<redacted>'")
+		buf, _ := io.ReadAll(req.Body)
+		req.Body = io.NopCloser(bytes.NewBuffer(buf))
+		fmt.Fprintf(&b, " -d '%s'", shellEscape(string(buf)))
 	}
 
-	u := *req.URL
-	q := u.Query()
-	for _, values := range q {
-		for i := range values {
-			values[i] = "redacted"
-		}
-	}
-	u.RawQuery = q.Encode()
-	fmt.Fprintf(&b, " '%s'", u.String())
+	fmt.Fprintf(&b, " '%s'", req.URL.String())
 	return b.String()
+}
+
+func shellEscape(s string) string {
+	return strings.ReplaceAll(s, "'", "'\\''")
 }
 
 func sanitizeResponseBody(data []byte) []byte {
