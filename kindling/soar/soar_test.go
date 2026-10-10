@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,4 +103,13 @@ func TestFileCacheKeyFollowsDiscoveryCountry(t *testing.T) {
 	(&fileCache{path: path, country: "IR"}).Store([]string{"1.2.3.4:53"})
 	require.Equal(t, []string{"1.2.3.4:53"}, (&fileCache{path: path, country: "ir"}).Load())
 	require.Empty(t, (&fileCache{path: path}).Load())
+}
+
+func TestFileCacheSurvivesNullFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "soar_resolvers.json")
+	require.NoError(t, os.WriteFile(path, []byte("null"), 0o600))
+	c := &fileCache{path: path}
+	require.Empty(t, c.Load())
+	c.Store([]string{"1.2.3.4:53"})
+	require.Equal(t, []string{"1.2.3.4:53"}, c.Load())
 }

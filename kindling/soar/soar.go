@@ -109,9 +109,12 @@ func (f *fileCache) key() string {
 }
 
 func (f *fileCache) load() map[string][]string {
-	m := map[string][]string{}
+	var m map[string][]string
 	if b, err := os.ReadFile(f.path); err == nil {
 		_ = json.Unmarshal(b, &m)
+	}
+	if m == nil { // missing, malformed, or a JSON null
+		m = map[string][]string{}
 	}
 	return m
 }
