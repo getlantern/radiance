@@ -108,6 +108,10 @@ func exchange(t *testing.T, pc net.PacketConn, wantProxied bool, resolvers ...*f
 		to := r.pc.LocalAddr().(*net.UDPAddr)
 
 		require.Eventually(t, func() bool {
+			// The route can switch in the background mid-attempt, so a packet from either
+			// socket (before the send or after the reply) left directly; only the proxy's
+			// outbound socket is neither.
+			before := pc.LocalAddr().(*net.UDPAddr).Port
 			if _, err := pc.WriteTo(wire, to); err != nil {
 				return false // lost while the route switches
 			}
@@ -116,7 +120,9 @@ func exchange(t *testing.T, pc net.PacketConn, wantProxied bool, resolvers ...*f
 				if !assert.Equal(t, wire, got.payload, "query altered in transit") {
 					return false
 				}
-				return (got.from.Port != pc.LocalAddr().(*net.UDPAddr).Port) == wantProxied
+				after := pc.LocalAddr().(*net.UDPAddr).Port
+				direct := got.from.Port == before || got.from.Port == after
+				return direct != wantProxied
 			case <-time.After(200 * time.Millisecond):
 				return false
 			}
