@@ -82,10 +82,10 @@ func (c *packetConn) reopen(ctx context.Context, old net.PacketConn) error {
 		return err
 	}
 	c.mu.Lock()
-	if c.closed || c.cur != old {
+	if closed := c.closed; closed || c.cur != old {
 		c.mu.Unlock()
 		pc.Close()
-		if c.closed {
+		if closed {
 			return net.ErrClosed
 		}
 		return nil
