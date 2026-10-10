@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/bypass"
+	"github.com/getlantern/radiance/internal/testutil"
 )
 
 // fakeResolver echoes each packet back prefixed with its name, and reports the
@@ -134,6 +135,7 @@ func exchange(t *testing.T, pc net.PacketConn, wantProxied bool, resolvers ...*f
 }
 
 func TestBypassUDPFollowsProxy(t *testing.T) {
+	t.Cleanup(testutil.LockBypassPort())
 	if l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", bypass.ProxyPort)); err != nil {
 		t.Skipf("bypass port busy (VPN running?): %v", err)
 	} else {
