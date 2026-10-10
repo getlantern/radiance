@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -47,4 +48,51 @@ func TestPacketConnReadDeadline(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ReadFrom ignored its deadline")
 	}
+}
+
+// A wedged proxy must not stall writes, and Close must still end everything.
+func TestPacketConnWedgedProxy(t *testing.T) {
+	pc, err := ListenPacket(context.Background(), "udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ProxyPort)))
+	if err != nil {
+		pc.Close()
+		t.Skipf("bypass port busy: %v", err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close() // accept, never answer the handshake
+		}
+	}()
+	ProxyStateChanged()
+
+	readErr := make(chan error, 1)
+	go func() {
+		_, _, err := pc.ReadFrom(make([]byte, 64))
+		readErr <- err
+	}()
+	sink, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer sink.Close()
+	start := time.Now()
+	for range 5 {
+		_, err := pc.WriteTo([]byte("x"), sink.LocalAddr())
+		require.NoError(t, err)
+	}
+	require.Less(t, time.Since(start), time.Second, "writes waited on the wedged proxy")
+
+	start = time.Now()
+	require.NoError(t, pc.Close())
+	select {
+	case err := <-readErr:
+		require.ErrorIs(t, err, net.ErrClosed)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadFrom still blocked after Close")
+	}
+	require.Less(t, time.Since(start), 2*time.Second)
 }

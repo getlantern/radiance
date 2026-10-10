@@ -92,10 +92,11 @@ func stopBypassBox(t *testing.T, b *sbox.Box) {
 	bypass.ProxyStateChanged()
 }
 
-// exchange sends a TXT query to each resolver and checks it arrives byte for
-// byte (not answered by sing-box's DNS hijack) and the reply comes back from
-// the right address. It returns whether the query left through the proxy.
-func exchange(t *testing.T, pc net.PacketConn, resolvers ...*fakeResolver) (proxied bool) {
+// exchange sends a TXT query to each resolver until one leaves by the wanted
+// route (proxied or direct; the conn switches in the background), and checks it
+// arrives byte for byte (not answered by sing-box's DNS hijack) and the reply
+// comes back from the right address.
+func exchange(t *testing.T, pc net.PacketConn, wantProxied bool, resolvers ...*fakeResolver) {
 	for i, r := range resolvers {
 		q := new(dns.Msg)
 		q.SetQuestion(fmt.Sprintf("q%d.t.example.com.", i), dns.TypeTXT)
@@ -104,20 +105,18 @@ func exchange(t *testing.T, pc net.PacketConn, resolvers ...*fakeResolver) (prox
 		require.NoError(t, err)
 		to := r.pc.LocalAddr().(*net.UDPAddr)
 
-		// Retry: the first write after a route switch can race the new association.
-		var got seenPacket
 		require.Eventually(t, func() bool {
-			_, err := pc.WriteTo(wire, to)
-			require.NoError(t, err)
+			if _, err := pc.WriteTo(wire, to); err != nil {
+				return false // lost while the route switches
+			}
 			select {
-			case got = <-r.seen:
-				return true
+			case got := <-r.seen:
+				require.Equal(t, wire, got.payload, "query altered in transit")
+				return (got.from.Port != pc.LocalAddr().(*net.UDPAddr).Port) == wantProxied
 			case <-time.After(200 * time.Millisecond):
 				return false
 			}
-		}, 5*time.Second, 10*time.Millisecond, "query never reached %s", r.name)
-		require.Equal(t, wire, got.payload, "query altered in transit")
-		proxied = got.from.Port != pc.LocalAddr().(*net.UDPAddr).Port
+		}, 5*time.Second, 10*time.Millisecond, "query to %s never left by the wanted route", r.name)
 
 		buf := make([]byte, 2048)
 		require.NoError(t, pc.SetReadDeadline(time.Now().Add(5*time.Second)))
@@ -125,14 +124,13 @@ func exchange(t *testing.T, pc net.PacketConn, resolvers ...*fakeResolver) (prox
 			n, from, err := pc.ReadFrom(buf)
 			require.NoError(t, err)
 			if string(buf[:n]) != r.name+string(wire) {
-				continue // a duplicate reply from a retry above
+				continue // a reply to a retry above
 			}
 			require.Equal(t, to.String(), from.String())
 			break
 		}
 		require.NoError(t, pc.SetReadDeadline(time.Time{}))
 	}
-	return proxied
 }
 
 func TestBypassUDPFollowsProxy(t *testing.T) {
@@ -147,19 +145,19 @@ func TestBypassUDPFollowsProxy(t *testing.T) {
 	pc, err := bypass.ListenPacket(context.Background(), "udp", ":0")
 	require.NoError(t, err)
 	defer pc.Close()
-	require.False(t, exchange(t, pc, a, b), "expected a direct send with no proxy")
+	exchange(t, pc, false, a, b)
 
 	// VPN up: the same conn moves into a UDP association, and DNS-shaped
 	// packets reach the resolvers untouched rather than being hijacked.
 	instance := startBypassBox(t)
-	require.True(t, exchange(t, pc, a, b), "expected a send through the bypass proxy")
+	exchange(t, pc, true, a, b)
 
 	// VPN down: back to a plain socket.
 	stopBypassBox(t, instance)
-	require.False(t, exchange(t, pc, a, b), "expected a direct send after the proxy stopped")
+	exchange(t, pc, false, a, b)
 
 	// And up again.
 	instance = startBypassBox(t)
 	defer stopBypassBox(t, instance)
-	require.True(t, exchange(t, pc, a, b), "expected the bypass proxy again")
+	exchange(t, pc, true, a, b)
 }

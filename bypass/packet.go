@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,7 +24,12 @@ var generation atomic.Uint64
 // stops; the conns switch route on their next write.
 func ProxyStateChanged() { generation.Add(1) }
 
-const reopenBackoff = time.Second
+const (
+	reopenBackoff = time.Second
+	// reopenTimeout bounds a replacement association's handshake with the local
+	// proxy, which answers in milliseconds unless it is wedged.
+	reopenTimeout = 5 * time.Second
+)
 
 // ListenPacket returns a UDP PacketConn that stays outside the VPN tunnel. While
 // the bypass proxy runs it relays through a SOCKS5 UDP association; otherwise it
@@ -31,7 +37,9 @@ const reopenBackoff = time.Second
 // re-picking its route whenever the proxy state changes or its association dies.
 func ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
 	c := &packetConn{network: network, address: address}
+	c.ctx, c.cancel = context.WithCancel(context.Background())
 	if err := c.reopen(ctx, nil); err != nil {
+		c.cancel()
 		return nil, err
 	}
 	return c, nil
@@ -39,11 +47,15 @@ func ListenPacket(ctx context.Context, network, address string) (net.PacketConn,
 
 type packetConn struct {
 	network, address string
+	ctx              context.Context // canceled by Close, ending any reopen
+	cancel           context.CancelFunc
 
-	mu     sync.Mutex
-	cur    net.PacketConn
-	gen    uint64
-	closed bool
+	mu          sync.Mutex
+	cur         net.PacketConn
+	gen         uint64
+	closed      bool
+	reopening   bool
+	lastAttempt time.Time
 	// Deadlines carry over to replacement conns.
 	readDeadline, writeDeadline time.Time
 }
@@ -81,20 +93,55 @@ func (c *packetConn) reopen(ctx context.Context, old net.PacketConn) error {
 	return nil
 }
 
+// reopenContext bounds a reopen by Close, reopenTimeout, and deadline if set.
+func (c *packetConn) reopenContext(deadline time.Time) (context.Context, context.CancelFunc) {
+	d := time.Now().Add(reopenTimeout)
+	if !deadline.IsZero() && deadline.Before(d) {
+		d = deadline
+	}
+	return context.WithDeadline(c.ctx, d)
+}
+
+// switchRoute reopens old in the background, one attempt at a time, so a write
+// never waits on the proxy: callers like Soar write while holding their own lock.
+func (c *packetConn) switchRoute(old net.PacketConn) {
+	c.mu.Lock()
+	if c.closed || c.reopening || time.Since(c.lastAttempt) < reopenBackoff {
+		c.mu.Unlock()
+		return
+	}
+	c.reopening, c.lastAttempt = true, time.Now()
+	c.mu.Unlock()
+	go func() {
+		ctx, cancel := c.reopenContext(time.Time{})
+		defer cancel()
+		c.reopen(ctx, old)
+		c.mu.Lock()
+		c.reopening = false
+		c.mu.Unlock()
+	}()
+}
+
+// WriteTo sends on the current conn. After a proxy state change, or when the
+// conn fails, it starts the switch; meanwhile packets go out the old route or
+// fail, which callers see as ordinary loss.
 func (c *packetConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	pc, gen, closed := c.current()
 	if closed {
 		return 0, net.ErrClosed
 	}
 	if gen != generation.Load() {
-		if err := c.reopen(context.Background(), pc); err != nil {
-			return 0, err
-		}
-		if pc, _, _ = c.current(); pc == nil {
-			return 0, net.ErrClosed
-		}
+		c.switchRoute(pc)
 	}
-	return pc.WriteTo(p, addr)
+	n, err := pc.WriteTo(p, addr)
+	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return n, err
+		}
+		c.switchRoute(pc) // the association died under us
+	}
+	return n, err
 }
 
 func (c *packetConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -118,13 +165,26 @@ func (c *packetConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		}
 		// The association died (proxy stopped or idled it out) or the socket
 		// failed: route afresh, backing off so a dead network doesn't spin.
-		if c.reopen(context.Background(), pc) != nil {
-			time.Sleep(reopenBackoff)
+		c.mu.Lock()
+		deadline := c.readDeadline
+		c.mu.Unlock()
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return 0, nil, os.ErrDeadlineExceeded
+		}
+		ctx, cancel := c.reopenContext(deadline)
+		err = c.reopen(ctx, pc)
+		cancel()
+		if err != nil {
+			select {
+			case <-c.ctx.Done():
+			case <-time.After(reopenBackoff):
+			}
 		}
 	}
 }
 
 func (c *packetConn) Close() error {
+	c.cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
