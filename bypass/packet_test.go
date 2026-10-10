@@ -183,3 +183,69 @@ func TestAssociateCanceledMidHandshake(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, time.Since(start), time.Second, "handshake ignored cancellation")
 }
+
+// Concurrent reads on an association must not race (run with -race).
+func TestAssociatedConnConcurrentReads(t *testing.T) {
+	if l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ProxyPort))); err != nil {
+		t.Skipf("bypass port busy: %v", err)
+	} else {
+		l.Close()
+	}
+	newSingboxServer(t)
+	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer echo.Close()
+	go func() {
+		b := make([]byte, 2048)
+		for {
+			n, from, err := echo.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			echo.WriteTo(b[:n], from)
+		}
+	}()
+	pc, err := associate(context.Background())
+	require.NoError(t, err)
+	defer pc.Close()
+	const readers, each = 4, 25
+	done := make(chan error, readers)
+	for range readers {
+		go func() {
+			b := make([]byte, 64)
+			for range each {
+				n, from, err := pc.ReadFrom(b)
+				if err != nil {
+					done <- err
+					return
+				}
+				if from.String() != echo.LocalAddr().String() || string(b[:n]) != "ping" {
+					done <- errors.New("bad datagram " + from.String() + " " + string(b[:n]))
+					return
+				}
+			}
+			done <- nil
+		}()
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				pc.WriteTo([]byte("ping"), echo.LocalAddr())
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+	for range readers {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("readers starved")
+		}
+	}
+}

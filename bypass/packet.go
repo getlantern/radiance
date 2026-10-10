@@ -1,6 +1,7 @@
 package bypass
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -313,13 +314,14 @@ func associate(ctx context.Context) (net.PacketConn, error) {
 		io.Copy(io.Discard, tcp)
 		udp.Close()
 	}()
-	return associatedConn{socks.NewAssociatePacketConn(udp, M.Socksaddr{}, tcp)}, nil
+	return associatedConn{socks.NewAssociatePacketConn(udp, M.Socksaddr{}, tcp), udp}, nil
 }
 
 // associatedConn keeps the SOCKS5 UDP header out of what the caller sees:
 // AssociatePacketConn counts it in writes and decodes into the caller's buffer.
 type associatedConn struct {
 	*socks.AssociatePacketConn
+	udp net.Conn // the association's relay socket, read directly
 }
 
 const socksUDPHeadroom = 3 + M.MaxSocksaddrLength
@@ -341,9 +343,19 @@ func (c associatedConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		*bp = make([]byte, need)
 	}
 	buf := (*bp)[:len(p)+socksUDPHeadroom]
-	n, addr, err := c.AssociatePacketConn.ReadFrom(buf)
+	// Decoded here rather than by AssociatePacketConn.ReadFrom, which records each sender in a
+	// shared field and so races under concurrent reads.
+	n, err := c.udp.Read(buf)
 	if err != nil {
 		return 0, nil, err
 	}
-	return copy(p, buf[:n]), addr, nil
+	if n < 3 {
+		return 0, nil, socks.ErrInvalidPacket
+	}
+	r := bytes.NewReader(buf[3:n])
+	from, err := M.SocksaddrSerializer.ReadAddrPort(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	return copy(p, buf[n-r.Len():n]), from.UDPAddr(), nil
 }

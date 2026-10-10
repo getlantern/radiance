@@ -16,6 +16,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/bypass"
@@ -112,7 +113,9 @@ func exchange(t *testing.T, pc net.PacketConn, wantProxied bool, resolvers ...*f
 			}
 			select {
 			case got := <-r.seen:
-				require.Equal(t, wire, got.payload, "query altered in transit")
+				if !assert.Equal(t, wire, got.payload, "query altered in transit") {
+					return false
+				}
 				return (got.from.Port != pc.LocalAddr().(*net.UDPAddr).Port) == wantProxied
 			case <-time.After(200 * time.Millisecond):
 				return false
