@@ -289,7 +289,12 @@ func associate(ctx context.Context) (net.PacketConn, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		tcp.SetDeadline(deadline)
 	}
+	// The handshake blocks on the socket, not ctx: a cancel (Close) closes it.
+	stop := context.AfterFunc(ctx, func() { tcp.Close() })
 	resp, err := socks.ClientHandshake5(tcp, socks5.CommandUDPAssociate, M.Socksaddr{}, "", "")
+	if !stop() && err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		tcp.Close()
 		return nil, err

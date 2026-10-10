@@ -159,3 +159,27 @@ func TestPacketConnFindsUnannouncedProxy(t *testing.T) {
 		require.Equal(t, len(payload), n, "payload truncated by the SOCKS header")
 	}
 }
+
+// Canceling an association attempt must interrupt a handshake the proxy never answers.
+func TestAssociateCanceledMidHandshake(t *testing.T) {
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ProxyPort)))
+	if err != nil {
+		t.Skipf("bypass port busy: %v", err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = associate(ctx)
+	require.Error(t, err)
+	require.Less(t, time.Since(start), time.Second, "handshake ignored cancellation")
+}
