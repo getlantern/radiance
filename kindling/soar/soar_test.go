@@ -65,9 +65,12 @@ func TestConfiguredBuildTunnels(t *testing.T) {
 	t.Cleanup(func() { Zone, PublicKey = "", "" })
 	Zone, PublicKey = "t.example.com", base64.StdEncoding.EncodeToString(pub)
 	// Seed the per-device cache with the local server, as a returning user's would be: discovery
-	// vets cached resolvers first.
+	// vets cached resolvers first. The country is pinned so New picks the same cache key on any
+	// host, whatever its time zone.
+	t.Cleanup(func() { settings.Set(settings.CountryCodeKey, "") })
+	settings.Set(settings.CountryCodeKey, "US")
 	dataDir := t.TempDir()
-	(&fileCache{path: filepath.Join(dataDir, "soar_resolvers.json")}).Store([]string{pc.LocalAddr().String()})
+	(&fileCache{path: filepath.Join(dataDir, "soar_resolvers.json"), country: "US"}).Store([]string{pc.LocalAddr().String()})
 
 	sc, err := New(dataDir)
 	require.NoError(t, err)
