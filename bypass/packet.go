@@ -307,8 +307,8 @@ func associate(ctx context.Context) (net.PacketConn, error) {
 	return associatedConn{socks.NewAssociatePacketConn(udp, M.Socksaddr{}, tcp)}, nil
 }
 
-// associatedConn reads through a buffer with room for the SOCKS5 UDP header, which
-// AssociatePacketConn would otherwise take out of the caller's buffer.
+// associatedConn keeps the SOCKS5 UDP header out of what the caller sees:
+// AssociatePacketConn counts it in writes and decodes into the caller's buffer.
 type associatedConn struct {
 	*socks.AssociatePacketConn
 }
@@ -316,6 +316,14 @@ type associatedConn struct {
 const socksUDPHeadroom = 3 + M.MaxSocksaddrLength
 
 var readBufs = sync.Pool{New: func() any { return new([]byte) }}
+
+// WriteTo reports the payload written, not the payload plus SOCKS header.
+func (c associatedConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if _, err := c.AssociatePacketConn.WriteTo(p, addr); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
 
 func (c associatedConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	bp := readBufs.Get().(*[]byte)

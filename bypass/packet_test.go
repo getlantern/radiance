@@ -144,6 +144,10 @@ func TestPacketConnFindsUnannouncedProxy(t *testing.T) {
 		}
 	}, 3*proxyProbeInterval, 50*time.Millisecond, "never moved onto the unannounced proxy")
 
+	n, err := pc.WriteTo(payload, echo.LocalAddr())
+	require.NoError(t, err)
+	require.Equal(t, len(payload), n, "write count includes the SOCKS header")
+
 	buf := make([]byte, len(payload))
 	require.NoError(t, pc.SetReadDeadline(time.Now().Add(5*time.Second)))
 	for {
