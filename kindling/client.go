@@ -45,15 +45,17 @@ var (
 	// paused is the current pause state, kept here because a pause can arrive
 	// with no client to receive it.
 	paused bool
-	// EnabledTransports gates which transports NewKindling wires up. AMP and DNS
-	// tunneling are parked off for every country; their builders stay wired
-	// behind these flags so turning either back on is a one-line change.
+	// EnabledTransports gates which transports NewKindling wires up. AMP is
+	// parked off for every country; its builder stays wired behind the flag so
+	// turning it back on is a one-line change. The DNS tunnel (Soar) also needs
+	// a build carrying a Soar server, and kindling races it only after every
+	// other transport fails.
 	//
 	// A var rather than constants because cmd/kindling-tester rewrites it to
 	// isolate a single transport, as does TestNewClient. Production code sets
 	// it once, here: nothing toggles a transport at runtime.
 	EnabledTransports = map[kindling.TransportName]bool{
-		kindling.TransportDNSTunnel:   false,
+		kindling.TransportDNSTunnel:   true,
 		kindling.TransportAMP:         false,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
