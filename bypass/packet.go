@@ -211,9 +211,13 @@ func (c *packetConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		err = c.reopen(ctx, pc)
 		cancel()
 		if err != nil {
+			wait := reopenBackoff
+			if !deadline.IsZero() {
+				wait = min(wait, time.Until(deadline))
+			}
 			select {
 			case <-c.ctx.Done():
-			case <-time.After(reopenBackoff):
+			case <-time.After(wait):
 			}
 		}
 	}
