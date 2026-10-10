@@ -92,3 +92,11 @@ func TestCountryFallsBackToTimeZone(t *testing.T) {
 	settings.Set(settings.CountryCodeKey, "CN")
 	require.Equal(t, "CN", country("Asia/Tehran"), "the known country wins over the zone")
 }
+
+// Resolvers verified under a time-zone guess must be found once config confirms the country.
+func TestFileCacheKeyFollowsDiscoveryCountry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "soar_resolvers.json")
+	(&fileCache{path: path, country: "IR"}).Store([]string{"1.2.3.4:53"})
+	require.Equal(t, []string{"1.2.3.4:53"}, (&fileCache{path: path, country: "ir"}).Load())
+	require.Empty(t, (&fileCache{path: path}).Load())
+}

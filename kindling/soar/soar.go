@@ -44,6 +44,7 @@ func New(dataDir string) (*soar.Client, error) {
 	if err != nil || len(key) != ed25519.PublicKeySize {
 		return nil, errors.New("soar: bad public key")
 	}
+	cc := country(common.LocalTimeZone())
 	return soar.NewClient(soar.Config{
 		Zone:         Zone,
 		ServerKey:    ed25519.PublicKey(key),
@@ -51,8 +52,8 @@ func New(dataDir string) (*soar.Client, error) {
 		DialTCP:      bypass.DialContext,
 		Discovery: soar.Discovery{
 			Enabled: true,
-			Country: country(common.LocalTimeZone()),
-			Cache:   &fileCache{path: filepath.Join(dataDir, "soar_resolvers.json")},
+			Country: cc,
+			Cache:   &fileCache{path: filepath.Join(dataDir, "soar_resolvers.json"), country: cc},
 		},
 		Logger: slog.Default().With("component", "soar"),
 	})
@@ -95,11 +96,14 @@ const maxCachedResolvers = 4
 type fileCache struct {
 	mu   sync.Mutex
 	path string
+	// country is the one discovery used, so resolvers verified on a fresh install (country
+	// guessed from the time zone) land where the next start, with config's country, looks.
+	country string
 }
 
 func (f *fileCache) key() string {
-	if cc := settings.GetString(settings.CountryCodeKey); cc != "" {
-		return strings.ToUpper(cc)
+	if f.country != "" {
+		return strings.ToUpper(f.country)
 	}
 	return "_"
 }
