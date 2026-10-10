@@ -41,6 +41,12 @@ func TestFileCacheRoundTrip(t *testing.T) {
 	require.Equal(t, []string{"1.2.3.4:53", "5.6.7.8:53"}, c.Load())
 }
 
+func TestFileCacheLoadIsBounded(t *testing.T) {
+	c := &fileCache{path: filepath.Join(t.TempDir(), "soar_resolvers.json")}
+	c.Store([]string{"1.1.1.1:53", "2.2.2.2:53", "3.3.3.3:53", "4.4.4.4:53", "5.5.5.5:53", "6.6.6.6:53"})
+	require.Len(t, c.Load(), maxCachedResolvers)
+}
+
 // A configured build reaches a Soar server and fetches through it.
 func TestConfiguredBuildTunnels(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

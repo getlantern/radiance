@@ -84,6 +84,12 @@ var zoneCountry = map[string]string{
 	"Asia/Magadan": "RU", "Asia/Srednekolymsk": "RU", "Asia/Kamchatka": "RU", "Asia/Anadyr": "RU",
 }
 
+// maxCachedResolvers bounds what Load returns. Soar wants the cache keyed by network, but
+// nothing identifies the network before the tunnel on every platform (with the VPN up, local
+// addresses are the TUN's). After a network change, stale entries then hold a few of
+// discovery's probe slots rather than all of them, and the next store drops them.
+const maxCachedResolvers = 4
+
 // fileCache persists resolvers that carried the tunnel, keyed by country, so the next start
 // vets them first instead of rediscovering.
 type fileCache struct {
@@ -109,7 +115,8 @@ func (f *fileCache) load() map[string][]string {
 func (f *fileCache) Load() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.load()[f.key()]
+	cached := f.load()[f.key()]
+	return cached[:min(len(cached), maxCachedResolvers)]
 }
 
 func (f *fileCache) Store(resolvers []string) {
