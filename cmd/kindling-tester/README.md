@@ -1,6 +1,6 @@
 # Kindling transport tester
 
-Tests individual [kindling](../../kindling) transports (proxyless, fronted, amp, dnstt).
+Tests individual [kindling](../../kindling) transports (proxyless, fronted, amp, DNS tunnel).
 It receives all its arguments via environment variables and uses the kindling HTTP client directly
 
 ## Environment variables
@@ -14,7 +14,7 @@ It receives all its arguments via environment variables and uses the kindling HT
 - `TARGET_URL`: The URL that will be fetched through kindling.
 - `DATA`: Directory for config files, logs, and output artefacts (`output.txt`, `timing.txt`, `success`).
 
-- `TRANSPORT`: The kindling transport to test. One of: `smart`, `domainfront`, `amp`, `dnstt`.
+- `TRANSPORT`: The kindling transport to test. One of: `smart`, `domainfront`, `amp`, `dnstt`. `dnstt` is kindling's name for the DNS-tunnel slot, which Soar now fills; it needs a build carrying a Soar server (see `kindling/soar`).
 
 ## CLI usage
 

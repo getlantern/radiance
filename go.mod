@@ -37,13 +37,10 @@ require (
 	github.com/Jigsaw-Code/outline-sdk/x v0.0.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
-	github.com/alitto/pond v1.9.2
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/broflake v0.0.0-20260918210927-195b2cd4bd8c
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
-	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
-	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3
 	github.com/getlantern/kindling v0.0.0-20261009152916-e708e3cd37f0
 	github.com/getlantern/lantern-box v0.0.140
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
@@ -130,6 +127,8 @@ require (
 	github.com/gaissmai/bart v0.18.0 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
+	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac // indirect
+	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 // indirect
 	github.com/getlantern/twiddle v0.0.0-20260914204124-f698a0d67d2f // indirect
