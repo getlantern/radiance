@@ -34,7 +34,7 @@ func Configured() bool { return Zone != "" && PublicKey != "" }
 
 // New returns a Soar client: resolvers come from discovery (the bundled per-country lists for
 // the user's country, the device's own resolvers, and a per-device cache of ones that worked),
-// and TCP/53 goes through radiance's bypass dialer so it never loops through the VPN.
+// and both UDP and TCP/53 go through radiance's bypass so they never loop through the VPN.
 func New(dataDir string) (*soar.Client, error) {
 	if !Configured() {
 		return nil, errors.New("soar: no server configured in this build")
@@ -44,9 +44,10 @@ func New(dataDir string) (*soar.Client, error) {
 		return nil, errors.New("soar: bad public key")
 	}
 	return soar.NewClient(soar.Config{
-		Zone:      Zone,
-		ServerKey: ed25519.PublicKey(key),
-		DialTCP:   bypass.DialContext,
+		Zone:         Zone,
+		ServerKey:    ed25519.PublicKey(key),
+		ListenPacket: bypass.ListenPacket,
+		DialTCP:      bypass.DialContext,
 		Discovery: soar.Discovery{
 			Enabled: true,
 			Country: settings.GetString(settings.CountryCodeKey),
