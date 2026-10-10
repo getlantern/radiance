@@ -16,6 +16,8 @@ import (
 
 	"github.com/getlantern/soar"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func TestUnconfiguredBuild(t *testing.T) {
@@ -73,4 +75,14 @@ func TestConfiguredBuildTunnels(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	require.Equal(t, "through soar", string(body))
+}
+
+func TestCountryFallsBackToTimeZone(t *testing.T) {
+	t.Cleanup(func() { settings.Set(settings.CountryCodeKey, "") })
+	settings.Set(settings.CountryCodeKey, "")
+	require.Equal(t, "IR", country("Asia/Tehran"))
+	require.Equal(t, "RU", country("Asia/Novosibirsk"))
+	require.Equal(t, "", country("America/New_York"))
+	settings.Set(settings.CountryCodeKey, "CN")
+	require.Equal(t, "CN", country("Asia/Tehran"), "the known country wins over the zone")
 }

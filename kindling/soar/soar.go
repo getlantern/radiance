@@ -16,6 +16,7 @@ import (
 	"github.com/getlantern/soar"
 
 	"github.com/getlantern/radiance/bypass"
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/settings"
 )
@@ -50,11 +51,37 @@ func New(dataDir string) (*soar.Client, error) {
 		DialTCP:      bypass.DialContext,
 		Discovery: soar.Discovery{
 			Enabled: true,
-			Country: settings.GetString(settings.CountryCodeKey),
+			Country: country(common.LocalTimeZone()),
 			Cache:   &fileCache{path: filepath.Join(dataDir, "soar_resolvers.json")},
 		},
 		Logger: slog.Default().With("component", "soar"),
 	})
+}
+
+// country picks the bundled resolver list to vet. A fresh install doesn't know its country
+// until config arrives, which may need this tunnel, and phones expose no system resolvers to
+// fall back on, so the time zone stands in for the countries Soar bundles lists for. A wrong
+// guess only adds candidates.
+func country(zone string) string {
+	if cc := settings.GetString(settings.CountryCodeKey); cc != "" {
+		return cc
+	}
+	return zoneCountry[zone]
+}
+
+var zoneCountry = map[string]string{
+	"Asia/Tehran": "IR", "Iran": "IR",
+
+	"Asia/Shanghai": "CN", "Asia/Urumqi": "CN", "Asia/Chongqing": "CN", "Asia/Chungking": "CN",
+	"Asia/Harbin": "CN", "Asia/Kashgar": "CN", "PRC": "CN",
+
+	"Europe/Moscow": "RU", "W-SU": "RU", "Europe/Kaliningrad": "RU", "Europe/Samara": "RU",
+	"Europe/Volgograd": "RU", "Europe/Saratov": "RU", "Europe/Ulyanovsk": "RU",
+	"Europe/Astrakhan": "RU", "Europe/Kirov": "RU", "Asia/Yekaterinburg": "RU", "Asia/Omsk": "RU",
+	"Asia/Novosibirsk": "RU", "Asia/Barnaul": "RU", "Asia/Tomsk": "RU", "Asia/Novokuznetsk": "RU",
+	"Asia/Krasnoyarsk": "RU", "Asia/Irkutsk": "RU", "Asia/Chita": "RU", "Asia/Yakutsk": "RU",
+	"Asia/Khandyga": "RU", "Asia/Vladivostok": "RU", "Asia/Ust-Nera": "RU", "Asia/Sakhalin": "RU",
+	"Asia/Magadan": "RU", "Asia/Srednekolymsk": "RU", "Asia/Kamchatka": "RU", "Asia/Anadyr": "RU",
 }
 
 // fileCache persists resolvers that carried the tunnel, keyed by country, so the next start
