@@ -23,6 +23,7 @@ import (
 	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	radiancesmart "github.com/getlantern/radiance/kindling/smart"
+	soartunnel "github.com/getlantern/radiance/kindling/soar"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -267,7 +268,17 @@ func NewKindling(dataDir string) (*Client, error) {
 		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
 	}
 
-	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled {
+	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled && soartunnel.Configured() {
+		// Soar takes the DNS-tunnel slot when this build carries a Soar server; dnstt otherwise.
+		sc, err := soartunnel.New(dataDir)
+		if err != nil {
+			slog.Error("failed to create soar dns tunnel", slog.Any("error", err))
+			span.RecordError(err)
+		} else {
+			closers = append(closers, sc.Close)
+			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(sc))
+		}
+	} else if enabled {
 		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
 		if err != nil {
 			slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
