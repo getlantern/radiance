@@ -44,6 +44,8 @@ type packetConn struct {
 	cur    net.PacketConn
 	gen    uint64
 	closed bool
+	// Deadlines carry over to replacement conns.
+	readDeadline, writeDeadline time.Time
 }
 
 func (c *packetConn) current() (net.PacketConn, uint64, bool) {
@@ -69,6 +71,8 @@ func (c *packetConn) reopen(ctx context.Context, old net.PacketConn) error {
 		}
 		return nil
 	}
+	pc.SetReadDeadline(c.readDeadline)
+	pc.SetWriteDeadline(c.writeDeadline)
 	c.cur, c.gen = pc, gen
 	c.mu.Unlock()
 	if old != nil {
@@ -108,6 +112,10 @@ func (c *packetConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		} else if next != pc {
 			continue // swapped under us
 		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return 0, nil, err
+		}
 		// The association died (proxy stopped or idled it out) or the socket
 		// failed: route afresh, backing off so a dead network doesn't spin.
 		if c.reopen(context.Background(), pc) != nil {
@@ -131,20 +139,25 @@ func (c *packetConn) LocalAddr() net.Addr {
 	return pc.LocalAddr()
 }
 
-// Deadlines aren't carried across reopens; ListenPacket's callers don't use them.
 func (c *packetConn) SetDeadline(t time.Time) error {
-	pc, _, _ := c.current()
-	return pc.SetDeadline(t)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readDeadline, c.writeDeadline = t, t
+	return c.cur.SetDeadline(t)
 }
 
 func (c *packetConn) SetReadDeadline(t time.Time) error {
-	pc, _, _ := c.current()
-	return pc.SetReadDeadline(t)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readDeadline = t
+	return c.cur.SetReadDeadline(t)
 }
 
 func (c *packetConn) SetWriteDeadline(t time.Time) error {
-	pc, _, _ := c.current()
-	return pc.SetWriteDeadline(t)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writeDeadline = t
+	return c.cur.SetWriteDeadline(t)
 }
 
 // openPacket associates through the bypass proxy, or, when the proxy isn't

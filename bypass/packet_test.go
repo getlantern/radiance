@@ -29,3 +29,22 @@ func TestPacketConnCloseUnblocksRead(t *testing.T) {
 	_, err = pc.WriteTo([]byte("x"), pc.LocalAddr())
 	require.ErrorIs(t, err, net.ErrClosed)
 }
+
+func TestPacketConnReadDeadline(t *testing.T) {
+	pc, err := ListenPacket(context.Background(), "udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer pc.Close()
+	require.NoError(t, pc.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := pc.ReadFrom(make([]byte, 64))
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		var ne net.Error
+		require.True(t, errors.As(err, &ne) && ne.Timeout(), "got %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadFrom ignored its deadline")
+	}
+}
