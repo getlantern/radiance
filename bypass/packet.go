@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,10 @@ const (
 	// reopenTimeout bounds a replacement association's handshake with the local
 	// proxy, which answers in milliseconds unless it is wedged.
 	reopenTimeout = 5 * time.Second
+	// proxyProbeInterval paces checks, while sending on a plain socket, for a
+	// bypass proxy that came up unannounced: one started by another process
+	// (a mobile VPN extension) never reaches ProxyStateChanged here.
+	proxyProbeInterval = 5 * time.Second
 )
 
 // ListenPacket returns a UDP PacketConn that stays outside the VPN tunnel. While
@@ -56,6 +61,8 @@ type packetConn struct {
 	closed      bool
 	reopening   bool
 	lastAttempt time.Time
+	direct      bool // cur is a plain socket, not an association
+	lastProbe   time.Time
 	// Deadlines carry over to replacement conns.
 	readDeadline, writeDeadline time.Time
 }
@@ -70,7 +77,7 @@ func (c *packetConn) current() (net.PacketConn, uint64, bool) {
 // proxy's current state, unless another goroutine already replaced it.
 func (c *packetConn) reopen(ctx context.Context, old net.PacketConn) error {
 	gen := generation.Load()
-	pc, err := openPacket(ctx, c.network, c.address)
+	pc, proxied, err := openPacket(ctx, c.network, c.address)
 	if err != nil {
 		return err
 	}
@@ -85,7 +92,7 @@ func (c *packetConn) reopen(ctx context.Context, old net.PacketConn) error {
 	}
 	pc.SetReadDeadline(c.readDeadline)
 	pc.SetWriteDeadline(c.writeDeadline)
-	c.cur, c.gen = pc, gen
+	c.cur, c.gen, c.direct, c.lastProbe = pc, gen, !proxied, time.Now()
 	c.mu.Unlock()
 	if old != nil {
 		old.Close() // unblocks ReadFrom, which moves to the new conn
@@ -132,6 +139,12 @@ func (c *packetConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	}
 	if gen != generation.Load() {
 		c.switchRoute(pc)
+	} else if c.probeDue() {
+		go func() {
+			if proxyListening(c.ctx) {
+				c.switchRoute(pc)
+			}
+		}()
 	}
 	n, err := pc.WriteTo(p, addr)
 	if err != nil {
@@ -142,6 +155,29 @@ func (c *packetConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 		c.switchRoute(pc) // the association died under us
 	}
 	return n, err
+}
+
+// probeDue reports, at most once per proxyProbeInterval, that a plain socket
+// should check whether the bypass proxy has come up.
+func (c *packetConn) probeDue() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.direct || c.closed || time.Since(c.lastProbe) < proxyProbeInterval {
+		return false
+	}
+	c.lastProbe = time.Now()
+	return true
+}
+
+func proxyListening(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ProxyPort)))
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func (c *packetConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -222,17 +258,18 @@ func (c *packetConn) SetWriteDeadline(t time.Time) error {
 
 // openPacket associates through the bypass proxy, or, when the proxy isn't
 // listening (VPN not running), opens a plain socket.
-func openPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
-	pc, err := associate(ctx)
+func openPacket(ctx context.Context, network, address string) (pc net.PacketConn, proxied bool, err error) {
+	pc, err = associate(ctx)
 	if err == nil {
-		return pc, nil
+		return pc, true, nil
 	}
 	var unreachable *proxyUnreachable
 	if !errors.As(err, &unreachable) {
-		return nil, err
+		return nil, false, err
 	}
 	var lc net.ListenConfig
-	return lc.ListenPacket(ctx, network, address)
+	pc, err = lc.ListenPacket(ctx, network, address)
+	return pc, false, err
 }
 
 // associate opens a SOCKS5 UDP association. Its lifetime is the control TCP
@@ -267,5 +304,29 @@ func associate(ctx context.Context) (net.PacketConn, error) {
 		io.Copy(io.Discard, tcp)
 		udp.Close()
 	}()
-	return socks.NewAssociatePacketConn(udp, M.Socksaddr{}, tcp), nil
+	return associatedConn{socks.NewAssociatePacketConn(udp, M.Socksaddr{}, tcp)}, nil
+}
+
+// associatedConn reads through a buffer with room for the SOCKS5 UDP header, which
+// AssociatePacketConn would otherwise take out of the caller's buffer.
+type associatedConn struct {
+	*socks.AssociatePacketConn
+}
+
+const socksUDPHeadroom = 3 + M.MaxSocksaddrLength
+
+var readBufs = sync.Pool{New: func() any { return new([]byte) }}
+
+func (c associatedConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	bp := readBufs.Get().(*[]byte)
+	defer readBufs.Put(bp)
+	if need := len(p) + socksUDPHeadroom; cap(*bp) < need {
+		*bp = make([]byte, need)
+	}
+	buf := (*bp)[:len(p)+socksUDPHeadroom]
+	n, addr, err := c.AssociatePacketConn.ReadFrom(buf)
+	if err != nil {
+		return 0, nil, err
+	}
+	return copy(p, buf[:n]), addr, nil
 }

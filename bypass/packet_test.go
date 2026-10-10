@@ -96,3 +96,62 @@ func TestPacketConnWedgedProxy(t *testing.T) {
 	}
 	require.Less(t, time.Since(start), 2*time.Second)
 }
+
+// A proxy started by another process never calls ProxyStateChanged here; a conn
+// sending on a plain socket must still find it, and once associated must hand
+// back whole payloads into exactly-sized buffers.
+func TestPacketConnFindsUnannouncedProxy(t *testing.T) {
+	if l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ProxyPort))); err != nil {
+		t.Skipf("bypass port busy: %v", err)
+	} else {
+		l.Close()
+	}
+	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer echo.Close()
+	seen := make(chan net.Addr, 64)
+	go func() {
+		b := make([]byte, 2048)
+		for {
+			n, from, err := echo.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			seen <- from
+			echo.WriteTo(b[:n], from)
+		}
+	}()
+
+	pc, err := ListenPacket(context.Background(), "udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer pc.Close()
+	newSingboxServer(t) // no ProxyStateChanged: as if another process started it
+
+	payload := make([]byte, 100)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	local := pc.LocalAddr().(*net.UDPAddr).Port
+	require.Eventually(t, func() bool {
+		if _, err := pc.WriteTo(payload, echo.LocalAddr()); err != nil {
+			return false
+		}
+		select {
+		case from := <-seen:
+			return from.(*net.UDPAddr).Port != local // arrived via the proxy
+		case <-time.After(200 * time.Millisecond):
+			return false
+		}
+	}, 3*proxyProbeInterval, 50*time.Millisecond, "never moved onto the unannounced proxy")
+
+	buf := make([]byte, len(payload))
+	require.NoError(t, pc.SetReadDeadline(time.Now().Add(5*time.Second)))
+	for {
+		n, _, err := pc.ReadFrom(buf)
+		require.NoError(t, err)
+		if n == len(payload) && string(buf) == string(payload) {
+			return
+		}
+		require.Equal(t, len(payload), n, "payload truncated by the SOCKS header")
+	}
+}
