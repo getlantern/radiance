@@ -41,7 +41,8 @@ A separate image is built per transport. Each image bakes `TRANSPORT` in at buil
 docker build --build-arg TRANSPORT=smart       -t radiance-kindling-tester:smart       -f ./docker/Dockerfile.kindling-tester .
 docker build --build-arg TRANSPORT=domainfront -t radiance-kindling-tester:domainfront -f ./docker/Dockerfile.kindling-tester .
 docker build --build-arg TRANSPORT=amp         -t radiance-kindling-tester:amp         -f ./docker/Dockerfile.kindling-tester .
-docker build --build-arg TRANSPORT=dnstt       -t radiance-kindling-tester:dnstt       -f ./docker/Dockerfile.kindling-tester .
+docker build --build-arg TRANSPORT=dnstt --build-arg SOAR_ZONE="$SOAR_ZONE" --build-arg SOAR_PUBLIC_KEY="$SOAR_PUBLIC_KEY" \
+                                                -t radiance-kindling-tester:dnstt       -f ./docker/Dockerfile.kindling-tester .
 ```
 
 ### Running

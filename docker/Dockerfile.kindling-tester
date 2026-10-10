@@ -4,13 +4,18 @@ RUN apt-get update && apt-get install -y git git-lfs bsdmainutils
 
 ARG TARGETOS
 ARG TARGETARCH
+# The Soar server for the DNS-tunnel (dnstt) slot; without them that slot is left out.
+ARG SOAR_ZONE
+ARG SOAR_PUBLIC_KEY
 
 WORKDIR /src
 
 COPY . .
 
 ENV GOCACHE=/root/.cache/go-build
-RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /kindling-tester ./cmd/kindling-tester/...
+RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+    -ldflags "-X github.com/getlantern/radiance/kindling/soar.Zone=${SOAR_ZONE} -X github.com/getlantern/radiance/kindling/soar.PublicKey=${SOAR_PUBLIC_KEY}" \
+    -o /kindling-tester ./cmd/kindling-tester/...
 
 FROM debian:bookworm-slim
 
