@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y git git-lfs bsdmainutils
 
 ARG TARGETOS
 ARG TARGETARCH
-# The Soar server for the DNS-tunnel (dnstt) slot; without them that slot is left out.
+# The Soar DNS-tunnel server; without them the soar transport is left out.
 ARG SOAR_ZONE
 ARG SOAR_PUBLIC_KEY
 

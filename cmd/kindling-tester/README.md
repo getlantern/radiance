@@ -14,7 +14,7 @@ It receives all its arguments via environment variables and uses the kindling HT
 - `TARGET_URL`: The URL that will be fetched through kindling.
 - `DATA`: Directory for config files, logs, and output artefacts (`output.txt`, `timing.txt`, `success`).
 
-- `TRANSPORT`: The kindling transport to test. One of: `smart`, `domainfront`, `amp`, `dnstt`. `dnstt` is kindling's name for the DNS-tunnel slot, which Soar now fills; it needs a build carrying a Soar server (see `kindling/soar`).
+- `TRANSPORT`: The kindling transport to test. One of: `smart`, `domainfront`, `amp`, `soar`. `soar` is the DNS tunnel; it needs a build carrying a Soar server (see `kindling/soar`).
 
 ## CLI usage
 
@@ -24,7 +24,7 @@ DEVICE_ID=1234 USER_ID=123 TOKEN=mytoken RUN_ID=run1 TARGET_URL=https://example.
     ./kindling-tester
 ```
 
-Replace `smart` with the transport you want to test (`domainfront`, `amp`, `dnstt`).
+Replace `smart` with the transport you want to test (`domainfront`, `amp`, `soar`).
 
 Upon success the tester writes:
 - `DATA/success` — empty marker file
@@ -41,8 +41,8 @@ A separate image is built per transport. Each image bakes `TRANSPORT` in at buil
 docker build --build-arg TRANSPORT=smart       -t radiance-kindling-tester:smart       -f ./docker/Dockerfile.kindling-tester .
 docker build --build-arg TRANSPORT=domainfront -t radiance-kindling-tester:domainfront -f ./docker/Dockerfile.kindling-tester .
 docker build --build-arg TRANSPORT=amp         -t radiance-kindling-tester:amp         -f ./docker/Dockerfile.kindling-tester .
-docker build --build-arg TRANSPORT=dnstt --build-arg SOAR_ZONE="$SOAR_ZONE" --build-arg SOAR_PUBLIC_KEY="$SOAR_PUBLIC_KEY" \
-                                                -t radiance-kindling-tester:dnstt       -f ./docker/Dockerfile.kindling-tester .
+docker build --build-arg TRANSPORT=soar --build-arg SOAR_ZONE="$SOAR_ZONE" --build-arg SOAR_PUBLIC_KEY="$SOAR_PUBLIC_KEY" \
+                                                -t radiance-kindling-tester:soar        -f ./docker/Dockerfile.kindling-tester .
 ```
 
 ### Running

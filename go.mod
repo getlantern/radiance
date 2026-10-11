@@ -12,8 +12,6 @@ replace github.com/tetratelabs/wazero => github.com/getlantern/wazero v1.11.0-wa
 
 replace github.com/refraction-networking/water => github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa
 
-// replace github.com/getlantern/dnstt => ../dnstt
-
 // replace github.com/getlantern/kindling => ../kindling
 
 // replace github.com/getlantern/common => ../common
@@ -41,7 +39,7 @@ require (
 	github.com/getlantern/broflake v0.0.0-20260918210927-195b2cd4bd8c
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
-	github.com/getlantern/kindling v0.0.0-20261009152916-e708e3cd37f0
+	github.com/getlantern/kindling v0.0.0-20261011001630-f967cdca8870
 	github.com/getlantern/lantern-box v0.0.140
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
@@ -122,12 +120,10 @@ require (
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/florianl/go-nfqueue/v2 v2.0.2 // indirect
-	github.com/flynn/noise v1.0.1-0.20220214164934-d803f5c4b0f4 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/gaissmai/bart v0.18.0 // indirect
 	github.com/gaukas/wazerofs v0.1.0 // indirect
 	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
-	github.com/getlantern/dnstt v0.0.0-20260603191204-3b860502c0ac // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20260616120552-f204338b01a3 // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
 	github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 // indirect
@@ -150,7 +146,6 @@ require (
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/keybase/go-keychain v0.0.1 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
-	github.com/klauspost/reedsolomon v1.12.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/libdns/acmedns v0.5.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -237,8 +232,6 @@ require (
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7 // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
-	github.com/templexxx/cpu v0.1.1 // indirect
-	github.com/templexxx/xorsimd v0.4.3 // indirect
 	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/theodorsm/covert-dtls v1.5.0 // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
@@ -246,12 +239,9 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	github.com/xtaci/kcp-go/v5 v5.6.20 // indirect
-	github.com/xtaci/smux v1.5.34 // indirect
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2 v2.11.0 // indirect
 	go.etcd.io/bbolt v1.3.11 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -270,7 +260,6 @@ require (
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.21.1 // indirect
-	www.bamsoftware.com/git/dnstt.git v1.20241021.0 // indirect
 	zombiezen.com/go/sqlite v0.13.1 // indirect
 )
 
