@@ -3,8 +3,10 @@ package kindling
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/getlantern/kindling"
 	"github.com/stretchr/testify/assert"
@@ -55,6 +57,21 @@ func TestRecordRace(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "dial: blocked", ampErr)
+	for _, e := range events {
+		for _, kv := range e.Attributes {
+			if kv.Key == "kindling.status" {
+				assert.NotZero(t, kv.Value.AsInt64(), "no status without a response")
+			}
+		}
+	}
+}
+
+func TestTruncateUTF8(t *testing.T) {
+	s := strings.Repeat("a", 255) + "é"
+	got := truncateUTF8(s, 256)
+	assert.True(t, utf8.ValidString(got))
+	assert.Equal(t, strings.Repeat("a", 255), got)
+	assert.Equal(t, "short", truncateUTF8("short", 256))
 }
 
 func TestRecordRaceWithoutSpan(t *testing.T) {
