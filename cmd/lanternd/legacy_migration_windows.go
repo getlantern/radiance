@@ -54,6 +54,9 @@ func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string) (*le
 	if err != nil {
 		return nil, closeNothing, err
 	}
+	if err := legacymigration.GrantProcessQuery(); err != nil {
+		return nil, closeNothing, err
+	}
 	closeServer, err := controller.Start(ctx)
 	if err != nil {
 		return nil, closeNothing, err
