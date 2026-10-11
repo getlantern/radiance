@@ -94,6 +94,38 @@ func TestDestinationSettingsFreshness(t *testing.T) {
 	}
 }
 
+func TestProtectPathRepairsInheritedDirectory(t *testing.T) {
+	if err := requireAdministrator(); err != nil {
+		t.Skip("requires an elevated administrator")
+	}
+	dir := filepath.Join(t.TempDir(), "data")
+	child := filepath.Join(dir, "nested", "fixture.txt")
+	if err := os.MkdirAll(filepath.Dir(child), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("preserved"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := protectPath(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{dir, filepath.Dir(child), child} {
+		handle, _, err := openPath(path, windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = verifyProtectedObject(handle, windows.SE_FILE_OBJECT, fileAllAccess, true)
+		windows.CloseHandle(handle)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(child)
+	if err != nil || string(data) != "preserved" {
+		t.Fatalf("fixture changed: %q, %v", data, err)
+	}
+}
+
 func TestMigrationPipeSIDAfterReadAndAnonymousIsolation(t *testing.T) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
