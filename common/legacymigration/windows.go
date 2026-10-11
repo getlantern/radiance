@@ -601,10 +601,11 @@ func protectPath(path string, root bool) error {
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		return nil
 	}
-	directory, err := os.Open(path)
+	readHandle, _, err := openPath(path, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
 	if err != nil {
 		return err
 	}
+	directory := os.NewFile(uintptr(readHandle), path)
 	defer directory.Close()
 	for {
 		entries, readErr := directory.ReadDir(128)
