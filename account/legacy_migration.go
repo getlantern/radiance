@@ -42,8 +42,11 @@ func VerifyLegacyIdentity(ctx context.Context, client *http.Client, proURL strin
 		return nil, errors.New("invalid account verification response")
 	}
 	var data UserDataResponse
-	if json.Unmarshal(raw, &data) != nil || data.LoginResponse_UserData == nil ||
-		(data.BaseResponse != nil && data.Error != "") || data.UserId != userID ||
+	if json.Unmarshal(raw, &data) != nil || data.LoginResponse_UserData == nil {
+		return nil, errors.New("account verification identity mismatch")
+	}
+	data.UserLevel = normalizeLegacyUserLevel(data.UserLevel)
+	if (data.BaseResponse != nil && data.Error != "") || data.UserId != userID ||
 		(data.UserLevel != "free" && data.UserLevel != "pro") ||
 		(data.DeviceID != "" && data.DeviceID != deviceID) ||
 		(data.Token != "" && data.Token != token) {

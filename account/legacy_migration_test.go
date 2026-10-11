@@ -36,6 +36,20 @@ func TestVerifyLegacyIdentityDoesNotReplaceCurrentAccount(t *testing.T) {
 	}
 }
 
+func TestVerifyLegacyIdentityFreeAccount(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"userId":42}`))
+	}))
+	defer server.Close()
+	data, err := VerifyLegacyIdentity(context.Background(), server.Client(), server.URL, 42, "legacy", "device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.LegacyUserData.UserLevel != "free" {
+		t.Fatal("did not recognize an omitted free account level")
+	}
+}
+
 func TestVerifyLegacyIdentityRejectsMismatchAndRedirect(t *testing.T) {
 	for _, body := range []string{`{"userId":99,"userLevel":"pro"}`, `{"userId":42,"token":"other","userLevel":"pro"}`, `{"userId":42,"userLevel":"admin"}`, `{"error":"secret","userId":42,"userLevel":"pro"}`, `{}`} {
 		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
