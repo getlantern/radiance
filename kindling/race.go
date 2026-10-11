@@ -10,7 +10,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// maxAttemptErr bounds the error text put on a span.
 const maxAttemptErr = 256
 
 // recordRace keeps per-transport results as span attributes, which queries can
