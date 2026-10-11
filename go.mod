@@ -39,7 +39,7 @@ require (
 	github.com/getlantern/broflake v0.0.0-20260918210927-195b2cd4bd8c
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
-	github.com/getlantern/kindling v0.0.0-20261011001630-f967cdca8870
+	github.com/getlantern/kindling v0.0.0-20261011002840-7a10d1b0d2f7
 	github.com/getlantern/lantern-box v0.0.140
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
