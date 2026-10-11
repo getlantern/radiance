@@ -265,8 +265,13 @@ func NewKindling(dataDir string) (*Client, error) {
 
 	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
 		// "pro-server" calls still target api.getiantem.org; everything
-		// else uses df.iantem.io.
-		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
+		// else uses df.iantem.io, which proxyless reaches as df.getiantem.org:
+		// Google's edge 403s Iranian clients on df.iantem.io, while the same
+		// origin behind Cloudflare gets through.
+		kindlingOptions = append(kindlingOptions,
+			kindling.WithProxyless("df.getiantem.org", "api.getiantem.org"),
+			kindling.WithProxylessAliases(map[string]string{"df.iantem.io": "df.getiantem.org"}),
+		)
 	}
 
 	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled && soartunnel.Configured() {
