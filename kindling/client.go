@@ -219,6 +219,7 @@ func NewKindling(dataDir string) (*Client, error) {
 			kindling.WithLogWriter(logger),
 			kindling.WithStreamDialer(bypass.StreamDialer()),
 			kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
+			kindling.WithRaceObserver(recordRace),
 			// "pro-server" calls still target api.getiantem.org; everything
 			// else uses df.iantem.io.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
@@ -236,6 +237,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		kindling.WithLogWriter(logger),
 		kindling.WithStreamDialer(bypass.StreamDialer()),
 		kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
+		kindling.WithRaceObserver(recordRace),
 	}
 
 	updaterCtx, cancel := context.WithCancel(ctx)
