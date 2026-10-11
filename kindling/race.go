@@ -2,6 +2,7 @@ package kindling
 
 import (
 	"context"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/getlantern/kindling"
@@ -42,9 +43,10 @@ func recordRace(ctx context.Context, race kindling.Race) {
 	}
 }
 
-// truncateUTF8 cuts s to at most n bytes without splitting a rune, since OTLP
-// rejects invalid UTF-8.
+// truncateUTF8 returns valid UTF-8 of at most n bytes, since OTLP rejects
+// invalid UTF-8.
 func truncateUTF8(s string, n int) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
 	if len(s) <= n {
 		return s
 	}

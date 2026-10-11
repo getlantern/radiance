@@ -72,6 +72,7 @@ func TestTruncateUTF8(t *testing.T) {
 	assert.True(t, utf8.ValidString(got))
 	assert.Equal(t, strings.Repeat("a", 255), got)
 	assert.Equal(t, "short", truncateUTF8("short", 256))
+	assert.True(t, utf8.ValidString(truncateUTF8("bad \xff byte", 256)))
 }
 
 func TestRecordRaceWithoutSpan(t *testing.T) {
