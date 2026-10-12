@@ -73,6 +73,14 @@ func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
 	return a.storeData(ctx, userResp)
 }
 
+func normalizeLegacyUserLevel(level string) string {
+	// The legacy API omits userLevel for free accounts.
+	if level == "" {
+		return "free"
+	}
+	return level
+}
+
 func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserData, error) {
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err := fmt.Errorf("received bad response: %s", resp.Error)
@@ -83,6 +91,7 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 		slog.Error("user data", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
+	resp.UserLevel = normalizeLegacyUserLevel(resp.UserLevel)
 	resp.DeviceID = settings.GetString(settings.DeviceIDKey)
 	a.mu.Lock()
 	defer a.mu.Unlock()

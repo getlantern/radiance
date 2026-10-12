@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/getlantern/radiance/common/legacymigration"
+
 	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -92,5 +94,5 @@ func authPeer(next http.Handler) http.Handler {
 }
 
 func peerCanAccess(peer usr) bool {
-	return peer.isAdmin
+	return peer.isAdmin || (peer.uid != "" && peer.uid == legacymigration.OwnerSID())
 }
