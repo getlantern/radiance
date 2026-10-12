@@ -9,10 +9,44 @@ import (
 	"os"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
+
+func TestWindowsPipeInteractiveAccess(t *testing.T) {
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, _, err := descriptor.DACL()
+	if err != nil || acl == nil {
+		t.Fatalf("pipe DACL = %v, %v", acl, err)
+	}
+	for index := uint16(0); index < acl.AceCount; index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, uint32(index), &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !sid.IsWellKnown(windows.WinInteractiveSid) {
+			continue
+		}
+		if ace.Mask != pipeClientAccess {
+			t.Fatalf("interactive access = %#x, client requests %#x", ace.Mask, pipeClientAccess)
+		}
+		// FILE_APPEND_DATA and FILE_CREATE_PIPE_INSTANCE share the same access bit.
+		if ace.Mask&windows.FILE_APPEND_DATA != 0 {
+			t.Fatal("interactive users can create pipe instances")
+		}
+		if ace.Mask&(windows.FILE_READ_DATA|windows.FILE_WRITE_DATA) != windows.FILE_READ_DATA|windows.FILE_WRITE_DATA {
+			t.Fatal("interactive users cannot read and write pipe data")
+		}
+		return
+	}
+	t.Fatal("pipe DACL has no interactive-user access entry")
+}
 
 func TestWindowsPipeHTTPAuthenticatesAfterReadingAndSurvivesAnonymousClient(t *testing.T) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()

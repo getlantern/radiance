@@ -23,7 +23,7 @@ const (
 	connectTimeout = 10 * time.Second
 
 	// The interactive-user ACE excludes pipe-instance creation rights.
-	sddl             = `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;IU)`
+	sddl             = `D:P(A;;GA;;;SY)(A;;GRGW;;;BA)(A;;0x12019b;;;IU)`
 	pipeClientAccess = 0x12019b
 )
 
