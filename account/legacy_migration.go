@@ -33,7 +33,7 @@ func VerifyLegacyIdentity(ctx context.Context, client *http.Client, proURL strin
 	if err != nil {
 		return nil, errors.New("account verification unavailable")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return nil, errors.New("account verification rejected")
 	}

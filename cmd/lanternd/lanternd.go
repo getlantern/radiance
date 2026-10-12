@@ -482,7 +482,7 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	if err != nil {
 		return fmt.Errorf("initialize legacy migration: %w", err)
 	}
-	defer closeMigration()
+	defer func() { _ = closeMigration() }()
 	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel))
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
