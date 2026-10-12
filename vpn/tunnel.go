@@ -34,6 +34,7 @@ import (
 	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/clientcontext"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
@@ -317,6 +318,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 		return fmt.Errorf("starting libbox service: %w", err)
 	}
 	slog.Debug("Libbox service started")
+	bypass.ProxyStateChanged()
 
 	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashServer)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
@@ -484,6 +486,7 @@ func (t *tunnel) close() error {
 			errs = append(errs, closer.Close())
 		}
 		err := errors.Join(errs...)
+		bypass.ProxyStateChanged()
 		done <- err
 		slog.Log(nil, rlog.LevelTrace, "Tunnel closers finished", "error", err)
 	}()

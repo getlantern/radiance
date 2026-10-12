@@ -20,9 +20,9 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/kindling/dnstt"
 	"github.com/getlantern/radiance/kindling/fronted"
 	radiancesmart "github.com/getlantern/radiance/kindling/smart"
+	soartunnel "github.com/getlantern/radiance/kindling/soar"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -45,15 +45,17 @@ var (
 	// paused is the current pause state, kept here because a pause can arrive
 	// with no client to receive it.
 	paused bool
-	// EnabledTransports gates which transports NewKindling wires up. AMP and DNS
-	// tunneling are parked off for every country; their builders stay wired
-	// behind these flags so turning either back on is a one-line change.
+	// EnabledTransports gates which transports NewKindling wires up. AMP is
+	// parked off for every country; its builder stays wired behind the flag so
+	// turning it back on is a one-line change. The DNS tunnel (Soar) also needs
+	// a build carrying a Soar server, and kindling races it only after every
+	// other transport fails.
 	//
 	// A var rather than constants because cmd/kindling-tester rewrites it to
 	// isolate a single transport, as does TestNewClient. Production code sets
 	// it once, here: nothing toggles a transport at runtime.
 	EnabledTransports = map[kindling.TransportName]bool{
-		kindling.TransportDNSTunnel:   false,
+		kindling.TransportDNSTunnel:   true,
 		kindling.TransportAMP:         false,
 		kindling.TransportSmart:       true,
 		kindling.TransportDomainfront: true,
@@ -95,7 +97,7 @@ func ensureInit() http.RoundTripper {
 // until kindling is initialized.
 func HTTPClient() *http.Client {
 	return &http.Client{
-		Timeout:   common.DNSTTHTTPTimeout,
+		Timeout:   common.KindlingHTTPTimeout,
 		Transport: readyTransport{},
 	}
 }
@@ -161,7 +163,7 @@ type pausable interface {
 }
 
 // Client is a kindling instance together with the transport resources its
-// construction created (config updaters, fronted/dnstt state).
+// construction created (config updaters, fronted state).
 type Client struct {
 	kindling.Kindling
 	cancel    context.CancelFunc
@@ -217,6 +219,7 @@ func NewKindling(dataDir string) (*Client, error) {
 			kindling.WithLogWriter(logger),
 			kindling.WithStreamDialer(bypass.StreamDialer()),
 			kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
+			kindling.WithRaceObserver(recordRace),
 			// "pro-server" calls still target api.getiantem.org; everything
 			// else uses df.iantem.io.
 			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
@@ -234,6 +237,7 @@ func NewKindling(dataDir string) (*Client, error) {
 		kindling.WithLogWriter(logger),
 		kindling.WithStreamDialer(bypass.StreamDialer()),
 		kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
+		kindling.WithRaceObserver(recordRace),
 	}
 
 	updaterCtx, cancel := context.WithCancel(ctx)
@@ -263,19 +267,23 @@ func NewKindling(dataDir string) (*Client, error) {
 
 	if enabled := EnabledTransports[kindling.TransportSmart]; enabled {
 		// "pro-server" calls still target api.getiantem.org; everything
-		// else uses df.iantem.io.
-		kindlingOptions = append(kindlingOptions, kindling.WithProxyless("df.iantem.io", "api.getiantem.org"))
+		// else uses df.iantem.io, which proxyless reaches as df.getiantem.org:
+		// Google's edge 403s Iranian clients on df.iantem.io, while the same
+		// origin behind Cloudflare gets through.
+		kindlingOptions = append(kindlingOptions,
+			kindling.WithProxyless("df.getiantem.org", "api.getiantem.org"),
+			kindling.WithProxylessAliases(map[string]string{"df.iantem.io": "df.getiantem.org"}),
+		)
 	}
 
-	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled {
-		dnsttOptions, err := dnstt.DNSTTOptions(updaterCtx, filepath.Join(dataDir, "dnstt.yml.gz"), logger)
+	if enabled := EnabledTransports[kindling.TransportDNSTunnel]; enabled && soartunnel.Configured() {
+		sc, err := soartunnel.New(dataDir)
 		if err != nil {
-			slog.Error("failed to create or load dnstt kindling options", slog.Any("error", err))
+			slog.Error("failed to create soar dns tunnel", slog.Any("error", err))
 			span.RecordError(err)
-		}
-		if dnsttOptions != nil {
-			closers = append(closers, dnsttOptions.Close)
-			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(dnsttOptions))
+		} else {
+			closers = append(closers, sc.Close)
+			kindlingOptions = append(kindlingOptions, kindling.WithDNSTunnel(sc))
 		}
 	}
 
