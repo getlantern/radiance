@@ -3,7 +3,7 @@ name: Windows legacy identity migration
 on:
   workflow_dispatch:
   push:
-    branches: [atavism/issue-3959]
+    branches: [main, refactor]
   pull_request:
     paths:
       - "common/legacymigration/**"

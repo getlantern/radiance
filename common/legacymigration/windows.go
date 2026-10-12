@@ -185,33 +185,37 @@ func Prepare(sid, source, id string) error {
 		return fmt.Errorf("migration source directory: %w", err)
 	}
 	defer closeHandles(ancestors)
+	dataDir, err := serviceDataDirectory()
+	if err != nil {
+		return err
+	}
 	return withEnrollmentLock(func() error {
 		s := &registryStore{keyPath: migrationKeyPath}
-		existing, err := s.Load()
-		if err != nil {
-			return err
-		}
-		if existing != nil && !matchingPendingEnrollment(existing, sid, source, id) {
-			return ErrConflict
-		}
-		dataDir, err := serviceDataDirectory()
-		if err != nil {
-			return err
-		}
-		if err := requireFreshDestination(dataDir); err != nil {
-			return err
-		}
-		if err := createEnrollmentKey(migrationKeyPath); err != nil {
-			return err
-		}
-		if err := ProtectDataDir(dataDir); err != nil {
-			return err
-		}
-		if existing != nil {
+		return s.prepare(sid, source, id, dataDir)
+	})
+}
+
+func (s *registryStore) prepare(sid, source, id, dataDir string) error {
+	existing, err := s.Load()
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if matchingPendingEnrollment(existing, sid, source, id) {
 			return nil
 		}
-		return s.save(&Record{Version: 1, MigrationID: id, SourceSID: sid, SourceDirectory: source, Status: "pending"})
-	})
+		return ErrConflict
+	}
+	if err := requireFreshDestination(dataDir); err != nil {
+		return err
+	}
+	if err := createEnrollmentKey(s.keyPath); err != nil {
+		return err
+	}
+	if err := ProtectDataDir(dataDir); err != nil {
+		return err
+	}
+	return s.save(&Record{Version: 1, MigrationID: id, SourceSID: sid, SourceDirectory: source, Status: "pending"})
 }
 
 func requireFreshDestination(path string) error {

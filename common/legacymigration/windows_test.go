@@ -253,6 +253,40 @@ func TestProtectedRegistryPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer key.Close()
+	t.Run("pending enrollment retry", func(t *testing.T) {
+		dataDir := t.TempDir()
+		settingsPath := filepath.Join(dataDir, "local.json")
+		if err := os.WriteFile(settingsPath, []byte("existing"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		before, _, err := key.GetStringValue(migrationValueName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.prepare(record.SourceSID, record.SourceDirectory, record.MigrationID, dataDir); err != nil {
+			t.Fatalf("retry with destination settings: %v", err)
+		}
+		after, _, err := key.GetStringValue(migrationValueName)
+		if err != nil || after != before {
+			t.Fatalf("retry changed enrollment: %q, %v", after, err)
+		}
+		if err := store.prepare(record.SourceSID, record.SourceDirectory, strings.Repeat("b", 32), dataDir); !errors.Is(err, ErrConflict) {
+			t.Fatalf("conflicting enrollment: %v", err)
+		}
+		if err := key.DeleteValue(migrationValueName); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.prepare(record.SourceSID, record.SourceDirectory, record.MigrationID, dataDir); !errors.Is(err, ErrConflict) {
+			t.Fatalf("fresh enrollment with destination settings: %v", err)
+		}
+		if pending, err := store.Load(); err != nil || pending != nil {
+			t.Fatalf("conflicting destination persisted enrollment: %#v, %v", pending, err)
+		}
+		data, err := os.ReadFile(settingsPath)
+		if err != nil || string(data) != "existing" {
+			t.Fatalf("destination settings changed: %q, %v", data, err)
+		}
+	})
 	if err := key.SetExpandStringValue(migrationValueName, `{"version":1}`); err != nil {
 		t.Fatal(err)
 	}
