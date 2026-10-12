@@ -15,7 +15,8 @@ func usrFromToken(t windows.Token) (p usr, err error) {
 	}
 	uname, _, _, err := u.User.Sid.LookupAccount("")
 	if err != nil {
-		return p, fmt.Errorf("failed to lookup account name: %w", err)
+		slog.Debug("failed to lookup pipe client account name", "error", err)
+		uname = ""
 	}
 	isAdm, err := isAdmin(t)
 	if err != nil {
