@@ -146,7 +146,7 @@ func (a *Client) sendRequest(
 		req.URL.RawQuery = q.Encode()
 	}
 
-	if env.GetBool(env.PrintCurl) && common.Stage() {
+	if env.GetBool(env.PrintCurl) || common.Stage() {
 		a.logger.Debug("CURL command", "curl", curlFromRequest(req))
 	}
 
