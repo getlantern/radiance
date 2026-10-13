@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel/trace"
 
 	rlog "github.com/getlantern/radiance/log"
@@ -69,10 +69,17 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+type peerLookupKey struct{}
+
 func authPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peer := usrFromContext(r.Context())
-		if peer.uid == "" {
+		lookup, ok := r.Context().Value(peerLookupKey{}).(func() (usr, error))
+		if !ok {
+			http.Error(w, "could not get credentials", http.StatusUnauthorized)
+			return
+		}
+		peer, err := lookup()
+		if err != nil || peer.uid == "" {
 			http.Error(w, "could not get credentials", http.StatusUnauthorized)
 			return
 		}

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -154,11 +155,9 @@ func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
 	}
 	if withAuth {
 		svr.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
-			peer, err := getConnPeer(c)
-			if err != nil {
-				slog.Error("Failed to get peer credentials", "error", err)
-			}
-			return contextWithUsr(ctx, peer)
+			// Windows pipe credentials are only available after reading the first request.
+			peer := sync.OnceValues(func() (usr, error) { return getConnPeer(c) })
+			return context.WithValue(ctx, peerLookupKey{}, peer)
 		}
 	}
 	return &Server{svr: svr}
