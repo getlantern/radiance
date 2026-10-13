@@ -22,7 +22,7 @@ func prepareLegacyMigration(command *prepareLegacyMigrationCmd) error {
 	return legacymigration.Prepare(command.SID, command.Source, command.MigrationID)
 }
 
-func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string) (*legacymigration.Controller, func() error, error) {
+func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string, server *ipc.Server) (*legacymigration.Controller, func() error, error) {
 	closeNothing := func() error { return nil }
 	record, err := legacymigration.Load()
 	if err != nil || record == nil {
@@ -31,8 +31,10 @@ func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string) (*le
 	if !strings.EqualFold(filepath.Clean(dataPath), filepath.Clean(internal.DefaultDataPath())) {
 		return nil, closeNothing, errors.New("migration requires the protected service data directory")
 	}
-	if err := legacymigration.ProtectDataDir(dataPath); err != nil {
-		return nil, closeNothing, err
+	if record.Status != "completed" {
+		if err := legacymigration.ProtectDataDir(dataPath); err != nil {
+			return nil, closeNothing, err
+		}
 	}
 	store, err := legacymigration.OpenStore()
 	if err != nil {
@@ -54,6 +56,7 @@ func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string) (*le
 	if err != nil {
 		return nil, closeNothing, err
 	}
+	server.SetOwnerSID(controller.OwnerSID())
 	if err := legacymigration.GrantProcessQuery(); err != nil {
 		return nil, closeNothing, err
 	}
@@ -61,9 +64,11 @@ func bootstrapLegacyMigration(ctx context.Context, dataPath, proURL string) (*le
 	if err != nil {
 		return nil, closeNothing, err
 	}
-	record, err = controller.Wait(ctx)
+	record, err = waitForLegacyAdoption(ctx, controller, time.Minute)
 	if err == nil {
-		err = legacymigration.WriteSettings(dataPath, record)
+		if record.Status != "completed" {
+			err = legacymigration.WriteSettings(dataPath, record)
+		}
 	}
 	if err != nil {
 		_ = closeServer()
@@ -105,8 +110,7 @@ func completeLegacyMigration(controller *legacymigration.Controller, server *ipc
 		user, err := be.UserData()
 		state.Healthy = server.Running() && err == nil && user != nil && user.LegacyUserData != nil &&
 			user.LegacyID == state.UserID && user.LegacyToken == state.Token &&
-			user.LegacyUserData.UserId == state.UserID && user.LegacyUserData.DeviceID == state.DeviceID &&
-			user.LegacyUserData.UserLevel == state.UserLevel
+			user.LegacyUserData.UserId == state.UserID && user.LegacyUserData.DeviceID == state.DeviceID
 		return state
 	})
 }

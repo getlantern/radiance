@@ -360,30 +360,6 @@ func TestEnrollmentLockWaitsAndClosesHandles(t *testing.T) {
 	}
 }
 
-func TestEnrollmentUpdatePreservesAnUncertainCommit(t *testing.T) {
-	existing := Record{Version: 1, MigrationID: strings.Repeat("a", 32), SourceSID: "S-1-5-21-1-2-3-1001", SourceDirectory: `C:\Users\Original\Lantern`, Status: "adopted", RequestSHA256: "accepted", Request: &Request{UserID: 123, Token: "first", DeviceID: "device"}}
-	completed := existing
-	completed.Status = "completed"
-	if !compatibleEnrollmentUpdate(&existing, &completed) {
-		t.Fatal("accepted completion rejected")
-	}
-	different := existing
-	request := *existing.Request
-	request.Token = "second"
-	different.Request = &request
-	if compatibleEnrollmentUpdate(&existing, &different) {
-		t.Fatal("allowed replacing an already-written request after a flush failure")
-	}
-	different = existing
-	different.RequestSHA256 = "replacement"
-	if compatibleEnrollmentUpdate(&existing, &different) {
-		t.Fatal("allowed changing the accepted payload digest")
-	}
-	if compatibleEnrollmentUpdate(&completed, &existing) {
-		t.Fatal("allowed reverting a completed enrollment")
-	}
-}
-
 func TestProtectionRejectsReparseWithoutChangingItsTarget(t *testing.T) {
 	if err := requireAdministrator(); err != nil {
 		t.Skip("requires an elevated Windows test process")

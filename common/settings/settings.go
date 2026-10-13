@@ -110,7 +110,6 @@ var k = &settings{
 
 func init() {
 	// set default values.
-	k.k.Set(LocaleKey.String(), "fa-IR")
 	k.k.Set(UserLevelKey.String(), "free")
 }
 
@@ -291,7 +290,7 @@ func loadSettings(path string, opts ...koanf.Option) error {
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	if err := k.k.Load(rawbytes.Provider(contents), &migrationJSON{}, opts...); err != nil {
+	if err := k.k.Load(rawbytes.Provider(contents), &settingsJSON{}, opts...); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
 	return nil

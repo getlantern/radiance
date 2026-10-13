@@ -444,10 +444,11 @@ func configureDaemonEnvironment(environment daemonEnvironment) error {
 
 func daemonBackendOptions(dataPath, logPath, logLevel string) backend.Options {
 	return backend.Options{
-		DataDir:                 dataPath,
-		LogDir:                  logPath,
-		LogLevel:                logLevel,
-		UserMessageCapabilities: userMessageCapabilities(),
+		DataDir:                  dataPath,
+		LogDir:                   logPath,
+		LogLevel:                 logLevel,
+		PreserveTelemetryConsent: true,
+		UserMessageCapabilities:  userMessageCapabilities(),
 	}
 }
 
@@ -476,17 +477,30 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	if err := configureDaemonEnvironment(environment); err != nil {
 		return fmt.Errorf("configure daemon environment: %w", err)
 	}
+	if err := initializeDaemonDiagnostics(dataPath, logPath, logLevel); err != nil {
+		slog.Warn("Daemon diagnostics initialization failed", "error", err)
+	}
 	authURL, proServerURL := daemonBackendURLs(environment)
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath, "environment", environment, "authURL", authURL, "proServerURL", proServerURL)
-	migration, closeMigration, err := bootstrapLegacyMigration(ctx, dataPath, proServerURL)
+	server := ipc.NewServer(nil, !common.IsMobile())
+	if err := server.Start(); err != nil {
+		return fmt.Errorf("failed to start IPC server: %w", err)
+	}
+	defer server.Close()
+	migration, closeMigration, err := bootstrapLegacyMigration(ctx, dataPath, proServerURL, server)
 	if err != nil {
-		return fmt.Errorf("initialize legacy migration: %w", err)
+		slog.Error("Legacy migration requires recovery", "error", err)
+		<-ctx.Done()
+		return nil
 	}
 	defer func() { _ = closeMigration() }()
 	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel))
 	if err != nil {
-		return fmt.Errorf("failed to create backend: %w", err)
+		slog.Error("Failed to create backend", "error", err)
+		<-ctx.Done()
+		return nil
 	}
+	defer be.Close()
 	user, err := be.UserData()
 	if err != nil {
 		return fmt.Errorf("failed to get current data: %w", err)
@@ -501,18 +515,26 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	}
 
 	be.Start()
-	server := ipc.NewServer(be, !common.IsMobile())
-	if err := server.Start(); err != nil {
-		return fmt.Errorf("failed to start IPC server: %w", err)
-	}
 	if migration != nil {
-		if err := completeLegacyMigration(migration, server, be); err != nil {
-			if !migration.Completed() {
-				return errors.New("legacy migration readiness could not be committed")
+		err := completeLegacyMigration(migration, server, be)
+		if err != nil && !migration.Completed() {
+			slog.Warn("Legacy migration readiness is pending", "error", err)
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for err != nil && !migration.Completed() {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+					err = completeLegacyMigration(migration, server, be)
+				}
 			}
-			slog.Warn("Legacy migration is not ready")
+		}
+		if err != nil {
+			slog.Warn("Legacy migration is not ready", "error", err)
 		}
 	}
+	server.SetBackend(be)
 
 	<-ctx.Done()
 

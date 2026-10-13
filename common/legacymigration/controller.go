@@ -7,10 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -37,6 +37,7 @@ type Controller struct {
 	identity    func() State
 	serveErrors chan error
 	rollback    func(context.Context) error
+	ownerSID    string
 }
 
 // NewController loads an existing machine enrollment.
@@ -48,8 +49,8 @@ func NewController(store Store, verify Verify) (*Controller, error) {
 	if err := validateRecord(r); err != nil {
 		return nil, err
 	}
-	c := &Controller{store: store, record: r, verify: verify, adopted: make(chan struct{}), serveErrors: make(chan error, 1)}
-	if r.Request != nil {
+	c := &Controller{store: store, record: r, verify: verify, adopted: make(chan struct{}), serveErrors: make(chan error, 1), ownerSID: r.SourceSID}
+	if r.Status != "pending" {
 		close(c.adopted)
 	}
 	return c, nil
@@ -59,24 +60,82 @@ func validateRecord(r *Record) error {
 	if r == nil || r.Version != 1 || !migrationIDPattern.MatchString(r.MigrationID) || r.SourceSID == "" || r.SourceDirectory == "" {
 		return errors.New("invalid migration enrollment")
 	}
-	if r.Status == "pending" && r.Request == nil && r.Receipt == nil && r.RequestSHA256 == "" && len(r.UserData) == 0 {
+	if r.Status == "pending" && r.Request == nil && r.Receipt == nil && r.RequestSHA256 == "" && r.TokenSHA256 == "" && len(r.UserData) == 0 {
 		return nil
 	}
-	if (r.Status != "adopted" && r.Status != "completed") || r.Request == nil || r.Receipt == nil || !json.Valid(r.UserData) {
+	if (r.Status != "adopted" && r.Status != "completed") || r.Receipt == nil {
+		return errors.New("invalid migration record")
+	}
+	receipt := r.Receipt
+	if !validDigest(r.RequestSHA256) || receipt.Version != 1 || receipt.Status != "adopted" || receipt.RequestSHA256 != r.RequestSHA256 || receipt.MigrationID != r.MigrationID || receipt.SourceSID != r.SourceSID || receipt.UserID <= 0 || !validLevel(receipt.UserLevel) || !validText(receipt.DeviceID, 256, true) {
+		return errors.New("invalid migration binding")
+	}
+	if r.Status == "completed" && r.Request == nil && len(r.UserData) == 0 && validDigest(r.TokenSHA256) {
+		return nil
+	}
+	if r.Request == nil || !json.Valid(r.UserData) || r.TokenSHA256 != "" {
 		return errors.New("invalid migration record")
 	}
 	if err := validateRequest(*r.Request, r); err != nil {
 		return err
 	}
-	hash, err := hex.DecodeString(r.RequestSHA256)
-	if err != nil || len(hash) != sha256.Size || r.Receipt.RequestSHA256 != r.RequestSHA256 || r.Receipt.MigrationID != r.MigrationID || r.Receipt.SourceSID != r.SourceSID || r.Receipt.UserID != r.Request.UserID || r.Receipt.DeviceID != r.Request.DeviceID {
+	if receipt.UserID != r.Request.UserID || receipt.DeviceID != r.Request.DeviceID {
 		return errors.New("invalid migration binding")
 	}
 	return nil
 }
 
+func validDigest(value string) bool {
+	hash, err := hex.DecodeString(value)
+	return err == nil && len(hash) == sha256.Size && strings.ToLower(value) == value
+}
+
+func digest(value []byte) string {
+	hash := sha256.Sum256(value)
+	return hex.EncodeToString(hash[:])
+}
+
+func validLevel(level string) bool {
+	return level == "free" || level == "pro"
+}
+
+func validText(value string, max int, required bool) bool {
+	return len(value) <= max && (!required || value != "") && strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
+func sameDirectory(a, b string) bool {
+	return strings.EqualFold(path.Clean(strings.ReplaceAll(a, `\`, "/")), path.Clean(strings.ReplaceAll(b, `\`, "/")))
+}
+
+func compatibleEnrollmentUpdate(existing, next *Record) bool {
+	if validateRecord(existing) != nil || validateRecord(next) != nil || existing.Version != next.Version || existing.MigrationID != next.MigrationID || existing.SourceSID != next.SourceSID || !sameDirectory(existing.SourceDirectory, next.SourceDirectory) {
+		return false
+	}
+	if existing.Status == "pending" {
+		return next.Status != "completed"
+	}
+	if existing.RequestSHA256 != next.RequestSHA256 || existing.Status == "completed" && next.Status != "completed" {
+		return false
+	}
+	if existing.Status == "adopted" && next.Status == "adopted" {
+		receipt := *existing.Receipt
+		receipt.UserLevel = next.Receipt.UserLevel
+		return *existing.Request == *next.Request && receipt == *next.Receipt
+	}
+	if *existing.Receipt != *next.Receipt {
+		return false
+	}
+	if next.Request == nil {
+		if existing.Request == nil {
+			return existing.TokenSHA256 == next.TokenSHA256
+		}
+		return next.TokenSHA256 == digest([]byte(existing.Request.Token))
+	}
+	return existing.Request != nil && *existing.Request == *next.Request && bytes.Equal(existing.UserData, next.UserData)
+}
+
 func validateRequest(r Request, enrollment *Record) error {
-	if r.Version != 1 || r.MigrationID != enrollment.MigrationID || !strings.EqualFold(r.SourceDirectory, enrollment.SourceDirectory) || r.UserID <= 0 {
+	if r.Version != 1 || r.MigrationID != enrollment.MigrationID || !sameDirectory(r.SourceDirectory, enrollment.SourceDirectory) || r.UserID <= 0 {
 		return errors.New("invalid migration request")
 	}
 	for _, field := range []struct {
@@ -84,7 +143,7 @@ func validateRequest(r Request, enrollment *Record) error {
 		max   int
 		req   bool
 	}{{r.Token, 4096, true}, {r.DeviceID, 256, true}, {r.Locale, 128, false}} {
-		if len(field.value) > field.max || (field.req && field.value == "") || strings.IndexFunc(field.value, unicode.IsControl) >= 0 {
+		if !validText(field.value, field.max, field.req) {
 			return errors.New("invalid migration request")
 		}
 	}
@@ -114,8 +173,8 @@ func (c *Controller) Adopt(ctx context.Context, sid string, raw []byte) (Receipt
 	if len(raw) == 0 || len(raw) > maxRequestBytes {
 		return Receipt{}, errors.New("invalid migration request")
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256(raw))
-	if c.record.Request != nil {
+	hash := digest(raw)
+	if c.record.Receipt != nil {
 		if c.record.RequestSHA256 != hash {
 			return Receipt{}, ErrConflict
 		}
@@ -131,7 +190,7 @@ func (c *Controller) Adopt(ctx context.Context, sid string, raw []byte) (Receipt
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	userData, level, err := c.verify(ctx, request)
-	if err != nil || !json.Valid(userData) || (level != "free" && level != "pro") {
+	if err != nil || !json.Valid(userData) || !validLevel(level) {
 		return Receipt{}, errVerification
 	}
 	receipt := Receipt{Version: 1, MigrationID: request.MigrationID, RequestSHA256: hash,
@@ -182,6 +241,9 @@ func (c *Controller) Completed() bool {
 	return c.record.Status == "completed"
 }
 
+// OwnerSID returns the immutable enrolled Windows user SID.
+func (c *Controller) OwnerSID() string { return c.ownerSID }
+
 // Wait blocks until adoption is durable, ctx is canceled, or the listener fails.
 // The returned record shares controller data and must not be modified.
 func (c *Controller) Wait(ctx context.Context) (*Record, error) {
@@ -198,15 +260,21 @@ func (c *Controller) Wait(ctx context.Context) (*Record, error) {
 	}
 }
 
-// MarkReady durably completes adoption and checks the live identity on subsequent status requests.
+// MarkReady durably completes adoption and removes the enrollment's credential copy.
 func (c *Controller) MarkReady(identity func() State) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.matchesState(identity()) {
+	if c.record.Status != "completed" && !c.matchesState(identity()) {
 		return ErrConflict
+	}
+	if c.record.Status == "completed" && c.record.Request == nil {
+		c.identity = identity
+		return nil
 	}
 	next := *c.record
 	next.Status = "completed"
+	next.TokenSHA256 = digest([]byte(next.Request.Token))
+	next.Request, next.UserData = nil, nil
 	if err := c.store.Save(&next); err != nil {
 		return errPersistence
 	}
@@ -215,11 +283,15 @@ func (c *Controller) MarkReady(identity func() State) error {
 }
 
 func (c *Controller) matchesState(state State) bool {
+	receipt := c.record.Receipt
+	if receipt == nil || !state.Healthy || !validLevel(state.UserLevel) || state.UserID != receipt.UserID || state.DeviceID != receipt.DeviceID {
+		return false
+	}
+	if c.record.Request == nil {
+		return c.record.TokenSHA256 == digest([]byte(state.Token))
+	}
 	r := c.record.Request
-	return r != nil && c.record.Receipt != nil && state.Healthy && state.UserID == r.UserID &&
-		state.Token == r.Token && state.DeviceID == r.DeviceID && state.Locale == r.Locale &&
-		state.UserLevel == c.record.Receipt.UserLevel && state.AutoReport == r.AutoReport &&
-		state.ProxyAll == r.ProxyAll && state.AutoLaunch == r.AutoLaunch
+	return state.Token == r.Token && (c.record.Status == "completed" || (r.Locale == "" || state.Locale == r.Locale) && state.AutoReport == r.AutoReport && state.ProxyAll == r.ProxyAll && state.AutoLaunch == r.AutoLaunch)
 }
 
 // SetRollback installs the operation that disconnects the destination VPN and confirms completion.
@@ -236,7 +308,7 @@ func (c *Controller) Rollback(ctx context.Context, sid, migrationID, requestSHA2
 	if sid == "" || sid != c.record.SourceSID {
 		return Receipt{}, ErrUnauthorized
 	}
-	if c.record.Request == nil || migrationID != c.record.MigrationID || requestSHA256 != c.record.RequestSHA256 {
+	if c.record.Receipt == nil || migrationID != c.record.MigrationID || requestSHA256 != c.record.RequestSHA256 {
 		return Receipt{}, ErrConflict
 	}
 	if c.rollback == nil {

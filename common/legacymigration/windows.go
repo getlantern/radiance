@@ -70,10 +70,11 @@ func (s *registryStore) Load() (*Record, error) {
 	if err := json.Unmarshal([]byte(value), &record); err != nil {
 		return nil, errors.New("invalid migration enrollment JSON")
 	}
-	if record.Version != 1 || record.MigrationID == "" || record.SourceSID == "" {
+	sid, err := windows.StringToSid(record.SourceSID)
+	if err != nil || sid.String() != record.SourceSID {
 		return nil, errors.New("invalid migration enrollment")
 	}
-	return &record, nil
+	return &record, validateRecord(&record)
 }
 
 func (s *registryStore) Save(record *Record) error {
@@ -111,19 +112,6 @@ func (s *registryStore) save(record *Record) error {
 		return fmt.Errorf("flush migration enrollment: %w", windows.Errno(result))
 	}
 	return nil
-}
-
-func compatibleEnrollmentUpdate(existing, next *Record) bool {
-	if existing.Version != next.Version || existing.MigrationID != next.MigrationID || existing.SourceSID != next.SourceSID || !strings.EqualFold(existing.SourceDirectory, next.SourceDirectory) {
-		return false
-	}
-	if existing.Status == "completed" && next.Status != "completed" {
-		return false
-	}
-	if existing.Request != nil {
-		return next.Request != nil && existing.RequestSHA256 == next.RequestSHA256 && *existing.Request == *next.Request
-	}
-	return true
 }
 
 func openEnrollmentKey(path string, access uint32) (registry.Key, error) {
@@ -250,8 +238,8 @@ func requireNoDestinationSettings(path string) error {
 
 func matchingPendingEnrollment(record *Record, sid, source, id string) bool {
 	return record.Version == 1 && record.MigrationID == id && record.SourceSID == sid &&
-		strings.EqualFold(filepath.Clean(record.SourceDirectory), source) && record.Status == "pending" &&
-		record.Request == nil && record.Receipt == nil && record.RequestSHA256 == "" && len(record.UserData) == 0
+		sameDirectory(record.SourceDirectory, source) && record.Status == "pending" &&
+		record.Request == nil && record.Receipt == nil && record.RequestSHA256 == "" && record.TokenSHA256 == "" && len(record.UserData) == 0
 }
 
 func requireAdministrator() error {

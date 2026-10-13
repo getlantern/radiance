@@ -243,6 +243,22 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 		assert.Equal(t, canonicalContents, got, "canonical preferred when all have pro")
 	})
 
+	t.Run("adopted free account survives stale Pro recovery files", func(t *testing.T) {
+		dir := t.TempDir()
+		canonical := filepath.Join(dir, settingsFileName)
+		adopted := []byte(`{"legacy_migration_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","user_id":42,"user_level":"free","token":"adopted-token"}`)
+		require.NoError(t, os.WriteFile(canonical, adopted, 0600))
+		stalePro := []byte(`{"user_id":1,"user_level":"pro","token":"stale-token"}`)
+		writeLegacy(t, dir, stalePro)
+		writeNested(t, dir, stalePro)
+
+		migrateLegacySettingsIfNeeded(dir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, adopted, got)
+	})
+
 	t.Run("none have pro: legacy wins over nested when canonical missing", func(t *testing.T) {
 		// User identifiers must survive even when Pro state is non-pro,
 		// to keep the device registration intact server-side.

@@ -9,21 +9,18 @@ import (
 	"github.com/knadh/koanf/parsers/json"
 )
 
-type migrationJSON struct{ json.JSON }
+type settingsJSON struct{ json.JSON }
 
-func (parser migrationJSON) Unmarshal(raw []byte) (map[string]any, error) {
+func (settingsJSON) Unmarshal(raw []byte) (map[string]any, error) {
 	var values map[string]any
 	decoder := stdjson.NewDecoder(bytes.NewReader(raw))
-	// Default float64 decoding rounds legacy user IDs above 2^53.
+	// Float64 decoding rounds integer IDs above 2^53.
 	decoder.UseNumber()
 	if err := decoder.Decode(&values); err != nil {
 		return nil, err
 	}
 	if decoder.Decode(new(any)) != io.EOF {
 		return nil, errors.New("trailing settings data")
-	}
-	if values["legacy_migration_id"] == nil {
-		return parser.JSON.Unmarshal(raw)
 	}
 	return preciseNumbers(values).(map[string]any), nil
 }

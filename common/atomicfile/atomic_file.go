@@ -36,7 +36,7 @@ func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return replace(f.Name(), filename)
+	return os.Rename(f.Name(), filename)
 }
 
 func ReadFile(filename string) ([]byte, error) {

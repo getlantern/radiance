@@ -12,7 +12,13 @@ import (
 // WriteSettings installs an accepted identity without overwriting existing settings.
 // Completed migrations preserve later account changes.
 func WriteSettings(dataDir string, record *Record) error {
-	if err := validateRecord(record); err != nil || record.Request == nil {
+	if err := validateRecord(record); err != nil {
+		return errors.New("no accepted migration identity")
+	}
+	if record.Status == "completed" {
+		return nil
+	}
+	if record.Request == nil {
 		return errors.New("no accepted migration identity")
 	}
 	path := filepath.Join(dataDir, "settings.json")
@@ -28,9 +34,6 @@ func WriteSettings(dataDir string, record *Record) error {
 		if json.Unmarshal(existing, &current) != nil || current.Migration != record.MigrationID || current.RequestSHA != record.RequestSHA256 {
 			return ErrConflict
 		}
-		if record.Status == "completed" {
-			return nil
-		}
 		if current.UserID != record.Request.UserID || current.Token != record.Request.Token || current.DeviceID != record.Request.DeviceID {
 			return ErrConflict
 		}
@@ -38,9 +41,6 @@ func WriteSettings(dataDir string, record *Record) error {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
-	}
-	if record.Status == "completed" {
-		return ErrConflict
 	}
 	request := record.Request
 	data := map[string]any{

@@ -48,6 +48,7 @@ type Record struct {
 	SourceDirectory string          `json:"source_directory"`
 	Status          string          `json:"status"`
 	RequestSHA256   string          `json:"request_sha256,omitempty"`
+	TokenSHA256     string          `json:"token_sha256,omitempty"`
 	Request         *Request        `json:"request,omitempty"`
 	Receipt         *Receipt        `json:"receipt,omitempty"`
 	UserData        json.RawMessage `json:"user_data,omitempty"`
@@ -80,13 +81,4 @@ func Load() (*Record, error) {
 		return record, err
 	}
 	return record, validateRecord(record)
-}
-
-// OwnerSID reports the authorized user only after durable adoption completes.
-func OwnerSID() string {
-	record, err := Load()
-	if err != nil || record == nil || record.Status != "completed" {
-		return ""
-	}
-	return record.SourceSID
 }

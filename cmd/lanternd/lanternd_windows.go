@@ -278,8 +278,7 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 		return true, 1
 	}
 	if err := legacymigration.GrantProcessQuery(); err != nil {
-		s.logger.Error("Failed to authorize migration process queries", "error", err)
-		return true, 1
+		s.logger.Warn("Migration process queries are unavailable", "error", err)
 	}
 	return s.run(config, r, status)
 }

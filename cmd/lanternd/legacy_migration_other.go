@@ -15,7 +15,7 @@ func prepareLegacyMigration(*prepareLegacyMigrationCmd) error {
 	return errors.New("legacy migration requires Windows")
 }
 
-func bootstrapLegacyMigration(context.Context, string, string) (*legacymigration.Controller, func() error, error) {
+func bootstrapLegacyMigration(context.Context, string, string, *ipc.Server) (*legacymigration.Controller, func() error, error) {
 	return nil, func() error { return nil }, nil
 }
 

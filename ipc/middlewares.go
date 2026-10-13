@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/getlantern/radiance/common/legacymigration"
-
 	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -72,6 +70,7 @@ func (r *statusRecorder) Flush() {
 }
 
 type peerLookupKey struct{}
+type ownerSIDKey struct{}
 
 func authPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +84,8 @@ func authPeer(next http.Handler) http.Handler {
 			http.Error(w, "could not get credentials", http.StatusUnauthorized)
 			return
 		}
-		if !peerCanAccess(peer) {
+		ownerSID, _ := r.Context().Value(ownerSIDKey{}).(string)
+		if !peerCanAccess(peer, ownerSID) {
 			http.Error(w, "permission denied", http.StatusForbidden)
 			return
 		}
@@ -93,6 +93,6 @@ func authPeer(next http.Handler) http.Handler {
 	})
 }
 
-func peerCanAccess(peer usr) bool {
-	return peer.isAdmin || (peer.uid != "" && peer.uid == legacymigration.OwnerSID())
+func peerCanAccess(peer usr, ownerSID string) bool {
+	return peer.isAdmin || (peer.uid != "" && peer.uid == ownerSID)
 }

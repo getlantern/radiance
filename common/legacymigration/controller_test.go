@@ -2,13 +2,16 @@ package legacymigration
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type memoryStore struct {
@@ -29,8 +32,29 @@ func (s *memoryStore) Save(record *Record) error {
 		return errors.New("disk unavailable")
 	}
 	raw, _ := json.Marshal(record)
-	_ = json.Unmarshal(raw, &s.record)
+	var saved *Record
+	_ = json.Unmarshal(raw, &saved)
+	s.record = saved
 	s.saves++
+	return nil
+}
+
+type uncertainStore struct {
+	memoryStore
+	failFlush bool
+}
+
+func (s *uncertainStore) Save(record *Record) error {
+	if s.record != nil && !compatibleEnrollmentUpdate(s.record, record) {
+		return ErrConflict
+	}
+	if err := s.memoryStore.Save(record); err != nil {
+		return err
+	}
+	if s.failFlush {
+		s.failFlush = false
+		return errors.New("flush unavailable")
+	}
 	return nil
 }
 
@@ -170,7 +194,7 @@ func TestReadyRejectsLostCredentialsPreferencesAndBackend(t *testing.T) {
 		func(s *State) { s.Token = "wrong" }, func(s *State) { s.DeviceID = "service-device" },
 		func(s *State) { s.Locale = "en-US" }, func(s *State) { s.AutoReport = false },
 		func(s *State) { s.ProxyAll = false }, func(s *State) { s.AutoLaunch = false },
-		func(s *State) { s.UserLevel = "free" }, func(s *State) { s.Healthy = false },
+		func(s *State) { s.UserLevel = "unknown" }, func(s *State) { s.Healthy = false },
 	} {
 		controller, store, raw := fixture(t)
 		if _, err := controller.Adopt(context.Background(), store.record.SourceSID, raw); err != nil {
@@ -184,6 +208,291 @@ func TestReadyRejectsLostCredentialsPreferencesAndBackend(t *testing.T) {
 		if controller.Completed() {
 			t.Fatal("bad state committed completion")
 		}
+	}
+}
+
+func adoptedFixture(t *testing.T) (*Controller, *memoryStore, []byte, State) {
+	t.Helper()
+	controller, store, raw := fixture(t)
+	if _, err := controller.Adopt(context.Background(), store.record.SourceSID, raw); err != nil {
+		t.Fatal(err)
+	}
+	state := State{UserID: 42, Token: "secret", DeviceID: "old-device", Locale: "fa-IR", UserLevel: "pro", AutoReport: true, ProxyAll: true, AutoLaunch: true, Healthy: true}
+	return controller, store, raw, state
+}
+
+func TestCompletionScrubsCredentialsAndPreservesReplayAfterRestart(t *testing.T) {
+	controller, store, raw, state := adoptedFixture(t)
+	state.UserLevel = "free"
+	if err := controller.MarkReady(func() State { return state }); err != nil {
+		t.Fatalf("subscription refresh prevented completion: %v", err)
+	}
+	encoded, err := json.Marshal(store.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.record.Request != nil || len(store.record.UserData) != 0 || store.record.TokenSHA256 != fmtDigest("secret") || strings.Contains(string(encoded), "secret") || strings.Contains(string(encoded), "legacyToken") {
+		t.Fatalf("completed record retains credentials: %s", encoded)
+	}
+	restarted, err := NewController(store, func(context.Context, Request) (json.RawMessage, string, error) {
+		t.Fatal("completed request verified again")
+		return nil, "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	record, err := restarted.Wait(ctx)
+	if err != nil || record.Status != "completed" || record.Request != nil {
+		t.Fatalf("completed enrollment blocked startup: %+v, %v", record, err)
+	}
+	if restarted.OwnerSID() != store.record.SourceSID {
+		t.Fatal("lost enrolled owner")
+	}
+	receipt, err := restarted.Adopt(context.Background(), store.record.SourceSID, raw)
+	if err != nil || receipt.Status != "adopted" {
+		t.Fatalf("completed replay: %+v, %v", receipt, err)
+	}
+	if _, err := restarted.Adopt(context.Background(), store.record.SourceSID, append(raw, ' ')); !errors.Is(err, ErrConflict) {
+		t.Fatalf("completed replay accepted different bytes: %v", err)
+	}
+	if _, err := restarted.Adopt(context.Background(), "other", raw); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("completed replay accepted another owner: %v", err)
+	}
+	state.Locale, state.UserLevel = "en-US", "pro"
+	state.AutoReport, state.ProxyAll, state.AutoLaunch = false, false, false
+	if err := restarted.MarkReady(func() State { return state }); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err = restarted.Status(store.record.SourceSID)
+	if err != nil || receipt.Status != "ready" || store.saves != 2 {
+		t.Fatalf("saved preferences or tier invalidated completed migration: %+v, %v", receipt, err)
+	}
+	calls := 0
+	restarted.SetRollback(func(context.Context) error { calls++; return nil })
+	if _, err := restarted.Rollback(context.Background(), receipt.SourceSID, receipt.MigrationID, receipt.RequestSHA256); err != nil || calls != 1 {
+		t.Fatalf("compact receipt failed rollback: %v", err)
+	}
+	for _, change := range []func(*State){
+		func(s *State) { s.UserID++ },
+		func(s *State) { s.Token = "new-login" },
+		func(s *State) { s.DeviceID = "new-device" },
+		func(s *State) { s.Healthy = false },
+		func(s *State) { s.UserLevel = "invalid" },
+	} {
+		changed := state
+		change(&changed)
+		if err := restarted.MarkReady(func() State { return changed }); err != nil {
+			t.Fatalf("later account change prevented startup: %v", err)
+		}
+		if receipt, err := restarted.Status(store.record.SourceSID); err != nil || receipt.Status == "ready" {
+			t.Fatalf("readiness lost live identity binding: %+v, %v", receipt, err)
+		}
+	}
+}
+
+func fmtDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", sum)
+}
+
+func TestCompletionPersistenceFailureRetainsRecoveryCredentials(t *testing.T) {
+	controller, store, _, state := adoptedFixture(t)
+	store.fail = true
+	if err := controller.MarkReady(func() State { return state }); !errors.Is(err, errPersistence) {
+		t.Fatalf("missing completion persistence failure: %v", err)
+	}
+	if controller.Completed() || store.record.Request == nil || controller.record.Request == nil || len(store.record.UserData) == 0 {
+		t.Fatal("failed completion discarded pending recovery identity")
+	}
+	store.fail = false
+	if err := controller.MarkReady(func() State { return state }); err != nil || !controller.Completed() {
+		t.Fatalf("completion retry failed: %v", err)
+	}
+}
+
+func TestAdoptionRetriesAnUncertainFlushWithARefreshedProfile(t *testing.T) {
+	_, pending, raw := fixture(t)
+	store := &uncertainStore{memoryStore: *pending, failFlush: true}
+	calls := 0
+	controller, err := NewController(store, func(_ context.Context, request Request) (json.RawMessage, string, error) {
+		calls++
+		level := "pro"
+		if calls > 1 {
+			level = "free"
+		}
+		data := json.RawMessage(fmt.Sprintf(`{"legacyID":42,"legacyToken":%q,"profile_revision":%d}`, request.Token, calls))
+		return data, level, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := store.record.SourceSID
+	if _, err := controller.Adopt(context.Background(), sid, raw); !errors.Is(err, errPersistence) {
+		t.Fatalf("missing uncertain flush failure: %v", err)
+	}
+	if store.record.Status != "adopted" || controller.record.Status != "pending" {
+		t.Fatal("flush failure did not leave an uncertain adoption")
+	}
+	replaced := []byte(strings.Replace(string(raw), `"token":"secret"`, `"token":"different"`, 1))
+	if _, err := controller.Adopt(context.Background(), sid, replaced); !errors.Is(err, errPersistence) {
+		t.Fatalf("uncertain adoption allowed replacement credentials: %v", err)
+	}
+	if store.record.Request.Token != "secret" || store.saves != 1 {
+		t.Fatal("failed retry replaced the already-written identity")
+	}
+	receipt, err := controller.Adopt(context.Background(), sid, raw)
+	if err != nil || receipt.UserLevel != "free" || calls != 3 || store.saves != 2 || controller.record.Status != "adopted" {
+		t.Fatalf("identical retry with refreshed profile failed: %+v, %v", receipt, err)
+	}
+	if !strings.Contains(string(store.record.UserData), `"profile_revision":3`) {
+		t.Fatal("identical retry discarded refreshed authenticated profile")
+	}
+}
+
+func TestMissingLegacyLocaleAllowsNormalLocaleDetection(t *testing.T) {
+	controller, store, raw := fixture(t)
+	var request Request
+	_ = json.Unmarshal(raw, &request)
+	request.Locale = ""
+	raw, _ = json.Marshal(request)
+	if _, err := controller.Adopt(context.Background(), store.record.SourceSID, raw); err != nil {
+		t.Fatal(err)
+	}
+	state := State{UserID: 42, Token: "secret", DeviceID: "old-device", Locale: "en-US", UserLevel: "pro", AutoReport: true, ProxyAll: true, AutoLaunch: true, Healthy: true}
+	if err := controller.MarkReady(func() State { return state }); err != nil {
+		t.Fatalf("locale detection prevented migration readiness: %v", err)
+	}
+}
+
+func TestOldCompletedRecordIsScrubbedWithoutRestoringItsAccount(t *testing.T) {
+	controller, store, _, _ := adoptedFixture(t)
+	store.record.Status = "completed"
+	restarted, err := NewController(store, controller.verify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	changed := []byte(`{"user_id":99,"token":"new-login","locale":"en-US"}`)
+	if err := os.WriteFile(path, changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSettings(dir, store.record); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.MarkReady(func() State { return State{} }); err != nil {
+		t.Fatalf("logout prevented old completed-record cleanup: %v", err)
+	}
+	if store.record.Request != nil || len(store.record.UserData) != 0 {
+		t.Fatal("old completed enrollment retained credentials")
+	}
+	if err := WriteSettings(dir, store.record); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(changed) {
+		t.Fatalf("completed enrollment reimported old settings: %q, %v", after, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSettings(dir, store.record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("compact completed record recreated deleted settings")
+	}
+}
+
+func TestPersistedReceiptValidation(t *testing.T) {
+	controller, store, _, state := adoptedFixture(t)
+	if err := controller.MarkReady(func() State { return state }); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Record){
+		"receipt version":        func(r *Record) { r.Receipt.Version++ },
+		"receipt status":         func(r *Record) { r.Receipt.Status = "ready" },
+		"receipt level":          func(r *Record) { r.Receipt.UserLevel = "invalid" },
+		"receipt user":           func(r *Record) { r.Receipt.UserID = 0 },
+		"receipt device":         func(r *Record) { r.Receipt.DeviceID = "" },
+		"receipt SID":            func(r *Record) { r.Receipt.SourceSID = "other" },
+		"receipt migration":      func(r *Record) { r.Receipt.MigrationID = strings.Repeat("b", 32) },
+		"receipt digest":         func(r *Record) { r.Receipt.RequestSHA256 = strings.Repeat("b", 64) },
+		"token fingerprint":      func(r *Record) { r.TokenSHA256 = "invalid" },
+		"missing fingerprint":    func(r *Record) { r.TokenSHA256 = "" },
+		"residual account":       func(r *Record) { r.UserData = []byte(`{}`) },
+		"pending compact record": func(r *Record) { r.Status = "pending" },
+		"adopted compact record": func(r *Record) { r.Status = "adopted" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(store.record)
+			var record Record
+			_ = json.Unmarshal(raw, &record)
+			mutate(&record)
+			if _, err := NewController(&memoryStore{record: &record}, controller.verify); err == nil {
+				t.Fatal("loaded an invalid completed enrollment")
+			}
+		})
+	}
+}
+
+func TestDirectoryComparisonDoesNotChangeReplayBinding(t *testing.T) {
+	controller, store, raw := fixture(t)
+	var request Request
+	_ = json.Unmarshal(raw, &request)
+	request.SourceDirectory = `c:/users/original/AppData/Roaming/./Lantern/`
+	changed, _ := json.Marshal(request)
+	if _, err := controller.Adopt(context.Background(), store.record.SourceSID, changed); err != nil {
+		t.Fatalf("equivalent local path rejected: %v", err)
+	}
+	if _, err := controller.Adopt(context.Background(), store.record.SourceSID, raw); !errors.Is(err, ErrConflict) {
+		t.Fatalf("equivalent path bypassed byte-identical replay: %v", err)
+	}
+}
+
+func TestEnrollmentUpdatePreservesAcceptedBindingAndCannotRestoreCredentials(t *testing.T) {
+	controller, store, _, state := adoptedFixture(t)
+	adopted, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullCompleted := *adopted
+	fullCompleted.Status = "completed"
+	if !compatibleEnrollmentUpdate(adopted, &fullCompleted) {
+		t.Fatal("legacy completion rejected")
+	}
+	if err := controller.MarkReady(func() State { return state }); err != nil {
+		t.Fatal(err)
+	}
+	if !compatibleEnrollmentUpdate(adopted, store.record) || !compatibleEnrollmentUpdate(&fullCompleted, store.record) || !compatibleEnrollmentUpdate(store.record, store.record) {
+		t.Fatal("credential scrubbing or compact replay rejected")
+	}
+	if compatibleEnrollmentUpdate(store.record, &fullCompleted) || compatibleEnrollmentUpdate(store.record, adopted) {
+		t.Fatal("completed enrollment restored credentials")
+	}
+	for name, mutate := range map[string]func(*Record){
+		"credentials":    func(r *Record) { r.Request.Token = "second" },
+		"request digest": func(r *Record) { r.RequestSHA256 = strings.Repeat("b", 64); r.Receipt.RequestSHA256 = r.RequestSHA256 },
+		"receipt user":   func(r *Record) { r.Receipt.UserID++; r.Request.UserID++ },
+		"receipt device": func(r *Record) { r.Receipt.DeviceID = "second"; r.Request.DeviceID = "second" },
+		"source SID":     func(r *Record) { r.SourceSID = "other"; r.Receipt.SourceSID = "other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(adopted)
+			var next Record
+			_ = json.Unmarshal(raw, &next)
+			mutate(&next)
+			if compatibleEnrollmentUpdate(adopted, &next) {
+				t.Fatal("changed an already-written identity after an uncertain flush")
+			}
+		})
+	}
+	next := *store.record
+	next.TokenSHA256 = fmtDigest("second")
+	if compatibleEnrollmentUpdate(store.record, &next) {
+		t.Fatal("compact completion changed credential fingerprint")
 	}
 }
 
