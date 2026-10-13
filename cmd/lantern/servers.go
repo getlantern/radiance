@@ -53,6 +53,43 @@ type ServerListEntry struct {
 	SelectionHistory *servers.SelectionHistory `json:"selection_history,omitempty"`
 }
 
+// ServerDetail represents a server in the detail output; it omits the outbound
+// options and private-server access token.
+type ServerDetail struct {
+	ServerListEntry
+	IsLantern   bool                     `json:"isLantern"`
+	Credentials *ServerDetailCredentials `json:"credentials,omitempty"`
+}
+
+// ServerDetailCredentials is [servers.ServerCredentials] without the access token.
+type ServerDetailCredentials struct {
+	Port     int  `json:"port,omitempty"`
+	IsJoined bool `json:"is_joined,omitempty"`
+}
+
+func newServerListEntry(s *servers.Server) ServerListEntry {
+	return ServerListEntry{
+		Tag:              s.Tag,
+		Type:             s.Type,
+		Location:         s.Location,
+		SelectionHistory: s.SelectionHistory,
+	}
+}
+
+func redactServer(s *servers.Server) ServerDetail {
+	if s == nil {
+		return ServerDetail{}
+	}
+	detail := ServerDetail{
+		ServerListEntry: newServerListEntry(s),
+		IsLantern:       s.IsLantern,
+	}
+	if c := s.Credentials; c != nil {
+		detail.Credentials = &ServerDetailCredentials{Port: c.Port, IsJoined: c.IsJoined}
+	}
+	return detail
+}
+
 type PrivateServerCmd struct {
 	Add          *PrivateServerAddCmd          `arg:"subcommand:add" help:"add a private server"`
 	Invite       *PrivateServerInviteCmd       `arg:"subcommand:invite" help:"create an invite for a private server"`
@@ -157,12 +194,7 @@ func serversList(ctx context.Context, c *ipc.Client, showLatency, asJSON bool, l
 	if asJSON {
 		out := make([]ServerListEntry, 0, len(srvs))
 		for _, s := range srvs {
-			out = append(out, ServerListEntry{
-				Tag:              s.Tag,
-				Type:             s.Type,
-				Location:         s.Location,
-				SelectionHistory: s.SelectionHistory,
-			})
+			out = append(out, newServerListEntry(s))
 		}
 		return printJSON(out)
 	}
@@ -204,7 +236,7 @@ func serversGet(ctx context.Context, c *ipc.Client, tag string) error {
 		fmt.Println("Server not found")
 		return nil
 	}
-	return printJSON(svr)
+	return printJSON(redactServer(svr))
 }
 
 func serversSelected(ctx context.Context, c *ipc.Client) error {
@@ -216,7 +248,7 @@ func serversSelected(ctx context.Context, c *ipc.Client) error {
 		fmt.Println("No server selected")
 		return nil
 	}
-	return printJSON(svr)
+	return printJSON(redactServer(svr))
 }
 
 func serversAutoSelections(ctx context.Context, c *ipc.Client, watch bool) error {

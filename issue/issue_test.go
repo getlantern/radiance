@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/log"
 )
 
 func TestSendReport(t *testing.T) {
@@ -52,7 +54,7 @@ func TestSendReport(t *testing.T) {
 		Language:          settings.GetString(settings.LocaleKey),
 	}
 
-	reporter := NewIssueReporter(newProtobufTestClient(t, want, assertLogsZipContainsHello))
+	reporter := NewIssueReporter(newProtobufTestClient(t, want, assertLogsZipContainsHello), log.NoOpLogger())
 	report := IssueReport{
 		Type:                  CannotAccessBlockedSites,
 		Description:           "Description placeholder-test only",
@@ -99,7 +101,7 @@ func TestSendReportWithFirstClassAttachment(t *testing.T) {
 		filename:    "screenshot.png",
 		contentType: "image/png",
 		content:     []byte("png-bytes"),
-	}))
+	}), log.NoOpLogger())
 	report := IssueReport{
 		Type:              CannotAccessBlockedSites,
 		Description:       "Description placeholder-test only",
@@ -128,7 +130,7 @@ func TestSendReportRejectsInvalidFirstClassAttachment(t *testing.T) {
 	settings.InitSettings(t.TempDir())
 	defer settings.Reset()
 
-	reporter := NewIssueReporter(&http.Client{})
+	reporter := NewIssueReporter(&http.Client{}, log.NoOpLogger())
 	err := reporter.Report(context.Background(), IssueReport{
 		Type:        CannotAccessBlockedSites,
 		Description: "validation path",
@@ -286,4 +288,33 @@ func assertLogsZipContainsHello(t *testing.T, got *ReportIssueRequest) {
 		}
 	}
 	assert.True(t, found, "logs.zip should contain attachments/Hello.txt")
+}
+
+func TestReportFailureLogsStatusOnly(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
+
+	const description = "my account email is user@example.com and my key is abc123"
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			// A backend error that echoes the submitted report back to us.
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader("rejected report: " + description)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	err := NewIssueReporter(client, logger).Report(context.Background(), IssueReport{
+		Type:        CannotAccessBlockedSites,
+		Description: description,
+		Email:       "user@example.com",
+	})
+	require.Error(t, err, "expected an error for a 500 response")
+	assert.NotContains(t, buf.String(), "abc123", "echoed report data reached the log")
+	assert.Contains(t, buf.String(), "statusCode=500", "failure log dropped the status")
 }

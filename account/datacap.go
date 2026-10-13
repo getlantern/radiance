@@ -51,6 +51,7 @@ const (
 var ErrCapExhausted = errors.New("datacap exhausted")
 
 type dataCapStreamState struct {
+	logger       *slog.Logger
 	progressed   bool
 	enabled      bool
 	allotmentEnd time.Time
@@ -62,20 +63,20 @@ func (s *dataCapStreamState) wrap(handler func(*DataCapInfo)) func(*DataCapInfo)
 	return func(info *DataCapInfo) {
 		s.progressed = true
 		s.enabled = info.Enabled
-		s.allotmentEnd = parseAllotmentEnd(info.Usage)
+		s.allotmentEnd = parseAllotmentEnd(s.logger, info.Usage)
 		handler(info)
 	}
 }
 
 // parseAllotmentEnd extracts and parses the reset time from usage data.
-func parseAllotmentEnd(usage *DataCapUsageDetails) time.Time {
+func parseAllotmentEnd(logger *slog.Logger, usage *DataCapUsageDetails) time.Time {
 	if usage == nil || usage.AllotmentEndTime == "" {
 		return time.Time{}
 	}
 
 	t, err := time.Parse(time.RFC3339, usage.AllotmentEndTime)
 	if err != nil {
-		slog.Warn("datacap allotmentEndTime parse failed", "value", usage.AllotmentEndTime, "error", err)
+		logger.Warn("datacap allotmentEndTime parse failed", "value", usage.AllotmentEndTime, "error", err)
 		return time.Time{}
 	}
 	return t
@@ -146,11 +147,11 @@ func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) 
 		}
 
 		start := time.Now()
-		state := dataCapStreamState{}
+		state := dataCapStreamState{logger: a.logger}
 
 		err := a.connectDataCapSSE(ctx, state.wrap(handler))
 		if err != nil {
-			slog.Debug("datacap SSE stream ended", "error", err)
+			a.logger.Debug("datacap SSE stream ended", "error", err)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -168,7 +169,7 @@ func (a *Client) DataCapStream(ctx context.Context, handler func(*DataCapInfo)) 
 		// closes. Recheck on a long interval rather than reconnecting into an
 		// immediate close.
 		if state.progressed && !state.enabled {
-			slog.Info("datacap disabled; pausing before recheck", "retryIn", datacapDisabledRetry)
+			a.logger.Info("datacap disabled; pausing before recheck", "retryIn", datacapDisabledRetry)
 			if err := waitOrDone(ctx, datacapDisabledRetry); err != nil {
 				return err
 			}
@@ -204,7 +205,7 @@ func allotmentResetWait(allotmentEnd time.Time) time.Duration {
 // context is cancelled.
 func (a *Client) waitForAllotmentReset(ctx context.Context, allotmentEnd time.Time) error {
 	wait := allotmentResetWait(allotmentEnd)
-	slog.Info("datacap exhausted; waiting for allotment reset", "wait", wait, "allotmentEnd", allotmentEnd)
+	a.logger.Info("datacap exhausted; waiting for allotment reset", "wait", wait, "allotmentEnd", allotmentEnd)
 	return waitOrDone(ctx, wait)
 }
 
@@ -246,7 +247,7 @@ func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInf
 		return traces.RecordError(ctx, fmt.Errorf("datacap SSE status %d", resp.StatusCode))
 	}
 
-	slog.Debug("connected to datacap SSE stream")
+	a.logger.Debug("connected to datacap SSE stream")
 
 	eventCh, scanErr := readSSE(ctx, resp.Body)
 	var (
@@ -265,7 +266,7 @@ func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInf
 				if len(prefix) > 64 {
 					prefix = prefix[:64]
 				}
-				slog.Warn("datacap SSE payload not valid JSON", "error", err, "payloadPrefix", prefix)
+				a.logger.Warn("datacap SSE payload not valid JSON", "error", err, "payloadPrefix", prefix)
 				continue
 			}
 
@@ -274,10 +275,10 @@ func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInf
 			handler(&datacap)
 
 			if datacap.Usage != nil {
-				slog.Debug("datacap updated", "bytesUsed", datacap.Usage.BytesUsed)
+				a.logger.Debug("datacap updated", "bytesUsed", datacap.Usage.BytesUsed)
 			}
 		case "cap_exhausted":
-			slog.Log(nil, log.LevelTrace, "datacap SSE cap_exhausted event received")
+			a.logger.Log(nil, log.LevelTrace, "datacap SSE cap_exhausted event received")
 			// The server closes intentionally after this event. Re-emit the last
 			// known datacap state with Exhausted set so callers get the reset time.
 			capExhausted = true

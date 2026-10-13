@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/ipc"
 )
 
@@ -122,7 +123,7 @@ func accountLogin(ctx context.Context, c *ipc.Client, cmd *LoginCmd) error {
 		if err != nil {
 			return err
 		}
-		return printJSON(userData)
+		return printJSON(redactUserData(userData))
 	}
 
 	email, err := prompt("Email: ")
@@ -139,7 +140,7 @@ func accountLogin(ctx context.Context, c *ipc.Client, cmd *LoginCmd) error {
 		return err
 	}
 	fmt.Println("Logged in successfully.")
-	return printJSON(userData)
+	return printJSON(redactUserData(userData))
 }
 
 func accountLogout(ctx context.Context, c *ipc.Client) error {
@@ -311,6 +312,26 @@ func accountDevices(ctx context.Context, c *ipc.Client, cmd *DevicesCmd) error {
 			return err
 		}
 		return printJSON(devices)
+	}
+}
+
+// redactedUserData is the subset of [account.UserData] safe to print; it omits
+// the pro tokens and JWT.
+type redactedUserData struct {
+	ID             string `json:"id"`
+	LegacyID       int64  `json:"legacyID"`
+	Email          string `json:"email,omitempty"`
+	EmailConfirmed bool   `json:"emailConfirmed"`
+	Success        bool   `json:"success"`
+}
+
+func redactUserData(u *account.UserData) redactedUserData {
+	return redactedUserData{
+		ID:             u.GetId(),
+		LegacyID:       u.GetLegacyID(),
+		Email:          u.GetLegacyUserData().GetEmail(),
+		EmailConfirmed: u.GetEmailConfirmed(),
+		Success:        u.GetSuccess(),
 	}
 }
 

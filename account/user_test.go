@@ -1,11 +1,13 @@
 package account
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +22,7 @@ import (
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/log"
 )
 
 // testServer holds server-side SRP state for the mock auth server.
@@ -180,10 +183,9 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/user-link-remove", func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, LinkResponse{
-			BaseResponse: &protos.BaseResponse{},
-			UserID:       123,
-			ProToken:     "token",
+		writeJSONResponse(w, map[string]any{
+			"userID": 123,
+			"token":  "token",
 		})
 	})
 
@@ -290,6 +292,7 @@ func newTestClient(t *testing.T) (*Client, *testServer) {
 	t.Cleanup(settings.Reset)
 	return &Client{
 		httpClient: ts.Client(),
+		logger:     log.NoOpLogger(),
 		proURL:     ts.URL,
 		authURL:    ts.URL,
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
@@ -354,6 +357,27 @@ func TestLogout(t *testing.T) {
 	settings.Set(settings.DeviceIDKey, "deviceId")
 	_, err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
+}
+
+func TestLogoutOmitsCredentials(t *testing.T) {
+	const (
+		legacyToken = "legacy-token-value"
+		jwtToken    = "jwt-token-value"
+	)
+	ac, _ := newTestClient(t)
+	settings.Set(settings.DeviceIDKey, "deviceId")
+	settings.Set(settings.TokenKey, legacyToken)
+	settings.Set(settings.JwtTokenKey, jwtToken)
+
+	var buf bytes.Buffer
+	ac.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	_, err := ac.Logout(context.Background(), "test@example.com")
+	require.NoError(t, err)
+	for _, secret := range []string{legacyToken, jwtToken, "test@example.com"} {
+		assert.NotContains(t, buf.String(), secret, "credential or PII leaked into the log")
+	}
+	assert.Contains(t, buf.String(), "deviceId=deviceId", "logout log dropped the device ID")
 }
 
 func TestStartRecoveryByEmail(t *testing.T) {

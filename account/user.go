@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io/fs"
 	"net/url"
-	"os"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
@@ -38,7 +38,7 @@ func (a *Client) NewUser(ctx context.Context) (*UserData, error) {
 
 	resp, err := a.sendProRequest(ctx, "POST", "/user-create", nil, nil, nil)
 	if err != nil {
-		slog.Error("creating new user", "error", err)
+		a.logger.Error("creating new user", "error", err)
 		return nil, traces.RecordError(ctx, err)
 	}
 	var userResp UserDataResponse
@@ -63,7 +63,7 @@ func (a *Client) FetchUserData(ctx context.Context) (*UserData, error) {
 func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
 	resp, err := a.sendProRequest(ctx, "GET", "/user-data", nil, nil, nil)
 	if err != nil {
-		slog.Error("user data", "error", err)
+		a.logger.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
 	}
 	var userResp UserDataResponse
@@ -76,11 +76,11 @@ func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
 func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserData, error) {
 	if resp.BaseResponse != nil && resp.Error != "" {
 		err := fmt.Errorf("received bad response: %s", resp.Error)
-		slog.Error("user data", "error", err)
+		a.logger.Error("user data", "error", err)
 		return nil, traces.RecordError(ctx, err)
 	}
 	if resp.LoginResponse_UserData == nil {
-		slog.Error("user data", "error", "no user data in response")
+		a.logger.Error("user data", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
 	resp.DeviceID = settings.GetString(settings.DeviceIDKey)
@@ -228,15 +228,15 @@ func (a *Client) SignupEmailConfirmation(ctx context.Context, email, code string
 }
 
 func writeSalt(salt []byte, path string) error {
-	if err := os.WriteFile(path, salt, fileperm.File); err != nil {
+	if err := atomicfile.WriteFile(path, salt, fileperm.File); err != nil {
 		return fmt.Errorf("writing salt to %s: %w", path, err)
 	}
 	return nil
 }
 
 func readSalt(path string) ([]byte, error) {
-	buf, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	buf, err := atomicfile.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("reading salt from %s: %w", path, err)
 	}
 	if len(buf) == 0 {
@@ -309,7 +309,7 @@ func (a *Client) Logout(ctx context.Context, email string) (*UserData, error) {
 	if jwtToken != "" {
 		logout.Token = jwtToken
 	}
-	slog.Info("Logout request", "request", logout, "JWTTokenSet", jwtToken != "")
+	a.logger.Info("Logout request", "deviceId", logout.DeviceId, "JWTTokenSet", jwtToken != "")
 	_, err := a.sendRequest(ctx, "POST", "/users/logout", nil, nil, logout)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
@@ -538,7 +538,7 @@ func (a *Client) OAuthLoginURL(ctx context.Context, provider string) (string, er
 }
 
 func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*UserData, error) {
-	slog.Debug("Getting OAuth login callback")
+	a.logger.Debug("Getting OAuth login callback")
 	jwtUserInfo, err := decodeJWT(oAuthToken)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding JWT: %w", err)
@@ -562,7 +562,7 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 	}
 
 	if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
-		slog.Error("Failed to persist JWT token", "error", err)
+		a.logger.Error("Failed to persist JWT token", "error", err)
 		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
 	}
 	settings.Set(settings.OAuthLoginKey, true)
@@ -592,8 +592,7 @@ var ErrInvalidToken = errors.New("invalid OAuth token")
 
 type LinkResponse struct {
 	*protos.BaseResponse `json:",inline"`
-	UserID               int    `json:"userID"`
-	ProToken             string `json:"token"`
+	UserID               int `json:"userID"`
 }
 
 // RemoveDevice removes a device from the user's account.
@@ -741,7 +740,7 @@ func (a *Client) setData(data *UserData) {
 func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserData {
 	changed, err := a.storeIdentityLocked(data.LegacyID, data.LegacyToken)
 	if err != nil {
-		slog.Error("failed to store account identity", "error", err)
+		a.logger.Error("failed to store account identity", "error", err)
 	}
 	defer func() {
 		if changed {
@@ -749,7 +748,7 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		}
 	}()
 	if data.LegacyUserData == nil {
-		slog.Info("no user data to set, storing id and token only")
+		a.logger.Info("no user data to set, storing id and token only")
 		return data
 	}
 
@@ -757,21 +756,21 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		oldUserLevel := settings.GetString(settings.UserLevelKey)
 		changed = changed || oldUserLevel != data.LegacyUserData.UserLevel
 		if err := settings.Set(settings.UserLevelKey, data.LegacyUserData.UserLevel); err != nil {
-			slog.Error("failed to set user level in settings", "error", err)
+			a.logger.Error("failed to set user level in settings", "error", err)
 		}
 	}
 	if data.LegacyUserData.Email != "" {
 		oldEmail := settings.GetString(settings.EmailKey)
 		changed = changed || oldEmail != data.LegacyUserData.Email
 		if err := settings.Set(settings.EmailKey, data.LegacyUserData.Email); err != nil {
-			slog.Error("failed to set email in settings", "error", err)
+			a.logger.Error("failed to set email in settings", "error", err)
 		}
 	}
 	if data.Token != "" {
 		oldJwtToken := settings.GetString(settings.JwtTokenKey)
 		changed = changed || oldJwtToken != data.Token
 		if err := settings.Set(settings.JwtTokenKey, data.Token); err != nil {
-			slog.Error("failed to set JWT token in settings", "error", err)
+			a.logger.Error("failed to set JWT token in settings", "error", err)
 		}
 	}
 
@@ -784,7 +783,7 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 			})
 		}
 		if err := settings.Set(settings.DevicesKey, devices); err != nil {
-			slog.Error("failed to set devices in settings", "error", err)
+			a.logger.Error("failed to set devices in settings", "error", err)
 		}
 	}
 
@@ -792,7 +791,7 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		// Merge only the cached response so old login fields cannot overwrite newer settings.
 		cached := new(UserData)
 		if err := settings.GetStruct(settings.UserDataKey, cached); err != nil {
-			slog.Warn("ignoring invalid cached user data", "error", err)
+			a.logger.Warn("ignoring invalid cached user data", "error", err)
 		} else if data.LegacyID != 0 && cached.LegacyID == data.LegacyID {
 			cached.LegacyToken = data.LegacyToken
 			cached.LegacyUserData = data.LegacyUserData
@@ -800,7 +799,7 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		}
 	}
 	if err := settings.Set(settings.UserDataKey, data); err != nil {
-		slog.Error("failed to set login response in settings", "error", err)
+		a.logger.Error("failed to set login response in settings", "error", err)
 	}
 
 	return data
@@ -821,7 +820,7 @@ func (a *Client) ClearUser() {
 		settings.UserDataKey,
 	)
 	if err != nil {
-		slog.Warn("failed to clear user info", "error", err)
+		a.logger.Warn("failed to clear user info", "error", err)
 	}
 	if hadIdentity {
 		events.Emit(UserChangeEvent{})
