@@ -195,14 +195,20 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 	if err := proto.Unmarshal(resp, &signupData); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling sign up response: %w", err))
 	}
-	if err := a.storeIdentity(signupData.LegacyID, signupData.ProToken, settings.Settings{
+	a.mu.Lock()
+	a.generation++
+	err = a.storeIdentityLocked(signupData.LegacyID, signupData.ProToken, settings.Settings{
 		settings.JwtTokenKey:      signupData.Token,
 		settings.OAuthLoginKey:    false,
 		settings.OAuthProviderKey: "",
-	}); err != nil {
+	})
+	if err == nil {
+		a.salt = salt
+	}
+	a.mu.Unlock()
+	if err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
 	}
-	a.setSalt(salt)
 
 	return salt, &signupData, nil
 }
@@ -375,9 +381,11 @@ func (a *Client) CompleteRecoveryByEmail(ctx context.Context, email, newPassword
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to complete recovery by email: %w", err))
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	// The salt cache isn't keyed by email, so only the current account's new salt belongs in it.
 	if strings.EqualFold(settings.GetString(settings.EmailKey), lowerCaseEmail) {
-		if err = a.storeSalt(newSalt); err != nil {
+		if err = a.storeSaltLocked(newSalt); err != nil {
 			return traces.RecordError(ctx, fmt.Errorf("failed to write new salt: %w", err))
 		}
 	}
@@ -705,6 +713,13 @@ func (a *Client) storeIdentity(id int64, token string, extra settings.Settings) 
 	defer a.mu.Unlock()
 	a.generation++
 	return a.storeIdentityLocked(id, token, extra)
+}
+
+// PatchAccountSettings saves updates as a change of the active account. Pending user-data and
+// purchase responses requested before the call are discarded, and a [UserChangeEvent] is emitted
+// if the account state changed.
+func (a *Client) PatchAccountSettings(updates settings.Settings) error {
+	return a.storeIdentity(0, "", updates)
 }
 
 // storeIdentityLocked saves id and token, each only if set, together with extra in one write that

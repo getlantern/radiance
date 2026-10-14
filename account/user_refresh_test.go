@@ -283,6 +283,9 @@ func TestStaleUserDataIsDiscarded(t *testing.T) {
 			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"}, nil)
 		}},
 		{"logout", func(a *Client) { a.ClearUser() }},
+		{"settings patch", func(a *Client) {
+			a.PatchAccountSettings(settings.Settings{settings.UserIDKey: int64(2), settings.TokenKey: "b"})
+		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a, _ := newTestClient(t)
