@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/url"
 	"strings"
 
@@ -36,6 +37,7 @@ func (a *Client) NewUser(ctx context.Context) (*UserData, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "new_user")
 	defer span.End()
 
+	generation := a.identityGeneration()
 	resp, err := a.sendProRequest(ctx, "POST", "/user-create", nil, nil, nil)
 	if err != nil {
 		a.logger.Error("creating new user", "error", err)
@@ -45,7 +47,7 @@ func (a *Client) NewUser(ctx context.Context) (*UserData, error) {
 	if err := json.Unmarshal(resp, &userResp); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling new user response: %w", err))
 	}
-	userData, err := a.storeData(ctx, userResp)
+	userData, err := a.storeData(ctx, userResp, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +63,7 @@ func (a *Client) FetchUserData(ctx context.Context) (*UserData, error) {
 
 // fetchUserData fetches the user's account data and stores it.
 func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
+	generation := a.identityGeneration()
 	resp, err := a.sendProRequest(ctx, "GET", "/user-data", nil, nil, nil)
 	if err != nil {
 		a.logger.Error("user data", "error", err)
@@ -70,15 +73,16 @@ func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
 	if err := json.Unmarshal(resp, &userResp); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling new user response: %w", err))
 	}
-	return a.storeData(ctx, userResp)
+	return a.storeData(ctx, userResp, generation)
 }
 
-func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserData, error) {
-	if resp.BaseResponse != nil && resp.Error != "" {
-		err := fmt.Errorf("received bad response: %s", resp.Error)
-		a.logger.Error("user data", "error", err)
-		return nil, traces.RecordError(ctx, err)
-	}
+// ErrAccountChanged is returned when the account may have changed while the request was in flight;
+// the response was discarded, and a retry acts on the current account.
+var ErrAccountChanged = errors.New("account changed during request")
+
+// storeData stores resp unless the account changed after generation was captured, in which case it
+// returns [ErrAccountChanged].
+func (a *Client) storeData(ctx context.Context, resp UserDataResponse, generation uint64) (*UserData, error) {
 	if resp.LoginResponse_UserData == nil {
 		a.logger.Error("user data", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
@@ -86,8 +90,14 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse) (*UserDat
 	resp.DeviceID = settings.GetString(settings.DeviceIDKey)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	if resp.Token == "" && resp.UserId != 0 && resp.UserId == settings.GetInt64(settings.UserIDKey) {
+	if a.generation != generation {
+		return nil, traces.RecordError(ctx, ErrAccountChanged)
+	}
+	sameUser := resp.UserId != 0 && resp.UserId == settings.GetInt64(settings.UserIDKey)
+	if resp.UserId != 0 && !sameUser {
+		a.generation++
+	}
+	if resp.Token == "" && sameUser {
 		resp.Token = settings.GetString(settings.TokenKey)
 	}
 	login := &UserData{
@@ -182,12 +192,12 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 	if err := proto.Unmarshal(resp, &signupData); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling sign up response: %w", err))
 	}
-	if err := a.storeIdentity(signupData.LegacyID, signupData.ProToken); err != nil {
+	if err := a.storeIdentity(signupData.LegacyID, signupData.ProToken, settings.Settings{
+		settings.JwtTokenKey:      signupData.Token,
+		settings.OAuthLoginKey:    false,
+		settings.OAuthProviderKey: "",
+	}); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
-	}
-	jwtTokenErr := settings.Set(settings.JwtTokenKey, signupData.Token)
-	if jwtTokenErr != nil {
-		return nil, nil, traces.RecordError(ctx, fmt.Errorf("could not save JWT token: %w", jwtTokenErr))
 	}
 
 	return salt, &signupData, nil
@@ -285,12 +295,12 @@ func (a *Client) Login(ctx context.Context, email, password string) (*UserData, 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
 	a.setData(&loginResp)
-	a.setSalt(salt)
-	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
+	if saltErr := a.storeSalt(salt); saltErr != nil {
 		return nil, traces.RecordError(ctx, saltErr)
 	}
-	settings.Set(settings.OAuthLoginKey, false)
-	settings.Set(settings.OAuthProviderKey, "")
+	if err := settings.Clear(settings.OAuthLoginKey, settings.OAuthProviderKey); err != nil {
+		a.logger.Warn("failed to clear OAuth login", "error", err)
+	}
 	return &loginResp, nil
 }
 
@@ -315,10 +325,7 @@ func (a *Client) Logout(ctx context.Context, email string) (*UserData, error) {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
 	a.ClearUser()
-	a.setSalt(nil)
-	settings.Set(settings.OAuthLoginKey, false)
-	settings.Set(settings.OAuthProviderKey, "")
-	if err := writeSalt(nil, a.saltPath); err != nil {
+	if err := a.storeSalt(nil); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
 	}
 	return a.NewUser(ctx)
@@ -362,8 +369,11 @@ func (a *Client) CompleteRecoveryByEmail(ctx context.Context, email, newPassword
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to complete recovery by email: %w", err))
 	}
-	if err = writeSalt(newSalt, a.saltPath); err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("failed to write new salt: %w", err))
+	// The salt cache isn't keyed by email, so only the current account's new salt belongs in it.
+	if strings.EqualFold(settings.GetString(settings.EmailKey), lowerCaseEmail) {
+		if err = a.storeSalt(newSalt); err != nil {
+			return traces.RecordError(ctx, fmt.Errorf("failed to write new salt: %w", err))
+		}
 	}
 	return nil
 }
@@ -461,14 +471,12 @@ func (a *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, co
 	if err != nil {
 		return traces.RecordError(ctx, err)
 	}
-	if err := writeSalt(newSalt, a.saltPath); err != nil {
+	if err := a.storeSalt(newSalt); err != nil {
 		return traces.RecordError(ctx, err)
 	}
 	if err := settings.Set(settings.EmailKey, newEmail); err != nil {
 		return traces.RecordError(ctx, err)
 	}
-
-	a.setSalt(newSalt)
 	return nil
 }
 
@@ -506,8 +514,7 @@ func (a *Client) DeleteAccount(ctx context.Context, email, password string) (*Us
 	}
 
 	a.ClearUser()
-	a.setSalt(nil)
-	if err := writeSalt(nil, a.saltPath); err != nil {
+	if err := a.storeSalt(nil); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
 
@@ -561,11 +568,13 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 		return nil, fmt.Errorf("error getting user data: %w", err)
 	}
 
-	if err := settings.Set(settings.JwtTokenKey, oAuthToken); err != nil {
+	if err := settings.Patch(settings.Settings{
+		settings.JwtTokenKey:   oAuthToken,
+		settings.OAuthLoginKey: true,
+	}); err != nil {
 		a.logger.Error("Failed to persist JWT token", "error", err)
 		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
 	}
-	settings.Set(settings.OAuthLoginKey, true)
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
 	a.setData(user)
@@ -583,7 +592,7 @@ func (a *Client) OAuthDeviceLimitCallback(ctx context.Context, oAuthToken string
 	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
 		return fmt.Errorf("%w: device-limit token is missing the account identity", ErrInvalidToken)
 	}
-	return a.storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken)
+	return a.storeIdentity(jwtUserInfo.LegacyUserID, jwtUserInfo.LegacyToken, nil)
 }
 
 // ErrInvalidToken distinguishes an unusable OAuth callback token from a
@@ -610,9 +619,6 @@ func (a *Client) RemoveDevice(ctx context.Context, deviceID string) (*LinkRespon
 	var link LinkResponse
 	if err := json.Unmarshal(resp, &link); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling remove device response: %w", err))
-	}
-	if link.BaseResponse != nil && link.BaseResponse.Error != "" {
-		return nil, traces.RecordError(ctx, fmt.Errorf("failed to remove device: %s", link.BaseResponse.Error))
 	}
 	return &link, nil
 }
@@ -648,11 +654,8 @@ func (a *Client) referralAttachV1(ctx context.Context, code string) (*ReferralAt
 		return nil, traces.RecordError(ctx, err)
 	}
 	var baseResp protos.BaseResponse
-	if err := proto.Unmarshal(resp, &baseResp); err != nil {
+	if err := json.Unmarshal(resp, &baseResp); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling referral attach response: %w", err))
-	}
-	if baseResp.Error != "" {
-		return nil, traces.RecordError(ctx, errors.New(baseResp.Error))
 	}
 	return &ReferralAttachResponse{
 		BaseResponse: &baseResp,
@@ -677,9 +680,6 @@ func (a *Client) referralAttachV2(ctx context.Context, code, channel string) (*R
 	if err := json.Unmarshal(resp, &referral); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling referral attach v2 response: %w", err))
 	}
-	if referral.BaseResponse != nil && referral.Error != "" {
-		return nil, traces.RecordError(ctx, errors.New(referral.Error))
-	}
 	return &referral, nil
 }
 
@@ -688,23 +688,31 @@ type UserChangeEvent struct {
 	events.Event
 }
 
-func (a *Client) storeIdentity(id int64, token string) error {
+func (a *Client) storeIdentity(id int64, token string, extra settings.Settings) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	changed, err := a.storeIdentityLocked(id, token)
-	if changed {
-		events.Emit(UserChangeEvent{})
-	}
-	return err
+	a.generation++
+	return a.storeIdentityLocked(id, token, extra)
 }
 
-// storeIdentityLocked requires a.mu to be held.
-func (a *Client) storeIdentityLocked(id int64, token string) (bool, error) {
-	previousID := settings.GetInt64(settings.UserIDKey)
-	previousToken := settings.GetString(settings.TokenKey)
-	updates := settings.Settings{}
+// storeIdentityLocked saves id and token, each only if set, together with extra in one write, and
+// emits a [UserChangeEvent] if the [accountState] changed. A different nonzero id clears the
+// previous account's credentials and cached data, and the whole write then applies in memory even
+// if the save fails, so the previous credentials never outlive the switch; otherwise it applies
+// only once saved. The OAuth flags are kept, because an OAuth sign-in records its provider before
+// switching. It requires a.mu to be held.
+func (a *Client) storeIdentityLocked(id int64, token string, extra settings.Settings) error {
+	before := currentAccount()
+	defer func() {
+		if currentAccount() != before {
+			events.Emit(UserChangeEvent{})
+		}
+	}()
 	// The cached response can lag behind signup or OAuth, so compare the active identity.
-	if id != 0 && id != previousID {
+	switching := id != 0 && id != settings.GetInt64(settings.UserIDKey)
+	updates := settings.Settings{}
+	if switching {
+		// Overwrite rather than delete, so unlocked readers never see the account without an id.
 		updates[settings.TokenKey] = ""
 		updates[settings.JwtTokenKey] = ""
 		updates[settings.EmailKey] = ""
@@ -712,18 +720,37 @@ func (a *Client) storeIdentityLocked(id int64, token string) (bool, error) {
 		updates[settings.DevicesKey] = []settings.Device{}
 		updates[settings.UserDataKey] = nil
 	}
+	maps.Copy(updates, extra)
 	if id != 0 {
 		updates[settings.UserIDKey] = id
 	}
 	if token != "" {
 		updates[settings.TokenKey] = token
 	}
-	if len(updates) == 0 {
-		return false, nil
+	switch {
+	case len(updates) == 0:
+		return nil
+	case switching:
+		return settings.Apply(updates)
+	default:
+		return settings.Patch(updates)
 	}
-	err := settings.Patch(updates)
-	changed := settings.GetInt64(settings.UserIDKey) != previousID || settings.GetString(settings.TokenKey) != previousToken
-	return changed, err
+}
+
+// accountState holds the settings whose change is reported as a [UserChangeEvent].
+type accountState struct {
+	id                       int64
+	token, level, email, jwt string
+}
+
+func currentAccount() accountState {
+	return accountState{
+		id:    settings.GetInt64(settings.UserIDKey),
+		token: settings.GetString(settings.TokenKey),
+		level: settings.GetString(settings.UserLevelKey),
+		email: settings.GetString(settings.EmailKey),
+		jwt:   settings.GetString(settings.JwtTokenKey),
+	}
 }
 
 func (a *Client) setData(data *UserData) {
@@ -733,47 +760,18 @@ func (a *Client) setData(data *UserData) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.generation++
 	a.setDataLocked(data, false)
 }
 
-// setDataLocked requires a.mu to be held and data to be non-nil.
+// setDataLocked stores a copy of data, merged with the cached response of the same account when
+// preserveLoginFields is set. Data without user data stores only its id, token and devices. It
+// logs rather than returns save failures, and returns data, possibly merged, which the caller may
+// modify without affecting settings. It requires a.mu to be held and data to be non-nil.
 func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserData {
-	changed, err := a.storeIdentityLocked(data.LegacyID, data.LegacyToken)
-	if err != nil {
-		a.logger.Error("failed to store account identity", "error", err)
-	}
-	defer func() {
-		if changed {
-			events.Emit(UserChangeEvent{})
-		}
-	}()
-	if data.LegacyUserData == nil {
-		a.logger.Info("no user data to set, storing id and token only")
-		return data
-	}
-
-	if data.LegacyUserData.UserLevel != "" {
-		oldUserLevel := settings.GetString(settings.UserLevelKey)
-		changed = changed || oldUserLevel != data.LegacyUserData.UserLevel
-		if err := settings.Set(settings.UserLevelKey, data.LegacyUserData.UserLevel); err != nil {
-			a.logger.Error("failed to set user level in settings", "error", err)
-		}
-	}
-	if data.LegacyUserData.Email != "" {
-		oldEmail := settings.GetString(settings.EmailKey)
-		changed = changed || oldEmail != data.LegacyUserData.Email
-		if err := settings.Set(settings.EmailKey, data.LegacyUserData.Email); err != nil {
-			a.logger.Error("failed to set email in settings", "error", err)
-		}
-	}
-	if data.Token != "" {
-		oldJwtToken := settings.GetString(settings.JwtTokenKey)
-		changed = changed || oldJwtToken != data.Token
-		if err := settings.Set(settings.JwtTokenKey, data.Token); err != nil {
-			a.logger.Error("failed to set JWT token in settings", "error", err)
-		}
-	}
-
+	updates := settings.Settings{}
+	// A device-limited login carries no user data, but its device list is what the user needs to
+	// pick a device to remove.
 	if len(data.Devices) > 0 {
 		devices := []settings.Device{}
 		for _, d := range data.Devices {
@@ -782,26 +780,36 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 				ID:   d.Id,
 			})
 		}
-		if err := settings.Set(settings.DevicesKey, devices); err != nil {
-			a.logger.Error("failed to set devices in settings", "error", err)
+		updates[settings.DevicesKey] = devices
+	}
+	if data.LegacyUserData == nil {
+		a.logger.Info("no user data to set, storing id, token and devices only")
+	} else {
+		if data.LegacyUserData.UserLevel != "" {
+			updates[settings.UserLevelKey] = data.LegacyUserData.UserLevel
 		}
-	}
-
-	if preserveLoginFields {
-		// Merge only the cached response so old login fields cannot overwrite newer settings.
-		cached := new(UserData)
-		if err := settings.GetStruct(settings.UserDataKey, cached); err != nil {
-			a.logger.Warn("ignoring invalid cached user data", "error", err)
-		} else if data.LegacyID != 0 && cached.LegacyID == data.LegacyID {
-			cached.LegacyToken = data.LegacyToken
-			cached.LegacyUserData = data.LegacyUserData
-			data = cached
+		if data.LegacyUserData.Email != "" {
+			updates[settings.EmailKey] = data.LegacyUserData.Email
 		}
+		if data.Token != "" {
+			updates[settings.JwtTokenKey] = data.Token
+		}
+		if preserveLoginFields {
+			// Merge only the cached response so old login fields cannot overwrite newer settings.
+			cached := new(UserData)
+			if err := settings.GetStruct(settings.UserDataKey, cached); err != nil {
+				a.logger.Warn("ignoring invalid cached user data", "error", err)
+			} else if data.LegacyID != 0 && cached.LegacyID == data.LegacyID {
+				cached.LegacyToken = data.LegacyToken
+				cached.LegacyUserData = data.LegacyUserData
+				data = cached
+			}
+		}
+		updates[settings.UserDataKey] = proto.Clone(data)
 	}
-	if err := settings.Set(settings.UserDataKey, data); err != nil {
-		a.logger.Error("failed to set login response in settings", "error", err)
+	if err := a.storeIdentityLocked(data.LegacyID, data.LegacyToken, updates); err != nil {
+		a.logger.Error("failed to store account data", "error", err)
 	}
-
 	return data
 }
 
@@ -809,17 +817,9 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 func (a *Client) ClearUser() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.generation++
 	hadIdentity := settings.GetInt64(settings.UserIDKey) != 0 || settings.GetString(settings.TokenKey) != ""
-	err := settings.Clear(
-		settings.UserIDKey,
-		settings.TokenKey,
-		settings.UserLevelKey,
-		settings.EmailKey,
-		settings.DevicesKey,
-		settings.JwtTokenKey,
-		settings.UserDataKey,
-	)
-	if err != nil {
+	if err := settings.Clear(settings.UserKeys...); err != nil {
 		a.logger.Warn("failed to clear user info", "error", err)
 	}
 	if hadIdentity {

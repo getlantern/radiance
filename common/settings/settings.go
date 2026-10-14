@@ -2,6 +2,7 @@
 package settings
 
 import (
+	"bytes"
 	jsonpkg "encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,14 +73,14 @@ const (
 	PreferredLocationKey _key = "preferred_location" // [common.PreferredLocation]
 
 	settingsFileName = "settings.json"
-	// legacySettingsFileName is what v9.0.x called the same file (it was
-	// renamed). On upgrade from v9.0.x, the user's
-	// persisted user_id / token / user_level live at <dataDir>/local.json;
-	// migrateLegacySettingsIfNeeded reads it from there so Pro state
-	// survives the rename.
+	// legacySettingsFileName is v9.0.x's name for the settings file.
 	legacySettingsFileName = "local.json"
 
 	settingsInvalidFileName = "settings.invalid.json"
+
+	// migrationMarkerFileName lives beside settings.json rather than inside it, so losing the
+	// settings file doesn't re-run a migration that already adopted an identity.
+	migrationMarkerFileName = ".settings-migrated"
 
 	// Development only keys
 	ConfigFetchDisabledKey        _key = "config_fetch_disabled"     // bool
@@ -103,16 +105,18 @@ type settings struct {
 }
 
 var k = &settings{
-	k: koanf.New("."),
+	k: newDefaults(),
 }
 
-func init() {
-	// set default values.
-	k.k.Set(LocaleKey.String(), "fa-IR")
-	k.k.Set(UserLevelKey.String(), "free")
+func newDefaults() *koanf.Koanf {
+	d := koanf.New(".")
+	d.Set(LocaleKey.String(), "fa-IR")
+	d.Set(UserLevelKey.String(), "free")
+	return d
 }
 
-// InitSettings initializes the config for user settings.
+// InitSettings initializes the config for user settings. Until it succeeds, changes are kept in
+// memory only.
 func InitSettings(fileDir string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -123,26 +127,62 @@ func InitSettings(fileDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
-	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
+	defer func() {
+		if !k.initialized {
+			k.filePath = ""
+		}
+	}()
+	markerPath := filepath.Join(fileDir, migrationMarkerFileName)
+	migrate := migrationPending(markerPath)
+	var identity map[string]any
+	if migrate {
+		identity, migrate = legacyIdentity(fileDir, k.filePath)
+	}
+	fresh := false
 	switch err := loadSettings(k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
-		if err := save(); err != nil {
-			return err
-		}
+		fresh = true
 	case errors.Is(err, errParseSettings):
-		// An invalid settings file must not be fatal: quarantine it, then start
-		// from in-memory defaults and overwrite the bad file with them.
+		// An invalid settings file must not be fatal; quarantine it before it's overwritten.
 		slog.Error("Settings file is invalid; starting from defaults", "path", k.filePath, "error", err)
 		quarantineInvalidSettings(k.filePath)
-		if err := save(); err != nil {
-			return err
-		}
+		fresh = true
 	case err != nil:
 		return fmt.Errorf("loading settings: %w", err)
 	}
+	switch {
+	case identity != nil:
+		err := updateLocked(func(kk *koanf.Koanf) error { return adoptIdentity(kk, identity) })
+		if err != nil && fresh {
+			return err
+		}
+		if err != nil {
+			slog.Warn("legacy settings migration: saving adopted identity failed; will retry", "error", err)
+			migrate = false
+		}
+	case fresh:
+		if err := saveLocked(k.k); err != nil {
+			return err
+		}
+	}
+	if migrate {
+		if err := atomicfile.WriteFile(markerPath, nil, fileperm.File); err != nil {
+			slog.Warn("legacy settings migration: writing marker failed; will retry", "path", markerPath, "error", err)
+		}
+	}
 	k.initialized = true
 	return nil
+}
+
+// migrationPending reports whether the legacy migration has yet to complete. An unreadable marker
+// counts as complete, because re-adopting a legacy identity can undo a logout.
+func migrationPending(markerPath string) bool {
+	_, err := os.Stat(markerPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("legacy settings migration: marker unreadable; skipping", "path", markerPath, "error", err)
+	}
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // candidateSource is one possible location of persisted user state.
@@ -153,25 +193,28 @@ type candidateSource struct {
 	contents []byte
 	exists   bool
 	label    string
+	// err is the read error, other than fs.ErrNotExist; exists is false when it is set.
+	err error
 }
 
-// migrateLegacySettingsIfNeeded recovers persisted user state written
-// by older client versions. Candidates in priority order:
+// legacyIdentity returns the identity keys to adopt from settings written by older client
+// versions, or nil when no legacy candidate outranks the canonical file. ok is false when any
+// candidate can't be read, so the migration can't be judged yet.
+//
+// Candidates in priority order:
 //
 //  1. <fileDir>/settings.json                 — canonical
 //  2. <fileDir>/local.json                    — v9.0.x (renamed)
-//  3. Windows ${PUBLIC}\Lantern\data\*        — v9.0.x cross-dir;
-//     spliced in below, Windows only
-//  4. pre-9.x platform-specific YAML; spliced in below
+//  3. ${PUBLIC}\Lantern\data\local.json       — v9.0.x cross-dir, Windows only
+//  4. pre-9.x platform-specific YAML
 //  5. <fileDir>/data/settings.json            — v9.1.x (bugged:
 //     setupDirectories appended an
 //     unconditional "/data" suffix)
 //
-// Pick the highest-priority candidate with user_level=="pro"; if none
-// is pro, the highest-priority candidate that exists. Losing Pro is
-// recoverable; losing the device registration creates server-side
-// orphans, so identifier continuity wins ties.
-func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
+// A candidate counts only if it holds a JSON object. Pick the highest-priority candidate with
+// user_level=="pro"; if none is pro, the highest-priority candidate with a user_id, so the device
+// registration is kept and a canonical file holding only defaults never wins.
+func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok bool) {
 	candidates := []candidateSource{
 		{path: canonicalPath, label: "canonical settings.json"},
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
@@ -184,23 +227,13 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 			candidates[i].contents = b
 			candidates[i].exists = true
 		case errors.Is(err, fs.ErrNotExist):
-			// Expected — file just isn't there. Treat as not-present.
 		default:
-			// Permission / I/O error — log it but don't bail outright. If
-			// it's the canonical path that's unreadable for non-ENOENT
-			// reasons, skip migration entirely so we don't try to write
-			// over a file the OS is telling us we can't see; for legacy
-			// or nested paths, treat the same as not-present.
-			slog.Warn("legacy settings migration: read failed",
-				"path", candidates[i].path, "error", err)
-			if candidates[i].path == canonicalPath {
-				return
-			}
+			candidates[i].err = err
 		}
 	}
 	// Optional candidates splice in at index 2, inserted oldest-first so
 	// newer generations end up higher priority.
-	if yc := legacyYAMLCandidate(fileDir); yc.exists {
+	if yc := legacyYAMLCandidate(fileDir); yc.exists || yc.err != nil {
 		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
 	}
 	// Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data) are the
@@ -212,63 +245,74 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {
 		candidates = append(candidates[:2], append(winExtras, candidates[2:]...)...)
 	}
+	for _, c := range candidates {
+		if c.err != nil {
+			slog.Warn("legacy settings migration: read failed; will retry", "path", c.path, "error", c.err)
+			return nil, false
+		}
+	}
 
-	// Pick: highest-priority file with user_level=="pro"; if none has pro,
-	// highest-priority file that exists at all (with non-empty contents).
-	pickIdx := -1
+	parsed := make([]map[string]any, len(candidates))
 	for i, c := range candidates {
-		if c.exists && userLevelInJSON(c.contents) == "pro" {
+		if !c.exists {
+			continue
+		}
+		if err := jsonpkg.Unmarshal(c.contents, &parsed[i]); err != nil || parsed[i] == nil {
+			slog.Warn("legacy settings migration: ignoring invalid candidate", "path", c.path, "error", err)
+			parsed[i] = nil
+		}
+	}
+	pickIdx := -1
+	for i, p := range parsed {
+		if p != nil && p[UserLevelKey.String()] == "pro" {
 			pickIdx = i
 			break
 		}
 	}
 	if pickIdx == -1 {
-		for i, c := range candidates {
-			if c.exists {
+		for i, p := range parsed {
+			if id := toString(p[UserIDKey.String()]); id != "" && id != "0" {
 				pickIdx = i
 				break
 			}
 		}
 	}
-	if pickIdx == -1 {
-		// Nothing on disk yet — fresh install, normal path. No-op.
-		return
+	if pickIdx == -1 || candidates[pickIdx].path == canonicalPath {
+		return nil, true
 	}
-	if candidates[pickIdx].path == canonicalPath {
-		// Canonical already wins — no migration needed.
-		return
+	identity = make(map[string]any)
+	for _, key := range identityKeys {
+		if v, ok := parsed[pickIdx][key.String()]; ok {
+			identity[key.String()] = v
+		}
 	}
-	writeMigrated(canonicalPath, candidates[pickIdx].contents, candidates[pickIdx].label)
+	slog.Info("legacy settings migration: recovering persisted identity", "source", candidates[pickIdx].label)
+	return identity, true
 }
 
-// writeMigrated overwrites the canonical settings file with the recovered
-// contents and logs the outcome. Uses atomicfile.WriteFile (the same
-// mechanism the normal save path uses) so a crash mid-write can't leave
-// a half-written settings.json on disk. Errors are logged-and-swallowed:
-// if the write fails the caller falls through to the fresh-install path,
-// which is a worse UX but not a corruption risk.
-func writeMigrated(canonicalPath string, contents []byte, source string) {
-	if err := atomicfile.WriteFile(canonicalPath, contents, fileperm.File); err != nil {
-		slog.Warn("legacy settings migration: write failed",
-			"dst", canonicalPath, "source", source, "error", err)
-		return
-	}
-	slog.Info("legacy settings migration: recovered persisted state",
-		"dst", canonicalPath, "source", source, "bytes", len(contents))
+var identityKeys = []_key{
+	UserIDKey, TokenKey, UserLevelKey, EmailKey, DeviceIDKey,
+	JwtTokenKey, OAuthLoginKey, OAuthProviderKey,
 }
 
-// userLevelInJSON returns the value of the "user_level" key from a JSON
-// settings blob, or "" if the key is missing / the blob is malformed.
-// Lightweight extraction so the migration doesn't need to load the full
-// koanf state machine before we've decided which file to read.
-func userLevelInJSON(contents []byte) string {
-	var s struct {
-		UserLevel string `json:"user_level"`
+// UserKeys are the settings that belong to the active user rather than the device.
+var UserKeys = []_key{
+	UserIDKey, TokenKey, UserLevelKey, EmailKey,
+	JwtTokenKey, DevicesKey, UserDataKey, OAuthLoginKey, OAuthProviderKey,
+}
+
+func adoptIdentity(kk *koanf.Koanf, identity map[string]any) error {
+	if toString(kk.Get(UserIDKey.String())) != toString(identity[UserIDKey.String()]) {
+		for _, key := range UserKeys {
+			kk.Delete(key.String())
+		}
 	}
-	if err := jsonpkg.Unmarshal(contents, &s); err != nil {
-		return ""
+	for key, v := range identity {
+		if err := kk.Set(key, v); err != nil {
+			return fmt.Errorf("could not set key %s: %w", key, err)
+		}
 	}
-	return s.UserLevel
+	return nil
 }
 
 // loadSettings applies the file to the in-memory settings.
@@ -319,10 +363,13 @@ func Get(key _key) any {
 }
 
 func GetString(key _key) string {
+	return toString(Get(key))
+}
+
+func toString(value any) string {
 	// JSON round-trip turns all numbers into float64 and since koanf uses Sprintf("%v") for string
 	// conversion, large integers (i.e. userID) get converted to scientific notation (e.g. 3.87286618e+08)
 	// so we handle float64 separately
-	value := Get(key)
 	if value == nil {
 		return ""
 	}
@@ -368,34 +415,29 @@ func Exists(key _key) bool {
 	return k.k.Exists(key.String())
 }
 
+// Set stores value under key. On error the previous value remains.
 func Set(key _key, value any) error {
-	// take lock for the entire duration of the Set + save sequence to prevent multiple Set
-	// calls from interleaving and leaving the file in an inconsistent state until the next write.
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	err := k.k.Set(key.String(), value)
-	if err != nil {
-		return fmt.Errorf("could not set key %s: %w", key, err)
-	}
-	return save()
+	return Patch(Settings{key: value})
 }
 
+// Clear removes keys and saves the settings. Unlike [Set] and [Patch], the keys stay removed in
+// memory even when the save fails; the save error is still returned.
 func Clear(keys ..._key) error {
-	// take lock for the entire duration. See [Set] for explanation.
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	for _, key := range keys {
 		k.k.Delete(key.String())
 	}
-	return save()
+	return saveLocked(k.k)
 }
 
 type Settings map[_key]any
 
+// Diff returns the entries of s that are absent from s2 or hold a different value there.
 func (s Settings) Diff(s2 Settings) Settings {
 	diff := make(Settings)
 	for k, v1 := range s {
-		if v2, ok := s2[k]; !ok || v1 != v2 {
+		if v2, ok := s2[k]; !ok || !reflect.DeepEqual(v1, v2) {
 			diff[k] = v1
 		}
 	}
@@ -410,48 +452,96 @@ func GetAll() Settings {
 	return s
 }
 
+// GetAllFor returns the values of keys that are set, omitting unset keys; with no keys it returns
+// all settings.
 func GetAllFor(keys ..._key) Settings {
 	if len(keys) == 0 {
 		return GetAll()
 	}
 	s := make(Settings)
 	for _, key := range keys {
-		s[key] = k.k.Get(key.String())
+		if k.k.Exists(key.String()) {
+			s[key] = k.k.Get(key.String())
+		}
 	}
 	return s
 }
 
-// Patch takes a map of settings to update and applies them all at once.
+// Patch applies updates all at once. On error the previous values remain.
 func Patch(updates Settings) error {
-	// take lock for the entire duration. See [Set] for explanation.
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	return updateLocked(func(kk *koanf.Koanf) error { return setAll(kk, updates) })
+}
+
+// Apply is like [Patch], except the updates take effect in memory even when the save fails; the
+// save error is still returned.
+func Apply(updates Settings) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if err := setAll(k.k, updates); err != nil {
+		return err
+	}
+	return saveLocked(k.k)
+}
+
+func setAll(kk *koanf.Koanf, updates Settings) error {
 	for key, value := range updates {
-		if err := k.k.Set(_key(key).String(), value); err != nil {
+		if err := kk.Set(key.String(), value); err != nil {
 			return fmt.Errorf("could not set key %s: %w", key, err)
 		}
 	}
-	return save()
+	return nil
 }
 
-func save() error {
-	out, err := k.k.Marshal(json.Parser())
+// updateLocked runs mutate on a copy of the settings, saves the copy, and only then makes it the
+// live settings, so a failed save leaves them unchanged. It requires k.mu to be held.
+func updateLocked(mutate func(*koanf.Koanf) error) error {
+	staged := k.k.Copy()
+	if err := mutate(staged); err != nil {
+		return err
+	}
+	if err := saveLocked(staged); err != nil {
+		return err
+	}
+	// Getters read k.k without k.mu, so replace its contents in place rather than the pointer.
+	return k.k.Load(mapProvider(staged.Raw()), nil, koanf.WithMergeFunc(replaceAll))
+}
+
+// mapProvider is a koanf provider for an already-parsed settings map.
+type mapProvider map[string]any
+
+func (p mapProvider) Read() (map[string]any, error) { return p, nil }
+
+func (mapProvider) ReadBytes() ([]byte, error) {
+	return nil, errors.New("mapProvider has no raw bytes")
+}
+
+// saveLocked writes src to the settings file unless the file already holds it. It requires k.mu
+// to be held.
+func saveLocked(src *koanf.Koanf) error {
+	if k.filePath == "" {
+		return nil
+	}
+	out, err := src.Marshal(json.Parser())
 	if err != nil {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
 	}
-
-	err = atomicfile.WriteFile(k.filePath, out, fileperm.File)
-	if err != nil {
+	if current, err := atomicfile.ReadFile(k.filePath); err == nil && bytes.Equal(out, current) {
+		return nil
+	}
+	if err := atomicfile.WriteFile(k.filePath, out, fileperm.File); err != nil {
 		return fmt.Errorf("could not write koanf file: %w", err)
 	}
 	return nil
 }
 
-// Reset clears the current settings in memory primarily for testing purposes.
+// Reset restores the default, uninitialized settings, primarily for testing purposes.
 func Reset() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.k = koanf.New(".")
+	k.k = newDefaults()
+	k.filePath = ""
 	k.initialized = false
 }
 

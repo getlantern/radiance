@@ -2,9 +2,7 @@ package settings
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -57,34 +55,21 @@ func samePathWindows(a, b string) bool {
 // readWindowsCrossDirCandidates is split out so tests can drive the path
 // resolution directly without needing to spoof %PUBLIC% / GOOS.
 func readWindowsCrossDirCandidates(v90xDir string) []candidateSource {
-	// legacySettingsFileName is tried first because it's the actual
-	// v9.0.x name; settingsFileName is included as a defensive
-	// fallback for users whose v9.0.x file got renamed by a partial /
-	// failed earlier upgrade attempt.
-	specs := []struct {
-		name, label string
-	}{
-		{legacySettingsFileName, fmt.Sprintf("v9.0.x Windows %s", filepath.Join(v90xDir, legacySettingsFileName))},
-		{settingsFileName, fmt.Sprintf("v9.0.x Windows %s", filepath.Join(v90xDir, settingsFileName))},
+	// settings.json is deliberately not read: in this directory it is the live UI's settings, not a
+	// v9.0.x artifact, so adopting it would import whatever the UI last wrote.
+	full := filepath.Join(v90xDir, legacySettingsFileName)
+	label := "v9.0.x Windows " + full
+	b, err := os.ReadFile(full)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
 	}
-	var out []candidateSource
-	for _, s := range specs {
-		full := filepath.Join(v90xDir, s.name)
-		b, err := os.ReadFile(full)
-		switch {
-		case err == nil:
-			out = append(out, candidateSource{
-				path:     full,
-				contents: b,
-				exists:   true,
-				label:    s.label,
-			})
-		case errors.Is(err, fs.ErrNotExist):
-			// Expected — fresh install or that filename never existed for this user.
-		default:
-			slog.Warn("v9.0.x Windows cross-dir read failed",
-				"path", full, "error", err)
-		}
+	if err != nil {
+		return []candidateSource{{path: full, label: label, err: err}}
 	}
-	return out
+	return []candidateSource{{
+		path:     full,
+		contents: b,
+		exists:   true,
+		label:    label,
+	}}
 }

@@ -26,12 +26,13 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 	if path == "" {
 		return candidateSource{}
 	}
+	label := fmt.Sprintf("pre-9.x %s yaml", layout)
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("pre-9.x yaml read failed", "path", path, "error", err)
-		}
+	if errors.Is(err, fs.ErrNotExist) {
 		return candidateSource{}
+	}
+	if err != nil {
+		return candidateSource{path: path, label: label, err: err}
 	}
 	translated, err := translateLegacyYAML(raw, layout)
 	if err != nil {
@@ -42,7 +43,7 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 		path:     path,
 		contents: translated,
 		exists:   true,
-		label:    fmt.Sprintf("pre-9.x %s yaml", layout),
+		label:    label,
 	}
 }
 

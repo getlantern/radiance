@@ -183,7 +183,9 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if opts.TimeZone != "" {
 		startup[settings.TimeZoneKey] = opts.TimeZone
 	}
-	settings.Patch(startup)
+	if err := settings.Apply(startup); err != nil {
+		slog.Warn("Failed to save startup settings", "error", err)
+	}
 
 	accountClient := account.NewClient(kindling.HTTPClient(), dataDir, slog.Default().With("service", "account"))
 

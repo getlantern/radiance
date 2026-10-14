@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -195,7 +196,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		state.referralAttachV1Code = body.Code
-		writeProtoResponse(w, &protos.BaseResponse{Error: state.referralAttachV1Error})
+		writeJSONResponse(w, &protos.BaseResponse{Error: state.referralAttachV1Error})
 	})
 
 	mux.HandleFunc("/referral-attach-v2", func(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +289,12 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 
 func newTestClient(t *testing.T) (*Client, *testServer) {
 	ts, state := newTestServer(t)
-	settings.InitSettings(t.TempDir())
+	// Legacy settings discovery reads these roots; empty ones keep the host's own files out.
+	for _, v := range []string{"HOME", "XDG_CONFIG_HOME", "APPDATA", "PUBLIC"} {
+		t.Setenv(v, t.TempDir())
+	}
+	settings.Reset()
+	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
 	return &Client{
 		httpClient: ts.Client(),
@@ -318,6 +324,36 @@ func newTestClientWithSRP(t *testing.T, email, password string) (*Client, *testS
 	ac.salt = salt
 
 	return ac, state
+}
+
+// useProServer points a's pro-server requests at handler for the rest of the test.
+func useProServer(t *testing.T, a *Client, handler http.Handler) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	a.proURL = server.URL
+}
+
+func serveJSON(v any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { writeJSONResponse(w, v) }
+}
+
+// heldJSON writes v only once release is closed, closing requested when the request arrives.
+func heldJSON(v any) (handler http.HandlerFunc, requested, release chan struct{}) {
+	requested, release = make(chan struct{}), make(chan struct{})
+	return func(w http.ResponseWriter, r *http.Request) {
+		close(requested)
+		<-release
+		writeJSONResponse(w, v)
+	}, requested, release
+}
+
+func setOAuthFlags(t *testing.T) {
+	t.Helper()
+	require.NoError(t, settings.Patch(settings.Settings{
+		settings.OAuthLoginKey:    true,
+		settings.OAuthProviderKey: "google",
+	}))
 }
 
 func TestSignUp(t *testing.T) {
@@ -352,6 +388,43 @@ func TestLogin(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestDeviceLimitedLoginStoresDevices(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		existing *UserData
+	}{
+		{name: "fresh identity"},
+		{name: "existing identity", existing: &UserData{
+			LegacyID:       7,
+			LegacyToken:    "tok",
+			Devices:        []*protos.LoginResponse_Device{{Id: "stale", Name: "Old"}},
+			LegacyUserData: &protos.LoginResponse_UserData{UserId: 7, UserLevel: "free"},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a, server := newTestClientWithSRP(t, "test@example.com", "password")
+			if tt.existing != nil {
+				a.setData(tt.existing)
+			}
+			userDataBefore := settings.Exists(settings.UserDataKey)
+			server.loginResponse = &UserData{
+				Devices: []*protos.LoginResponse_Device{
+					{Id: "phone", Name: "Phone"},
+					{Id: "laptop", Name: "Laptop"},
+				},
+			}
+
+			_, err := a.Login(context.Background(), "test@example.com", "password")
+			require.NoError(t, err)
+
+			devices, err := settings.Devices()
+			require.NoError(t, err)
+			assert.Equal(t, []settings.Device{{ID: "phone", Name: "Phone"}, {ID: "laptop", Name: "Laptop"}}, devices)
+			assert.Equal(t, userDataBefore, settings.Exists(settings.UserDataKey),
+				"a device-limited login is not a successful login")
+		})
+	}
+}
 func TestLogout(t *testing.T) {
 	ac, _ := newTestClient(t)
 	settings.Set(settings.DeviceIDKey, "deviceId")
@@ -390,6 +463,50 @@ func TestCompleteRecoveryByEmail(t *testing.T) {
 	ac, _ := newTestClient(t)
 	err := ac.CompleteRecoveryByEmail(context.Background(), "test@example.com", "newPassword", "code")
 	assert.NoError(t, err)
+}
+
+func TestRecoverySalt(t *testing.T) {
+	completeRecovery := func(t *testing.T, a *Client, email string) error {
+		t.Helper()
+		return a.CompleteRecoveryByEmail(context.Background(), email, "new-password", "code")
+	}
+
+	t.Run("current account caches and saves the new salt", func(t *testing.T) {
+		a, _ := newTestClient(t)
+		require.NoError(t, settings.Set(settings.EmailKey, "me@example.com"))
+		a.salt = []byte("old-salt")
+
+		require.NoError(t, completeRecovery(t, a, "Me@example.com"))
+
+		saved, err := readSalt(a.saltPath)
+		require.NoError(t, err)
+		assert.NotEqual(t, []byte("old-salt"), a.getSaltCached())
+		assert.Equal(t, a.getSaltCached(), saved)
+	})
+
+	t.Run("a failed save still replaces the cached salt", func(t *testing.T) {
+		a, _ := newTestClient(t)
+		require.NoError(t, settings.Set(settings.EmailKey, "me@example.com"))
+		a.salt = []byte("old-salt")
+		a.saltPath = filepath.Join(t.TempDir(), "missing", saltFileName)
+
+		assert.Error(t, completeRecovery(t, a, "me@example.com"))
+		assert.NotEqual(t, []byte("old-salt"), a.getSaltCached())
+	})
+
+	t.Run("another account's salt is not stored", func(t *testing.T) {
+		a, _ := newTestClient(t)
+		require.NoError(t, settings.Set(settings.EmailKey, "me@example.com"))
+		a.salt = []byte("my-salt")
+		require.NoError(t, writeSalt([]byte("my-salt"), a.saltPath))
+
+		require.NoError(t, completeRecovery(t, a, "other@example.com"))
+
+		assert.Equal(t, []byte("my-salt"), a.getSaltCached())
+		saved, err := os.ReadFile(a.saltPath)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("my-salt"), saved)
+	})
 }
 
 func TestValidateEmailRecoveryCode(t *testing.T) {
@@ -552,4 +669,24 @@ func TestReferralAttach_V2Error(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "invalid code")
+}
+
+func TestOAuthFlagsCleared(t *testing.T) {
+	t.Run("ClearUser", func(t *testing.T) {
+		a, _ := newTestClient(t)
+		setOAuthFlags(t)
+		a.ClearUser()
+		assert.False(t, settings.GetBool(settings.OAuthLoginKey))
+		assert.Empty(t, settings.GetString(settings.OAuthProviderKey))
+	})
+
+	t.Run("SignUp", func(t *testing.T) {
+		a, _ := newTestClient(t)
+		require.NoError(t, settings.Patch(settings.Settings{settings.TokenKey: "t", settings.UserIDKey: "123"}))
+		setOAuthFlags(t)
+		_, _, err := a.SignUp(context.Background(), "new@example.com", "password")
+		require.NoError(t, err)
+		assert.False(t, settings.GetBool(settings.OAuthLoginKey))
+		assert.Empty(t, settings.GetString(settings.OAuthProviderKey))
+	})
 }

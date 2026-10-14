@@ -269,3 +269,107 @@ func TestFetchUserDataDoesNotReplayLoginSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, devices, storedDevices)
 }
+
+func TestStaleUserDataIsDiscarded(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		change func(a *Client)
+	}{
+		{"A to B", func(a *Client) {
+			a.setData(&UserData{LegacyID: 2, LegacyToken: "b"})
+		}},
+		{"A to B to A", func(a *Client) {
+			a.setData(&UserData{LegacyID: 2, LegacyToken: "b"})
+			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+		}},
+		{"logout", func(a *Client) { a.ClearUser() }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a, _ := newTestClient(t)
+			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+			handler, requested, release := heldJSON(UserDataResponse{
+				LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 1, Token: "a", UserLevel: "pro"},
+			})
+			useProServer(t, a, handler)
+
+			errc := make(chan error, 1)
+			go func() {
+				_, err := a.FetchUserData(context.Background())
+				errc <- err
+			}()
+			<-requested
+			tt.change(a)
+			after := currentAccount()
+			close(release)
+
+			assert.ErrorIs(t, <-errc, ErrAccountChanged)
+			assert.Equal(t, after, currentAccount(), "a stale response must not change the account")
+			assert.False(t, settings.IsPro())
+		})
+	}
+}
+
+func TestNewUserDiscardsInFlightUserData(t *testing.T) {
+	a, _ := newTestClient(t)
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+	userData, requested, release := heldJSON(UserDataResponse{
+		LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 1, Token: "a"},
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/user-data", userData)
+	mux.Handle("/user-create", serveJSON(UserDataResponse{
+		LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 2, Token: "b"},
+	}))
+	useProServer(t, a, mux)
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.FetchUserData(context.Background())
+		errc <- err
+	}()
+	<-requested
+	_, err := a.NewUser(context.Background())
+	require.NoError(t, err)
+	close(release)
+
+	assert.ErrorIs(t, <-errc, ErrAccountChanged)
+	assert.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+}
+
+func TestReturnedUserDataIsACopy(t *testing.T) {
+	a, _ := newTestClient(t)
+	got, err := a.FetchUserData(context.Background())
+	require.NoError(t, err)
+
+	got.LegacyUserData.UserLevel = "pro"
+	got.Id = "mutated"
+
+	var stored UserData
+	require.NoError(t, settings.GetStruct(settings.UserDataKey, &stored))
+	assert.Empty(t, stored.Id)
+	assert.Empty(t, stored.LegacyUserData.UserLevel)
+}
+
+func TestAccountSwitchNeverExposesAnEmptyIdentity(t *testing.T) {
+	a, _ := newTestClient(t)
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+	stop := make(chan struct{})
+	sawEmpty := make(chan bool, 1)
+	go func() {
+		empty := false
+		for {
+			select {
+			case <-stop:
+				sawEmpty <- empty
+				return
+			default:
+				empty = empty || settings.GetInt64(settings.UserIDKey) == 0 || settings.GetString(settings.TokenKey) == ""
+			}
+		}
+	}()
+	for i := range 50 {
+		a.setData(&UserData{LegacyID: int64(2 + i%2), LegacyToken: "t"})
+	}
+	close(stop)
+	assert.False(t, <-sawEmpty, "readers must never see an account without an id or token")
+}

@@ -2,12 +2,17 @@ package account
 
 import (
 	"context"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 )
 
 func TestSubscriptionPaymentRedirect(t *testing.T) {
@@ -142,12 +147,36 @@ func TestRestoreSubscription(t *testing.T) {
 		assert.Equal(t, "token", resp.ActualUserToken)
 	})
 
-	t.Run("google", func(t *testing.T) {
+	t.Run("google switches to the purchasing account", func(t *testing.T) {
 		ac, _ := newTestClient(t)
+		ac.setData(&UserData{
+			LegacyID:       1,
+			LegacyToken:    "old-token",
+			Token:          "old-jwt",
+			LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com", UserLevel: "pro"},
+		})
+		setOAuthFlags(t)
+		changes := make(chan struct{}, 4)
+		sub := events.Subscribe(func(UserChangeEvent) { changes <- struct{}{} })
+		defer sub.Unsubscribe()
+
 		resp, err := ac.RestoreSubscription(context.Background(), GoogleService, map[string]string{"purchaseToken": "t"})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		assert.Equal(t, "active", resp.Status)
+
+		assert.Equal(t, int64(1234), settings.GetInt64(settings.UserIDKey))
+		assert.Equal(t, "token", settings.GetString(settings.TokenKey))
+		assert.Empty(t, settings.GetString(settings.JwtTokenKey))
+		assert.Empty(t, settings.GetString(settings.EmailKey))
+		assert.False(t, settings.IsPro())
+		assert.False(t, settings.GetBool(settings.OAuthLoginKey))
+		assert.Empty(t, settings.GetString(settings.OAuthProviderKey))
+		select {
+		case <-changes:
+		case <-time.After(3 * time.Second):
+			t.Fatal("account switch not reported")
+		}
 	})
 
 	t.Run("unsupported", func(t *testing.T) {
@@ -180,4 +209,69 @@ func TestNewStripeSubscriptionOmitsEmptyCouponCode(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp)
 	assert.False(t, ts.stripeSubscriptionHasCouponCode)
+}
+
+func TestVerifySwitchesToPurchaser(t *testing.T) {
+	a, _ := newTestClient(t)
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "old-token"})
+	require.NoError(t, a.storeSalt([]byte("previous-salt")))
+	useProServer(t, a, serveJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "purchaser"}))
+
+	_, err := a.VerifySubscription(context.Background(), AppleService, map[string]string{"receipt": "r"})
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(99), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "purchaser", settings.GetString(settings.TokenKey))
+	assert.Nil(t, a.getSaltCached(), "the previous account's salt must not carry over")
+	saved, err := readSalt(a.saltPath)
+	require.NoError(t, err)
+	assert.Nil(t, saved)
+}
+
+func TestLatePurchaseResponseDoesNotSwitch(t *testing.T) {
+	a, _ := newTestClient(t)
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+	handler, requested, release := heldJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "purchaser"})
+	useProServer(t, a, handler)
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.VerifySubscription(context.Background(), AppleService, map[string]string{"receipt": "r"})
+		errc <- err
+	}()
+	<-requested
+	a.setData(&UserData{LegacyID: 2, LegacyToken: "b"})
+	close(release)
+
+	assert.NoError(t, <-errc, "the purchase itself succeeded")
+	assert.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "b", settings.GetString(settings.TokenKey))
+}
+
+func TestSameAccountPurchaseKeepsSaltAndOAuth(t *testing.T) {
+	a, _ := newTestClient(t)
+	a.setData(&UserData{LegacyID: 99, LegacyToken: "old-token"})
+	require.NoError(t, a.storeSalt([]byte("my-salt")))
+	setOAuthFlags(t)
+	useProServer(t, a, serveJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "new-token"}))
+
+	_, err := a.VerifySubscription(context.Background(), AppleService, map[string]string{"receipt": "r"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "new-token", settings.GetString(settings.TokenKey))
+	assert.Equal(t, []byte("my-salt"), a.getSaltCached())
+	saved, err := readSalt(a.saltPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("my-salt"), saved)
+	assert.True(t, settings.GetBool(settings.OAuthLoginKey))
+	assert.Equal(t, "google", settings.GetString(settings.OAuthProviderKey))
+}
+
+func TestVerifySucceedsWithAnUnexpectedBody(t *testing.T) {
+	a, _ := newTestClient(t)
+	useProServer(t, a, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	_, err := a.VerifySubscription(context.Background(), AppleService, map[string]string{"receipt": "r"})
+
+	assert.NoError(t, err)
 }
