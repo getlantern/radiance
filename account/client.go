@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -86,10 +87,10 @@ func (a *Client) baseURL() string {
 	return common.GetBaseURL()
 }
 
-// sendRequest sends an HTTP request to the specified URL with the given method, query parameters,
-// headers, and body. If the URL is relative, the base URL will be prepended.
+// sendRequest sends an HTTP request, prepending the base URL when url is relative.
 //
-// A non-2xx response returns an error whose message includes the response body.
+// A non-2xx response returns an error whose message includes the response body, with email
+// addresses, JWTs, numbers of six or more digits, and long tokens containing a digit redacted.
 func (a *Client) sendRequest(
 	ctx context.Context,
 	method, url string,
@@ -163,7 +164,7 @@ func (a *Client) sendRequest(
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		a.logger.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode)
-		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitizeResponseBody(respBody))
+		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, redactResponseBody(sanitizeResponseBody(respBody)))
 	}
 
 	if len(respBody) == 0 {
@@ -229,6 +230,32 @@ func curlFromRequest(req *http.Request) string {
 
 func shellEscape(s string) string {
 	return strings.ReplaceAll(s, "'", "'\\''")
+}
+
+var (
+	redactedEmail = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	redactedJWT   = regexp.MustCompile(`eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`)
+	redactedToken = regexp.MustCompile(`[A-Za-z0-9+/=_-]{20,}`)
+	// Recovery and link codes are six digits; shorter numbers, such as IDs in messages, are kept.
+	redactedDigits = regexp.MustCompile(`\b[0-9]{6,}\b`)
+	hasDigit       = regexp.MustCompile(`[0-9]`)
+)
+
+const redacted = "[redacted]"
+
+// redactResponseBody keeps a server's error codes and messages, which the app matches on, while
+// removing values the server may echo back from the request.
+func redactResponseBody(data []byte) []byte {
+	data = redactedEmail.ReplaceAll(data, []byte(redacted))
+	data = redactedJWT.ReplaceAll(data, []byte(redacted))
+	// Requiring a digit keeps long snake_case error codes intact.
+	data = redactedToken.ReplaceAllFunc(data, func(m []byte) []byte {
+		if hasDigit.Match(m) {
+			return []byte(redacted)
+		}
+		return m
+	})
+	return redactedDigits.ReplaceAll(data, []byte(redacted))
 }
 
 func sanitizeResponseBody(data []byte) []byte {
