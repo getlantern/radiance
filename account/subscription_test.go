@@ -154,7 +154,7 @@ func TestRestoreSubscription(t *testing.T) {
 			LegacyToken:    "old-token",
 			Token:          "old-jwt",
 			LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com", UserLevel: "pro"},
-		})
+		}, nil)
 		setOAuthFlags(t)
 		changes := make(chan struct{}, 4)
 		sub := events.Subscribe(func(UserChangeEvent) { changes <- struct{}{} })
@@ -213,7 +213,7 @@ func TestNewStripeSubscriptionOmitsEmptyCouponCode(t *testing.T) {
 
 func TestVerifySwitchesToPurchaser(t *testing.T) {
 	a, _ := newTestClient(t)
-	a.setData(&UserData{LegacyID: 1, LegacyToken: "old-token"})
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "old-token"}, nil)
 	require.NoError(t, a.storeSalt([]byte("previous-salt")))
 	useProServer(t, a, serveJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "purchaser"}))
 
@@ -228,9 +228,23 @@ func TestVerifySwitchesToPurchaser(t *testing.T) {
 	assert.Nil(t, saved)
 }
 
+func TestPurchaseSwitchNotSavedKeepsAccount(t *testing.T) {
+	a, _ := newTestClient(t)
+	require.NoError(t, a.setData(&UserData{LegacyID: 1, LegacyToken: "old-token"}, nil))
+	require.NoError(t, a.storeSalt([]byte("previous-salt")))
+	useProServer(t, a, serveJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "purchaser"}))
+	defer failSettingsSaves(t)()
+
+	_, err := a.VerifySubscription(context.Background(), AppleService, map[string]string{"receipt": "r"})
+
+	assert.NoError(t, err, "the purchase itself succeeded")
+	assert.Equal(t, int64(1), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, []byte("previous-salt"), a.getSaltCached())
+}
+
 func TestLatePurchaseResponseDoesNotSwitch(t *testing.T) {
 	a, _ := newTestClient(t)
-	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"}, nil)
 	handler, requested, release := heldJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "purchaser"})
 	useProServer(t, a, handler)
 
@@ -240,7 +254,7 @@ func TestLatePurchaseResponseDoesNotSwitch(t *testing.T) {
 		errc <- err
 	}()
 	<-requested
-	a.setData(&UserData{LegacyID: 2, LegacyToken: "b"})
+	a.setData(&UserData{LegacyID: 2, LegacyToken: "b"}, nil)
 	close(release)
 
 	assert.NoError(t, <-errc, "the purchase itself succeeded")
@@ -250,7 +264,7 @@ func TestLatePurchaseResponseDoesNotSwitch(t *testing.T) {
 
 func TestSameAccountPurchaseKeepsSaltAndOAuth(t *testing.T) {
 	a, _ := newTestClient(t)
-	a.setData(&UserData{LegacyID: 99, LegacyToken: "old-token"})
+	a.setData(&UserData{LegacyID: 99, LegacyToken: "old-token"}, nil)
 	require.NoError(t, a.storeSalt([]byte("my-salt")))
 	setOAuthFlags(t)
 	useProServer(t, a, serveJSON(VerifySubscriptionResponse{Status: "active", ActualUserID: 99, ActualUserToken: "new-token"}))

@@ -105,7 +105,11 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse, generatio
 		LegacyToken:    resp.Token,
 		LegacyUserData: resp.LoginResponse_UserData,
 	}
-	return a.setDataLocked(login, true), nil
+	data, err := a.setDataLocked(login, true, nil)
+	if err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("saving user data: %w", err))
+	}
+	return data, nil
 }
 
 type DataCapInfo struct {
@@ -186,7 +190,6 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 	if err != nil {
 		return nil, nil, traces.RecordError(ctx, err)
 	}
-	a.setSalt(salt)
 
 	var signupData protos.SignupResponse
 	if err := proto.Unmarshal(resp, &signupData); err != nil {
@@ -199,6 +202,7 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 	}); err != nil {
 		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
 	}
+	a.setSalt(salt)
 
 	return salt, &signupData, nil
 }
@@ -294,12 +298,12 @@ func (a *Client) Login(ctx context.Context, email, password string) (*UserData, 
 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
-	a.setData(&loginResp)
+	oauth := settings.Settings{settings.OAuthLoginKey: false, settings.OAuthProviderKey: ""}
+	if err := a.setData(&loginResp, oauth); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("saving login: %w", err))
+	}
 	if saltErr := a.storeSalt(salt); saltErr != nil {
 		return nil, traces.RecordError(ctx, saltErr)
-	}
-	if err := settings.Clear(settings.OAuthLoginKey, settings.OAuthProviderKey); err != nil {
-		a.logger.Warn("failed to clear OAuth login", "error", err)
 	}
 	return &loginResp, nil
 }
@@ -324,7 +328,9 @@ func (a *Client) Logout(ctx context.Context, email string) (*UserData, error) {
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))
 	}
-	a.ClearUser()
+	if err := a.ClearUser(); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("logged out on the server, but clearing the local account failed: %w", err))
+	}
 	if err := a.storeSalt(nil); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("writing salt after logout: %w", err))
 	}
@@ -513,7 +519,9 @@ func (a *Client) DeleteAccount(ctx context.Context, email, password string) (*Us
 		return nil, traces.RecordError(ctx, err)
 	}
 
-	a.ClearUser()
+	if err := a.ClearUser(); err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("account deleted on the server, but clearing the local account failed: %w", err))
+	}
 	if err := a.storeSalt(nil); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to write salt during account deletion cleanup: %w", err))
 	}
@@ -562,7 +570,9 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 			Email:    jwtUserInfo.Email,
 		},
 	}
-	a.setData(login)
+	if err := a.setData(login, nil); err != nil {
+		return nil, fmt.Errorf("saving OAuth identity: %w", err)
+	}
 	user, err := a.fetchUserData(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting user data: %w", err)
@@ -577,7 +587,9 @@ func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*Us
 	}
 	user.Id = jwtUserInfo.Email
 	user.EmailConfirmed = true
-	a.setData(user)
+	if err := a.setData(user, nil); err != nil {
+		return nil, fmt.Errorf("saving OAuth user data: %w", err)
+	}
 	return user, nil
 }
 
@@ -695,12 +707,11 @@ func (a *Client) storeIdentity(id int64, token string, extra settings.Settings) 
 	return a.storeIdentityLocked(id, token, extra)
 }
 
-// storeIdentityLocked saves id and token, each only if set, together with extra in one write, and
-// emits a [UserChangeEvent] if the [accountState] changed. A different nonzero id clears the
-// previous account's credentials and cached data, and the whole write then applies in memory even
-// if the save fails, so the previous credentials never outlive the switch; otherwise it applies
-// only once saved. The OAuth flags are kept, because an OAuth sign-in records its provider before
-// switching. It requires a.mu to be held.
+// storeIdentityLocked saves id and token, each only if set, together with extra in one write that
+// takes effect only once saved, and emits a [UserChangeEvent] if the [accountState] changed. A
+// different nonzero id also clears the previous account's credentials and cached data. The OAuth
+// flags are kept, because an OAuth sign-in records its provider before switching. It requires a.mu
+// to be held.
 func (a *Client) storeIdentityLocked(id int64, token string, extra settings.Settings) error {
 	before := currentAccount()
 	defer func() {
@@ -727,14 +738,10 @@ func (a *Client) storeIdentityLocked(id int64, token string, extra settings.Sett
 	if token != "" {
 		updates[settings.TokenKey] = token
 	}
-	switch {
-	case len(updates) == 0:
+	if len(updates) == 0 {
 		return nil
-	case switching:
-		return settings.Apply(updates)
-	default:
-		return settings.Patch(updates)
 	}
+	return settings.Patch(updates)
 }
 
 // accountState holds the settings whose change is reported as a [UserChangeEvent].
@@ -753,22 +760,23 @@ func currentAccount() accountState {
 	}
 }
 
-func (a *Client) setData(data *UserData) {
+// setData stores data together with extra, or clears the account when data is nil.
+func (a *Client) setData(data *UserData, extra settings.Settings) error {
 	if data == nil {
-		a.ClearUser()
-		return
+		return a.ClearUser()
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.generation++
-	a.setDataLocked(data, false)
+	_, err := a.setDataLocked(data, false, extra)
+	return err
 }
 
-// setDataLocked stores a copy of data, merged with the cached response of the same account when
-// preserveLoginFields is set. Data without user data stores only its id, token and devices. It
-// logs rather than returns save failures, and returns data, possibly merged, which the caller may
-// modify without affecting settings. It requires a.mu to be held and data to be non-nil.
-func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserData {
+// setDataLocked stores a copy of data together with extra, first merging data with the cached
+// response of the same account when preserveLoginFields is set. Data without user data stores only its id, token
+// and devices. It returns data, possibly merged, which the caller may modify without affecting
+// settings. It requires a.mu to be held and data to be non-nil.
+func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool, extra settings.Settings) (*UserData, error) {
 	updates := settings.Settings{}
 	// A device-limited login carries no user data, but its device list is what the user needs to
 	// pick a device to remove.
@@ -807,22 +815,24 @@ func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool) *UserDa
 		}
 		updates[settings.UserDataKey] = proto.Clone(data)
 	}
+	maps.Copy(updates, extra)
 	if err := a.storeIdentityLocked(data.LegacyID, data.LegacyToken, updates); err != nil {
-		a.logger.Error("failed to store account data", "error", err)
+		return nil, err
 	}
-	return data
+	return data, nil
 }
 
-// ClearUser removes the cached account and its credentials.
-func (a *Client) ClearUser() {
+// ClearUser removes the cached account and its credentials. On error the account remains.
+func (a *Client) ClearUser() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.generation++
 	hadIdentity := settings.GetInt64(settings.UserIDKey) != 0 || settings.GetString(settings.TokenKey) != ""
 	if err := settings.Clear(settings.UserKeys...); err != nil {
-		a.logger.Warn("failed to clear user info", "error", err)
+		return fmt.Errorf("clearing user info: %w", err)
 	}
 	if hadIdentity {
 		events.Emit(UserChangeEvent{})
 	}
+	return nil
 }

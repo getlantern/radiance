@@ -294,7 +294,9 @@ func newTestClient(t *testing.T) (*Client, *testServer) {
 		t.Setenv(v, t.TempDir())
 	}
 	settings.Reset()
-	require.NoError(t, settings.InitSettings(t.TempDir()))
+	dataDir := t.TempDir()
+	require.NoError(t, settings.InitSettings(dataDir))
+	require.NoError(t, settings.Set(settings.DataPathKey, dataDir))
 	t.Cleanup(settings.Reset)
 	return &Client{
 		httpClient: ts.Client(),
@@ -303,6 +305,15 @@ func newTestClient(t *testing.T) (*Client, *testServer) {
 		authURL:    ts.URL,
 		saltPath:   filepath.Join(t.TempDir(), saltFileName),
 	}, state
+}
+
+// failSettingsSaves makes settings saves fail until the returned func restores the data directory.
+func failSettingsSaves(t *testing.T) (restore func()) {
+	t.Helper()
+	dir := settings.GetString(settings.DataPathKey)
+	aside := dir + ".aside"
+	require.NoError(t, os.Rename(dir, aside))
+	return func() { require.NoError(t, os.Rename(aside, dir)) }
 }
 
 // newTestClientWithSRP creates a test client and pre-registers an email/password on the mock server.
@@ -366,6 +377,18 @@ func TestSignUp(t *testing.T) {
 	assert.NotNil(t, signupResponse)
 }
 
+func TestSignUpKeepsSaltWhenSaveFails(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, settings.Patch(settings.Settings{settings.TokenKey: "t", settings.UserIDKey: "123"}))
+	ac.salt = []byte("account-salt")
+	defer failSettingsSaves(t)()
+
+	_, _, err := ac.SignUp(context.Background(), "new@example.com", "password")
+
+	assert.ErrorContains(t, err, "saving signup identity")
+	assert.Equal(t, []byte("account-salt"), ac.getSaltCached())
+}
+
 func TestSignupEmailResendCode(t *testing.T) {
 	ac, _ := newTestClient(t)
 	ac.salt = []byte("salt")
@@ -404,7 +427,7 @@ func TestDeviceLimitedLoginStoresDevices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a, server := newTestClientWithSRP(t, "test@example.com", "password")
 			if tt.existing != nil {
-				a.setData(tt.existing)
+				a.setData(tt.existing, nil)
 			}
 			userDataBefore := settings.Exists(settings.UserDataKey)
 			server.loginResponse = &UserData{
@@ -430,6 +453,36 @@ func TestLogout(t *testing.T) {
 	settings.Set(settings.DeviceIDKey, "deviceId")
 	_, err := ac.Logout(context.Background(), "test@example.com")
 	assert.NoError(t, err)
+}
+
+func TestLogoutKeepsAccountWhenSaveFails(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, ac.setData(&UserData{LegacyID: 7, LegacyToken: "tok"}, nil))
+	defer failSettingsSaves(t)()
+
+	_, err := ac.Logout(context.Background(), "test@example.com")
+
+	assert.ErrorContains(t, err, "logged out on the server")
+	assert.Equal(t, int64(7), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "tok", settings.GetString(settings.TokenKey))
+}
+
+func TestLoginKeepsAccountWhenSaveFails(t *testing.T) {
+	ac, server := newTestClientWithSRP(t, "test@example.com", "password")
+	require.NoError(t, ac.setData(&UserData{LegacyID: 7, LegacyToken: "tok"}, nil))
+	server.loginResponse = &UserData{
+		LegacyID:       8,
+		LegacyToken:    "new",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 8, UserLevel: "pro"},
+	}
+	defer failSettingsSaves(t)()
+
+	_, err := ac.Login(context.Background(), "test@example.com", "password")
+
+	assert.ErrorContains(t, err, "saving login")
+	assert.Equal(t, int64(7), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "tok", settings.GetString(settings.TokenKey))
+	assert.False(t, settings.IsPro())
 }
 
 func TestLogoutOmitsCredentials(t *testing.T) {
@@ -554,6 +607,18 @@ func TestDeleteAccount(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestDeleteAccountKeepsAccountWhenSaveFails(t *testing.T) {
+	email := "test@example.com"
+	ac, _ := newTestClientWithSRP(t, email, "password")
+	require.NoError(t, ac.setData(&UserData{LegacyID: 7, LegacyToken: "tok"}, nil))
+	defer failSettingsSaves(t)()
+
+	_, err := ac.DeleteAccount(context.Background(), email, "password")
+
+	assert.ErrorContains(t, err, "account deleted on the server")
+	assert.Equal(t, int64(7), settings.GetInt64(settings.UserIDKey))
+}
+
 func TestOAuthLoginUrl(t *testing.T) {
 	ac, _ := newTestClient(t)
 	url, err := ac.OAuthLoginURL(context.Background(), "google")
@@ -568,7 +633,7 @@ func TestOAuthLoginCallback(t *testing.T) {
 		LegacyID: 456, Token: "old-jwt",
 		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
 		LegacyUserData: &protos.LoginResponse_UserData{UserId: 456},
-	})
+	}, nil)
 
 	// Mock JWT with unverified signature — decodeJWT uses ParseUnverified so this succeeds.
 	mockToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJsZWdhY3lfdXNlcl9pZCI6MTIzNDUsImxlZ2FjeV90b2tlbiI6InRlc3QtdG9rZW4ifQ.test"

@@ -420,15 +420,16 @@ func Set(key _key, value any) error {
 	return Patch(Settings{key: value})
 }
 
-// Clear removes keys and saves the settings. Unlike [Set] and [Patch], the keys stay removed in
-// memory even when the save fails; the save error is still returned.
+// Clear removes keys. On error the previous values remain.
 func Clear(keys ..._key) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	for _, key := range keys {
-		k.k.Delete(key.String())
-	}
-	return saveLocked(k.k)
+	return updateLocked(func(kk *koanf.Koanf) error {
+		for _, key := range keys {
+			kk.Delete(key.String())
+		}
+		return nil
+	})
 }
 
 type Settings map[_key]any
@@ -471,27 +472,28 @@ func GetAllFor(keys ..._key) Settings {
 func Patch(updates Settings) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return updateLocked(func(kk *koanf.Koanf) error { return setAll(kk, updates) })
+	return updateLocked(func(kk *koanf.Koanf) error {
+		for key, value := range updates {
+			if err := kk.Set(key.String(), value); err != nil {
+				return fmt.Errorf("could not set key %s: %w", key, err)
+			}
+		}
+		return nil
+	})
 }
 
 // Apply is like [Patch], except the updates take effect in memory even when the save fails; the
-// save error is still returned.
+// save error is still returned. It is for inputs the process recomputes on every start, such as
+// paths and the host's telemetry consent, which must hold for the current run regardless.
 func Apply(updates Settings) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if err := setAll(k.k, updates); err != nil {
-		return err
-	}
-	return saveLocked(k.k)
-}
-
-func setAll(kk *koanf.Koanf, updates Settings) error {
 	for key, value := range updates {
-		if err := kk.Set(key.String(), value); err != nil {
+		if err := k.k.Set(key.String(), value); err != nil {
 			return fmt.Errorf("could not set key %s: %w", key, err)
 		}
 	}
-	return nil
+	return saveLocked(k.k)
 }
 
 // updateLocked runs mutate on a copy of the settings, saves the copy, and only then makes it the

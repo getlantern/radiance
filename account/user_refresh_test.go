@@ -92,7 +92,7 @@ func TestFetchUserDataWithoutMatchingLogin(t *testing.T) {
 					LegacyUserData: &protos.LoginResponse_UserData{
 						UserId: tt.cachedID, Email: "old@example.com", UserLevel: "pro",
 					},
-				})
+				}, nil)
 			}
 			got, err := ac.FetchUserData(context.Background())
 			require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestFetchUserDataWithoutToken(t *testing.T) {
 			ac.setData(&UserData{
 				LegacyID: 123, LegacyToken: "cached-token", Id: "account-id",
 				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "cached-token"},
-			})
+			}, nil)
 			require.NoError(t, settings.Set(settings.TokenKey, "current-token"))
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				writeJSONResponse(w, UserDataResponse{
@@ -158,7 +158,7 @@ func TestSignupSwitchesAccountBeforeRefresh(t *testing.T) {
 		LegacyID: 456, LegacyToken: "old-token", Token: "old-jwt",
 		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
 		LegacyUserData: &protos.LoginResponse_UserData{UserId: 456},
-	})
+	}, nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeProtoResponse(w, &protos.SignupResponse{LegacyID: 123, ProToken: "signup-token", Token: "signup-jwt"})
 	}))
@@ -184,7 +184,7 @@ func TestLoginReplacesCachedFields(t *testing.T) {
 		Token:          "previous-jwt",
 		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
 		LegacyUserData: &protos.LoginResponse_UserData{UserId: 123},
-	})
+	}, nil)
 	server.loginResponse = &UserData{
 		LegacyID:       123,
 		LegacyUserData: &protos.LoginResponse_UserData{UserId: 123},
@@ -235,7 +235,7 @@ func TestSetDataNilClearsCachedUser(t *testing.T) {
 	ac, _ := newTestClient(t)
 	_, err := ac.NewUser(context.Background())
 	require.NoError(t, err)
-	ac.setData(nil)
+	ac.setData(nil, nil)
 	assert.False(t, settings.Exists(settings.UserDataKey))
 	assert.Empty(t, settings.GetString(settings.TokenKey))
 }
@@ -247,7 +247,7 @@ func TestFetchUserDataDoesNotReplayLoginSettings(t *testing.T) {
 		Token:          "old-jwt",
 		Devices:        []*protos.LoginResponse_Device{{Id: "old-device"}},
 		LegacyUserData: &protos.LoginResponse_UserData{UserId: 123},
-	})
+	}, nil)
 	devices := []settings.Device{{ID: "new-device", Name: "Laptop"}}
 	require.NoError(t, settings.Patch(settings.Settings{
 		settings.JwtTokenKey: "new-jwt",
@@ -276,17 +276,17 @@ func TestStaleUserDataIsDiscarded(t *testing.T) {
 		change func(a *Client)
 	}{
 		{"A to B", func(a *Client) {
-			a.setData(&UserData{LegacyID: 2, LegacyToken: "b"})
+			a.setData(&UserData{LegacyID: 2, LegacyToken: "b"}, nil)
 		}},
 		{"A to B to A", func(a *Client) {
-			a.setData(&UserData{LegacyID: 2, LegacyToken: "b"})
-			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+			a.setData(&UserData{LegacyID: 2, LegacyToken: "b"}, nil)
+			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"}, nil)
 		}},
 		{"logout", func(a *Client) { a.ClearUser() }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a, _ := newTestClient(t)
-			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+			a.setData(&UserData{LegacyID: 1, LegacyToken: "a"}, nil)
 			handler, requested, release := heldJSON(UserDataResponse{
 				LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 1, Token: "a", UserLevel: "pro"},
 			})
@@ -311,7 +311,7 @@ func TestStaleUserDataIsDiscarded(t *testing.T) {
 
 func TestNewUserDiscardsInFlightUserData(t *testing.T) {
 	a, _ := newTestClient(t)
-	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"}, nil)
 	userData, requested, release := heldJSON(UserDataResponse{
 		LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 1, Token: "a"},
 	})
@@ -352,7 +352,7 @@ func TestReturnedUserDataIsACopy(t *testing.T) {
 
 func TestAccountSwitchNeverExposesAnEmptyIdentity(t *testing.T) {
 	a, _ := newTestClient(t)
-	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"})
+	a.setData(&UserData{LegacyID: 1, LegacyToken: "a"}, nil)
 	stop := make(chan struct{})
 	sawEmpty := make(chan bool, 1)
 	go func() {
@@ -368,7 +368,7 @@ func TestAccountSwitchNeverExposesAnEmptyIdentity(t *testing.T) {
 		}
 	}()
 	for i := range 50 {
-		a.setData(&UserData{LegacyID: int64(2 + i%2), LegacyToken: "t"})
+		a.setData(&UserData{LegacyID: int64(2 + i%2), LegacyToken: "t"}, nil)
 	}
 	close(stop)
 	assert.False(t, <-sawEmpty, "readers must never see an account without an id or token")

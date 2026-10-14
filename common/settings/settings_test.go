@@ -691,21 +691,27 @@ func TestSaveFailure(t *testing.T) {
 	t.Run("Apply takes effect even when the save fails", func(t *testing.T) {
 		dir := t.TempDir()
 		initAt(t, dir)
+		require.NoError(t, Patch(Settings{TelemetryKey: true}))
 		defer moveAside(t, dir)()
 
-		assert.Error(t, Apply(Settings{DataPathKey: "/data"}))
+		assert.Error(t, Apply(Settings{TelemetryKey: false, LocaleKey: "en-US"}))
 
-		assert.Equal(t, "/data", GetString(DataPathKey))
+		assert.False(t, GetBool(TelemetryKey))
+		assert.Equal(t, "en-US", GetString(LocaleKey))
 	})
 
-	t.Run("Clear removes keys even when the save fails", func(t *testing.T) {
+	t.Run("Clear takes effect only once saved", func(t *testing.T) {
 		dir := t.TempDir()
 		initAt(t, dir)
 		require.NoError(t, Patch(Settings{TokenKey: "secret", UserIDKey: 1}))
-		defer moveAside(t, dir)()
+		restore := moveAside(t, dir)
 
 		assert.Error(t, Clear(TokenKey, UserIDKey))
+		assert.Equal(t, "secret", GetString(TokenKey))
+		assert.Equal(t, "1", GetString(UserIDKey))
 
+		restore()
+		require.NoError(t, Clear(TokenKey, UserIDKey))
 		assert.False(t, Exists(TokenKey))
 		assert.False(t, Exists(UserIDKey))
 	})
