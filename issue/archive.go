@@ -32,8 +32,8 @@ const (
 // given truncation priority; secondary log files and attachments are included
 // greedily if space permits. The total compressed archive size will not exceed
 // maxSize bytes.
-func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) ([]byte, error) {
-	logFiles := globFiles(logDir, "*.log")
+func buildIssueArchive(logger *slog.Logger, logDir string, additionalFiles []string, maxSize int64) ([]byte, error) {
+	logFiles := globFiles(logger, logDir, "*.log")
 
 	var primaryLogData []byte
 	var secondaryLogs []extraFile
@@ -41,7 +41,7 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 	for _, lf := range logFiles {
 		data, err := snapshotLogFile(lf, maxSize)
 		if err != nil {
-			slog.Warn("unable to snapshot log file", "path", lf, "error", err)
+			logger.Warn("unable to snapshot log file", "path", lf, "error", err)
 			continue
 		}
 		if len(data) == 0 {
@@ -57,18 +57,18 @@ func buildIssueArchive(logDir string, additionalFiles []string, maxSize int64) (
 		}
 	}
 
-	attachments := readExtraFiles(additionalFiles)
+	attachments := readExtraFiles(logger, additionalFiles)
 
 	primaryPath := filepath.Join(logDir, logArchiveName)
-	primaryLogData = prependMostRecentBackup(primaryPath, primaryLogData, maxSize)
+	primaryLogData = prependMostRecentBackup(logger, primaryPath, primaryLogData, maxSize)
 
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
 }
 
 // prependMostRecentBackup prepends the newest rotated gzip backup, if present,
 // so a mid-session rotation does not lose earlier log history.
-func prependMostRecentBackup(primaryLogPath string, current []byte, maxArchiveSize int64) []byte {
-	backupPath, ok := findMostRecentCompressedBackup(primaryLogPath)
+func prependMostRecentBackup(logger *slog.Logger, primaryLogPath string, current []byte, maxArchiveSize int64) []byte {
+	backupPath, ok := findMostRecentCompressedBackup(logger, primaryLogPath)
 	if !ok {
 		return current
 	}
@@ -80,7 +80,7 @@ func prependMostRecentBackup(primaryLogPath string, current []byte, maxArchiveSi
 
 	backupData, err := readGzipTail(backupPath, remaining)
 	if err != nil {
-		slog.Warn("unable to read compressed log backup", "path", backupPath, "error", err)
+		logger.Warn("unable to read compressed log backup", "path", backupPath, "error", err)
 		return current
 	}
 	if len(backupData) == 0 {
@@ -93,12 +93,12 @@ func prependMostRecentBackup(primaryLogPath string, current []byte, maxArchiveSi
 	return append(backupData, current...)
 }
 
-func findMostRecentCompressedBackup(primaryLogPath string) (string, bool) {
+func findMostRecentCompressedBackup(logger *slog.Logger, primaryLogPath string) (string, bool) {
 	dir := filepath.Dir(primaryLogPath)
 	base := filepath.Base(primaryLogPath)
 	logName := strings.TrimSuffix(base, logExt)
 
-	matches := globFiles(dir, logName+"-*"+backupExt)
+	matches := globFiles(logger, dir, logName+"-*"+backupExt)
 	if len(matches) == 0 {
 		return "", false
 	}
@@ -168,10 +168,10 @@ func readGzipTail(path string, maxRead int64) ([]byte, error) {
 	}
 }
 
-func globFiles(dir, pattern string) []string {
+func globFiles(logger *slog.Logger, dir, pattern string) []string {
 	matches, err := filepath.Glob(filepath.Join(dir, pattern))
 	if err != nil {
-		slog.Warn("unable to glob files", "dir", dir, "pattern", pattern, "error", err)
+		logger.Warn("unable to glob files", "dir", dir, "pattern", pattern, "error", err)
 		return nil
 	}
 	return matches
@@ -222,12 +222,12 @@ type extraFile struct {
 	data []byte
 }
 
-func readExtraFiles(paths []string) []extraFile {
+func readExtraFiles(logger *slog.Logger, paths []string) []extraFile {
 	var files []extraFile
 	for _, p := range paths {
 		data, err := os.ReadFile(p)
 		if err != nil {
-			slog.Warn("unable to read additional file", "path", p, "error", err)
+			logger.Warn("unable to read additional file", "path", p, "error", err)
 			continue
 		}
 		files = append(files, extraFile{

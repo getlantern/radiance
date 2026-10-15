@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -68,7 +67,7 @@ func (a *Client) SubscriptionPlans(ctx context.Context, channel string) (string,
 	}
 	resp, err := a.sendProRequest(ctx, "GET", "/plans-v5", params, nil, nil)
 	if err != nil {
-		slog.Error("retrieving plans", "error", err)
+		a.logger.Error("retrieving plans", "error", err)
 		return "", traces.RecordError(ctx, err)
 	}
 	var plans SubscriptionPlans
@@ -77,7 +76,7 @@ func (a *Client) SubscriptionPlans(ctx context.Context, channel string) (string,
 	}
 	if plans.BaseResponse != nil && plans.Error != "" {
 		err = fmt.Errorf("received bad response: %s", plans.Error)
-		slog.Error("retrieving plans", "error", err)
+		a.logger.Error("retrieving plans", "error", err)
 		return "", traces.RecordError(ctx, err)
 	}
 	return string(resp), nil
@@ -130,7 +129,7 @@ func (a *Client) VerifySubscription(ctx context.Context, service SubscriptionSer
 
 	resp, err := a.sendProRequest(ctx, "POST", path, nil, nil, data)
 	if err != nil {
-		slog.Error("verifying subscription", "error", err)
+		a.logger.Error("verifying subscription", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
 	}
 	return string(resp), nil
@@ -164,7 +163,7 @@ func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionSe
 
 	resp, err := a.sendProRequest(ctx, "POST", path, nil, nil, data)
 	if err != nil {
-		slog.Error("restoring subscription", "error", err)
+		a.logger.Error("restoring subscription", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("restoring subscription: %w", err))
 	}
 	var result RestoreSubscriptionResponse
@@ -180,7 +179,7 @@ func (a *Client) StripeBillingPortalURL(ctx context.Context, baseURL, userID, pr
 	defer span.End()
 	portalURL, err := url.Parse(baseURL + "/stripe-billing-portal")
 	if err != nil {
-		slog.Error("parsing portal URL", "error", err)
+		a.logger.Error("parsing portal URL", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("parsing portal URL: %w", err))
 	}
 	query := portalURL.Query()
@@ -201,7 +200,7 @@ func (a *Client) paymentRedirect(ctx context.Context, path string, params map[st
 	}
 	resp, err := a.sendProRequest(ctx, "GET", path, params, headers, nil)
 	if err != nil {
-		slog.Error("payment redirect", "error", err)
+		a.logger.Error("payment redirect", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("payment redirect: %w", err))
 	}
 	var r redirect
@@ -275,7 +274,7 @@ func (a *Client) ActivationCode(ctx context.Context, email, resellerCode string)
 	}
 	resp, err := a.sendProRequest(ctx, "POST", "/purchase", nil, nil, data)
 	if err != nil {
-		slog.Error("retrieving subscription status", "error", err)
+		a.logger.Error("retrieving subscription status", "error", err)
 		return nil, traces.RecordError(ctx, fmt.Errorf("retrieving subscription status: %w", err))
 	}
 	var purchase PurchaseResponse
@@ -283,7 +282,7 @@ func (a *Client) ActivationCode(ctx context.Context, email, resellerCode string)
 		return nil, traces.RecordError(ctx, fmt.Errorf("unmarshaling purchase response: %w", err))
 	}
 	if purchase.BaseResponse != nil && purchase.Error != "" {
-		slog.Error("retrieving subscription status", "error", purchase.Error)
+		a.logger.Error("retrieving subscription status", "error", purchase.Error)
 		return nil, traces.RecordError(ctx, fmt.Errorf("received bad response: %s", purchase.Error))
 	}
 	return &purchase, nil

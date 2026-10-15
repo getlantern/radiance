@@ -77,9 +77,9 @@ type BoxOptions struct {
 	SelectionHistorySeed map[string]lbA.TagHistory `json:"tag_history"`
 	// LanternServerTags lists the outbound/endpoint tags in Options that are
 	// Lantern servers. Only Lantern servers receive injected client info, so
-	// these seed the client-context injector's match bounds at construction —
-	// otherwise servers baked into the initial config get no data-usage
-	// attribution until a config refresh adds them.
+	// these seed the tunnel's client-info Injector at construction; otherwise
+	// outbounds baked into the initial config get no data-usage attribution.
+	// The Injector covers outbounds only, so endpoint tags have no effect.
 	LanternServerTags []string `json:"lantern_server_tags,omitempty"`
 }
 

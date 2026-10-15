@@ -146,7 +146,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	platformDeviceID := settings.GetString(settings.DeviceIDKey)
 
-	accountClient := account.NewClient(kindling.HTTPClient(), dataDir)
+	accountClient := account.NewClient(kindling.HTTPClient(), dataDir, slog.Default().With("service", "account"))
 
 	svrMgr, err := servers.NewManager(
 		dataDir, slog.Default().With("service", "server_manager"),
@@ -195,7 +195,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	r := &LocalBackend{
 		ctx:               ctx,
 		cancel:            cancel,
-		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient()),
+		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter")),
 		selectionReporter: newSelectionReporter(kindling.HTTPClient()),
 		accountClient:     accountClient,
 		confHandler:       config.NewConfigHandler(ctx, cOpts),
@@ -567,13 +567,13 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	}
 
 	if r == nil {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
+		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
 		return meta
 	}
 	if r.issueReporter != nil {
 		meta.reporter = r.issueReporter
 	} else {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient())
+		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
 	}
 	if r.deviceID != "" {
 		meta.deviceID = r.deviceID
@@ -1362,9 +1362,9 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 }
 
 // lanternServerTags collects the tags of the Lantern servers in cfg and
-// managed, to seed the client-context injector's match bounds. Every cfg
-// outbound and endpoint is a Lantern server; managed servers carry the flag
-// explicitly.
+// managed, to seed the tunnel's client-info Injector, which covers outbounds
+// only. Every cfg outbound and endpoint is a Lantern server; managed servers
+// carry the flag explicitly.
 func lanternServerTags(cfg *config.Config, managed []*servers.Server) []string {
 	seen := make(map[string]struct{})
 	var tags []string

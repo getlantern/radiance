@@ -326,7 +326,7 @@ func TestInitialAccountEventDoesNotLoopConfigCreation(t *testing.T) {
 	})}
 	ch := NewConfigHandler(context.Background(), Options{
 		DataPath: t.TempDir(), Logger: log.NoOpLogger(), HTTPClient: client,
-		AccountClient: account.NewClient(client, t.TempDir()),
+		AccountClient: account.NewClient(client, t.TempDir(), log.NoOpLogger()),
 	})
 	defer ch.cancel()
 	ch.Start()

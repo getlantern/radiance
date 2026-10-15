@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/log"
 )
 
 func TestReadSSE_BasicEvent(t *testing.T) {
@@ -118,7 +120,7 @@ func TestConnectDataCapSSE_CapExhausted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Client{httpClient: srv.Client(), authURL: srv.URL}
+	a := &Client{httpClient: srv.Client(), logger: log.NoOpLogger(), authURL: srv.URL}
 	var got []DataCapInfo
 	err := a.connectDataCapSSE(context.Background(), func(info *DataCapInfo) {
 		got = append(got, *info)
@@ -133,7 +135,7 @@ func TestConnectDataCapSSE_CapExhausted(t *testing.T) {
 }
 
 func TestWaitForAllotmentReset_ContextCancelled(t *testing.T) {
-	a := &Client{}
+	a := &Client{logger: log.NoOpLogger()}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// A cancelled context must return immediately even when the fallback wait
@@ -157,7 +159,7 @@ func TestAllotmentResetWait(t *testing.T) {
 }
 
 func TestDataCapStreamState_Wrap(t *testing.T) {
-	var s dataCapStreamState
+	s := dataCapStreamState{logger: log.NoOpLogger()}
 	var delivered bool
 	h := s.wrap(func(*DataCapInfo) { delivered = true })
 
