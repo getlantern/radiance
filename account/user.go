@@ -310,11 +310,14 @@ func (a *Client) Login(ctx context.Context, email, password string) (*UserData, 
 	// regardless of state we need to save login information
 	// We have device flow limit on login
 	oauth := settings.Settings{settings.OAuthLoginKey: false, settings.OAuthProviderKey: ""}
-	if err := a.setData(&loginResp, oauth); err != nil {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.generation++
+	if _, err := a.setDataLocked(&loginResp, false, oauth); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("saving login: %w", err))
 	}
-	if saltErr := a.storeSalt(salt); saltErr != nil {
-		return nil, traces.RecordError(ctx, saltErr)
+	if err := a.storeSaltLocked(salt); err != nil {
+		return nil, traces.RecordError(ctx, err)
 	}
 	return &loginResp, nil
 }
