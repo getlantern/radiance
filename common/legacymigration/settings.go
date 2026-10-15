@@ -102,10 +102,10 @@ func importSettings(ctx context.Context, dataDir string, request Request, verify
 	if saveOwner == nil {
 		return errors.New("missing service owner persistence")
 	}
-	if err := saveOwner(); err != nil {
+	if err := writeSettings(dataDir, request, raw, level, user.LegacyUserData.Email); err != nil {
 		return err
 	}
-	return writeSettings(dataDir, request, raw, level, user.LegacyUserData.Email)
+	return saveOwner()
 }
 
 func checkDestination(dataDir string, request Request) error {

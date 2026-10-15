@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/getlantern/radiance/common/serviceowner"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -58,13 +59,20 @@ func Import(ctx context.Context, sid, source, id, requestPath string, verify Ver
 		if err := requireStoppedDestination(); err != nil {
 			return err
 		}
+		if saveOwner == nil {
+			return errors.New("missing service owner persistence")
+		}
+		owner, err := serviceowner.Load()
+		if err != nil {
+			return err
+		}
+		if owner != "" && owner != sid {
+			return ErrConflict
+		}
 		if err := ProtectDataDir(dataDir); err != nil {
 			return err
 		}
 		return importSettings(ctx, dataDir, request, verify, func() error {
-			if saveOwner == nil {
-				return errors.New("missing service owner persistence")
-			}
 			return saveOwner(sid)
 		})
 	})

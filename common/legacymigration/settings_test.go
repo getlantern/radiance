@@ -157,29 +157,25 @@ func TestImportRejectsConflictingDestination(t *testing.T) {
 
 func TestImportFailureDoesNotPersistIdentity(t *testing.T) {
 	request := requestFixture()
-	for _, failure := range []string{"verification", "wrong account", "wrong device", "wrong token", "wrong level", "owner"} {
+	for _, failure := range []string{"verification", "wrong account", "wrong device", "wrong token", "wrong level"} {
 		t.Run(failure, func(t *testing.T) {
 			dir := t.TempDir()
-			verify := accepting(request)
-			saveOwner := func() error { return errors.New("owner conflict") }
-			if failure != "owner" {
-				saveOwner = func() error { t.Fatal("saved owner before verification"); return nil }
-				verify = func(context.Context, Request) (json.RawMessage, string, error) {
-					invalid := request
-					switch failure {
-					case "verification":
-						return nil, "", errors.New("upstream original-token")
-					case "wrong account":
-						invalid.UserID++
-					case "wrong device":
-						invalid.DeviceID += "-other"
-					case "wrong token":
-						invalid.Token += "-other"
-					case "wrong level":
-						return verifiedFixture(request, "unknown"), "unknown", nil
-					}
-					return verifiedFixture(invalid, "pro"), "pro", nil
+			saveOwner := func() error { t.Fatal("saved owner before verification"); return nil }
+			verify := func(context.Context, Request) (json.RawMessage, string, error) {
+				invalid := request
+				switch failure {
+				case "verification":
+					return nil, "", errors.New("upstream original-token")
+				case "wrong account":
+					invalid.UserID++
+				case "wrong device":
+					invalid.DeviceID += "-other"
+				case "wrong token":
+					invalid.Token += "-other"
+				case "wrong level":
+					return verifiedFixture(request, "unknown"), "unknown", nil
 				}
+				return verifiedFixture(invalid, "pro"), "pro", nil
 			}
 			err := importSettings(context.Background(), dir, request, verify, saveOwner)
 			if err == nil || strings.Contains(err.Error(), request.Token) {
@@ -189,5 +185,55 @@ func TestImportFailureDoesNotPersistIdentity(t *testing.T) {
 				t.Fatalf("failure persisted identity: %v", err)
 			}
 		})
+	}
+}
+
+func TestImportWriteFailureDoesNotSaveOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	request := requestFixture()
+	err := importSettings(context.Background(), dir, request, accepting(request), func() error {
+		t.Fatal("saved owner without settings")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("import succeeded without a writable settings directory")
+	}
+}
+
+func TestImportOwnerFailureCanRetry(t *testing.T) {
+	dir := t.TempDir()
+	request := requestFixture()
+	ownerErr := errors.New("owner write failed")
+	err := importSettings(context.Background(), dir, request, accepting(request), func() error {
+		if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
+			t.Fatalf("settings were not committed before the owner: %v", err)
+		}
+		if err := checkDestination(dir, request); err != nil {
+			t.Fatalf("committed settings have a different identity: %v", err)
+		}
+		return ownerErr
+	})
+	if !errors.Is(err, ownerErr) {
+		t.Fatalf("import = %v, want owner failure", err)
+	}
+	target := filepath.Join(dir, "settings.json")
+	before, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before = []byte(strings.Replace(string(before), `"locale":"fa-IR"`, `"locale":"en-US"`, 1))
+	if err := os.WriteFile(target, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ownerSaved := false
+	if err := importSettings(context.Background(), dir, request, accepting(request), func() error { ownerSaved = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !ownerSaved {
+		t.Fatal("retry did not save owner")
+	}
+	after, err := os.ReadFile(target)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("retry changed existing settings: %v", err)
 	}
 }
