@@ -44,7 +44,7 @@ require (
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20261011133221-f5e57ec9c1c5
-	github.com/getlantern/soar v0.2.1
+	github.com/getlantern/soar v0.2.2-0.20261015195933-f0d55048c703
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
