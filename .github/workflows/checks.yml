@@ -1,0 +1,32 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.13.0
+          # Build the linter with the repo's Go so it can type-check this module.
+          install-mode: goinstall
+          only-new-issues: true
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test with the race detector
+        run: go test -race -tags with_clash_api ./...
