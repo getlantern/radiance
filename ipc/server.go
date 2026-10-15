@@ -946,6 +946,19 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if peer, ok := r.Context().Value(peerKey{}).(usr); ok && !peer.isAdmin {
+			for key := range updates {
+				switch key {
+				case settings.LocaleKey, settings.TimeZoneKey, settings.TelemetryKey,
+					settings.SmartRoutingKey, settings.SplitTunnelKey, settings.SplitTunnelPolicyKey,
+					settings.AdBlockKey, settings.AutoConnectKey, settings.PeerShareEnabledKey,
+					settings.PeerManualPortKey, settings.UnboundedKey, settings.LogLevelKey:
+				default:
+					http.Error(w, "permission denied", http.StatusForbidden)
+					return
+				}
+			}
+		}
 		if err := s.backend(r.Context()).PatchSettings(updates); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1491,8 +1504,8 @@ func (s *localapi) subscriptionRestoreHandler(w http.ResponseWriter, r *http.Req
 ///////////
 
 func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
-	var req IssueReportRequest
-	if err := decodeJSON(r, &req); err != nil {
+	req, err := decodeIssueReport(r)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1501,6 +1514,18 @@ func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func decodeIssueReport(r *http.Request) (IssueReportRequest, error) {
+	var req IssueReportRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return req, err
+	}
+	if peer, ok := r.Context().Value(peerKey{}).(usr); ok && !peer.isAdmin {
+		// An unprivileged caller cannot choose files for the service to read.
+		req.AdditionalAttachments = nil
+	}
+	return req, nil
 }
 
 ///////////
