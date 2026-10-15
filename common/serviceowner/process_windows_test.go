@@ -1,13 +1,12 @@
 //go:build windows
 
-package legacymigration
+package serviceowner
 
 import (
 	"bytes"
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"unsafe"
 
@@ -81,7 +80,7 @@ func TestGrantProcessQueryPreservesPermissions(t *testing.T) {
 		t.Fatal("repeated grant changed process permissions")
 	}
 	if err := grantProcessQuery(handle, nil); err == nil {
-		t.Fatal("accepted a missing source SID")
+		t.Fatal("accepted a missing owner SID")
 	}
 	if err := windows.SetSecurityInfo(handle, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
@@ -91,55 +90,6 @@ func TestGrantProcessQueryPreservesPermissions(t *testing.T) {
 	}
 	if dacl, _, err := processQueryTestDescriptor(t, handle).DACL(); err != nil || dacl != nil {
 		t.Fatal("changed the rejected null process DACL")
-	}
-}
-
-func TestProcessQuerySIDRejectsUnsafeEnrollment(t *testing.T) {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := Record{Version: 1, MigrationID: strings.Repeat("a", 32), SourceSID: user.User.Sid.String(), SourceDirectory: `C:\Users\Original\Lantern`, Status: "pending"}
-	if !user.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
-		if sid, err := processQuerySID(&base); err != nil || !sid.Equals(user.User.Sid) {
-			t.Fatalf("valid enrollment rejected: %v", err)
-		}
-	}
-	if _, err := processQuerySID(nil); err == nil {
-		t.Fatal("accepted missing enrollment")
-	}
-	for name, mutate := range map[string]func(*Record){
-		"version":       func(r *Record) { r.Version = 2 },
-		"migration ID":  func(r *Record) { r.MigrationID = "invalid" },
-		"source":        func(r *Record) { r.SourceDirectory = "" },
-		"status":        func(r *Record) { r.Status = "completed" },
-		"pending data":  func(r *Record) { r.Request = &Request{} },
-		"missing SID":   func(r *Record) { r.SourceSID = "" },
-		"malformed SID": func(r *Record) { r.SourceSID = "invalid" },
-		"noncanonical":  func(r *Record) { r.SourceSID = strings.ToLower(r.SourceSID) },
-		"SYSTEM":        func(r *Record) { r.SourceSID = "S-1-5-18" },
-	} {
-		t.Run(name, func(t *testing.T) {
-			record := base
-			mutate(&record)
-			if _, err := processQuerySID(&record); err == nil {
-				t.Fatal("accepted unsafe enrollment")
-			}
-		})
-	}
-}
-
-func TestGrantProcessQueryWithoutEnrollment(t *testing.T) {
-	if record, err := Load(); err != nil || record != nil {
-		t.Skip("requires absent migration enrollment")
-	}
-	handle := windows.CurrentProcess()
-	before := processQueryTestDescriptor(t, handle).String()
-	if err := GrantProcessQuery(); err != nil {
-		t.Fatal(err)
-	}
-	if after := processQueryTestDescriptor(t, handle).String(); after != before {
-		t.Fatal("changed process permissions without enrollment")
 	}
 }
 

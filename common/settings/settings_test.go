@@ -211,12 +211,11 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 		assert.Equal(t, canonicalPro, got, "canonical-pro should survive")
 	})
 
-	t.Run("nested-pro wins over canonical-expired and legacy-expired", func(t *testing.T) {
-		// e.g., user paid via Shepherd while on v9.1.x, so the nested file
-		// legitimately holds pro state.
+	t.Run("canonical expired account survives nested Pro recovery", func(t *testing.T) {
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
-		require.NoError(t, os.WriteFile(canonical, []byte(`{"user_id": 1, "user_level": "expired"}`), 0o644))
+		canonicalContents := []byte(`{"user_id": 1, "user_level": "expired"}`)
+		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
 		writeLegacy(t, tempDir, []byte(`{"user_id": 1, "user_level": "expired"}`))
 		nestedPro := []byte(`{"user_id": 2, "user_level": "pro"}`)
 		writeNested(t, tempDir, nestedPro)
@@ -225,7 +224,7 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
-		assert.Equal(t, nestedPro, got, "nested-pro should beat both canonical and legacy when only it has pro")
+		assert.Equal(t, canonicalContents, got)
 	})
 
 	t.Run("all-pro: canonical wins (most recent deliberate state)", func(t *testing.T) {
@@ -243,10 +242,10 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 		assert.Equal(t, canonicalContents, got, "canonical preferred when all have pro")
 	})
 
-	t.Run("adopted free account survives stale Pro recovery files", func(t *testing.T) {
+	t.Run("canonical free account survives stale Pro recovery files", func(t *testing.T) {
 		dir := t.TempDir()
 		canonical := filepath.Join(dir, settingsFileName)
-		adopted := []byte(`{"legacy_migration_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","user_id":42,"user_level":"free","token":"adopted-token"}`)
+		adopted := []byte(`{"user_id":42,"user_level":"free","token":"adopted-token"}`)
 		require.NoError(t, os.WriteFile(canonical, adopted, 0600))
 		stalePro := []byte(`{"user_id":1,"user_level":"pro","token":"stale-token"}`)
 		writeLegacy(t, dir, stalePro)
@@ -257,6 +256,51 @@ func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
 		assert.Equal(t, adopted, got)
+	})
+
+	t.Run("logged out canonical settings survive stale Pro recovery files", func(t *testing.T) {
+		dir := t.TempDir()
+		canonical := filepath.Join(dir, settingsFileName)
+		require.NoError(t, os.WriteFile(canonical, []byte(`{}`), 0600))
+		writeLegacy(t, dir, []byte(`{"user_id":1,"user_level":"pro","token":"stale-token"}`))
+
+		migrateLegacySettingsIfNeeded(dir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{}`, string(got))
+	})
+
+	t.Run("invalid canonical settings recover a valid free account", func(t *testing.T) {
+		for _, invalid := range []string{`{invalid}`, `null`, `[]`, `{} {}`} {
+			t.Run(invalid, func(t *testing.T) {
+				dir := t.TempDir()
+				canonical := filepath.Join(dir, settingsFileName)
+				require.NoError(t, os.WriteFile(canonical, []byte(invalid), 0600))
+				legacy := []byte(`{"user_id":42,"user_level":"free","token":"current-token"}`)
+				writeLegacy(t, dir, legacy)
+
+				migrateLegacySettingsIfNeeded(dir, canonical)
+
+				got, err := os.ReadFile(canonical)
+				require.NoError(t, err)
+				assert.Equal(t, legacy, got)
+			})
+		}
+	})
+
+	t.Run("malformed legacy settings do not hide a valid nested account", func(t *testing.T) {
+		dir := t.TempDir()
+		canonical := filepath.Join(dir, settingsFileName)
+		writeLegacy(t, dir, []byte(`{invalid}`))
+		nested := []byte(`{"user_id":42,"user_level":"free"}`)
+		writeNested(t, dir, nested)
+
+		migrateLegacySettingsIfNeeded(dir, canonical)
+
+		got, err := os.ReadFile(canonical)
+		require.NoError(t, err)
+		assert.Equal(t, nested, got)
 	})
 
 	t.Run("none have pro: legacy wins over nested when canonical missing", func(t *testing.T) {

@@ -1,20 +1,24 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/getlantern/radiance/common"
 	commonenv "github.com/getlantern/radiance/common/env"
-	"github.com/getlantern/radiance/common/legacymigration"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	rlog "github.com/getlantern/radiance/log"
 )
+
+type migrateCmd struct {
+	SID         string            `arg:"--sid,required"`
+	Source      string            `arg:"--source,required"`
+	MigrationID string            `arg:"--migration-id,required"`
+	Request     string            `arg:"--request,required"`
+	Environment daemonEnvironment `arg:"--environment" default:"prod" help:"backend environment (prod or staging)"`
+}
 
 func initializeDaemonDiagnostics(dataPath, logPath, logLevel string) error {
 	dataPath = withDefault(commonenv.GetString(commonenv.DataPath), dataPath)
@@ -31,15 +35,4 @@ func initializeDaemonDiagnostics(dataPath, logPath, logLevel string) error {
 	}
 	slog.SetDefault(rlog.NewLogger(rlog.Config{LogPath: output, Level: logLevel, Prod: common.Prod()}))
 	return nil
-}
-
-func waitForLegacyAdoption(ctx context.Context, migration *legacymigration.Controller, initialTimeout time.Duration) (*legacymigration.Record, error) {
-	initial, cancel := context.WithTimeout(ctx, initialTimeout)
-	record, err := migration.Wait(initial)
-	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		return record, err
-	}
-	slog.Warn("Legacy adoption is pending; diagnostics and authenticated retry remain available")
-	return migration.Wait(ctx)
 }

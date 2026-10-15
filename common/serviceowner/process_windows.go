@@ -1,6 +1,4 @@
-//go:build windows
-
-package legacymigration
+package serviceowner
 
 import (
 	"errors"
@@ -10,10 +8,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// GrantProcessQuery grants the enrolled user limited query access to the current LocalSystem process when protected migration enrollment exists.
+// GrantProcessQuery grants the configured owner limited query access to the current LocalSystem process.
 func GrantProcessQuery() error {
-	record, err := Load()
-	if err != nil || record == nil {
+	value, err := Load()
+	if err != nil || value == "" {
 		return err
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
@@ -21,37 +19,26 @@ func GrantProcessQuery() error {
 		return err
 	}
 	if !user.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
-		return ErrUnauthorized
+		return errors.New("service process is not running as LocalSystem")
 	}
-	sid, err := processQuerySID(record)
+	sid, err := parseSID(value)
 	if err != nil {
 		return err
 	}
 	return grantProcessQuery(windows.CurrentProcess(), sid)
 }
 
-func processQuerySID(record *Record) (*windows.SID, error) {
-	if err := validateRecord(record); err != nil {
-		return nil, err
-	}
-	sid, err := windows.StringToSid(record.SourceSID)
-	if err != nil || sid.String() != record.SourceSID || sid.IsWellKnown(windows.WinLocalSystemSid) {
-		return nil, errors.New("invalid migration source SID")
-	}
-	return sid, nil
-}
-
 func grantProcessQuery(handle windows.Handle, sid *windows.SID) error {
 	if sid == nil {
-		return errors.New("missing migration source SID")
+		return errors.New("missing service owner SID")
 	}
 	sd, err := windows.GetSecurityInfo(handle, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
-		return fmt.Errorf("read migration process permissions: %w", err)
+		return fmt.Errorf("read service process permissions: %w", err)
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil || dacl == nil {
-		return errors.New("migration process permissions are unrestricted")
+		return errors.New("service process permissions are unrestricted")
 	}
 	var pinned runtime.Pinner
 	pinned.Pin(sid)
@@ -68,10 +55,10 @@ func grantProcessQuery(handle windows.Handle, sid *windows.SID) error {
 	}}
 	dacl, err = windows.ACLFromEntries(entries, dacl)
 	if err != nil {
-		return fmt.Errorf("merge migration process permissions: %w", err)
+		return fmt.Errorf("merge service process permissions: %w", err)
 	}
 	if err := windows.SetSecurityInfo(handle, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
-		return fmt.Errorf("grant migration process query access: %w", err)
+		return fmt.Errorf("grant service process query access: %w", err)
 	}
 	return nil
 }

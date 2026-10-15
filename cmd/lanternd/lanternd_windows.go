@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/getlantern/radiance/common"
-	"github.com/getlantern/radiance/common/legacymigration"
+	"github.com/getlantern/radiance/common/serviceowner"
 )
 
 const (
@@ -277,8 +277,8 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 		s.logger.Error("Failed to parse service arguments", "error", err)
 		return true, 1
 	}
-	if err := legacymigration.GrantProcessQuery(); err != nil {
-		s.logger.Warn("Migration process queries are unavailable", "error", err)
+	if err := serviceowner.GrantProcessQuery(); err != nil {
+		s.logger.Warn("Service process queries are unavailable", "error", err)
 	}
 	return s.run(config, r, status)
 }

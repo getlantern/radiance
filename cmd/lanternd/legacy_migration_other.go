@@ -2,23 +2,8 @@
 
 package main
 
-import (
-	"context"
-	"errors"
+import "errors"
 
-	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/common/legacymigration"
-	"github.com/getlantern/radiance/ipc"
-)
-
-func prepareLegacyMigration(*prepareLegacyMigrationCmd) error {
-	return errors.New("legacy migration requires Windows")
-}
-
-func bootstrapLegacyMigration(context.Context, string, string, *ipc.Server) (*legacymigration.Controller, func() error, error) {
-	return nil, func() error { return nil }, nil
-}
-
-func completeLegacyMigration(*legacymigration.Controller, *ipc.Server, *backend.LocalBackend) error {
+func migrateLegacy(*migrateCmd) error {
 	return errors.New("legacy migration requires Windows")
 }

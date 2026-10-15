@@ -3,166 +3,39 @@
 package legacymigration
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"unsafe"
 
-	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
+	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
 const (
-	migrationPipePath  = `\\.\pipe\Lantern\legacy-migration-v1`
-	migrationKeyPath   = `Software\Lantern\LegacyMigrationV1`
-	migrationValueName = "Record"
-	registrySecurity   = `O:BAG:BAD:P(A;;KA;;;SY)(A;;KA;;;BA)`
-	directorySecurity  = `O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`
-	fileSecurity       = `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)`
-	fileAllAccess      = 0x1f01ff
-	// Client rights exclude FILE_CREATE_PIPE_INSTANCE, which generic write includes.
-	pipeSecurity = `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;IU)`
+	directorySecurity = `O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`
+	fileSecurity      = `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)`
+	fileAllAccess     = 0x1f01ff
 )
 
-var (
-	migrationAdvapi       = windows.NewLazySystemDLL("advapi32.dll")
-	regCreateKeyEx        = migrationAdvapi.NewProc("RegCreateKeyExW")
-	regFlushKey           = migrationAdvapi.NewProc("RegFlushKey")
-	impersonatePipeClient = migrationAdvapi.NewProc("ImpersonateNamedPipeClient")
-)
-
-type registryStore struct{ keyPath string }
-
-// OpenStore returns the administrator-controlled Windows enrollment store.
-func OpenStore() (Store, error) {
-	return &registryStore{keyPath: migrationKeyPath}, nil
-}
-
-func (s *registryStore) Load() (*Record, error) {
-	key, err := openEnrollmentKey(s.keyPath, registry.QUERY_VALUE)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer key.Close()
-	value, valueType, err := key.GetStringValue(migrationValueName)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read migration enrollment: %w", err)
-	}
-	if valueType != registry.SZ {
-		return nil, errors.New("invalid migration enrollment value type")
-	}
-	var record Record
-	if err := json.Unmarshal([]byte(value), &record); err != nil {
-		return nil, errors.New("invalid migration enrollment JSON")
-	}
-	sid, err := windows.StringToSid(record.SourceSID)
-	if err != nil || sid.String() != record.SourceSID {
-		return nil, errors.New("invalid migration enrollment")
-	}
-	return &record, validateRecord(&record)
-}
-
-func (s *registryStore) Save(record *Record) error {
-	if record == nil {
-		return errors.New("missing migration enrollment")
-	}
-	return withEnrollmentLock(func() error { return s.save(record) })
-}
-
-func (s *registryStore) save(record *Record) error {
-	if err := validateRecord(record); err != nil {
-		return err
-	}
-	existing, err := s.Load()
-	if err != nil {
-		return err
-	}
-	if existing != nil && !compatibleEnrollmentUpdate(existing, record) {
-		return ErrConflict
-	}
-	value, err := json.Marshal(record)
-	if err != nil {
-		return errors.New("encode migration enrollment")
-	}
-	key, err := openEnrollmentKey(s.keyPath, registry.SET_VALUE|registry.QUERY_VALUE)
-	if err != nil {
-		return err
-	}
-	defer key.Close()
-	if err := key.SetStringValue(migrationValueName, string(value)); err != nil {
-		return fmt.Errorf("persist migration enrollment: %w", err)
-	}
-	result, _, _ := regFlushKey.Call(uintptr(key))
-	if result != 0 {
-		return fmt.Errorf("flush migration enrollment: %w", windows.Errno(result))
-	}
-	return nil
-}
-
-func openEnrollmentKey(path string, access uint32) (registry.Key, error) {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, access|windows.READ_CONTROL|registry.WOW64_64KEY)
-	if err != nil {
-		return 0, err
-	}
-	if err := verifyProtectedObject(windows.Handle(key), windows.SE_REGISTRY_KEY, registry.ALL_ACCESS, true); err != nil {
-		key.Close()
-		return 0, fmt.Errorf("untrusted migration registry permissions: %w", err)
-	}
-	return key, nil
-}
-
-func createEnrollmentKey(keyPath string) error {
-	sd, err := windows.SecurityDescriptorFromString(registrySecurity)
-	if err != nil {
-		return err
-	}
-	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
-	path, err := windows.UTF16PtrFromString(keyPath)
-	if err != nil {
-		return err
-	}
-	var key registry.Key
-	var disposition uint32
-	result, _, _ := regCreateKeyEx.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(path)), 0, 0, 0,
-		uintptr(registry.READ|registry.WOW64_64KEY), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&disposition)))
-	runtime.KeepAlive(sd)
-	if result != 0 {
-		return fmt.Errorf("create migration enrollment key: %w", windows.Errno(result))
-	}
-	defer key.Close()
-	return verifyProtectedObject(windows.Handle(key), windows.SE_REGISTRY_KEY, registry.ALL_ACCESS, true)
-}
-
-// Prepare enrolls a user and protects the service data before credentials arrive.
-func Prepare(sid, source, id string) error {
+// Import verifies and imports a private snapshot before the destination service starts.
+func Import(ctx context.Context, sid, source, id, requestPath string, verify Verify, saveOwner func(string) error) error {
 	if err := requireAdministrator(); err != nil {
 		return err
 	}
 	parsedSID, err := windows.StringToSid(sid)
-	if err != nil || parsedSID.String() != sid {
+	if err != nil || parsedSID.String() != sid || parsedSID.IsWellKnown(windows.WinLocalSystemSid) {
 		return errors.New("invalid migration source SID")
 	}
 	_, _, accountType, err := parsedSID.LookupAccount("")
 	if err != nil || accountType != windows.SidTypeUser {
 		return errors.New("migration source SID does not identify a user")
-	}
-	if !migrationIDPattern.MatchString(id) {
-		return errors.New("migration ID must contain 32 lowercase hexadecimal digits")
 	}
 	source, err = localDirectoryPath(source)
 	if err != nil {
@@ -170,76 +43,55 @@ func Prepare(sid, source, id string) error {
 	}
 	ancestors, err := openDirectoryChain(source)
 	if err != nil {
-		return fmt.Errorf("migration source directory: %w", err)
+		return errors.New("invalid migration source directory")
 	}
 	defer closeHandles(ancestors)
+	request, err := readRequestFile(requestPath, sid, source, id)
+	if err != nil {
+		return err
+	}
 	dataDir, err := serviceDataDirectory()
 	if err != nil {
 		return err
 	}
-	return withEnrollmentLock(func() error {
-		s := &registryStore{keyPath: migrationKeyPath}
-		return s.prepare(sid, source, id, dataDir)
+	return withImportLock(func() error {
+		if err := requireStoppedDestination(); err != nil {
+			return err
+		}
+		if err := ProtectDataDir(dataDir); err != nil {
+			return err
+		}
+		return importSettings(ctx, dataDir, request, verify, func() error {
+			if saveOwner == nil {
+				return errors.New("missing service owner persistence")
+			}
+			return saveOwner(sid)
+		})
 	})
 }
 
-func (s *registryStore) prepare(sid, source, id, dataDir string) error {
-	existing, err := s.Load()
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		if matchingPendingEnrollment(existing, sid, source, id) {
-			return nil
-		}
-		return ErrConflict
-	}
-	if err := requireFreshDestination(dataDir); err != nil {
-		return err
-	}
-	if err := createEnrollmentKey(s.keyPath); err != nil {
-		return err
-	}
-	if err := ProtectDataDir(dataDir); err != nil {
-		return err
-	}
-	return s.save(&Record{Version: 1, MigrationID: id, SourceSID: sid, SourceDirectory: source, Status: "pending"})
-}
-
-func requireFreshDestination(path string) error {
+func requireStoppedDestination() error {
 	manager, err := mgr.Connect()
 	if err != nil {
 		return err
 	}
 	defer manager.Disconnect()
 	service, err := manager.OpenService("LanternSvc")
-	if err == nil {
-		service.Close()
-		return ErrConflict
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return nil
 	}
-	if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+	if err != nil {
 		return err
 	}
-	return requireNoDestinationSettings(path)
-}
-
-func requireNoDestinationSettings(path string) error {
-	for _, relative := range []string{"settings.json", "local.json", "settings.yaml", "settings.yml", filepath.Join("data", "settings.json"), filepath.Join("data", "local.json"), filepath.Join("data", "settings.yaml"), filepath.Join("data", "settings.yml")} {
-		_, err := os.Lstat(filepath.Join(path, relative))
-		if err == nil {
-			return ErrConflict
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	defer service.Close()
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if status.State != svc.Stopped {
+		return ErrConflict
 	}
 	return nil
-}
-
-func matchingPendingEnrollment(record *Record, sid, source, id string) bool {
-	return record.Version == 1 && record.MigrationID == id && record.SourceSID == sid &&
-		sameDirectory(record.SourceDirectory, source) && record.Status == "pending" &&
-		record.Request == nil && record.Receipt == nil && record.RequestSHA256 == "" && record.TokenSHA256 == "" && len(record.UserData) == 0
 }
 
 func requireAdministrator() error {
@@ -254,15 +106,14 @@ func requireAdministrator() error {
 	return nil
 }
 
-func withEnrollmentLock(fn func() error) error {
+func withImportLock(fn func() error) error {
 	sd, err := windows.SecurityDescriptorFromString(`O:BAG:BAD:P(A;;0x1f0001;;;SY)(A;;0x1f0001;;;BA)`)
 	if err != nil {
 		return err
 	}
-	name, _ := windows.UTF16PtrFromString(`Global\Lantern.LegacyMigrationV1.Registry`)
+	name, _ := windows.UTF16PtrFromString(`Global\Lantern.LegacyImport`)
 	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
 	handle, err := windows.CreateMutexEx(&sa, name, 0, windows.MUTEX_ALL_ACCESS)
-	// ERROR_ALREADY_EXISTS still returns a handle that must be closed.
 	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return err
 	}
@@ -270,7 +121,6 @@ func withEnrollmentLock(fn func() error) error {
 	if err := verifyProtectedObject(handle, windows.SE_KERNEL_OBJECT, windows.MUTEX_ALL_ACCESS, true); err != nil {
 		return err
 	}
-	// Windows mutex ownership follows the OS thread, including ReleaseMutex.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	result, err := windows.WaitForSingleObject(handle, 10000)
@@ -278,10 +128,68 @@ func withEnrollmentLock(fn func() error) error {
 		return err
 	}
 	if result != windows.WAIT_OBJECT_0 && result != windows.WAIT_ABANDONED {
-		return errors.New("migration enrollment is busy")
+		return errors.New("legacy import is busy")
 	}
 	defer windows.ReleaseMutex(handle)
 	return fn()
+}
+
+func readRequestFile(path, sid, source, id string) (Request, error) {
+	path, err := localDirectoryPath(path)
+	if err != nil {
+		return Request{}, errors.New("invalid migration snapshot path")
+	}
+	ancestors, err := openDirectoryChain(filepath.Dir(path))
+	if err != nil {
+		return Request{}, errors.New("invalid migration snapshot directory")
+	}
+	defer closeHandles(ancestors)
+	handle, info, err := openPath(path, windows.GENERIC_READ|windows.READ_CONTROL, windows.FILE_SHARE_READ)
+	if err != nil {
+		return Request{}, errors.New("cannot open migration snapshot")
+	}
+	file := os.NewFile(uintptr(handle), path)
+	defer file.Close()
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 || info.FileSizeHigh != 0 || info.FileSizeLow > maxRequestBytes {
+		return Request{}, errors.New("invalid migration snapshot size")
+	}
+	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil || verifyRequestDescriptor(sd, sid) != nil {
+		return Request{}, errors.New("migration snapshot permissions are not private")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxRequestBytes+1))
+	if err != nil {
+		return Request{}, errors.New("cannot read migration snapshot")
+	}
+	return decodeRequest(raw, source, id)
+}
+
+func verifyRequestDescriptor(sd *windows.SECURITY_DESCRIPTOR, sourceSID string) error {
+	if sd == nil {
+		return ErrUnauthorized
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner == nil || !(trustedOwner(owner.String()) || owner.String() == sourceSID) {
+		return ErrUnauthorized
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount == 0 {
+		return ErrUnauthorized
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return err
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return ErrUnauthorized
+		}
+		principal := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		if !(trustedOwner(principal) || principal == sourceSID) {
+			return ErrUnauthorized
+		}
+	}
+	return nil
 }
 
 func verifyProtectedObject(handle windows.Handle, kind windows.SE_OBJECT_TYPE, access uint32, protected bool) error {
@@ -327,119 +235,6 @@ func trustedOwner(sid string) bool {
 	return sid == "S-1-5-18" || sid == "S-1-5-32-544"
 }
 
-// Listen accepts local migration connections without granting pipe creation rights.
-func Listen() (net.Listener, error) {
-	if err := requireAdministrator(); err != nil {
-		return nil, err
-	}
-	listener, err := winio.ListenPipe(migrationPipePath, &winio.PipeConfig{
-		SecurityDescriptor: pipeSecurity,
-		InputBufferSize:    64 * 1024,
-		OutputBufferSize:   64 * 1024,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &migrationListener{Listener: listener}, nil
-}
-
-type migrationListener struct{ net.Listener }
-
-type pipeConnection interface {
-	net.Conn
-	Fd() uintptr
-}
-
-type migrationConn struct {
-	pipeConnection
-	once  sync.Once
-	sid   string
-	err   error
-	ready chan struct{}
-}
-
-func (l *migrationListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	pipe, ok := conn.(pipeConnection)
-	if !ok {
-		conn.Close()
-		return nil, errors.New("migration listener returned an unsupported connection")
-	}
-	return &migrationConn{pipeConnection: pipe, ready: make(chan struct{})}, nil
-}
-
-func (c *migrationConn) Read(buffer []byte) (int, error) {
-	n, err := c.pipeConnection.Read(buffer)
-	if n > 0 {
-		c.once.Do(func() {
-			c.sid, c.err = readPipeSID(windows.Handle(c.Fd()))
-			close(c.ready)
-		})
-		if c.err != nil {
-			c.Close()
-			return 0, c.err
-		}
-	}
-	return n, err
-}
-
-// PeerSID returns the authenticated SID after the connection's first successful read.
-func PeerSID(conn net.Conn) (string, error) {
-	pipe, ok := conn.(*migrationConn)
-	if !ok {
-		return "", ErrUnauthorized
-	}
-	select {
-	case <-pipe.ready:
-		if pipe.err != nil || pipe.sid == "" {
-			return "", ErrUnauthorized
-		}
-		return pipe.sid, nil
-	default:
-		return "", ErrUnauthorized
-	}
-}
-
-func readPipeSID(handle windows.Handle) (string, error) {
-	type result struct {
-		sid string
-		err error
-	}
-	results := make(chan result, 1)
-	go func() {
-		runtime.LockOSThread()
-		impersonated, _, callErr := impersonatePipeClient.Call(uintptr(handle))
-		if impersonated == 0 {
-			runtime.UnlockOSThread()
-			results <- result{err: fmt.Errorf("identify migration pipe client: %w", callErr)}
-			return
-		}
-		var token windows.Token
-		err := windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_QUERY, true, &token)
-		var sid string
-		if err == nil {
-			var user *windows.Tokenuser
-			user, err = token.GetTokenUser()
-			if err == nil {
-				sid = user.User.Sid.String()
-			}
-			token.Close()
-		}
-		if revertErr := windows.RevertToSelf(); revertErr != nil {
-			results <- result{err: fmt.Errorf("revert migration pipe impersonation: %w", revertErr)}
-			// A goroutine that exits while locked causes Go to discard its OS thread.
-			return
-		}
-		runtime.UnlockOSThread()
-		results <- result{sid: sid, err: err}
-	}()
-	r := <-results
-	return r.sid, r.err
-}
-
 func serviceDataDirectory() (string, error) {
 	path, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, windows.KF_FLAG_DEFAULT)
 	if err != nil {
@@ -449,7 +244,9 @@ func serviceDataDirectory() (string, error) {
 }
 
 func localDirectoryPath(path string) (string, error) {
-	path = filepath.Clean(path)
+	if path != filepath.Clean(path) {
+		return "", errors.New("ambiguous migration directory path")
+	}
 	volume := filepath.VolumeName(path)
 	if len(volume) != 2 || volume[1] != ':' || !filepath.IsAbs(path) || strings.ContainsRune(path[2:], ':') {
 		return "", errors.New("migration directory must use an absolute local drive path")
