@@ -310,15 +310,13 @@ func Get(key _key) any {
 }
 
 func GetString(key _key) string {
-	// JSON round-trip turns all numbers into float64 and since koanf uses Sprintf("%v") for string
-	// conversion, large integers (i.e. userID) get converted to scientific notation (e.g. 3.87286618e+08)
-	// so we handle float64 separately
 	value := Get(key)
 	if value == nil {
 		return ""
 	}
 	switch v := value.(type) {
 	case float64:
+		// Direct callers can still supply floating-point IDs.
 		return strconv.FormatInt(int64(v), 10)
 	case string:
 		return v
