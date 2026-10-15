@@ -3,8 +3,11 @@ package account
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -375,4 +378,148 @@ func TestAccountSwitchNeverExposesAnEmptyIdentity(t *testing.T) {
 	}
 	close(stop)
 	assert.False(t, <-sawEmpty, "readers must never see an account without an id or token")
+}
+
+func TestPatchAccountSwitchClearsOld(t *testing.T) {
+	for _, id := range []any{
+		int(2), int8(2), int16(2), int32(2), int64(2),
+		uint(2), uint8(2), uint16(2), uint32(2), uint64(2),
+		float64(2), "2",
+	} {
+		t.Run(fmt.Sprintf("%T", id), func(t *testing.T) {
+			a, _ := newTestClient(t)
+			require.NoError(t, a.setData(&UserData{
+				LegacyID:       1,
+				LegacyToken:    "a",
+				Token:          "a-jwt",
+				LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "a@example.com", UserLevel: "pro"},
+			}, nil))
+			require.NoError(t, a.storeSalt([]byte("a-salt")))
+			setOAuthFlags(t)
+			updates := settings.Settings{settings.UserIDKey: id, settings.TokenKey: "b"}
+
+			require.NoError(t, a.PatchAccountSettings(updates))
+
+			assert.Equal(t, id, updates[settings.UserIDKey])
+			assert.Equal(t, int64(2), settings.Get(settings.UserIDKey))
+			require.NoError(t, settings.Reload())
+			assert.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+			assert.Equal(t, "b", settings.GetString(settings.TokenKey))
+			assert.Empty(t, settings.GetString(settings.JwtTokenKey))
+			assert.Empty(t, settings.GetString(settings.EmailKey))
+			assert.Empty(t, settings.Get(settings.UserDataKey))
+			assert.False(t, settings.IsPro())
+			assert.False(t, settings.GetBool(settings.OAuthLoginKey))
+			assert.Empty(t, settings.GetString(settings.OAuthProviderKey))
+			assert.Nil(t, a.getSaltCached())
+			salt, err := readSalt(a.saltPath)
+			require.NoError(t, err)
+			assert.Nil(t, salt)
+		})
+	}
+}
+
+func TestPatchAccountRejectsBadID(t *testing.T) {
+	for _, id := range []any{
+		nil, true, "", "invalid", "2.5", "9223372036854775808",
+		0, -1, uint64(math.MaxInt64) + 1, 2.5, float32(2.5),
+		float64(math.MaxInt64), math.Inf(1), math.NaN(),
+	} {
+		t.Run(fmt.Sprintf("%T/%v", id, id), func(t *testing.T) {
+			a, _ := newTestClient(t)
+			require.NoError(t, a.PatchAccountSettings(settings.Settings{
+				settings.UserIDKey: int64(1), settings.TokenKey: "a",
+			}))
+			before := settings.GetAll()
+			generation := a.identityGeneration()
+
+			err := a.PatchAccountSettings(settings.Settings{settings.UserIDKey: id, settings.TokenKey: "b"})
+
+			require.ErrorContains(t, err, "invalid user ID")
+			assert.Equal(t, before, settings.GetAll())
+			assert.Equal(t, generation, a.identityGeneration())
+		})
+	}
+}
+
+func TestParseUserIDLarge(t *testing.T) {
+	for _, tt := range []struct {
+		value any
+		want  int64
+	}{
+		{float64(1e9), 1e9},
+		{float64(1<<60) + 256, 1152921504606847232},
+		{float64(math.MaxInt64) - 1024, 9223372036854774784},
+		{int64(math.MaxInt64), math.MaxInt64},
+		{uint64(math.MaxInt64), math.MaxInt64},
+		{"9223372036854775807", math.MaxInt64},
+	} {
+		got, err := parseUserID(tt.value)
+		require.NoError(t, err)
+		assert.Equal(t, tt.want, got)
+	}
+}
+
+func TestSwitchNeedsSaltCleared(t *testing.T) {
+	a, _ := newTestClient(t)
+	require.NoError(t, a.PatchAccountSettings(settings.Settings{
+		settings.UserIDKey: int64(1), settings.TokenKey: "a",
+	}))
+	require.NoError(t, a.storeSalt([]byte("a-salt")))
+	before := settings.GetAll()
+	dir := filepath.Dir(a.saltPath)
+	require.NoError(t, os.Rename(dir, dir+".aside"))
+	t.Cleanup(func() { require.NoError(t, os.Rename(dir+".aside", dir)) })
+
+	err := a.PatchAccountSettings(settings.Settings{settings.UserIDKey: int64(2), settings.TokenKey: "b"})
+
+	require.ErrorContains(t, err, "clearing the previous account's salt")
+	assert.Equal(t, before, settings.GetAll())
+	assert.Equal(t, []byte("a-salt"), a.getSaltCached())
+	salt, err := readSalt(filepath.Join(dir+".aside", saltFileName))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("a-salt"), salt)
+}
+
+func TestPatchAccountNoopKeepsPending(t *testing.T) {
+	a, _ := newTestClient(t)
+	require.NoError(t, a.PatchAccountSettings(settings.Settings{
+		settings.UserIDKey: int64(1), settings.TokenKey: "a", settings.OAuthLoginKey: true,
+	}))
+	require.NoError(t, settings.Reload())
+	handler, requested, release := heldJSON(UserDataResponse{
+		LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 1, Token: "a", UserLevel: "pro"},
+	})
+	useProServer(t, a, handler)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.FetchUserData(context.Background())
+		errc <- err
+	}()
+	<-requested
+
+	require.NoError(t, a.PatchAccountSettings(settings.Settings{
+		settings.UserIDKey: "1", settings.TokenKey: "a", settings.OAuthLoginKey: true,
+	}))
+	close(release)
+
+	require.NoError(t, <-errc)
+	assert.True(t, settings.IsPro())
+}
+
+func TestPatchAccountSameKeepsFields(t *testing.T) {
+	a, _ := newTestClient(t)
+	require.NoError(t, a.setData(&UserData{
+		LegacyID:       1,
+		LegacyToken:    "a",
+		Token:          "a-jwt",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "a@example.com"},
+	}, nil))
+	require.NoError(t, a.storeSalt([]byte("a-salt")))
+
+	require.NoError(t, a.PatchAccountSettings(settings.Settings{settings.EmailKey: "new@example.com"}))
+
+	assert.Equal(t, "new@example.com", settings.GetString(settings.EmailKey))
+	assert.Equal(t, "a-jwt", settings.GetString(settings.JwtTokenKey))
+	assert.Equal(t, []byte("a-salt"), a.getSaltCached())
 }

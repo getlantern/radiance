@@ -164,13 +164,6 @@ func (a *Client) switchToPurchaser(ctx context.Context, generation uint64, id in
 	}
 	if err := a.storeIdentityLocked(id, token, extra); err != nil {
 		a.logger.Error("saving the purchasing account", "error", traces.RecordError(ctx, err))
-		return
-	}
-	if switching {
-		// The salt cache isn't keyed by email, so the previous account's salt must go.
-		if err := a.storeSaltLocked(nil); err != nil {
-			a.logger.Error("clearing the previous account's salt", "error", traces.RecordError(ctx, err))
-		}
 	}
 }
 

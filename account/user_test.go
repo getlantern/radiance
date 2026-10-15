@@ -599,6 +599,72 @@ func TestCompleteChangeEmail(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestChangeEmailDiscardsStale(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, ac.setData(&UserData{
+		LegacyID:       1,
+		LegacyToken:    "a",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com"},
+	}, nil))
+	handler, requested, release := heldJSON(UserDataResponse{
+		LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 1, Token: "a", Email: "old@example.com"},
+	})
+	useProServer(t, ac, handler)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := ac.FetchUserData(context.Background())
+		errc <- err
+	}()
+	<-requested
+
+	require.NoError(t, ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code"))
+	close(release)
+
+	assert.ErrorIs(t, <-errc, ErrAccountChanged)
+	assert.Equal(t, "new@example.com", settings.GetString(settings.EmailKey))
+}
+
+func TestChangeEmailSurvivesUpdate(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, ac.setData(&UserData{
+		LegacyID:       1,
+		LegacyToken:    "a",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com"},
+	}, nil))
+	ac.salt = []byte("old-salt")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, ac.PatchAccountSettings(settings.Settings{settings.UserLevelKey: "pro"}))
+		writeProtoResponse(w, &protos.EmptyResponse{})
+	}))
+	defer server.Close()
+	ac.authURL = server.URL
+
+	require.NoError(t, ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code"))
+
+	assert.Equal(t, "new@example.com", settings.GetString(settings.EmailKey))
+	assert.NotEqual(t, []byte("old-salt"), ac.getSaltCached())
+}
+
+func TestChangeEmailSkipsOtherAccount(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, ac.setData(&UserData{
+		LegacyID:       1,
+		LegacyToken:    "a",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com"},
+	}, nil))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, ac.PatchAccountSettings(settings.Settings{settings.UserIDKey: int64(2), settings.TokenKey: "b"}))
+		writeProtoResponse(w, &protos.EmptyResponse{})
+	}))
+	defer server.Close()
+	ac.authURL = server.URL
+
+	assert.Error(t, ac.CompleteChangeEmail(context.Background(), "new@example.com", "password", "code"))
+
+	assert.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+	assert.Empty(t, settings.GetString(settings.EmailKey))
+}
+
 func TestDeleteAccount(t *testing.T) {
 	email := "test@example.com"
 	ac, _ := newTestClientWithSRP(t, email, "password")
@@ -647,12 +713,137 @@ func TestOAuthLoginCallback(t *testing.T) {
 	assert.Empty(t, devices)
 }
 
+func TestOAuthLoginDiscardedOnSwitch(t *testing.T) {
+	ac, _ := newTestClient(t)
+	useProServer(t, ac, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, ac.PatchAccountSettings(settings.Settings{settings.UserIDKey: int64(99), settings.TokenKey: "other"}))
+		writeJSONResponse(w, UserDataResponse{
+			LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 12345, Token: "test-token"},
+		})
+	}))
+	mockToken := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20iLCJsZWdhY3lfdXNlcl9pZCI6MTIzNDUsImxlZ2FjeV90b2tlbiI6InRlc3QtdG9rZW4ifQ.test"
+
+	_, err := ac.OAuthLoginCallback(context.Background(), mockToken)
+
+	assert.ErrorIs(t, err, ErrAccountChanged)
+	assert.Equal(t, int64(99), settings.GetInt64(settings.UserIDKey))
+	assert.Empty(t, settings.GetString(settings.JwtTokenKey))
+	assert.False(t, settings.GetBool(settings.OAuthLoginKey))
+}
+
+func TestOAuthLoginSavesAccount(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, ac.setData(&UserData{
+		LegacyID: 1, LegacyToken: "old-token", Token: "old-jwt",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com"},
+	}, nil))
+	require.NoError(t, ac.storeSalt([]byte("old-salt")))
+	require.NoError(t, settings.Set(settings.DeviceIDKey, "device"))
+	require.NoError(t, settings.Set(settings.OAuthProviderKey, "google"))
+	before := currentAccount()
+	generation := ac.identityGeneration()
+	useProServer(t, ac, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "2", r.Header.Get(common.UserIDHeader))
+		assert.Equal(t, "oauth-token", r.Header.Get(common.ProTokenHeader))
+		assert.Equal(t, "device", r.Header.Get(common.DeviceIDHeader))
+		assert.Equal(t, before, currentAccount())
+		assert.Equal(t, []byte("old-salt"), ac.getSaltCached())
+		writeJSONResponse(w, UserDataResponse{
+			LoginResponse_UserData: &protos.LoginResponse_UserData{UserId: 2, UserLevel: "pro"},
+		})
+	}))
+	token := mockJWT(t, map[string]any{
+		"legacy_user_id": 2, "legacy_token": "oauth-token", "email": "new@example.com",
+	})
+
+	user, err := ac.OAuthLoginCallback(context.Background(), token)
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, generation+1, ac.identityGeneration())
+	assert.Equal(t, "new@example.com", user.Id)
+	assert.True(t, user.EmailConfirmed)
+	assert.Equal(t, token, user.Token)
+	assert.Equal(t, "oauth-token", user.LegacyToken)
+	assert.Equal(t, "new@example.com", user.LegacyUserData.Email)
+	assert.Equal(t, "device", user.LegacyUserData.DeviceID)
+	require.NoError(t, settings.Reload())
+	assert.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+	assert.Equal(t, "oauth-token", settings.GetString(settings.TokenKey))
+	assert.Equal(t, token, settings.GetString(settings.JwtTokenKey))
+	assert.Equal(t, "new@example.com", settings.GetString(settings.EmailKey))
+	assert.True(t, settings.GetBool(settings.OAuthLoginKey))
+	assert.Equal(t, "google", settings.GetString(settings.OAuthProviderKey))
+	assert.True(t, settings.IsPro())
+	var cached UserData
+	require.NoError(t, settings.GetStruct(settings.UserDataKey, &cached))
+	assert.True(t, proto.Equal(user, &cached))
+	assert.Nil(t, ac.getSaltCached())
+}
+
+func TestOAuthLoginFailureKeepsAccount(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		status   int
+		body     string
+		failSave bool
+	}{
+		{name: "request", status: http.StatusServiceUnavailable, body: "unavailable"},
+		{name: "json", status: http.StatusOK, body: "invalid"},
+		{name: "missing user data", status: http.StatusOK, body: "{}"},
+		{name: "missing identity", status: http.StatusOK, body: `{"email":"new@example.com"}`},
+		{name: "save", status: http.StatusOK, body: `{"userId":2,"token":"oauth-token"}`, failSave: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ac, _ := newTestClient(t)
+			require.NoError(t, ac.setData(&UserData{
+				LegacyID: 1, LegacyToken: "old-token", Token: "old-jwt",
+				LegacyUserData: &protos.LoginResponse_UserData{UserId: 1, Email: "old@example.com"},
+			}, nil))
+			require.NoError(t, ac.storeSalt([]byte("old-salt")))
+			before := settings.GetAll()
+			useProServer(t, ac, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			if tt.failSave {
+				defer failSettingsSaves(t)()
+			}
+			token := mockJWT(t, map[string]any{"legacy_user_id": 2, "legacy_token": "oauth-token"})
+
+			user, err := ac.OAuthLoginCallback(context.Background(), token)
+
+			require.Error(t, err)
+			assert.Nil(t, user)
+			assert.Equal(t, before, settings.GetAll())
+			assert.Equal(t, []byte("old-salt"), ac.getSaltCached())
+		})
+	}
+}
+
 func TestOAuthLoginCallback_InvalidToken(t *testing.T) {
 	ac, _ := newTestClient(t)
 
 	_, err := ac.OAuthLoginCallback(context.Background(), "invalid-token")
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidToken)
 	assert.Contains(t, err.Error(), "error decoding JWT")
+}
+
+func TestOAuthLoginRejectsNoIdentity(t *testing.T) {
+	for _, claims := range []map[string]any{
+		{"legacy_token": "oauth-token"},
+		{"legacy_user_id": 2},
+	} {
+		ac, _ := newTestClient(t)
+		useProServer(t, ac, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("no request should be sent for a token without an account identity")
+		}))
+
+		_, err := ac.OAuthLoginCallback(context.Background(), mockJWT(t, claims))
+
+		assert.ErrorIs(t, err, ErrInvalidToken)
+	}
 }
 
 // mockJWT builds an unsigned JWT from the given claims; decodeJWT uses

@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"math"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -47,33 +50,35 @@ func (a *Client) NewUser(ctx context.Context) (*UserData, error) {
 	if err := json.Unmarshal(resp, &userResp); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling new user response: %w", err))
 	}
-	userData, err := a.storeData(ctx, userResp, generation)
-	if err != nil {
-		return nil, err
-	}
-	return userData, nil
+	return a.storeData(ctx, userResp, generation)
 }
 
 // FetchUserData fetches user data from the server.
 func (a *Client) FetchUserData(ctx context.Context) (*UserData, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "fetch_user_data")
 	defer span.End()
-	return a.fetchUserData(ctx)
+	generation := a.identityGeneration()
+	resp, err := a.requestUserData(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return a.storeData(ctx, resp, generation)
 }
 
-// fetchUserData fetches the user's account data and stores it.
-func (a *Client) fetchUserData(ctx context.Context) (*UserData, error) {
-	generation := a.identityGeneration()
-	resp, err := a.sendProRequest(ctx, "GET", "/user-data", nil, nil, nil)
+func (a *Client) requestUserData(ctx context.Context, headers map[string]string) (UserDataResponse, error) {
+	resp, err := a.sendProRequest(ctx, "GET", "/user-data", nil, headers, nil)
 	if err != nil {
 		a.logger.Error("user data", "error", err)
-		return nil, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
+		return UserDataResponse{}, traces.RecordError(ctx, fmt.Errorf("getting user data: %w", err))
 	}
 	var userResp UserDataResponse
 	if err := json.Unmarshal(resp, &userResp); err != nil {
-		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling new user response: %w", err))
+		return UserDataResponse{}, traces.RecordError(ctx, fmt.Errorf("unmarshalling user data response: %w", err))
 	}
-	return a.storeData(ctx, userResp, generation)
+	if userResp.LoginResponse_UserData == nil {
+		return UserDataResponse{}, traces.RecordError(ctx, errors.New("no user data in response"))
+	}
+	return userResp, nil
 }
 
 // ErrAccountChanged is returned when the account may have changed while the request was in flight;
@@ -453,8 +458,9 @@ func (a *Client) StartChangeEmail(ctx context.Context, newEmail, password string
 	return traces.RecordError(ctx, err)
 }
 
-// CompleteChangeEmail completes a change of the email address associated with this user account,
-// using the code received via email.
+// CompleteChangeEmail changes the account's email using the code received via email.
+// If another account is active when the response arrives, only the server is updated and an error
+// is returned.
 func (a *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "complete_change_email")
 	defer span.End()
@@ -474,6 +480,7 @@ func (a *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, co
 		return traces.RecordError(ctx, err)
 	}
 
+	userID := settings.GetInt64(settings.UserIDKey)
 	data := &protos.CompleteChangeEmailRequest{
 		OldEmail:    settings.GetString(settings.EmailKey),
 		NewEmail:    newEmail,
@@ -485,10 +492,16 @@ func (a *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, co
 	if err != nil {
 		return traces.RecordError(ctx, err)
 	}
-	if err := a.storeSalt(newSalt); err != nil {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if settings.GetInt64(settings.UserIDKey) != userID {
+		return traces.RecordError(ctx, errors.New("email changed on the server, but another account is now active locally"))
+	}
+	a.generation++
+	if err := a.storeSaltLocked(newSalt); err != nil {
 		return traces.RecordError(ctx, err)
 	}
-	if err := settings.Set(settings.EmailKey, newEmail); err != nil {
+	if err := a.storeIdentityLocked(0, "", settings.Settings{settings.EmailKey: newEmail}); err != nil {
 		return traces.RecordError(ctx, err)
 	}
 	return nil
@@ -560,42 +573,55 @@ func (a *Client) OAuthLoginURL(ctx context.Context, provider string) (string, er
 	return loginURL.String(), nil
 }
 
+// OAuthLoginCallback signs in with the token from an OAuth callback. It returns [ErrAccountChanged]
+// if the account changes before the sign-in is saved.
 func (a *Client) OAuthLoginCallback(ctx context.Context, oAuthToken string) (*UserData, error) {
 	a.logger.Debug("Getting OAuth login callback")
 	jwtUserInfo, err := decodeJWT(oAuthToken)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding JWT: %w", err)
+		return nil, fmt.Errorf("%w: error decoding JWT: %w", ErrInvalidToken, err)
+	}
+	if jwtUserInfo.LegacyUserID == 0 || jwtUserInfo.LegacyToken == "" {
+		return nil, fmt.Errorf("%w: login token is missing the account identity", ErrInvalidToken)
 	}
 
-	// Seed the identity first so the fetchUserData call below can authenticate.
-	login := &UserData{
-		LegacyID:    jwtUserInfo.LegacyUserID,
-		LegacyToken: jwtUserInfo.LegacyToken,
-		LegacyUserData: &protos.LoginResponse_UserData{
-			UserId:   jwtUserInfo.LegacyUserID,
-			Token:    jwtUserInfo.LegacyToken,
-			DeviceID: jwtUserInfo.DeviceID,
-			Email:    jwtUserInfo.Email,
-		},
-	}
-	if err := a.setData(login, nil); err != nil {
-		return nil, fmt.Errorf("saving OAuth identity: %w", err)
-	}
-	user, err := a.fetchUserData(ctx)
+	generation := a.identityGeneration()
+	resp, err := a.requestUserData(ctx, map[string]string{
+		common.UserIDHeader:   strconv.FormatInt(jwtUserInfo.LegacyUserID, 10),
+		common.ProTokenHeader: jwtUserInfo.LegacyToken,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("error getting user data: %w", err)
+		return nil, fmt.Errorf("getting OAuth user data: %w", err)
 	}
-
-	if err := settings.Patch(settings.Settings{
-		settings.JwtTokenKey:   oAuthToken,
+	if resp.UserId == 0 {
+		return nil, errors.New("OAuth user data is missing the account identity")
+	}
+	if resp.UserId == jwtUserInfo.LegacyUserID {
+		if resp.Token == "" {
+			resp.Token = jwtUserInfo.LegacyToken
+		}
+		if resp.Email == "" {
+			resp.Email = jwtUserInfo.Email
+		}
+	}
+	resp.DeviceID = settings.GetString(settings.DeviceIDKey)
+	user := &UserData{
+		LegacyID:       resp.UserId,
+		LegacyToken:    resp.Token,
+		LegacyUserData: resp.LoginResponse_UserData,
+		Id:             jwtUserInfo.Email,
+		EmailConfirmed: true,
+		Token:          oAuthToken,
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.generation != generation {
+		return nil, ErrAccountChanged
+	}
+	a.generation++
+	if _, err := a.setDataLocked(user, false, settings.Settings{
 		settings.OAuthLoginKey: true,
 	}); err != nil {
-		a.logger.Error("Failed to persist JWT token", "error", err)
-		return nil, fmt.Errorf("failed to persist JWT token: %w", err)
-	}
-	user.Id = jwtUserInfo.Email
-	user.EmailConfirmed = true
-	if err := a.setData(user, nil); err != nil {
 		return nil, fmt.Errorf("saving OAuth user data: %w", err)
 	}
 	return user, nil
@@ -715,18 +741,59 @@ func (a *Client) storeIdentity(id int64, token string, extra settings.Settings) 
 	return a.storeIdentityLocked(id, token, extra)
 }
 
-// PatchAccountSettings saves updates as a change of the active account. Pending user-data and
-// purchase responses requested before the call are discarded, and a [UserChangeEvent] is emitted
-// if the account state changed.
+// PatchAccountSettings saves updates as a change to the active account. If any value differs from
+// its stored setting, user-data and purchase responses requested before the call are discarded;
+// otherwise the call does nothing.
+// A different user ID clears the previous account's credentials, cached data, salt and OAuth flags.
+// A supplied user ID must be a positive int64-compatible number or base-10 string.
+// A changed account emits a [UserChangeEvent]; on error the active identity remains unchanged.
 func (a *Client) PatchAccountSettings(updates settings.Settings) error {
-	return a.storeIdentity(0, "", updates)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var id int64
+	if value, ok := updates[settings.UserIDKey]; ok {
+		var err error
+		id, err = parseUserID(value)
+		if err != nil {
+			return err
+		}
+	}
+	var extra settings.Settings
+	if id != 0 && id != settings.GetInt64(settings.UserIDKey) {
+		extra = settings.Settings{settings.OAuthLoginKey: false, settings.OAuthProviderKey: ""}
+		maps.Copy(extra, updates)
+	} else {
+		// Diff also compares types, so the user ID, already matched numerically, is left out.
+		extra = updates.Diff(settings.GetAllFor(slices.Collect(maps.Keys(updates))...))
+		delete(extra, settings.UserIDKey)
+		if len(extra) == 0 {
+			return nil
+		}
+	}
+	a.generation++
+	return a.storeIdentityLocked(id, "", extra)
 }
 
-// storeIdentityLocked saves id and token, each only if set, together with extra in one write that
-// takes effect only once saved, and emits a [UserChangeEvent] if the [accountState] changed. A
-// different nonzero id also clears the previous account's credentials and cached data. The OAuth
-// flags are kept, because an OAuth sign-in records its provider before switching. It requires a.mu
-// to be held.
+func parseUserID(v any) (int64, error) {
+	value := fmt.Sprint(v)
+	if f, ok := v.(float64); ok {
+		if math.Trunc(f) != f {
+			return 0, fmt.Errorf("invalid user ID %v: expected an integer", f)
+		}
+		value = strconv.FormatFloat(f, 'f', 0, 64)
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("invalid user ID %q: expected a positive int64", value)
+	}
+	return id, nil
+}
+
+// storeIdentityLocked saves nonzero id and nonempty token together with extra, emitting a
+// [UserChangeEvent] if the account changed. Switching accounts clears credentials, cached data
+// and salt, but keeps OAuth flags because sign-in records its provider before switching.
+// A failed settings write leaves the identity unchanged but may discard the persisted salt.
+// It requires a.mu to be held.
 func (a *Client) storeIdentityLocked(id int64, token string, extra settings.Settings) error {
 	before := currentAccount()
 	defer func() {
@@ -756,7 +823,19 @@ func (a *Client) storeIdentityLocked(id int64, token string, extra settings.Sett
 	if len(updates) == 0 {
 		return nil
 	}
-	return settings.Patch(updates)
+	if switching {
+		// Invalidate the unkeyed salt on disk before publishing another identity.
+		if err := writeSalt(nil, a.saltPath); err != nil {
+			return fmt.Errorf("clearing the previous account's salt: %w", err)
+		}
+	}
+	if err := settings.Patch(updates); err != nil {
+		return err
+	}
+	if switching {
+		a.salt = nil
+	}
+	return nil
 }
 
 // accountState holds the settings whose change is reported as a [UserChangeEvent].
@@ -788,9 +867,9 @@ func (a *Client) setData(data *UserData, extra settings.Settings) error {
 }
 
 // setDataLocked stores a copy of data together with extra, first merging data with the cached
-// response of the same account when preserveLoginFields is set. Data without user data stores only its id, token
-// and devices. It returns data, possibly merged, which the caller may modify without affecting
-// settings. It requires a.mu to be held and data to be non-nil.
+// response of the same account when preserveLoginFields is set. Data without user data stores only
+// its id, token and devices. It returns data, possibly merged, which the caller may modify without
+// affecting settings. It requires a.mu to be held and data to be non-nil.
 func (a *Client) setDataLocked(data *UserData, preserveLoginFields bool, extra settings.Settings) (*UserData, error) {
 	updates := settings.Settings{}
 	// A device-limited login carries no user data, but its device list is what the user needs to

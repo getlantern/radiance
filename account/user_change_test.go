@@ -56,6 +56,13 @@ func TestAccountChangesNotifyWithoutBackendWrappers(t *testing.T) {
 	a.ClearUser()
 	expect(0)
 
+	oauthToken := mockJWT(t, map[string]any{
+		"legacy_user_id": 123, "legacy_token": "oauth-token", "email": "test@example.com",
+	})
+	_, err = a.OAuthLoginCallback(ctx, oauthToken)
+	require.NoError(t, err)
+	expect(1)
+
 	token := mockJWT(t, map[string]any{"legacy_user_id": 789, "legacy_token": "oauth-token"})
 	require.NoError(t, a.OAuthDeviceLimitCallback(ctx, token))
 	expect(1)

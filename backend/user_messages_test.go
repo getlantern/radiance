@@ -62,6 +62,30 @@ func TestPatchSettingsAccountKeysDiscardStaleUserData(t *testing.T) {
 	require.False(t, settings.IsPro())
 }
 
+func TestPatchSettingsSwitchKeepsMatches(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	require.NoError(t, settings.Patch(settings.Settings{
+		settings.UserIDKey:     int64(1),
+		settings.TokenKey:      "a",
+		settings.UserLevelKey:  "pro",
+		settings.OAuthLoginKey: true,
+	}))
+	r := &LocalBackend{accountClient: account.NewClient(http.DefaultClient, t.TempDir(), log.NoOpLogger())}
+
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.UserIDKey:     int64(2),
+		settings.TokenKey:      "b",
+		settings.UserLevelKey:  "pro",
+		settings.OAuthLoginKey: true,
+	}))
+
+	require.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+	require.True(t, settings.IsPro())
+	require.True(t, settings.GetBool(settings.OAuthLoginKey))
+}
+
 func TestUserMessagesFollowAccountEvents(t *testing.T) {
 	settings.Reset()
 	t.Cleanup(settings.Reset)
@@ -154,4 +178,41 @@ func TestUserMessagesFollowAccountEvents(t *testing.T) {
 	message, err := r.CurrentUserMessage()
 	require.NoError(t, err)
 	require.Nil(t, message)
+}
+
+type switchingPeer struct {
+	*fakePeerController
+	onStart func()
+}
+
+func (p *switchingPeer) Start(ctx context.Context) error {
+	p.onStart()
+	return p.fakePeerController.Start(ctx)
+}
+
+func TestPatchSettingsAccountKeysWin(t *testing.T) {
+	for _, token := range []string{"a", "new-a"} {
+		t.Run(token, func(t *testing.T) {
+			settings.Reset()
+			t.Cleanup(settings.Reset)
+			require.NoError(t, settings.InitSettings(t.TempDir()))
+			require.NoError(t, settings.Patch(settings.Settings{settings.UserIDKey: int64(1), settings.TokenKey: "a"}))
+			a := account.NewClient(http.DefaultClient, t.TempDir(), log.NoOpLogger())
+			peer := &switchingPeer{fakePeerController: &fakePeerController{}, onStart: func() {
+				require.NoError(t, a.PatchAccountSettings(settings.Settings{settings.UserIDKey: int64(2), settings.TokenKey: "b"}))
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r := &LocalBackend{ctx: ctx, peerClient: peer, accountClient: a}
+
+			require.NoError(t, r.PatchSettings(settings.Settings{
+				settings.PeerShareEnabledKey: true,
+				settings.UserIDKey:           int64(1),
+				settings.TokenKey:            token,
+			}))
+
+			require.Equal(t, int64(1), settings.GetInt64(settings.UserIDKey))
+			require.Equal(t, token, settings.GetString(settings.TokenKey))
+		})
+	}
 }

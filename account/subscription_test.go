@@ -240,6 +240,9 @@ func TestPurchaseSwitchNotSavedKeepsAccount(t *testing.T) {
 	assert.NoError(t, err, "the purchase itself succeeded")
 	assert.Equal(t, int64(1), settings.GetInt64(settings.UserIDKey))
 	assert.Equal(t, []byte("previous-salt"), a.getSaltCached())
+	salt, err := readSalt(a.saltPath)
+	require.NoError(t, err)
+	assert.Nil(t, salt)
 }
 
 func TestLatePurchaseResponseDoesNotSwitch(t *testing.T) {

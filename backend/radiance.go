@@ -717,16 +717,16 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
 	}
-	if len(diff) == 0 {
-		return errs
-	}
 	patch := settings.Patch
 	for _, key := range settings.UserKeys {
-		if _, ok := diff[key]; ok {
-			// settings.Patch would let a stale user-data or purchase response overwrite this change.
+		if value, ok := updates[key]; ok {
+			// Account fields must be applied together against the identity active at commit time.
+			diff[key] = value
 			patch = r.accountClient.PatchAccountSettings
-			break
 		}
+	}
+	if len(diff) == 0 {
+		return errs
 	}
 	if err := patch(diff); err != nil {
 		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", err))
