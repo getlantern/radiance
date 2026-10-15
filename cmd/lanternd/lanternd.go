@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common"
 	commonenv "github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/serviceowner"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/ipc"
 	rlog "github.com/getlantern/radiance/log"
@@ -144,6 +145,7 @@ type daemonArgs struct {
 	Install   *installCmd   `arg:"subcommand:install" help:"install as system service"`
 	Uninstall *uninstallCmd `arg:"subcommand:uninstall" help:"uninstall system service"`
 	Version   *versionCmd   `arg:"subcommand:version" help:"print version"`
+	Migrate   *migrateCmd   `arg:"subcommand:migrate" help:"import a legacy Windows user"`
 }
 
 func (daemonArgs) Description() string {
@@ -209,6 +211,8 @@ func main() {
 		err = uninstall()
 	case a.Version != nil:
 		fmt.Println(common.Version)
+	case a.Migrate != nil:
+		err = migrateLegacy(a.Migrate)
 	}
 	if err != nil {
 		log.Fatalf("Error: %v\n", err)
@@ -426,21 +430,21 @@ func babysit(ctx context.Context, args []string, logger *slog.Logger) error {
 	return nil
 }
 
-// daemonBackendOptions overrides staging only, preserving any externally
-// configured development environment in production mode.
-func daemonBackendOptions(dataPath, logPath, logLevel string, environment daemonEnvironment) backend.Options {
-	options := backend.Options{
-		DataDir:                 dataPath,
-		LogDir:                  logPath,
-		LogLevel:                logLevel,
-		UserMessageCapabilities: userMessageCapabilities(),
-	}
+func configureDaemonEnvironment(environment daemonEnvironment) error {
 	if environment == daemonEnvironmentStaging {
-		options.EnvOverrides = map[string]string{
-			commonenv.ENV.String(): string(environment),
-		}
+		return os.Setenv(commonenv.ENV.String(), string(environment))
 	}
-	return options
+	return nil
+}
+
+func daemonBackendOptions(dataPath, logPath, logLevel string) backend.Options {
+	return backend.Options{
+		DataDir:                  dataPath,
+		LogDir:                   logPath,
+		LogLevel:                 logLevel,
+		PreserveTelemetryConsent: true,
+		UserMessageCapabilities:  userMessageCapabilities(),
+	}
 }
 
 func userMessageCapabilities() wire.ClientCapabilities {
@@ -465,12 +469,34 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if err := configureDaemonEnvironment(environment); err != nil {
+		return fmt.Errorf("configure daemon environment: %w", err)
+	}
+	if err := initializeDaemonDiagnostics(dataPath, logPath, logLevel); err != nil {
+		slog.Warn("Daemon diagnostics initialization failed", "error", err)
+	}
 	authURL, proServerURL := daemonBackendURLs(environment)
 	slog.Info("Starting lanternd", "version", common.Version, "dataPath", dataPath, "environment", environment, "authURL", authURL, "proServerURL", proServerURL)
-	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel, environment))
+	ownerSID, err := serviceowner.Load()
 	if err != nil {
-		return fmt.Errorf("failed to create backend: %w", err)
+		return fmt.Errorf("load service owner: %w", err)
 	}
+	if err := serviceowner.GrantProcessQuery(); err != nil {
+		slog.Warn("Service process queries are unavailable", "error", err)
+	}
+	server := ipc.NewServer(nil, !common.IsMobile())
+	server.SetOwnerSID(ownerSID)
+	if err := server.Start(); err != nil {
+		return fmt.Errorf("failed to start IPC server: %w", err)
+	}
+	defer server.Close()
+	be, err := backend.NewLocalBackend(ctx, daemonBackendOptions(dataPath, logPath, logLevel))
+	if err != nil {
+		slog.Error("Failed to create backend", "error", err)
+		<-ctx.Done()
+		return nil
+	}
+	defer be.Close()
 	user, err := be.UserData()
 	if err != nil {
 		return fmt.Errorf("failed to get current data: %w", err)
@@ -482,10 +508,7 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 	}
 
 	be.Start()
-	server := ipc.NewServer(be, !common.IsMobile())
-	if err := server.Start(); err != nil {
-		return fmt.Errorf("failed to start IPC server: %w", err)
-	}
+	server.SetBackend(be)
 
 	<-ctx.Done()
 

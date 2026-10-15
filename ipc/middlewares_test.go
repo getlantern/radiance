@@ -10,9 +10,10 @@ import (
 
 func TestAuthPeer(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		lookup func() (usr, error)
-		status int
+		name     string
+		lookup   func() (usr, error)
+		ownerSID string
+		status   int
 	}{
 		{name: "missing credentials", status: http.StatusUnauthorized},
 		{
@@ -31,6 +32,18 @@ func TestAuthPeer(t *testing.T) {
 			status: http.StatusForbidden,
 		},
 		{
+			name:     "enrolled owner",
+			ownerSID: "original-user",
+			lookup:   func() (usr, error) { return usr{uid: "original-user"}, nil },
+			status:   http.StatusNoContent,
+		},
+		{
+			name:     "different enrolled owner",
+			ownerSID: "original-user",
+			lookup:   func() (usr, error) { return usr{uid: "other-user"}, nil },
+			status:   http.StatusForbidden,
+		},
+		{
 			name:   "administrator",
 			lookup: func() (usr, error) { return usr{uid: "administrator", isAdmin: true}, nil },
 			status: http.StatusNoContent,
@@ -38,6 +51,7 @@ func TestAuthPeer(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request = request.WithContext(context.WithValue(request.Context(), ownerSIDKey{}, test.ownerSID))
 			if test.lookup != nil {
 				request = request.WithContext(context.WithValue(request.Context(), peerLookupKey{}, test.lookup))
 			}

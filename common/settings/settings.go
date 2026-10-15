@@ -108,7 +108,6 @@ var k = &settings{
 
 func init() {
 	// set default values.
-	k.k.Set(LocaleKey.String(), "fa-IR")
 	k.k.Set(UserLevelKey.String(), "free")
 }
 
@@ -155,25 +154,21 @@ type candidateSource struct {
 	label    string
 }
 
-// migrateLegacySettingsIfNeeded recovers persisted user state written
-// by older client versions. Candidates in priority order:
-//
-//  1. <fileDir>/settings.json                 — canonical
-//  2. <fileDir>/local.json                    — v9.0.x (renamed)
-//  3. Windows ${PUBLIC}\Lantern\data\*        — v9.0.x cross-dir;
-//     spliced in below, Windows only
-//  4. pre-9.x platform-specific YAML; spliced in below
-//  5. <fileDir>/data/settings.json            — v9.1.x (bugged:
-//     setupDirectories appended an
-//     unconditional "/data" suffix)
-//
-// Pick the highest-priority candidate with user_level=="pro"; if none
-// is pro, the highest-priority candidate that exists. Losing Pro is
-// recoverable; losing the device registration creates server-side
-// orphans, so identifier continuity wins ties.
+// migrateLegacySettingsIfNeeded preserves valid canonical settings and recovers
+// missing or invalid settings from older client versions, preferring Pro accounts.
 func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
+	raw, err := os.ReadFile(canonicalPath)
+	canonicalExists := err == nil
+	switch {
+	case err == nil:
+		if validSettingsJSON(raw) {
+			return
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		slog.Warn("legacy settings migration: read failed", "path", canonicalPath, "error", err)
+		return
+	}
 	candidates := []candidateSource{
-		{path: canonicalPath, label: "canonical settings.json"},
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
 		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
 	}
@@ -181,27 +176,19 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 		b, err := os.ReadFile(candidates[i].path)
 		switch {
 		case err == nil:
-			candidates[i].contents = b
-			candidates[i].exists = true
+			if validSettingsJSON(b) {
+				candidates[i].contents = b
+				candidates[i].exists = true
+			}
 		case errors.Is(err, fs.ErrNotExist):
 			// Expected — file just isn't there. Treat as not-present.
 		default:
-			// Permission / I/O error — log it but don't bail outright. If
-			// it's the canonical path that's unreadable for non-ENOENT
-			// reasons, skip migration entirely so we don't try to write
-			// over a file the OS is telling us we can't see; for legacy
-			// or nested paths, treat the same as not-present.
 			slog.Warn("legacy settings migration: read failed",
 				"path", candidates[i].path, "error", err)
-			if candidates[i].path == canonicalPath {
-				return
-			}
 		}
 	}
-	// Optional candidates splice in at index 2, inserted oldest-first so
-	// newer generations end up higher priority.
 	if yc := legacyYAMLCandidate(fileDir); yc.exists {
-		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
+		candidates = append(candidates[:1], append([]candidateSource{yc}, candidates[1:]...)...)
 	}
 	// Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data) are the
 	// same generation of state as the same-dir local.json, just stored
@@ -210,7 +197,7 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 	// env is unset windowsCrossDirCandidatesFn returns nil and this is a
 	// no-op.
 	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {
-		candidates = append(candidates[:2], append(winExtras, candidates[2:]...)...)
+		candidates = append(candidates[:1], append(winExtras, candidates[1:]...)...)
 	}
 
 	// Pick: highest-priority file with user_level=="pro"; if none has pro,
@@ -224,7 +211,7 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 	}
 	if pickIdx == -1 {
 		for i, c := range candidates {
-			if c.exists {
+			if c.exists && validSettingsJSON(c.contents) {
 				pickIdx = i
 				break
 			}
@@ -234,11 +221,15 @@ func migrateLegacySettingsIfNeeded(fileDir, canonicalPath string) {
 		// Nothing on disk yet — fresh install, normal path. No-op.
 		return
 	}
-	if candidates[pickIdx].path == canonicalPath {
-		// Canonical already wins — no migration needed.
-		return
+	if canonicalExists {
+		quarantineInvalidSettings(canonicalPath)
 	}
 	writeMigrated(canonicalPath, candidates[pickIdx].contents, candidates[pickIdx].label)
+}
+
+func validSettingsJSON(contents []byte) bool {
+	var values map[string]jsonpkg.RawMessage
+	return jsonpkg.Unmarshal(contents, &values) == nil && values != nil
 }
 
 // writeMigrated overwrites the canonical settings file with the recovered
@@ -281,7 +272,7 @@ func loadSettings(path string, opts ...koanf.Option) error {
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	if err := k.k.Load(rawbytes.Provider(contents), json.Parser(), opts...); err != nil {
+	if err := k.k.Load(rawbytes.Provider(contents), &settingsJSON{}, opts...); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
 	return nil
@@ -319,15 +310,13 @@ func Get(key _key) any {
 }
 
 func GetString(key _key) string {
-	// JSON round-trip turns all numbers into float64 and since koanf uses Sprintf("%v") for string
-	// conversion, large integers (i.e. userID) get converted to scientific notation (e.g. 3.87286618e+08)
-	// so we handle float64 separately
 	value := Get(key)
 	if value == nil {
 		return ""
 	}
 	switch v := value.(type) {
 	case float64:
+		// Direct callers can still supply floating-point IDs.
 		return strconv.FormatInt(int64(v), 10)
 	case string:
 		return v

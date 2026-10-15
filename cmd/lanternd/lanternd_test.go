@@ -110,6 +110,7 @@ func TestServiceRunConfigRejectsInvalidEnvironment(t *testing.T) {
 }
 
 func TestStagingServiceRunConfigSelectsStagingAccountEndpoints(t *testing.T) {
+	t.Setenv(commonenv.ENV.String(), "prod")
 	installed := serviceRunConfig{
 		dataPath:    "/data",
 		logPath:     "/logs",
@@ -119,10 +120,10 @@ func TestStagingServiceRunConfigSelectsStagingAccountEndpoints(t *testing.T) {
 	parsed, err := parseServiceRunArgs(installed.args())
 	require.NoError(t, err)
 
-	options := daemonBackendOptions(parsed.dataPath, parsed.logPath, parsed.logLevel, parsed.environment)
+	require.NoError(t, configureDaemonEnvironment(parsed.environment))
+	options := daemonBackendOptions(parsed.dataPath, parsed.logPath, parsed.logLevel)
 	require.Equal(t, userMessageCapabilities(), options.UserMessageCapabilities)
-	require.Equal(t, "staging", options.EnvOverrides[commonenv.ENV.String()])
-	t.Setenv(commonenv.ENV.String(), options.EnvOverrides[commonenv.ENV.String()])
+	require.True(t, common.Stage())
 	require.Equal(t, common.StageBaseURL, common.GetBaseURL())
 	require.Equal(t, common.StageProServerURL, common.GetProServerURL())
 
@@ -131,11 +132,10 @@ func TestStagingServiceRunConfigSelectsStagingAccountEndpoints(t *testing.T) {
 	require.Equal(t, common.StageProServerURL, proServerURL)
 }
 
-func TestProductionBackendOptionsPreserveDevelopmentEnvironment(t *testing.T) {
+func TestProductionDaemonPreservesDevelopmentEnvironment(t *testing.T) {
 	t.Setenv(commonenv.ENV.String(), "dev")
 
-	options := daemonBackendOptions("/data", "/logs", "debug", daemonEnvironmentProd)
-	require.NotContains(t, options.EnvOverrides, commonenv.ENV.String())
+	require.NoError(t, configureDaemonEnvironment(daemonEnvironmentProd))
 	require.Equal(t, "dev", common.Env())
 }
 
