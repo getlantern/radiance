@@ -20,6 +20,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/unbounded"
@@ -837,7 +838,7 @@ func (s *localapi) serversAddHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.backend(r.Context()).AddServers(req.Servers); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), addServersStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -864,7 +865,7 @@ func (s *localapi) serversFromJSONHandler(w http.ResponseWriter, r *http.Request
 	}
 	tags, err := s.backend(r.Context()).AddServersByJSON(req.Config)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), addServersStatus(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, tags)
@@ -878,7 +879,7 @@ func (s *localapi) serversFromURLsHandler(w http.ResponseWriter, r *http.Request
 	}
 	tags, err := s.backend(r.Context()).AddServersByURL(req.URLs, req.SkipCertVerification)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), addServersStatus(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, tags)
@@ -892,10 +893,17 @@ func (s *localapi) serversPrivateAddHandler(w http.ResponseWriter, r *http.Reque
 	}
 	err := s.backend(r.Context()).AddPrivateServer(req.Tag, req.IP, req.Port, req.AccessToken, req.Location, req.Joined)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), addServersStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func addServersStatus(err error) int {
+	if errors.Is(err, hostaccess.ErrDenied) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 // serversPrivateInviteHandler handles POST (create) and DELETE (revoke) on /servers/private/invite.

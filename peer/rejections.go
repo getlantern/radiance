@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/publicsuffix"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 )
 
 // maxRejectedHosts bounds the tally file. Sharded CDN hostnames are unbounded
@@ -29,10 +30,9 @@ const maxPortsPerHost = 16
 
 const otherPorts = "other"
 
-// rejectionsFileMode is owner-only rather than fileperm.File: the file lists
-// hosts people in censored countries asked for, and the data directory is
-// world-readable.
-const rejectionsFileMode os.FileMode = 0o600
+// rejectionsFileMode is owner-only on every platform: the file lists hosts
+// people in censored countries asked for.
+const rejectionsFileMode = fileperm.Private
 
 const rejectionSummarySize = 15
 

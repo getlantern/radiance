@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -20,6 +19,7 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
 func TestBuildOptions(t *testing.T) {
@@ -179,35 +179,42 @@ func TestBuildOptions_BanditURLOverrides(t *testing.T) {
 	assert.Equal(t, overrides, autoOpts.URLOverrides, "URLOverrides should be wired from config")
 }
 
-func TestBuildOptions_WATERDirOverride(t *testing.T) {
+func TestBuildOptions_DropsHostAccess(t *testing.T) {
 	cfg := testConfig(t)
-	basePath := t.TempDir()
-	waterOutbound := O.Outbound{
-		Tag:  "water-test",
-		Type: lbC.TypeWATER,
-		Options: &lbO.WATEROutboundOptions{
-			Dir: "/tmp/stale",
-		},
-	}
-	cfg.Options.Outbounds = append(cfg.Options.Outbounds, waterOutbound)
-	boxOptions := BoxOptions{
-		BasePath: basePath,
-		Options:  cfg.Options,
-	}
-
-	opts, err := buildOptions(boxOptions)
+	cfg.Options.Outbounds = append(cfg.Options.Outbounds,
+		O.Outbound{Tag: "tor-out", Type: C.TypeTor, Options: &O.TorOutboundOptions{ExecutablePath: "/tmp/payload"}},
+		O.Outbound{Tag: "water-out", Type: lbC.TypeWATER, Options: &lbO.WATEROutboundOptions{Dir: "/tmp/stale"}},
+	)
+	cfg.Options.Endpoints = append(cfg.Options.Endpoints, O.Endpoint{
+		Tag: "wg-listen", Type: C.TypeWireGuard, Options: &O.WireGuardEndpointOptions{ListenPort: 51820, Name: "../../tmp/x"},
+	})
+	opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
 	require.NoError(t, err)
 
-	out := findOutbound(opts.Outbounds, "water-test")
-	require.NotNil(t, out, "water-test outbound missing from built options")
-	waterOpts, ok := out.Options.(*lbO.WATEROutboundOptions)
-	require.True(t, ok, "expected *WATEROutboundOptions")
-	assert.Equal(t, filepath.Join(basePath, "water"), waterOpts.Dir,
-		"buildOptions must override Dir to the app-managed water directory")
+	assert.False(t, slices.ContainsFunc(opts.Endpoints, func(e O.Endpoint) bool { return e.Tag == "wg-listen" }))
+	assert.Nil(t, findOutbound(opts.Outbounds, "tor-out"))
+	assert.Nil(t, findOutbound(opts.Outbounds, "water-out"))
+	selector := findOutbound(opts.Outbounds, ManualSelectTag)
+	require.NotNil(t, selector)
+	assert.NotContains(t, selector.Options.(*lbO.MutableSelectorOutboundOptions).Outbounds, "tor-out",
+		"a dropped outbound must not be referenced by the selector")
+}
 
-	// Original struct must not be mutated.
-	assert.Equal(t, "/tmp/stale", waterOutbound.Options.(*lbO.WATEROutboundOptions).Dir,
-		"buildOptions must not mutate the caller's WATEROutboundOptions")
+func TestBuildOptions_RejectsHostAccessDNS(t *testing.T) {
+	cfg := testConfig(t)
+	var dns O.DNSOptions
+	if cfg.Options.DNS != nil {
+		dns = *cfg.Options.DNS
+	}
+	dns.Servers = append(slices.Clone(dns.Servers), O.DNSServerOptions{
+		Type: C.DNSTypeUDP, Tag: "planted", Options: &O.RemoteDNSServerOptions{
+			RawLocalDNSServerOptions: O.RawLocalDNSServerOptions{DialerOptions: O.DialerOptions{NetNs: "/proc/1/ns/net"}},
+			DNSServerAddressOptions:  O.DNSServerAddressOptions{Server: "192.0.2.1"},
+		},
+	})
+	cfg.Options.DNS = &dns
+	_, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+	require.ErrorIs(t, err, hostaccess.ErrDenied)
 }
 
 func contains[S ~[]E, E any](t *testing.T, s S, e E) bool {
