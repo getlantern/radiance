@@ -260,7 +260,8 @@ type PurchaseResponse struct {
 	Status               string      `json:"status"`
 }
 
-// ActivationCode is used to purchase a subscription using a reseller code.
+// ActivationCode is used to purchase a subscription using a reseller code or a
+// website license key, which carries a PRO prefix or suffix (PRO-XXXXX-...).
 func (a *Client) ActivationCode(ctx context.Context, email, resellerCode string) (*PurchaseResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "activation_code")
 	defer span.End()
@@ -271,6 +272,11 @@ func (a *Client) ActivationCode(ctx context.Context, email, resellerCode string)
 		"email":          email,
 		"deviceName":     settings.GetString(settings.DeviceIDKey),
 		"resellerCode":   resellerCode,
+	}
+	if key := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(resellerCode), "-", "")); len(key) > 3 &&
+		(strings.HasPrefix(key, "PRO") || strings.HasSuffix(key, "PRO")) {
+		data["provider"] = "web-license"
+		data["licenseKey"] = strings.TrimSuffix(strings.TrimPrefix(key, "PRO"), "PRO")
 	}
 	resp, err := a.sendProRequest(ctx, "POST", "/purchase", nil, nil, data)
 	if err != nil {
