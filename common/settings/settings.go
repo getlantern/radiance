@@ -134,7 +134,7 @@ func InitSettings(fileDir string) error {
 	migrate := migrationPending(markerPath)
 	var identity map[string]any
 	if migrate {
-		identity, migrate = legacyIdentity(fileDir, k.filePath)
+		identity = legacyIdentity(fileDir, k.filePath)
 	}
 	fresh := false
 	switch err := loadSettings(k.filePath); {
@@ -183,45 +183,39 @@ func migrationPending(markerPath string) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// candidateSource is one possible location of persisted user state.
-// contents is always canonical JSON — direct for v9.x, translated for
-// pre-9.x YAML.
+// candidateSource is one possible location of persisted user state. contents is v9.x JSON, or
+// pre-9.x YAML translated to JSON.
 type candidateSource struct {
 	path     string
 	contents []byte
 	exists   bool
 	label    string
-	// err is the read error, other than fs.ErrNotExist; exists is false when it is set.
-	err error
 }
 
 // legacyIdentity returns the identity keys to adopt from settings written by older client
-// versions, or nil when nothing should be adopted. ok is false when any file can't be read, so the
-// migration can't be judged yet.
+// versions, or nil when nothing should be adopted or canonicalPath can't be read. A legacy candidate
+// that can't be read counts as missing.
 //
 // Legacy candidates in priority order:
 //
 //  1. <fileDir>/local.json                    — v9.0.x (renamed)
 //  2. ${PUBLIC}\Lantern\data\local.json       — v9.0.x cross-dir, Windows only
 //  3. pre-9.x platform-specific YAML
-//  4. <fileDir>/data/settings.json            — v9.1.x (bugged:
-//     setupDirectories appended an
-//     unconditional "/data" suffix)
+//  4. <fileDir>/data/settings.json            — v9.1.x (misplaced under data/)
 //
-// A canonical file with a non-zero user_id always wins, because it is account state this client
-// already accepted. One without may be the defaults written while an unreadable candidate kept the
-// migration pending, so it never wins. Otherwise a candidate counts only if it holds a JSON object:
-// pick the highest-priority one with user_level=="pro", or if none is pro, the highest-priority one
-// with a non-zero user_id, so the device registration is kept.
-func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok bool) {
+// A canonical file holding a JSON object always wins, even without an account, because it is
+// state this client already accepted. Otherwise a legacy candidate counts only if it holds a JSON
+// object: pick the highest-priority one with user_level=="pro", or if none is pro, the
+// highest-priority one with a non-zero user_id, so the device registration is kept.
+func legacyIdentity(fileDir, canonicalPath string) map[string]any {
 	switch raw, err := os.ReadFile(canonicalPath); {
 	case err == nil:
-		if p, err := (settingsJSON{}).Unmarshal(raw); err == nil && hasAccount(p) {
-			return nil, true
+		if p, err := (settingsJSON{}).Unmarshal(raw); err == nil && p != nil {
+			return nil
 		}
 	case !errors.Is(err, fs.ErrNotExist):
-		slog.Warn("legacy settings migration: read failed; will retry", "path", canonicalPath, "error", err)
-		return nil, false
+		// InitSettings fails on the same read before marking the migration complete.
+		return nil
 	}
 	candidates := []candidateSource{
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
@@ -235,29 +229,17 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 			candidates[i].exists = true
 		case errors.Is(err, fs.ErrNotExist):
 		default:
-			candidates[i].err = err
+			slog.Warn("legacy settings migration: read failed", "path", candidates[i].path, "error", err)
 		}
 	}
 	// Optional candidates are inserted oldest-first, so newer generations rank higher.
-	if yc := legacyYAMLCandidate(fileDir); yc.exists || yc.err != nil {
+	if yc := legacyYAMLCandidate(fileDir); yc.exists {
 		candidates = append(candidates[:1], append([]candidateSource{yc}, candidates[1:]...)...)
 	}
-	// Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data) are the
-	// same generation of state as the same-dir local.json, just stored
-	// under a different filesystem root because lanternd's data dir moved
-	// to ${ProgramData}\Lantern. On every other GOOS / when the
-	// env is unset windowsCrossDirCandidatesFn returns nil and this is a
-	// no-op.
+	// Cross-dir candidates are the same generation as local.json.
 	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {
 		candidates = append(candidates[:1], append(winExtras, candidates[1:]...)...)
 	}
-	for _, c := range candidates {
-		if c.err != nil {
-			slog.Warn("legacy settings migration: read failed; will retry", "path", c.path, "error", c.err)
-			return nil, false
-		}
-	}
-
 	parsed := make([]map[string]any, len(candidates))
 	for i, c := range candidates {
 		if !c.exists {
@@ -286,16 +268,16 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 		}
 	}
 	if pickIdx == -1 {
-		return nil, true
+		return nil
 	}
-	identity = make(map[string]any)
+	identity := make(map[string]any)
 	for _, key := range identityKeys {
 		if v, ok := parsed[pickIdx][key.String()]; ok {
 			identity[key.String()] = v
 		}
 	}
 	slog.Info("legacy settings migration: recovering persisted identity", "source", candidates[pickIdx].label)
-	return identity, true
+	return identity
 }
 
 func hasAccount(settings map[string]any) bool {

@@ -3,6 +3,7 @@ package settings
 import (
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,13 +14,8 @@ import (
 // lookup to a temp dir without touching the host's %PUBLIC%.
 var windowsCrossDirCandidatesFn = windowsCrossDirCandidates
 
-// windowsCrossDirCandidates returns settings candidates from the v9.0.x
-// Windows data directory (${PUBLIC}\Lantern\data), which the same-dir
-// migration doesn't cover: radiance's data dir moved to
-// ${ProgramData}\Lantern and the two directories don't share a parent, so
-// the same-dir candidates never see the v9.0.x file.
-//
-// Returns nil on non-Windows hosts or when %PUBLIC% is unset.
+// windowsCrossDirCandidates returns the v9.0.x local.json from ${PUBLIC}\Lantern\data, which the
+// same-dir candidates miss because radiance's data dir moved to ${ProgramData}\Lantern.
 func windowsCrossDirCandidates(fileDir string) []candidateSource {
 	if runtime.GOOS != "windows" {
 		return nil
@@ -64,7 +60,8 @@ func readWindowsCrossDirCandidates(v90xDir string) []candidateSource {
 		return nil
 	}
 	if err != nil {
-		return []candidateSource{{path: full, label: label, err: err}}
+		slog.Warn("legacy settings migration: read failed", "path", full, "error", err)
+		return nil
 	}
 	return []candidateSource{{
 		path:     full,

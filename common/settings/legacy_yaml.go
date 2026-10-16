@@ -32,7 +32,8 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 		return candidateSource{}
 	}
 	if err != nil {
-		return candidateSource{path: path, label: label, err: err}
+		slog.Warn("legacy settings migration: read failed", "path", path, "error", err)
+		return candidateSource{}
 	}
 	translated, err := translateLegacyYAML(raw, layout)
 	if err != nil {

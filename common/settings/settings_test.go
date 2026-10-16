@@ -354,19 +354,20 @@ func TestLegacyMigration(t *testing.T) {
 		assert.Equal(t, "apple", GetString(OAuthProviderKey))
 	})
 
-	t.Run("a canonical file without a user id doesn't outrank a legacy identity", func(t *testing.T) {
+	t.Run("logged out canonical settings survive stale Pro recovery files", func(t *testing.T) {
 		tempDir := t.TempDir()
 		writeCanonical(t, tempDir, `{"locale": "en-US", "device_id": "dev"}`)
-		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "free", "token": "tok"}`)
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "pro", "token": "stale-token"}`)
 
 		initAt(t, tempDir)
 
-		assert.Equal(t, "7", GetString(UserIDKey))
+		assert.False(t, Exists(UserIDKey))
+		assert.False(t, Exists(TokenKey))
 		assert.Equal(t, "en-US", GetString(LocaleKey))
 		assert.Equal(t, "dev", GetString(DeviceIDKey))
 	})
 
-	t.Run("an unreadable legacy file leaves the migration pending", func(t *testing.T) {
+	t.Run("an unreadable legacy file counts as missing", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("permission semantics differ on windows")
 		}
@@ -374,19 +375,15 @@ func TestLegacyMigration(t *testing.T) {
 			t.Skip("root reads files regardless of mode")
 		}
 		tempDir := t.TempDir()
-		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "free", "token": "tok"}`)
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "pro", "token": "tok"}`)
 		legacy := filepath.Join(tempDir, legacySettingsFileName)
 		require.NoError(t, os.Chmod(legacy, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(legacy, 0o644) })
+		writeNested(t, tempDir, `{"user_id": 5, "user_level": "free"}`)
 
 		initAt(t, tempDir)
-		assert.False(t, Exists(UserIDKey))
-		assert.NoFileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
-		require.NoError(t, Set(DeviceIDKey, "dev"))
 
-		require.NoError(t, os.Chmod(legacy, 0o644))
-		initAt(t, tempDir)
-		assert.Equal(t, "7", GetString(UserIDKey))
+		assert.Equal(t, "5", GetString(UserIDKey))
 		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
 	})
 
@@ -465,7 +462,8 @@ func TestLegacyMigration(t *testing.T) {
 
 	t.Run("a failed save is retried on the next start", func(t *testing.T) {
 		tempDir := t.TempDir()
-		writeCanonical(t, tempDir, `{"locale": "en-US"}`)
+		// null loads as empty settings but isn't a JSON object, so the legacy identity is adopted.
+		writeCanonical(t, tempDir, `null`)
 		writeLegacy(t, tempDir, `{"user_id": 2, "user_level": "pro"}`)
 		restore := readOnlyDir(t, tempDir)
 
