@@ -14,6 +14,8 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/serviceowner"
+	"github.com/getlantern/radiance/internal/dirsecurity"
 )
 
 const (
@@ -55,6 +57,12 @@ func install(dataPath, logPath, logLevel string, environment daemonEnvironment) 
 	// Errors are expected on first install when no service exists yet.
 	if err := uninstall(); err != nil {
 		slog.Debug("No existing service to remove (expected on first install)", "error", err)
+	}
+
+	for _, path := range []string{dataPath, logPath} {
+		if err := dirsecurity.Secure(path); err != nil {
+			return fmt.Errorf("secure %s: %w", path, err)
+		}
 	}
 
 	m, err := mgr.Connect()
@@ -275,6 +283,9 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 	if err != nil {
 		s.logger.Error("Failed to parse service arguments", "error", err)
 		return true, 1
+	}
+	if err := serviceowner.GrantProcessQuery(); err != nil {
+		s.logger.Warn("Service process queries are unavailable", "error", err)
 	}
 	return s.run(config, r, status)
 }

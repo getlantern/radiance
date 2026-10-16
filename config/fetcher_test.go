@@ -137,3 +137,12 @@ func TestUserIDFormatMatchesMain(t *testing.T) {
 		})
 	}
 }
+
+func TestSupportedProtocolsOmitsDenied(t *testing.T) {
+	protocols := supportedProtocols()
+	assert.NotEmpty(t, protocols)
+	for _, p := range []string{"tor", "water", "tailscale"} {
+		assert.NotContains(t, protocols, p)
+	}
+	assert.Contains(t, protocols, "shadowsocks")
+}

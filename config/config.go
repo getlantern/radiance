@@ -238,26 +238,12 @@ func (ch *ConfigHandler) doFetchConfig() error {
 	cleanTags(&confResp)
 
 	setWireGuardKeyInOptions(confResp.Options.Endpoints, privateKey)
-	setCustomProtocolOptions(confResp.Options.Outbounds)
 	if err := ch.setConfig(&confResp); err != nil {
 		ch.logger.Error("failed to set config", "error", err)
 		return fmt.Errorf("setting config: %w", err)
 	}
 	ch.logger.Info("Config fetched")
 	return nil
-}
-
-func setCustomProtocolOptions(outbounds []option.Outbound) {
-	for _, outbound := range outbounds {
-		switch opts := outbound.Options.(type) {
-		case *lbO.WATEROutboundOptions:
-			opts.Dir = filepath.Join(settings.GetString(settings.DataPathKey), "water")
-			// TODO: set hysteria custom parameters and brutal congestion
-			// control; blocked on per-client upload/download measurements we
-			// don't collect yet.
-		default:
-		}
-	}
 }
 
 func cleanTags(cfg *C.ConfigResponse) {

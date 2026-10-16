@@ -573,6 +573,7 @@ func (t *tunnel) addOutbounds(list servers.ServerList) error {
 // addOutboundsLocked adds the servers in list to the tunnel. The caller must
 // hold t.outboundMu.
 func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
+	list = allowedServers(list)
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -690,6 +691,7 @@ func (t *tunnel) updateNonSelectableOutbounds(list servers.ServerList) error {
 // updateNonSelectableOutboundsLocked implements updateNonSelectableOutbounds. The
 // caller must hold t.outboundMu.
 func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) error {
+	list = allowedServers(list)
 	ctx := t.ctx
 	router := service.FromContext[adapter.Router](ctx)
 

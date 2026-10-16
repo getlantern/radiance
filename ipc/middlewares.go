@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -70,6 +71,8 @@ func (r *statusRecorder) Flush() {
 }
 
 type peerLookupKey struct{}
+type peerKey struct{}
+type ownerSIDKey struct{}
 
 func authPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,14 +86,19 @@ func authPeer(next http.Handler) http.Handler {
 			http.Error(w, "could not get credentials", http.StatusUnauthorized)
 			return
 		}
-		if !peerCanAccess(peer) {
+		ownerSID, _ := r.Context().Value(ownerSIDKey{}).(string)
+		if !peerCanAccess(peer, ownerSID) {
 			http.Error(w, "permission denied", http.StatusForbidden)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if !peer.isAdmin && r.URL.Path == envEndpoint {
+			http.Error(w, "permission denied", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, peer)))
 	})
 }
 
-func peerCanAccess(peer usr) bool {
-	return peer.isAdmin
+func peerCanAccess(peer usr, ownerSID string) bool {
+	return peer.isAdmin || (peer.uid != "" && peer.uid == ownerSID)
 }

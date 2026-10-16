@@ -18,6 +18,7 @@ import (
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 )
 
@@ -135,7 +136,7 @@ func (f *fileCache) Store(resolvers []string) {
 	if err != nil {
 		return
 	}
-	if err := atomicfile.WriteFile(f.path, b, 0o600); err != nil {
+	if err := atomicfile.WriteFile(f.path, b, fileperm.Private); err != nil {
 		slog.Debug("soar: storing resolver cache", "error", err)
 	}
 }

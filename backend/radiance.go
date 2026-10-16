@@ -107,13 +107,14 @@ type Options struct {
 	// TimeZone is the device's IANA time zone name (e.g. "Asia/Tehran"). Empty keeps the
 	// previously stored zone.
 	TimeZone string
-	// this should be the platform device ID on mobile devices, desktop platforms will generate their
-	// own device ID and ignore this value
+	// DeviceID overrides the saved ID on mobile; desktop ignores this option.
 	DeviceID string
-	// User choice for telemetry consent
-	TelemetryConsent        bool
-	PlatformInterface       vpn.PlatformInterface
-	UserMessageCapabilities wire.ClientCapabilities
+	// TelemetryConsent overrides the saved preference unless PreserveTelemetryConsent is true.
+	TelemetryConsent bool
+	// PreserveTelemetryConsent leaves the stored telemetry preference unchanged at startup.
+	PreserveTelemetryConsent bool
+	PlatformInterface        vpn.PlatformInterface
+	UserMessageCapabilities  wire.ClientCapabilities
 	// EnvOverrides are applied via os.Setenv before common.Init so sandboxed
 	// system extensions (macOS/iOS), which don't inherit shell env, still see
 	// RADIANCE_* vars from the host process. Entries are set verbatim — no
@@ -123,14 +124,9 @@ type Options struct {
 
 // NewLocalBackend performs global initialization and returns a new LocalBackend instance.
 // It should be called once at the start of the application.
+// Initialization tolerates component failures to preserve issue reporting, except when
+// common initialization fails.
 func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
-	// Invariant: a user must always be able to construct a backend and report an
-	// issue, even when on-disk state is unreadable or incompatible (e.g. after a
-	// downgrade). Failures loading the server manager, split tunnel, and config
-	// are logged and degraded, never returned. The only fatal path is
-	// common.Init, which fails only when the data directory or settings file
-	// can't be created or read — i.e. the app genuinely cannot run.
-
 	// Must run before common.Init: it reads RADIANCE_VERSION once and
 	// freezes it, so a later Setenv is ignored by the header-fill path.
 	var envOverrideErrs error
@@ -145,46 +141,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if envOverrideErrs != nil {
 		slog.Warn("Failed to apply some env overrides", "error", envOverrideErrs)
 	}
-	if opts.Locale == "" {
-		if tag, err := locale.Detect(); err != nil {
-			opts.Locale = "en-US"
-		} else {
-			opts.Locale = tag.String()
-		}
-	}
-
-	var platformDeviceID string
-	switch common.Platform {
-	case "ios", "android":
-		// The device ID is owned by the native caller and shared to the extension
-		// through persisted settings so both use the same ID. Unlike the desktop
-		// branch, don't generate one here — log and continue if it's absent.
-		switch {
-		case opts.DeviceID != "":
-			platformDeviceID = opts.DeviceID
-		case settings.Exists(settings.DeviceIDKey):
-			if platformDeviceID = settings.GetString(settings.DeviceIDKey); platformDeviceID == "" {
-				slog.Warn("No device ID was found")
-			}
-		default:
-			slog.Warn("No device ID was found")
-		}
-	default:
-		platformDeviceID = deviceid.Get(settings.GetString(settings.DataPathKey))
-	}
-
 	dataDir := settings.GetString(settings.DataPathKey)
-	disableFetch := env.GetBool(env.DisableFetch)
-	startup := settings.Settings{
-		settings.LocaleKey:              opts.Locale,
-		settings.DeviceIDKey:            platformDeviceID,
-		settings.ConfigFetchDisabledKey: disableFetch,
-		settings.TelemetryKey:           opts.TelemetryConsent,
+	if err := settings.Patch(startupSettings(opts)); err != nil {
+		slog.Warn("Persisting startup settings", "error", err)
 	}
-	if opts.TimeZone != "" {
-		startup[settings.TimeZoneKey] = opts.TimeZone
-	}
-	settings.Patch(startup)
+	platformDeviceID := settings.GetString(settings.DeviceIDKey)
 
 	accountClient := account.NewClient(kindling.HTTPClient(), dataDir, slog.Default().With("service", "account"))
 
@@ -227,7 +188,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	cOpts := config.Options{
 		DataPath:      dataDir,
-		Locale:        opts.Locale,
+		Locale:        settings.GetString(settings.LocaleKey),
 		AccountClient: accountClient,
 		HTTPClient:    kindling.HTTPClient(),
 		Logger:        slog.Default().With("service", "config_handler"),
@@ -256,6 +217,46 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
 	r.clearSelectedIfMissing()
 	return r, nil
+}
+
+func startupSettings(opts Options) settings.Settings {
+	deviceID := settings.GetString(settings.DeviceIDKey)
+	switch common.Platform {
+	case "ios", "android":
+		if opts.DeviceID != "" {
+			deviceID = opts.DeviceID
+		}
+		if deviceID == "" {
+			slog.Warn("No device ID was found")
+		}
+	default:
+		if deviceID == "" {
+			deviceID = deviceid.Get(settings.GetString(settings.DataPathKey))
+		}
+	}
+	localeName := opts.Locale
+	if localeName == "" {
+		localeName = settings.GetString(settings.LocaleKey)
+	}
+	if localeName == "" {
+		if tag, err := locale.Detect(); err == nil {
+			localeName = tag.String()
+		} else {
+			localeName = "en-US"
+		}
+	}
+	startup := settings.Settings{
+		settings.LocaleKey:              localeName,
+		settings.DeviceIDKey:            deviceID,
+		settings.ConfigFetchDisabledKey: env.GetBool(env.DisableFetch),
+	}
+	if !opts.PreserveTelemetryConsent {
+		startup[settings.TelemetryKey] = opts.TelemetryConsent
+	}
+	if opts.TimeZone != "" {
+		startup[settings.TimeZoneKey] = opts.TimeZone
+	}
+	return startup
 }
 
 // loadUserMessageService returns nil when capabilities disable messaging or service initialization fails.
@@ -906,7 +907,11 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	return nil
 }
 
+// AddServers adds user-supplied servers, clearing IsLantern on each.
 func (r *LocalBackend) AddServers(list servers.ServerList) error {
+	for _, srv := range list.Servers {
+		srv.IsLantern = false
+	}
 	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("failed to add servers to ServerManager: %w", err)
 	}
@@ -954,17 +959,23 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // across config updates.
 const maxRetainedLanternServers = 60
 
-// updateServers adds the servers in list that are not already present. When
-// evict is set it first evicts retained Lantern servers (see
-// lanternServersToEvict). Only a newly received config may evict: a config
-// that was already applied, such as the cached one at startup, would judge
-// its own offers a second time.
+// updateServers adds the servers in list that are not already present and
+// pass [servers.Server.CheckHostAccess]. When evict is set it first evicts
+// retained Lantern servers (see lanternServersToEvict). Only a newly received
+// config may evict: a config that was already applied, such as the cached one
+// at startup, would judge its own offers a second time.
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
-		_, exists := existingTags[srv.Tag]
-		return exists
+		if _, exists := existingTags[srv.Tag]; exists {
+			return true
+		}
+		if err := srv.CheckHostAccess(); err != nil {
+			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
+			return true
+		}
+		return false
 	})
 
 	if evict {
@@ -1617,6 +1628,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	svrs := r.srvManager.AllServers()
 	slog.Debug("Running offline URL tests", "server_count", len(svrs), "url_override_count", len(cfg.BanditURLOverrides))
 	results, err := r.vpnClient.RunOfflineURLTests(
+		// Backend shutdown must stop probes before they use a tunnel started by another process.
 		r.ctx,
 		settings.GetString(settings.DataPathKey),
 		servers.ServerList{Servers: svrs}.Outbounds(),
