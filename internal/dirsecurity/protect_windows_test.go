@@ -181,13 +181,7 @@ func TestRebuildFileDetachesRetainedHandles(t *testing.T) {
 	if err := rebuildFile(path, "servers.json"); err != nil {
 		t.Fatal(err)
 	}
-	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windows.SetSecurityInfo(retained, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil); err != nil {
-		t.Fatal(err)
-	}
+	tryGrantEveryone(t, retained)
 	requireRestricted(t, target)
 	got, err := os.ReadFile(target)
 	if err != nil || string(got) != "planted" {
@@ -278,13 +272,7 @@ func TestSecureReplacesForeignOwnedFile(t *testing.T) {
 	if err := Secure(path); err != nil {
 		t.Fatal(err)
 	}
-	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windows.SetSecurityInfo(retained, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil); err != nil {
-		t.Fatal(err)
-	}
+	tryGrantEveryone(t, retained)
 	requireRestricted(t, target)
 	if got, err := os.ReadFile(target); err != nil || string(got) != "planted" {
 		t.Fatalf("replaced contents = %q, %v", got, err)
@@ -420,13 +408,7 @@ func TestSecureDetachesRetainedHandlesOnTrustedFiles(t *testing.T) {
 	if err := Secure(path); err != nil {
 		t.Fatal(err)
 	}
-	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windows.SetSecurityInfo(retained, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil); err != nil {
-		t.Fatal(err)
-	}
+	tryGrantEveryone(t, retained)
 	requireRestricted(t, target)
 }
 
@@ -443,7 +425,8 @@ func TestRebuildFileFailsWhileHandleDeniesDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retained, err := windows.CreateFile(name, windows.WRITE_DAC, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+	// Sharing only binds handles with data access.
+	retained, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,4 +449,16 @@ func TestRebuildFileFailsWhileHandleDeniesDeletion(t *testing.T) {
 	if len(leftovers) != 0 {
 		t.Fatalf("left temporary files: %v", leftovers)
 	}
+}
+
+// tryGrantEveryone tries to grant Everyone full access through handle, which
+// refers to a file that has since been replaced. Windows may refuse the change
+// or apply it to the original; either way the replacement must not change.
+func tryGrantEveryone(t *testing.T, handle windows.Handle) {
+	t.Helper()
+	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil)
 }

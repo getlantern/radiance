@@ -327,10 +327,11 @@ type fileRenameInfo struct {
 	FileName       [1]uint16
 }
 
-// replaceOpenFile renames src over dst. Where the volume supports POSIX
+// replaceOpenFile renames src over dst. Where the OS and volume support POSIX
 // renames, it succeeds while other handles have dst open, and those handles
-// keep referring to the replaced file; it fails while a handle on dst denies
-// deletion. Elsewhere it fails while any handle has dst open.
+// keep referring to the original file; it fails while a handle that can read,
+// write or delete dst denies deletion. Elsewhere it fails while any handle has
+// dst open.
 func replaceOpenFile(src, dst string) error {
 	target, err := windows.UTF16FromString(dst)
 	if err != nil {
