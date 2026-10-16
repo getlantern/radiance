@@ -27,6 +27,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
 )
@@ -84,7 +85,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		WGPublicKey:    wgPublicKey,
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
-		Protocols:      protocol.SupportedProtocols(),
+		Protocols:      supportedProtocols(),
 		// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
 		// outbounds but keep them out of the proxy-selection groups) so the server can
 		// gate such outbounds on the capability rather than the client version.
@@ -243,4 +244,10 @@ func moduleVersion(modulePath ...string) (string, error) {
 	}
 
 	return "", fmt.Errorf("module %s not found", modulePath)
+}
+
+func supportedProtocols() []string {
+	return slices.DeleteFunc(slices.Clone(protocol.SupportedProtocols()), func(p string) bool {
+		return !hostaccess.TypeAllowed(p)
+	})
 }
