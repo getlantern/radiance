@@ -14,15 +14,12 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 )
 
 const (
 	administratorsSID = "S-1-5-32-544"
 	localSystemSID    = "S-1-5-18"
-
-	maxRebuildBytes = 64 << 20
 
 	// rootMarkerName prevents retained handles from converting the secured root
 	// into a junction, which requires an empty directory.
@@ -54,9 +51,8 @@ func Prepare(path string) error {
 //
 // For names equal to Lantern ignoring case, it leaves a marker and replaces
 // files with restricted copies inaccessible through previously opened handles.
-// Other names are only created. It stops at the first error, including files
-// larger than 64 MiB, and wraps [ErrUnsafePath] for untrusted directory owners,
-// reparse points or hard links.
+// Other names are only created. It stops at the first error and wraps
+// [ErrUnsafePath] for untrusted directory owners, reparse points or hard links.
 func Secure(path string) error {
 	return prepare(path, true)
 }
@@ -117,10 +113,15 @@ func prepareAs(path string, secureContents bool, p principals) error {
 	return secureChildren(path, p)
 }
 
-// markRoot writes the root marker, then confirms through a handle that does
+// markRoot creates the root marker if missing, then confirms through a handle that does
 // not follow reparse points that the same directory still holds it.
 func markRoot(path string, info windows.ByHandleFileInformation) error {
-	if err := atomicfile.WriteFile(filepath.Join(path, rootMarkerName), nil, fileperm.File); err != nil {
+	marker, err := os.OpenFile(filepath.Join(path, rootMarkerName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileperm.File)
+	if err == nil {
+		if err := marker.Close(); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	handle, current, err := openPath(path, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
@@ -286,24 +287,25 @@ func resetDirectory(path string, info windows.ByHandleFileInformation, p princip
 // inherits dir's restriction. It fails while another handle can write or
 // delete the original, or denies its deletion.
 func rebuildFile(dir, name string) error {
-	handle, _, err := openPath(filepath.Join(dir, name), windows.GENERIC_READ, windows.FILE_SHARE_READ)
+	handle, info, err := openPath(filepath.Join(dir, name), windows.GENERIC_READ, windows.FILE_SHARE_READ)
 	if err != nil {
+		return err
+	}
+	size := uint64(info.FileSizeHigh)<<32 | uint64(info.FileSizeLow)
+	if err := requireCopySpace(dir, size); err != nil {
+		windows.CloseHandle(handle)
 		return err
 	}
 	file := os.NewFile(uintptr(handle), name)
-	raw, err := io.ReadAll(io.LimitReader(file, maxRebuildBytes+1))
-	file.Close()
-	if err != nil {
-		return err
-	}
-	if len(raw) > maxRebuildBytes {
-		return fmt.Errorf("file is larger than %d bytes", maxRebuildBytes)
-	}
 	tmp, err := os.CreateTemp(dir, name+".tmp*")
 	if err != nil {
+		file.Close()
 		return err
 	}
-	_, err = tmp.Write(raw)
+	_, err = io.Copy(tmp, file)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
 	if syncErr := tmp.Sync(); err == nil {
 		err = syncErr
 	}
@@ -317,6 +319,22 @@ func rebuildFile(dir, name string) error {
 		os.Remove(tmp.Name())
 	}
 	return err
+}
+
+// requireCopySpace checks the full logical size because copying expands sparse holes.
+func requireCopySpace(dir string, size uint64) error {
+	path, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return err
+	}
+	var available uint64
+	if err := windows.GetDiskFreeSpaceEx(path, &available, nil, nil); err != nil {
+		return err
+	}
+	if size > available {
+		return fmt.Errorf("copy requires %d bytes, %d available: %w", size, available, windows.ERROR_DISK_FULL)
+	}
+	return nil
 }
 
 // fileRenameInfo is FILE_RENAME_INFO with the Flags member of its union.

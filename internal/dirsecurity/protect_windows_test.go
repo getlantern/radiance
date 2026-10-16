@@ -386,6 +386,188 @@ func TestSecureMarksRoot(t *testing.T) {
 	}
 }
 
+func TestSecureReplacesMarkerWithRetainedReadHandle(t *testing.T) {
+	for name, previousSecure := range map[string]bool{"existing": false, "secured": true} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "Lantern")
+			if err := Prepare(path); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(path, rootMarkerName)
+			if previousSecure {
+				if err := Secure(path); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(target, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			name, err := windows.UTF16PtrFromString(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			retained, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer windows.CloseHandle(retained)
+
+			if err := Secure(path); err != nil {
+				t.Fatal(err)
+			}
+			requireRestricted(t, target)
+			if err := Secure(path); err != nil {
+				t.Fatalf("securing a marked root again: %v", err)
+			}
+		})
+	}
+}
+
+func TestSecurePreservesLargeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(path, "large.cache")
+	original, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	const (
+		size = (64 << 20) + 1
+		head = "start of large file"
+		tail = "end of large file"
+	)
+	if err := original.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.WriteAt([]byte(head), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.WriteAt([]byte(tail), size-int64(len(tail))); err != nil {
+		t.Fatal(err)
+	}
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, target)
+	rebuilt, err := os.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rebuilt.Close()
+	info, err := rebuilt.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != size {
+		t.Fatalf("rebuilt size = %d, want %d", info.Size(), size)
+	}
+	for _, part := range []struct {
+		offset int64
+		want   string
+	}{{0, head}, {size - int64(len(tail)), tail}} {
+		got := make([]byte, len(part.want))
+		if _, err := rebuilt.ReadAt(got, part.offset); err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != part.want {
+			t.Fatalf("rebuilt contents at %d = %q, want %q", part.offset, got, part.want)
+		}
+	}
+}
+
+func TestRequireCopySpace(t *testing.T) {
+	dir := t.TempDir()
+	for _, size := range []uint64{0, 1} {
+		if err := requireCopySpace(dir, size); err != nil {
+			t.Fatalf("requireCopySpace(%d): %v", size, err)
+		}
+	}
+	if err := requireCopySpace(dir, ^uint64(0)); !errors.Is(err, windows.ERROR_DISK_FULL) {
+		t.Fatalf("requireCopySpace(MaxUint64) = %v, want ERROR_DISK_FULL", err)
+	}
+	if err := requireCopySpace(filepath.Join(dir, "missing"), 0); err == nil {
+		t.Fatal("accepted a directory whose free space cannot be queried")
+	}
+}
+
+func TestRebuildFileRejectsSparseFileLargerThanFreeSpace(t *testing.T) {
+	dir := t.TempDir()
+	path, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total uint64
+	if err := windows.GetDiskFreeSpaceEx(path, nil, &total, nil); err != nil {
+		t.Fatal(err)
+	}
+	if total >= 1<<63-1 {
+		t.Skip("volume capacity exceeds the maximum file size")
+	}
+	size := int64(total + 1)
+	target := filepath.Join(dir, "sparse.cache")
+	original, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	var returned uint32
+	if err := windows.DeviceIoControl(windows.Handle(original.Fd()), windows.FSCTL_SET_SPARSE, nil, 0, nil, 0, &returned, nil); err != nil {
+		if errors.Is(err, windows.ERROR_INVALID_FUNCTION) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) {
+			t.Skipf("sparse files unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	const content = "original"
+	if _, err := original.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := original.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := os.NewFile(uintptr(retained), target)
+	defer locked.Close()
+	var overlapped windows.Overlapped
+	// A missing preflight must fail on the first read instead of filling the disk.
+	if err := windows.LockFileEx(retained, windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped); err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildFile(dir, filepath.Base(target)); !errors.Is(err, windows.ERROR_DISK_FULL) {
+		t.Fatalf("rebuildFile = %v, want ERROR_DISK_FULL", err)
+	}
+	info, err := locked.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != size {
+		t.Fatalf("original size = %d, want %d", info.Size(), size)
+	}
+	got := make([]byte, len(content))
+	if _, err := locked.ReadAt(got, 0); err != nil || string(got) != content {
+		t.Fatalf("original contents = %q, %v", got, err)
+	}
+	leftovers, err := filepath.Glob(target + ".tmp*")
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary files = %v, %v", leftovers, err)
+	}
+}
+
 func TestSecureDetachesRetainedHandlesOnTrustedFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Lantern")
 	if err := Prepare(path); err != nil {

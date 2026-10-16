@@ -27,6 +27,9 @@ func TestCheckOutboundDenied(t *testing.T) {
 	}{
 		{"tor", option.Outbound{Type: C.TypeTor, Options: &option.TorOutboundOptions{}}},
 		{"water", option.Outbound{Type: lbC.TypeWATER, Options: &lbO.WATEROutboundOptions{}}},
+		{"tls certificate", option.Outbound{Type: C.TypeTrojan, Options: &option.TrojanOutboundOptions{
+			OutboundTLSOptionsContainer: tls(option.OutboundTLSOptions{Enabled: true, CertificatePath: "/etc/ca.pem"}),
+		}}},
 		{"tls client certificate", option.Outbound{Type: C.TypeTrojan, Options: &option.TrojanOutboundOptions{
 			OutboundTLSOptionsContainer: tls(option.OutboundTLSOptions{Enabled: true, ClientCertificatePath: "/etc/cert.pem"}),
 		}}},
@@ -64,10 +67,10 @@ func TestCheckOutboundAllowed(t *testing.T) {
 			Method:        "chacha20-ietf-poly1305",
 			Password:      "pw",
 		}}},
-		{"tls ca and ech paths with inline client material", option.Outbound{Type: C.TypeTrojan, Options: &option.TrojanOutboundOptions{
+		{"inline tls material and ech path", option.Outbound{Type: C.TypeTrojan, Options: &option.TrojanOutboundOptions{
 			OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{TLS: &option.OutboundTLSOptions{
 				Enabled:           true,
-				CertificatePath:   "/etc/ca.pem",
+				Certificate:       []string{"-----BEGIN CERTIFICATE-----"},
 				ClientCertificate: []string{"-----BEGIN CERTIFICATE-----"},
 				ClientKey:         []string{"-----BEGIN PRIVATE KEY-----"},
 				ECH:               &option.OutboundECHOptions{Enabled: true, ConfigPath: "/etc/ech.pem"},
@@ -111,9 +114,6 @@ var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|n
 // reviewedFields maps an options struct type to its host-input-looking fields
 // that are allowed, and why.
 var reviewedFields = map[reflect.Type]map[string]string{
-	reflect.TypeFor[option.OutboundTLSOptions](): {
-		"certificate_path": "TLS trust roots; read and parsed, never sent",
-	},
 	reflect.TypeFor[option.OutboundECHOptions](): {
 		"config_path": "TLS ECH config; read and parsed, never sent",
 	},

@@ -94,6 +94,25 @@ func TestLiveTunnelDoesNotExecute(t *testing.T) {
 	assert.NoFileExists(t, marker)
 }
 
+func TestLiveTunnelRejectsCertificatePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private.txt")
+	require.NoError(t, os.WriteFile(path, []byte("synthetic-certificate-path-secret"), 0o600))
+	out := O.Outbound{Tag: "tls-file", Type: C.TypeTrojan, Options: &O.TrojanOutboundOptions{
+		ServerOptions: O.ServerOptions{Server: "127.0.0.1", ServerPort: 443},
+		Password:      "test",
+		OutboundTLSOptionsContainer: O.OutboundTLSOptionsContainer{TLS: &O.OutboundTLSOptions{
+			Enabled: true, CertificatePath: path,
+		}},
+	}}
+	tun := startPolicyTestTunnel(t)
+	list := servers.ServerList{Servers: []*servers.Server{{Tag: out.Tag, Type: out.Type, Options: out}}}
+
+	require.NoError(t, tun.addOutbounds(list))
+	require.NoError(t, tun.updateNonSelectableOutbounds(list))
+	_, found := service.FromContext[adapter.OutboundManager](tun.ctx).Outbound(out.Tag)
+	assert.False(t, found)
+}
+
 func startPolicyTestTunnel(t *testing.T) *tunnel {
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
