@@ -27,8 +27,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
-	lbC "github.com/getlantern/lantern-box/constant"
-	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/log"
@@ -286,6 +284,22 @@ func (c *VPNClient) ResetNetwork() {
 	if c.tunnel != nil {
 		c.tunnel.resetNetwork()
 	}
+}
+
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+// Nil or stale listeners are ignored.
+func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if listener == nil || c.tunnel == nil || c.tunnel.boxInstance == nil {
+		return
+	}
+	network := c.tunnel.boxInstance.Network()
+	current, ok := network.InterfaceMonitor().(libbox.InterfaceUpdateListener)
+	if !ok || current != listener {
+		return
+	}
+	network.ResetNetwork()
 }
 
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
@@ -633,13 +647,11 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 	return done
 }
 
-// RunOfflineURLTests will run URL tests for all outbounds if the tunnel is not currently connected.
-// This can improve initial connection times by pre-determining reachability and latency to servers.
+// RunOfflineURLTests probes outbounds that pass the host-access check while disconnected.
+// It returns [ErrTunnelAlreadyConnected] if the tunnel is connected.
 //
-// The tests are cancelled and any results discarded if ctx is cancelled or if [VPNClient.Connect]
-// is called while they are running. Callers should pass a context tied to the backend lifetime so
-// that closing the backend (e.g. when the tunnel comes up in the extension process) stops in-flight
-// probe dials rather than letting them route through the newly established tunnel.
+// Tests are cancelled and results discarded if ctx is cancelled or
+// [VPNClient.Connect] is called while they are running.
 func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
 	c.mu.Lock()
 	if c.tunnel != nil {
@@ -664,21 +676,11 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	// Extract bandit trace context for distributed tracing
 	traceCtx, hasTrace := traces.ExtractBanditTraceContext(banditURLs)
 
+	outbounds = allowedOutbounds(outbounds)
 	c.logger.Info("Performing offline URL tests", "outbound_count", len(outbounds), "timeout", offlineURLTestTimeout)
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
-	}
-	// Avoid mutating the caller's slice.
-	outbounds = append([]option.Outbound(nil), outbounds...)
-	for i := range outbounds {
-		// Seeding starts a long-lived BitTorrent client; disable it for this
-		// short-lived instance so instance.Close() returns promptly.
-		if waterOpts, ok := outbounds[i].Options.(*lbO.WATEROutboundOptions); outbounds[i].Type == lbC.TypeWATER && ok {
-			cp := *waterOpts
-			cp.SeedEnabled = false
-			outbounds[i].Options = &cp
-		}
 	}
 	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs))
 	// CacheFile must stay disabled: enabling it holds an exclusive flock on

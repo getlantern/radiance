@@ -7,7 +7,9 @@ on:
   pull_request:
     paths:
       - "common/legacymigration/**"
+      - "common/fileperm/**"
       - "common/atomicfile/**"
+      - "internal/dirsecurity/**"
       - "common/settings/**"
       - "backend/**"
       - "account/**"
@@ -42,5 +44,5 @@ jobs:
       - name: Exercise Windows migration authorization and recovery
         shell: pwsh
         run: |
-          go test -v -tags with_clash_api ./common/legacymigration ./common/atomicfile ./common/settings ./account ./backend ./ipc ./cmd/lanternd
+          go test -v -tags with_clash_api ./internal/dirsecurity ./common/legacymigration ./common/atomicfile ./common/settings ./account ./backend ./ipc ./cmd/lanternd
           if ($LASTEXITCODE -ne 0) { throw 'Windows identity migration tests failed' }

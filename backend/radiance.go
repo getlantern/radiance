@@ -44,6 +44,7 @@ import (
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -914,7 +915,11 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	return nil
 }
 
+// AddServers adds user-supplied servers, clearing IsLantern on each.
 func (r *LocalBackend) AddServers(list servers.ServerList) error {
+	for _, srv := range list.Servers {
+		srv.IsLantern = false
+	}
 	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("failed to add servers to ServerManager: %w", err)
 	}
@@ -962,17 +967,23 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // across config updates.
 const maxRetainedLanternServers = 60
 
-// updateServers adds the servers in list that are not already present. When
-// evict is set it first evicts retained Lantern servers (see
-// lanternServersToEvict). Only a newly received config may evict: a config
-// that was already applied, such as the cached one at startup, would judge
-// its own offers a second time.
+// updateServers adds the servers in list that are not already present and
+// pass [servers.Server.CheckHostAccess]. When evict is set it first evicts
+// retained Lantern servers (see lanternServersToEvict). Only a newly received
+// config may evict: a config that was already applied, such as the cached one
+// at startup, would judge its own offers a second time.
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
-		_, exists := existingTags[srv.Tag]
-		return exists
+		if _, exists := existingTags[srv.Tag]; exists {
+			return true
+		}
+		if err := srv.CheckHostAccess(); err != nil {
+			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
+			return true
+		}
+		return false
 	})
 
 	if evict {
@@ -1459,6 +1470,11 @@ func (r *LocalBackend) RestartVPN() error {
 // ResetNetwork drops the VPN's connections and re-seeds its interface state.
 func (r *LocalBackend) ResetNetwork() { r.vpnClient.ResetNetwork() }
 
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
+	r.vpnClient.ResetNetworkForMonitor(listener)
+}
+
 // Pause pauses the VPN for a device sleep.
 func (r *LocalBackend) Pause() { r.vpnClient.Pause() }
 
@@ -1620,6 +1636,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 	svrs := r.srvManager.AllServers()
 	slog.Debug("Running offline URL tests", "server_count", len(svrs), "url_override_count", len(cfg.BanditURLOverrides))
 	results, err := r.vpnClient.RunOfflineURLTests(
+		// Backend shutdown must stop probes before they use a tunnel started by another process.
 		r.ctx,
 		settings.GetString(settings.DataPathKey),
 		servers.ServerList{Servers: svrs}.Outbounds(),
