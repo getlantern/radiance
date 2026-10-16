@@ -142,14 +142,16 @@ var (
 // systems, and a named pipe for Windows.
 type Server struct {
 	svr    *http.Server
+	api    *localapi
 	closed atomic.Bool
 }
 
 // NewServer returns an IPC server backed by b. When withAuth is true, the
 // server authenticates each connection; when false, it accepts all connections.
 func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
+	api := newLocalAPI(b, withAuth)
 	svr := &http.Server{
-		Handler:     newLocalAPI(b, withAuth),
+		Handler:     api,
 		ReadTimeout: 5 * time.Second,
 		Protocols:   &protocols,
 	}
@@ -160,8 +162,15 @@ func NewServer(b *backend.LocalBackend, withAuth bool) *Server {
 			return context.WithValue(ctx, peerLookupKey{}, peer)
 		}
 	}
-	return &Server{svr: svr}
+	return &Server{svr: svr, api: api}
 }
+
+// SetBackend exposes b to subsequent requests without taking ownership of it.
+// A nil backend permits only issue reporting and log streaming.
+func (s *Server) SetBackend(b *backend.LocalBackend) { s.api.setBackend(b) }
+
+// SetOwnerSID authorizes sid alongside administrators; sid must come from validated protected storage.
+func (s *Server) SetOwnerSID(sid string) { s.api.ownerSID.Store(&sid) }
 
 // Start begins listening for incoming IPC requests.
 func (s *Server) Start() error {
@@ -194,8 +203,9 @@ func (s *Server) Close() error {
 type backendKey struct{}
 
 type localapi struct {
-	be      atomic.Pointer[backend.LocalBackend]
-	handler http.Handler
+	be       atomic.Pointer[backend.LocalBackend]
+	ownerSID atomic.Pointer[string]
+	handler  http.Handler
 }
 
 // backend returns the LocalBackend snapshotted at the start of the request.
@@ -313,7 +323,13 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc(envEndpoint, traced(s.envHandler))
 
 	// Build the middleware chain: log -> (optional auth) -> mux
-	var handler http.Handler = mux
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.backend(r.Context()) == nil && r.URL.Path != issueEndpoint && r.URL.Path != logsStreamEndpoint {
+			http.Error(w, "service is not ready", http.StatusServiceUnavailable)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 	if withAuth {
 		handler = authPeer(handler)
 	}
@@ -329,11 +345,10 @@ func (s *localapi) setBackend(b *backend.LocalBackend) *backend.LocalBackend {
 
 func (s *localapi) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b := s.be.Load()
-	if b == nil {
-		http.Error(w, "service is not ready", http.StatusServiceUnavailable)
-		return
-	}
 	ctx := context.WithValue(r.Context(), backendKey{}, b)
+	if sid := s.ownerSID.Load(); sid != nil {
+		ctx = context.WithValue(ctx, ownerSIDKey{}, *sid)
+	}
 	s.handler.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -922,6 +937,19 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if peer, ok := r.Context().Value(peerKey{}).(usr); ok && !peer.isAdmin {
+			for key := range updates {
+				switch key {
+				case settings.LocaleKey, settings.TimeZoneKey, settings.TelemetryKey,
+					settings.SmartRoutingKey, settings.SplitTunnelKey, settings.SplitTunnelPolicyKey,
+					settings.AdBlockKey, settings.AutoConnectKey, settings.PeerShareEnabledKey,
+					settings.PeerManualPortKey, settings.UnboundedKey, settings.LogLevelKey:
+				default:
+					http.Error(w, "permission denied", http.StatusForbidden)
+					return
+				}
+			}
+		}
 		if err := s.backend(r.Context()).PatchSettings(updates); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1471,8 +1499,8 @@ func (s *localapi) subscriptionRestoreHandler(w http.ResponseWriter, r *http.Req
 ///////////
 
 func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
-	var req IssueReportRequest
-	if err := decodeJSON(r, &req); err != nil {
+	req, err := decodeIssueReport(r)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1481,6 +1509,18 @@ func (s *localapi) issueReportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func decodeIssueReport(r *http.Request) (IssueReportRequest, error) {
+	var req IssueReportRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return req, err
+	}
+	if peer, ok := r.Context().Value(peerKey{}).(usr); ok && !peer.isAdmin {
+		// An unprivileged caller cannot choose files for the service to read.
+		req.AdditionalAttachments = nil
+	}
+	return req, nil
 }
 
 ///////////

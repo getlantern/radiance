@@ -172,7 +172,7 @@ func TestInitSettings(t *testing.T) {
 		require.NoError(t, Set(UserLevelKey, "pro"))
 		Reset()
 		assert.Equal(t, "free", GetString(UserLevelKey))
-		assert.Equal(t, "fa-IR", GetString(LocaleKey))
+		assert.False(t, Exists(LocaleKey))
 	})
 }
 
@@ -232,6 +232,15 @@ func TestLegacyMigration(t *testing.T) {
 		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
 	})
 
+	t.Run("a user id above 2^53 is adopted exactly", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 9007199254740993, "token": "abc"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, int64(9007199254740993), GetInt64(UserIDKey))
+	})
+
 	t.Run("v9.1.x nested file recovered when canonical is missing", func(t *testing.T) {
 		tempDir := t.TempDir()
 		writeNested(t, tempDir, `{"user_id": 135809562, "user_level": "pro", "device_id": "abc"}`)
@@ -264,32 +273,19 @@ func TestLegacyMigration(t *testing.T) {
 		assert.True(t, IsPro())
 	})
 
-	t.Run("nested-pro wins over canonical-expired and legacy-expired", func(t *testing.T) {
-		// e.g., user paid via Shepherd while on v9.1.x, so the nested file
-		// legitimately holds pro state.
+	t.Run("canonical expired account survives nested Pro recovery", func(t *testing.T) {
 		tempDir := t.TempDir()
-		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "expired", "token": "t1", "jwt_token": "j1", "locale": "en-US"}`)
+		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "expired", "token": "t1", "jwt_token": "j1"}`)
 		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "expired"}`)
 		writeNested(t, tempDir, `{"user_id": 2, "user_level": "pro"}`)
 
 		initAt(t, tempDir)
 
-		assert.Equal(t, "2", GetString(UserIDKey))
-		assert.True(t, IsPro())
-		assert.False(t, Exists(TokenKey), "the replaced user's token must not carry over")
-		assert.False(t, Exists(JwtTokenKey), "the replaced user's JWT must not carry over")
-		assert.Equal(t, "en-US", GetString(LocaleKey), "non-identity settings are kept")
-	})
-
-	t.Run("same user keeps its credentials when a legacy file restores pro", func(t *testing.T) {
-		tempDir := t.TempDir()
-		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "expired", "jwt_token": "j1"}`)
-		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "pro"}`)
-
-		initAt(t, tempDir)
-
-		assert.True(t, IsPro())
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.False(t, IsPro())
+		assert.Equal(t, "t1", GetString(TokenKey))
 		assert.Equal(t, "j1", GetString(JwtTokenKey))
+		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
 	})
 
 	t.Run("all-pro: canonical wins (most recent deliberate state)", func(t *testing.T) {
@@ -301,6 +297,36 @@ func TestLegacyMigration(t *testing.T) {
 		initAt(t, tempDir)
 
 		assert.Equal(t, "1", GetString(UserIDKey))
+	})
+
+	t.Run("canonical free account survives stale Pro recovery files", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeCanonical(t, tempDir, `{"user_id":42,"user_level":"free","token":"adopted-token"}`)
+		stalePro := `{"user_id":1,"user_level":"pro","token":"stale-token"}`
+		writeLegacy(t, tempDir, stalePro)
+		writeNested(t, tempDir, stalePro)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, "42", GetString(UserIDKey))
+		assert.Equal(t, "adopted-token", GetString(TokenKey))
+		assert.False(t, IsPro())
+	})
+
+	t.Run("invalid canonical settings recover a valid free account", func(t *testing.T) {
+		for _, invalid := range []string{`{invalid}`, `null`, `[]`, `{} {}`} {
+			t.Run(invalid, func(t *testing.T) {
+				tempDir := t.TempDir()
+				writeCanonical(t, tempDir, invalid)
+				writeLegacy(t, tempDir, `{"user_id":42,"user_level":"free","token":"current-token"}`)
+
+				initAt(t, tempDir)
+
+				assert.Equal(t, "42", GetString(UserIDKey))
+				assert.Equal(t, "current-token", GetString(TokenKey))
+				assert.Equal(t, "current-token", onDisk(t, tempDir)["token"])
+			})
+		}
 	})
 
 	t.Run("none have pro: legacy wins over nested when canonical missing", func(t *testing.T) {
@@ -372,7 +398,7 @@ func TestLegacyMigration(t *testing.T) {
 
 		assert.Equal(t, "1", GetString(UserIDKey))
 		assert.False(t, Exists(PeerShareEnabledKey))
-		assert.Equal(t, "fa-IR", GetString(LocaleKey))
+		assert.False(t, Exists(LocaleKey))
 	})
 
 	t.Run("fresh install writes defaults and the marker", func(t *testing.T) {
@@ -439,12 +465,12 @@ func TestLegacyMigration(t *testing.T) {
 
 	t.Run("a failed save is retried on the next start", func(t *testing.T) {
 		tempDir := t.TempDir()
-		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "expired"}`)
+		writeCanonical(t, tempDir, `{"locale": "en-US"}`)
 		writeLegacy(t, tempDir, `{"user_id": 2, "user_level": "pro"}`)
 		restore := readOnlyDir(t, tempDir)
 
 		initAt(t, tempDir)
-		assert.Equal(t, "1", GetString(UserIDKey), "an unsaved adoption must not take effect")
+		assert.False(t, Exists(UserIDKey), "an unsaved adoption must not take effect")
 		assert.NoFileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
 
 		restore()

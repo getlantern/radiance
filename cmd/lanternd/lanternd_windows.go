@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/serviceowner"
 )
 
 const (
@@ -275,6 +276,9 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, status chan
 	if err != nil {
 		s.logger.Error("Failed to parse service arguments", "error", err)
 		return true, 1
+	}
+	if err := serviceowner.GrantProcessQuery(); err != nil {
+		s.logger.Warn("Service process queries are unavailable", "error", err)
 	}
 	return s.run(config, r, status)
 }

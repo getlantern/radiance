@@ -43,9 +43,10 @@ func TestFetchUserDataPreservesLogin(t *testing.T) {
 	want := proto.Clone(login).(*UserData)
 	want.LegacyToken = "test-token"
 	want.LegacyUserData = &protos.LoginResponse_UserData{
-		UserId:   123,
-		Token:    "test-token",
-		DeviceID: "deviceId",
+		UserId:    123,
+		Token:     "test-token",
+		DeviceID:  "deviceId",
+		UserLevel: "free",
 	}
 
 	for range 2 {
@@ -102,7 +103,7 @@ func TestFetchUserDataWithoutMatchingLogin(t *testing.T) {
 			want := &UserData{
 				LegacyID:       123,
 				LegacyToken:    "test-token",
-				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "test-token"},
+				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "test-token", UserLevel: "free"},
 			}
 			assert.True(t, proto.Equal(want, got), "want %v, got %v", want, got)
 			var stored UserData
@@ -223,7 +224,7 @@ func TestFetchUserDataReplacesInvalidCache(t *testing.T) {
 			want := &UserData{
 				LegacyID:       123,
 				LegacyToken:    "test-token",
-				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "test-token"},
+				LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, Token: "test-token", UserLevel: "free"},
 			}
 			assert.True(t, proto.Equal(want, got), "want %v, got %v", want, got)
 			require.NoError(t, settings.Reload())
@@ -353,7 +354,7 @@ func TestReturnedUserDataIsACopy(t *testing.T) {
 	var stored UserData
 	require.NoError(t, settings.GetStruct(settings.UserDataKey, &stored))
 	assert.Empty(t, stored.Id)
-	assert.Empty(t, stored.LegacyUserData.UserLevel)
+	assert.Equal(t, "free", stored.LegacyUserData.UserLevel)
 }
 
 func TestAccountSwitchNeverExposesAnEmptyIdentity(t *testing.T) {
@@ -522,4 +523,20 @@ func TestPatchAccountSameKeepsFields(t *testing.T) {
 	assert.Equal(t, "new@example.com", settings.GetString(settings.EmailKey))
 	assert.Equal(t, "a-jwt", settings.GetString(settings.JwtTokenKey))
 	assert.Equal(t, []byte("a-salt"), a.getSaltCached())
+}
+
+func TestFetchUserDataKeepsFreeLevel(t *testing.T) {
+	ac, _ := newTestClient(t)
+	ac.setData(&UserData{
+		LegacyID: 123, LegacyToken: "test-token",
+		LegacyUserData: &protos.LoginResponse_UserData{UserId: 123, UserLevel: "free"},
+	}, nil)
+	data, err := ac.FetchUserData(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "free", data.LegacyUserData.UserLevel)
+	assert.Equal(t, "free", settings.GetString(settings.UserLevelKey))
+	require.NoError(t, settings.Reload())
+	var cached UserData
+	require.NoError(t, settings.GetStruct(settings.UserDataKey, &cached))
+	assert.Equal(t, "free", cached.LegacyUserData.UserLevel)
 }

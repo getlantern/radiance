@@ -78,7 +78,16 @@ func (a *Client) requestUserData(ctx context.Context, headers map[string]string)
 	if userResp.LoginResponse_UserData == nil {
 		return UserDataResponse{}, traces.RecordError(ctx, errors.New("no user data in response"))
 	}
+	userResp.UserLevel = normalizeLegacyUserLevel(userResp.UserLevel)
 	return userResp, nil
+}
+
+func normalizeLegacyUserLevel(level string) string {
+	// The legacy API omits userLevel for free accounts.
+	if level == "" {
+		return "free"
+	}
+	return level
 }
 
 // ErrAccountChanged is returned when the account may have changed while the request was in flight;
@@ -92,6 +101,7 @@ func (a *Client) storeData(ctx context.Context, resp UserDataResponse, generatio
 		a.logger.Error("user data", "error", "no user data in response")
 		return nil, traces.RecordError(ctx, fmt.Errorf("no user data in response"))
 	}
+	resp.UserLevel = normalizeLegacyUserLevel(resp.UserLevel)
 	resp.DeviceID = settings.GetString(settings.DeviceIDKey)
 	a.mu.Lock()
 	defer a.mu.Unlock()

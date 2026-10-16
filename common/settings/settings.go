@@ -3,7 +3,6 @@ package settings
 
 import (
 	"bytes"
-	jsonpkg "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -110,7 +109,6 @@ var k = &settings{
 
 func newDefaults() *koanf.Koanf {
 	d := koanf.New(".")
-	d.Set(LocaleKey.String(), "fa-IR")
 	d.Set(UserLevelKey.String(), "free")
 	return d
 }
@@ -198,25 +196,34 @@ type candidateSource struct {
 }
 
 // legacyIdentity returns the identity keys to adopt from settings written by older client
-// versions, or nil when no legacy candidate outranks the canonical file. ok is false when any
-// candidate can't be read, so the migration can't be judged yet.
+// versions, or nil when nothing should be adopted. ok is false when any file can't be read, so the
+// migration can't be judged yet.
 //
-// Candidates in priority order:
+// Legacy candidates in priority order:
 //
-//  1. <fileDir>/settings.json                 — canonical
-//  2. <fileDir>/local.json                    — v9.0.x (renamed)
-//  3. ${PUBLIC}\Lantern\data\local.json       — v9.0.x cross-dir, Windows only
-//  4. pre-9.x platform-specific YAML
-//  5. <fileDir>/data/settings.json            — v9.1.x (bugged:
+//  1. <fileDir>/local.json                    — v9.0.x (renamed)
+//  2. ${PUBLIC}\Lantern\data\local.json       — v9.0.x cross-dir, Windows only
+//  3. pre-9.x platform-specific YAML
+//  4. <fileDir>/data/settings.json            — v9.1.x (bugged:
 //     setupDirectories appended an
 //     unconditional "/data" suffix)
 //
-// A candidate counts only if it holds a JSON object. Pick the highest-priority candidate with
-// user_level=="pro"; if none is pro, the highest-priority candidate with a user_id, so the device
-// registration is kept and a canonical file holding only defaults never wins.
+// A canonical file with a non-zero user_id always wins, because it is account state this client
+// already accepted. One without may be the defaults written while an unreadable candidate kept the
+// migration pending, so it never wins. Otherwise a candidate counts only if it holds a JSON object:
+// pick the highest-priority one with user_level=="pro", or if none is pro, the highest-priority one
+// with a non-zero user_id, so the device registration is kept.
 func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok bool) {
+	switch raw, err := os.ReadFile(canonicalPath); {
+	case err == nil:
+		if p, err := (settingsJSON{}).Unmarshal(raw); err == nil && hasAccount(p) {
+			return nil, true
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		slog.Warn("legacy settings migration: read failed; will retry", "path", canonicalPath, "error", err)
+		return nil, false
+	}
 	candidates := []candidateSource{
-		{path: canonicalPath, label: "canonical settings.json"},
 		{path: filepath.Join(fileDir, legacySettingsFileName), label: "v9.0.x local.json"},
 		{path: filepath.Join(fileDir, "data", settingsFileName), label: "v9.1.x data/settings.json"},
 	}
@@ -231,10 +238,9 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 			candidates[i].err = err
 		}
 	}
-	// Optional candidates splice in at index 2, inserted oldest-first so
-	// newer generations end up higher priority.
+	// Optional candidates are inserted oldest-first, so newer generations rank higher.
 	if yc := legacyYAMLCandidate(fileDir); yc.exists || yc.err != nil {
-		candidates = append(candidates[:2], append([]candidateSource{yc}, candidates[2:]...)...)
+		candidates = append(candidates[:1], append([]candidateSource{yc}, candidates[1:]...)...)
 	}
 	// Windows v9.0.x cross-dir candidates (${PUBLIC}\Lantern\data) are the
 	// same generation of state as the same-dir local.json, just stored
@@ -243,7 +249,7 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 	// env is unset windowsCrossDirCandidatesFn returns nil and this is a
 	// no-op.
 	if winExtras := windowsCrossDirCandidatesFn(fileDir); len(winExtras) > 0 {
-		candidates = append(candidates[:2], append(winExtras, candidates[2:]...)...)
+		candidates = append(candidates[:1], append(winExtras, candidates[1:]...)...)
 	}
 	for _, c := range candidates {
 		if c.err != nil {
@@ -257,10 +263,12 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 		if !c.exists {
 			continue
 		}
-		if err := jsonpkg.Unmarshal(c.contents, &parsed[i]); err != nil || parsed[i] == nil {
+		p, err := (settingsJSON{}).Unmarshal(c.contents)
+		if err != nil || p == nil {
 			slog.Warn("legacy settings migration: ignoring invalid candidate", "path", c.path, "error", err)
-			parsed[i] = nil
+			continue
 		}
+		parsed[i] = p
 	}
 	pickIdx := -1
 	for i, p := range parsed {
@@ -271,13 +279,13 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 	}
 	if pickIdx == -1 {
 		for i, p := range parsed {
-			if id := toString(p[UserIDKey.String()]); id != "" && id != "0" {
+			if hasAccount(p) {
 				pickIdx = i
 				break
 			}
 		}
 	}
-	if pickIdx == -1 || candidates[pickIdx].path == canonicalPath {
+	if pickIdx == -1 {
 		return nil, true
 	}
 	identity = make(map[string]any)
@@ -288,6 +296,11 @@ func legacyIdentity(fileDir, canonicalPath string) (identity map[string]any, ok 
 	}
 	slog.Info("legacy settings migration: recovering persisted identity", "source", candidates[pickIdx].label)
 	return identity, true
+}
+
+func hasAccount(settings map[string]any) bool {
+	id := toString(settings[UserIDKey.String()])
+	return id != "" && id != "0"
 }
 
 var identityKeys = []_key{
@@ -325,7 +338,7 @@ func loadSettings(path string, opts ...koanf.Option) error {
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	if err := k.k.Load(rawbytes.Provider(contents), json.Parser(), opts...); err != nil {
+	if err := k.k.Load(rawbytes.Provider(contents), &settingsJSON{}, opts...); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
 	return nil
@@ -367,14 +380,12 @@ func GetString(key _key) string {
 }
 
 func toString(value any) string {
-	// JSON round-trip turns all numbers into float64 and since koanf uses Sprintf("%v") for string
-	// conversion, large integers (i.e. userID) get converted to scientific notation (e.g. 3.87286618e+08)
-	// so we handle float64 separately
 	if value == nil {
 		return ""
 	}
 	switch v := value.(type) {
 	case float64:
+		// Callers can store float64 IDs, which %v would render in scientific notation.
 		return strconv.FormatInt(int64(v), 10)
 	case string:
 		return v
