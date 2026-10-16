@@ -287,8 +287,13 @@ func resetDirectory(path string, info windows.ByHandleFileInformation, p princip
 // inherits dir's restriction. It fails while another handle can write or
 // delete the original, or denies its deletion.
 func rebuildFile(dir, name string) error {
-	handle, _, err := openPath(filepath.Join(dir, name), windows.GENERIC_READ, windows.FILE_SHARE_READ)
+	handle, info, err := openPath(filepath.Join(dir, name), windows.GENERIC_READ, windows.FILE_SHARE_READ)
 	if err != nil {
+		return err
+	}
+	size := uint64(info.FileSizeHigh)<<32 | uint64(info.FileSizeLow)
+	if err := requireCopySpace(dir, size); err != nil {
+		windows.CloseHandle(handle)
 		return err
 	}
 	file := os.NewFile(uintptr(handle), name)
@@ -314,6 +319,22 @@ func rebuildFile(dir, name string) error {
 		os.Remove(tmp.Name())
 	}
 	return err
+}
+
+// requireCopySpace checks the full logical size because copying expands sparse holes.
+func requireCopySpace(dir string, size uint64) error {
+	path, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return err
+	}
+	var available uint64
+	if err := windows.GetDiskFreeSpaceEx(path, &available, nil, nil); err != nil {
+		return err
+	}
+	if size > available {
+		return fmt.Errorf("copy requires %d bytes, %d available: %w", size, available, windows.ERROR_DISK_FULL)
+	}
+	return nil
 }
 
 // fileRenameInfo is FILE_RENAME_INFO with the Flags member of its union.
