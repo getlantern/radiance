@@ -32,7 +32,7 @@ var deniedDNSTypes = map[string]bool{
 }
 
 var deniedFields = map[reflect.Type][]string{
-	reflect.TypeFor[option.OutboundTLSOptions]():       {"client_certificate_path", "client_key_path"},
+	reflect.TypeFor[option.OutboundTLSOptions]():       {"certificate_path", "client_certificate_path", "client_key_path"},
 	reflect.TypeFor[option.DialerOptions]():            {"protect_path", "netns"},
 	reflect.TypeFor[option.DirectActionOptions]():      {"protect_path", "netns"},
 	reflect.TypeFor[option.SSHOutboundOptions]():       {"private_key_path"},
