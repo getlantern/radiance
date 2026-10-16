@@ -748,9 +748,13 @@ func TestPatchSkipsUnchangedWrites(t *testing.T) {
 	dir := t.TempDir()
 	initAt(t, dir)
 	path := filepath.Join(dir, settingsFileName)
+	// On Windows, os.Stat defers the file ID lookup to os.SameFile; a handle's Stat records it now.
 	stat := func() os.FileInfo {
 		t.Helper()
-		info, err := os.Stat(path)
+		f, err := os.Open(path)
+		require.NoError(t, err)
+		defer f.Close()
+		info, err := f.Stat()
 		require.NoError(t, err)
 		return info
 	}
