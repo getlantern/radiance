@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -427,4 +428,42 @@ func TestSecureDetachesRetainedHandlesOnTrustedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireRestricted(t, target)
+}
+
+func TestRebuildFileFailsWhileHandleDeniesDeletion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(path, "servers.json")
+	if err := os.WriteFile(target, []byte("planted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := windows.CreateFile(name, windows.WRITE_DAC, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(retained)
+
+	err = rebuildFile(path, "servers.json")
+	if err == nil {
+		t.Fatal("replaced a file another handle denies deleting")
+	}
+	if !strings.Contains(err.Error(), "rename ") {
+		t.Fatalf("rebuildFile failed before renaming: %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "planted" {
+		t.Fatalf("original contents = %q, %v", got, err)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(path, "servers.json.tmp*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("left temporary files: %v", leftovers)
+	}
 }

@@ -299,7 +299,63 @@ func rebuildFile(dir, name string) error {
 	if len(raw) > maxRebuildBytes {
 		return fmt.Errorf("file is larger than %d bytes", maxRebuildBytes)
 	}
-	return atomicfile.WriteFile(filepath.Join(dir, name), raw, fileperm.File)
+	tmp, err := os.CreateTemp(dir, name+".tmp*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(raw)
+	if syncErr := tmp.Sync(); err == nil {
+		err = syncErr
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = replaceOpenFile(tmp.Name(), filepath.Join(dir, name))
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+	}
+	return err
+}
+
+// fileRenameInfo is FILE_RENAME_INFO with the Flags member of its union.
+type fileRenameInfo struct {
+	Flags          uint32
+	RootDirectory  windows.Handle
+	FileNameLength uint32
+	FileName       [1]uint16
+}
+
+// replaceOpenFile renames src over dst. Where the volume supports POSIX
+// renames, it succeeds while other handles have dst open, and those handles
+// keep referring to the replaced file; it fails while a handle on dst denies
+// deletion. Elsewhere it fails while any handle has dst open.
+func replaceOpenFile(src, dst string) error {
+	target, err := windows.UTF16FromString(dst)
+	if err != nil {
+		return err
+	}
+	handle, _, err := openPath(src, windows.DELETE|windows.SYNCHRONIZE, windows.FILE_SHARE_READ)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	nameBytes := (len(target) - 1) * 2
+	buf := make([]byte, int(unsafe.Sizeof(fileRenameInfo{}))+nameBytes)
+	info := (*fileRenameInfo)(unsafe.Pointer(&buf[0]))
+	info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	info.FileNameLength = uint32(nameBytes)
+	copy(unsafe.Slice(&info.FileName[0], len(target)), target)
+	err = windows.SetFileInformationByHandle(handle, windows.FileRenameInfoEx, &buf[0], uint32(len(buf)))
+	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) || errors.Is(err, windows.ERROR_INVALID_FUNCTION) {
+		info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS
+		err = windows.SetFileInformationByHandle(handle, windows.FileRenameInfo, &buf[0], uint32(len(buf)))
+	}
+	if err != nil {
+		return fmt.Errorf("rename %s to %s: %w", src, dst, err)
+	}
+	return nil
 }
 
 func objectOwner(handle windows.Handle) (string, error) {
