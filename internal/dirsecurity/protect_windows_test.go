@@ -1,0 +1,430 @@
+//go:build windows
+
+package dirsecurity
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+func TestSnapshotPermissions(t *testing.T) {
+	sid := "S-1-5-21-1-2-3-1001"
+	tests := []struct {
+		name, sddl string
+		valid      bool
+	}{
+		{"original user", `O:` + sid + `G:` + sid + `D:P(A;;FA;;;` + sid + `)(A;;FA;;;SY)(A;;FA;;;BA)`, true},
+		{"administrator", fileSecurity, true},
+		{"inherited private", `O:` + sid + `G:` + sid + `D:(A;;FA;;;` + sid + `)(A;;FA;;;SY)`, true},
+		{"untrusted owner", `O:IUG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)`, false},
+		{"other reader", `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)`, false},
+		{"other writer", `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FW;;;WD)`, false},
+		{"null DACL", `O:BAG:BAD:NO_ACCESS_CONTROL`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sd, err := windows.SecurityDescriptorFromString(test.sddl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyRequestDescriptor(sd, sid); (err == nil) != test.valid {
+				t.Fatalf("accepted = %v, want %v: %v", err == nil, test.valid, err)
+			}
+		})
+	}
+}
+
+func TestLocalMigrationPathsRejectAliases(t *testing.T) {
+	for _, path := range []string{`relative`, `\\server\share\Lantern`, `\\?\C:\Lantern`, `C:Lantern`, `C:\Lantern:stream`, `C:\Lantern.`, `C:\Lantern `, `C:\Lantern\..\Lantern`, `C:\Lantern\.\data`} {
+		if _, err := LocalDirectoryPath(path); err == nil {
+			t.Fatalf("accepted path %q", path)
+		}
+	}
+}
+
+func TestSnapshotRejectsHardLinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(target, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, filepath.Join(dir, "alias.json")); err != nil {
+		t.Fatal(err)
+	}
+	handle, _, err := openPath(target, windows.GENERIC_READ|windows.READ_CONTROL, windows.FILE_SHARE_READ)
+	if err == nil {
+		windows.CloseHandle(handle)
+		t.Fatal("accepted hard-linked snapshot")
+	}
+}
+
+func TestSnapshotRejectsReparsePoints(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(target, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(dir, "alias.json")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	handle, _, err := openPath(alias, windows.GENERIC_READ|windows.READ_CONTROL, windows.FILE_SHARE_READ)
+	if err == nil {
+		windows.CloseHandle(handle)
+		t.Fatal("accepted reparse snapshot")
+	}
+}
+
+func TestPrepareRestrictsDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, path)
+
+	if err := os.WriteFile(filepath.Join(path, "servers.json"), []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, filepath.Join(path, "servers.json"))
+}
+
+func TestPrepareOnlyCreatesOtherNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "other")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control, _, _ := sd.Control(); control&windows.SE_DACL_PROTECTED != 0 {
+		t.Fatal("restricted a directory not named Lantern")
+	}
+}
+
+func TestSecureResetsExistingContents(t *testing.T) {
+	user := testUser(t)
+	path := filepath.Join(t.TempDir(), "Lantern")
+	createWithSecurity(t, path, `D:P(A;OICI;FA;;;`+user+`)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;BU)`)
+	child := filepath.Join(path, "config.json")
+	if err := os.WriteFile(child, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, path)
+	requireRestricted(t, child)
+}
+
+func TestSecureRefusesHardLinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(outside, filepath.Join(path, "planted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Secure(path); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("Secure = %v, want ErrUnsafePath", err)
+	}
+}
+
+func TestSecureRefusesRetainedRootHandle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := windows.CreateFile(name, windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(retained)
+	if err := Secure(path); err == nil {
+		t.Fatal("secured a directory another handle can rename")
+	}
+}
+
+func TestRebuildFileDetachesRetainedHandles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(path, "servers.json")
+	if err := os.WriteFile(target, []byte("planted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := windows.CreateFile(name, windows.WRITE_DAC, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(retained)
+
+	if err := rebuildFile(path, "servers.json"); err != nil {
+		t.Fatal(err)
+	}
+	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetSecurityInfo(retained, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, target)
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "planted" {
+		t.Fatalf("rebuilt contents = %q, %v", got, err)
+	}
+}
+
+func testUser(t *testing.T) string {
+	t.Helper()
+	user, err := currentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user
+}
+
+// requireRestricted fails unless path grants access only to the current
+// principals' grantee and Administrators.
+func requireRestricted(t *testing.T, path string) {
+	t.Helper()
+	p, err := currentPrincipals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount != 2 {
+		t.Fatalf("%s: unexpected access list: %v", path, err)
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || uint32(ace.Mask) != fileAllAccess || !(sid == p.grantee || sid == administratorsSID) {
+			t.Fatalf("%s: unexpected access for %s", path, sid)
+		}
+	}
+}
+
+func createWithSecurity(t *testing.T, path, sddl string) {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.CreateDirectory(name, &sa); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	fileAllAccess = 0x1f01ff
+	usersSID      = "S-1-5-32-545"
+	fileSecurity  = `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)`
+)
+
+func TestSecureReplacesForeignOwnedFile(t *testing.T) {
+	user := testUser(t)
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(path, "servers.json")
+	if err := os.WriteFile(target, []byte("planted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setForeignOwner(t, target, `D:P(A;;FA;;;`+user+`)(A;;FA;;;BU)`)
+	name, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := windows.CreateFile(name, windows.WRITE_DAC, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(retained)
+
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetSecurityInfo(retained, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, target)
+	if got, err := os.ReadFile(target); err != nil || string(got) != "planted" {
+		t.Fatalf("replaced contents = %q, %v", got, err)
+	}
+}
+
+func TestSecureRefusesForeignOwnedDirectory(t *testing.T) {
+	user := testUser(t)
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(path, "planted")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setForeignOwner(t, sub, `D:P(A;OICI;FA;;;`+user+`)(A;OICI;FA;;;BU)`)
+	if err := Secure(path); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("Secure = %v, want ErrUnsafePath", err)
+	}
+}
+
+func TestPrepareRefusesForeignOwnedRoot(t *testing.T) {
+	user := testUser(t)
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setForeignOwner(t, path, `D:P(A;OICI;FA;;;`+user+`)(A;OICI;FA;;;BU)`)
+	if err := Prepare(path); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("Prepare = %v, want ErrUnsafePath", err)
+	}
+}
+
+// setForeignOwner makes Users the owner of path with the given DACL. Assigning
+// an owner other than oneself needs SeRestorePrivilege, so the test is skipped
+// without it.
+func setForeignOwner(t *testing.T, path, dacl string) {
+	t.Helper()
+	enablePrivilege(t, "SeRestorePrivilege")
+	owner, err := windows.StringToSid(usersSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, acl, err := securityParts(dacl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, acl, nil); err != nil {
+		t.Skipf("cannot assign a foreign owner: %v", err)
+	}
+}
+
+func enablePrivilege(t *testing.T, name string) {
+	t.Helper()
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY, &token); err != nil {
+		t.Skipf("open process token: %v", err)
+	}
+	var luid windows.LUID
+	privilege, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		token.Close()
+		t.Fatal(err)
+	}
+	if err := windows.LookupPrivilegeValue(nil, privilege, &luid); err != nil {
+		token.Close()
+		t.Skipf("look up %s: %v", name, err)
+	}
+	set := func(attributes uint32) error {
+		privileges := windows.Tokenprivileges{PrivilegeCount: 1}
+		privileges.Privileges[0] = windows.LUIDAndAttributes{Luid: luid, Attributes: attributes}
+		return windows.AdjustTokenPrivileges(token, false, &privileges, 0, nil, nil)
+	}
+	if err := set(windows.SE_PRIVILEGE_ENABLED); err != nil {
+		token.Close()
+		t.Skipf("enable %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		_ = set(0)
+		token.Close()
+	})
+}
+
+func TestPrepareAcceptsDirectorySecuredByAdministrator(t *testing.T) {
+	if !isElevatedAdministrator() {
+		t.Skip("requires an elevated administrator")
+	}
+	user := testUser(t)
+	path := filepath.Join(t.TempDir(), "Lantern")
+	installer := principals{owner: administratorsSID, grantee: localSystemSID, user: user}
+	if err := prepareAs(path, true, installer); err != nil {
+		t.Fatal(err)
+	}
+	service := principals{owner: user, grantee: user, user: user}
+	if err := prepareAs(path, false, service); err != nil {
+		t.Fatalf("a directory the installer secured must be accepted by the service: %v", err)
+	}
+}
+
+func TestSecureMarksRoot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(path, rootMarkerName)); err != nil {
+		t.Fatalf("secured root has no marker: %v", err)
+	}
+	if err := Secure(path); err != nil {
+		t.Fatalf("securing a marked root again: %v", err)
+	}
+}
+
+func TestSecureDetachesRetainedHandlesOnTrustedFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Lantern")
+	if err := Prepare(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(path, "servers.json")
+	if err := os.WriteFile(target, []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := windows.CreateFile(name, windows.WRITE_DAC, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(retained)
+
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	_, open, err := securityParts(`D:(A;;FA;;;WD)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetSecurityInfo(retained, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, open, nil); err != nil {
+		t.Fatal(err)
+	}
+	requireRestricted(t, target)
+}

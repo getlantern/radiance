@@ -13,32 +13,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestSnapshotPermissions(t *testing.T) {
-	sid := "S-1-5-21-1-2-3-1001"
-	tests := []struct {
-		name, sddl string
-		valid      bool
-	}{
-		{"original user", `O:` + sid + `G:` + sid + `D:P(A;;FA;;;` + sid + `)(A;;FA;;;SY)(A;;FA;;;BA)`, true},
-		{"administrator", fileSecurity, true},
-		{"inherited private", `O:` + sid + `G:` + sid + `D:(A;;FA;;;` + sid + `)(A;;FA;;;SY)`, true},
-		{"untrusted owner", `O:IUG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)`, false},
-		{"other reader", `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)`, false},
-		{"other writer", `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FW;;;WD)`, false},
-		{"null DACL", `O:BAG:BAD:NO_ACCESS_CONTROL`, false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			sd, err := windows.SecurityDescriptorFromString(test.sddl)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := verifyRequestDescriptor(sd, sid); (err == nil) != test.valid {
-				t.Fatalf("accepted = %v, want %v: %v", err == nil, test.valid, err)
-			}
-		})
-	}
-}
+const (
+	fileSecurity  = `O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)`
+	fileAllAccess = 0x1f01ff
+)
 
 func TestProtectedDestinationPermissions(t *testing.T) {
 	for _, test := range []struct {
@@ -59,47 +37,6 @@ func TestProtectedDestinationPermissions(t *testing.T) {
 		if err := verifyProtectedDescriptor(sd, fileAllAccess, true); (err == nil) != test.valid {
 			t.Fatalf("descriptor %s: %v", test.sddl, err)
 		}
-	}
-}
-
-func TestLocalMigrationPathsRejectAliases(t *testing.T) {
-	for _, path := range []string{`relative`, `\\server\share\Lantern`, `\\?\C:\Lantern`, `C:Lantern`, `C:\Lantern:stream`, `C:\Lantern.`, `C:\Lantern `, `C:\Lantern\..\Lantern`, `C:\Lantern\.\data`} {
-		if _, err := localDirectoryPath(path); err == nil {
-			t.Fatalf("accepted path %q", path)
-		}
-	}
-}
-
-func TestSnapshotRejectsHardLinks(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "snapshot.json")
-	if err := os.WriteFile(target, []byte("existing"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(target, filepath.Join(dir, "alias.json")); err != nil {
-		t.Fatal(err)
-	}
-	handle, _, err := openPath(target, windows.GENERIC_READ|windows.READ_CONTROL, windows.FILE_SHARE_READ)
-	if err == nil {
-		windows.CloseHandle(handle)
-		t.Fatal("accepted hard-linked snapshot")
-	}
-}
-
-func TestSnapshotRejectsReparsePoints(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "snapshot.json")
-	if err := os.WriteFile(target, []byte("existing"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(dir, "alias.json")
-	if err := os.Symlink(target, alias); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	handle, _, err := openPath(alias, windows.GENERIC_READ|windows.READ_CONTROL, windows.FILE_SHARE_READ)
-	if err == nil {
-		windows.CloseHandle(handle)
-		t.Fatal("accepted reparse snapshot")
 	}
 }
 
