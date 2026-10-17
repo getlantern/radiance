@@ -55,8 +55,9 @@ These bug classes have shipped here, most frequent and severe first. Check a dif
    - Check for interface methods that return nil.
    - Check for services that must be registered with `service.ContextWithPtr`.
    - Check that outbound JSON goes through sing's `json` package with the box context.
-5. **Route rules** (`vpn/boxoptions*.go`). One wrong rule fails every connection. A reject without `NoDrop` escalated to silent drops, a rule detour named `ai-domains` didn't match the `sr-ai-domains` outbound, and catch-all ordering changes were reverted (#627, #376, #189).
-   - Check that every rule's outbound tag exists, that the rule's order relative to the catch-all reject is right, and that reject actions set `NoDrop`.
+5. **Route rules** (`vpn/boxoptions*.go`). One wrong rule fails every connection. The IPv6 fallback reject lacked `NoDrop`, so sing-box escalated it to a silent drop and IPv6 connections stalled instead of falling back to IPv4; a rule detour named `ai-domains` didn't match the `sr-ai-domains` outbound, and catch-all ordering changes were reverted (#627, #376, #189).
+   - Check that every rule's outbound tag exists, and that the rule's order relative to the catch-all reject is right.
+   - Check that a reject meant to make clients fail over at once (`rejectIPv6Rule`) sets `NoDrop`. The catch-all and high-memory rejects leave it unset, which keeps sing-box's drop-under-flood behaviour; don't add it there.
 6. **Events and IPC delivery** (`events/`, `ipc/`). In-process `events.Subscribe` doesn't cross the iOS/Android process boundary. SSE subscribers missed the current status, and Emit didn't preserve per-subscriber order (#422, #447, #610).
    - Check for the snapshot-then-stream race and for per-subscriber ordering.
    - Check which process emits and which subscribes.
@@ -72,6 +73,6 @@ Also scrutinize `cmd/lanternd/*_windows.go` and the wintun code. Two changes the
 ## Contracts a diff can silently break
 
 - **getlantern/lantern** calls radiance through gomobile/FFI. `LocalBackend.Start` runs inside iOS `startTunnel`, a hung JNI call wedges Android's connect gate, and native callers supply the data dir and (on mobile) the device ID.
-- **IPC** is h2c with no version negotiation: a mixed-version system-extension swap broke every call. Clients rely on its status codes (202 for async outbound updates, 200 for `ErrConnectInProgress`) and on SSE snapshot semantics.
+- **IPC** is h2c with no version negotiation: a mixed-version system-extension swap broke every call. Clients rely on its status codes (for example, a connect while one is already running returns 200 for `ErrConnectInProgress`, not an error) and on SSE snapshot semantics.
 - **`sing-box` is replaced by `getlantern/sing-box-minimal`** in `go.mod`, and bumping it changes registration behaviour. `getlantern/lantern-box` group semantics (MutableSelector failover, URL-test history) and `getlantern/common`'s smart-routing tags must match what radiance builds. Run `go mod tidy` on every bump.
 - **lantern-cloud** reads request headers, honours non-selectable outbound flags, and defines the datacap SSE terminal states.
