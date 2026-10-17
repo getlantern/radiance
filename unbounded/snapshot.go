@@ -114,8 +114,6 @@ func CurrentSnapshot() Snapshot {
 func (m *unboundedManager) snapshot() Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.foldAllSlots()
-	m.foldRetiredRuns()
 	m.prunePeerBytes()
 	s := Snapshot{
 		Epoch:     snapshotEpoch,
@@ -148,6 +146,9 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 	if ctx.Err() != nil {
 		return
 	}
+	// Prune before acquiring, so a returning IP's fresh tally can't pick up
+	// bytes still pending from its pruned lifetime.
+	m.prunePeerBytes()
 	if state > 0 {
 		if m.peers == nil {
 			m.peers = make(map[int]string)
@@ -186,7 +187,6 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 		}
 		delete(m.peers, slot)
 	}
-	m.prunePeerBytes()
 }
 
 // retiredRun keeps a stopped run's slot table and its final slot owners, so
@@ -202,7 +202,7 @@ type retiredRun struct {
 // final totals stay visible for peerRetention, and retires the run's slot
 // table for the same period. Caller must hold m.mu.
 func (m *unboundedManager) releaseAllPeers() {
-	m.foldAllSlots()
+	m.prunePeerBytes()
 	for _, source := range m.peers {
 		m.releasePeer(source)
 	}
@@ -312,7 +312,13 @@ func (m *unboundedManager) releasePeer(source string) {
 	}
 }
 
+// prunePeerBytes drops tallies of IPs ended more than peerRetention ago, and
+// expired retired runs. It first folds every pending byte, so bytes are
+// always credited to the tally lifetime they were relayed in. Caller must
+// hold m.mu.
 func (m *unboundedManager) prunePeerBytes() {
+	m.foldAllSlots()
+	m.foldRetiredRuns()
 	now := m.clock()
 	for ip, t := range m.peerBytes {
 		if t.active == 0 && now.Sub(t.endedAt) > peerRetention {

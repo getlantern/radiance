@@ -370,3 +370,34 @@ func TestSnapshotCreditsRetiredRunBytesToItsOwners(t *testing.T) {
 		{IP: "192.0.2.3", Up: 3},
 	}, s.PeerBytes)
 }
+
+func TestSnapshotPendingBytesStayWithPrunedLifetime(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, slots := newBytesManager(&now)
+	ctx := context.Background()
+	up := chunkCounter(slots, false)
+
+	m.recordConnection(ctx, 1, 0, "192.0.2.1")
+	up(5, 0)
+	m.recordConnection(ctx, -1, 0, "")
+	now = now.Add(peerRetention + time.Second)
+	// A late batch is still pending when the same IP returns, with no
+	// snapshot taken in between.
+	up(7, 0)
+	m.recordConnection(ctx, 1, 1, "192.0.2.1")
+	s := m.snapshot()
+	require.Equal(t, uint64(12), s.BytesUp)
+	require.Equal(t, []PeerBytes{{IP: "192.0.2.1"}}, s.PeerBytes)
+}
+
+func TestRetiredRunsExpireWithoutPolling(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, _ := newBytesManager(&now)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseAllPeers()
+	m.slots = &slotTable{}
+	now = now.Add(peerRetention + time.Second)
+	m.releaseAllPeers()
+	require.Len(t, m.retired, 1)
+}
