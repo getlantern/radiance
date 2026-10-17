@@ -452,8 +452,6 @@ func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
 	cancel()
 	m.mu.Lock()
 	m.running = false
-	m.releaseAllPeers()
-	m.peers = nil
 	m.mu.Unlock()
 	select {
 	case <-done:
@@ -568,9 +566,10 @@ func (m *unboundedManager) start() {
 
 		// Downstream chunks fire per chunk on broflake's data path, so the
 		// counters stay lock-free and attribution to an IP happens later
-		// under m.mu. The same ctx guard drops chunks after stop.
-		bfOpt.OnDownstreamChunkFunc = chunkCounter(ctx, slots, true)
-		bfOpt.OnUpstreamChunkFunc = chunkCounter(ctx, slots, false)
+		// under m.mu. The table is closed once ui.Stop returns, which drops
+		// any chunks after that.
+		bfOpt.OnDownstreamChunkFunc = chunkCounter(slots, true)
+		bfOpt.OnUpstreamChunkFunc = chunkCounter(slots, false)
 
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
@@ -599,9 +598,7 @@ func (m *unboundedManager) start() {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
 			cancel()
 			m.mu.Lock()
-			m.cancel = nil
-			m.done = nil
-			m.runningCfg = nil
+			m.finishRun(slots)
 			m.mu.Unlock()
 			return
 		}
@@ -614,9 +611,7 @@ func (m *unboundedManager) start() {
 		slog.Info("Unbounded: stopping broflake widget proxy")
 		ui.Stop()
 		m.mu.Lock()
-		m.cancel = nil
-		m.done = nil
-		m.runningCfg = nil
+		m.finishRun(slots)
 		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy stopped")
 	}()

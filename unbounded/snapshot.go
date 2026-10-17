@@ -94,10 +94,12 @@ type peerTally struct {
 }
 
 // chunkCounter returns a broflake ChunkFunc that adds relayed bytes to the
-// slot's downstream or upstream counter.
-func chunkCounter(ctx context.Context, slots *slotTable, down bool) clientcore.ChunkFunc {
+// slot's downstream or upstream counter. It keeps counting after the worker's
+// context is cancelled, because broflake flushes its batched upstream bytes
+// while stopping; the table is closed only after the widget has stopped.
+func chunkCounter(slots *slotTable, down bool) clientcore.ChunkFunc {
 	return func(size int, workerIdx int) {
-		if size <= 0 || ctx.Err() != nil {
+		if size <= 0 {
 			return
 		}
 		slots.add(workerIdx, uint64(size), down)
@@ -279,4 +281,16 @@ func (m *unboundedManager) clock() time.Time {
 		return m.now()
 	}
 	return time.Now()
+}
+
+// finishRun records the final byte totals of the run that owned slots, after
+// its widget has stopped, and clears the run's state. Caller must hold m.mu.
+func (m *unboundedManager) finishRun(slots *slotTable) {
+	if m.slots == slots {
+		m.releaseAllPeers()
+		m.peers = nil
+	}
+	m.cancel = nil
+	m.done = nil
+	m.runningCfg = nil
 }

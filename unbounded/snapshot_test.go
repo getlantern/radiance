@@ -71,7 +71,7 @@ func TestSnapshotAttributesBytesToPeerIPs(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m, slots := newBytesManager(&now)
 	ctx := context.Background()
-	down, up := chunkCounter(ctx, slots, true), chunkCounter(ctx, slots, false)
+	down, up := chunkCounter(slots, true), chunkCounter(slots, false)
 
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
 	m.recordConnection(ctx, 1, 1, "192.0.2.2")
@@ -104,7 +104,7 @@ func TestSnapshotSlotReuseByDifferentIP(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m, slots := newBytesManager(&now)
 	ctx := context.Background()
-	down := chunkCounter(ctx, slots, true)
+	down := chunkCounter(slots, true)
 
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
 	down(100, 0)
@@ -131,7 +131,7 @@ func TestSnapshotRetainsEndedPeersFor60s(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m, slots := newBytesManager(&now)
 	ctx := context.Background()
-	down := chunkCounter(ctx, slots, true)
+	down := chunkCounter(slots, true)
 
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
 	m.recordConnection(ctx, 1, 1, "192.0.2.1")
@@ -179,7 +179,7 @@ func TestSnapshotStopKeepsFinalPeerBytes(t *testing.T) {
 	manager.mu.Unlock()
 	ctx, stopCtx := context.WithCancel(context.Background())
 	manager.recordConnection(ctx, 1, 0, "192.0.2.1")
-	down := chunkCounter(ctx, slots, true)
+	down := chunkCounter(slots, true)
 	down(64, 0)
 
 	require.NoError(t, Stop(context.Background()))
@@ -201,8 +201,8 @@ func TestSnapshotJSONShape(t *testing.T) {
 	m, slots := newBytesManager(&now)
 	ctx := context.Background()
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
-	chunkCounter(ctx, slots, true)(12, 0)
-	chunkCounter(ctx, slots, false)(3, 0)
+	chunkCounter(slots, true)(12, 0)
+	chunkCounter(slots, false)(3, 0)
 
 	raw, err := json.Marshal(m.snapshot())
 	require.NoError(t, err)
@@ -236,7 +236,7 @@ func TestSnapshotConcurrentChunksAreCountedOnce(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m, slots := newBytesManager(&now)
 	ctx := context.Background()
-	down := chunkCounter(ctx, slots, true)
+	down := chunkCounter(slots, true)
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
 	m.recordConnection(ctx, 1, 1, "192.0.2.2")
 
@@ -263,7 +263,7 @@ func TestSnapshotCreditsLateUpstreamBatchToClosedPeer(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m, slots := newBytesManager(&now)
 	ctx := context.Background()
-	up := chunkCounter(ctx, slots, false)
+	up := chunkCounter(slots, false)
 
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
 	up(10, 0)
@@ -302,4 +302,35 @@ func TestSlotTableCloseWaitsForInFlightAdds(t *testing.T) {
 	<-closed
 	slots.add(0, 100, true)
 	require.Equal(t, uint64(5), slots.slot(0).down.Load())
+}
+
+type flushingWidget struct{ onStop func() }
+
+func (w *flushingWidget) Stop() { w.onStop() }
+
+func TestSnapshotCountsUpstreamFlushedWhileStopping(t *testing.T) {
+	var upstream clientcore.ChunkFunc
+	resetManager(t, func(bf *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		upstream = bf.OnUpstreamChunkFunc
+		return &flushingWidget{onStop: func() { upstream(9, 0) }}, nil
+	})
+	now := time.Unix(1000, 0)
+	manager.now = func() time.Time { return now }
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	manager.mu.Lock()
+	manager.lastFeatureOn = true
+	manager.lastCfg = testCfg()
+	manager.mu.Unlock()
+	require.NoError(t, Apply())
+	require.Eventually(t, func() bool { return CurrentSnapshot().Running }, time.Second, time.Millisecond)
+
+	manager.recordConnection(context.Background(), 1, 0, "192.0.2.1")
+	upstream(4, 0)
+	require.NoError(t, Stop(context.Background()))
+	s := CurrentSnapshot()
+	require.Equal(t, uint64(13), s.BytesUp)
+	require.Equal(t, []PeerBytes{{IP: "192.0.2.1", Up: 13}}, s.PeerBytes)
+	// The table is closed once the widget has stopped.
+	upstream(100, 0)
+	require.Equal(t, uint64(13), CurrentSnapshot().BytesUp)
 }
