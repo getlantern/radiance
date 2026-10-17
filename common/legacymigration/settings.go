@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/fileperm"
 )
 
 const maxRequestBytes = 64 << 10
@@ -161,5 +162,5 @@ func writeSettings(dataDir string, request Request, user json.RawMessage, level,
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(target, raw, 0600)
+	return atomicfile.WriteFile(target, raw, fileperm.File)
 }

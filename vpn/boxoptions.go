@@ -28,6 +28,7 @@ import (
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/log"
 )
 
@@ -383,10 +384,17 @@ func tunHasIPv6(opts O.Options) bool {
 }
 
 // buildOptions builds the box options using the config options and user servers.
+// Denied outbounds and endpoints are dropped; denied DNS or route options fail
+// the build with an error wrapping [hostaccess.ErrDenied].
 func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
+	bOptions.Options.Outbounds = allowedOutbounds(bOptions.Options.Outbounds)
+	bOptions.Options.Endpoints = allowedEndpoints(bOptions.Options.Endpoints)
+	if err := hostaccess.CheckOptions(bOptions.Options); err != nil {
+		return O.Options{}, err
+	}
 	if len(bOptions.Options.Outbounds) == 0 && len(bOptions.Options.Endpoints) == 0 {
 		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
 	}
@@ -418,20 +426,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
-
-	// A caller-supplied Dir (e.g. /tmp from a Linux-targeting config) may not
-	// be writable on the device; always point WATER outbounds at the app's
-	// managed data directory instead.
-	waterDir := filepath.Join(bOptions.BasePath, "water")
-	for i := range opts.Outbounds {
-		if opts.Outbounds[i].Type == lbC.TypeWATER {
-			if waterOpts, ok := opts.Outbounds[i].Options.(*lbO.WATEROutboundOptions); ok {
-				cp := *waterOpts
-				cp.Dir = waterDir
-				opts.Outbounds[i].Options = &cp
-			}
-		}
-	}
 
 	initial := bOptions.InitialServer
 	if initial == "" || initial == AutoSelectTag {

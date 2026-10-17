@@ -23,6 +23,7 @@ import (
 	commonenv "github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/serviceowner"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/internal/dirsecurity"
 	"github.com/getlantern/radiance/ipc"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/vpn"
@@ -269,14 +270,15 @@ func copyBin() (string, error) {
 
 // newDaemonLogger returns the supervisor logger for the daemon log file.
 func newDaemonLogger(logPath, logLevel string) *slog.Logger {
-	// The child creates this directory in common.Init, but the supervisor logs — and starts
-	// draining the child — before that. A failure is not fatal: lumberjack retries the MkdirAll on
-	// its first write, and refusing to run the daemon over its log directory would be worse.
-	if err := os.MkdirAll(logPath, 0o755); err != nil {
-		slog.Warn("Failed to create log directory", "error", err, "path", logPath)
+	output := filepath.Join(logPath, internal.LogFileName)
+	// The child enforces the directory check by refusing to start; the supervisor
+	// only avoids writing into a rejected directory.
+	if err := dirsecurity.Prepare(logPath); err != nil {
+		slog.Warn("Failed to prepare log directory; logging to stdout", "error", err, "path", logPath)
+		output = rlog.StdoutPath
 	}
 	return rlog.NewLogger(rlog.Config{
-		LogPath:          filepath.Join(logPath, internal.LogFileName),
+		LogPath:          output,
 		Level:            logLevel,
 		Prod:             true,
 		DisablePublisher: true,
@@ -471,6 +473,13 @@ func runDaemon(ctx context.Context, dataPath, logPath, logLevel string, environm
 
 	if err := configureDaemonEnvironment(environment); err != nil {
 		return fmt.Errorf("configure daemon environment: %w", err)
+	}
+	dataPath = withDefault(commonenv.GetString(commonenv.DataPath), dataPath)
+	logPath = withDefault(commonenv.GetString(commonenv.LogPath), logPath)
+	for _, path := range []string{dataPath, logPath} {
+		if err := dirsecurity.Prepare(path); err != nil {
+			return fmt.Errorf("prepare %s: %w", path, err)
+		}
 	}
 	if err := initializeDaemonDiagnostics(dataPath, logPath, logLevel); err != nil {
 		slog.Warn("Daemon diagnostics initialization failed", "error", err)

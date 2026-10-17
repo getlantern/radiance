@@ -34,6 +34,7 @@ import (
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
 
@@ -161,6 +162,19 @@ func (s *Server) Clone() *Server {
 		cp.SelectionHistory = &h
 	}
 	return &cp
+}
+
+// CheckHostAccess returns an error wrapping [hostaccess.ErrDenied] if the
+// server's options would let it act on the host beyond making network
+// connections.
+func (s *Server) CheckHostAccess() error {
+	switch opts := s.Options.(type) {
+	case option.Outbound:
+		return hostaccess.CheckOutbound(opts)
+	case option.Endpoint:
+		return hostaccess.CheckEndpoint(opts)
+	}
+	return nil
 }
 
 // ServerList is a batch of servers with optional URL overrides for bulk operations.
@@ -341,10 +355,16 @@ func warnIfReaderStarved(caller string, wait time.Duration) {
 
 // AddServers adds new servers. If force is true, it will overwrite any
 // existing servers with the same tags. If force is false, it returns an error
-// if any of the tags already exist.
+// if any of the tags already exist. If any server fails
+// [Server.CheckHostAccess], none are added.
 func (m *Manager) AddServers(list ServerList, force bool) error {
 	if len(list.Servers) == 0 {
 		return nil
+	}
+	for _, srv := range list.Servers {
+		if err := srv.CheckHostAccess(); err != nil {
+			return fmt.Errorf("server %q: %w", srv.Tag, err)
+		}
 	}
 
 	// Perform the in-memory mutation under the write lock, then release it
@@ -480,9 +500,10 @@ const (
 )
 
 // loadServers reads servers.json into the in-memory map, salvaging every
-// parseable entry. A single unparseable server — e.g. an outbound type or option
-// field this build's sing-box doesn't recognize after a version downgrade — is
-// skipped rather than discarding the whole file.
+// parseable, allowed entry. A single unparseable server (e.g. an outbound type
+// or option field this build's sing-box doesn't recognize after a version
+// downgrade) or one denied by [Server.CheckHostAccess] is skipped rather than
+// discarding the whole file.
 //
 // It returns a non-nil error enumerating any skipped entries (or a wholly
 // unparseable file); the in-memory state is still valid when it does.
@@ -507,7 +528,8 @@ func (m *Manager) loadServers() error {
 }
 
 // loadServerList handles the current array-based on-disk format and salvages
-// every entry that can still be decoded by this build.
+// every entry that can still be decoded by this build and passes
+// [Server.CheckHostAccess].
 func (m *Manager) loadServerList(buf []byte) error {
 	var rawServers []stdjson.RawMessage
 	if err := stdjson.Unmarshal(buf, &rawServers); err != nil {
@@ -522,6 +544,10 @@ func (m *Manager) loadServerList(buf []byte) error {
 			skippedErrors = append(skippedErrors, fmt.Errorf("server %q: %w", serverTag(rawServer), err))
 			continue
 		}
+		if err := srv.CheckHostAccess(); err != nil {
+			skippedErrors = append(skippedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
+			continue
+		}
 		m.servers[srv.Tag] = srv
 	}
 
@@ -534,12 +560,10 @@ func (m *Manager) loadServerList(buf []byte) error {
 	return nil
 }
 
-// loadOldFormat handles the legacy map[string]Options layout and migrates it to
-// the current format on the next save. Unlike the array path it does not salvage
-// per-element: a downgrade-incompatible entry fails the whole map, in which case
-// the file is quarantined and the map is left empty. This is acceptable because
-// the old format predates the types that introduce downgrade hazards and is
-// being phased out.
+// loadOldFormat loads the legacy map layout and saves it in the current format.
+// Decode failures quarantine the file without loading entries. Entries denied
+// by [Server.CheckHostAccess] are skipped and reported as errors after migration,
+// and the original file is quarantined.
 //
 // TODO: remove once the legacy map layout no longer appears on disk in the field.
 func (m *Manager) loadOldFormat(buf []byte) error {
@@ -554,6 +578,14 @@ func (m *Manager) loadOldFormat(buf []byte) error {
 		m.quarantineInvalidServers(buf)
 		return fmt.Errorf("unmarshal legacy server options: %w", err)
 	}
+	var deniedErrors []error
+	add := func(srv *Server) {
+		if err := srv.CheckHostAccess(); err != nil {
+			deniedErrors = append(deniedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
+			return
+		}
+		m.servers[srv.Tag] = srv
+	}
 	for group, opts := range old {
 		isLantern := group == modeLantern
 		for _, out := range opts.Outbounds {
@@ -564,7 +596,7 @@ func (m *Manager) loadOldFormat(buf []byte) error {
 			if creds, ok := opts.Credentials[out.Tag]; ok {
 				srv.Credentials = &creds
 			}
-			m.servers[out.Tag] = srv
+			add(srv)
 		}
 		for _, ep := range opts.Endpoints {
 			srv := &Server{
@@ -574,11 +606,17 @@ func (m *Manager) loadOldFormat(buf []byte) error {
 			if creds, ok := opts.Credentials[ep.Tag]; ok {
 				srv.Credentials = &creds
 			}
-			m.servers[ep.Tag] = srv
+			add(srv)
 		}
+	}
+	if len(deniedErrors) > 0 {
+		m.quarantineInvalidServers(buf)
 	}
 	if err := m.saveServers(); err != nil {
 		return fmt.Errorf("re-saving migrated servers in new format: %w", err)
+	}
+	if len(deniedErrors) > 0 {
+		return fmt.Errorf("skipped %d server(s): %w", len(deniedErrors), errors.Join(deniedErrors...))
 	}
 	return nil
 }
