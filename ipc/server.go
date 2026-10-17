@@ -1308,7 +1308,11 @@ func (s *localapi) accountOAuthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		userData, err := s.backend(r.Context()).OAuthLoginCallback(r.Context(), req.OAuthToken)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			status := http.StatusInternalServerError
+			if errors.Is(err, account.ErrInvalidToken) {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, userData)

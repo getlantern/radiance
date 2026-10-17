@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,20 +43,15 @@ func TestWindowsCrossDirCandidates(t *testing.T) {
 		assert.Contains(t, cs[0].label, "v9.0.x Windows", "label must identify the cross-dir source")
 	})
 
-	t.Run("readWindowsCrossDirCandidates picks up both local.json and settings.json", func(t *testing.T) {
+	t.Run("readWindowsCrossDirCandidates ignores settings.json", func(t *testing.T) {
 		dir := t.TempDir()
 		local := []byte(`{"user_level":"pro","user_id":1}`)
-		canon := []byte(`{"user_level":"expired","user_id":2}`)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), local, 0o644))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, settingsFileName), canon, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, settingsFileName), []byte(`{"user_id":2}`), 0o644))
 
 		cs := readWindowsCrossDirCandidates(dir)
-		require.Len(t, cs, 2, "both filenames should be returned when both exist")
-		// local.json must come first — it's the actual v9.0.x name; the
-		// settings.json fallback is for users who got renamed by a
-		// partial earlier upgrade.
-		assert.Equal(t, local, cs[0].contents, "local.json must be first")
-		assert.Equal(t, canon, cs[1].contents, "settings.json fallback must be second")
+		require.Len(t, cs, 1)
+		assert.Equal(t, local, cs[0].contents)
 	})
 
 	t.Run("readWindowsCrossDirCandidates returns empty when dir is empty", func(t *testing.T) {
@@ -88,14 +84,57 @@ func TestWindowsCrossDirCandidates(t *testing.T) {
 	})
 }
 
+// isolateDiscovery stops InitSettings from reading the host's own legacy settings files.
+func isolateDiscovery(t *testing.T) {
+	t.Helper()
+	prevYAML, prevWin := legacyYAMLPathFn, windowsCrossDirCandidatesFn
+	legacyYAMLPathFn = func(string) (string, string) { return "", "" }
+	windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
+	t.Cleanup(func() {
+		legacyYAMLPathFn, windowsCrossDirCandidatesFn = prevYAML, prevWin
+	})
+}
+
+func initAt(t *testing.T, dir string) {
+	t.Helper()
+	Reset()
+	t.Cleanup(Reset)
+	require.NoError(t, InitSettings(dir))
+}
+
+// readOnlyDir makes dir readable but not writable until the returned func restores it, skipping the
+// test where that cannot be enforced.
+func readOnlyDir(t *testing.T, dir string) (restore func()) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions differ on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root writes regardless of mode")
+	}
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	return func() { require.NoError(t, os.Chmod(dir, 0o755)) }
+}
+
+// moveAside makes dir unavailable until the returned func moves it back.
+func moveAside(t *testing.T, dir string) (restore func()) {
+	t.Helper()
+	aside := dir + ".aside"
+	require.NoError(t, os.Rename(dir, aside))
+	return func() { require.NoError(t, os.Rename(aside, dir)) }
+}
+
 func TestInitSettings(t *testing.T) {
+	isolateDiscovery(t)
+
 	t.Run("existing valid config file", func(t *testing.T) {
 		tempDir := t.TempDir()
 		path := filepath.Join(tempDir, settingsFileName)
 		content := []byte(`{"locale": "en-US", "country_code": "US"}`)
 		require.NoError(t, os.WriteFile(path, content, 0644), "failed to create test config file")
 
-		require.NoError(t, InitSettings(tempDir), "failed to initialize settings")
+		initAt(t, tempDir)
 		assert.Equal(t, "en-US", Get(LocaleKey))
 		assert.Equal(t, "US", Get(CountryCodeKey))
 	})
@@ -108,463 +147,656 @@ func TestInitSettings(t *testing.T) {
 	})
 
 	t.Run("invalid config file recovers", func(t *testing.T) {
-		Reset()
-		t.Cleanup(Reset)
 		tempDir := t.TempDir()
 		path := filepath.Join(tempDir, settingsFileName)
 		require.NoError(t, os.WriteFile(path, []byte(`{invalid json}`), 0644))
 
-		require.NoError(t, InitSettings(tempDir), "an invalid settings file must not block initialization")
+		initAt(t, tempDir)
 
 		invalidPath := filepath.Join(tempDir, settingsInvalidFileName)
 		assert.FileExists(t, invalidPath, "the invalid file must be preserved for diagnostics")
 		assert.NoError(t, loadSettings(path), "settings.json must be rewritten with a parseable default")
 	})
+
+	t.Run("changes before InitSettings stay in memory", func(t *testing.T) {
+		Reset()
+		t.Cleanup(Reset)
+
+		require.NoError(t, Set(LocaleKey, "en-US"))
+
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+	})
+
+	t.Run("Reset restores defaults", func(t *testing.T) {
+		initAt(t, t.TempDir())
+		require.NoError(t, Set(UserLevelKey, "pro"))
+		Reset()
+		assert.Equal(t, "free", GetString(UserLevelKey))
+		assert.False(t, Exists(LocaleKey))
+	})
 }
 
-func TestMigrateLegacySettingsIfNeeded(t *testing.T) {
-	// Redirect the OS-specific pre-9.x YAML lookup to nowhere by
-	// default so individual tests don't pick up the host machine's
-	// actual ~/Library/Application Support/Lantern/settings.yaml or
-	// equivalent. Sub-tests that exercise the YAML path opt in by
-	// pointing the function at their tempDir.
-	prevYAMLPath := legacyYAMLPathFn
-	legacyYAMLPathFn = func(string) (string, string) { return "", "" }
-	t.Cleanup(func() { legacyYAMLPathFn = prevYAMLPath })
+func TestLegacyMigration(t *testing.T) {
+	isolateDiscovery(t)
 
-	// Same treatment for the Windows v9.0.x cross-dir lookup: default
-	// to nothing so tests don't accidentally pick up a real
-	// %PUBLIC%\Lantern\data on a developer's Windows machine. Tests that
-	// exercise this path opt in.
-	prevWinCrossDir := windowsCrossDirCandidatesFn
-	windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
-	t.Cleanup(func() { windowsCrossDirCandidatesFn = prevWinCrossDir })
-
-	writeNested := func(t *testing.T, dir string, contents []byte) {
+	writeNested := func(t *testing.T, dir string, contents string) {
 		t.Helper()
 		nd := filepath.Join(dir, "data")
 		require.NoError(t, os.MkdirAll(nd, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(nd, settingsFileName), contents, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(nd, settingsFileName), []byte(contents), 0o644))
 	}
-	writeLegacy := func(t *testing.T, dir string, contents []byte) {
+	writeLegacy := func(t *testing.T, dir string, contents string) {
 		t.Helper()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), contents, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), []byte(contents), 0o644))
+	}
+	writeCanonical := func(t *testing.T, dir string, contents string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, settingsFileName), []byte(contents), 0o644))
+	}
+	useCrossDir := func(t *testing.T, v90xDir string) {
+		t.Helper()
+		prev := windowsCrossDirCandidatesFn
+		windowsCrossDirCandidatesFn = func(string) []candidateSource {
+			return readWindowsCrossDirCandidates(v90xDir)
+		}
+		t.Cleanup(func() { windowsCrossDirCandidatesFn = prev })
+	}
+	useYAML := func(t *testing.T, dir, contents string) {
+		t.Helper()
+		yamlPath := filepath.Join(dir, "fake-pre9x-settings.yaml")
+		require.NoError(t, os.WriteFile(yamlPath, []byte(contents), 0o644))
+		prev := legacyYAMLPathFn
+		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
+		t.Cleanup(func() { legacyYAMLPathFn = prev })
+	}
+	// onDisk reads back the saved settings, so assertions cover what the next start sees.
+	onDisk := func(t *testing.T, dir string) map[string]any {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, settingsFileName))
+		require.NoError(t, err)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(b, &got))
+		return got
 	}
 
-	t.Run("v9.0.x local.json recovered when canonical is missing (Derek's failing case)", func(t *testing.T) {
-		// User upgraded from v9.0.x straight to the fixed build. v9.0.x wrote
-		// to <dataDir>/local.json; canonical settings.json doesn't exist;
-		// no v9.1.x nested file. The fix must read local.json so Pro survives.
+	t.Run("v9.0.x local.json recovered when canonical is missing", func(t *testing.T) {
 		tempDir := t.TempDir()
-		want := []byte(`{"user_id": 3580849, "user_level": "pro", "token": "abc"}`)
-		writeLegacy(t, tempDir, want)
+		writeLegacy(t, tempDir, `{"user_id": 3580849, "user_level": "pro", "token": "abc"}`)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, want, got, "v9.0.x local.json should be migrated to canonical")
+		assert.Equal(t, "3580849", GetString(UserIDKey))
+		assert.Equal(t, "pro", GetString(UserLevelKey))
+		assert.Equal(t, "abc", GetString(TokenKey))
+		assert.Equal(t, "abc", onDisk(t, tempDir)["token"], "adopted identity must be saved")
+		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
+	})
+
+	t.Run("a user id above 2^53 is adopted exactly", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 9007199254740993, "token": "abc"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, int64(9007199254740993), GetInt64(UserIDKey))
 	})
 
 	t.Run("v9.1.x nested file recovered when canonical is missing", func(t *testing.T) {
 		tempDir := t.TempDir()
-		want := []byte(`{"user_id": 135809562, "user_level": "pro", "device_id": "abc"}`)
-		writeNested(t, tempDir, want)
+		writeNested(t, tempDir, `{"user_id": 135809562, "user_level": "pro", "device_id": "abc"}`)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, want, got, "v9.1.x nested file should be migrated to canonical")
+		assert.Equal(t, "135809562", GetString(UserIDKey))
+		assert.Equal(t, "abc", GetString(DeviceIDKey))
 	})
 
 	t.Run("v9.0.x local.json wins over v9.1.x expired nested", func(t *testing.T) {
-		// Upgrade chain v9.0.x → v9.1.x → fix: legacy has pro, nested has
-		// expired (because v9.1.x lost the user_id). Migration must pick
-		// legacy so Pro survives.
 		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
-		legacyPro := []byte(`{"user_id": 1, "user_level": "pro"}`)
-		writeLegacy(t, tempDir, legacyPro)
-		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
+		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "pro"}`)
+		writeNested(t, tempDir, `{"user_id": 999, "user_level": "expired"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, legacyPro, got, "legacy local.json with pro should beat nested expired")
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.True(t, IsPro())
 	})
 
 	t.Run("canonical-pro wins over nested-expired", func(t *testing.T) {
 		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
-		canonicalPro := []byte(`{"user_id": 1, "user_level": "pro"}`)
-		require.NoError(t, os.WriteFile(canonical, canonicalPro, 0o644))
-		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
+		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "pro"}`)
+		writeNested(t, tempDir, `{"user_id": 999, "user_level": "expired"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, canonicalPro, got, "canonical-pro should survive")
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.True(t, IsPro())
 	})
 
 	t.Run("canonical expired account survives nested Pro recovery", func(t *testing.T) {
 		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
-		canonicalContents := []byte(`{"user_id": 1, "user_level": "expired"}`)
-		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
-		writeLegacy(t, tempDir, []byte(`{"user_id": 1, "user_level": "expired"}`))
-		nestedPro := []byte(`{"user_id": 2, "user_level": "pro"}`)
-		writeNested(t, tempDir, nestedPro)
+		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "expired", "token": "t1", "jwt_token": "j1"}`)
+		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "expired"}`)
+		writeNested(t, tempDir, `{"user_id": 2, "user_level": "pro"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, canonicalContents, got)
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.False(t, IsPro())
+		assert.Equal(t, "t1", GetString(TokenKey))
+		assert.Equal(t, "j1", GetString(JwtTokenKey))
+		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
 	})
 
 	t.Run("all-pro: canonical wins (most recent deliberate state)", func(t *testing.T) {
 		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
-		canonicalContents := []byte(`{"user_id": 1, "user_level": "pro"}`)
-		require.NoError(t, os.WriteFile(canonical, canonicalContents, 0o644))
-		writeLegacy(t, tempDir, []byte(`{"user_id": 2, "user_level": "pro"}`))
-		writeNested(t, tempDir, []byte(`{"user_id": 3, "user_level": "pro"}`))
+		writeCanonical(t, tempDir, `{"user_id": 1, "user_level": "pro"}`)
+		writeLegacy(t, tempDir, `{"user_id": 2, "user_level": "pro"}`)
+		writeNested(t, tempDir, `{"user_id": 3, "user_level": "pro"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, canonicalContents, got, "canonical preferred when all have pro")
+		assert.Equal(t, "1", GetString(UserIDKey))
 	})
 
 	t.Run("canonical free account survives stale Pro recovery files", func(t *testing.T) {
-		dir := t.TempDir()
-		canonical := filepath.Join(dir, settingsFileName)
-		adopted := []byte(`{"user_id":42,"user_level":"free","token":"adopted-token"}`)
-		require.NoError(t, os.WriteFile(canonical, adopted, 0600))
-		stalePro := []byte(`{"user_id":1,"user_level":"pro","token":"stale-token"}`)
-		writeLegacy(t, dir, stalePro)
-		writeNested(t, dir, stalePro)
+		tempDir := t.TempDir()
+		writeCanonical(t, tempDir, `{"user_id":42,"user_level":"free","token":"adopted-token"}`)
+		stalePro := `{"user_id":1,"user_level":"pro","token":"stale-token"}`
+		writeLegacy(t, tempDir, stalePro)
+		writeNested(t, tempDir, stalePro)
 
-		migrateLegacySettingsIfNeeded(dir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, adopted, got)
-	})
-
-	t.Run("logged out canonical settings survive stale Pro recovery files", func(t *testing.T) {
-		dir := t.TempDir()
-		canonical := filepath.Join(dir, settingsFileName)
-		require.NoError(t, os.WriteFile(canonical, []byte(`{}`), 0600))
-		writeLegacy(t, dir, []byte(`{"user_id":1,"user_level":"pro","token":"stale-token"}`))
-
-		migrateLegacySettingsIfNeeded(dir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.JSONEq(t, `{}`, string(got))
+		assert.Equal(t, "42", GetString(UserIDKey))
+		assert.Equal(t, "adopted-token", GetString(TokenKey))
+		assert.False(t, IsPro())
 	})
 
 	t.Run("invalid canonical settings recover a valid free account", func(t *testing.T) {
 		for _, invalid := range []string{`{invalid}`, `null`, `[]`, `{} {}`} {
 			t.Run(invalid, func(t *testing.T) {
-				dir := t.TempDir()
-				canonical := filepath.Join(dir, settingsFileName)
-				require.NoError(t, os.WriteFile(canonical, []byte(invalid), 0600))
-				legacy := []byte(`{"user_id":42,"user_level":"free","token":"current-token"}`)
-				writeLegacy(t, dir, legacy)
+				tempDir := t.TempDir()
+				writeCanonical(t, tempDir, invalid)
+				writeLegacy(t, tempDir, `{"user_id":42,"user_level":"free","token":"current-token"}`)
 
-				migrateLegacySettingsIfNeeded(dir, canonical)
+				initAt(t, tempDir)
 
-				got, err := os.ReadFile(canonical)
-				require.NoError(t, err)
-				assert.Equal(t, legacy, got)
+				assert.Equal(t, "42", GetString(UserIDKey))
+				assert.Equal(t, "current-token", GetString(TokenKey))
+				assert.Equal(t, "current-token", onDisk(t, tempDir)["token"])
 			})
 		}
-	})
-
-	t.Run("malformed legacy settings do not hide a valid nested account", func(t *testing.T) {
-		dir := t.TempDir()
-		canonical := filepath.Join(dir, settingsFileName)
-		writeLegacy(t, dir, []byte(`{invalid}`))
-		nested := []byte(`{"user_id":42,"user_level":"free"}`)
-		writeNested(t, dir, nested)
-
-		migrateLegacySettingsIfNeeded(dir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, nested, got)
 	})
 
 	t.Run("none have pro: legacy wins over nested when canonical missing", func(t *testing.T) {
 		// User identifiers must survive even when Pro state is non-pro,
 		// to keep the device registration intact server-side.
 		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
-		legacyContents := []byte(`{"user_id": 1, "user_level": "free", "token": "abc"}`)
-		writeLegacy(t, tempDir, legacyContents)
-		writeNested(t, tempDir, []byte(`{"user_id": 2, "user_level": "free", "token": "xyz"}`))
+		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "free", "token": "abc"}`)
+		writeNested(t, tempDir, `{"user_id": 2, "user_level": "free", "token": "xyz"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, legacyContents, got, "legacy preferred over nested when canonical missing and neither has pro")
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.Equal(t, "abc", GetString(TokenKey))
 	})
 
-	t.Run("nothing on disk is a no-op", func(t *testing.T) {
+	t.Run("adopts the recovered account's OAuth state", func(t *testing.T) {
 		tempDir := t.TempDir()
-		canonical := filepath.Join(tempDir, settingsFileName)
+		writeNested(t, tempDir, `{"user_id": 3, "user_level": "pro", "jwt_token": "jwt", "oauth_login": true, "oauth_provider": "apple"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		_, err := os.Stat(canonical)
-		assert.True(t, os.IsNotExist(err), "no migration when no source files exist")
+		assert.Equal(t, "3", GetString(UserIDKey))
+		assert.Equal(t, "jwt", GetString(JwtTokenKey))
+		assert.True(t, GetBool(OAuthLoginKey))
+		assert.Equal(t, "apple", GetString(OAuthProviderKey))
+	})
+
+	t.Run("logged out canonical settings survive stale Pro recovery files", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeCanonical(t, tempDir, `{"locale": "en-US", "device_id": "dev"}`)
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "pro", "token": "stale-token"}`)
+
+		initAt(t, tempDir)
+
+		assert.False(t, Exists(UserIDKey))
+		assert.False(t, Exists(TokenKey))
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+		assert.Equal(t, "dev", GetString(DeviceIDKey))
+	})
+
+	t.Run("an unreadable legacy file counts as missing", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("permission semantics differ on windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root reads files regardless of mode")
+		}
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "pro", "token": "tok"}`)
+		legacy := filepath.Join(tempDir, legacySettingsFileName)
+		require.NoError(t, os.Chmod(legacy, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(legacy, 0o644) })
+		writeNested(t, tempDir, `{"user_id": 5, "user_level": "free"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, "5", GetString(UserIDKey))
+		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
+	})
+
+	t.Run("adopts identity keys only", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "pro", "peer_share_enabled": true, "locale": "ru-RU"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.False(t, Exists(PeerShareEnabledKey))
+		assert.False(t, Exists(LocaleKey))
+	})
+
+	t.Run("fresh install writes defaults and the marker", func(t *testing.T) {
+		tempDir := t.TempDir()
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, "free", GetString(UserLevelKey))
+		assert.FileExists(t, filepath.Join(tempDir, settingsFileName))
+		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
+	})
+
+	t.Run("a completed migration never resurrects a cleared account", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 111, "user_level": "pro", "token": "OLD-PRO-TOKEN", "email": "old@example.com"}`)
+		initAt(t, tempDir)
+		require.Equal(t, "111", GetString(UserIDKey))
+
+		require.NoError(t, Clear(UserIDKey, TokenKey, UserLevelKey, EmailKey))
+		require.NoError(t, Patch(Settings{UserIDKey: 222, UserLevelKey: "free"}))
+		initAt(t, tempDir)
+
+		assert.Equal(t, "222", GetString(UserIDKey))
+		assert.Equal(t, "free", GetString(UserLevelKey))
+		assert.False(t, Exists(TokenKey))
+
+		require.NoError(t, Set(UserLevelKey, "expired"))
+		initAt(t, tempDir)
+		assert.Equal(t, "expired", GetString(UserLevelKey))
+	})
+
+	t.Run("a missing canonical file after migration starts fresh", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 111, "user_level": "pro"}`)
+		initAt(t, tempDir)
+		require.NoError(t, os.Remove(filepath.Join(tempDir, settingsFileName)))
+
+		initAt(t, tempDir)
+
+		assert.False(t, Exists(UserIDKey))
+	})
+
+	t.Run("malformed canonical loses to a valid legacy file", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeCanonical(t, tempDir, `{invalid json}`)
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "free", "token": "tok"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, "7", GetString(UserIDKey))
+		assert.Equal(t, "tok", GetString(TokenKey))
+		assert.FileExists(t, filepath.Join(tempDir, settingsInvalidFileName))
+	})
+
+	t.Run("malformed legacy candidate is ignored", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_level": "pro"`)
+		writeNested(t, tempDir, `{"user_id": 5, "user_level": "free"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, "5", GetString(UserIDKey))
+	})
+
+	t.Run("a failed save is retried on the next start", func(t *testing.T) {
+		tempDir := t.TempDir()
+		// null loads as empty settings but isn't a JSON object, so the legacy identity is adopted.
+		writeCanonical(t, tempDir, `null`)
+		writeLegacy(t, tempDir, `{"user_id": 2, "user_level": "pro"}`)
+		restore := readOnlyDir(t, tempDir)
+
+		initAt(t, tempDir)
+		assert.False(t, Exists(UserIDKey), "an unsaved adoption must not take effect")
+		assert.NoFileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
+
+		restore()
+		initAt(t, tempDir)
+		assert.Equal(t, "2", GetString(UserIDKey))
+		assert.FileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
+	})
+
+	t.Run("a new canonical file carries the adopted identity", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "free", "token": "tok"}`)
+
+		initAt(t, tempDir)
+
+		assert.Equal(t, float64(7), onDisk(t, tempDir)["user_id"])
+	})
+
+	t.Run("a failed first write leaves a non-pro legacy identity recoverable", func(t *testing.T) {
+		tempDir := t.TempDir()
+		writeLegacy(t, tempDir, `{"user_id": 7, "user_level": "free", "token": "tok"}`)
+		restore := readOnlyDir(t, tempDir)
+
+		Reset()
+		t.Cleanup(Reset)
+		require.Error(t, InitSettings(tempDir))
+		assert.NoFileExists(t, filepath.Join(tempDir, settingsFileName))
+
+		restore()
+		initAt(t, tempDir)
+		assert.Equal(t, "7", GetString(UserIDKey))
 	})
 
 	t.Run("pre-9.x desktop YAML recovered when no JSON candidates exist", func(t *testing.T) {
-		// Redirect the YAML lookup at a tempDir-local file so the test
-		// is portable across OSes.
 		tempDir := t.TempDir()
-		yamlPath := filepath.Join(tempDir, "fake-pre9x-settings.yaml")
-		require.NoError(t, os.WriteFile(yamlPath, []byte(`userID: 3580849
+		useYAML(t, tempDir, `userID: 3580849
 deviceID: legacy-device-id
 userPro: true
 userToken: legacy-token
 emailAddress: derek@example.com
-`), 0o644))
-		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
-		t.Cleanup(func() { legacyYAMLPathFn = func(string) (string, string) { return "", "" } })
+`)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		initAt(t, tempDir)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		gotStr := string(got)
-		assert.Contains(t, gotStr, `"user_id":3580849`)
-		assert.Contains(t, gotStr, `"device_id":"legacy-device-id"`)
-		assert.Contains(t, gotStr, `"user_level":"pro"`)
-		assert.Contains(t, gotStr, `"token":"legacy-token"`)
-		assert.Contains(t, gotStr, `"email":"derek@example.com"`)
+		assert.Equal(t, "3580849", GetString(UserIDKey))
+		assert.Equal(t, "legacy-device-id", GetString(DeviceIDKey))
+		assert.Equal(t, "pro", GetString(UserLevelKey))
+		assert.Equal(t, "legacy-token", GetString(TokenKey))
+		assert.Equal(t, "derek@example.com", GetString(EmailKey))
 	})
 
 	t.Run("v9.0.x local.json beats pre-9.x YAML", func(t *testing.T) {
-		// Both exist with pro state. local.json is the higher-priority
-		// (more recent) source, so it should win.
 		tempDir := t.TempDir()
-		yamlPath := filepath.Join(tempDir, "fake-pre9x-settings.yaml")
-		require.NoError(t, os.WriteFile(yamlPath, []byte(`userID: 1
+		useYAML(t, tempDir, `userID: 1
 userPro: true
 userToken: legacy-token
-`), 0o644))
-		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
-		t.Cleanup(func() { legacyYAMLPathFn = func(string) (string, string) { return "", "" } })
+`)
+		writeLegacy(t, tempDir, `{"user_id": 2, "user_level": "pro", "token": "v9.0-token"}`)
 
-		writeLegacy(t, tempDir, []byte(`{"user_id": 2, "user_level": "pro", "token": "v9.0-token"}`))
+		initAt(t, tempDir)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Contains(t, string(got), `"user_id": 2`,
-			"v9.0.x local.json should win over pre-9.x YAML when both have pro")
-		assert.Contains(t, string(got), `"v9.0-token"`)
+		assert.Equal(t, "2", GetString(UserIDKey))
+		assert.Equal(t, "v9.0-token", GetString(TokenKey))
 	})
 
 	t.Run("pre-9.x YAML beats v9.1.x bugged nested file", func(t *testing.T) {
-		// Pre-9.x has pro; v9.1.x nested has expired (the bugged case).
-		// Pre-9.x must win.
 		tempDir := t.TempDir()
-		yamlPath := filepath.Join(tempDir, "fake-pre9x-settings.yaml")
-		require.NoError(t, os.WriteFile(yamlPath, []byte(`userID: 1
+		useYAML(t, tempDir, `userID: 1
 userPro: true
 userToken: legacy-token
-`), 0o644))
-		legacyYAMLPathFn = func(string) (string, string) { return yamlPath, "desktop" }
-		t.Cleanup(func() { legacyYAMLPathFn = func(string) (string, string) { return "", "" } })
+`)
+		writeNested(t, tempDir, `{"user_id": 999, "user_level": "expired"}`)
 
-		writeNested(t, tempDir, []byte(`{"user_id": 999, "user_level": "expired"}`))
+		initAt(t, tempDir)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Contains(t, string(got), `"user_level":"pro"`,
-			"pre-9.x YAML with pro should win over v9.1.x nested expired")
-		assert.Contains(t, string(got), `"legacy-token"`)
+		assert.Equal(t, "pro", GetString(UserLevelKey))
+		assert.Equal(t, "legacy-token", GetString(TokenKey))
 	})
 
 	t.Run("iOS userconfig.yaml recovered when canonical is missing", func(t *testing.T) {
-		// On iOS the legacy YAML is sandbox-relative — it lives next to
-		// where settings.json now lives, so legacyYAMLCandidate reads
-		// from fileDir directly and we can exercise it from a test
-		// without monkeypatching $HOME or $APPDATA. (Desktop legacy
-		// paths are covered via translateLegacyYAML's unit tests, which
-		// don't depend on the OS-specific path resolution.)
 		if runtime.GOOS != "ios" {
 			t.Skip("iOS-only path: legacy YAML elsewhere is OS-specific")
 		}
+		prev := legacyYAMLPathFn
+		legacyYAMLPathFn = legacyYAMLPath
+		t.Cleanup(func() { legacyYAMLPathFn = prev })
 		tempDir := t.TempDir()
-		yamlPath := filepath.Join(tempDir, "userconfig.yaml")
-		require.NoError(t, os.WriteFile(yamlPath, []byte(`UserID: 7777
+		require.NoError(t, os.WriteFile(filepath.Join(tempDir, "userconfig.yaml"), []byte(`UserID: 7777
 DeviceID: ios-device
 Token: tok
 `), 0o644))
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
 
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Contains(t, string(got), `"user_id":7777`)
-		assert.Contains(t, string(got), `"device_id":"ios-device"`)
+		initAt(t, tempDir)
+
+		assert.Equal(t, "7777", GetString(UserIDKey))
+		assert.Equal(t, "ios-device", GetString(DeviceIDKey))
 	})
 
 	t.Run("Windows v9.0.x cross-dir local.json recovered when canonical/same-dir/nested all missing", func(t *testing.T) {
-		// FD #174606 / engineering#3460: PR #370 moved the Windows daemon
-		// from <PUBLIC>\Lantern\data (where v9.0.x Flutter+FFI wrote
-		// local.json) to <ProgramData>\Lantern. The same-dir scan can't
-		// see across that filesystem boundary, so cross-dir candidates
-		// are spliced in by windowsCrossDirCandidatesFn. Verify recovery.
 		tempDir := t.TempDir()
 		v90xDir := filepath.Join(tempDir, "windows-v90x")
 		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
-		want := []byte(`{"user_id": 195646669, "user_level": "pro", "token": "preserved"}`)
-		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName), want, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName),
+			[]byte(`{"user_id": 195646669, "user_level": "pro", "token": "preserved"}`), 0o644))
+		useCrossDir(t, v90xDir)
 
-		windowsCrossDirCandidatesFn = func(string) []candidateSource {
-			return readWindowsCrossDirCandidates(v90xDir)
-		}
-		t.Cleanup(func() {
-			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
-		})
+		initAt(t, tempDir)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, want, got, "v9.0.x cross-dir local.json must be migrated to canonical")
+		assert.Equal(t, "195646669", GetString(UserIDKey))
+		assert.Equal(t, "preserved", GetString(TokenKey))
 	})
 
-	t.Run("Windows v9.0.x cross-dir falls back to settings.json when local.json missing", func(t *testing.T) {
-		// Defensive case: a user whose v9.0.x file got renamed by an
-		// earlier partial upgrade attempt. The cross-dir scan should
-		// still pick up settings.json under ${PUBLIC}\Lantern\data.
+	t.Run("Windows cross-dir settings.json is never adopted", func(t *testing.T) {
 		tempDir := t.TempDir()
 		v90xDir := filepath.Join(tempDir, "windows-v90x")
 		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
-		want := []byte(`{"user_id": 42, "user_level": "pro"}`)
-		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, settingsFileName), want, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, settingsFileName),
+			[]byte(`{"user_id": 42, "user_level": "pro", "peer_share_enabled": true}`), 0o644))
+		useCrossDir(t, v90xDir)
 
-		windowsCrossDirCandidatesFn = func(string) []candidateSource {
-			return readWindowsCrossDirCandidates(v90xDir)
-		}
-		t.Cleanup(func() {
-			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
-		})
+		initAt(t, tempDir)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, want, got, "v9.0.x cross-dir settings.json must be migrated when local.json absent")
+		assert.False(t, Exists(UserIDKey))
+		assert.False(t, Exists(PeerShareEnabledKey))
 	})
 
 	t.Run("Windows v9.0.x cross-dir loses to same-dir v9.0.x local.json", func(t *testing.T) {
-		// If both exist, same-dir wins — it's strictly more recent state.
-		// (Cross-dir is only a thing because Windows users skipped through
-		// the v9.0.x → v9.1.x transition; same-dir local.json means the
-		// daemon already migrated once and the cross-dir copy is stale.)
 		tempDir := t.TempDir()
 		v90xDir := filepath.Join(tempDir, "windows-v90x")
 		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName),
 			[]byte(`{"user_id": 999, "user_level": "pro"}`), 0o644))
-		sameDirPro := []byte(`{"user_id": 1, "user_level": "pro", "token": "same-dir"}`)
-		require.NoError(t, os.WriteFile(filepath.Join(tempDir, legacySettingsFileName), sameDirPro, 0o644))
+		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "pro", "token": "same-dir"}`)
+		useCrossDir(t, v90xDir)
 
-		windowsCrossDirCandidatesFn = func(string) []candidateSource {
-			return readWindowsCrossDirCandidates(v90xDir)
-		}
-		t.Cleanup(func() {
-			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
-		})
+		initAt(t, tempDir)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, sameDirPro, got, "same-dir v9.0.x must outrank cross-dir v9.0.x")
+		assert.Equal(t, "1", GetString(UserIDKey))
+		assert.Equal(t, "same-dir", GetString(TokenKey))
 	})
 
 	t.Run("Windows v9.0.x cross-dir-pro beats v9.1.x nested-expired", func(t *testing.T) {
-		// The headline case: user upgrades from v9.0.x Windows (Pro state
-		// at ${PUBLIC}\Lantern\data\local.json) through a buggy v9.1.x
-		// build (which wrote an expired record at <ProgramData>\Lantern\data\settings.json)
-		// to the fix. The cross-dir Pro must win over the nested expired.
 		tempDir := t.TempDir()
 		v90xDir := filepath.Join(tempDir, "windows-v90x")
 		require.NoError(t, os.MkdirAll(v90xDir, 0o755))
-		crossDirPro := []byte(`{"user_id": 195646669, "user_level": "pro"}`)
-		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName), crossDirPro, 0o644))
-		writeNested(t, tempDir, []byte(`{"user_id": 99, "user_level": "expired"}`))
+		require.NoError(t, os.WriteFile(filepath.Join(v90xDir, legacySettingsFileName),
+			[]byte(`{"user_id": 195646669, "user_level": "pro"}`), 0o644))
+		writeNested(t, tempDir, `{"user_id": 99, "user_level": "expired"}`)
+		useCrossDir(t, v90xDir)
 
-		windowsCrossDirCandidatesFn = func(string) []candidateSource {
-			return readWindowsCrossDirCandidates(v90xDir)
-		}
-		t.Cleanup(func() {
-			windowsCrossDirCandidatesFn = func(string) []candidateSource { return nil }
-		})
+		initAt(t, tempDir)
 
-		canonical := filepath.Join(tempDir, settingsFileName)
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
-
-		got, err := os.ReadFile(canonical)
-		require.NoError(t, err)
-		assert.Equal(t, crossDirPro, got, "cross-dir pro must beat nested expired (engineering#3460)")
+		assert.Equal(t, "195646669", GetString(UserIDKey))
+		assert.True(t, IsPro())
 	})
 
 	t.Run("unreadable canonical (non-ENOENT) skips migration", func(t *testing.T) {
-		// Permission error on the canonical path: don't fall through and
-		// overwrite a file we couldn't read. unix only — windows handles
-		// permissions differently and chmod wouldn't reproduce this.
 		if runtime.GOOS == "windows" {
 			t.Skip("permission semantics differ on windows")
 		}
+		if os.Geteuid() == 0 {
+			t.Skip("root reads files regardless of mode")
+		}
 		tempDir := t.TempDir()
 		canonical := filepath.Join(tempDir, settingsFileName)
-		require.NoError(t, os.WriteFile(canonical, []byte(`{"user_level": "expired"}`), 0o644))
-		// Make the file unreadable.
+		writeCanonical(t, tempDir, `{"user_level": "expired"}`)
 		require.NoError(t, os.Chmod(canonical, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(canonical, 0o644) })
-		// Stage a legacy-pro candidate that would otherwise win.
-		writeLegacy(t, tempDir, []byte(`{"user_id": 1, "user_level": "pro"}`))
+		writeLegacy(t, tempDir, `{"user_id": 1, "user_level": "pro"}`)
 
-		migrateLegacySettingsIfNeeded(tempDir, canonical)
+		Reset()
+		t.Cleanup(Reset)
+		assert.Error(t, InitSettings(tempDir))
 
-		// Restore readability and confirm the canonical contents are
-		// unchanged (still the expired body, not the legacy-pro body).
 		require.NoError(t, os.Chmod(canonical, 0o644))
 		got, err := os.ReadFile(canonical)
 		require.NoError(t, err)
 		assert.Equal(t, `{"user_level": "expired"}`, string(got),
 			"canonical with non-ENOENT read error should be left alone")
+		assert.NoFileExists(t, filepath.Join(tempDir, migrationMarkerFileName))
 	})
 }
 
+func TestDiff(t *testing.T) {
+	curr := Settings{
+		DevicesKey:          []any{map[string]any{"ID": "a"}},
+		UserDataKey:         nil,
+		LocaleKey:           "en-US",
+		FeatureOverridesKey: map[string]any{"x": true},
+	}
+	updates := Settings{
+		DevicesKey:          []any{map[string]any{"ID": "a"}},
+		UserDataKey:         nil,
+		LocaleKey:           "fa-IR",
+		FeatureOverridesKey: map[string]any{"x": false},
+		EmailKey:            nil,
+	}
+
+	diff := updates.Diff(curr)
+
+	assert.Equal(t, Settings{
+		LocaleKey:           "fa-IR",
+		FeatureOverridesKey: map[string]any{"x": false},
+		EmailKey:            nil,
+	}, diff, "equal slices and nulls drop out; a null for an absent key stays")
+}
+
+func TestGetAllForOmitsAbsentKeys(t *testing.T) {
+	isolateDiscovery(t)
+	initAt(t, t.TempDir())
+	require.NoError(t, Set(UserDataKey, nil))
+
+	got := GetAllFor(UserDataKey, EmailKey)
+
+	assert.Equal(t, Settings{UserDataKey: nil}, got)
+}
+
+func TestSaveFailure(t *testing.T) {
+	isolateDiscovery(t)
+
+	t.Run("Set and Patch take effect only once saved", func(t *testing.T) {
+		dir := t.TempDir()
+		initAt(t, dir)
+		require.NoError(t, Set(LocaleKey, "en-US"))
+		before, err := os.ReadFile(filepath.Join(dir, settingsFileName))
+		require.NoError(t, err)
+		restore := moveAside(t, dir)
+
+		assert.Error(t, Set(LocaleKey, "ru-RU"))
+		assert.Error(t, Patch(Settings{LocaleKey: "ru-RU", CountryCodeKey: "RU"}))
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+		assert.False(t, Exists(CountryCodeKey))
+		restore()
+		after, err := os.ReadFile(filepath.Join(dir, settingsFileName))
+		require.NoError(t, err)
+		assert.Equal(t, before, after, "the file keeps its previous contents")
+		assert.Equal(t, Settings{LocaleKey: "ru-RU"}, Settings{LocaleKey: "ru-RU"}.Diff(GetAllFor(LocaleKey)),
+			"a retry still sees the change")
+
+		require.NoError(t, Patch(Settings{LocaleKey: "ru-RU", CountryCodeKey: "RU"}))
+		assert.Equal(t, "ru-RU", GetString(LocaleKey))
+		assert.Equal(t, "RU", GetString(CountryCodeKey))
+	})
+
+	t.Run("Apply takes effect even when the save fails", func(t *testing.T) {
+		dir := t.TempDir()
+		initAt(t, dir)
+		require.NoError(t, Patch(Settings{TelemetryKey: true}))
+		defer moveAside(t, dir)()
+
+		assert.Error(t, Apply(Settings{TelemetryKey: false, LocaleKey: "en-US"}))
+
+		assert.False(t, GetBool(TelemetryKey))
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+	})
+
+	t.Run("Clear takes effect only once saved", func(t *testing.T) {
+		dir := t.TempDir()
+		initAt(t, dir)
+		require.NoError(t, Patch(Settings{TokenKey: "secret", UserIDKey: 1}))
+		restore := moveAside(t, dir)
+
+		assert.Error(t, Clear(TokenKey, UserIDKey))
+		assert.Equal(t, "secret", GetString(TokenKey))
+		assert.Equal(t, "1", GetString(UserIDKey))
+
+		restore()
+		require.NoError(t, Clear(TokenKey, UserIDKey))
+		assert.False(t, Exists(TokenKey))
+		assert.False(t, Exists(UserIDKey))
+	})
+}
+
+func TestPatchSkipsUnchangedWrites(t *testing.T) {
+	isolateDiscovery(t)
+	dir := t.TempDir()
+	initAt(t, dir)
+	path := filepath.Join(dir, settingsFileName)
+	// On Windows, os.Stat defers the file ID lookup to os.SameFile; a handle's Stat records it now.
+	stat := func() os.FileInfo {
+		t.Helper()
+		f, err := os.Open(path)
+		require.NoError(t, err)
+		defer f.Close()
+		info, err := f.Stat()
+		require.NoError(t, err)
+		return info
+	}
+	initial := stat()
+
+	require.NoError(t, Patch(Settings{LocaleKey: "en-US", CountryCodeKey: "US"}))
+	changed := stat()
+	require.NoError(t, Patch(Settings{LocaleKey: "en-US"}))
+	require.NoError(t, Set(CountryCodeKey, "US"))
+
+	// atomicfile renames a new file into place, so a file with the same identity was never rewritten.
+	assert.False(t, os.SameFile(initial, changed), "a real change is written")
+	assert.True(t, os.SameFile(changed, stat()), "unchanged values are not rewritten")
+}
+
+func TestPatchRewritesAFileChangedElsewhere(t *testing.T) {
+	isolateDiscovery(t)
+	dir := t.TempDir()
+	initAt(t, dir)
+	require.NoError(t, Set(LocaleKey, "en-US"))
+	path := filepath.Join(dir, settingsFileName)
+	require.NoError(t, os.WriteFile(path, []byte(`{"locale": "ru-RU"}`), 0o644))
+
+	require.NoError(t, Set(LocaleKey, "en-US"))
+
+	require.NoError(t, Reload())
+	assert.Equal(t, "en-US", GetString(LocaleKey))
+}
+
+func TestFailedInitKeepsChangesInMemory(t *testing.T) {
+	isolateDiscovery(t)
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	readOnlyDir(t, dir)
+	require.Error(t, InitSettings(dir))
+
+	require.NoError(t, Set(LocaleKey, "en-US"))
+
+	assert.Equal(t, "en-US", GetString(LocaleKey))
+}
+
 func TestReload(t *testing.T) {
+	isolateDiscovery(t)
 	initSettingsAt := func(t *testing.T, contents string) string {
 		t.Helper()
 		Reset()
@@ -632,6 +864,7 @@ func TestReload(t *testing.T) {
 }
 
 func TestReloadRacesNothing(t *testing.T) {
+	isolateDiscovery(t)
 	Reset()
 	t.Cleanup(Reset)
 	dir := t.TempDir()

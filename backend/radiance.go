@@ -142,8 +142,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		slog.Warn("Failed to apply some env overrides", "error", envOverrideErrs)
 	}
 	dataDir := settings.GetString(settings.DataPathKey)
-	if err := settings.Patch(startupSettings(opts)); err != nil {
-		slog.Warn("Persisting startup settings", "error", err)
+	if err := settings.Apply(startupSettings(opts)); err != nil {
+		slog.Warn("Failed to save startup settings", "error", err)
 	}
 	platformDeviceID := settings.GetString(settings.DeviceIDKey)
 
@@ -717,10 +717,18 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
 	}
+	patch := settings.Patch
+	for _, key := range settings.UserKeys {
+		if value, ok := updates[key]; ok {
+			// Account fields must be applied together against the identity active at commit time.
+			diff[key] = value
+			patch = r.accountClient.PatchAccountSettings
+		}
+	}
 	if len(diff) == 0 {
 		return errs
 	}
-	if err := settings.Patch(diff); err != nil {
+	if err := patch(diff); err != nil {
 		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", err))
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
@@ -739,7 +747,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 
 	// vpn settings
 	//
-	// settings.Patch above already persisted the whole diff, so an early return
+	// The patch above already persisted the whole diff, so an early return
 	// on a handler error would leave a persisted key that no runtime state
 	// matches — the divergence applyPeerShare's rollback exists to prevent. Run
 	// every handler and join their errors so the caller sees write failures.
@@ -758,7 +766,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	// Drive the Unbounded widget proxy off the toggle change immediately
 	// rather than waiting for the next NewConfigEvent to re-evaluate.
-	// settings.Patch above has already persisted the new value, so go
+	// The patch above has already persisted the new value, so go
 	// straight to Apply() — SetEnabled would short-circuit on the
 	// already-matching persisted value and never re-evaluate the
 	// manager. Apply re-checks the three-condition predicate against

@@ -2,7 +2,6 @@ package settings
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -15,13 +14,8 @@ import (
 // lookup to a temp dir without touching the host's %PUBLIC%.
 var windowsCrossDirCandidatesFn = windowsCrossDirCandidates
 
-// windowsCrossDirCandidates returns settings candidates from the v9.0.x
-// Windows data directory (${PUBLIC}\Lantern\data), which the same-dir
-// migration doesn't cover: radiance's data dir moved to
-// ${ProgramData}\Lantern and the two directories don't share a parent, so
-// the same-dir candidates never see the v9.0.x file.
-//
-// Returns nil on non-Windows hosts or when %PUBLIC% is unset.
+// windowsCrossDirCandidates returns the v9.0.x local.json from ${PUBLIC}\Lantern\data, which the
+// same-dir candidates miss because radiance's data dir moved to ${ProgramData}\Lantern.
 func windowsCrossDirCandidates(fileDir string) []candidateSource {
 	if runtime.GOOS != "windows" {
 		return nil
@@ -57,34 +51,22 @@ func samePathWindows(a, b string) bool {
 // readWindowsCrossDirCandidates is split out so tests can drive the path
 // resolution directly without needing to spoof %PUBLIC% / GOOS.
 func readWindowsCrossDirCandidates(v90xDir string) []candidateSource {
-	// legacySettingsFileName is tried first because it's the actual
-	// v9.0.x name; settingsFileName is included as a defensive
-	// fallback for users whose v9.0.x file got renamed by a partial /
-	// failed earlier upgrade attempt.
-	specs := []struct {
-		name, label string
-	}{
-		{legacySettingsFileName, fmt.Sprintf("v9.0.x Windows %s", filepath.Join(v90xDir, legacySettingsFileName))},
-		{settingsFileName, fmt.Sprintf("v9.0.x Windows %s", filepath.Join(v90xDir, settingsFileName))},
+	// settings.json is deliberately not read: in this directory it is the live UI's settings, not a
+	// v9.0.x artifact, so adopting it would import whatever the UI last wrote.
+	full := filepath.Join(v90xDir, legacySettingsFileName)
+	label := "v9.0.x Windows " + full
+	b, err := os.ReadFile(full)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
 	}
-	var out []candidateSource
-	for _, s := range specs {
-		full := filepath.Join(v90xDir, s.name)
-		b, err := os.ReadFile(full)
-		switch {
-		case err == nil:
-			out = append(out, candidateSource{
-				path:     full,
-				contents: b,
-				exists:   true,
-				label:    s.label,
-			})
-		case errors.Is(err, fs.ErrNotExist):
-			// Expected — fresh install or that filename never existed for this user.
-		default:
-			slog.Warn("v9.0.x Windows cross-dir read failed",
-				"path", full, "error", err)
-		}
+	if err != nil {
+		slog.Warn("legacy settings migration: read failed", "path", full, "error", err)
+		return nil
 	}
-	return out
+	return []candidateSource{{
+		path:     full,
+		contents: b,
+		exists:   true,
+		label:    label,
+	}}
 }

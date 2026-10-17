@@ -38,7 +38,9 @@ type Client struct {
 
 	salt     []byte
 	saltPath string
-	mu       sync.RWMutex
+	// generation advances whenever the active account may change; guarded by mu.
+	generation uint64
+	mu         sync.RWMutex
 }
 
 // NewClient returns a Client that caches its salt under dataDir. A nil logger
@@ -70,6 +72,25 @@ func (a *Client) setSalt(salt []byte) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.salt = salt
+}
+
+func (a *Client) storeSalt(salt []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.storeSaltLocked(salt)
+}
+
+// storeSaltLocked caches salt before persisting it, so a failed write never leaves a stale salt
+// cached. It requires a.mu to be held.
+func (a *Client) storeSaltLocked(salt []byte) error {
+	a.salt = salt
+	return writeSalt(salt, a.saltPath)
+}
+
+func (a *Client) identityGeneration() uint64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.generation
 }
 
 func (a *Client) proBaseURL() string {
@@ -177,7 +198,8 @@ func (a *Client) sendRequest(
 
 // sendProRequest sends a request to the Pro server, automatically adding the required headers,
 // including the device ID, user ID, and Pro token from settings, if available. If the URL is relative,
-// the Pro server base URL will be prepended.
+// the Pro server base URL will be prepended. A 2xx response carrying a non-empty error envelope
+// is returned as an error.
 func (a *Client) sendProRequest(
 	ctx context.Context,
 	method, url string,
@@ -197,7 +219,17 @@ func (a *Client) sendProRequest(
 		headers[common.UserIDHeader] = uid
 	}
 	maps.Copy(headers, additionalheaders)
-	return a.sendRequest(ctx, method, url, queryParams, headers, body)
+	resp, err := a.sendRequest(ctx, method, url, queryParams, headers, body)
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(resp, &envelope) == nil && envelope.Error != "" {
+		return nil, fmt.Errorf("received bad response: %s", envelope.Error)
+	}
+	return resp, nil
 }
 
 // curlFromRequest renders req as a curl command, replacing req.Body with an

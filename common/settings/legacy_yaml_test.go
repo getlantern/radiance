@@ -11,8 +11,7 @@ import (
 func TestTranslateLegacyYAML_Desktop(t *testing.T) {
 	t.Run("pro user with all fields", func(t *testing.T) {
 		// Shape mirrors what the pre-9.x desktop client (flashlight +
-		// lantern-client) wrote into ~/.lantern/settings.yaml /
-		// %APPDATA%\Lantern\settings.yaml / ~/.config/lantern/settings.yaml.
+		// lantern-client) wrote to the paths legacyYAMLPath resolves.
 		yaml := []byte(`userID: 3580849
 deviceID: 84e9c7b2-2a54-44f3-9ec6-276086017e49
 userPro: true
@@ -42,7 +41,7 @@ userToken: tok
 `)
 		out, err := translateLegacyYAML(yaml, "desktop")
 		require.NoError(t, err)
-		assert.Equal(t, "free", userLevelInJSON(out),
+		assert.Equal(t, "free", userLevelIn(t, out),
 			"a known but non-pro user should translate to user_level=free")
 	})
 
@@ -52,7 +51,7 @@ userToken: ""
 `)
 		out, err := translateLegacyYAML(yaml, "desktop")
 		require.NoError(t, err)
-		assert.Equal(t, "", userLevelInJSON(out),
+		assert.Equal(t, "", userLevelIn(t, out),
 			"no user_id means we shouldn't claim 'free'; let next login decide")
 	})
 
@@ -60,6 +59,15 @@ userToken: ""
 		_, err := translateLegacyYAML([]byte("\tnot: a [valid yaml: doc\n"), "desktop")
 		assert.Error(t, err)
 	})
+}
+
+func userLevelIn(t *testing.T, contents []byte) string {
+	t.Helper()
+	var got struct {
+		UserLevel string `json:"user_level"`
+	}
+	require.NoError(t, json.Unmarshal(contents, &got))
+	return got.UserLevel
 }
 
 func TestTranslateLegacyYAML_iOS(t *testing.T) {

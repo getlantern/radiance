@@ -80,13 +80,18 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		return fmt.Errorf("failed to initialize settings: %w", err)
 	}
 
-	settings.Set(settings.DataPathKey, data)
-	settings.Set(settings.LogPathKey, logs)
+	startup := settings.Settings{
+		settings.DataPathKey: data,
+		settings.LogPathKey:  logs,
+	}
 	// env override wins; otherwise preserve any persisted value; otherwise seed from the arg.
 	if v := env.GetString(env.LogLevel); v != "" {
-		settings.Set(settings.LogLevelKey, v)
+		startup[settings.LogLevelKey] = v
 	} else if !settings.Exists(settings.LogLevelKey) {
-		settings.Set(settings.LogLevelKey, logLevel)
+		startup[settings.LogLevelKey] = logLevel
+	}
+	if err := settings.Apply(startup); err != nil {
+		slog.Warn("Failed to save startup settings", "error", err)
 	}
 
 	logger := log.NewLogger(log.Config{
@@ -191,14 +196,8 @@ func setupDirectories(data, logs string) (dataDir, logDir string, err error) {
 	} else if logs == "" {
 		logs = internal.DefaultLogPath()
 	}
-	// Honor the caller's path as-is. A previous version of this function
-	// unconditionally appended /data and /logs suffixes here even when the
-	// caller passed a fully-resolved path (e.g. Android passes
-	// <app.dataDir>/.lantern). That broke upgrade continuity: v9.0.x had
-	// written settings.json under <caller-path>/, while v9.1.x reads from
-	// <caller-path>/data/, so every existing install lost its persisted
-	// user_id, device_id, jwt token, and user_level on upgrade — surfacing
-	// as "Pro is suddenly expired after the update."
+	// Use the caller's path as-is; earlier versions' settings live directly under it, so a
+	// suffix hides them from migration.
 	data, _ = filepath.Abs(data)
 	logs, _ = filepath.Abs(logs)
 	for _, path := range []string{data, logs} {
