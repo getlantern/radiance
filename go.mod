@@ -4,7 +4,7 @@ go 1.26.9
 
 // replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.13.20-0.20260929170631-54c013f07aeb
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.13.20-0.20261017021932-5a256d757969
 
 // replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4
 
@@ -306,7 +306,7 @@ require (
 	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
 	github.com/sagernet/sing-shadowsocks2 v0.2.1 // indirect
 	github.com/sagernet/sing-shadowtls v0.2.1 // indirect
-	github.com/sagernet/sing-tun v0.8.12-0.20260810140523-7c73233bd0fb // indirect
+	github.com/sagernet/sing-tun v0.8.12-0.20260810140523-7c73233bd0fb
 	github.com/sagernet/sing-vmess v0.2.9-0.20260929152519-9b95ab8c9478 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
 	github.com/sagernet/wireguard-go v0.0.4 // indirect
