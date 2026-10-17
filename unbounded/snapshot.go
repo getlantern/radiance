@@ -50,6 +50,32 @@ type slotBytes struct {
 // land in an orphaned table instead of the next run's attribution.
 type slotTable struct {
 	slots sync.Map
+	// mu is read-held by each chunk callback around its add, so close can
+	// wait out callbacks already past the closed check before the final fold.
+	mu     sync.RWMutex
+	closed bool
+}
+
+func (t *slotTable) add(idx int, size uint64, down bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.closed {
+		return
+	}
+	s := t.slot(idx)
+	if down {
+		s.down.Add(size)
+	} else {
+		s.up.Add(size)
+	}
+}
+
+// close stops the table accepting bytes and returns once every in-flight add
+// has landed, so a fold after close sees all accepted bytes.
+func (t *slotTable) close() {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
 }
 
 func (t *slotTable) slot(idx int) *slotBytes {
@@ -74,12 +100,7 @@ func chunkCounter(ctx context.Context, slots *slotTable, down bool) clientcore.C
 		if size <= 0 || ctx.Err() != nil {
 			return
 		}
-		s := slots.slot(workerIdx)
-		if down {
-			s.down.Add(uint64(size))
-		} else {
-			s.up.Add(uint64(size))
-		}
+		slots.add(workerIdx, uint64(size), down)
 	}
 }
 
@@ -145,12 +166,20 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 		if prev, ok := m.peers[slot]; ok {
 			m.releasePeer(prev)
 		}
+		delete(m.lastOwner, slot)
 		m.peers[slot] = source
 		m.acquirePeer(source)
 	} else if state < 0 {
 		m.foldSlot(slot)
 		if prev, ok := m.peers[slot]; ok {
 			m.releasePeer(prev)
+			// broflake batches upstream bytes for up to 250ms and reports the
+			// close without flushing them, so the closed peer keeps the slot's
+			// bytes until the next accept.
+			if m.lastOwner == nil {
+				m.lastOwner = make(map[int]string)
+			}
+			m.lastOwner[slot] = prev
 		}
 		delete(m.peers, slot)
 	}
@@ -161,11 +190,15 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 // their final totals stay visible for peerRetention after the worker stops.
 // Caller must hold m.mu.
 func (m *unboundedManager) releaseAllPeers() {
+	if m.slots != nil {
+		m.slots.close()
+	}
 	m.foldAllSlots()
 	for _, source := range m.peers {
 		m.releasePeer(source)
 	}
 	m.slots = nil
+	m.lastOwner = nil
 }
 
 // foldSlot moves a slot's pending bytes into the totals and, when the slot's
@@ -196,7 +229,11 @@ func (m *unboundedManager) addSlotBytes(idx int, s *slotBytes) {
 	}
 	m.bytesDown += down
 	m.bytesUp += up
-	if t := m.peerBytes[m.peers[idx]]; t != nil {
+	owner, live := m.peers[idx]
+	if !live {
+		owner = m.lastOwner[idx]
+	}
+	if t := m.peerBytes[owner]; t != nil {
 		t.down += down
 		t.up += up
 	}

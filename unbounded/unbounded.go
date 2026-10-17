@@ -191,6 +191,9 @@ type unboundedManager struct {
 	bytesDown uint64
 	bytesUp   uint64
 	peerBytes map[string]*peerTally
+	// lastOwner keeps a closed slot's IP so bytes broflake reports after the
+	// close are still credited to it.
+	lastOwner map[int]string
 	// now overrides time.Now for peer retention tests.
 	now func() time.Time
 }

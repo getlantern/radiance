@@ -109,7 +109,7 @@ func TestSnapshotSlotReuseByDifferentIP(t *testing.T) {
 	m.recordConnection(ctx, 1, 0, "192.0.2.1")
 	down(100, 0)
 	m.recordConnection(ctx, -1, 0, "192.0.2.1")
-	// Chunks between close and the next accept have no owner.
+	// Chunks between close and the next accept are late batches from the closed peer.
 	down(5, 0)
 	m.recordConnection(ctx, 1, 0, "192.0.2.2")
 	down(40, 0)
@@ -120,7 +120,7 @@ func TestSnapshotSlotReuseByDifferentIP(t *testing.T) {
 	s := m.snapshot()
 	require.Equal(t, uint64(147), s.BytesDown)
 	got := peerBytesByIP(s)
-	require.Equal(t, uint64(100), got["192.0.2.1"].Down)
+	require.Equal(t, uint64(105), got["192.0.2.1"].Down)
 	require.Equal(t, uint64(40), got["192.0.2.2"].Down)
 	require.Equal(t, uint64(2), got["192.0.2.3"].Down)
 	require.Equal(t, 0, m.peerBytes["192.0.2.2"].active)
@@ -257,4 +257,49 @@ func TestSnapshotConcurrentChunksAreCountedOnce(t *testing.T) {
 	s := m.snapshot()
 	require.Equal(t, uint64(2000), s.BytesDown)
 	require.Equal(t, []PeerBytes{{IP: "192.0.2.1", Down: 1000}, {IP: "192.0.2.2", Down: 1000}}, s.PeerBytes)
+}
+
+func TestSnapshotCreditsLateUpstreamBatchToClosedPeer(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, slots := newBytesManager(&now)
+	ctx := context.Background()
+	up := chunkCounter(ctx, slots, false)
+
+	m.recordConnection(ctx, 1, 0, "192.0.2.1")
+	up(10, 0)
+	m.snapshot()
+	m.recordConnection(ctx, -1, 0, "")
+	m.snapshot()
+	// broflake flushes the closed peer's pending upstream batch after the close.
+	up(7, 0)
+	now = now.Add(time.Second)
+	require.Equal(t, []PeerBytes{{IP: "192.0.2.1", Up: 17}}, m.snapshot().PeerBytes)
+
+	m.recordConnection(ctx, 1, 0, "192.0.2.2")
+	up(3, 0)
+	s := m.snapshot()
+	require.Equal(t, uint64(20), s.BytesUp)
+	got := peerBytesByIP(s)
+	require.Equal(t, uint64(17), got["192.0.2.1"].Up)
+	require.Equal(t, uint64(3), got["192.0.2.2"].Up)
+}
+
+func TestSlotTableCloseWaitsForInFlightAdds(t *testing.T) {
+	slots := &slotTable{}
+	slots.mu.RLock()
+	closed := make(chan struct{})
+	go func() {
+		slots.close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("close returned while an add was in flight")
+	case <-time.After(20 * time.Millisecond):
+	}
+	slots.slot(0).down.Add(5)
+	slots.mu.RUnlock()
+	<-closed
+	slots.add(0, 100, true)
+	require.Equal(t, uint64(5), slots.slot(0).down.Load())
 }
