@@ -181,9 +181,9 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 			// close without flushing them, so the closed peer keeps the slot's
 			// bytes until the next accept.
 			if m.lastOwner == nil {
-				m.lastOwner = make(map[int]string)
+				m.lastOwner = make(map[int]*peerTally)
 			}
-			m.lastOwner[slot] = prev
+			m.lastOwner[slot] = m.peerBytes[prev]
 		}
 		delete(m.peers, slot)
 	}
@@ -194,7 +194,7 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 // and credited to the consumers that relayed them.
 type retiredRun struct {
 	slots     *slotTable
-	owners    map[int]string
+	owners    map[int]*peerTally
 	retiredAt time.Time
 }
 
@@ -207,12 +207,12 @@ func (m *unboundedManager) releaseAllPeers() {
 		m.releasePeer(source)
 	}
 	if m.slots != nil {
-		owners := make(map[int]string, len(m.lastOwner)+len(m.peers))
-		for idx, source := range m.lastOwner {
-			owners[idx] = source
+		owners := make(map[int]*peerTally, len(m.lastOwner)+len(m.peers))
+		for idx, t := range m.lastOwner {
+			owners[idx] = t
 		}
 		for idx, source := range m.peers {
-			owners[idx] = source
+			owners[idx] = m.peerBytes[source]
 		}
 		m.retired = append(m.retired, retiredRun{slots: m.slots, owners: owners, retiredAt: m.clock()})
 	}
@@ -264,23 +264,25 @@ func (m *unboundedManager) foldAllSlots() {
 	})
 }
 
-// slotOwner is the IP credited with a live slot's bytes: its current consumer,
-// or the last one while the slot is vacant.
-func (m *unboundedManager) slotOwner(idx int) string {
+// slotOwner is the tally credited with a live slot's bytes: its current
+// consumer's, or the last one's while the slot is vacant. Owners are held as
+// tallies rather than IPs, so bytes from a pruned lifetime never reach a
+// returning IP's fresh tally.
+func (m *unboundedManager) slotOwner(idx int) *peerTally {
 	if owner, live := m.peers[idx]; live {
-		return owner
+		return m.peerBytes[owner]
 	}
 	return m.lastOwner[idx]
 }
 
-func (m *unboundedManager) addSlotBytes(owner string, s *slotBytes) {
+func (m *unboundedManager) addSlotBytes(t *peerTally, s *slotBytes) {
 	down, up := s.down.Swap(0), s.up.Swap(0)
 	if down == 0 && up == 0 {
 		return
 	}
 	m.bytesDown += down
 	m.bytesUp += up
-	if t := m.peerBytes[owner]; t != nil {
+	if t != nil {
 		t.down += down
 		t.up += up
 	}

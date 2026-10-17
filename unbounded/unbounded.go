@@ -191,9 +191,9 @@ type unboundedManager struct {
 	bytesDown uint64
 	bytesUp   uint64
 	peerBytes map[string]*peerTally
-	// lastOwner keeps a closed slot's IP so bytes broflake reports after the
+	// lastOwner keeps a closed slot's tally so bytes broflake reports after the
 	// close are still credited to it.
-	lastOwner map[int]string
+	lastOwner map[int]*peerTally
 	// retired holds stopped runs' tables still absorbing late bytes.
 	retired []retiredRun
 	// now overrides time.Now for peer retention tests.

@@ -401,3 +401,20 @@ func TestRetiredRunsExpireWithoutPolling(t *testing.T) {
 	m.releaseAllPeers()
 	require.Len(t, m.retired, 1)
 }
+
+func TestSnapshotLateBytesAfterPruneSkipReturningIP(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, slots := newBytesManager(&now)
+	ctx := context.Background()
+	up := chunkCounter(slots, false)
+
+	m.recordConnection(ctx, 1, 0, "192.0.2.1")
+	m.recordConnection(ctx, -1, 0, "")
+	now = now.Add(peerRetention + time.Second)
+	m.recordConnection(ctx, 1, 1, "192.0.2.1")
+	// Arrives after the prune that started the IP's new lifetime.
+	up(7, 0)
+	s := m.snapshot()
+	require.Equal(t, uint64(7), s.BytesUp)
+	require.Equal(t, []PeerBytes{{IP: "192.0.2.1"}}, s.PeerBytes)
+}
