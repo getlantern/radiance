@@ -184,16 +184,26 @@ func TestSnapshotStopKeepsFinalPeerBytes(t *testing.T) {
 
 	require.NoError(t, Stop(context.Background()))
 	stopCtx()
-	// Late chunks from the stopped run are dropped.
-	down(1000, 0)
-	slots.slot(0).down.Add(1000)
 	s := CurrentSnapshot()
 	require.False(t, s.Running)
 	require.Empty(t, s.Peers)
 	require.Equal(t, uint64(64), s.BytesDown)
 	require.Equal(t, []PeerBytes{{IP: "192.0.2.1", Down: 64}}, s.PeerBytes)
+
+	// broflake tears down asynchronously, so chunks can arrive after Stop.
+	down(36, 0)
+	require.Equal(t, []PeerBytes{{IP: "192.0.2.1", Down: 100}}, CurrentSnapshot().PeerBytes)
+
 	now = now.Add(peerRetention + time.Second)
-	require.Empty(t, CurrentSnapshot().PeerBytes)
+	s = CurrentSnapshot()
+	require.Empty(t, s.PeerBytes)
+	require.Equal(t, uint64(100), s.BytesDown)
+	manager.mu.Lock()
+	require.Empty(t, manager.retired)
+	manager.mu.Unlock()
+	// Once the retired run expires its table is closed.
+	down(1000, 0)
+	require.Equal(t, uint64(100), CurrentSnapshot().BytesDown)
 }
 
 func TestSnapshotJSONShape(t *testing.T) {
@@ -330,7 +340,33 @@ func TestSnapshotCountsUpstreamFlushedWhileStopping(t *testing.T) {
 	s := CurrentSnapshot()
 	require.Equal(t, uint64(13), s.BytesUp)
 	require.Equal(t, []PeerBytes{{IP: "192.0.2.1", Up: 13}}, s.PeerBytes)
-	// The table is closed once the widget has stopped.
-	upstream(100, 0)
-	require.Equal(t, uint64(13), CurrentSnapshot().BytesUp)
+}
+
+func TestSnapshotCreditsRetiredRunBytesToItsOwners(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, oldSlots := newBytesManager(&now)
+	ctx := context.Background()
+	oldUp := chunkCounter(oldSlots, false)
+	m.recordConnection(ctx, 1, 0, "192.0.2.1")
+	m.recordConnection(ctx, 1, 1, "192.0.2.2")
+	m.recordConnection(ctx, -1, 1, "")
+	m.mu.Lock()
+	m.releaseAllPeers()
+	newSlots := &slotTable{}
+	m.slots = newSlots
+	m.peers = make(map[int]string)
+	m.mu.Unlock()
+
+	newUp := chunkCounter(newSlots, false)
+	m.recordConnection(ctx, 1, 0, "192.0.2.3")
+	oldUp(5, 0)
+	oldUp(2, 1)
+	newUp(3, 0)
+	s := m.snapshot()
+	require.Equal(t, uint64(10), s.BytesUp)
+	require.Equal(t, []PeerBytes{
+		{IP: "192.0.2.1", Up: 5},
+		{IP: "192.0.2.2", Up: 2},
+		{IP: "192.0.2.3", Up: 3},
+	}, s.PeerBytes)
 }

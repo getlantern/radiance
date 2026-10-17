@@ -95,8 +95,8 @@ type peerTally struct {
 
 // chunkCounter returns a broflake ChunkFunc that adds relayed bytes to the
 // slot's downstream or upstream counter. It keeps counting after the worker's
-// context is cancelled, because broflake flushes its batched upstream bytes
-// while stopping; the table is closed only after the widget has stopped.
+// context is cancelled: broflake tears down asynchronously after ui.Stop
+// returns and can still deliver bytes, which the retired run absorbs.
 func chunkCounter(slots *slotTable, down bool) clientcore.ChunkFunc {
 	return func(size int, workerIdx int) {
 		if size <= 0 {
@@ -115,6 +115,7 @@ func (m *unboundedManager) snapshot() Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.foldAllSlots()
+	m.foldRetiredRuns()
 	m.prunePeerBytes()
 	s := Snapshot{
 		Epoch:     snapshotEpoch,
@@ -188,19 +189,58 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 	m.prunePeerBytes()
 }
 
-// releaseAllPeers folds outstanding slot bytes and ends every live peer, so
-// their final totals stay visible for peerRetention after the worker stops.
-// Caller must hold m.mu.
+// retiredRun keeps a stopped run's slot table and its final slot owners, so
+// bytes broflake delivers during its asynchronous teardown are still counted
+// and credited to the consumers that relayed them.
+type retiredRun struct {
+	slots     *slotTable
+	owners    map[int]string
+	retiredAt time.Time
+}
+
+// releaseAllPeers folds outstanding slot bytes, ends every live peer so their
+// final totals stay visible for peerRetention, and retires the run's slot
+// table for the same period. Caller must hold m.mu.
 func (m *unboundedManager) releaseAllPeers() {
-	if m.slots != nil {
-		m.slots.close()
-	}
 	m.foldAllSlots()
 	for _, source := range m.peers {
 		m.releasePeer(source)
 	}
+	if m.slots != nil {
+		owners := make(map[int]string, len(m.lastOwner)+len(m.peers))
+		for idx, source := range m.lastOwner {
+			owners[idx] = source
+		}
+		for idx, source := range m.peers {
+			owners[idx] = source
+		}
+		m.retired = append(m.retired, retiredRun{slots: m.slots, owners: owners, retiredAt: m.clock()})
+	}
 	m.slots = nil
 	m.lastOwner = nil
+}
+
+// foldRetiredRuns folds bytes stopped runs received since the last fold, and
+// drops runs retired longer than peerRetention after a final fold. Caller
+// must hold m.mu.
+func (m *unboundedManager) foldRetiredRuns() {
+	now := m.clock()
+	kept := m.retired[:0]
+	for _, r := range m.retired {
+		expired := now.Sub(r.retiredAt) > peerRetention
+		if expired {
+			r.slots.close()
+		}
+		r.slots.slots.Range(func(k, v any) bool {
+			m.addSlotBytes(r.owners[k.(int)], v.(*slotBytes))
+			return true
+		})
+		if !expired {
+			kept = append(kept, r)
+		}
+	}
+	clear(m.retired[len(kept):])
+	m.retired = kept
 }
 
 // foldSlot moves a slot's pending bytes into the totals and, when the slot's
@@ -210,7 +250,7 @@ func (m *unboundedManager) foldSlot(idx int) {
 		return
 	}
 	if s, ok := m.slots.slots.Load(idx); ok {
-		m.addSlotBytes(idx, s.(*slotBytes))
+		m.addSlotBytes(m.slotOwner(idx), s.(*slotBytes))
 	}
 }
 
@@ -219,22 +259,27 @@ func (m *unboundedManager) foldAllSlots() {
 		return
 	}
 	m.slots.slots.Range(func(k, v any) bool {
-		m.addSlotBytes(k.(int), v.(*slotBytes))
+		m.addSlotBytes(m.slotOwner(k.(int)), v.(*slotBytes))
 		return true
 	})
 }
 
-func (m *unboundedManager) addSlotBytes(idx int, s *slotBytes) {
+// slotOwner is the IP credited with a live slot's bytes: its current consumer,
+// or the last one while the slot is vacant.
+func (m *unboundedManager) slotOwner(idx int) string {
+	if owner, live := m.peers[idx]; live {
+		return owner
+	}
+	return m.lastOwner[idx]
+}
+
+func (m *unboundedManager) addSlotBytes(owner string, s *slotBytes) {
 	down, up := s.down.Swap(0), s.up.Swap(0)
 	if down == 0 && up == 0 {
 		return
 	}
 	m.bytesDown += down
 	m.bytesUp += up
-	owner, live := m.peers[idx]
-	if !live {
-		owner = m.lastOwner[idx]
-	}
 	if t := m.peerBytes[owner]; t != nil {
 		t.down += down
 		t.up += up
@@ -281,16 +326,4 @@ func (m *unboundedManager) clock() time.Time {
 		return m.now()
 	}
 	return time.Now()
-}
-
-// finishRun records the final byte totals of the run that owned slots, after
-// its widget has stopped, and clears the run's state. Caller must hold m.mu.
-func (m *unboundedManager) finishRun(slots *slotTable) {
-	if m.slots == slots {
-		m.releaseAllPeers()
-		m.peers = nil
-	}
-	m.cancel = nil
-	m.done = nil
-	m.runningCfg = nil
 }

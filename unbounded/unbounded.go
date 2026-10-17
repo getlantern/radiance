@@ -194,6 +194,8 @@ type unboundedManager struct {
 	// lastOwner keeps a closed slot's IP so bytes broflake reports after the
 	// close are still credited to it.
 	lastOwner map[int]string
+	// retired holds stopped runs' tables still absorbing late bytes.
+	retired []retiredRun
 	// now overrides time.Now for peer retention tests.
 	now func() time.Time
 }
@@ -452,6 +454,8 @@ func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
 	cancel()
 	m.mu.Lock()
 	m.running = false
+	m.releaseAllPeers()
+	m.peers = nil
 	m.mu.Unlock()
 	select {
 	case <-done:
@@ -566,8 +570,8 @@ func (m *unboundedManager) start() {
 
 		// Downstream chunks fire per chunk on broflake's data path, so the
 		// counters stay lock-free and attribution to an IP happens later
-		// under m.mu. The table is closed once ui.Stop returns, which drops
-		// any chunks after that.
+		// under m.mu. Chunks arriving after stop land in the retired run,
+		// credited to the slot owners at stop.
 		bfOpt.OnDownstreamChunkFunc = chunkCounter(slots, true)
 		bfOpt.OnUpstreamChunkFunc = chunkCounter(slots, false)
 
@@ -598,7 +602,9 @@ func (m *unboundedManager) start() {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
 			cancel()
 			m.mu.Lock()
-			m.finishRun(slots)
+			m.cancel = nil
+			m.done = nil
+			m.runningCfg = nil
 			m.mu.Unlock()
 			return
 		}
@@ -611,7 +617,9 @@ func (m *unboundedManager) start() {
 		slog.Info("Unbounded: stopping broflake widget proxy")
 		ui.Stop()
 		m.mu.Lock()
-		m.finishRun(slots)
+		m.cancel = nil
+		m.done = nil
+		m.runningCfg = nil
 		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy stopped")
 	}()
