@@ -36,7 +36,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20261004155437-e0237743ac3d
+	github.com/getlantern/broflake v0.0.0-20261017164347-6a1d80144213
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
 	github.com/getlantern/kindling v0.0.0-20261014210827-0f4a89dbe1ee

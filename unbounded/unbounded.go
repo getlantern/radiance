@@ -183,6 +183,16 @@ type unboundedManager struct {
 	running    bool
 	peers      map[int]string
 	arrivals   uint64
+
+	// slots receives per-chunk byte counts from the live worker; it is
+	// folded into bytesDown/bytesUp and peerBytes (keyed by consumer IP)
+	// whenever a slot's connection changes or a snapshot is taken.
+	slots     *slotTable
+	bytesDown uint64
+	bytesUp   uint64
+	peerBytes map[string]*peerTally
+	// now overrides time.Now for peer retention tests.
+	now func() time.Time
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -439,6 +449,7 @@ func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
 	cancel()
 	m.mu.Lock()
 	m.running = false
+	m.releaseAllPeers()
 	m.peers = nil
 	m.mu.Unlock()
 	select {
@@ -498,6 +509,8 @@ func (m *unboundedManager) start() {
 	// Retain the immutable config snapshot to detect changes while this worker runs.
 	m.runningCfg = ucfg
 	m.peers = make(map[int]string)
+	slots := &slotTable{}
+	m.slots = slots
 	m.mu.Unlock()
 
 	go func() {
@@ -549,6 +562,12 @@ func (m *unboundedManager) start() {
 				Timestamp: time.Now().UnixMilli(),
 			})
 		}
+
+		// Downstream chunks fire per chunk on broflake's data path, so the
+		// counters stay lock-free and attribution to an IP happens later
+		// under m.mu. The same ctx guard drops chunks after stop.
+		bfOpt.OnDownstreamChunkFunc = chunkCounter(ctx, slots, true)
+		bfOpt.OnUpstreamChunkFunc = chunkCounter(ctx, slots, false)
 
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
