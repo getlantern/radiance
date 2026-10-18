@@ -216,6 +216,13 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 
 	// Subscription endpoints
 	mux.HandleFunc("/plans-v5", func(w http.ResponseWriter, r *http.Request) {
+		// The pro server's requireUser middleware rejects anonymous plan requests.
+		if r.Header.Get(common.UserIDHeader) == "" {
+			writeJSONResponse(w, SubscriptionPlans{
+				BaseResponse: &protos.BaseResponse{Error: "Bad input: request should provide an integer User ID"},
+			})
+			return
+		}
 		writeJSONResponse(w, SubscriptionPlans{
 			BaseResponse: &protos.BaseResponse{},
 			Plans:        []*protos.Plan{{Id: "1y-usd-10", Description: "Pro Plan"}},
