@@ -366,6 +366,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		c.listenerDraining.Store(true)
 		peerconn.SetListener(nil)
 		c.resetConnTracking()
+		c.relay.end()
 		if box != nil {
 			_ = c.closeBox(box)
 		}
@@ -705,6 +706,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.listenerDraining.Store(true)
 	peerconn.SetListener(nil)
 	c.resetConnTracking()
+	c.relay.end()
 
 	cancel()
 	<-done

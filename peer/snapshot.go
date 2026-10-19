@@ -56,7 +56,11 @@ type relayStats struct {
 	conns                map[*peerconn.Counter]string
 	ips                  map[string]*relayTally
 	closedDown, closedUp uint64
-	now                  func() time.Time
+	// endedAt is when the session stopped, or zero while it runs. Stop drops
+	// the close events of connections still open, so those are retired by
+	// time instead: relayRetention after endedAt.
+	endedAt time.Time
+	now     func() time.Time
 }
 
 func (r *relayStats) clock() time.Time {
@@ -76,6 +80,36 @@ func (r *relayStats) begin() {
 	r.conns = nil
 	r.ips = nil
 	r.closedDown, r.closedUp = 0, 0
+	r.endedAt = time.Time{}
+}
+
+// end marks the session stopped. Its connections' counters stay readable for
+// relayRetention, long enough for the app's poller to see the bytes relayed
+// while the box closed, and are then folded into the totals and dropped.
+func (r *relayStats) end() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.endedAt = r.clock()
+}
+
+// pruneLocked drops clients that left more than relayRetention ago, and once a
+// stopped session is past it, folds its still-open connections into the
+// totals so they stop being held. Caller must hold r.mu.
+func (r *relayStats) pruneLocked(now time.Time) {
+	if !r.endedAt.IsZero() && now.Sub(r.endedAt) > relayRetention {
+		for c := range r.conns {
+			r.closedDown += c.Down()
+			r.closedUp += c.Up()
+		}
+		r.conns = nil
+		r.ips = nil
+		return
+	}
+	for ip, t := range r.ips {
+		if t.open == 0 && now.Sub(t.endedAt) > relayRetention {
+			delete(r.ips, ip)
+		}
+	}
 }
 
 // record follows one connection's accept or close. A close folds the
@@ -90,6 +124,12 @@ func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if state > 0 {
+		// Pruned here too, so a session no one polls does not keep every
+		// client it has ever seen. Before acquiring, so a returning IP's
+		// fresh tally does not inherit its pruned totals.
+		r.pruneLocked(r.clock())
+	}
 	if r.ips == nil {
 		r.ips = make(map[string]*relayTally)
 		r.conns = make(map[*peerconn.Counter]string)
@@ -126,12 +166,7 @@ func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
 func (r *relayStats) snapshot(running bool) Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	now := r.clock()
-	for ip, t := range r.ips {
-		if t.open == 0 && now.Sub(t.endedAt) > relayRetention {
-			delete(r.ips, ip)
-		}
-	}
+	r.pruneLocked(r.clock())
 	s := Snapshot{
 		Epoch:     r.epoch,
 		Running:   running,

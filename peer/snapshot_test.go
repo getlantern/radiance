@@ -86,6 +86,47 @@ func TestRelayStats_PrunesDepartedClientsAfterRetention(t *testing.T) {
 	assert.Equal(t, uint64(40), s.BytesDown)
 }
 
+// With no one polling, departed clients are still pruned as new ones arrive,
+// so memory does not grow with lifetime client churn.
+func TestRelayStats_PrunesWithoutSnapshots(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	r := relayStats{now: func() time.Time { return now }}
+	r.begin()
+	old := counter(10, 1)
+	r.record(1, "203.0.113.7:1000", old)
+	r.record(-1, "203.0.113.7:1000", old)
+	now = now.Add(relayRetention + time.Second)
+	r.record(1, "198.51.100.9:2000", counter(5, 0))
+	r.mu.Lock()
+	_, kept := r.ips["203.0.113.7"]
+	r.mu.Unlock()
+	assert.False(t, kept)
+	assert.Equal(t, uint64(15), r.snapshot(true).BytesDown)
+}
+
+// Stop drops the close events of connections still open, so a stopped
+// session's open connections are retired by time: still read live for the
+// retention window, then folded into the totals, which never go backwards.
+func TestRelayStats_RetiresOpenConnectionsAfterStop(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	r := relayStats{now: func() time.Time { return now }}
+	r.begin()
+	c := counter(100, 10)
+	r.record(1, "203.0.113.7:1000", c)
+	r.end()
+	c.AddDown(20) // bytes moved while the box closed
+	assert.Equal(t, uint64(120), r.snapshot(false).BytesDown)
+
+	now = now.Add(relayRetention + time.Second)
+	s := r.snapshot(false)
+	assert.Equal(t, uint64(120), s.BytesDown, "folded, not lost")
+	assert.Equal(t, uint64(10), s.BytesUp)
+	assert.Empty(t, s.PeerBytes)
+	r.mu.Lock()
+	assert.Empty(t, r.conns, "the counter is no longer held")
+	r.mu.Unlock()
+}
+
 // Each session counts from zero under its own epoch, but the last session's
 // totals stay readable until the next begins.
 func TestRelayStats_NewEpochPerSession(t *testing.T) {
