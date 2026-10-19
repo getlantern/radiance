@@ -246,6 +246,8 @@ func (s *SplitTunnel) updateFiltersLocked(diff SplitTunnelFilter, fn actionFn) {
 	s.ruleMap[TypePackageName].PackageName = fn(s.ruleMap[TypePackageName].PackageName, diff.PackageName)
 }
 
+// updateProcessPaths treats Windows path aliases as one item when applying fn.
+// Other platforms retain fn's matching and duplication behavior.
 func updateProcessPaths(paths, items []string, fn actionFn) []string {
 	if runtime.GOOS != "windows" {
 		return fn(paths, items)
@@ -259,6 +261,8 @@ func updateProcessPaths(paths, items []string, fn actionFn) []string {
 	})
 }
 
+// normalizeProcessPaths returns unique Windows paths in first-occurrence order
+// without changing the input; on other platforms it returns paths unchanged.
 func normalizeProcessPaths(paths []string) []string {
 	if runtime.GOOS != "windows" {
 		return paths

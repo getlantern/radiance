@@ -1,8 +1,11 @@
 // Package processpath provides process-path identity across Windows aliases.
 package processpath
 
-// Normalize case-folds Windows paths and expands local absolute paths from 8.3 names when available.
-// Missing paths and reparse points retain their cleaned spelling; other platforms return path unchanged.
+// Normalize returns a platform-specific process-path identity.
+//
+// On Windows, paths are case-folded and drive-absolute paths are cleaned. Local
+// drive-absolute 8.3 aliases are expanded when accessible without following
+// reparse points. Other platforms return path unchanged.
 func Normalize(path string) string {
 	return normalize(path)
 }

@@ -17,10 +17,13 @@ func TestNormalizeWindowsPaths(t *testing.T) {
 	for _, path := range []string{
 		"",
 		`Game.EXE`,
+		`.\Games\..\GAME.EXE`,
 		`C:Game.EXE`,
 		`\Games\GAME.EXE`,
 		`\\server.invalid\share\GAME.EXE`,
+		`\\server.invalid\share\Games\..\GAME.EXE`,
 		`\\?\C:\Games\GAME.EXE`,
+		`\\?\C:\Games\..\GAME.EXE`,
 		`\\.\C:\Games\GAME.EXE`,
 	} {
 		if got, want := Normalize(path), strings.ToLower(path); got != want {
