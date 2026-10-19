@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	box "github.com/getlantern/lantern-box"
+	"github.com/getlantern/lantern-box/tracker/peerconn"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
@@ -1227,6 +1228,87 @@ func TestTrackConn_IgnoresUnmatchedClose(t *testing.T) {
 
 	c.trackConn(1, "198.51.100.9:55001")
 	assert.Equal(t, 1, c.ActiveClients(), "and must not corrupt later counting")
+}
+
+// TestIsVerifierConn_PairsCloseWithAccept pins that a verifier close, which
+// carries no destination, is matched by the source its accept recorded, and
+// that an ordinary connection from the same IP is not swept up with it.
+func TestIsVerifierConn_PairsCloseWithAccept(t *testing.T) {
+	c := &Client{}
+
+	assert.True(t, c.isVerifierConn(1, "35.233.177.182:33792", "api.iantem.io:443"))
+	assert.True(t, c.isVerifierConn(1, "35.233.177.183:1000", "API.staging.iantem.io:443"))
+	assert.False(t, c.isVerifierConn(1, "35.233.177.182:33793", "google.com:443"))
+
+	assert.True(t, c.isVerifierConn(-1, "35.233.177.182:33792", ""))
+	assert.False(t, c.isVerifierConn(-1, "35.233.177.182:33792", ""),
+		"a second close for the same source is not the verifier's")
+	assert.False(t, c.isVerifierConn(-1, "35.233.177.182:33793", ""))
+
+	c.resetConnTracking()
+	assert.False(t, c.isVerifierConn(-1, "35.233.177.183:1000", ""),
+		"a reset forgets verifier connections from the old session")
+}
+
+// TestClient_VerifierStreamsSharingASource covers samizdat multiplexing: a
+// client's ordinary stream and two api.iantem.io streams share one source.
+// Both hidden accepts must hide a close each, so the ordinary stream stays
+// counted until its own close.
+func TestClient_VerifierStreamsSharingASource(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	c := newTestClient(t, fwd, &fakeBoxService{}, newStubServer(t))
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	defer func() { require.NoError(t, c.Stop(ctx)) }()
+
+	const src = "5.119.14.105:10304"
+	peerconn.Notify(peerconn.Event{State: +1, Source: src, Destination: "google.com:443"})
+	peerconn.Notify(peerconn.Event{State: +1, Source: src, Destination: "api.iantem.io:443"})
+	peerconn.Notify(peerconn.Event{State: +1, Source: src, Destination: "api.iantem.io:443"})
+	require.Equal(t, 1, c.ActiveClients())
+
+	peerconn.Notify(peerconn.Event{State: -1, Source: src})
+	peerconn.Notify(peerconn.Event{State: -1, Source: src})
+	assert.Equal(t, 1, c.ActiveClients(), "two hidden accepts absorb two closes")
+	peerconn.Notify(peerconn.Event{State: -1, Source: src})
+	assert.Equal(t, 0, c.ActiveClients())
+}
+
+// TestClient_HidesVerifierConnections covers lantern-cloud's verify callback,
+// which reaches api.iantem.io through the peer: it must not reach the UI as a
+// person helped nor be reported to the server as a client.
+func TestClient_HidesVerifierConnections(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	c := newTestClient(t, fwd, &fakeBoxService{}, newStubServer(t))
+	ctx := context.Background()
+
+	got := make(chan ConnectionEvent, 8)
+	sub := events.Subscribe(func(evt ConnectionEvent) { got <- evt })
+	defer sub.Unsubscribe()
+
+	require.NoError(t, c.Start(ctx))
+	peerconn.Notify(peerconn.Event{State: +1, Source: "35.233.177.182:33792", Destination: "api.iantem.io:443"})
+	peerconn.Notify(peerconn.Event{State: +1, Source: "5.119.14.105:10304", Destination: "google.com:443"})
+	assert.Equal(t, 1, c.ActiveClients(), "the verifier is not a client")
+	peerconn.Notify(peerconn.Event{State: -1, Source: "35.233.177.182:33792"})
+	peerconn.Notify(peerconn.Event{State: -1, Source: "5.119.14.105:10304"})
+
+	var sources []string
+	for len(sources) < 2 {
+		select {
+		case evt := <-got:
+			sources = append(sources, evt.Source)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("got %d connection events, want 2", len(sources))
+		}
+	}
+	assert.Equal(t, []string{"5.119.14.105:10304", "5.119.14.105:10304"}, sources)
+	select {
+	case evt := <-got:
+		t.Fatalf("unexpected connection event for %s", evt.Source)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.NoError(t, c.Stop(ctx))
 }
 
 // TestResetConnTracking_ClearsAcrossSessions covers Stop → Start: the new
