@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
+	"github.com/getlantern/radiance/common/processpath"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 )
@@ -222,7 +224,7 @@ func (s *SplitTunnel) updateFilterLocked(filterType string, item string, fn acti
 	case TypeProcessName:
 		rule.ProcessName = fn(rule.ProcessName, items)
 	case TypeProcessPath:
-		rule.ProcessPath = fn(rule.ProcessPath, items)
+		rule.ProcessPath = updateProcessPaths(rule.ProcessPath, items, fn)
 	case TypeProcessPathRegex:
 		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, items)
 	case TypePackageName:
@@ -239,9 +241,38 @@ func (s *SplitTunnel) updateFiltersLocked(diff SplitTunnelFilter, fn actionFn) {
 	s.ruleMap[TypeDomainKeyword].DomainKeyword = fn(s.ruleMap[TypeDomainKeyword].DomainKeyword, diff.DomainKeyword)
 	s.ruleMap[TypeDomainRegex].DomainRegex = fn(s.ruleMap[TypeDomainRegex].DomainRegex, diff.DomainRegex)
 	s.ruleMap[TypeProcessName].ProcessName = fn(s.ruleMap[TypeProcessName].ProcessName, diff.ProcessName)
-	s.ruleMap[TypeProcessPath].ProcessPath = fn(s.ruleMap[TypeProcessPath].ProcessPath, diff.ProcessPath)
+	s.ruleMap[TypeProcessPath].ProcessPath = updateProcessPaths(s.ruleMap[TypeProcessPath].ProcessPath, diff.ProcessPath, fn)
 	s.ruleMap[TypeProcessPathRegex].ProcessPathRegex = fn(s.ruleMap[TypeProcessPathRegex].ProcessPathRegex, diff.ProcessPathRegex)
 	s.ruleMap[TypePackageName].PackageName = fn(s.ruleMap[TypePackageName].PackageName, diff.PackageName)
+}
+
+func updateProcessPaths(paths, items []string, fn actionFn) []string {
+	if runtime.GOOS != "windows" {
+		return fn(paths, items)
+	}
+	updated := fn(normalizeProcessPaths(paths), normalizeProcessPaths(items))
+	seen := make(map[string]bool, len(updated))
+	return slices.DeleteFunc(updated, func(path string) bool {
+		duplicate := seen[path]
+		seen[path] = true
+		return duplicate
+	})
+}
+
+func normalizeProcessPaths(paths []string) []string {
+	if runtime.GOOS != "windows" {
+		return paths
+	}
+	normalized := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		path = processpath.Normalize(path)
+		if !seen[path] {
+			seen[path] = true
+			normalized = append(normalized, path)
+		}
+	}
+	return normalized
 }
 
 func merge(slice []string, items []string) []string {
@@ -413,6 +444,17 @@ func (s *SplitTunnel) loadRule() error {
 	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 	s.inverted.Store(s.activeFilter.Invert)
+	s.access.Lock()
+	paths := s.ruleMap[TypeProcessPath].ProcessPath
+	if normalized := normalizeProcessPaths(paths); !slices.Equal(paths, normalized) {
+		s.ruleMap[TypeProcessPath].ProcessPath = normalized
+		err := s.saveLocked()
+		if err != nil {
+			s.access.Unlock()
+			return fmt.Errorf("normalizing process paths: %w", err)
+		}
+	}
+	s.access.Unlock()
 
 	s.logger.Log(context.Background(), log.LevelTrace, "loaded split tunnel rules",
 		"file", s.ruleFile, "filters", s.Filters().String(),
