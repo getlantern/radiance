@@ -47,9 +47,13 @@ type relayTally struct {
 // lantern-box attaches to each connection. It has its own lock because
 // Snapshot is polled every second and must not wait on Start or Stop.
 type relayStats struct {
-	mu                   sync.Mutex
-	epoch                string
-	conns                map[string]*peerconn.Counter // open, by "ip:port" source
+	mu    sync.Mutex
+	epoch string
+	// conns maps each open connection's counter to its "ip:port" source. The
+	// counter, not the source, is the key: samizdat multiplexes streams over
+	// one TCP conn, so several open streams can share a source, and the same
+	// counter comes back on each stream's close.
+	conns                map[*peerconn.Counter]string
 	ips                  map[string]*relayTally
 	closedDown, closedUp uint64
 	now                  func() time.Time
@@ -88,11 +92,11 @@ func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
 	defer r.mu.Unlock()
 	if r.ips == nil {
 		r.ips = make(map[string]*relayTally)
-		r.conns = make(map[string]*peerconn.Counter)
+		r.conns = make(map[*peerconn.Counter]string)
 	}
 	switch {
 	case state > 0:
-		r.conns[source] = bytes
+		r.conns[bytes] = source
 		t := r.ips[ip]
 		if t == nil {
 			t = &relayTally{}
@@ -100,10 +104,10 @@ func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
 		}
 		t.open++
 	case state < 0:
-		if _, ok := r.conns[source]; !ok {
+		if _, ok := r.conns[bytes]; !ok {
 			return
 		}
-		delete(r.conns, source)
+		delete(r.conns, bytes)
 		down, up := bytes.Down(), bytes.Up()
 		r.closedDown += down
 		r.closedUp += up
@@ -137,7 +141,7 @@ func (r *relayStats) snapshot(running bool) Snapshot {
 		PeerBytes: []PeerBytes{},
 	}
 	live := make(map[string]PeerBytes, len(r.ips))
-	for source, c := range r.conns {
+	for c, source := range r.conns {
 		down, up := c.Down(), c.Up()
 		s.BytesDown += down
 		s.BytesUp += up
