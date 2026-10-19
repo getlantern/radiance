@@ -778,13 +778,23 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 		if out.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("outbound missing tag"))
 		}
-		servers = append(servers, (&Server{Tag: out.Tag, Type: out.Type, Options: out}).WithTLSVerification())
+		server := &Server{
+			Tag:     out.Tag,
+			Type:    out.Type,
+			Options: out,
+		}
+		servers = append(servers, server.WithTLSVerification())
 	}
 	for _, ep := range cfg.Endpoints {
 		if ep.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("endpoint missing tag"))
 		}
-		servers = append(servers, (&Server{Tag: ep.Tag, Type: ep.Type, Options: ep}).WithTLSVerification())
+		server := &Server{
+			Tag:     ep.Tag,
+			Type:    ep.Type,
+			Options: ep,
+		}
+		servers = append(servers, server.WithTLSVerification())
 	}
 	list := ServerList{Servers: servers}
 	if err := m.AddServers(list, false); err != nil {
