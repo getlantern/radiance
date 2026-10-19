@@ -175,21 +175,40 @@ func TestRelayStats_IgnoresCallbacksFromAnEarlierSession(t *testing.T) {
 	assert.False(t, held)
 }
 
-// Each session counts from zero under its own epoch, but the last session's
-// totals stay readable until the next begins.
-func TestRelayStats_NewEpochPerSession(t *testing.T) {
+// Like Unbounded's, the epoch is fixed for the process and totals carry
+// across sessions, so a Stop and Start between two of the app's polls loses
+// none of the stopped session's bytes; its open connections fold in at begin.
+func TestRelayStats_TotalsCarryAcrossSessions(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	r := relayStats{now: func() time.Time { return now }}
-	r.begin()
+	gen := r.begin()
 	first := r.snapshot(true).Epoch
-	r.record(1, "203.0.113.7:1000", counter(10, 1))
-	assert.Equal(t, uint64(10), r.snapshot(false).BytesDown, "stopping keeps the totals")
+	c := counter(10, 1)
+	r.recordFor(gen, 1, "203.0.113.7:1000", c)
+	r.end()
 	assert.Empty(t, r.snapshot(false).Peers, "a stopped session lists no peers")
 
+	c.AddDown(5) // relayed after the last poll, while the box closed
 	now = now.Add(time.Second)
-	r.begin()
+	gen = r.begin()
 	s := r.snapshot(true)
-	assert.NotEqual(t, first, s.Epoch)
+	assert.Equal(t, first, s.Epoch)
+	assert.Equal(t, uint64(15), s.BytesDown, "nothing lost across the restart")
+	assert.Equal(t, []PeerBytes{{IP: "203.0.113.7", Down: 15, Up: 1}}, s.PeerBytes)
+
+	r.recordFor(gen, 1, "198.51.100.9:2000", counter(7, 0))
+	assert.Equal(t, uint64(22), r.snapshot(true).BytesDown)
+}
+
+// A verifier accept can pass the drain check, stall, and resume after Stop,
+// where isVerifierConn no longer recognizes it. end advances the generation,
+// so the late event is not counted in the stopped session.
+func TestRelayStats_IgnoresEventsAfterEnd(t *testing.T) {
+	var r relayStats
+	gen := r.begin()
+	r.end()
+	r.recordFor(gen, 1, "35.233.177.182:33792", counter(500, 50))
+	s := r.snapshot(false)
 	assert.Zero(t, s.BytesDown)
 	assert.Empty(t, s.PeerBytes)
 }

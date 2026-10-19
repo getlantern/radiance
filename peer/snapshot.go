@@ -14,9 +14,10 @@ import (
 // enough for the app's 1s poller to observe its final count.
 const relayRetention = 60 * time.Second
 
-// Snapshot is the data a direct-sharing session has relayed, in the shape of
-// unbounded.Snapshot so the app can fold both with the same code. Byte counts
-// are cumulative since Epoch, which changes with every session.
+// Snapshot is the data direct sharing has relayed, in the shape of
+// unbounded.Snapshot so the app can fold both with the same code. Like
+// Unbounded's, Epoch is fixed for the process and byte counts are cumulative
+// across sessions, so a Stop and Start between two polls loses nothing.
 type Snapshot struct {
 	Epoch     string      `json:"epoch"`
 	Running   bool        `json:"running"`
@@ -43,8 +44,8 @@ type relayTally struct {
 	endedAt              time.Time
 }
 
-// relayStats accumulates a session's relayed bytes from the counters
-// lantern-box attaches to each connection. It has its own lock because
+// relayStats accumulates relayed bytes from the counters lantern-box
+// attaches to each connection. It has its own lock because
 // Snapshot is polled every second and must not wait on Start or Stop.
 type relayStats struct {
 	mu    sync.Mutex
@@ -58,12 +59,12 @@ type relayStats struct {
 	closedDown, closedUp uint64
 	// endedAt is when the session stopped, or zero while it runs. Stop drops
 	// the close events of connections still open, so those are retired by
-	// time instead: relayRetention after endedAt.
+	// time instead: relayRetention after endedAt, or at the next begin.
 	endedAt time.Time
-	// gen identifies the session; it changes with every begin. A listener
-	// callback from an earlier session that resumes after a restart carries
-	// the old generation, so its event is ignored instead of being counted
-	// in the new session.
+	// gen identifies the running session and changes at every begin and end.
+	// A listener callback that resumes after Stop, or after Stop and Start,
+	// carries an old generation, so its event is ignored rather than counted
+	// after the session it belongs to has ended.
 	gen uint64
 	now func() time.Time
 }
@@ -75,28 +76,55 @@ func (r *relayStats) clock() time.Time {
 	return time.Now()
 }
 
-// begin starts a new session's totals under a fresh epoch. The previous
-// session's totals stay readable until then, so a poll just after Stop still
-// sees its final bytes.
+// begin starts a session and returns its generation. Totals carry on from
+// earlier sessions under the same epoch; connections the previous session
+// left open are folded into them, and their clients start their retention.
 func (r *relayStats) begin() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.gen++
-	r.epoch = strconv.FormatInt(r.clock().UnixNano(), 10)
+	if r.epoch == "" {
+		r.epoch = strconv.FormatInt(r.clock().UnixNano(), 10)
+	}
+	now := r.clock()
+	for c, source := range r.conns {
+		r.foldLocked(c, source, now)
+	}
 	r.conns = nil
-	r.ips = nil
-	r.closedDown, r.closedUp = 0, 0
 	r.endedAt = time.Time{}
+	r.gen++
 	return r.gen
 }
 
-// end marks the session stopped. Its connections' counters stay readable for
+// end marks the session stopped and ends its generation, so the listener's
+// late events are ignored. Its open connections' counters stay readable for
 // relayRetention, long enough for the app's poller to see the bytes relayed
 // while the box closed, and are then folded into the totals and dropped.
 func (r *relayStats) end() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.endedAt = r.clock()
+	r.gen++
+}
+
+// foldLocked moves a finished connection's final count into the totals and its
+// client's tally. Caller must hold r.mu and remove c from r.conns.
+func (r *relayStats) foldLocked(c *peerconn.Counter, source string, now time.Time) {
+	ip, _, err := net.SplitHostPort(source)
+	if err != nil {
+		ip = source
+	}
+	down, up := c.Down(), c.Up()
+	r.closedDown += down
+	r.closedUp += up
+	if t := r.ips[ip]; t != nil {
+		t.closedDown += down
+		t.closedUp += up
+		t.open--
+		if t.open <= 0 {
+			t.open = 0
+			t.endedAt = now
+		}
+	}
 }
 
 // pruneLocked drops clients that left more than relayRetention ago, and once a
@@ -151,6 +179,8 @@ func (r *relayStats) recordFor(gen uint64, state int, source string, bytes *peer
 	}
 	if r.ips == nil {
 		r.ips = make(map[string]*relayTally)
+	}
+	if r.conns == nil {
 		r.conns = make(map[*peerconn.Counter]string)
 	}
 	switch {
@@ -167,18 +197,7 @@ func (r *relayStats) recordFor(gen uint64, state int, source string, bytes *peer
 			return
 		}
 		delete(r.conns, bytes)
-		down, up := bytes.Down(), bytes.Up()
-		r.closedDown += down
-		r.closedUp += up
-		if t := r.ips[ip]; t != nil {
-			t.closedDown += down
-			t.closedUp += up
-			t.open--
-			if t.open <= 0 {
-				t.open = 0
-				t.endedAt = r.clock()
-			}
-		}
+		r.foldLocked(bytes, source, r.clock())
 	}
 }
 
