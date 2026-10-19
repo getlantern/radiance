@@ -100,6 +100,7 @@ const (
 	accountSignupEndpoint           = "/account/signup/"
 	accountVerifyPasswordEndpoint   = "/account/verify-password"
 	accountEmailEndpoint            = "/account/email"
+	accountBindLegacyEmailEndpoint  = "/account/bind-legacy-email"
 	accountRecoveryEndpoint         = "/account/recovery"
 	accountDeleteEndpoint           = "/account/delete"
 	accountOAuthEndpoint            = "/account/oauth"
@@ -294,6 +295,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("POST "+accountSignupEndpoint+"{action...}", traced(s.accountSignupHandler))
 	mux.HandleFunc("POST "+accountVerifyPasswordEndpoint, traced(s.accountVerifyPasswordHandler))
 	mux.HandleFunc("POST "+accountEmailEndpoint+"/{action}", traced(s.accountEmailHandler))
+	mux.HandleFunc("POST "+accountBindLegacyEmailEndpoint+"/{action}", traced(s.accountBindLegacyEmailHandler))
 	mux.HandleFunc("POST "+accountRecoveryEndpoint+"/{action}", traced(s.accountRecoveryHandler))
 	mux.HandleFunc("DELETE "+accountDeleteEndpoint, traced(s.accountDeleteHandler))
 	mux.HandleFunc(accountOAuthEndpoint, traced(s.accountOAuthHandler))

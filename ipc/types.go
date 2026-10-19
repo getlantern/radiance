@@ -88,6 +88,13 @@ type RecoveryCompleteRequest struct {
 	Code        string `json:"code"`
 }
 
+// BindLegacyEmailCompleteRequest supplies credentials for completing an email binding.
+type BindLegacyEmailCompleteRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Code     string `json:"code"`
+}
+
 type ActivationRequest struct {
 	Email        string `json:"email"`
 	ResellerCode string `json:"resellerCode"`
