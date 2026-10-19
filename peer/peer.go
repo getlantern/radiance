@@ -203,6 +203,11 @@ type Client struct {
 	// streams over one TCP conn, so several can share a source. Guarded by
 	// connsMu.
 	verifierConns map[string]int
+	// verifierCounters holds the byte counters of open verifier streams. When
+	// events carry a counter it identifies the stream, so a close is hidden
+	// exactly when its own accept was; verifierConns is the fallback for
+	// events without one. Guarded by connsMu.
+	verifierCounters map[*peerconn.Counter]struct{}
 
 	// relay totals the bytes each session relays, for RelaySnapshot.
 	relay relayStats
@@ -525,7 +530,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if evt.Rejected {
 			c.rejections.record(evt.Destination)
 		}
-		if c.isVerifierConn(state, source, evt.Destination) {
+		if c.isVerifierConn(state, source, evt.Destination, evt.Bytes) {
 			slog.Debug("peer listener: hiding verifier connection",
 				"state", state, "source", source)
 			return
@@ -840,6 +845,7 @@ func (c *Client) resetConnTracking() {
 	defer c.connsMu.Unlock()
 	c.connsByIP = nil
 	c.verifierConns = nil
+	c.verifierCounters = nil
 }
 
 // verifierCallbackHosts are the hosts lantern-cloud's verifier fetches through
@@ -851,11 +857,12 @@ var verifierCallbackHosts = []string{"api.iantem.io", "api.staging.iantem.io"}
 // isVerifierConn reports whether a connection event belongs to lantern-cloud's
 // verifier, which re-verifies serving peers too, so that it is neither shown
 // as a person helped nor reported to the server as a client. An accept is
-// matched by destination. A close carries no destination, so each hidden
-// accept hides one later close from the same source. When ordinary and
-// verifier streams share a source, which close is hidden may not be the
-// verifier's own, but the per-IP totals still balance.
-func (c *Client) isVerifierConn(state int, source, destination string) bool {
+// matched by destination. A close carries no destination, so it is matched by
+// its byte counter, which identifies the stream. Without a counter, each
+// hidden accept hides one later close from the same source; when ordinary and
+// verifier streams share a source that may not be the verifier's own close,
+// but the per-IP totals still balance.
+func (c *Client) isVerifierConn(state int, source, destination string, bytes *peerconn.Counter) bool {
 	c.connsMu.Lock()
 	defer c.connsMu.Unlock()
 	// Same reason as trackConn: a late accept must not repopulate the set
@@ -864,6 +871,13 @@ func (c *Client) isVerifierConn(state int, source, destination string) bool {
 		return false
 	}
 	if state < 0 {
+		if bytes != nil {
+			if _, ok := c.verifierCounters[bytes]; !ok {
+				return false
+			}
+			delete(c.verifierCounters, bytes)
+			return true
+		}
 		n := c.verifierConns[source]
 		if n == 0 {
 			return false
@@ -883,6 +897,13 @@ func (c *Client) isVerifierConn(state int, source, destination string) bool {
 		return strings.EqualFold(h, host)
 	}) {
 		return false
+	}
+	if bytes != nil {
+		if c.verifierCounters == nil {
+			c.verifierCounters = make(map[*peerconn.Counter]struct{})
+		}
+		c.verifierCounters[bytes] = struct{}{}
+		return true
 	}
 	if c.verifierConns == nil {
 		c.verifierConns = make(map[string]int)

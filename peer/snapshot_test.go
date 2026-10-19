@@ -68,6 +68,32 @@ func TestRelayStats_StreamsSharingASource(t *testing.T) {
 	assert.Equal(t, []string{"203.0.113.7:1000"}, s.Peers)
 }
 
+// An ordinary stream and an api.iantem.io stream share a source, and the
+// ordinary one closes first. Matched by counter, its close is not mistaken for
+// the verifier's, so it leaves the snapshot and stops being held.
+func TestClient_OrdinaryCloseBeforeVerifierOnSharedSource(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	c := newTestClient(t, fwd, &fakeBoxService{}, newStubServer(t))
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	defer func() { require.NoError(t, c.Stop(ctx)) }()
+
+	const src = "5.119.14.105:10304"
+	ordinary, verifier := counter(300, 30), counter(9, 9)
+	peerconn.Notify(peerconn.Event{State: +1, Source: src, Destination: "google.com:443", Bytes: ordinary})
+	peerconn.Notify(peerconn.Event{State: +1, Source: src, Destination: "api.iantem.io:443", Bytes: verifier})
+	peerconn.Notify(peerconn.Event{State: -1, Source: src, Bytes: ordinary})
+	assert.Equal(t, 0, c.ActiveClients())
+	assert.Empty(t, c.RelaySnapshot().Peers)
+	peerconn.Notify(peerconn.Event{State: -1, Source: src, Bytes: verifier})
+	assert.Equal(t, 0, c.ActiveClients())
+	s := c.RelaySnapshot()
+	assert.Equal(t, uint64(300), s.BytesDown, "only the ordinary stream counts")
+	c.relay.mu.Lock()
+	assert.Empty(t, c.relay.conns)
+	c.relay.mu.Unlock()
+}
+
 // A departed client stays in the snapshot long enough for the app's poller to
 // see its final count, then drops out; session totals keep its bytes.
 func TestRelayStats_PrunesDepartedClientsAfterRetention(t *testing.T) {
