@@ -1236,17 +1236,17 @@ func TestTrackConn_IgnoresUnmatchedClose(t *testing.T) {
 func TestIsVerifierConn_PairsCloseWithAccept(t *testing.T) {
 	c := &Client{}
 
-	assert.True(t, c.isVerifierConn(1, "35.233.177.182:33792", "api.iantem.io:443"))
-	assert.True(t, c.isVerifierConn(1, "35.233.177.183:1000", "API.staging.iantem.io:443"))
-	assert.False(t, c.isVerifierConn(1, "35.233.177.182:33793", "google.com:443"))
+	assert.True(t, c.isVerifierConn(1, "35.233.177.182:33792", "api.iantem.io:443", nil))
+	assert.True(t, c.isVerifierConn(1, "35.233.177.183:1000", "API.staging.iantem.io:443", nil))
+	assert.False(t, c.isVerifierConn(1, "35.233.177.182:33793", "google.com:443", nil))
 
-	assert.True(t, c.isVerifierConn(-1, "35.233.177.182:33792", ""))
-	assert.False(t, c.isVerifierConn(-1, "35.233.177.182:33792", ""),
+	assert.True(t, c.isVerifierConn(-1, "35.233.177.182:33792", "", nil))
+	assert.False(t, c.isVerifierConn(-1, "35.233.177.182:33792", "", nil),
 		"a second close for the same source is not the verifier's")
-	assert.False(t, c.isVerifierConn(-1, "35.233.177.182:33793", ""))
+	assert.False(t, c.isVerifierConn(-1, "35.233.177.182:33793", "", nil))
 
 	c.resetConnTracking()
-	assert.False(t, c.isVerifierConn(-1, "35.233.177.183:1000", ""),
+	assert.False(t, c.isVerifierConn(-1, "35.233.177.183:1000", "", nil),
 		"a reset forgets verifier connections from the old session")
 }
 

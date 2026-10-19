@@ -398,8 +398,9 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 	return nil
 }
 
-func (f *fakePeerController) IsActive() bool             { return f.active.Load() }
-func (f *fakePeerController) CurrentStatus() peer.Status { return peer.Status{Active: f.active.Load()} }
+func (f *fakePeerController) IsActive() bool               { return f.active.Load() }
+func (f *fakePeerController) CurrentStatus() peer.Status   { return peer.Status{Active: f.active.Load()} }
+func (f *fakePeerController) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
 
 // newPeerTestBackend wires a minimal LocalBackend with only the fields
 // applyPeerShare touches. settings is initialized to a fresh tempdir per test
@@ -699,8 +700,9 @@ func (f *slowStartFake) Stop(_ context.Context) error {
 	f.active.Store(false)
 	return nil
 }
-func (f *slowStartFake) IsActive() bool             { return f.active.Load() }
-func (f *slowStartFake) CurrentStatus() peer.Status { return peer.Status{Active: f.active.Load()} }
+func (f *slowStartFake) IsActive() bool               { return f.active.Load() }
+func (f *slowStartFake) CurrentStatus() peer.Status   { return peer.Status{Active: f.active.Load()} }
+func (f *slowStartFake) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path
