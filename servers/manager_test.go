@@ -190,7 +190,7 @@ func TestAddServersByURL(t *testing.T) {
 		_, exists = m.GetServerByTag("Trojan+with+TLS")
 		assert.True(t, exists, "Trojan server should be added")
 	})
-	t.Run("skip certificate", func(t *testing.T) {
+	t.Run("legacy skip flag requires certificate verification", func(t *testing.T) {
 		m := testManager(t)
 		_, err := m.AddServersByURL(t.Context(), urls, true)
 		require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestAddServersByURL(t *testing.T) {
 		require.IsType(t, &option.TrojanOutboundOptions{}, options)
 		trojanOpts := options.(*option.TrojanOutboundOptions)
 		require.NotNil(t, trojanOpts.TLS)
-		assert.True(t, trojanOpts.TLS.Insecure, "TLS.Insecure should be true")
+		assert.False(t, trojanOpts.TLS.Insecure)
 	})
 	t.Run("empty urls", func(t *testing.T) {
 		m := testManager(t)
