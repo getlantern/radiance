@@ -200,6 +200,35 @@ func TestRelayStats_TotalsCarryAcrossSessions(t *testing.T) {
 	assert.Equal(t, uint64(22), r.snapshot(true).BytesDown)
 }
 
+// closeBox can return before the old box finishes closing, so a stopped
+// session's connections can keep moving bytes after the next begin. Their
+// counters stay readable, though no longer listed as peers, until retention
+// ends, and are then folded into the totals with nothing lost.
+func TestRelayStats_DrainingCountersSurviveARestart(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	r := relayStats{now: func() time.Time { return now }}
+	gen := r.begin()
+	old := counter(10, 1)
+	r.recordFor(gen, 1, "203.0.113.7:1000", old)
+	r.end()
+	r.begin()
+
+	old.AddDown(5) // still draining in the old box
+	s := r.snapshot(true)
+	assert.Equal(t, uint64(15), s.BytesDown)
+	assert.Empty(t, s.Peers, "a retired connection is not a current peer")
+	assert.Equal(t, []PeerBytes{{IP: "203.0.113.7", Down: 15, Up: 1}}, s.PeerBytes)
+
+	now = now.Add(relayRetention + time.Second)
+	s = r.snapshot(true)
+	assert.Equal(t, uint64(15), s.BytesDown, "folded at retention, never backwards")
+	r.mu.Lock()
+	assert.Empty(t, r.conns, "the counter is released")
+	r.mu.Unlock()
+	old.AddDown(100) // after the fold the counter is no longer read
+	assert.Equal(t, uint64(15), r.snapshot(true).BytesDown)
+}
+
 // A verifier accept can pass the drain check, stall, and resume after Stop,
 // where isVerifierConn no longer recognizes it. end advances the generation,
 // so the late event is not counted in the stopped session.
