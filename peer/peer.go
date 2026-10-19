@@ -8,6 +8,8 @@ import (
 	"math/rand/v2"
 	"net"
 	"runtime/debug"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -195,6 +197,10 @@ type Client struct {
 	// contend with Start/Stop holding c.mu.
 	connsMu   sync.Mutex
 	connsByIP map[string]int
+	// verifierConns holds the "ip:port" sources of open connections from
+	// lantern-cloud's verifier, so their closes, which carry no destination,
+	// are hidden like their accepts. Guarded by connsMu.
+	verifierConns map[string]struct{}
 
 	// rejections tallies destinations refused by reject rules, across
 	// sessions, so allowlist gaps are visible. Flushed on each heartbeat and
@@ -509,12 +515,17 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		// can flip the level. The listener-registration line below stays
 		// at Info — that's a once-per-session lifecycle event, not a
 		// per-connection breadcrumb.
-		slog.Debug("peer listener: forwarding connection event",
-			"state", state, "source", source)
-		c.trackConn(state, source)
 		if evt.Rejected {
 			c.rejections.record(evt.Destination)
 		}
+		if c.isVerifierConn(state, source, evt.Destination) {
+			slog.Debug("peer listener: hiding verifier connection",
+				"state", state, "source", source)
+			return
+		}
+		slog.Debug("peer listener: forwarding connection event",
+			"state", state, "source", source)
+		c.trackConn(state, source)
 		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
@@ -819,6 +830,49 @@ func (c *Client) resetConnTracking() {
 	c.connsMu.Lock()
 	defer c.connsMu.Unlock()
 	c.connsByIP = nil
+	c.verifierConns = nil
+}
+
+// verifierCallbackHosts are the hosts lantern-cloud's verifier fetches through
+// a peer to prove it can proxy: "api." + the environment's public domain, per
+// defaultPeerVerifyCallbackURL in lantern-cloud's cmd/api/peer_verify.go. They
+// are lantern-cloud itself checking the route, not a person being helped.
+var verifierCallbackHosts = []string{"api.iantem.io", "api.staging.iantem.io"}
+
+// isVerifierConn reports whether a connection event belongs to lantern-cloud's
+// verifier, which re-verifies serving peers too, so that it is neither shown
+// as a person helped nor reported to the server as a client. An accept is
+// matched by destination; its close is matched by the source the accept
+// recorded, because a close carries no destination.
+func (c *Client) isVerifierConn(state int, source, destination string) bool {
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	// Same reason as trackConn: a late accept must not repopulate the set
+	// after resetConnTracking has cleared it.
+	if c.listenerDraining.Load() {
+		return false
+	}
+	if state < 0 {
+		if _, ok := c.verifierConns[source]; ok {
+			delete(c.verifierConns, source)
+			return true
+		}
+		return false
+	}
+	host, _, err := net.SplitHostPort(destination)
+	if err != nil {
+		host = destination
+	}
+	if !slices.ContainsFunc(verifierCallbackHosts, func(h string) bool {
+		return strings.EqualFold(h, host)
+	}) {
+		return false
+	}
+	if c.verifierConns == nil {
+		c.verifierConns = make(map[string]struct{})
+	}
+	c.verifierConns[source] = struct{}{}
+	return true
 }
 
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
