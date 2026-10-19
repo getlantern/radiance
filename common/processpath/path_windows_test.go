@@ -44,7 +44,7 @@ func TestNormalizeWindowsShortPath(t *testing.T) {
 		{"long path", windows.MAX_PATH + 80},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := windowsLongPath(t, t.TempDir())
 			for len(dir) < test.minLength {
 				dir = filepath.Join(dir, "Long Game Directory")
 			}
@@ -76,6 +76,23 @@ func TestNormalizeWindowsShortPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func windowsLongPath(t *testing.T, path string) string {
+	t.Helper()
+	input, err := windows.UTF16PtrFromString(`\\?\` + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetLongPathName(input, &buffer[0], uint32(len(buffer)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 || int(n) >= len(buffer) {
+		t.Fatalf("GetLongPathName(%q) returned invalid length %d", path, n)
+	}
+	return strings.TrimPrefix(windows.UTF16ToString(buffer[:n]), `\\?\`)
 }
 
 func TestNormalizeWindowsReparsePoints(t *testing.T) {

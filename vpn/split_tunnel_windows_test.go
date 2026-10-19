@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 
-	"github.com/getlantern/radiance/common/processpath"
 	rlog "github.com/getlantern/radiance/log"
 )
 
@@ -25,7 +24,7 @@ func TestSplitTunnelWindowsProcessPathIdentity(t *testing.T) {
 	require.NoError(t, st.AddItems(SplitTunnelFilter{ProcessPath: []string{
 		strings.ToUpper(path), filepath.ToSlash(path),
 	}}))
-	assert.Equal(t, []string{processpath.Normalize(path)}, st.Filters().ProcessPath)
+	assert.Equal(t, []string{strings.ToLower(path)}, st.Filters().ProcessPath)
 	require.NoError(t, st.SetEnabled(true))
 
 	rule, _ := splitTunnelMatcher(t, st)
@@ -59,7 +58,7 @@ func TestSplitTunnelWindowsMigratesSavedProcessPaths(t *testing.T) {
 
 	loaded, err := NewSplitTunnelHandler(dataDir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	assert.Equal(t, []string{processpath.Normalize(path)}, loaded.Filters().ProcessPath)
+	assert.Equal(t, []string{strings.ToLower(path)}, loaded.Filters().ProcessPath)
 	assert.Equal(t, []string{`C:\\Preserve\\.*`}, loaded.Filters().ProcessPathRegex)
 	assert.Equal(t, []string{"example.com"}, loaded.Filters().Domain)
 	assert.True(t, loaded.IsEnabled())
@@ -85,13 +84,21 @@ func TestSplitTunnelWindowsMissingProcessPathRemainsRemovable(t *testing.T) {
 
 func windowsProcessPathFixture(t *testing.T) (string, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "Launcher Child Executable.exe")
-	require.NoError(t, os.WriteFile(path, nil, 0o600))
-	input, err := windows.UTF16PtrFromString(path)
+	input, err := windows.UTF16PtrFromString(`\\?\` + t.TempDir())
 	require.NoError(t, err)
 	buffer := make([]uint16, windows.MAX_LONG_PATH)
-	n, err := windows.GetShortPathName(input, &buffer[0], uint32(len(buffer)))
+	n, err := windows.GetLongPathName(input, &buffer[0], uint32(len(buffer)))
 	require.NoError(t, err)
+	require.Positive(t, n)
 	require.Less(t, int(n), len(buffer))
-	return path, windows.UTF16ToString(buffer[:n])
+	dir := strings.TrimPrefix(windows.UTF16ToString(buffer[:n]), `\\?\`)
+	path := filepath.Join(dir, "Launcher Child Executable.exe")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	input, err = windows.UTF16PtrFromString(`\\?\` + path)
+	require.NoError(t, err)
+	n, err = windows.GetShortPathName(input, &buffer[0], uint32(len(buffer)))
+	require.NoError(t, err)
+	require.Positive(t, n)
+	require.Less(t, int(n), len(buffer))
+	return path, strings.TrimPrefix(windows.UTF16ToString(buffer[:n]), `\\?\`)
 }
