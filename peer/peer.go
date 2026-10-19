@@ -338,7 +338,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// silence the disconnect cascade during box.Close; if we don't reset
 	// here, a Stop→Start cycle would leave the wrapper permanently muted.
 	c.listenerDraining.Store(false)
-	c.relay.begin()
+	relayGen := c.relay.begin()
 
 	var (
 		success   bool
@@ -538,7 +538,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		slog.Debug("peer listener: forwarding connection event",
 			"state", state, "source", source)
 		c.trackConn(state, source)
-		c.relay.record(state, source, evt.Bytes)
+		c.relay.recordFor(relayGen, state, source, evt.Bytes)
 		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)

@@ -153,6 +153,28 @@ func TestRelayStats_RetiresOpenConnectionsAfterStop(t *testing.T) {
 	r.mu.Unlock()
 }
 
+// A listener callback from the previous session can pass its drain check,
+// stall, and resume after Stop→Start. Its generation is stale, so its counter
+// is not counted in the new session or held by it.
+func TestRelayStats_IgnoresCallbacksFromAnEarlierSession(t *testing.T) {
+	var r relayStats
+	old := r.begin()
+	r.end()
+	current := r.begin()
+	require.NotEqual(t, old, current)
+
+	stale := counter(500, 50)
+	r.recordFor(old, 1, "203.0.113.7:1000", stale)
+	r.recordFor(current, 1, "198.51.100.9:2000", counter(7, 3))
+	s := r.snapshot(true)
+	assert.Equal(t, uint64(7), s.BytesDown)
+	assert.Equal(t, []string{"198.51.100.9:2000"}, s.Peers)
+	r.mu.Lock()
+	_, held := r.conns[stale]
+	r.mu.Unlock()
+	assert.False(t, held)
+}
+
 // Each session counts from zero under its own epoch, but the last session's
 // totals stay readable until the next begins.
 func TestRelayStats_NewEpochPerSession(t *testing.T) {

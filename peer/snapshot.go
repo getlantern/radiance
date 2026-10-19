@@ -60,7 +60,12 @@ type relayStats struct {
 	// the close events of connections still open, so those are retired by
 	// time instead: relayRetention after endedAt.
 	endedAt time.Time
-	now     func() time.Time
+	// gen identifies the session; it changes with every begin. A listener
+	// callback from an earlier session that resumes after a restart carries
+	// the old generation, so its event is ignored instead of being counted
+	// in the new session.
+	gen uint64
+	now func() time.Time
 }
 
 func (r *relayStats) clock() time.Time {
@@ -73,14 +78,16 @@ func (r *relayStats) clock() time.Time {
 // begin starts a new session's totals under a fresh epoch. The previous
 // session's totals stay readable until then, so a poll just after Stop still
 // sees its final bytes.
-func (r *relayStats) begin() {
+func (r *relayStats) begin() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.gen++
 	r.epoch = strconv.FormatInt(r.clock().UnixNano(), 10)
 	r.conns = nil
 	r.ips = nil
 	r.closedDown, r.closedUp = 0, 0
 	r.endedAt = time.Time{}
+	return r.gen
 }
 
 // end marks the session stopped. Its connections' counters stay readable for
@@ -115,6 +122,15 @@ func (r *relayStats) pruneLocked(now time.Time) {
 // record follows one connection's accept or close. A close folds the
 // connection's final count, so totals keep it after the connection is gone.
 func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
+	r.mu.Lock()
+	gen := r.gen
+	r.mu.Unlock()
+	r.recordFor(gen, state, source, bytes)
+}
+
+// recordFor is record for the session with generation gen; an event from any
+// other session is ignored.
+func (r *relayStats) recordFor(gen uint64, state int, source string, bytes *peerconn.Counter) {
 	if bytes == nil {
 		return
 	}
@@ -124,6 +140,9 @@ func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if gen != r.gen {
+		return
+	}
 	if state > 0 {
 		// Pruned here too, so a session no one polls does not keep every
 		// client it has ever seen. Before acquiring, so a returning IP's
