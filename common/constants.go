@@ -43,17 +43,3 @@ func GetVersion() string {
 	}
 	return Version
 }
-
-func GetProServerURL() string {
-	if Stage() {
-		return StageProServerURL
-	}
-	return ProServerURL
-}
-
-func GetBaseURL() string {
-	if Stage() {
-		return StageBaseURL
-	}
-	return BaseURL
-}

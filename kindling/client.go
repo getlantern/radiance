@@ -79,10 +79,6 @@ func initKindling() {
 	}
 }
 
-func Init() {
-	go ensureInit()
-}
-
 func ensureInit() http.RoundTripper {
 	mu.Lock()
 	defer mu.Unlock()
@@ -91,15 +87,6 @@ func ensureInit() http.RoundTripper {
 		initialized = true
 	}
 	return transport
-}
-
-// HTTPClient returns an HTTP client whose transport blocks on first use
-// until kindling is initialized.
-func HTTPClient() *http.Client {
-	return &http.Client{
-		Timeout:   common.KindlingHTTPTimeout,
-		Transport: readyTransport{},
-	}
 }
 
 type readyTransport struct{}
