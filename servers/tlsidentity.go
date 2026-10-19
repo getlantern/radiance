@@ -5,7 +5,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
-// WithTLSVerification returns a copy whose standard outbound TLS options require peer authentication.
+// WithTLSVerification returns a copy whose outbound TLS options require peer authentication.
 func (s *Server) WithTLSVerification() *Server {
 	copy := s.Clone()
 	switch opts := copy.Options.(type) {

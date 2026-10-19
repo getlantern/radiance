@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	lbO "github.com/getlantern/lantern-box/option"
 	boxtls "github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/option"
 	boxlog "github.com/sagernet/sing/common/logger"
@@ -41,6 +42,46 @@ func TestOptionsDoesNotMutateInput(t *testing.T) {
 	assert.Nil(t, Options(nil))
 	var typedNil *option.HTTPOutboundOptions
 	assert.Equal(t, typedNil, Options(typedNil))
+}
+
+func TestUnboundedOptionsRequireTLSIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		client    bool
+		discovery bool
+	}{
+		{name: "client", client: true},
+		{name: "discovery", discovery: true},
+		{name: "both", client: true, discovery: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := lbO.UnboundedOutboundOptions{
+				InsecureDoNotVerifyClientCert:    test.client,
+				InsecureDoNotVerifyDiscoveryCert: test.discovery,
+				EgressCA:                         "configured CA",
+				EgressServerName:                 "egress.example.com",
+				DiscoverySrv:                     "https://discovery.example.com",
+			}
+			original := input
+			for _, value := range []any{input, &input} {
+				var got lbO.UnboundedOutboundOptions
+				switch normalized := Options(value).(type) {
+				case lbO.UnboundedOutboundOptions:
+					got = normalized
+				case *lbO.UnboundedOutboundOptions:
+					got = *normalized
+				default:
+					t.Fatalf("unexpected options type %T", normalized)
+				}
+				assert.False(t, got.InsecureDoNotVerifyClientCert)
+				assert.False(t, got.InsecureDoNotVerifyDiscoveryCert)
+				assert.Equal(t, input.EgressCA, got.EgressCA)
+				assert.Equal(t, input.EgressServerName, got.EgressServerName)
+				assert.Equal(t, input.DiscoverySrv, got.DiscoverySrv)
+				assert.Equal(t, original, input)
+			}
+		})
+	}
 }
 
 func TestOptionsPreservesIndependentVerification(t *testing.T) {
