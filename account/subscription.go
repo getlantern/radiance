@@ -14,6 +14,7 @@ import (
 	"github.com/getlantern/radiance/account/protos"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/traces"
 )
 
@@ -56,11 +57,44 @@ type SubscriptionResponse struct {
 	PublishableKey string `json:"publishableKey"`
 }
 
+// userWaitTimeout bounds how long a request waits for a new install's user to be created.
+const userWaitTimeout = 60 * time.Second
+
+// waitForUser blocks until a user ID exists. New installs create their user asynchronously, and
+// endpoints such as /plans-v5 reject requests without one.
+func (a *Client) waitForUser(ctx context.Context) error {
+	if settings.GetInt64(settings.UserIDKey) != 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, userWaitTimeout)
+	defer cancel()
+	changed := make(chan struct{}, 1)
+	events.SubscribeContext(ctx, func(UserChangeEvent) {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	// Re-check after subscribing so a user created in between isn't missed.
+	for settings.GetInt64(settings.UserIDKey) == 0 {
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for user: %w", ctx.Err())
+		}
+	}
+	return nil
+}
+
 // SubscriptionPlans retrieves available subscription plans for a given channel.
 func (a *Client) SubscriptionPlans(ctx context.Context, channel string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "subscription_plans")
 	defer span.End()
 
+	if err := a.waitForUser(ctx); err != nil {
+		a.logger.Error("retrieving plans", "error", err)
+		return "", traces.RecordError(ctx, err)
+	}
 	params := map[string]string{
 		"locale":              settings.GetString(settings.LocaleKey),
 		"distributionChannel": channel,

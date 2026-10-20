@@ -24,11 +24,13 @@ func (s stubSampler) Sample(now time.Time) memmon.Sample {
 }
 
 // joinClosable joins a tracked record whose closer folds it back out of the
-// tracker on Close, mirroring the real tcpConn/udpConn wrappers so closeConn and
-// closeAllTracked exercise the live eviction path.
-func joinClosable(ct *connTracker, outbound string, createdAt time.Time) *record {
+// tracker on Close, mirroring the real tcpConn/udpConn wrappers so the tracker's
+// close paths exercise the live eviction path. chain is ordered as resolveChain
+// builds it: leaf first, matched outbound last.
+func joinClosable(ct *connTracker, outbound string, createdAt time.Time, chain ...string) *record {
 	r := newRec(outbound)
 	r.createdAt = createdAt
+	r.chain = chain
 	r.closer = closerFunc(func() error { ct.leave(r); return nil })
 	ct.join(r)
 	return r

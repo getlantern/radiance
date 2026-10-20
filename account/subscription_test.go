@@ -189,9 +189,48 @@ func TestRestoreSubscription(t *testing.T) {
 
 func TestPlans(t *testing.T) {
 	ac, _ := newTestClient(t)
+	require.NoError(t, ac.storeIdentity(123, "token", nil))
 	resp, err := ac.SubscriptionPlans(context.Background(), "store")
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp)
+}
+
+func TestPlansWaitsForNewUser(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, settings.Clear(settings.UserIDKey)) // InitSettings may migrate a local install's user
+	type result struct {
+		resp string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := ac.SubscriptionPlans(context.Background(), "store")
+		done <- result{resp, err}
+	}()
+
+	select {
+	case r := <-done:
+		t.Fatalf("plans returned before a user existed: %+v", r)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NoError(t, ac.storeIdentity(123, "token", nil))
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		assert.NotEmpty(t, r.resp)
+	case <-time.After(5 * time.Second):
+		t.Fatal("plans did not proceed after the user was created")
+	}
+}
+
+func TestPlansWithoutUserStopsWithContext(t *testing.T) {
+	ac, _ := newTestClient(t)
+	require.NoError(t, settings.Clear(settings.UserIDKey)) // InitSettings may migrate a local install's user
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := ac.SubscriptionPlans(ctx, "store")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestNewStripeSubscriptionForwardsCouponCode(t *testing.T) {

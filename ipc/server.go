@@ -81,6 +81,7 @@ const (
 	peerStatusEndpoint           = "/peer/status"
 	peerStatusEventsEndpoint     = "/peer/status/events"
 	peerConnectionEventsEndpoint = "/peer/connection/events"
+	peerSnapshotEndpoint         = "/peer/snapshot"
 
 	// Unbounded ("Basic mode") endpoints. Connection events have the same
 	// JSON shape as /peer/connection/events but are emitted from a
@@ -276,6 +277,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// SSE skips the tracer middleware since it buffers the entire response body.
 	mux.HandleFunc("GET "+peerStatusEventsEndpoint, s.peerStatusEventsHandler)
 	mux.HandleFunc("GET "+peerConnectionEventsEndpoint, s.peerConnectionEventsHandler)
+	mux.HandleFunc("GET "+peerSnapshotEndpoint, traced(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.backend(r.Context()).PeerRelaySnapshot())
+	}))
 	mux.HandleFunc("GET "+unboundedConnectionEventsEndpoint, s.unboundedConnectionEventsHandler)
 
 	mux.HandleFunc("GET "+unboundedSnapshotEndpoint, traced(func(w http.ResponseWriter, r *http.Request) {
