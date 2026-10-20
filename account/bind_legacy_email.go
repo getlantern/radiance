@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -52,7 +53,7 @@ func (a *Client) StartBindLegacyEmail(ctx context.Context, email string) error {
 		return err
 	}
 	data := &protos.StartBindLegacyEmailRequest{Email: strings.ToLower(strings.TrimSpace(email))}
-	_, err = a.sendRequest(ctx, "POST", "/users/bind_legacy_email", nil, identity.headers(), data)
+	_, err = a.sendRequest(ctx, http.MethodPost, "/users/bind_legacy_email", nil, identity.headers(), data)
 	return err
 }
 
@@ -76,9 +77,12 @@ func (a *Client) CompleteBindLegacyEmail(ctx context.Context, email, password, c
 		return err
 	}
 	data := &protos.CompleteBindLegacyEmailRequest{
-		Email: email, Code: code, NewSalt: salt, NewVerifier: verifier.Bytes(),
+		Email:       email,
+		Code:        code,
+		NewSalt:     salt,
+		NewVerifier: verifier.Bytes(),
 	}
-	if _, err := a.sendRequest(ctx, "POST", "/users/bind_legacy_email/complete", nil, identity.headers(), data); err != nil {
+	if _, err := a.sendRequest(ctx, http.MethodPost, "/users/bind_legacy_email/complete", nil, identity.headers(), data); err != nil {
 		return err
 	}
 
