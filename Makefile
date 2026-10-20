@@ -14,7 +14,10 @@ else
 endif
 
 VERSION ?=
-LDFLAGS := $(if $(VERSION),-ldflags "-X 'github.com/getlantern/radiance/common.Version=$(VERSION)'")
+# Commit and build time identify the exact build in telemetry (vcs.ref.head.revision, build.time).
+COMMIT := $(or $(strip $(shell git rev-parse --short=7 HEAD 2>/dev/null)),unknown)
+BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -ldflags "$(if $(VERSION),-X 'github.com/getlantern/radiance/common.Version=$(VERSION)' )-X 'github.com/getlantern/radiance/common.Commit=$(COMMIT)' -X 'github.com/getlantern/radiance/common.BuildTime=$(BUILD_TIME)'"
 
 .PHONY: build-daemon
 build-daemon:

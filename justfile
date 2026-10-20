@@ -3,7 +3,11 @@ tags := if os() == "macos" { "standalone," + base_tags } else { base_tags }
 lanternd := if os() == "windows" { "lanternd.exe" } else { "lanternd" }
 lantern := if os() == "windows" { "lantern.exe" } else { "lantern" }
 version := env("VERSION", "")
-ldflags := if version != "" { "-ldflags \"-X 'github.com/getlantern/radiance/common.Version=" + version + "'\"" } else { "" }
+# Commit and build time identify the exact build in telemetry (vcs.ref.head.revision, build.time).
+commit := `git rev-parse --short=7 HEAD 2>/dev/null || echo unknown`
+build_time := `date -u +%Y-%m-%dT%H:%M:%SZ`
+version_flag := if version != "" { "-X 'github.com/getlantern/radiance/common.Version=" + version + "' " } else { "" }
+ldflags := "-ldflags \"" + version_flag + "-X 'github.com/getlantern/radiance/common.Commit=" + commit + "' -X 'github.com/getlantern/radiance/common.BuildTime=" + build_time + "'\""
 
 cli_tags := if os() == "macos" { "standalone" } else { "" }
 cli_tags_flag := if cli_tags != "" { "-tags " + cli_tags } else { "" }
