@@ -38,8 +38,12 @@ var (
 )
 
 type Attributes struct {
-	App            string
-	AppVersion     string
+	App        string
+	AppVersion string
+	// BuildCommit and BuildTime identify the exact build, which AppVersion doesn't:
+	// every beta of a release shares its version.
+	BuildCommit    string
+	BuildTime      string
 	DeviceID       string
 	GeoCountry     string
 	GoVersion      string
@@ -72,15 +76,17 @@ func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 	}
 
 	attrs := Attributes{
-		App:        "radiance",
-		DeviceID:   deviceID,
-		AppVersion: rcommon.GetVersion(),
-		Platform:   rcommon.Platform,
-		GoVersion:  runtime.Version(),
-		OSName:     runtime.GOOS,
-		OSArch:     runtime.GOARCH,
-		GeoCountry: configResponse.Country,
-		Pro:        pro,
+		App:         "radiance",
+		DeviceID:    deviceID,
+		AppVersion:  rcommon.GetVersion(),
+		BuildCommit: rcommon.Commit,
+		BuildTime:   rcommon.BuildTime,
+		Platform:    rcommon.Platform,
+		GoVersion:   runtime.Version(),
+		OSName:      runtime.GOOS,
+		OSArch:      runtime.GOARCH,
+		GeoCountry:  configResponse.Country,
+		Pro:         pro,
 	}
 	if osStr, err := osversion.GetHumanReadable(); err == nil {
 		attrs.OSVersion = osStr
@@ -127,6 +133,8 @@ func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		semconv.ServiceNameKey.String(serviceName),
 		semconv.ServiceVersionKey.String(a.AppVersion),
+		semconv.VCSRefHeadRevisionKey.String(a.BuildCommit),
+		semconv.BuildTimeKey.String(a.BuildTime),
 		semconv.DeploymentEnvironmentNameKey.String(e),
 		semconv.OSNameKey.String(a.OSName),
 		semconv.OSVersionKey.String(a.OSVersion),
