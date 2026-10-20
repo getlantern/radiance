@@ -111,6 +111,14 @@ func (c *Client) PeerStatus(ctx context.Context) (peer.Status, error) {
 	return status, err
 }
 
+// PeerRelaySnapshot reads the bytes the current or most recent direct-sharing
+// session has relayed, in the shape of UnboundedSnapshot.
+func (c *Client) PeerRelaySnapshot(ctx context.Context) (peer.Snapshot, error) {
+	var s peer.Snapshot
+	err := c.doJSON(ctx, http.MethodGet, peerSnapshotEndpoint, nil, &s)
+	return s, err
+}
+
 /////////////
 //   VPN   //
 /////////////

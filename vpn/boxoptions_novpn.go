@@ -51,6 +51,8 @@ func baseInbounds() []O.Inbound {
 
 func bypassRoutingRules() []O.Rule { return nil }
 
+func tunSelfRoutingRules() []O.Rule { return nil }
+
 func splitTunnelRuleSet(_ string) []O.RuleSet { return nil }
 
 func splitTunnelRoutingRules() []O.Rule { return nil }
