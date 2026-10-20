@@ -3,8 +3,10 @@
 package vpn
 
 import (
+	"slices"
 	"testing"
 
+	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +36,26 @@ func TestBaseOpts_TunIPv6Address(t *testing.T) {
 	} else {
 		require.Len(t, tunOpts.Address, 1, "expected v4-only TUN when system has no global v6")
 	}
+}
+
+func TestBaseRoutingRules_RejectsTunSelfDial(t *testing.T) {
+	rules := baseRoutingRules()
+	selfIdx, privateIdx := -1, -1
+	for i, r := range rules {
+		raw := r.DefaultOptions.RawDefaultRule
+		if r.DefaultOptions.RuleAction.Action == C.RuleActionTypeReject &&
+			slices.Contains(raw.IPCIDR, "10.10.1.0/30") {
+			selfIdx = i
+			assert.Equal(t, []string{inboundTag}, []string(raw.Inbound))
+			assert.Contains(t, []string(raw.IPCIDR), "fdfe:dcba:9876::/126")
+		}
+		if raw.IPIsPrivate && privateIdx == -1 {
+			privateIdx = i
+		}
+	}
+	require.NotEqual(t, -1, selfIdx, "expected a reject rule for the TUN subnet")
+	require.NotEqual(t, -1, privateIdx, "expected the private-IP direct rule")
+	assert.Less(t, selfIdx, privateIdx, "TUN self-dial reject must precede the private-IP direct rule")
 }
 
 func TestKernelBelow(t *testing.T) {

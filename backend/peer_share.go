@@ -22,6 +22,7 @@ type peerController interface {
 	Stop(ctx context.Context) error
 	IsActive() bool
 	CurrentStatus() peer.Status
+	RelaySnapshot() peer.Snapshot
 }
 
 // peerToggleTimeout caps blocking time on a slow router; UPnP M-SEARCH +
@@ -196,4 +197,14 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 		return peer.Status{}
 	}
 	return r.peerClient.CurrentStatus()
+}
+
+// PeerRelaySnapshot returns the bytes the current or most recent direct-sharing
+// session has relayed, for the IPC /peer/snapshot endpoint. A nil peerClient
+// reports an empty snapshot, as PeerStatus does.
+func (r *LocalBackend) PeerRelaySnapshot() peer.Snapshot {
+	if r.peerClient == nil {
+		return peer.Snapshot{Peers: []string{}, PeerBytes: []peer.PeerBytes{}}
+	}
+	return r.peerClient.RelaySnapshot()
 }
