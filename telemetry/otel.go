@@ -133,8 +133,8 @@ func buildResources(serviceName string, a Attributes) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		semconv.ServiceNameKey.String(serviceName),
 		semconv.ServiceVersionKey.String(a.AppVersion),
-		attribute.String("vcs.ref.head.revision", a.BuildCommit),
-		attribute.String("build.time", a.BuildTime),
+		semconv.VCSRefHeadRevisionKey.String(a.BuildCommit),
+		semconv.BuildTimeKey.String(a.BuildTime),
 		semconv.DeploymentEnvironmentNameKey.String(e),
 		semconv.OSNameKey.String(a.OSName),
 		semconv.OSVersionKey.String(a.OSVersion),

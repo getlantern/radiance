@@ -3,6 +3,7 @@ package telemetry
 import (
 	"testing"
 
+	semconv "github.com/getlantern/semconv"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -14,9 +15,9 @@ func TestBuildResourcesIdentifiesTheBuild(t *testing.T) {
 		BuildTime:   "2026-10-18T22:30:00Z",
 	})...)
 	for key, want := range map[attribute.Key]string{
-		"service.version":       "10.0.3",
-		"vcs.ref.head.revision": "25a8d99",
-		"build.time":            "2026-10-18T22:30:00Z",
+		semconv.ServiceVersionKey:     "10.0.3",
+		semconv.VCSRefHeadRevisionKey: "25a8d99",
+		semconv.BuildTimeKey:          "2026-10-18T22:30:00Z",
 	} {
 		got, ok := res.Value(key)
 		assert.True(t, ok, "missing %s", key)
