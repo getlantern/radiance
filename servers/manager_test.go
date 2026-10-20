@@ -67,6 +67,63 @@ func TestPrivateServerIntegration(t *testing.T) {
 
 }
 
+func TestAddPrivateServerResponse(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "endpoints only",
+			body:    `{"endpoints":[{"type":"wireguard","tag":"remote"}]}`,
+			wantErr: "endpoints-only private server responses are not supported",
+		},
+		{
+			name:    "empty",
+			body:    `{}`,
+			wantErr: "no endpoints or outbounds in response",
+		},
+		{
+			name: "outbound",
+			body: `{"outbounds":[{"type":"direct","tag":"remote"}]}`,
+		},
+		{
+			name: "outbound and endpoint",
+			body: `{"outbounds":[{"type":"direct","tag":"remote"}],"endpoints":[{"type":"wireguard","tag":"endpoint"}]}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/connect-config", r.URL.Path)
+				_, err := w.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(srv.Close)
+			u, err := url.Parse(srv.URL)
+			require.NoError(t, err)
+			port, err := strconv.Atoi(u.Port())
+			require.NoError(t, err)
+
+			m := testManager(t)
+			m.httpClient = srv.Client()
+			err = m.AddPrivateServer("local", u.Hostname(), port, "token", C.ServerLocation{}, true)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				assert.Empty(t, m.servers)
+				assert.NoFileExists(t, m.serversFile)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, m.servers, 1)
+			server := m.servers["local"]
+			require.NotNil(t, server)
+			assert.Equal(t, "local", server.Tag)
+			assert.Equal(t, "local", server.Options.(option.Outbound).Tag)
+			assert.FileExists(t, m.serversFile)
+		})
+	}
+}
+
 type lanternServerManagerMock struct {
 	users      map[string]string
 	testConfig string

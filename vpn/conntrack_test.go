@@ -3,6 +3,7 @@ package vpn
 import (
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -244,6 +245,58 @@ func TestConnTracker_ConcurrentJoinLeave(t *testing.T) {
 	up, down := ct.Total()
 	assert.Equal(t, int64(n), up)
 	assert.Equal(t, int64(n), down)
+}
+
+func TestConnTracker_JoinReclaim(t *testing.T) {
+	ct := newConnTracker()
+	stop := make(chan struct{})
+	reclaimed := make(chan struct{})
+	var wg sync.WaitGroup
+	var minimum int64
+
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				ct.closeAllTracked()
+				minimum = min(minimum, ct.activeConnectionCount())
+				runtime.Gosched()
+			}
+		}
+	})
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				ct.Connections()
+				ct.activeConnections()
+				runtime.Gosched()
+			}
+		}
+	})
+
+	for range 5000 {
+		r := newRec("out")
+		r.closer = closerFunc(func() error {
+			ct.leave(r)
+			minimum = min(minimum, ct.activeConnectionCount())
+			reclaimed <- struct{}{}
+			return nil
+		})
+		ct.join(r)
+		<-reclaimed
+	}
+	close(stop)
+	wg.Wait()
+
+	assert.Zero(t, minimum, "active count went negative during reclamation")
+	assert.Zero(t, ct.activeConnectionCount())
+	assert.Empty(t, ct.Connections())
+	assert.Empty(t, ct.activeConnections())
 }
 
 func TestConnTracker_CloseWaitsForInFlightWriteAccounting(t *testing.T) {

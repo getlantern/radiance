@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,9 +31,52 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 )
+
+func useTempCrashLog(t *testing.T) string {
+	t.Helper()
+	t.Cleanup(settings.Reset)
+	dir := t.TempDir()
+	require.NoError(t, settings.InitSettings(dir))
+	require.NoError(t, settings.Set(settings.LogPathKey, dir))
+	return filepath.Join(dir, internal.CrashLogFileName)
+}
+
+func readCrashLog(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(content)
+}
+
+func TestTunnelStart_Panic(t *testing.T) {
+	crashLog := useTempCrashLog(t)
+	tun := &tunnel{dataPath: t.TempDir()}
+	t.Cleanup(func() { assert.NoError(t, tun.close()) })
+	options := O.Options{
+		Log: &O.LogOptions{Disabled: true},
+		Outbounds: []O.Outbound{{
+			// Mismatched options panic inside the registered outbound factory.
+			Type: C.TypeDirect, Tag: "panic", Options: &O.HTTPOutboundOptions{},
+		}},
+	}
+	err := tun.start(t.Context(), options, nil, false)
+	require.ErrorContains(t, err, "panic creating box instance")
+	require.ErrorContains(t, err, "initializing tunnel")
+	assert.NotContains(t, err.Error(), "\n")
+	crash := readCrashLog(t, crashLog)
+	assert.Contains(t, crash, "recovered panic creating box instance")
+	assert.Contains(t, crash, "adapter/outbound/registry.go:")
+	assert.Contains(t, crash, "vpn/tunnel.go:")
+	require.NotNil(t, tun.ctx)
+	assert.ErrorIs(t, tun.ctx.Err(), context.Canceled)
+	assert.Nil(t, tun.boxInstance)
+	assert.Empty(t, tun.closers)
+}
 
 // TestTunnelDevicePauseWake covers the non-iOS path: devicePause pauses the
 // manager and deviceWake resumes it. The iOS timer branch depends on
@@ -260,10 +304,7 @@ func (r *infoRecorder) RoutedPacketConnection(_ context.Context, conn N.PacketCo
 // server, and returns its port and a recorder of connections routed to dest.
 func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := uint16(l.Addr().(*net.TCPAddr).Port)
-	require.NoError(t, l.Close())
+	port := freePort(t)
 
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	server, err := sbox.New(sbox.Options{Context: box.Context(t.Context()), Options: O.Options{

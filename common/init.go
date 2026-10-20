@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/fileperm"
@@ -158,15 +159,39 @@ func logBuildInfo() {
 	}
 }
 
+func openCrashLog() (*os.File, error) {
+	path := filepath.Join(settings.GetString(settings.LogPathKey), internal.CrashLogFileName)
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileperm.File)
+}
+
 func createCrashReporter() {
-	crashFilePath := filepath.Join(settings.GetString(settings.LogPathKey), internal.CrashLogFileName)
-	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileperm.File)
+	f, err := openCrashLog()
 	if err != nil {
 		slog.Error("Failed to open crash log file", "error", err)
 	} else {
 		debug.SetCrashOutput(f, debug.CrashOptions{})
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
+	}
+}
+
+// WriteRecoveredPanic appends a recovered panic and the calling goroutine's stack to the crash log.
+// The stack includes the panicking frames only while the recovering deferred call is still running.
+// Nothing is written when the log directory is unset.
+func WriteRecoveredPanic(operation string, recovered any) {
+	if settings.GetString(settings.LogPathKey) == "" {
+		return
+	}
+	f, err := openCrashLog()
+	if err != nil {
+		slog.Error("Failed to open crash log file", "error", err)
+		return
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s recovered panic %s: %v\n%s\n",
+		time.Now().UTC().Format(time.RFC3339Nano), operation, recovered, debug.Stack())
+	if err != nil {
+		slog.Error("Failed to write recovered panic to crash log", "error", err)
 	}
 }
 
