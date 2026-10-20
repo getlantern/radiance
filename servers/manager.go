@@ -803,10 +803,14 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 	return &list, nil
 }
 
-// AddServersByURL adds a server(s) by downloading and parsing the config from a list of URLs.
-func (m *Manager) AddServersByURL(ctx context.Context, urls []string, _ bool) (*ServerList, error) {
+// AddServersByURL imports server configurations from URLs.
+// skipCertVerification is retained for compatibility and cannot disable peer authentication.
+func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) (*ServerList, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURLs")
 	defer span.End()
+	if skipCertVerification {
+		m.logger.Warn("Ignoring skipCertVerification: proxy TLS authentication is required")
+	}
 	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
 	if !loaded {
 		return nil, traces.RecordError(ctx, fmt.Errorf("URL config provider not loaded"))

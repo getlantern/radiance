@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -28,8 +30,19 @@ func TestURLFlagsCannotDisableTLSIdentity(t *testing.T) {
 	} {
 		for _, legacySkip := range []bool{false, true} {
 			manager := testManager(t)
+			var logs bytes.Buffer
+			manager.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 			list, err := manager.AddServersByURL(t.Context(), []string{url}, legacySkip)
 			require.NoError(t, err)
+			if legacySkip {
+				assert.Contains(t, logs.String(), "level=WARN")
+				assert.Contains(t, logs.String(), "Ignoring skipCertVerification: proxy TLS authentication is required")
+			} else {
+				assert.Empty(t, logs.String())
+			}
+			assert.NotContains(t, logs.String(), url)
+			assert.NotContains(t, logs.String(), "password")
+			assert.NotContains(t, logs.String(), "uuid")
 			require.Len(t, list.Servers, 1)
 			requireVerifiedTLS(t, list.Servers[0])
 			stored, found := manager.GetServerByTag("private")
