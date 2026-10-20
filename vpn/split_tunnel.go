@@ -452,10 +452,8 @@ func (s *SplitTunnel) loadRule() error {
 	paths := s.ruleMap[TypeProcessPath].ProcessPath
 	if normalized := normalizeProcessPaths(paths); !slices.Equal(paths, normalized) {
 		s.ruleMap[TypeProcessPath].ProcessPath = normalized
-		err := s.saveLocked()
-		if err != nil {
-			s.access.Unlock()
-			return fmt.Errorf("normalizing process paths: %w", err)
+		if err := s.saveLocked(); err != nil {
+			s.logger.Warn("failed to persist normalized process paths", "error", err)
 		}
 	}
 	s.access.Unlock()

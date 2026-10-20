@@ -3,6 +3,8 @@
 package vpn
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,16 +29,25 @@ func TestSplitTunnelWindowsProcessPathIdentity(t *testing.T) {
 	assert.Equal(t, []string{strings.ToLower(path)}, st.Filters().ProcessPath)
 	require.NoError(t, st.SetEnabled(true))
 
-	rule, _ := splitTunnelMatcher(t, st)
-	assert.True(t, rule.Match(&adapter.InboundContext{
-		ProcessInfo: &adapter.ConnectionOwner{ProcessPath: strings.ToUpper(path)},
-	}))
-	assert.False(t, rule.Match(&adapter.InboundContext{
-		ProcessInfo: &adapter.ConnectionOwner{ProcessPath: filepath.Join(filepath.Dir(path), "Launcher.exe")},
-	}))
-	assert.False(t, rule.Match(&adapter.InboundContext{
-		ProcessInfo: &adapter.ConnectionOwner{ProcessPath: filepath.Join(filepath.Dir(path), "Other", filepath.Base(path))},
-	}))
+	for _, policy := range []SplitTunnelPolicy{SplitTunnelPolicyExclude, SplitTunnelPolicyInclude} {
+		t.Run(string(policy), func(t *testing.T) {
+			require.NoError(t, st.SetPolicy(policy))
+			rule, _ := splitTunnelMatcher(t, st)
+			for _, runtimePath := range []string{path, strings.ToUpper(path), filepath.ToSlash(path), short} {
+				assert.Equal(t, policy == SplitTunnelPolicyExclude, rule.Match(&adapter.InboundContext{
+					ProcessInfo: &adapter.ConnectionOwner{ProcessPath: runtimePath},
+				}), "selected process: %s", runtimePath)
+			}
+			for _, otherPath := range []string{
+				filepath.Join(filepath.Dir(path), "Launcher.exe"),
+				filepath.Join(filepath.Dir(path), "Other", filepath.Base(path)),
+			} {
+				assert.Equal(t, policy == SplitTunnelPolicyInclude, rule.Match(&adapter.InboundContext{
+					ProcessInfo: &adapter.ConnectionOwner{ProcessPath: otherPath},
+				}), "unselected process: %s", otherPath)
+			}
+		})
+	}
 
 	require.NoError(t, st.RemoveItems(SplitTunnelFilter{ProcessPath: []string{strings.ToUpper(short)}}))
 	assert.Empty(t, st.Filters().ProcessPath)
@@ -82,6 +93,55 @@ func TestSplitTunnelWindowsMissingProcessPathRemainsRemovable(t *testing.T) {
 	assert.Empty(t, st.Filters().ProcessPath)
 }
 
+func TestSplitTunnelWindowsMigrationSaveFailure(t *testing.T) {
+	path, short := windowsProcessPathFixture(t)
+	dataDir := t.TempDir()
+	st, err := NewSplitTunnelHandler(dataDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	st.ruleMap[TypeProcessPath].ProcessPath = []string{short, strings.ToUpper(path)}
+	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	original, err := os.ReadFile(st.ruleFile)
+	require.NoError(t, err)
+
+	var loaded *SplitTunnel
+	func() {
+		name, err := windows.UTF16PtrFromString(st.ruleFile)
+		require.NoError(t, err)
+		handle, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ,
+			nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		require.NoError(t, err)
+		defer func() { assert.NoError(t, windows.CloseHandle(handle)) }()
+
+		var logs bytes.Buffer
+		loaded, err = NewSplitTunnelHandler(dataDir, slog.New(slog.NewTextHandler(&logs, nil)))
+		require.NoError(t, err)
+		assert.Contains(t, logs.String(), "failed to persist normalized process paths")
+		assert.Equal(t, []string{strings.ToLower(path)}, loaded.Filters().ProcessPath)
+		assert.True(t, loaded.IsEnabled())
+		assert.Equal(t, SplitTunnelPolicyInclude, loaded.Policy())
+		unchanged, err := os.ReadFile(st.ruleFile)
+		require.NoError(t, err)
+		assert.Equal(t, original, unchanged)
+
+		rule, _ := splitTunnelMatcher(t, loaded)
+		for _, runtimePath := range []string{path, short} {
+			assert.False(t, rule.Match(&adapter.InboundContext{
+				ProcessInfo: &adapter.ConnectionOwner{ProcessPath: runtimePath},
+			}), "selected process must stay tunneled while migration cannot be saved")
+		}
+	}()
+
+	require.NoError(t, loaded.AddItem(TypeDomain, "example.com"))
+	reloaded, err := NewSplitTunnelHandler(dataDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, loaded.Filters(), reloaded.Filters())
+	require.NoError(t, os.Remove(path))
+	reloaded, err = NewSplitTunnelHandler(dataDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, []string{strings.ToLower(path)}, reloaded.Filters().ProcessPath)
+}
+
 func windowsProcessPathFixture(t *testing.T) (string, string) {
 	t.Helper()
 	input, err := windows.UTF16PtrFromString(`\\?\` + t.TempDir())
@@ -100,5 +160,12 @@ func windowsProcessPathFixture(t *testing.T) (string, string) {
 	require.NoError(t, err)
 	require.Positive(t, n)
 	require.Less(t, int(n), len(buffer))
-	return path, strings.TrimPrefix(windows.UTF16ToString(buffer[:n]), `\\?\`)
+	short := strings.TrimPrefix(windows.UTF16ToString(buffer[:n]), `\\?\`)
+	if strings.EqualFold(path, short) {
+		if os.Getenv("RADIANCE_REQUIRE_SHORT_PATH_TEST") == "1" {
+			t.Fatal("8.3 aliases are unavailable on the smoke-test volume")
+		}
+		t.Skip("8.3 aliases are unavailable on this volume")
+	}
+	return path, short
 }

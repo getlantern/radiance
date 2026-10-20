@@ -1,0 +1,52 @@
+name: Windows split-tunnel paths
+
+on:
+  pull_request:
+    paths:
+      - "common/processpath/**"
+      - "vpn/split_tunnel*"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/windows-split-tunnel.yml"
+  push:
+    branches: [main, refactor]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-split-tunnel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "0"
+      GOFLAGS: -mod=readonly
+      RADIANCE_REQUIRE_SHORT_PATH_TEST: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Enable short paths on the test volume
+        shell: pwsh
+        run: |
+          fsutil 8dot3name set 2
+          if ($LASTEXITCODE -ne 0) { throw 'Could not enable per-volume 8.3 settings' }
+          $volume = [System.IO.Path]::GetPathRoot($env:TEMP).TrimEnd('\')
+          fsutil 8dot3name set $volume 0
+          if ($LASTEXITCODE -ne 0) { throw "Could not enable 8.3 aliases on $volume" }
+      - name: Test process identity and rule migration
+        shell: pwsh
+        run: |
+          go test -v -tags with_clash_api ./common/processpath
+          if ($LASTEXITCODE -ne 0) { throw 'Process path tests failed' }
+          go test -v -tags with_clash_api ./vpn -run '^TestSplitTunnelWindows'
+          if ($LASTEXITCODE -ne 0) { throw 'Split-tunnel path tests failed' }
