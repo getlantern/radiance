@@ -237,7 +237,7 @@ type Client struct {
 	// They are always kept when pairing short IDs are applied, because
 	// lantern-cloud's verifier and pool clients authenticate with them.
 	baseShortIDs []string
-	// pairingShortIDs is the last pairing set the server vouched for;
+	// pairingShortIDs is the newest pairing set the server vouched for;
 	// pairingKnown says there is one. A response that does not vouch for a
 	// set leaves both alone, so a server that cannot tell never revokes, and
 	// a rotated box gets this set again. pairingApplied says the current box
@@ -245,19 +245,16 @@ type Client struct {
 	pairingShortIDs []string
 	pairingKnown    bool
 	pairingApplied  bool
-	// pairingGen counts the known sets recorded, so a rotation can tell that
-	// a heartbeat recorded a newer set while it was building its box.
-	// Bumped under shortIDsMu and c.mu.
-	pairingGen uint64
-	// pairingEpoch is bumped, under shortIDsMu and c.mu, when a rotation
-	// starts. A heartbeat sent in an earlier epoch may carry a set older
-	// than the one the rotation installs, so its set is discarded.
-	pairingEpoch uint64
-	// pairingConfirmedAt is when a known set was last recorded from the
-	// server. A rotation that reuses the record keeps it.
+	// pairingRevision is the server's revision of the newest set accepted,
+	// the highest seen this session, 0 before any. It survives expiry, so a
+	// set older than one already accepted is never taken.
+	pairingRevision int64
+	// pairingConfirmedAt is when a known set was last accepted. A rotation
+	// that reuses the record keeps it.
 	pairingConfirmedAt time.Time
-	// shortIDsMu serializes pushing a set onto the box with recording it, so
-	// a heartbeat and a rotation cannot record a set the box does not hold.
+	// shortIDsMu serializes recording a set with pushing it onto the box,
+	// so the box and pairingApplied agree. It is held across those local
+	// pushes only, never across network I/O or a box's Start or Close.
 	// Taken before c.mu, never while holding it.
 	shortIDsMu sync.Mutex
 	// warnedNoBaseShortIDs and warnedNoUpdater keep their warnings to one
@@ -537,10 +534,12 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// serves without it; otherwise the box keeps its base ID.
 	baseShortIDs := inboundShortIDs(options)
 	var startPairing []string
-	startPairingKnown := regResp.PairingShortIDsKnown
+	var startRevision int64
+	startPairingKnown := regResp.PairingShortIDsKnown && regResp.PairingShortIDsRevision > 0
 	startPairingApplied := false
 	if startPairingKnown {
 		startPairing = slices.Clone(regResp.PairingShortIDs)
+		startRevision = int64(regResp.PairingShortIDsRevision)
 		startPairingApplied = c.applyShortIDs(box, baseShortIDs, startPairing)
 	}
 
@@ -633,7 +632,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.pairingShortIDs = startPairing
 	c.pairingKnown = startPairingKnown
 	c.pairingApplied = startPairingApplied
-	c.pairingGen++
+	c.pairingRevision = startRevision
 	if startPairingKnown {
 		c.pairingConfirmedAt = c.cfg.Now()
 	}
@@ -768,6 +767,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.pairingShortIDs = nil
 	c.pairingKnown = false
 	c.pairingApplied = false
+	c.pairingRevision = 0
 	c.pairingConfirmedAt = time.Time{}
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
@@ -1001,7 +1001,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 		case <-t.C:
 			c.rejections.flush()
 			c.mu.Lock()
-			routeID, registration, epoch := c.routeID, c.registration, c.pairingEpoch
+			routeID, registration := c.routeID, c.registration
 			c.mu.Unlock()
 			if routeID == "" {
 				return
@@ -1011,13 +1011,14 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
-				// here, unless a rotation began since it was sent.
-				c.applyPairing(resp.PairingShortIDs, true, &epoch)
+				// here, unless a newer set was accepted while it was in
+				// flight.
+				c.applyPairingShortIDs(resp.PairingShortIDs, true, int64(resp.PairingShortIDsRevision))
 			} else {
 				// A failed heartbeat, or one that does not vouch for a set,
 				// says nothing about pairings, so the last set stays, and is
 				// pushed again if the box does not hold it.
-				c.applyPairingShortIDs(nil, false)
+				c.applyPairingShortIDs(nil, false, 0)
 			}
 			c.expireUnconfirmedPairing()
 			if err != nil {
@@ -1160,18 +1161,6 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
-	// The pairing generation is read before Register, so a heartbeat that
-	// records a newer set after the server built this response, during the
-	// register or the old box's teardown, is seen to be newer below.
-	// Bumping the epoch here discards any heartbeat still in flight from
-	// before, whose set may be older than this register's. Both are done
-	// under shortIDsMu, so no such heartbeat records between them.
-	c.shortIDsMu.Lock()
-	c.mu.Lock()
-	c.pairingEpoch++
-	rotGen := c.pairingGen
-	c.mu.Unlock()
-	c.shortIDsMu.Unlock()
 	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
@@ -1187,6 +1176,11 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.registration++
 	registration := c.registration
 	c.mu.Unlock()
+	if regResp.PairingShortIDsKnown {
+		// Offered like a heartbeat's set: taken only if newer than the
+		// one held, and pushed onto the box serving now.
+		c.applyPairingShortIDs(regResp.PairingShortIDs, true, int64(regResp.PairingShortIDsRevision))
+	}
 	sameRoute := regResp.RouteID == oldRouteID
 	// abandon undoes a registration this rotation can no longer use. A new
 	// route_id is deregistered so the bandit doesn't hand out creds for a box
@@ -1253,34 +1247,28 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
 	// The new box is built with its base ID only. Before it starts it is
-	// given a pairing set, so paired users reconnecting after the old box
-	// closed are never refused: the register response's when the server
-	// vouches for it and no heartbeat has recorded a newer one since the
-	// register began, and otherwise the recorded set. shortIDsMu is held
-	// from this choice through the swap, so no heartbeat can record a newer
-	// set (revoking a pairing this one still carries) before the new box is
-	// the one heartbeats push to.
+	// given the newest recorded set, which includes this register's if it
+	// was newer, so paired users reconnecting after the old box closed are
+	// never refused. A heartbeat that records a newer set before the swap
+	// pushes it onto the old box; the swap below gives the new box it.
 	newBase := inboundShortIDs(options)
-	c.shortIDsMu.Lock()
-	c.mu.Lock()
-	rotPairing, rotKnown := slices.Clone(c.pairingShortIDs), c.pairingKnown
-	fromRegister := regResp.PairingShortIDsKnown && c.pairingGen == rotGen
-	c.mu.Unlock()
-	if fromRegister {
-		rotPairing, rotKnown = slices.Clone(regResp.PairingShortIDs), true
-	}
-	rotApplied := false
+	var (
+		rotPairing []string
+		rotKnown   bool
+		rotApplied bool
+	)
 	newBox, err := buildAndStartWithRetry(ctx, func() (boxService, error) {
 		b, err := c.cfg.BuildBoxService(sessionRunCtx, options)
-		if err == nil && rotKnown {
-			rotApplied = c.applyShortIDs(b, newBase, rotPairing)
+		if err != nil {
+			return b, err
 		}
-		return b, err
+		c.mu.Lock()
+		rotPairing, rotKnown = slices.Clone(c.pairingShortIDs), c.pairingKnown
+		c.mu.Unlock()
+		rotApplied = rotKnown && c.applyShortIDs(b, newBase, rotPairing)
+		return b, nil
 	}, c.closeBox)
 	if err != nil {
-		// Released first: stopping waits for the heartbeat loop, which may
-		// be waiting for shortIDsMu.
-		c.shortIDsMu.Unlock()
 		// The old box is closed and the new one isn't up: nothing listens.
 		// Leave c.box pointing at oldBox so Stop's close stays idempotent.
 		return fail(fmt.Errorf("start new sing-box: %w", err), false)
@@ -1292,6 +1280,8 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// runCtx-check above and now would have cleared active AND set it
 	// back true, but the new session's runCtx differs from sessionRunCtx
 	// — so we'd otherwise resurrect old-session state into the new one.
+	// shortIDsMu orders the swap against a heartbeat's record and push.
+	c.shortIDsMu.Lock()
 	c.mu.Lock()
 	if !c.active || c.runCtx != sessionRunCtx {
 		c.mu.Unlock()
@@ -1312,18 +1302,22 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
-	if fromRegister {
-		c.pairingShortIDs = rotPairing
-		c.pairingKnown = true
-		c.pairingGen++
-		c.pairingConfirmedAt = c.cfg.Now()
-	}
-	// The box holds the recorded set exactly when the push before Start
-	// took; with no known set there is nothing for it to hold.
-	c.pairingApplied = rotKnown && rotApplied
+	// The box holds the record if the push before Start took and nothing
+	// newer was recorded since. Otherwise it is given the record now; a
+	// failure leaves pairingApplied false for the next heartbeat to retry.
+	held := !c.pairingKnown || rotApplied && slices.Equal(rotPairing, c.pairingShortIDs)
+	c.pairingApplied = held
+	record, recordKnown := slices.Clone(c.pairingShortIDs), c.pairingKnown
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
+	if !held && recordKnown && c.applyShortIDs(newBox, newBase, record) {
+		c.mu.Lock()
+		if c.box == newBox {
+			c.pairingApplied = true
+		}
+		c.mu.Unlock()
+	}
 	c.shortIDsMu.Unlock()
 
 	if !sameRoute {
@@ -1619,46 +1613,47 @@ func (c *Client) applyShortIDs(b boxService, base, pairing []string) bool {
 	return true
 }
 
-// applyPairingShortIDs pushes pairing short IDs onto the box serving now and
-// records them. A failed push leaves the box, and so the record, as it was.
-// With known false the server did not vouch for pairing, so the recorded
-// set is pushed again, but only when the box does not hold it yet because
-// an earlier push onto it failed.
-func (c *Client) applyPairingShortIDs(pairing []string, known bool) {
-	c.applyPairing(pairing, known, nil)
+// acceptsPairingRevision reports whether a known set at revision rev is newer
+// than the one held, so that a response computed earlier but answered later
+// (a heartbeat in flight across a rotation's register, say) never replaces
+// it. The server sends known and the revision together, so a known set with
+// revision 0 is never taken. Called with c.mu held.
+func (c *Client) acceptsPairingRevision(rev int64) bool {
+	return rev > c.pairingRevision
 }
 
-// applyPairing is applyPairingShortIDs for a set sent in pairing epoch
-// *sentEpoch, which is discarded if a rotation has begun since: the rotation
-// installs a set at least as new. Nil skips the check.
-func (c *Client) applyPairing(pairing []string, known bool, sentEpoch *uint64) {
+// applyPairingShortIDs offers a pairing set to the box serving now. With
+// known true it is the server's set at revision rev: if newer than the one
+// held, it is recorded, confirmed now, and pushed. Whether or not it was,
+// a recorded set the box does not hold, because a push onto it failed, is
+// pushed again; with known false that is all it does.
+func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
 	c.shortIDsMu.Lock()
 	defer c.shortIDsMu.Unlock()
 	c.mu.Lock()
-	if known && sentEpoch != nil && *sentEpoch != c.pairingEpoch {
+	b, base := c.box, c.baseShortIDs
+	if b == nil {
 		c.mu.Unlock()
 		return
 	}
-	b, base := c.box, c.baseShortIDs
-	if !known {
-		if !c.pairingKnown || c.pairingApplied {
-			c.mu.Unlock()
-			return
-		}
-		pairing = slices.Clone(c.pairingShortIDs)
+	if known && c.acceptsPairingRevision(rev) {
+		c.pairingShortIDs = slices.Clone(pairing)
+		c.pairingKnown = true
+		c.pairingRevision = rev
+		c.pairingConfirmedAt = c.cfg.Now()
+		c.pairingApplied = false
 	}
+	if !c.pairingKnown || c.pairingApplied {
+		c.mu.Unlock()
+		return
+	}
+	record := slices.Clone(c.pairingShortIDs)
 	c.mu.Unlock()
-	if b == nil || !c.applyShortIDs(b, base, pairing) {
+	if !c.applyShortIDs(b, base, record) {
 		return
 	}
 	c.mu.Lock()
 	if c.box == b {
-		if known {
-			c.pairingShortIDs = slices.Clone(pairing)
-			c.pairingKnown = true
-			c.pairingGen++
-			c.pairingConfirmedAt = c.cfg.Now()
-		}
 		c.pairingApplied = true
 	}
 	c.mu.Unlock()
@@ -1699,7 +1694,6 @@ func (c *Client) expireUnconfirmedPairing() {
 		c.pairingKnown = false
 		c.pairingApplied = true
 		c.pairingConfirmedAt = time.Time{}
-		c.pairingGen++
 	}
 	c.mu.Unlock()
 	slog.Info("peer: pairing short IDs unconfirmed for too long; dropped")

@@ -39,6 +39,30 @@ type RegisterResponse struct {
 	// complete set, so an empty list means no pairings. False, or absent
 	// from an older server, means the peer keeps the set it has.
 	PairingShortIDsKnown bool `json:"pairing_short_ids_known"`
+	// PairingShortIDsRevision is when the server computed PairingShortIDs,
+	// in Unix milliseconds, so the peer never replaces a set with an older
+	// one. Non-zero exactly when PairingShortIDsKnown is true.
+	PairingShortIDsRevision Revision `json:"pairing_short_ids_revision"`
+}
+
+// Revision is an int64 that decodes from a JSON number or, as lantern-cloud's
+// protojson encoding sends int64s, a JSON string.
+type Revision int64
+
+func (r *Revision) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		b = []byte(s)
+	}
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return fmt.Errorf("revision: %w", err)
+	}
+	*r = Revision(n)
+	return nil
 }
 
 // HeartbeatResponse carries the current pairing short IDs, which rotate with
@@ -46,8 +70,9 @@ type RegisterResponse struct {
 // replaces its pairing set with PairingShortIDs, so an ended pairing drops
 // out here; otherwise it keeps the set it has.
 type HeartbeatResponse struct {
-	PairingShortIDs      []string `json:"pairing_short_ids"`
-	PairingShortIDsKnown bool     `json:"pairing_short_ids_known"`
+	PairingShortIDs         []string `json:"pairing_short_ids"`
+	PairingShortIDsKnown    bool     `json:"pairing_short_ids_known"`
+	PairingShortIDsRevision Revision `json:"pairing_short_ids_revision"`
 }
 
 type LifecycleRequest struct {

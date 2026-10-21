@@ -195,7 +195,7 @@ func TestClient_HeartbeatTransportErrorKeepsPairingShortIDs(t *testing.T) {
 	assert.Equal(t, [][]string{{testBaseShortID, "1111111111111111"}}, b.shortIDUpdates())
 }
 
-func TestClient_FailedShortIDUpdateKeepsPreviousSet(t *testing.T) {
+func TestClient_FailedShortIDUpdateIsRetried(t *testing.T) {
 	srv := newStubServer(t)
 	srv.registerResp.ServerConfig = launchCfgWithShortID()
 	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
@@ -207,11 +207,59 @@ func TestClient_FailedShortIDUpdateKeepsPreviousSet(t *testing.T) {
 
 	b.setUpdateErr(errors.New("refused"))
 	srv.heartbeatShortIDs.Store(&[]string{"2222222222222222"})
-	after := srv.heartbeatCount.Load()
-	require.Eventually(t, func() bool { return srv.heartbeatCount.Load() >= after+3 }, 2*time.Second, 10*time.Millisecond)
+	waitHeartbeats(t, srv, 3)
+	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, b.lastShortIDs(),
+		"a refused set leaves the inbound as it was")
 	ids, known := pairingState(c)
 	assert.True(t, known)
-	assert.Equal(t, []string{"1111111111111111"}, ids, "a set the inbound refused is not recorded as applied")
+	assert.Equal(t, []string{"2222222222222222"}, ids, "the record is the server's newest set")
+
+	b.setUpdateErr(nil)
+	require.Eventually(t, func() bool {
+		return slices.Equal(b.lastShortIDs(), []string{testBaseShortID, "2222222222222222"})
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestClient_PairingRevisionOrdering(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
+	srv.registerResp.PairingShortIDsKnown = true
+	srv.registerResp.PairingShortIDsRevision = 100
+	b := &fakeBoxService{}
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) { cfg.HeartbeatInterval = 20 * time.Millisecond })
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	withRegister := [][]string{{testBaseShortID, "1111111111111111"}}
+
+	srv.heartbeatRevision.Store(50)
+	srv.heartbeatShortIDs.Store(&[]string{"2222222222222222"})
+	waitHeartbeats(t, srv, 3)
+	assert.Equal(t, withRegister, b.shortIDUpdates(), "an older revision is ignored")
+
+	srv.heartbeatRevision.Store(200)
+	require.Eventually(t, func() bool {
+		return slices.Equal(b.lastShortIDs(), []string{testBaseShortID, "2222222222222222"})
+	}, 2*time.Second, 10*time.Millisecond, "a newer revision wins")
+}
+
+// The server sends known and its revision together, so a known set without
+// a revision is not trusted, at register or heartbeat.
+func TestClient_KnownSetWithoutRevisionIsIgnored(t *testing.T) {
+	srv := newStubServer(t)
+	srv.noRevisions = true
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
+	srv.registerResp.PairingShortIDsKnown = true
+	srv.heartbeatShortIDs.Store(&[]string{"2222222222222222"})
+	b := &fakeBoxService{}
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) { cfg.HeartbeatInterval = 20 * time.Millisecond })
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	waitHeartbeats(t, srv, 3)
+	assert.Empty(t, b.shortIDUpdates())
+	_, known := pairingState(c)
+	assert.False(t, known)
 }
 
 // rotatedBoxHas reports whether any box built by a rotation, not by Start,
@@ -294,71 +342,51 @@ func TestClient_RotationKeepsLastKnownPairingShortIDs(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "a rotation whose register does not vouch for a set keeps the last known one")
 }
 
-func TestClient_RotationKeepsNewerHeartbeatSet(t *testing.T) {
-	heartbeatDone := make(chan struct{})
-	srv := newStubServer(t)
-	srv.registerResp.ServerConfig = launchCfgWithShortID()
-	srv.registerResp.PairingShortIDs = []string{"3333333333333333", "5555555555555555"}
-	srv.registerResp.PairingShortIDsKnown = true
-	var (
-		c     *Client
-		mu    sync.Mutex
-		boxes []*fakeBoxService
-	)
-	c = newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
-		cfg.CredRotationInterval = time.Hour
-		cfg.HeartbeatInterval = time.Hour
-		cfg.BuildBoxService = func(_ context.Context, options string) (boxService, error) {
-			mu.Lock()
-			b := &fakeBoxService{gotConfig: options}
-			boxes = append(boxes, b)
-			n := len(boxes)
-			mu.Unlock()
-			if n == 2 {
-				// A heartbeat lands while the rotation builds its box: the
-				// 3333 pairing has ended. It runs on its own goroutine, as
-				// the heartbeat loop does, and waits for the swap.
-				go func() {
-					defer close(heartbeatDone)
-					c.applyPairingShortIDs([]string{"5555555555555555"}, true)
-				}()
-			}
-			return b, nil
-		}
-	})
-	require.NoError(t, c.Start(context.Background()))
-	t.Cleanup(func() { _ = c.Stop(context.Background()) })
-	require.NoError(t, c.rotateCreds(context.Background()))
-	<-heartbeatDone
-
-	mu.Lock()
-	require.Len(t, boxes, 2)
-	rotated := boxes[1]
-	mu.Unlock()
-	assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, rotated.lastShortIDs(),
-		"the rotation's register snapshot must not restore a pairing a newer heartbeat revoked")
-	ids, known := pairingState(c)
-	assert.True(t, known)
-	assert.Equal(t, []string{"5555555555555555"}, ids)
-}
-
-// closeHookBox runs onClose, once, when it is first closed.
-type closeHookBox struct {
+// hookBox runs onStart before starting and onClose, once, on its first
+// close.
+type hookBox struct {
 	*fakeBoxService
+	onStart func()
 	once    sync.Once
 	onClose func()
 }
 
-func (b *closeHookBox) Close() error {
-	b.once.Do(b.onClose)
+func (b *hookBox) Start() error {
+	if b.onStart != nil {
+		b.onStart()
+	}
+	return b.fakeBoxService.Start()
+}
+
+func (b *hookBox) Close() error {
+	if b.onClose != nil {
+		b.once.Do(b.onClose)
+	}
 	return b.fakeBoxService.Close()
 }
 
-func TestClient_RotationKeepsHeartbeatSetRecordedAfterRegister(t *testing.T) {
+// rotationWithHooks starts a client whose first register carries pairing
+// set first at revision 10 and whose later ones carry rotated at revision
+// 100, rotates once, and returns the box the rotation built. hook, when set,
+// wraps the box the given build (1 for Start's, 2 for the rotation's) returns.
+func rotationWithHooks(t *testing.T, first, rotated []string, build int, hook func(c *Client, b *hookBox)) (*Client, *fakeBoxService) {
+	t.Helper()
 	srv := newStubServer(t)
-	srv.registerResp.ServerConfig = launchCfgWithShortID()
-	srv.registerResp.PairingShortIDs = []string{"3333333333333333", "5555555555555555"}
-	srv.registerResp.PairingShortIDsKnown = true
+	var registers atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		resp := RegisterResponse{
+			RouteID:                  "00000000-0000-0000-0000-000000000123",
+			ServerConfig:             launchCfgWithShortID(),
+			HeartbeatIntervalSeconds: 60,
+			PairingShortIDs:          rotated,
+			PairingShortIDsKnown:     true,
+			PairingShortIDsRevision:  100,
+		}
+		if registers.Add(1) == 1 {
+			resp.PairingShortIDs, resp.PairingShortIDsRevision = first, 10
+		}
+		return resp
+	}
 	var (
 		c     *Client
 		mu    sync.Mutex
@@ -372,33 +400,74 @@ func TestClient_RotationKeepsHeartbeatSetRecordedAfterRegister(t *testing.T) {
 			defer mu.Unlock()
 			b := &fakeBoxService{gotConfig: options}
 			boxes = append(boxes, b)
-			if len(boxes) > 1 {
-				return b, nil
+			if len(boxes) == build && hook != nil {
+				h := &hookBox{fakeBoxService: b}
+				hook(c, h)
+				return h, nil
 			}
-			// The rotation closes the first box after its Register has
-			// returned. A heartbeat lands then, revoking the 3333 pairing
-			// the register response still carries.
-			return &closeHookBox{fakeBoxService: b, onClose: func() {
-				c.applyPairingShortIDs([]string{"5555555555555555"}, true)
-			}}, nil
+			return b, nil
 		}
 	})
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	require.NoError(t, c.rotateCreds(context.Background()))
-
 	mu.Lock()
+	defer mu.Unlock()
 	require.Len(t, boxes, 2)
-	rotated := boxes[1]
-	mu.Unlock()
-	assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, rotated.shortIDsAtStart(),
-		"the new box must never start with a pairing a newer heartbeat revoked")
-	assert.Equal(t, [][]string{{testBaseShortID, "5555555555555555"}}, rotated.shortIDUpdates())
-	ids, known := pairingState(c)
-	assert.True(t, known)
+	return c, boxes[1]
+}
+
+func TestClient_RotationTakesRegisterSetBeforeStart(t *testing.T) {
+	c, rotated := rotationWithHooks(t, []string{"3333333333333333"}, []string{"5555555555555555"}, 0, nil)
+	assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, rotated.shortIDsAtStart())
+	ids, _ := pairingState(c)
 	assert.Equal(t, []string{"5555555555555555"}, ids)
 }
 
+// A heartbeat with a newer revision than the rotation's register, landing
+// while the new box is built or after it starts but before the swap, wins.
+func TestClient_RotationKeepsNewerHeartbeatSet(t *testing.T) {
+	both := []string{"3333333333333333", "5555555555555555"}
+	newer := func(c *Client) { c.applyPairingShortIDs([]string{"5555555555555555"}, true, 200) }
+	for name, tc := range map[string]struct {
+		build int
+		hook  func(c *Client, b *hookBox)
+		start []string
+	}{
+		"while the old box closes": {
+			build: 1, hook: func(c *Client, b *hookBox) { b.onClose = func() { newer(c) } },
+			start: []string{testBaseShortID, "5555555555555555"},
+		},
+		"after the new box starts": {
+			build: 2, hook: func(c *Client, b *hookBox) { b.onStart = func() { newer(c) } },
+			start: []string{testBaseShortID, "3333333333333333", "5555555555555555"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, rotated := rotationWithHooks(t, both, both, tc.build, tc.hook)
+			assert.Equal(t, tc.start, rotated.shortIDsAtStart())
+			assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, rotated.lastShortIDs(),
+				"the register's older set must not outlive a newer heartbeat that revoked a pairing")
+			ids, _ := pairingState(c)
+			assert.Equal(t, []string{"5555555555555555"}, ids)
+		})
+	}
+}
+
+// A heartbeat whose set is older than the rotation's register, landing
+// after the register (here, while the old box closes), is ignored.
+func TestClient_RotationIgnoresOlderHeartbeatBeforeSwap(t *testing.T) {
+	c, rotated := rotationWithHooks(t, []string{"3333333333333333"}, []string{"5555555555555555"}, 1,
+		func(c *Client, b *hookBox) {
+			b.onClose = func() { c.applyPairingShortIDs([]string{"3333333333333333"}, true, 50) }
+		})
+	assert.Equal(t, [][]string{{testBaseShortID, "5555555555555555"}}, rotated.shortIDUpdates())
+	ids, _ := pairingState(c)
+	assert.Equal(t, []string{"5555555555555555"}, ids)
+}
+
+// A heartbeat computed before the rotation's register but answered after
+// the swap is ignored.
 func TestClient_InFlightHeartbeatDoesNotOverwriteRotation(t *testing.T) {
 	srv := newStubServer(t)
 	var registers atomic.Int64
@@ -409,13 +478,15 @@ func TestClient_InFlightHeartbeatDoesNotOverwriteRotation(t *testing.T) {
 			HeartbeatIntervalSeconds: 60,
 			PairingShortIDs:          []string{"5555555555555555"},
 			PairingShortIDsKnown:     true,
+			PairingShortIDsRevision:  100,
 		}
 		if registers.Add(1) == 1 {
-			resp.PairingShortIDs = []string{"3333333333333333"}
+			resp.PairingShortIDs, resp.PairingShortIDsRevision = []string{"3333333333333333"}, 10
 		}
 		return resp
 	}
 	srv.heartbeatShortIDs.Store(&[]string{"3333333333333333"})
+	srv.heartbeatRevision.Store(20)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
@@ -448,6 +519,7 @@ func TestClient_InFlightHeartbeatDoesNotOverwriteRotation(t *testing.T) {
 	<-entered
 	require.NoError(t, c.rotateCreds(context.Background()))
 	srv.heartbeatShortIDs.Store(&[]string{"5555555555555555"})
+	srv.heartbeatRevision.Store(150)
 	releaseOnce.Do(func() { close(release) })
 	require.Eventually(t, func() bool { return heartbeats.Load() >= 3 }, 2*time.Second, 10*time.Millisecond)
 
@@ -457,7 +529,7 @@ func TestClient_InFlightHeartbeatDoesNotOverwriteRotation(t *testing.T) {
 	mu.Unlock()
 	for _, set := range rotated.shortIDUpdates() {
 		assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, set,
-			"a heartbeat sent before the rotation must not restore the pairing it ended")
+			"a heartbeat computed before the rotation must not restore the pairing it ended")
 	}
 	ids, known := pairingState(c)
 	assert.True(t, known)

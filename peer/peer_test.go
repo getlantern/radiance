@@ -220,7 +220,14 @@ type stubServer struct {
 	// pairing_short_ids with pairing_short_ids_known true. Unset, the
 	// heartbeat answers with an empty body, as servers that predate the
 	// fields do.
-	heartbeatShortIDs  atomic.Pointer[[]string]
+	heartbeatShortIDs atomic.Pointer[[]string]
+	// heartbeatRevision is sent as pairing_short_ids_revision with
+	// heartbeatShortIDs. Zero means the next of revisions, which, as the
+	// server's clock does, increases with each known set the stub sends,
+	// in register responses too. noRevisions sends 0 instead.
+	heartbeatRevision  atomic.Int64
+	revisions          atomic.Int64
+	noRevisions        bool
 	registerCount      atomic.Int64
 	verifyCount        atomic.Int64
 	heartbeatCount     atomic.Int64
@@ -266,6 +273,9 @@ func newStubServer(t *testing.T) *stubServer {
 		if s.registerRespFn != nil {
 			resp = s.registerRespFn()
 		}
+		if resp.PairingShortIDsKnown && resp.PairingShortIDsRevision == 0 && !s.noRevisions {
+			resp.PairingShortIDsRevision = Revision(s.revisions.Add(1))
+		}
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 	mux.HandleFunc("/v1/peer/verify", func(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +301,10 @@ func newStubServer(t *testing.T) *stubServer {
 		s.heartbeatDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
 		// Read on arrival, so a response onHeartbeat delays carries what the
 		// server knew when the heartbeat was sent.
-		ids := s.heartbeatShortIDs.Load()
+		ids, rev := s.heartbeatShortIDs.Load(), s.heartbeatRevision.Load()
+		if ids != nil && rev == 0 && !s.noRevisions {
+			rev = s.revisions.Add(1)
+		}
 		if s.onHeartbeat != nil {
 			s.onHeartbeat()
 		}
@@ -300,7 +313,7 @@ func newStubServer(t *testing.T) *stubServer {
 			return
 		}
 		if ids != nil {
-			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true})
+			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -1437,10 +1450,12 @@ func TestAPI_HeartbeatReturnsPairingShortIDs(t *testing.T) {
 	assert.False(t, resp.PairingShortIDsKnown)
 
 	srv.heartbeatShortIDs.Store(&[]string{"1111111111111111"})
+	srv.heartbeatRevision.Store(1761004800000)
 	resp, err = api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1111111111111111"}, resp.PairingShortIDs)
 	assert.True(t, resp.PairingShortIDsKnown)
+	assert.Equal(t, Revision(1761004800000), resp.PairingShortIDsRevision)
 }
 
 func TestAPI_HeartbeatToleratesMissingPairingFields(t *testing.T) {
@@ -1448,7 +1463,20 @@ func TestAPI_HeartbeatToleratesMissingPairingFields(t *testing.T) {
 		body      string
 		wantIDs   []string
 		wantKnown bool
+		wantRev   Revision
 	}{
+		// lantern-cloud's protojson encodes int64 as a JSON string.
+		"string revision": {
+			body:    `{"pairing_short_ids":["1111111111111111"],"pairing_short_ids_known":true,"pairing_short_ids_revision":"1800000450000"}`,
+			wantIDs: []string{"1111111111111111"}, wantKnown: true, wantRev: 1800000450000,
+		},
+		"number revision": {
+			body:    `{"pairing_short_ids":["1111111111111111"],"pairing_short_ids_known":true,"pairing_short_ids_revision":1800000450000}`,
+			wantIDs: []string{"1111111111111111"}, wantKnown: true, wantRev: 1800000450000,
+		},
+		"revision not a number": {
+			body: `{"pairing_short_ids":["1111111111111111"],"pairing_short_ids_known":true,"pairing_short_ids_revision":"soon"}`,
+		},
 		"empty body":          {body: ""},
 		"empty object":        {body: "{}"},
 		"ids without known":   {body: `{"pairing_short_ids":["1111111111111111"]}`, wantIDs: []string{"1111111111111111"}},
@@ -1471,19 +1499,38 @@ func TestAPI_HeartbeatToleratesMissingPairingFields(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantIDs, resp.PairingShortIDs)
 			assert.Equal(t, tc.wantKnown, resp.PairingShortIDsKnown)
+			assert.Equal(t, tc.wantRev, resp.PairingShortIDsRevision)
 		})
 	}
+}
+
+func TestAPI_RegisterDecodesStringRevision(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"route_id":"00000000-0000-0000-0000-000000000123","server_config":"{}",` +
+			`"heartbeat_interval_seconds":60,"pairing_short_ids":["2222222222222222"],` +
+			`"pairing_short_ids_known":true,"pairing_short_ids_revision":"1800000450000"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	api := NewAPI(srv.Client(), srv.URL, "test-device")
+	resp, err := api.Register(context.Background(), RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698})
+	require.NoError(t, err)
+	assert.Equal(t, Revision(1800000450000), resp.PairingShortIDsRevision)
+	assert.True(t, resp.PairingShortIDsKnown)
 }
 
 func TestAPI_RegisterReturnsPairingShortIDs(t *testing.T) {
 	srv := newStubServer(t)
 	srv.registerResp.PairingShortIDs = []string{"2222222222222222"}
 	srv.registerResp.PairingShortIDsKnown = true
+	srv.registerResp.PairingShortIDsRevision = 1761004800000
 	api := NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device")
 	resp, err := api.Register(context.Background(), RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"2222222222222222"}, resp.PairingShortIDs)
 	assert.True(t, resp.PairingShortIDsKnown)
+	assert.Equal(t, Revision(1761004800000), resp.PairingShortIDsRevision)
 }
 
 func TestRegisterRequest_ServePoolOmittedUnlessSet(t *testing.T) {
