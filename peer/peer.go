@@ -1143,6 +1143,12 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
+	// The pairing generation is read before Register, so a heartbeat that
+	// records a newer set after the server built this response, during the
+	// register or the old box's teardown, is seen to be newer below.
+	c.mu.Lock()
+	rotGen := c.pairingGen
+	c.mu.Unlock()
 	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
@@ -1223,15 +1229,21 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if closeErr := c.closeBox(oldBox); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
-	// The new box is built with its base ID only. It is given the register
-	// response's pairing set when the server vouches for it, and otherwise
-	// the last known one, before it starts, so paired users reconnecting
-	// after the old box closed are never refused.
+	// The new box is built with its base ID only. Before it starts it is
+	// given a pairing set, so paired users reconnecting after the old box
+	// closed are never refused: the register response's when the server
+	// vouches for it and no heartbeat has recorded a newer one since the
+	// register began, and otherwise the recorded set. shortIDsMu is held
+	// from this choice through the swap, so no heartbeat can record a newer
+	// set (revoking a pairing this one still carries) before the new box is
+	// the one heartbeats push to.
 	newBase := inboundShortIDs(options)
+	c.shortIDsMu.Lock()
 	c.mu.Lock()
-	rotPairing, rotKnown, rotGen := slices.Clone(c.pairingShortIDs), c.pairingKnown, c.pairingGen
+	rotPairing, rotKnown := slices.Clone(c.pairingShortIDs), c.pairingKnown
+	fromRegister := regResp.PairingShortIDsKnown && c.pairingGen == rotGen
 	c.mu.Unlock()
-	if regResp.PairingShortIDsKnown {
+	if fromRegister {
 		rotPairing, rotKnown = slices.Clone(regResp.PairingShortIDs), true
 	}
 	rotApplied := false
@@ -1243,6 +1255,9 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		return b, err
 	}, c.closeBox)
 	if err != nil {
+		// Released first: stopping waits for the heartbeat loop, which may
+		// be waiting for shortIDsMu.
+		c.shortIDsMu.Unlock()
 		// The old box is closed and the new one isn't up: nothing listens.
 		// Leave c.box pointing at oldBox so Stop's close stays idempotent.
 		return fail(fmt.Errorf("start new sing-box: %w", err), false)
@@ -1254,8 +1269,6 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// runCtx-check above and now would have cleared active AND set it
 	// back true, but the new session's runCtx differs from sessionRunCtx
 	// — so we'd otherwise resurrect old-session state into the new one.
-	// shortIDsMu is held so no heartbeat's push and record straddles the swap.
-	c.shortIDsMu.Lock()
 	c.mu.Lock()
 	if !c.active || c.runCtx != sessionRunCtx {
 		c.mu.Unlock()
@@ -1276,19 +1289,14 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
-	switch {
-	case c.pairingGen != rotGen:
-		// A heartbeat recorded a newer set while the box was being built,
-		// so the box holds a stale one that may still carry a revoked
-		// pairing. Keep the record and give the box it now, before anyone
-		// else can see the box.
-		c.pairingApplied = c.pairingKnown && c.applyShortIDs(newBox, newBase, c.pairingShortIDs)
-	case rotKnown:
+	if fromRegister {
 		c.pairingShortIDs = rotPairing
 		c.pairingKnown = true
-		c.pairingApplied = rotApplied
 		c.pairingGen++
 	}
+	// The box holds the recorded set exactly when the push before Start
+	// took; with no known set there is nothing for it to hold.
+	c.pairingApplied = rotKnown && rotApplied
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
