@@ -10,6 +10,7 @@ import (
 	"net/http"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,6 +146,15 @@ func traceSpan(ctx context.Context, name string, fn func() error) error {
 	return err
 }
 
+var lineBreakEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
+
+func recoverToError(err *error, operation string) {
+	if r := recover(); r != nil {
+		common.WriteRecoveredPanic(operation, r)
+		*err = fmt.Errorf("panic %s: %s", operation, lineBreakEscaper.Replace(fmt.Sprint(r)))
+	}
+}
+
 func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
 	defer func() {
@@ -215,8 +225,8 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 
 	slog.Log(nil, rlog.LevelTrace, "Creating box instance")
 	var instance *sbox.Box
-	if err := traceSpan(ctx, "sbox.New", func() error {
-		var err error
+	if err := traceSpan(ctx, "sbox.New", func() (err error) {
+		defer recoverToError(&err, "creating box instance")
 		instance, err = sbox.New(sbox.Options{
 			Context: t.ctx,
 			Options: options,
