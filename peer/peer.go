@@ -1275,6 +1275,12 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		c.pairingShortIDs = rotPairing
 		c.pairingKnown = true
 		c.pairingApplied = rotApplied
+	} else if c.pairingKnown {
+		// The new box got the set snapshotted before the build, but a
+		// heartbeat may have recorded a newer one since. Have the next
+		// heartbeat push the record; repushing an already-held set is a
+		// no-op, and the record is authoritative either way.
+		c.pairingApplied = false
 	}
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
