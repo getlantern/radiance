@@ -129,6 +129,10 @@ type fakeBoxService struct {
 	started   atomic.Bool
 	closed    atomic.Bool
 	gotConfig string
+
+	idsMu     sync.Mutex
+	shortIDs  [][]string
+	updateErr error
 }
 
 func (b *fakeBoxService) Start() error {
@@ -142,6 +146,41 @@ func (b *fakeBoxService) Start() error {
 func (b *fakeBoxService) Close() error {
 	b.closed.Store(true)
 	return b.closeErr
+}
+
+// UpdateShortIDs records each set, as the samizdat inbound would apply it.
+// With updateErr set it refuses the set and records nothing.
+func (b *fakeBoxService) UpdateShortIDs(ids []string) error {
+	b.idsMu.Lock()
+	defer b.idsMu.Unlock()
+	if b.updateErr != nil {
+		return b.updateErr
+	}
+	b.shortIDs = append(b.shortIDs, append([]string(nil), ids...))
+	return nil
+}
+
+func (b *fakeBoxService) setUpdateErr(err error) {
+	b.idsMu.Lock()
+	defer b.idsMu.Unlock()
+	b.updateErr = err
+}
+
+// lastShortIDs is the set most recently applied, or nil.
+func (b *fakeBoxService) lastShortIDs() []string {
+	b.idsMu.Lock()
+	defer b.idsMu.Unlock()
+	if len(b.shortIDs) == 0 {
+		return nil
+	}
+	return b.shortIDs[len(b.shortIDs)-1]
+}
+
+// shortIDUpdates is every set applied, oldest first.
+func (b *fakeBoxService) shortIDUpdates() [][]string {
+	b.idsMu.Lock()
+	defer b.idsMu.Unlock()
+	return append([][]string(nil), b.shortIDs...)
 }
 
 type stubServer struct {
