@@ -454,6 +454,88 @@ func TestClient_RotationKeepsNewerHeartbeatSet(t *testing.T) {
 	}
 }
 
+// Expiry that clears the set after the rotation pushed it onto its new box,
+// but before the swap, leaves the new box with its base ID only.
+func TestClient_RotationReconcilesSetExpiredBeforeSwap(t *testing.T) {
+	srv := newStubServer(t)
+	var registers atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		resp := RegisterResponse{
+			RouteID:                  "00000000-0000-0000-0000-000000000123",
+			ServerConfig:             launchCfgWithShortID(),
+			HeartbeatIntervalSeconds: 60,
+		}
+		if registers.Add(1) == 1 {
+			resp.PairingShortIDs = []string{"3333333333333333"}
+			resp.PairingShortIDsKnown = true
+		}
+		return resp
+	}
+	clock := &testClock{}
+	clock.set(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+	var (
+		c     *Client
+		mu    sync.Mutex
+		boxes []*fakeBoxService
+	)
+	c = newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
+		cfg.Now = clock.now
+		cfg.BuildBoxService = func(_ context.Context, options string) (boxService, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			b := &fakeBoxService{gotConfig: options}
+			boxes = append(boxes, b)
+			if len(boxes) == 1 {
+				return b, nil
+			}
+			// A heartbeat expires the set after the push before Start.
+			return &hookBox{fakeBoxService: b, onStart: func() {
+				clock.advance(pairingMaxUnconfirmed)
+				c.expireUnconfirmedPairing()
+			}}, nil
+		}
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.rotateCreds(context.Background()))
+
+	mu.Lock()
+	require.Len(t, boxes, 2)
+	rotated := boxes[1]
+	mu.Unlock()
+	assert.Equal(t, []string{testBaseShortID, "3333333333333333"}, rotated.shortIDsAtStart(),
+		"the retained set was pushed before Start")
+	assert.Equal(t, []string{testBaseShortID}, rotated.lastShortIDs(),
+		"the expired IDs must not stay accepted on the new box")
+	_, known := pairingState(c)
+	assert.False(t, known)
+	c.mu.Lock()
+	applied := c.pairingApplied
+	c.mu.Unlock()
+	assert.True(t, applied)
+}
+
+// A failed push of the base ID after expiry is retried by a heartbeat that
+// does not vouch for a set.
+func TestClient_FailedBaseOnlyPushIsRetried(t *testing.T) {
+	c, b, srv, clock := expiryClient(t)
+	b.setUpdateErr(errors.New("refused"))
+	clock.advance(pairingMaxUnconfirmed)
+	waitHeartbeats(t, srv, 3)
+	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, b.lastShortIDs())
+	// Simulate the swap path's failure: the record is gone but the box
+	// still holds the set.
+	c.mu.Lock()
+	c.pairingKnown, c.pairingShortIDs, c.pairingApplied = false, nil, false
+	c.mu.Unlock()
+	b.setUpdateErr(nil)
+	require.Eventually(t, func() bool {
+		return slices.Equal(b.lastShortIDs(), []string{testBaseShortID})
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
 // A heartbeat whose set is older than the rotation's register, landing
 // after the register (here, while the old box closes), is ignored.
 func TestClient_RotationIgnoresOlderHeartbeatBeforeSwap(t *testing.T) {

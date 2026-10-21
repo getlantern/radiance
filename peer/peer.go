@@ -631,7 +631,8 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.baseShortIDs = baseShortIDs
 	c.pairingShortIDs = startPairing
 	c.pairingKnown = startPairingKnown
-	c.pairingApplied = startPairingApplied
+	// With no known set the new box holds what it should: its base ID.
+	c.pairingApplied = !startPairingKnown || startPairingApplied
 	c.pairingRevision = startRevision
 	if startPairingKnown {
 		c.pairingConfirmedAt = c.cfg.Now()
@@ -1302,16 +1303,25 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
-	// The box holds the record if the push before Start took and nothing
-	// newer was recorded since. Otherwise it is given the record now; a
-	// failure leaves pairingApplied false for the next heartbeat to retry.
-	held := !c.pairingKnown || rotApplied && slices.Equal(rotPairing, c.pairingShortIDs)
+	// Reconcile the new box with the current record, which a heartbeat may
+	// have replaced, or expiry cleared, since the push before Start. The
+	// box holds the pairing set that push took, or none; the record wants
+	// its set, or none when it is not known. If they differ, the box is
+	// given the record now, base ID only when there is none, and a failure
+	// leaves pairingApplied false for the next heartbeat to retry.
+	var pushed, want []string
+	if rotKnown && rotApplied {
+		pushed = rotPairing
+	}
+	if c.pairingKnown {
+		want = slices.Clone(c.pairingShortIDs)
+	}
+	held := slices.Equal(pushed, want)
 	c.pairingApplied = held
-	record, recordKnown := slices.Clone(c.pairingShortIDs), c.pairingKnown
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
-	if !held && recordKnown && c.applyShortIDs(newBox, newBase, record) {
+	if !held && c.applyShortIDs(newBox, newBase, want) {
 		c.mu.Lock()
 		if c.box == newBox {
 			c.pairingApplied = true
@@ -1625,8 +1635,9 @@ func (c *Client) acceptsPairingRevision(rev int64) bool {
 // applyPairingShortIDs offers a pairing set to the box serving now. With
 // known true it is the server's set at revision rev: if newer than the one
 // held, it is recorded, confirmed now, and pushed. Whether or not it was,
-// a recorded set the box does not hold, because a push onto it failed, is
-// pushed again; with known false that is all it does.
+// if the box does not hold the record (its set, or the base ID only when
+// none is known) because a push failed, it is pushed again; with known
+// false that is all it does.
 func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
 	c.shortIDsMu.Lock()
 	defer c.shortIDsMu.Unlock()
@@ -1643,11 +1654,16 @@ func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
 		c.pairingConfirmedAt = c.cfg.Now()
 		c.pairingApplied = false
 	}
-	if !c.pairingKnown || c.pairingApplied {
+	if c.pairingApplied {
 		c.mu.Unlock()
 		return
 	}
-	record := slices.Clone(c.pairingShortIDs)
+	// Base ID only when no set is known: a rotation's box may still hold
+	// a set that expired before its swap.
+	var record []string
+	if c.pairingKnown {
+		record = slices.Clone(c.pairingShortIDs)
+	}
 	c.mu.Unlock()
 	if !c.applyShortIDs(b, base, record) {
 		return
