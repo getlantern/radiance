@@ -397,7 +397,11 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		var reason Reason
 		if retErr != nil {
 			failedPhase := c.currentPhase()
-			if named := classifyStartFailure(failedPhase, retErr); named != nil {
+			var manualPort uint16
+			if m, ok := fwd.(*portforward.ManualForwarder); ok {
+				manualPort = m.Port()
+			}
+			if named := classifyStartFailure(failedPhase, retErr, manualPort); named != nil {
 				if named.Reason == ReasonCanceled {
 					// Not a failure: the user toggled sharing back off while
 					// it was still coming up. At Error this would put an

@@ -29,6 +29,9 @@ func NewManualForwarder(port uint16) *ManualForwarder {
 	return &ManualForwarder{port: port}
 }
 
+// Port returns the router port this forwarder was configured with.
+func (m *ManualForwarder) Port() uint16 { return m.port }
+
 // ParseManualPort parses a string into a TCP port number. Values outside
 // 1..65535 return an error so callers can log and fall through to UPnP
 // discovery rather than register a non-listening port with the server.
