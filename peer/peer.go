@@ -136,6 +136,8 @@ type Config struct {
 	// BoxCloseTimeout bounds how long teardown waits for a sing-box Close.
 	// Zero means defaultBoxCloseTimeout.
 	BoxCloseTimeout time.Duration
+	// Now is the clock for pairing-set expiry. Nil means time.Now.
+	Now func() time.Time
 	// OnSelfStop is called after the client stops itself, rather than on a
 	// caller's Stop: the server dropped its route, or a credential rotation
 	// left nothing serving what the server advertises. It runs on its own
@@ -247,6 +249,13 @@ type Client struct {
 	// a heartbeat recorded a newer set while it was building its box.
 	// Bumped under shortIDsMu and c.mu.
 	pairingGen uint64
+	// pairingEpoch is bumped, under shortIDsMu and c.mu, when a rotation
+	// starts. A heartbeat sent in an earlier epoch may carry a set older
+	// than the one the rotation installs, so its set is discarded.
+	pairingEpoch uint64
+	// pairingConfirmedAt is when a known set was last recorded from the
+	// server. A rotation that reuses the record keeps it.
+	pairingConfirmedAt time.Time
 	// shortIDsMu serializes pushing a set onto the box with recording it, so
 	// a heartbeat and a rotation cannot record a set the box does not hold.
 	// Taken before c.mu, never while holding it.
@@ -328,6 +337,9 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.HeartbeatTimeout == 0 {
 		cfg.HeartbeatTimeout = 30 * time.Second
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	return &Client{
 		cfg:        cfg,
@@ -622,6 +634,9 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.pairingKnown = startPairingKnown
 	c.pairingApplied = startPairingApplied
 	c.pairingGen++
+	if startPairingKnown {
+		c.pairingConfirmedAt = c.cfg.Now()
+	}
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
@@ -753,6 +768,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.pairingShortIDs = nil
 	c.pairingKnown = false
 	c.pairingApplied = false
+	c.pairingConfirmedAt = time.Time{}
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
 	stoppingSnapshot := c.status
@@ -985,7 +1001,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 		case <-t.C:
 			c.rejections.flush()
 			c.mu.Lock()
-			routeID, registration := c.routeID, c.registration
+			routeID, registration, epoch := c.routeID, c.registration, c.pairingEpoch
 			c.mu.Unlock()
 			if routeID == "" {
 				return
@@ -995,14 +1011,15 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
-				// here.
-				c.applyPairingShortIDs(resp.PairingShortIDs, true)
+				// here, unless a rotation began since it was sent.
+				c.applyPairing(resp.PairingShortIDs, true, &epoch)
 			} else {
 				// A failed heartbeat, or one that does not vouch for a set,
 				// says nothing about pairings, so the last set stays, and is
 				// pushed again if the box does not hold it.
 				c.applyPairingShortIDs(nil, false)
 			}
+			c.expireUnconfirmedPairing()
 			if err != nil {
 				// A single transient blip shouldn't kill the registration —
 				// the server-side reaper will deprecate the row if heartbeats
@@ -1146,9 +1163,15 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// The pairing generation is read before Register, so a heartbeat that
 	// records a newer set after the server built this response, during the
 	// register or the old box's teardown, is seen to be newer below.
+	// Bumping the epoch here discards any heartbeat still in flight from
+	// before, whose set may be older than this register's. Both are done
+	// under shortIDsMu, so no such heartbeat records between them.
+	c.shortIDsMu.Lock()
 	c.mu.Lock()
+	c.pairingEpoch++
 	rotGen := c.pairingGen
 	c.mu.Unlock()
+	c.shortIDsMu.Unlock()
 	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
@@ -1293,6 +1316,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		c.pairingShortIDs = rotPairing
 		c.pairingKnown = true
 		c.pairingGen++
+		c.pairingConfirmedAt = c.cfg.Now()
 	}
 	// The box holds the recorded set exactly when the push before Start
 	// took; with no known set there is nothing for it to hold.
@@ -1601,9 +1625,20 @@ func (c *Client) applyShortIDs(b boxService, base, pairing []string) bool {
 // set is pushed again, but only when the box does not hold it yet because
 // an earlier push onto it failed.
 func (c *Client) applyPairingShortIDs(pairing []string, known bool) {
+	c.applyPairing(pairing, known, nil)
+}
+
+// applyPairing is applyPairingShortIDs for a set sent in pairing epoch
+// *sentEpoch, which is discarded if a rotation has begun since: the rotation
+// installs a set at least as new. Nil skips the check.
+func (c *Client) applyPairing(pairing []string, known bool, sentEpoch *uint64) {
 	c.shortIDsMu.Lock()
 	defer c.shortIDsMu.Unlock()
 	c.mu.Lock()
+	if known && sentEpoch != nil && *sentEpoch != c.pairingEpoch {
+		c.mu.Unlock()
+		return
+	}
 	b, base := c.box, c.baseShortIDs
 	if !known {
 		if !c.pairingKnown || c.pairingApplied {
@@ -1622,10 +1657,52 @@ func (c *Client) applyPairingShortIDs(pairing []string, known bool) {
 			c.pairingShortIDs = slices.Clone(pairing)
 			c.pairingKnown = true
 			c.pairingGen++
+			c.pairingConfirmedAt = c.cfg.Now()
 		}
 		c.pairingApplied = true
 	}
 	c.mu.Unlock()
+}
+
+// pairingMaxUnconfirmed is how long a pairing set is kept without the server
+// vouching for it again. A pairing short ID is valid for epochs e-1..e+1 of
+// 24 hours, so none in a set is still valid this long after it was issued.
+// Without the bound, a server that keeps answering without a set (replicas
+// without the ticket key, say) would keep an ended pairing working forever.
+const pairingMaxUnconfirmed = 48 * time.Hour
+
+// expireUnconfirmedPairing drops the pairing set, leaving the box with its
+// base ID only, once the server has not vouched for it for
+// pairingMaxUnconfirmed. A failed push keeps the record so the next heartbeat
+// tries again.
+func (c *Client) expireUnconfirmedPairing() {
+	c.shortIDsMu.Lock()
+	defer c.shortIDsMu.Unlock()
+	c.mu.Lock()
+	if !c.pairingKnown || c.cfg.Now().Sub(c.pairingConfirmedAt) < pairingMaxUnconfirmed {
+		c.mu.Unlock()
+		return
+	}
+	b, base := c.box, c.baseShortIDs
+	c.mu.Unlock()
+	if b == nil {
+		return
+	}
+	// Without a base ID no pairing ID was ever pushed, so there is nothing
+	// to take off the box.
+	if len(base) > 0 && !c.applyShortIDs(b, base, nil) {
+		return
+	}
+	c.mu.Lock()
+	if c.box == b {
+		c.pairingShortIDs = nil
+		c.pairingKnown = false
+		c.pairingApplied = true
+		c.pairingConfirmedAt = time.Time{}
+		c.pairingGen++
+	}
+	c.mu.Unlock()
+	slog.Info("peer: pairing short IDs unconfirmed for too long; dropped")
 }
 
 // defaultBuildBoxService builds the sing-box service for one peer box.

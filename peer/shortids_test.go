@@ -399,6 +399,184 @@ func TestClient_RotationKeepsHeartbeatSetRecordedAfterRegister(t *testing.T) {
 	assert.Equal(t, []string{"5555555555555555"}, ids)
 }
 
+func TestClient_InFlightHeartbeatDoesNotOverwriteRotation(t *testing.T) {
+	srv := newStubServer(t)
+	var registers atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		resp := RegisterResponse{
+			RouteID:                  "00000000-0000-0000-0000-000000000123",
+			ServerConfig:             launchCfgWithShortID(),
+			HeartbeatIntervalSeconds: 60,
+			PairingShortIDs:          []string{"5555555555555555"},
+			PairingShortIDsKnown:     true,
+		}
+		if registers.Add(1) == 1 {
+			resp.PairingShortIDs = []string{"3333333333333333"}
+		}
+		return resp
+	}
+	srv.heartbeatShortIDs.Store(&[]string{"3333333333333333"})
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var heartbeats atomic.Int64
+	srv.onHeartbeat = func() {
+		if heartbeats.Add(1) == 1 {
+			// The first heartbeat, which carries the 3333 pairing, is
+			// answered only after the rotation that ends it.
+			close(entered)
+			<-release
+		}
+	}
+	var (
+		mu    sync.Mutex
+		boxes []*fakeBoxService
+	)
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = 20 * time.Millisecond
+		cfg.BuildBoxService = func(_ context.Context, options string) (boxService, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			b := &fakeBoxService{gotConfig: options}
+			boxes = append(boxes, b)
+			return b, nil
+		}
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	<-entered
+	require.NoError(t, c.rotateCreds(context.Background()))
+	srv.heartbeatShortIDs.Store(&[]string{"5555555555555555"})
+	releaseOnce.Do(func() { close(release) })
+	require.Eventually(t, func() bool { return heartbeats.Load() >= 3 }, 2*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	require.Len(t, boxes, 2)
+	rotated := boxes[1]
+	mu.Unlock()
+	for _, set := range rotated.shortIDUpdates() {
+		assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, set,
+			"a heartbeat sent before the rotation must not restore the pairing it ended")
+	}
+	ids, known := pairingState(c)
+	assert.True(t, known)
+	assert.Equal(t, []string{"5555555555555555"}, ids)
+}
+
+// testClock is a settable clock for Config.Now.
+type testClock struct{ ns atomic.Int64 }
+
+func (c *testClock) now() time.Time          { return time.Unix(0, c.ns.Load()) }
+func (c *testClock) set(t time.Time)         { c.ns.Store(t.UnixNano()) }
+func (c *testClock) advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+// expiryClient starts a client whose register vouches for the 1111 pairing
+// at clock time t0, with heartbeats that vouch for nothing.
+func expiryClient(t *testing.T) (*Client, *fakeBoxService, *stubServer, *testClock) {
+	t.Helper()
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
+	srv.registerResp.PairingShortIDsKnown = true
+	clock := &testClock{}
+	clock.set(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+	b := &fakeBoxService{}
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = 20 * time.Millisecond
+		cfg.Now = clock.now
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	return c, b, srv, clock
+}
+
+// waitHeartbeats waits for n more heartbeats to complete their handling.
+func waitHeartbeats(t *testing.T, srv *stubServer, n int64) {
+	t.Helper()
+	// One beyond n, so the nth has been handled, not merely sent.
+	after := srv.heartbeatCount.Load()
+	require.Eventually(t, func() bool { return srv.heartbeatCount.Load() >= after+n+1 }, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestClient_UnconfirmedPairingShortIDsExpire(t *testing.T) {
+	c, b, srv, clock := expiryClient(t)
+	withPairing := []string{testBaseShortID, "1111111111111111"}
+	require.Equal(t, withPairing, b.lastShortIDs())
+
+	clock.advance(pairingMaxUnconfirmed - time.Minute)
+	waitHeartbeats(t, srv, 3)
+	assert.Equal(t, withPairing, b.lastShortIDs(), "kept until 48 hours pass unconfirmed")
+	_, known := pairingState(c)
+	assert.True(t, known)
+
+	clock.advance(time.Minute)
+	require.Eventually(t, func() bool {
+		return slices.Equal(b.lastShortIDs(), []string{testBaseShortID})
+	}, 2*time.Second, 5*time.Millisecond, "dropped once 48 hours pass without the server vouching for it")
+	ids, known := pairingState(c)
+	assert.False(t, known)
+	assert.Empty(t, ids)
+	waitHeartbeats(t, srv, 3)
+	assert.Equal(t, []string{testBaseShortID}, b.lastShortIDs(), "a dropped set is not restored by unconfirmed heartbeats")
+}
+
+func TestClient_ConfirmedHeartbeatExtendsPairingShortIDs(t *testing.T) {
+	c, b, srv, clock := expiryClient(t)
+	withPairing := []string{testBaseShortID, "1111111111111111"}
+
+	clock.advance(47 * time.Hour)
+	srv.heartbeatShortIDs.Store(&[]string{"1111111111111111"})
+	waitHeartbeats(t, srv, 2)
+	srv.heartbeatShortIDs.Store(nil)
+
+	clock.advance(2 * time.Hour) // 49h after Start, 2h after the confirmation
+	waitHeartbeats(t, srv, 3)
+	assert.Equal(t, withPairing, b.lastShortIDs(), "a confirmation at 47h extends the set")
+	_, known := pairingState(c)
+	assert.True(t, known)
+
+	clock.advance(pairingMaxUnconfirmed)
+	require.Eventually(t, func() bool {
+		return slices.Equal(b.lastShortIDs(), []string{testBaseShortID})
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestClient_RotationKeepsPairingConfirmationTime(t *testing.T) {
+	srv := newStubServer(t)
+	var registers atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		resp := RegisterResponse{
+			RouteID:                  "00000000-0000-0000-0000-000000000123",
+			ServerConfig:             launchCfgWithShortID(),
+			HeartbeatIntervalSeconds: 60,
+		}
+		if registers.Add(1) == 1 {
+			resp.PairingShortIDs = []string{"3333333333333333"}
+			resp.PairingShortIDsKnown = true
+		}
+		return resp
+	}
+	clock := &testClock{}
+	start := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	clock.set(start)
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
+		cfg.Now = clock.now
+		cfg.BuildBoxService = func(_ context.Context, _ string) (boxService, error) { return &fakeBoxService{}, nil }
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	clock.advance(30 * time.Hour)
+	require.NoError(t, c.rotateCreds(context.Background()))
+	c.mu.Lock()
+	confirmed := c.pairingConfirmedAt
+	c.mu.Unlock()
+	assert.True(t, confirmed.Equal(start), "a rotation that reuses the record must not refresh its confirmation")
+}
+
 // realSamizdatOptions is a launch config the real lantern-box samizdat inbound
 // accepts, listening on a free loopback port.
 func realSamizdatOptions(t *testing.T) string {

@@ -289,6 +289,9 @@ func newStubServer(t *testing.T) *stubServer {
 	mux.HandleFunc("/v1/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeatCount.Add(1)
 		s.heartbeatDeviceID.Store(r.Header.Get("X-Lantern-Device-Id"))
+		// Read on arrival, so a response onHeartbeat delays carries what the
+		// server knew when the heartbeat was sent.
+		ids := s.heartbeatShortIDs.Load()
 		if s.onHeartbeat != nil {
 			s.onHeartbeat()
 		}
@@ -296,7 +299,7 @@ func newStubServer(t *testing.T) *stubServer {
 			http.Error(w, "heartbeat failed", s.heartbeatStatus)
 			return
 		}
-		if ids := s.heartbeatShortIDs.Load(); ids != nil {
+		if ids != nil {
 			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true})
 			return
 		}
