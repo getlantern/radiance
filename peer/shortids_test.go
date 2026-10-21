@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -291,6 +292,48 @@ func TestClient_RotationKeepsLastKnownPairingShortIDs(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return rotatedBoxHas(port, []string{testBaseShortID, "3333333333333333"})
 	}, 2*time.Second, 10*time.Millisecond, "a rotation whose register does not vouch for a set keeps the last known one")
+}
+
+func TestClient_RotationKeepsNewerHeartbeatSet(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"3333333333333333", "5555555555555555"}
+	srv.registerResp.PairingShortIDsKnown = true
+	var (
+		c     *Client
+		mu    sync.Mutex
+		boxes []*fakeBoxService
+	)
+	c = newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = func(_ context.Context, options string) (boxService, error) {
+			mu.Lock()
+			b := &fakeBoxService{gotConfig: options}
+			boxes = append(boxes, b)
+			n := len(boxes)
+			mu.Unlock()
+			if n == 2 {
+				// A heartbeat lands while the rotation builds its box: the
+				// 3333 pairing has ended.
+				c.applyPairingShortIDs([]string{"5555555555555555"}, true)
+			}
+			return b, nil
+		}
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.NoError(t, c.rotateCreds(context.Background()))
+
+	mu.Lock()
+	require.Len(t, boxes, 2)
+	rotated := boxes[1]
+	mu.Unlock()
+	assert.Equal(t, []string{testBaseShortID, "5555555555555555"}, rotated.lastShortIDs(),
+		"the rotation's register snapshot must not restore a pairing a newer heartbeat revoked")
+	ids, known := pairingState(c)
+	assert.True(t, known)
+	assert.Equal(t, []string{"5555555555555555"}, ids)
 }
 
 // realSamizdatOptions is a launch config the real lantern-box samizdat inbound

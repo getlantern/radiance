@@ -243,6 +243,10 @@ type Client struct {
 	pairingShortIDs []string
 	pairingKnown    bool
 	pairingApplied  bool
+	// pairingGen counts the known sets recorded, so a rotation can tell that
+	// a heartbeat recorded a newer set while it was building its box.
+	// Bumped under shortIDsMu and c.mu.
+	pairingGen uint64
 	// shortIDsMu serializes pushing a set onto the box with recording it, so
 	// a heartbeat and a rotation cannot record a set the box does not hold.
 	// Taken before c.mu, never while holding it.
@@ -617,6 +621,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.pairingShortIDs = startPairing
 	c.pairingKnown = startPairingKnown
 	c.pairingApplied = startPairingApplied
+	c.pairingGen++
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
@@ -1224,7 +1229,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// after the old box closed are never refused.
 	newBase := inboundShortIDs(options)
 	c.mu.Lock()
-	rotPairing, rotKnown := slices.Clone(c.pairingShortIDs), c.pairingKnown
+	rotPairing, rotKnown, rotGen := slices.Clone(c.pairingShortIDs), c.pairingKnown, c.pairingGen
 	c.mu.Unlock()
 	if regResp.PairingShortIDsKnown {
 		rotPairing, rotKnown = slices.Clone(regResp.PairingShortIDs), true
@@ -1271,16 +1276,18 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
-	if rotKnown {
+	switch {
+	case c.pairingGen != rotGen:
+		// A heartbeat recorded a newer set while the box was being built,
+		// so the box holds a stale one that may still carry a revoked
+		// pairing. Keep the record and give the box it now, before anyone
+		// else can see the box.
+		c.pairingApplied = c.pairingKnown && c.applyShortIDs(newBox, newBase, c.pairingShortIDs)
+	case rotKnown:
 		c.pairingShortIDs = rotPairing
 		c.pairingKnown = true
 		c.pairingApplied = rotApplied
-	} else if c.pairingKnown {
-		// The new box got the set snapshotted before the build, but a
-		// heartbeat may have recorded a newer one since. Have the next
-		// heartbeat push the record; repushing an already-held set is a
-		// no-op, and the record is authoritative either way.
-		c.pairingApplied = false
+		c.pairingGen++
 	}
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
@@ -1479,6 +1486,8 @@ func pickInternalPort() uint16 {
 // servePool returns nil when this peer also serves the general pool, so the
 // register request leaves serve_pool out and the server applies its default,
 // and a pointer to false when the user has limited it to helper pairings.
+// It is read at each registration, so a change takes effect at the next one:
+// the next Start or the hourly credential rotation.
 func servePool() *bool {
 	if settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey) {
 		return nil
@@ -1601,8 +1610,11 @@ func (c *Client) applyPairingShortIDs(pairing []string, known bool) {
 	}
 	c.mu.Lock()
 	if c.box == b {
-		c.pairingShortIDs = slices.Clone(pairing)
-		c.pairingKnown = true
+		if known {
+			c.pairingShortIDs = slices.Clone(pairing)
+			c.pairingKnown = true
+			c.pairingGen++
+		}
 		c.pairingApplied = true
 	}
 	c.mu.Unlock()
