@@ -33,6 +33,9 @@ type localTransport struct {
 
 func (t localTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != t.origin.Scheme || req.URL.Host != t.origin.Host || req.URL.User != nil {
+		if req.Body != nil {
+			req.Body.Close()
+		}
 		return nil, errors.New("E2E HTTP request must target the configured local API")
 	}
 	return t.Transport.RoundTrip(req)

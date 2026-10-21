@@ -22,12 +22,20 @@ func legacyBindingClient(t *testing.T) (*Client, *UserData) {
 	t.Helper()
 	a, _ := newTestClient(t)
 	data := &UserData{
-		LegacyID: 42, LegacyToken: "pro-token", Id: "account-id", Token: "jwt-token",
-		Devices: []*protos.LoginResponse_Device{{Id: "device", Name: "Laptop"}},
+		LegacyID:    42,
+		LegacyToken: "pro-token",
+		Id:          "account-id",
+		Token:       "jwt-token",
+		Devices:     []*protos.LoginResponse_Device{{Id: "device", Name: "Laptop"}},
 		LegacyUserData: &protos.LoginResponse_UserData{
-			UserId: 42, Token: "pro-token", Email: "support+42@getlantern.org",
-			UserLevel: "pro", Expiration: 2000000000, Subscription: "subscription",
-			DeviceID: "device", Devices: []*protos.LoginResponse_Device{{Id: "device"}},
+			UserId:       42,
+			Token:        "pro-token",
+			Email:        "support+42@getlantern.org",
+			UserLevel:    "pro",
+			Expiration:   2000000000,
+			Subscription: "subscription",
+			DeviceID:     "device",
+			Devices:      []*protos.LoginResponse_Device{{Id: "device"}},
 		},
 	}
 	a.setData(data)
@@ -125,8 +133,8 @@ func TestCompleteBindLegacyEmailPreservesIdentityAndNotifies(t *testing.T) {
 }
 
 func TestBindLegacyEmailFailuresPreserveAccount(t *testing.T) {
-	for _, complete := range []bool{false, true} {
-		t.Run(map[bool]string{false: "start", true: "complete"}[complete], func(t *testing.T) {
+	for _, action := range []string{"start", "complete"} {
+		t.Run(action, func(t *testing.T) {
 			a, _ := legacyBindingClient(t)
 			before := bindingSettings(t)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +144,7 @@ func TestBindLegacyEmailFailuresPreserveAccount(t *testing.T) {
 			t.Cleanup(server.Close)
 			a.authURL = server.URL
 			var err error
-			if complete {
+			if action == "complete" {
 				err = a.CompleteBindLegacyEmail(t.Context(), "real@example.com", "password", "000000")
 			} else {
 				err = a.StartBindLegacyEmail(t.Context(), "real@example.com")

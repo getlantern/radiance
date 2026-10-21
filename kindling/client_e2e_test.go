@@ -5,6 +5,7 @@ package kindling
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -55,4 +56,34 @@ func TestLocalHTTPClientRequiresConfiguration(t *testing.T) {
 	t.Setenv("LANTERN_E2E_API_URL", "")
 	require.Panics(t, func() { HTTPClient() })
 	require.Panics(t, Init)
+}
+
+func TestLocalHTTPClientClosesRejectedBodies(t *testing.T) {
+	t.Setenv("LANTERN_E2E_API_URL", "http://127.0.0.1:8080")
+	client := HTTPClient()
+	t.Cleanup(client.CloseIdleConnections)
+	for _, endpoint := range []string{
+		"http://127.0.0.1:8081/v1",
+		"https://127.0.0.1:8080/v1",
+		"http://user:password@127.0.0.1:8080/v1",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			body := &localRequestBody{Reader: strings.NewReader("request")}
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint, body)
+			require.NoError(t, err)
+			_, err = client.Do(request)
+			require.ErrorContains(t, err, "E2E HTTP request must target the configured local API")
+			require.True(t, body.closed)
+		})
+	}
+}
+
+type localRequestBody struct {
+	*strings.Reader
+	closed bool
+}
+
+func (b *localRequestBody) Close() error {
+	b.closed = true
+	return nil
 }
