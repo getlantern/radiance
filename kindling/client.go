@@ -221,8 +221,9 @@ func NewKindling(dataDir string) (*Client, error) {
 			kindling.WithSmartDialerConfig(radiancesmart.DialerConfig),
 			kindling.WithRaceObserver(recordRace),
 			// "pro-server" calls still target api.getiantem.org; everything
-			// else uses df.iantem.io.
-			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io"),
+			// else uses df.iantem.io. freddie.iantem.io is Unbounded's
+			// signaling server, which staging shares with production.
+			kindling.WithProxyless("df.iantem.io", "api.getiantem.org", "api.staging.iantem.io", "freddie.iantem.io"),
 		)
 		if err != nil {
 			return nil, err
@@ -269,9 +270,10 @@ func NewKindling(dataDir string) (*Client, error) {
 		// "pro-server" calls still target api.getiantem.org; everything
 		// else uses df.iantem.io, which proxyless reaches as df.getiantem.org:
 		// Google's edge 403s Iranian clients on df.iantem.io, while the same
-		// origin behind Cloudflare gets through.
+		// origin behind Cloudflare gets through. freddie.iantem.io is
+		// Unbounded's signaling server.
 		kindlingOptions = append(kindlingOptions,
-			kindling.WithProxyless("df.getiantem.org", "api.getiantem.org"),
+			kindling.WithProxyless("df.getiantem.org", "api.getiantem.org", "freddie.iantem.io"),
 			kindling.WithProxylessAliases(map[string]string{"df.iantem.io": "df.getiantem.org"}),
 		)
 	}

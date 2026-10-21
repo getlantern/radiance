@@ -561,7 +561,7 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	if c.tunnel == nil {
 		return "", ErrTunnelNotConnected
 	}
-	mode := c.tunnel.clashServer.Mode()
+	mode := c.tunnel.clashServer.selectedMode()
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(mode)
 	if !loaded {
 		return "", fmt.Errorf("%s group not found", mode)
