@@ -156,8 +156,11 @@ type stubServer struct {
 	registerRespFn  func() RegisterResponse
 	heartbeatStatus int
 	// onHeartbeat and onDeregister run before the request is answered.
-	onHeartbeat        func()
-	onDeregister       func()
+	onHeartbeat  func()
+	onDeregister func()
+	// onVerify, when set, runs before verify is answered; a non-zero return
+	// replaces the status.
+	onVerify           func(LifecycleRequest) int
 	deregisterStatus   int
 	registerCount      atomic.Int64
 	verifyCount        atomic.Int64
@@ -212,6 +215,12 @@ func newStubServer(t *testing.T) *stubServer {
 		var req LifecycleRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		s.lastVerifyReq.Store(req)
+		if s.onVerify != nil {
+			if status := s.onVerify(req); status != 0 {
+				http.Error(w, "verify failed", status)
+				return
+			}
+		}
 		if s.verifyStatus != http.StatusOK {
 			http.Error(w, "verify failed", s.verifyStatus)
 			return
