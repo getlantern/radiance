@@ -235,12 +235,14 @@ type Client struct {
 	// They are always kept when pairing short IDs are applied, because
 	// lantern-cloud's verifier and pool clients authenticate with them.
 	baseShortIDs []string
-	// pairingShortIDs is the last pairing set the server vouched for and the
-	// inbound accepted; pairingKnown says there is one. A response that does
-	// not vouch for a set leaves both alone, so a server that cannot tell
-	// never revokes, and a rotated box gets this set again.
+	// pairingShortIDs is the last pairing set the server vouched for;
+	// pairingKnown says there is one. A response that does not vouch for a
+	// set leaves both alone, so a server that cannot tell never revokes, and
+	// a rotated box gets this set again. pairingApplied says the current box
+	// holds it; when a push failed it does not, and each heartbeat retries.
 	pairingShortIDs []string
 	pairingKnown    bool
+	pairingApplied  bool
 	// shortIDsMu serializes pushing a set onto the box with recording it, so
 	// a heartbeat and a rotation cannot record a set the box does not hold.
 	// Taken before c.mu, never while holding it.
@@ -512,20 +514,23 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		cancelRun()
 		return fmt.Errorf("build sing-box: %w", err)
 	}
-	if err := box.Start(); err != nil {
-		cancelRun()
-		return fmt.Errorf("start sing-box: %w", err)
-	}
 
 	// Paired inviters authenticate with per-pairing short IDs that
 	// lantern-cloud rotates. The launch config's own ID stays. Only a set the
-	// server vouches for is applied; otherwise the box keeps its base ID.
+	// server vouches for is applied, and before Start, so the box never
+	// serves without it; otherwise the box keeps its base ID.
 	baseShortIDs := inboundShortIDs(options)
 	var startPairing []string
-	startPairingKnown := regResp.PairingShortIDsKnown &&
-		c.applyShortIDs(box, baseShortIDs, regResp.PairingShortIDs)
+	startPairingKnown := regResp.PairingShortIDsKnown
+	startPairingApplied := false
 	if startPairingKnown {
 		startPairing = slices.Clone(regResp.PairingShortIDs)
+		startPairingApplied = c.applyShortIDs(box, baseShortIDs, startPairing)
+	}
+
+	if err := box.Start(); err != nil {
+		cancelRun()
+		return fmt.Errorf("start sing-box: %w", err)
 	}
 
 	c.emitPhase(PhaseVerifying, "")
@@ -611,6 +616,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.baseShortIDs = baseShortIDs
 	c.pairingShortIDs = startPairing
 	c.pairingKnown = startPairingKnown
+	c.pairingApplied = startPairingApplied
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
@@ -741,6 +747,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.baseShortIDs = nil
 	c.pairingShortIDs = nil
 	c.pairingKnown = false
+	c.pairingApplied = false
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
 	stoppingSnapshot := c.status
@@ -983,9 +990,13 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
-				// here. A failed heartbeat, or one that does not vouch for a
-				// set, says nothing about pairings, so the last set stays.
+				// here.
 				c.applyPairingShortIDs(resp.PairingShortIDs, true)
+			} else {
+				// A failed heartbeat, or one that does not vouch for a set,
+				// says nothing about pairings, so the last set stays, and is
+				// pushed again if the box does not hold it.
+				c.applyPairingShortIDs(nil, false)
 			}
 			if err != nil {
 				// A single transient blip shouldn't kill the registration —
@@ -1207,15 +1218,30 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if closeErr := c.closeBox(oldBox); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
+	// The new box is built with its base ID only. It is given the register
+	// response's pairing set when the server vouches for it, and otherwise
+	// the last known one, before it starts, so paired users reconnecting
+	// after the old box closed are never refused.
+	newBase := inboundShortIDs(options)
+	c.mu.Lock()
+	rotPairing, rotKnown := slices.Clone(c.pairingShortIDs), c.pairingKnown
+	c.mu.Unlock()
+	if regResp.PairingShortIDsKnown {
+		rotPairing, rotKnown = slices.Clone(regResp.PairingShortIDs), true
+	}
+	rotApplied := false
 	newBox, err := buildAndStartWithRetry(ctx, func() (boxService, error) {
-		return c.cfg.BuildBoxService(sessionRunCtx, options)
+		b, err := c.cfg.BuildBoxService(sessionRunCtx, options)
+		if err == nil && rotKnown {
+			rotApplied = c.applyShortIDs(b, newBase, rotPairing)
+		}
+		return b, err
 	}, c.closeBox)
 	if err != nil {
 		// The old box is closed and the new one isn't up: nothing listens.
 		// Leave c.box pointing at oldBox so Stop's close stays idempotent.
 		return fail(fmt.Errorf("start new sing-box: %w", err), false)
 	}
-	newBase := inboundShortIDs(options)
 
 	// Final swap under lock. Re-check that the session is still the
 	// one we started against. Per-session runCtx identity is a stricter
@@ -1223,9 +1249,12 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// runCtx-check above and now would have cleared active AND set it
 	// back true, but the new session's runCtx differs from sessionRunCtx
 	// — so we'd otherwise resurrect old-session state into the new one.
+	// shortIDsMu is held so no heartbeat's push and record straddles the swap.
+	c.shortIDsMu.Lock()
 	c.mu.Lock()
 	if !c.active || c.runCtx != sessionRunCtx {
 		c.mu.Unlock()
+		c.shortIDsMu.Unlock()
 		// Either Stop cleared state, or Stop→Start replaced the session.
 		// Close the new box we just brought up (the current session has
 		// no reference to it) and clean up a separate new route. Don't
@@ -1242,14 +1271,15 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
+	if rotKnown {
+		c.pairingShortIDs = rotPairing
+		c.pairingKnown = true
+		c.pairingApplied = rotApplied
+	}
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
-
-	// The new box accepts only its base ID. Push the register response's set
-	// when the server vouches for it, and otherwise the last known one, so
-	// paired users survive the rotation.
-	c.applyPairingShortIDs(regResp.PairingShortIDs, regResp.PairingShortIDsKnown)
+	c.shortIDsMu.Unlock()
 
 	if !sameRoute {
 		// Deregister the prior route so the bandit stops handing the old
@@ -1543,16 +1573,17 @@ func (c *Client) applyShortIDs(b boxService, base, pairing []string) bool {
 }
 
 // applyPairingShortIDs pushes pairing short IDs onto the box serving now and
-// records them. With known false the server did not vouch for pairing, so
-// the last known set is pushed instead, which only matters for a box that
-// a rotation just replaced; with no known set nothing is pushed.
+// records them. A failed push leaves the box, and so the record, as it was.
+// With known false the server did not vouch for pairing, so the recorded
+// set is pushed again, but only when the box does not hold it yet because
+// an earlier push onto it failed.
 func (c *Client) applyPairingShortIDs(pairing []string, known bool) {
 	c.shortIDsMu.Lock()
 	defer c.shortIDsMu.Unlock()
 	c.mu.Lock()
 	b, base := c.box, c.baseShortIDs
 	if !known {
-		if !c.pairingKnown {
+		if !c.pairingKnown || c.pairingApplied {
 			c.mu.Unlock()
 			return
 		}
@@ -1566,6 +1597,7 @@ func (c *Client) applyPairingShortIDs(pairing []string, known bool) {
 	if c.box == b {
 		c.pairingShortIDs = slices.Clone(pairing)
 		c.pairingKnown = true
+		c.pairingApplied = true
 	}
 	c.mu.Unlock()
 }

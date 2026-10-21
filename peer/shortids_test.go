@@ -65,6 +65,8 @@ func TestClient_StartAddsRegisterPairingShortIDs(t *testing.T) {
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, b.lastShortIDs())
+	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, b.shortIDsAtStart(),
+		"the box must hold the pairing IDs before it starts serving")
 }
 
 func TestClient_StartIgnoresUnknownRegisterPairingShortIDs(t *testing.T) {
@@ -212,16 +214,37 @@ func TestClient_FailedShortIDUpdateKeepsPreviousSet(t *testing.T) {
 }
 
 // rotatedBoxHas reports whether any box built by a rotation, not by Start,
-// ended up accepting want.
+// was already accepting want when it started.
 func rotatedBoxHas(port *portBoxes, want []string) bool {
 	port.mu.Lock()
 	defer port.mu.Unlock()
 	for _, b := range port.boxes[min(1, len(port.boxes)):] {
-		if slices.Equal(b.lastShortIDs(), want) {
+		if b.started.Load() && slices.Equal(b.shortIDsAtStart(), want) {
 			return true
 		}
 	}
 	return false
+}
+
+func TestClient_FailedPushIsRetriedOnUnknownHeartbeat(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
+	srv.registerResp.PairingShortIDsKnown = true
+	// Heartbeats answer without the fields, so none vouches for a set.
+	b := &fakeBoxService{updateErr: errors.New("refused")}
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) { cfg.HeartbeatInterval = 20 * time.Millisecond })
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	assert.Nil(t, b.lastShortIDs(), "the push at Start failed")
+
+	b.setUpdateErr(nil)
+	require.Eventually(t, func() bool {
+		return slices.Equal(b.lastShortIDs(), []string{testBaseShortID, "1111111111111111"})
+	}, 2*time.Second, 10*time.Millisecond, "a heartbeat pushes the recorded set the box does not hold")
+	after := srv.heartbeatCount.Load()
+	require.Eventually(t, func() bool { return srv.heartbeatCount.Load() >= after+3 }, 2*time.Second, 10*time.Millisecond)
+	assert.Len(t, b.shortIDUpdates(), 1, "once the box holds the set it is not pushed again")
 }
 
 func TestClient_RotationReappliesPairingShortIDs(t *testing.T) {
@@ -239,7 +262,7 @@ func TestClient_RotationReappliesPairingShortIDs(t *testing.T) {
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	require.Eventually(t, func() bool {
 		return rotatedBoxHas(port, []string{testBaseShortID, "3333333333333333"})
-	}, 2*time.Second, 10*time.Millisecond, "a rotated box starts with the base ID only, so the pairing IDs must be pushed again")
+	}, 2*time.Second, 10*time.Millisecond, "a rotated box must hold the pairing IDs before it starts")
 }
 
 func TestClient_RotationKeepsLastKnownPairingShortIDs(t *testing.T) {

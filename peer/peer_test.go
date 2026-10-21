@@ -133,14 +133,29 @@ type fakeBoxService struct {
 	idsMu     sync.Mutex
 	shortIDs  [][]string
 	updateErr error
+	// idsAtStart is the set the inbound held when Start was called, nil for
+	// its base ID only.
+	idsAtStart []string
 }
 
 func (b *fakeBoxService) Start() error {
 	if b.startErr != nil {
 		return b.startErr
 	}
+	b.idsMu.Lock()
+	if len(b.shortIDs) > 0 {
+		b.idsAtStart = b.shortIDs[len(b.shortIDs)-1]
+	}
+	b.idsMu.Unlock()
 	b.started.Store(true)
 	return nil
+}
+
+// shortIDsAtStart is the set the inbound held when Start was called.
+func (b *fakeBoxService) shortIDsAtStart() []string {
+	b.idsMu.Lock()
+	defer b.idsMu.Unlock()
+	return b.idsAtStart
 }
 
 func (b *fakeBoxService) Close() error {
