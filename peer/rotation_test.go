@@ -463,7 +463,11 @@ func TestClient_RotationVerifiesNewRouteAfterNewBoxStarts(t *testing.T) {
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
-	require.Eventually(t, func() bool { return srv.verifyCount.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(verifies) >= 2
+	}, 2*time.Second, 10*time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, "00000000-0000-0000-0000-000000000102", verifies[1], "rotation must verify the new route_id")
