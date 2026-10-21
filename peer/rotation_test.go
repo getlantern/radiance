@@ -498,6 +498,8 @@ func TestClient_RotationVerifyFailureKeepsClientRunning(t *testing.T) {
 
 	require.Eventually(t, func() bool { return verifies.Load() >= 3 }, 2*time.Second, 10*time.Millisecond,
 		"rotation should keep rotating and verifying after a verify failure")
+	require.NoError(t, c.acquireLifecycle(context.Background()))
+	defer c.releaseLifecycle()
 	assert.True(t, c.IsActive())
 	assert.Zero(t, selfStops.Load())
 	port.mu.Lock()
