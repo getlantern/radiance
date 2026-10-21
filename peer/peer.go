@@ -1212,7 +1212,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 
 	// The re-register reset the route's verification, and the server hands
-	// clients only verified peers. The new box is listening, so verify now.
+	// clients only verified peers.
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, peerVerifyTimeout)
 	verifyErr := c.cfg.API.Verify(verifyCtx, regResp.RouteID)
 	cancelVerify()
