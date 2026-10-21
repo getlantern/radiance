@@ -53,6 +53,16 @@ func readCrashLog(t *testing.T, path string) string {
 	return string(content)
 }
 
+func TestRecoverToError_LineBreaks(t *testing.T) {
+	crashLog := useTempCrashLog(t)
+	err := func() (err error) {
+		defer recoverToError(&err, "testing")
+		panic("first\r\nsecond")
+	}()
+	require.EqualError(t, err, `panic testing: first\r\nsecond`)
+	assert.Contains(t, readCrashLog(t, crashLog), "recovered panic testing: first\r\nsecond")
+}
+
 func TestTunnelStart_Panic(t *testing.T) {
 	crashLog := useTempCrashLog(t)
 	tun := &tunnel{dataPath: t.TempDir()}

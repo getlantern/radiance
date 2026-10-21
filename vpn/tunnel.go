@@ -10,6 +10,7 @@ import (
 	"net/http"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,10 +146,12 @@ func traceSpan(ctx context.Context, name string, fn func() error) error {
 	return err
 }
 
+var lineBreakEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
+
 func recoverToError(err *error, operation string) {
 	if r := recover(); r != nil {
 		common.WriteRecoveredPanic(operation, r)
-		*err = fmt.Errorf("panic %s: %v", operation, r)
+		*err = fmt.Errorf("panic %s: %s", operation, lineBreakEscaper.Replace(fmt.Sprint(r)))
 	}
 }
 
