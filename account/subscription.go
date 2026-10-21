@@ -260,6 +260,26 @@ type PurchaseResponse struct {
 	Status               string      `json:"status"`
 }
 
+// UnmarshalJSON accepts plan as either a full plan object (reseller codes) or
+// a bare plan ID string (web licenses).
+func (p *PurchaseResponse) UnmarshalJSON(b []byte) error {
+	type alias PurchaseResponse
+	aux := struct {
+		*alias
+		Plan json.RawMessage `json:"plan"`
+	}{alias: (*alias)(p)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if len(aux.Plan) == 0 || string(aux.Plan) == "null" {
+		return nil
+	}
+	if aux.Plan[0] == '"' {
+		return json.Unmarshal(aux.Plan, &p.Plan.Id)
+	}
+	return json.Unmarshal(aux.Plan, &p.Plan)
+}
+
 // ActivationCode purchases a subscription with resellerCode, redeeming it as a
 // website license key if it starts with "PRO" (case-insensitive, ignoring
 // leading whitespace).
