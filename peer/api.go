@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/getlantern/radiance/common"
@@ -64,6 +65,13 @@ type HeartbeatRequest struct {
 	// overstate how many people are actually being helped.
 	ActiveClients int `json:"active_clients"`
 }
+
+// decodeError is a 2xx response whose body did not decode, so callers can
+// tell it from a request the server never accepted.
+type decodeError struct{ err error }
+
+func (e *decodeError) Error() string { return "decode response: " + e.err.Error() }
+func (e *decodeError) Unwrap() error { return e.err }
 
 // APIError carries the server's HTTP status and body.
 type APIError struct {
@@ -122,12 +130,22 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 // measured now cannot go stale the way an assignment log does when clients
 // simply disappear.
 //
-// It returns the pairing short IDs the inbound must accept. A server that
-// predates them answers with an empty body, which decodes as not known.
+// It returns the pairing short IDs the inbound must accept. A 2xx means the
+// server has recorded the heartbeat, so a body that doesn't decode, including
+// the empty body of a server that predates the IDs, never fails it: the
+// response comes back as not known and the peer keeps the set it has.
 func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) (*HeartbeatResponse, error) {
 	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients}
 	var resp HeartbeatResponse
-	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, &resp); err != nil {
+	err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, &resp)
+	var de *decodeError
+	if errors.As(err, &de) {
+		if !errors.Is(de.err, io.EOF) {
+			slog.Debug("peer heartbeat response unreadable; pairing short IDs not known")
+		}
+		return &HeartbeatResponse{}, nil
+	}
+	if err != nil {
 		return nil, fmt.Errorf("heartbeat: %w", err)
 	}
 	return &resp, nil
@@ -185,8 +203,8 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 		return &APIError{Status: resp.StatusCode, Body: string(bytes.TrimSpace(buf))}
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("decode response: %w", err)
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return &decodeError{err: err}
 		}
 	}
 	return nil

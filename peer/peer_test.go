@@ -1397,6 +1397,9 @@ func TestAPI_HeartbeatToleratesMissingPairingFields(t *testing.T) {
 		"ids without known":   {body: `{"pairing_short_ids":["1111111111111111"]}`, wantIDs: []string{"1111111111111111"}},
 		"known false":         {body: `{"pairing_short_ids":[],"pairing_short_ids_known":false}`, wantIDs: []string{}},
 		"known with no pairs": {body: `{"pairing_short_ids":[],"pairing_short_ids_known":true}`, wantIDs: []string{}, wantKnown: true},
+		"malformed json":      {body: `{"pairing_short_ids":["1111`},
+		"known wrong type":    {body: `{"pairing_short_ids":["1111111111111111"],"pairing_short_ids_known":"yes"}`},
+		"ids wrong type":      {body: `{"pairing_short_ids":"1111111111111111","pairing_short_ids_known":true}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1457,4 +1460,16 @@ func TestClient_RegisterSendsServePool(t *testing.T) {
 	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
 	require.NotNil(t, sp, "a volunteer serving only its pairings must say so")
 	assert.False(t, *sp)
+}
+
+func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	api := NewAPI(srv.Client(), srv.URL, "test-device")
+	_, err := api.Register(context.Background(), RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698})
+	require.Error(t, err, "a register without a route or config is unusable")
 }
