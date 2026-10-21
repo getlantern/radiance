@@ -3,6 +3,7 @@ package vpn
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +124,43 @@ func TestSelectMode_NotConnected(t *testing.T) {
 	err := tun.selectMode(AutoSelectTag)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tunnel not running")
+}
+
+type stubDNSRouter struct{ adapter.DNSRouter }
+
+func (stubDNSRouter) ClearCache() {}
+
+// newModeTestTunnel returns a tunnel in auto mode that passes selectMode's running check.
+func newModeTestTunnel(t *testing.T) *tunnel {
+	t.Helper()
+	srv, err := newClashServer(context.Background(), nil, O.ClashAPIOptions{
+		ModeList:    []string{ManualSelectTag, AutoSelectTag},
+		DefaultMode: AutoSelectTag,
+	})
+	require.NoError(t, err)
+	cs := srv.(*clashServer)
+	cs.dnsRouter = stubDNSRouter{}
+	t.Cleanup(func() { cs.Close() })
+	return &tunnel{boxInstance: &sbox.Box{}, clashServer: cs}
+}
+
+func TestSelectMode_ClosesOnlyOutgoingModeFlows(t *testing.T) {
+	for _, rejecting := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rejecting=%t", rejecting), func(t *testing.T) {
+			tun := newModeTestTunnel(t)
+			tun.clashServer.setRejectMode(rejecting)
+			ct := tun.clashServer.connTracker
+			auto := joinClosable(ct, "srv-a", time.Now(), "srv-a", AutoSelectTag)
+			manual := joinClosable(ct, "srv-b", time.Now(), "srv-b", ManualSelectTag)
+
+			require.NoError(t, tun.selectMode(AutoSelectTag))
+			assert.False(t, auto.closed.Load(), "selecting the current mode must close nothing")
+
+			require.NoError(t, tun.selectMode(ManualSelectTag))
+			assert.True(t, auto.closed.Load(), "switching away from auto must close its flows")
+			assert.False(t, manual.closed.Load())
+		})
+	}
 }
 
 func TestRemoveDuplicates(t *testing.T) {

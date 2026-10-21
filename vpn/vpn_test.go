@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -311,4 +312,35 @@ func TestConsumeCacheClearMarker(t *testing.T) {
 		assert.NoError(t, consumeCacheClearMarker(dir))
 		assert.FileExists(t, cacheFilePath(dir))
 	})
+}
+
+type stubOutboundManager struct {
+	adapter.OutboundManager
+	outbounds map[string]adapter.Outbound
+}
+
+func (m stubOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	o, ok := m.outbounds[tag]
+	return o, ok
+}
+
+type stubGroup struct {
+	adapter.OutboundGroup
+	now string
+}
+
+func (g stubGroup) Now() string { return g.now }
+
+func TestCurrentSelectedServer_WhileRejecting(t *testing.T) {
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{
+		AutoSelectTag: stubGroup{now: "srv-a"},
+	}}
+	tun.clashServer.setRejectMode(true)
+	c := &VPNClient{tunnel: tun}
+	c.status.Store(Connected)
+
+	tag, err := c.CurrentSelectedServer()
+	require.NoError(t, err)
+	assert.Equal(t, "srv-a", tag)
 }

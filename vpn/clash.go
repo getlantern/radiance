@@ -105,28 +105,35 @@ func newClashServer(ctx context.Context, _ log.ObservableFactory, options O.Clas
 	}, nil
 }
 
-func (s *clashServer) SetMode(mode string) error {
+func (s *clashServer) SetMode(mode string) (prev string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i := slices.IndexFunc(s.modeList, func(m string) bool {
 		return strings.EqualFold(m, mode)
 	})
 	if i == -1 {
-		return fmt.Errorf("mode %q is not in mode list", mode)
+		return "", fmt.Errorf("mode %q is not in mode list", mode)
 	}
 	mode = s.modeList[i]
-	if s.mode != mode {
-		slog.Info("Switching mode", "from", s.mode, "to", mode)
+	prev = s.mode
+	if prev != mode {
+		slog.Info("Switching mode", "from", prev, "to", mode)
 		s.mode = mode
 		s.dnsRouter.ClearCache()
 	}
-	return nil
+	return prev, nil
 }
 
+// Mode returns rejectMode while reject mode is enabled, otherwise the selected mode.
 func (s *clashServer) Mode() string {
 	if s.rejecting.Load() {
 		return rejectMode
 	}
+	return s.selectedMode()
+}
+
+// selectedMode returns the user's mode, ignoring reject mode.
+func (s *clashServer) selectedMode() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mode
