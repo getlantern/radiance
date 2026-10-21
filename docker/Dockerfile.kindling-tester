@@ -1,6 +1,7 @@
-FROM golang:1.25.1 AS builder
+FROM golang:1.26.10 AS builder
 
-RUN apt-get update && apt-get install -y git git-lfs bsdmainutils
+COPY docker/trust /usr/local/lib/lantern-trust
+RUN apt-get update && apt-get install -y git git-lfs bsdmainutils ca-certificates openssl && sh /usr/local/lib/lantern-trust/update-trust.sh
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -19,7 +20,8 @@ RUN --mount=type=cache,target="$GOCACHE" GOOS=$TARGETOS GOARCH=$TARGETARCH go bu
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY docker/trust /usr/local/lib/lantern-trust
+RUN apt-get update && apt-get install -y ca-certificates openssl && sh /usr/local/lib/lantern-trust/update-trust.sh && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /kindling-tester /kindling-tester
 
