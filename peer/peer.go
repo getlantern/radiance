@@ -453,6 +453,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
+		ServePool:    servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
@@ -940,7 +941,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
+			_, err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
 			cancel()
 			if err != nil {
 				// A single transient blip shouldn't kill the registration —
@@ -1086,6 +1087,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
+		ServePool:    servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
@@ -1385,6 +1387,17 @@ func pickManualForwarder() portForwarder {
 
 func pickInternalPort() uint16 {
 	return uint16(internalPortMin + rand.IntN(internalPortMax-internalPortMin))
+}
+
+// servePool returns nil when this peer also serves the general pool, so the
+// register request leaves serve_pool out and the server applies its default,
+// and a pointer to false when the user has limited it to helper pairings.
+func servePool() *bool {
+	if settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey) {
+		return nil
+	}
+	off := false
+	return &off
 }
 
 // defaultBuildBoxService builds the sing-box service for one peer box.

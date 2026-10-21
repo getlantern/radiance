@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,12 +19,34 @@ type RegisterRequest struct {
 	ExternalIP   string `json:"external_ip"`
 	ExternalPort uint16 `json:"external_port"`
 	InternalPort uint16 `json:"internal_port"`
+	// ServePool is set, to false, only when the route should serve just this
+	// device's helper pairings. Absent means the route also serves the
+	// general pool, which is what servers that predate the field assume.
+	ServePool *bool `json:"serve_pool,omitempty"`
 }
 
 type RegisterResponse struct {
 	RouteID                  string `json:"route_id"`
 	ServerConfig             string `json:"server_config"`
 	HeartbeatIntervalSeconds int64  `json:"heartbeat_interval_seconds"`
+	// PairingShortIDs are the short IDs, 16 lowercase hex characters each,
+	// the inbound must accept for this device's helper pairings, beside the
+	// launch config's own. They are only meaningful when
+	// PairingShortIDsKnown is true.
+	PairingShortIDs []string `json:"pairing_short_ids"`
+	// PairingShortIDsKnown says the server vouches for PairingShortIDs as the
+	// complete set, so an empty list means no pairings. False, or absent
+	// from an older server, means the peer keeps the set it has.
+	PairingShortIDsKnown bool `json:"pairing_short_ids_known"`
+}
+
+// HeartbeatResponse carries the current pairing short IDs, which rotate with
+// the server's 24-hour epoch. When PairingShortIDsKnown is true the peer
+// replaces its pairing set with PairingShortIDs, so an ended pairing drops
+// out here; otherwise it keeps the set it has.
+type HeartbeatResponse struct {
+	PairingShortIDs      []string `json:"pairing_short_ids"`
+	PairingShortIDsKnown bool     `json:"pairing_short_ids_known"`
 }
 
 type LifecycleRequest struct {
@@ -98,12 +121,16 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 // variants, and a peer serves samizdat. Reporting also self-corrects — a count
 // measured now cannot go stale the way an assignment log does when clients
 // simply disappear.
-func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) error {
+//
+// It returns the pairing short IDs the inbound must accept. A server that
+// predates them answers with an empty body, which decodes as not known.
+func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) (*HeartbeatResponse, error) {
 	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients}
-	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, nil); err != nil {
-		return fmt.Errorf("heartbeat: %w", err)
+	var resp HeartbeatResponse
+	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, &resp); err != nil {
+		return nil, fmt.Errorf("heartbeat: %w", err)
 	}
-	return nil
+	return &resp, nil
 }
 
 func (a *API) Deregister(ctx context.Context, routeID string) error {
@@ -158,7 +185,7 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 		return &APIError{Status: resp.StatusCode, Body: string(bytes.TrimSpace(buf))}
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}

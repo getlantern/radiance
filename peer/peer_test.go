@@ -160,8 +160,13 @@ type stubServer struct {
 	onDeregister func()
 	// onVerify, when set, runs before verify is answered; a non-zero return
 	// replaces the status.
-	onVerify           func(LifecycleRequest) int
-	deregisterStatus   int
+	onVerify         func(LifecycleRequest) int
+	deregisterStatus int
+	// heartbeatShortIDs, when set, is returned as the heartbeat response's
+	// pairing_short_ids with pairing_short_ids_known true. Unset, the
+	// heartbeat answers with an empty body, as servers that predate the
+	// fields do.
+	heartbeatShortIDs  atomic.Pointer[[]string]
 	registerCount      atomic.Int64
 	verifyCount        atomic.Int64
 	heartbeatCount     atomic.Int64
@@ -235,6 +240,10 @@ func newStubServer(t *testing.T) *stubServer {
 		}
 		if s.heartbeatStatus != http.StatusOK {
 			http.Error(w, "heartbeat failed", s.heartbeatStatus)
+			return
+		}
+		if ids := s.heartbeatShortIDs.Load(); ids != nil {
+			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -1118,7 +1127,8 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 	_, err := api.Register(ctx, RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698, InternalPort: 35698})
 	require.NoError(t, err)
 	require.NoError(t, api.Verify(ctx, "00000000-0000-0000-0000-000000000123"))
-	require.NoError(t, api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123", 0))
+	_, err = api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123", 0)
+	require.NoError(t, err)
 	require.NoError(t, api.Deregister(ctx, "00000000-0000-0000-0000-000000000123"))
 
 	for _, path := range []string{"/peer/register", "/peer/verify", "/peer/heartbeat", "/peer/deregister"} {
@@ -1359,4 +1369,92 @@ func TestTrackConn_DropsCountsWhileDraining(t *testing.T) {
 	c.listenerDraining.Store(false)
 	c.trackConn(1, "198.51.100.9:55001")
 	assert.Equal(t, 1, c.ActiveClients())
+}
+
+func TestAPI_HeartbeatReturnsPairingShortIDs(t *testing.T) {
+	srv := newStubServer(t)
+	api := NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device")
+	resp, err := api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
+	require.NoError(t, err, "an empty body is a heartbeat from a server that predates pairings")
+	assert.Empty(t, resp.PairingShortIDs)
+	assert.False(t, resp.PairingShortIDsKnown)
+
+	srv.heartbeatShortIDs.Store(&[]string{"1111111111111111"})
+	resp, err = api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1111111111111111"}, resp.PairingShortIDs)
+	assert.True(t, resp.PairingShortIDsKnown)
+}
+
+func TestAPI_HeartbeatToleratesMissingPairingFields(t *testing.T) {
+	cases := map[string]struct {
+		body      string
+		wantIDs   []string
+		wantKnown bool
+	}{
+		"empty body":          {body: ""},
+		"empty object":        {body: "{}"},
+		"ids without known":   {body: `{"pairing_short_ids":["1111111111111111"]}`, wantIDs: []string{"1111111111111111"}},
+		"known false":         {body: `{"pairing_short_ids":[],"pairing_short_ids_known":false}`, wantIDs: []string{}},
+		"known with no pairs": {body: `{"pairing_short_ids":[],"pairing_short_ids_known":true}`, wantIDs: []string{}, wantKnown: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/peer/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			api := NewAPI(srv.Client(), srv.URL, "test-device")
+			resp, err := api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantIDs, resp.PairingShortIDs)
+			assert.Equal(t, tc.wantKnown, resp.PairingShortIDsKnown)
+		})
+	}
+}
+
+func TestAPI_RegisterReturnsPairingShortIDs(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.PairingShortIDs = []string{"2222222222222222"}
+	srv.registerResp.PairingShortIDsKnown = true
+	api := NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device")
+	resp, err := api.Register(context.Background(), RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"2222222222222222"}, resp.PairingShortIDs)
+	assert.True(t, resp.PairingShortIDsKnown)
+}
+
+func TestRegisterRequest_ServePoolOmittedUnlessSet(t *testing.T) {
+	buf, err := json.Marshal(RegisterRequest{ExternalIP: "203.0.113.42"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(buf), "serve_pool")
+
+	off := false
+	buf, err = json.Marshal(RegisterRequest{ExternalIP: "203.0.113.42", ServePool: &off})
+	require.NoError(t, err)
+	assert.Contains(t, string(buf), `"serve_pool":false`)
+}
+
+func TestClient_RegisterSendsServePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	srv := newStubServer(t)
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+	})
+	ctx := context.Background()
+
+	require.NoError(t, c.Start(ctx))
+	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
+		"unset means help others too, which the server assumes when the field is absent")
+	require.NoError(t, c.Stop(ctx))
+
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
+	require.NotNil(t, sp, "a volunteer serving only its pairings must say so")
+	assert.False(t, *sp)
 }
