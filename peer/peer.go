@@ -266,6 +266,10 @@ const peerCredRotationInterval = 1 * time.Hour
 // teardown and leak the registered route or router rule.
 const peerCleanupTimeout = 30 * time.Second
 
+// peerVerifyTimeout bounds the post-rotation Verify, which runs holding the
+// lifecycle slot.
+const peerVerifyTimeout = 30 * time.Second
+
 func NewClient(cfg Config) (*Client, error) {
 	if cfg.API == nil {
 		return nil, errors.New("peer: Config.API is required")
@@ -1205,6 +1209,16 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 				"err", err, "old_route_id", oldRouteID)
 		}
 		cancelDereg()
+	}
+
+	// The re-register reset the route's verification, and the server hands
+	// clients only verified peers. The new box is listening, so verify now.
+	verifyCtx, cancelVerify := context.WithTimeout(ctx, peerVerifyTimeout)
+	verifyErr := c.cfg.API.Verify(verifyCtx, regResp.RouteID)
+	cancelVerify()
+	if verifyErr != nil && ctx.Err() == nil {
+		slog.Warn("verify after rotation failed; box left running",
+			"err", verifyErr, "route_id", regResp.RouteID)
 	}
 
 	slog.Info("peer cred rotation succeeded",
