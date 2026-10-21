@@ -300,6 +300,7 @@ func baseRoutingRules() []O.Rule {
 		},
 	}
 	rules = append(rules, bypassRoutingRules()...)
+	rules = append(rules, tunSelfRoutingRules()...)
 	rules = append(rules, O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{

@@ -286,6 +286,22 @@ func (c *VPNClient) ResetNetwork() {
 	}
 }
 
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+// Nil or stale listeners are ignored.
+func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if listener == nil || c.tunnel == nil || c.tunnel.boxInstance == nil {
+		return
+	}
+	network := c.tunnel.boxInstance.Network()
+	current, ok := network.InterfaceMonitor().(libbox.InterfaceUpdateListener)
+	if !ok || current != listener {
+		return
+	}
+	network.ResetNetwork()
+}
+
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
 func (c *VPNClient) Pause() {
 	c.mu.RLock()
@@ -545,7 +561,7 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	if c.tunnel == nil {
 		return "", ErrTunnelNotConnected
 	}
-	mode := c.tunnel.clashServer.Mode()
+	mode := c.tunnel.clashServer.selectedMode()
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(mode)
 	if !loaded {
 		return "", fmt.Errorf("%s group not found", mode)

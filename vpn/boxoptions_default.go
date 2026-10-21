@@ -26,6 +26,11 @@ const (
 	inboundTag = "tun-in"
 )
 
+var (
+	tunPrefix4 = netip.MustParsePrefix("10.10.1.1/30")
+	tunPrefix6 = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
+)
+
 // baseInbounds returns the tunnel-build inbounds: the TUN device (per-platform
 // stack/routing applied here) plus the loopback bypass proxy that carries
 // kindling's bootstrap traffic outside the tunnel.
@@ -34,11 +39,9 @@ func baseInbounds() []O.Inbound {
 
 	// ULA-only interfaces don't indicate real public v6, so gate the TUN v6 address
 	// on genuine global v6 connectivity.
-	tunAddress := []netip.Prefix{
-		netip.MustParsePrefix("10.10.1.1/30"),
-	}
+	tunAddress := []netip.Prefix{tunPrefix4}
 	if hasGlobalIPv6() {
-		tunAddress = append(tunAddress, netip.MustParsePrefix("fdfe:dcba:9876::1/126"))
+		tunAddress = append(tunAddress, tunPrefix6)
 		slog.Info("vpn: TUN with IPv6 ULA (system has global v6)")
 	} else {
 		slog.Info("vpn: TUN IPv4-only (no global v6 detected)")
@@ -102,6 +105,26 @@ func bypassRoutingRules() []O.Rule {
 					RouteOptions: O.RouteActionOptions{
 						Outbound: "direct",
 					},
+				},
+			},
+		},
+	}
+}
+
+// tunSelfRoutingRules rejects tunnel flows addressed to the TUN's own subnet.
+// The private-IP direct rule would otherwise dial them straight back into the
+// TUN, looping until disconnect.
+func tunSelfRoutingRules() []O.Rule {
+	return []O.Rule{
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					Inbound: []string{inboundTag},
+					IPCIDR:  []string{tunPrefix4.Masked().String(), tunPrefix6.Masked().String()},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeReject,
 				},
 			},
 		},

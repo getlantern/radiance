@@ -239,6 +239,18 @@ func (m *connTracker) closeAllTracked() {
 	}
 }
 
+// closeMatchedTo closes the connections whose route rule matched tag, not those that only pass
+// through it.
+func (m *connTracker) closeMatchedTo(tag string) {
+	for _, r := range m.conns.Iter() {
+		chain := r.chain
+		if len(chain) == 0 || chain[len(chain)-1] != tag {
+			continue
+		}
+		m.closeRecord(r)
+	}
+}
+
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
 // bufio unwrap to the underlying conn for its vectorised and read-waiter fast paths. Close first
 // closes the wrapped conn, then folds the connection out of the tracker so the final accounting

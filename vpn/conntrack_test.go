@@ -128,6 +128,24 @@ func TestConnTracker_ObserverOnClose(t *testing.T) {
 	assert.InDelta(t, 2.0, c.DurationSeconds, 0.5)
 }
 
+func TestConnTracker_CloseMatchedTo(t *testing.T) {
+	ct := newConnTracker()
+	now := time.Now()
+	matched := joinClosable(ct, "srv-a", now, "srv-a", AutoSelectTag)
+	passingThrough := joinClosable(ct, "srv-a", now, "srv-a", AutoSelectTag, "sr-group")
+	otherMode := joinClosable(ct, "srv-b", now, "srv-b", ManualSelectTag)
+	direct := joinClosable(ct, "direct", now, "direct")
+	unresolved := joinClosable(ct, "", now)
+
+	ct.closeMatchedTo(AutoSelectTag)
+
+	assert.True(t, matched.closed.Load(), "a flow matched to the tag must be closed")
+	assert.False(t, passingThrough.closed.Load(), "a flow only passing through the tag must stay open")
+	assert.False(t, otherMode.closed.Load())
+	assert.False(t, direct.closed.Load())
+	assert.False(t, unresolved.closed.Load())
+}
+
 func TestConnTracker_TotalAndShim(t *testing.T) {
 	ct := newConnTracker()
 	a, b := newRec("vpn-a"), newRec("vpn-b")

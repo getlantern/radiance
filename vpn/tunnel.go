@@ -457,10 +457,13 @@ func (t *tunnel) selectMode(mode string) error {
 		return fmt.Errorf("tunnel not running")
 	}
 
-	if t.clashServer.Mode() != mode {
-		t.clashServer.SetMode(mode)
-		// Reset connections on a mode switch since the user explicitly chose to switch
-		closeAllRouted(t.clashServer.connTracker)
+	prev, err := t.clashServer.SetMode(mode)
+	if err != nil {
+		return fmt.Errorf("switching mode: %w", err)
+	}
+	if prev != mode {
+		// Flows matched to the outgoing mode keep its server until closed.
+		t.clashServer.connTracker.closeMatchedTo(prev)
 		go func() {
 			time.Sleep(time.Second)
 			runtimeDebug.FreeOSMemory()

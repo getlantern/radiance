@@ -44,6 +44,7 @@ import (
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -1460,6 +1461,11 @@ func (r *LocalBackend) RestartVPN() error {
 
 // ResetNetwork drops the VPN's connections and re-seeds its interface state.
 func (r *LocalBackend) ResetNetwork() { r.vpnClient.ResetNetwork() }
+
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
+	r.vpnClient.ResetNetworkForMonitor(listener)
+}
 
 // Pause pauses the VPN for a device sleep.
 func (r *LocalBackend) Pause() { r.vpnClient.Pause() }

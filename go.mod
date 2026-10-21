@@ -4,7 +4,7 @@ go 1.26.9
 
 // replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
-replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.13.20-0.20260929170631-54c013f07aeb
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.13.20-0.20261019115333-624aa48e0252
 
 // replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4
 
@@ -36,15 +36,15 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20261004155437-e0237743ac3d
+	github.com/getlantern/broflake v0.0.0-20261018030031-c6268bfc1b56
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
 	github.com/getlantern/kindling v0.0.0-20261014210827-0f4a89dbe1ee
-	github.com/getlantern/lantern-box v0.0.154
+	github.com/getlantern/lantern-box v0.0.166
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
-	github.com/getlantern/semconv v0.0.0-20261011133221-f5e57ec9c1c5
-	github.com/getlantern/soar v0.2.2
+	github.com/getlantern/semconv v0.0.0-20261020020737-084d1daf4879
+	github.com/getlantern/soar v0.2.3
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
@@ -126,7 +126,7 @@ require (
 	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20261009194109-22f33eaeac6e // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
-	github.com/getlantern/samizdat v0.0.3-0.20260819153658-ebc74116a064 // indirect
+	github.com/getlantern/samizdat v0.0.3-0.20261019142234-18bd41c612f1 // indirect
 	github.com/getlantern/twiddle v0.0.0-20260914204124-f698a0d67d2f // indirect
 	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced // indirect
@@ -306,7 +306,7 @@ require (
 	github.com/sagernet/sing-shadowsocks v0.2.8 // indirect
 	github.com/sagernet/sing-shadowsocks2 v0.2.1 // indirect
 	github.com/sagernet/sing-shadowtls v0.2.1 // indirect
-	github.com/sagernet/sing-tun v0.8.12-0.20260810140523-7c73233bd0fb // indirect
+	github.com/sagernet/sing-tun v0.8.12-0.20260810140523-7c73233bd0fb
 	github.com/sagernet/sing-vmess v0.2.9-0.20260929152519-9b95ab8c9478 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
 	github.com/sagernet/wireguard-go v0.0.4 // indirect
