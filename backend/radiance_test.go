@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -381,10 +382,15 @@ type fakePeerController struct {
 	stopCalls  atomic.Int64
 	startErr   error
 	active     atomic.Bool
+	// servePoolAtStart is peer_serve_pool as the first Start saw it, which
+	// is what that Start's registration sends.
+	servePoolAtStart atomic.Value // any
 }
 
 func (f *fakePeerController) Start(_ context.Context) error {
-	f.startCalls.Add(1)
+	if f.startCalls.Add(1) == 1 {
+		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
+	}
 	if f.startErr != nil {
 		return f.startErr
 	}
@@ -536,6 +542,22 @@ func TestPatchSettings_NonBoolToggleRejected(t *testing.T) {
 	assert.Zero(t, fake.stopCalls.Load())
 	assert.True(t, fake.IsActive())
 	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// A PATCH that turns sharing on and limits it to helper pairings registers
+// with serve_pool=false from the first registration.
+func TestPatchSettings_ServePoolPersistedBeforeSharingStarts(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPeerTestBackend(t, fake)
+
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true,
+		settings.PeerServePoolKey:    false,
+	}))
+	require.Equal(t, int64(1), fake.startCalls.Load())
+	assert.Equal(t, "false", fake.servePoolAtStart.Load(),
+		"the first registration must already see peer_serve_pool=false")
+	assert.False(t, settings.GetBool(settings.PeerServePoolKey))
 }
 
 // An invalid setting in the same PATCH is rejected before the toggle applies.
