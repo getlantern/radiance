@@ -5,6 +5,7 @@ package vpn
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -43,7 +44,145 @@ func TestNewSplitTunnelHandlerQuarantinesInvalidRuleFile(t *testing.T) {
 
 	invalidPath := filepath.Join(tmpDir, internal.SplitTunnelInvalidFileName)
 	assert.FileExists(t, invalidPath, "the unparseable file must be preserved for diagnostics")
-	assert.FileExists(t, ruleFile, "split-tunnel.json must be left in place for re-upgrade")
+	assert.FileExists(t, ruleFile, "loading must not remove the source file")
+}
+
+func TestInvalidCopySurvivesSave(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{"unparseable", `{"version":3,"rules":[{"unknown_field":true}]}`, "unmarshalling rule file"},
+		{"invalid envelope", `{"version":3,"rules":[{"domain":"example.com"}]}`, "validating rule file"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, internal.SplitTunnelFileName)
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+			st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+			require.ErrorContains(t, err, tt.wantErr)
+			require.NotNil(t, st)
+
+			require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+			assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+			assert.False(t, st.IsEnabled())
+			assert.Empty(t, st.Filters().Domain)
+			current, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.NotEqual(t, tt.content, string(current))
+			_, err = json.UnmarshalExtended[O.PlainRuleSetCompat](current)
+			require.NoError(t, err)
+			saved, err := os.ReadFile(filepath.Join(dir, internal.SplitTunnelInvalidFileName))
+			require.NoError(t, err)
+			assert.Equal(t, tt.content, string(saved))
+		})
+	}
+}
+
+func writeRuleSet(t *testing.T, dir string, rs O.PlainRuleSet) []byte {
+	t.Helper()
+	content, err := json.Marshal(O.PlainRuleSetCompat{Version: 3, Options: rs})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, internal.SplitTunnelFileName), content, 0o600))
+	return content
+}
+
+func TestRejectInvalidEnvelope(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		edit func(*O.PlainRuleSet)
+	}{
+		{"no root", func(rs *O.PlainRuleSet) { rs.Rules = nil }},
+		{"plain root", func(rs *O.PlainRuleSet) {
+			rs.Rules[0] = O.HeadlessRule{
+				Type: C.RuleTypeDefault, DefaultOptions: O.DefaultHeadlessRule{Domain: []string{"example.com"}},
+			}
+		}},
+		{"multiple roots", func(rs *O.PlainRuleSet) { rs.Rules = append(rs.Rules, rs.Rules[0]) }},
+		{"empty logical root", func(rs *O.PlainRuleSet) { rs.Rules[0].LogicalOptions.Rules = nil }},
+		{"inverted root", func(rs *O.PlainRuleSet) { rs.Rules[0].LogicalOptions.Invert = true }},
+		{"invalid root mode", func(rs *O.PlainRuleSet) { rs.Rules[0].LogicalOptions.Mode = "xor" }},
+		{"missing disable rule", func(rs *O.PlainRuleSet) {
+			rs.Rules[0].LogicalOptions.Rules = rs.Rules[0].LogicalOptions.Rules[1:]
+		}},
+		{"invalid disable rule", func(rs *O.PlainRuleSet) {
+			rs.Rules[0].LogicalOptions.Rules[0].LogicalOptions.Mode = C.LogicalTypeOr
+		}},
+		{"extra child", func(rs *O.PlainRuleSet) {
+			root := &rs.Rules[0].LogicalOptions
+			root.Rules = append(root.Rules, root.Rules[1])
+		}},
+		{"invalid filter mode", func(rs *O.PlainRuleSet) {
+			rs.Rules[0].LogicalOptions.Rules[1].LogicalOptions.Mode = C.LogicalTypeAnd
+		}},
+		{"nested filter", func(rs *O.PlainRuleSet) {
+			root := &rs.Rules[0].LogicalOptions
+			root.Rules[1].LogicalOptions.Rules = []O.HeadlessRule{root.Rules[0]}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: defaultRule()}}}
+			tt.edit(&rs)
+			dir := t.TempDir()
+			content := writeRuleSet(t, dir, rs)
+			_, err := json.UnmarshalExtended[O.PlainRuleSetCompat](content)
+			require.NoError(t, err, "fixture must decode before envelope validation")
+
+			st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+			require.ErrorContains(t, err, "validating rule file")
+			require.NotNil(t, st)
+			assert.False(t, st.IsEnabled())
+			assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+			assert.Empty(t, st.Filters().Domain)
+			for _, name := range []string{internal.SplitTunnelFileName, internal.SplitTunnelInvalidFileName} {
+				got, err := os.ReadFile(filepath.Join(dir, name))
+				require.NoError(t, err)
+				assert.Equal(t, content, got)
+			}
+			require.NoError(t, st.AddItem(TypeDomain, "example.org"))
+			assert.Equal(t, []string{"example.org"}, st.Filters().Domain)
+		})
+	}
+}
+
+func TestLoadEquivalentDisableRule(t *testing.T) {
+	content := `{"version":3,"rules":[{"type":"logical","mode":"or","rules":[
+		{"type":"logical","mode":"and","invert":false,"rules":[
+			{"domain":"disable.rule","domain_suffix":[]},
+			{"domain":["disable.rule"],"domain_suffix":[],"invert":true}
+		]},
+		{"type":"logical","mode":"or","rules":[{"domain":"example.com"}]}
+	]}]}`
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, internal.SplitTunnelFileName), []byte(content), 0o600))
+
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.True(t, st.IsEnabled())
+	assert.Equal(t, []string{"example.com"}, st.Filters().Domain)
+	assert.NoFileExists(t, filepath.Join(dir, internal.SplitTunnelInvalidFileName))
+}
+
+func TestLoadEmptyEnvelope(t *testing.T) {
+	for _, children := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d children", children), func(t *testing.T) {
+			root := defaultRule()
+			root.Mode = C.LogicalTypeOr
+			root.Rules = root.Rules[:children]
+			dir := t.TempDir()
+			writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
+
+			st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+			require.NoError(t, err)
+			assert.True(t, st.IsEnabled())
+			assert.Empty(t, st.Filters().Domain)
+			require.NoError(t, st.AddItem(TypeDomain, "example.org"))
+			reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+			require.NoError(t, err)
+			assert.Equal(t, []string{"example.org"}, reloaded.Filters().Domain)
+		})
+	}
 }
 
 func TestEnableDisableIsEnabled(t *testing.T) {

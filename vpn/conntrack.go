@@ -152,8 +152,9 @@ func (m *connTracker) Total() (up, down int64) {
 }
 
 func (m *connTracker) join(r *record) {
-	m.conns.Store(r.id, r)
+	// A published record can be reclaimed before join returns.
 	m.activeCount.Add(1)
+	m.conns.Store(r.id, r)
 }
 
 // leave folds the connection's final accounting exactly once, gated by record.closed.

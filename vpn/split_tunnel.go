@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sync"
@@ -45,9 +46,7 @@ type SplitTunnel struct {
 // set from disk.
 //
 // The returned handler is always usable, even when the error is non-nil: an
-// unreadable or unparseable rule file — e.g. one this build's sing-box can't
-// decode after a version downgrade — falls back to the default no-op rule,
-// yielding a working handler plus an error describing the failure.
+// unreadable or invalid rule file falls back to the default no-op rule.
 func NewSplitTunnelHandler(dataPath string, logger *slog.Logger) (*SplitTunnel, error) {
 	s := newSplitTunnel(dataPath, logger)
 	if err := s.loadRule(); err != nil {
@@ -359,6 +358,38 @@ func isEmptyRule(rule O.DefaultHeadlessRule) bool {
 		len(rule.ProcessPath) == 0 && len(rule.ProcessPathRegex) == 0
 }
 
+func validateSplitTunnelRule(rules []O.HeadlessRule) error {
+	if len(rules) != 1 || rules[0].Type != C.RuleTypeLogical {
+		return errors.New("expected a single logical split tunnel rule")
+	}
+	root := rules[0].LogicalOptions
+	if root.Invert || (root.Mode != C.LogicalTypeAnd && root.Mode != C.LogicalTypeOr) {
+		return errors.New("invalid split tunnel rule mode")
+	}
+	if len(root.Rules) < 1 || len(root.Rules) > 2 ||
+		!reflect.DeepEqual(root.Rules[0], defaultRule().Rules[0]) {
+		return errors.New("invalid split tunnel disable rule")
+	}
+	if len(root.Rules) == 2 {
+		filter := root.Rules[1]
+		switch filter.Type {
+		case C.RuleTypeDefault:
+		case C.RuleTypeLogical:
+			if filter.LogicalOptions.Mode != C.LogicalTypeOr {
+				return errors.New("invalid split tunnel filter mode")
+			}
+			for _, rule := range filter.LogicalOptions.Rules {
+				if rule.Type != C.RuleTypeDefault {
+					return errors.New("invalid split tunnel filter rule")
+				}
+			}
+		default:
+			return errors.New("invalid split tunnel filter type")
+		}
+	}
+	return nil
+}
+
 func (s *SplitTunnel) loadRule() error {
 	rawRuleSet, err := atomicfile.ReadFile(s.ruleFile)
 	// the file should exist at this point, so we don't need to check for fs.ErrNotExist
@@ -371,9 +402,9 @@ func (s *SplitTunnel) loadRule() error {
 		return fmt.Errorf("unmarshalling rule file %s: %w", s.ruleFile, err)
 	}
 	rules := ruleSet.Options.Rules
-	if len(rules) == 0 {
-		s.logger.Warn("split tunnel rule file format is invalid, using empty rule")
-		return nil
+	if err := validateSplitTunnelRule(rules); err != nil {
+		s.quarantineInvalidRuleSet(rawRuleSet)
+		return fmt.Errorf("validating rule file %s: %w", s.ruleFile, err)
 	}
 
 	s.rule = rules[0].LogicalOptions
@@ -385,7 +416,7 @@ func (s *SplitTunnel) loadRule() error {
 				Rules: []O.HeadlessRule{},
 			},
 		})
-	} else if len(s.rule.Rules) > 1 && s.rule.Rules[1].Type == C.RuleTypeDefault {
+	} else if s.rule.Rules[1].Type == C.RuleTypeDefault {
 		// TODO: drop this migration once all persisted rules use the LogicalOptions
 		// format; kept for now to stay compatible with configs written by older builds.
 		s.logger.Debug("Migrating legacy split tunnel rule format")
@@ -465,16 +496,15 @@ func (s *SplitTunnel) loadRule() error {
 	return nil
 }
 
-// quarantineInvalidRuleSet copies the unparseable rule file aside to
-// split-tunnel.invalid.json for diagnostics. The original is left in place so a
-// later re-upgrade can still read rules this build couldn't.
+// quarantineInvalidRuleSet copies content to split-tunnel.invalid.json without modifying the rule
+// file, so the invalid rules survive the next save that replaces it.
 func (s *SplitTunnel) quarantineInvalidRuleSet(content []byte) {
 	invalidPath := filepath.Join(filepath.Dir(s.ruleFile), internal.SplitTunnelInvalidFileName)
 	if err := atomicfile.WriteFile(invalidPath, content, fileperm.File); err != nil {
 		s.logger.Error("Writing invalid split tunnel copy", "path", invalidPath, "error", err)
 		return
 	}
-	s.logger.Warn("Preserved unparseable split tunnel file for diagnostics", "path", invalidPath)
+	s.logger.Warn("Saved invalid split tunnel rules for diagnostics", "path", invalidPath)
 }
 
 func defaultRule() O.LogicalHeadlessRule {
