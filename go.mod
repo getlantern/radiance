@@ -46,6 +46,7 @@ require (
 	github.com/getlantern/semconv v0.0.0-20261020020737-084d1daf4879
 	github.com/getlantern/soar v0.2.4
 	github.com/goccy/go-yaml v1.19.0
+	github.com/gofrs/flock v0.12.1
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
