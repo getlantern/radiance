@@ -790,3 +790,80 @@ func TestStructValuesSurviveUnrelatedWrites(t *testing.T) {
 	assert.Equal(t, "IR", afterWrite.Location.CountryCode,
 		"JSON-tagged fields must survive the disk round-trip an unrelated write performs")
 }
+
+func TestConditionalWritesDecideAgainstFile(t *testing.T) {
+	initAt := func(t *testing.T, contents string) string {
+		t.Helper()
+		Reset()
+		t.Cleanup(Reset)
+		dir := t.TempDir()
+		path := filepath.Join(dir, settingsFileName)
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0644))
+		require.NoError(t, InitSettings(dir))
+		return path
+	}
+
+	t.Run("ReplaceString spares a newer value another process wrote", func(t *testing.T) {
+		path := initAt(t, `{}`)
+		require.NoError(t, Set(LogLevelKey, "trace"))
+		require.NoError(t, os.WriteFile(path, []byte(`{"log_level": "debug"}`), 0644))
+
+		require.NoError(t, ReplaceString(LogLevelKey, "trace", "info"))
+
+		assert.Equal(t, "debug", GetString(LogLevelKey),
+			"a deliberate level persisted by another process must survive the demotion")
+	})
+
+	t.Run("ReplaceString replaces a matching value", func(t *testing.T) {
+		initAt(t, `{"log_level": "trace"}`)
+		require.NoError(t, ReplaceString(LogLevelKey, "trace", "info"))
+		assert.Equal(t, "info", GetString(LogLevelKey))
+	})
+
+	t.Run("SetIfAbsent spares a value another process wrote", func(t *testing.T) {
+		path := initAt(t, `{}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"log_level": "warn"}`), 0644))
+
+		require.NoError(t, SetIfAbsent(LogLevelKey, "info"))
+
+		assert.Equal(t, "warn", GetString(LogLevelKey))
+	})
+
+	t.Run("SetIfAbsent seeds a missing value", func(t *testing.T) {
+		initAt(t, `{}`)
+		require.NoError(t, SetIfAbsent(LogLevelKey, "info"))
+		assert.Equal(t, "info", GetString(LogLevelKey))
+	})
+}
+
+func TestUnreadableFileStillAppliesWritesLocally(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses file permissions to force read failures")
+	}
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	path := filepath.Join(dir, settingsFileName)
+	require.NoError(t, InitSettings(dir))
+	require.NoError(t, Set(TokenKey, "live-token"))
+
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+	require.Error(t, Clear(TokenKey), "an unreadable file must surface as an error")
+	assert.False(t, Exists(TokenKey), "logout must still take effect in this process")
+	require.NoError(t, os.Chmod(path, 0o000)) // confirm the failed write left the file alone
+	got, err := os.ReadFile(path)
+	require.Error(t, err, "the unreadable file must not be overwritten")
+	_ = got
+
+	require.NoError(t, os.Chmod(path, 0o644))
+	require.NoError(t, Set(LocaleKey, "en-US"))
+
+	assert.False(t, Exists(TokenKey))
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &onDisk))
+	_, tokenOnDisk := onDisk["token"]
+	assert.False(t, tokenOnDisk, "the journaled tombstone must reach the file once it is writable")
+}

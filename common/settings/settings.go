@@ -109,9 +109,9 @@ type settings struct {
 	initialized bool
 	filePath    string
 	mu          sync.Mutex
-	// pending holds writes whose save failed, reapplied on top of the file
-	// until one succeeds, so a later write cannot resurrect the state they
-	// replaced. Guarded by mu.
+	// pending holds writes that have not reached the file, reapplied on top
+	// of it until one persists, so a later write cannot resurrect the state
+	// they replaced. Guarded by mu.
 	pending map[string]pendingWrite
 }
 
@@ -403,23 +403,40 @@ func Exists(key _key) bool {
 	return snapshot().Exists(key.String())
 }
 
-// mutate applies updates on top of the file's current contents, not this
-// process's snapshot, so a write can't clobber keys another process changed.
-// The next snapshot is published even when persisting fails, so the new value
-// is visible in this process.
-func mutate(updates map[string]pendingWrite) error {
+// mutate applies the writes returned by produce on top of the file's current
+// contents, not this process's snapshot, so a write can't clobber keys another
+// process changed; produce sees that same state and can decide against it. The
+// next snapshot is published even when persisting fails, so the new value is
+// visible in this process.
+func mutate(produce func(next *koanf.Koanf) (map[string]pendingWrite, error)) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	unlock := lockSettingsFile(k.filePath)
 	defer unlock()
-	next, err := writeBase()
+	next, baseErr := writeBase()
+	if baseErr != nil {
+		// An unreadable file must not void the write locally — a logout's
+		// tombstones in particular: decide and journal against the live
+		// snapshot, and leave the file alone.
+		var err error
+		if next, err = clone(snapshot()); err != nil {
+			return errors.Join(baseErr, err)
+		}
+		if err := applyWrites(next, k.pending); err != nil {
+			return errors.Join(baseErr, err)
+		}
+	}
+	updates, err := produce(next)
 	if err != nil {
 		return err
 	}
 	if err := applyWrites(next, updates); err != nil {
 		return err
 	}
-	saveErr := save(next)
+	saveErr := baseErr
+	if saveErr == nil {
+		saveErr = save(next)
+	}
 	if saveErr != nil {
 		if k.pending == nil {
 			k.pending = make(map[string]pendingWrite)
@@ -432,6 +449,12 @@ func mutate(updates map[string]pendingWrite) error {
 	}
 	k.k.Store(next)
 	return saveErr
+}
+
+func writesProducer(updates map[string]pendingWrite) func(*koanf.Koanf) (map[string]pendingWrite, error) {
+	return func(*koanf.Koanf) (map[string]pendingWrite, error) {
+		return updates, nil
+	}
 }
 
 func applyWrites(next *koanf.Koanf, updates map[string]pendingWrite) error {
@@ -462,8 +485,8 @@ func writeBase() (*koanf.Koanf, error) {
 
 // diskBase returns the file's contents over the defaults. A missing or
 // corrupt file falls back to the current snapshot, which turns a corrupt
-// file back into valid state on the next write; any other read error fails
-// the write.
+// file back into valid state on the next write; any other read error is
+// returned.
 func diskBase() (*koanf.Koanf, error) {
 	if k.filePath == "" {
 		return clone(snapshot())
@@ -509,7 +532,29 @@ func lockSettingsFile(path string) func() {
 }
 
 func Set(key _key, value any) error {
-	return mutate(map[string]pendingWrite{key.String(): {value: value}})
+	return mutate(writesProducer(map[string]pendingWrite{key.String(): {value: value}}))
+}
+
+// SetIfAbsent persists value under key only when the key has no value yet,
+// deciding against the file's state under the settings write lock.
+func SetIfAbsent(key _key, value any) error {
+	return mutate(func(next *koanf.Koanf) (map[string]pendingWrite, error) {
+		if next.Exists(key.String()) {
+			return nil, nil
+		}
+		return map[string]pendingWrite{key.String(): {value: value}}, nil
+	})
+}
+
+// ReplaceString sets key to "to" only while its current value is "from",
+// deciding against the file's state under the settings write lock.
+func ReplaceString(key _key, from, to string) error {
+	return mutate(func(next *koanf.Koanf) (map[string]pendingWrite, error) {
+		if next.String(key.String()) != from {
+			return nil, nil
+		}
+		return map[string]pendingWrite{key.String(): {value: to}}, nil
+	})
 }
 
 func Clear(keys ..._key) error {
@@ -517,7 +562,7 @@ func Clear(keys ..._key) error {
 	for _, key := range keys {
 		updates[key.String()] = pendingWrite{deleted: true}
 	}
-	return mutate(updates)
+	return mutate(writesProducer(updates))
 }
 
 type Settings map[_key]any
@@ -558,7 +603,7 @@ func Patch(updates Settings) error {
 	for key, value := range updates {
 		writes[key.String()] = pendingWrite{value: value}
 	}
-	return mutate(writes)
+	return mutate(writesProducer(writes))
 }
 
 func save(next *koanf.Koanf) error {

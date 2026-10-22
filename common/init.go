@@ -106,12 +106,12 @@ func seedLogLevel(configured string) {
 		settings.Set(settings.LogLevelKey, v)
 		return
 	}
-	if !settings.Exists(settings.LogLevelKey) {
-		settings.Set(settings.LogLevelKey, configured)
+	if configured == "" {
 		return
 	}
-	if configured != "" && configured != "trace" && settings.GetString(settings.LogLevelKey) == "trace" {
-		settings.Set(settings.LogLevelKey, configured)
+	settings.SetIfAbsent(settings.LogLevelKey, configured)
+	if configured != "trace" {
+		settings.ReplaceString(settings.LogLevelKey, "trace", configured)
 	}
 }
 
