@@ -29,7 +29,9 @@ concurrency:
 jobs:
   migration:
     runs-on: windows-2025
-    timeout-minutes: 30
+    # The tests take ~3 minutes; a hung runner should surface fast and free
+    # the concurrency slot.
+    timeout-minutes: 15
     env:
       CGO_ENABLED: "0"
       GOFLAGS: -mod=readonly
@@ -46,3 +48,21 @@ jobs:
         run: |
           go test -v -tags with_clash_api ./internal/dirsecurity ./common/legacymigration ./common/atomicfile ./common/settings ./account ./backend ./ipc ./cmd/lanternd
           if ($LASTEXITCODE -ne 0) { throw 'Windows identity migration tests failed' }
+
+  # The Windows job's own check status is occasionally lost after a successful
+  # run (the job shows "in progress" forever while the run has concluded, seen
+  # on PR #701). This job's status posts from a Linux runner once the run
+  # concludes and lands reliably — gate branch protection on it, never on
+  # `migration` directly.
+  result:
+    runs-on: ubuntu-latest
+    needs: migration
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Report the migration job result
+        env:
+          MIGRATION_RESULT: ${{ needs.migration.result }}
+        run: |
+          echo "migration: $MIGRATION_RESULT"
+          test "$MIGRATION_RESULT" = "success"
