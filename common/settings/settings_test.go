@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	_ "github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/env"
 )
 
 func TestWindowsCrossDirCandidates(t *testing.T) {
@@ -866,4 +866,19 @@ func TestUnreadableFileStillAppliesWritesLocally(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &onDisk))
 	_, tokenOnDisk := onDisk["token"]
 	assert.False(t, tokenOnDisk, "the journaled tombstone must reach the file once it is writable")
+}
+
+func TestInitSettingsSkipsMigrationDespiteMalformedTestingEnv(t *testing.T) {
+	t.Setenv(env.Testing.String(), "yes")
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	legacy := []byte(`{"user_level":"pro","token":"leaked"}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, legacySettingsFileName), legacy, 0o644))
+
+	require.NoError(t, InitSettings(dir))
+
+	assert.NotEqual(t, "pro", GetString(UserLevelKey),
+		"a malformed RADIANCE_TESTING value must not re-enable the migration in a test binary")
+	assert.False(t, Exists(TokenKey))
 }

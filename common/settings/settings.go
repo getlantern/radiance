@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -164,7 +165,7 @@ func InitSettings(fileDir string) error {
 	// Migration candidates reach outside fileDir — the pre-9.x YAML lives in
 	// the user's real Lantern profile — so under test it would import the
 	// developer's live account, pro token included, into the test's store.
-	if !env.GetBool(env.Testing) {
+	if !testing.Testing() && !env.GetBool(env.Testing) {
 		migrateLegacySettingsIfNeeded(fileDir, k.filePath)
 	}
 	next, err := clone(snapshot())
