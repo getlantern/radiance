@@ -736,3 +736,31 @@ func TestWriteAdoptsOtherProcessState(t *testing.T) {
 		assert.Equal(t, "IR", GetString(CountryCodeKey))
 	})
 }
+
+func TestFailedSaveIsNotRevertedByLaterWrites(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a read-only directory to force save failures")
+	}
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	require.NoError(t, InitSettings(dir))
+	require.NoError(t, Set(TokenKey, "live-token"))
+
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	require.Error(t, Clear(TokenKey), "save must fail in a read-only directory")
+	assert.False(t, Exists(TokenKey), "the deletion is visible in this process despite the failed save")
+
+	require.NoError(t, os.Chmod(dir, 0o755))
+	require.NoError(t, Set(LocaleKey, "fa-IR"))
+
+	assert.False(t, Exists(TokenKey), "a later write must not resurrect the cleared token")
+	got, err := os.ReadFile(filepath.Join(dir, settingsFileName))
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(got, &onDisk))
+	_, tokenOnDisk := onDisk["token"]
+	assert.False(t, tokenOnDisk, "the pending deletion must reach the file with the next save")
+	assert.Equal(t, "fa-IR", onDisk["locale"])
+}

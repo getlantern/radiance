@@ -81,8 +81,7 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		return fmt.Errorf("failed to initialize settings: %w", err)
 	}
 
-	settings.Set(settings.DataPathKey, data)
-	settings.Set(settings.LogPathKey, logs)
+	settings.Patch(settings.Settings{settings.DataPathKey: data, settings.LogPathKey: logs})
 	seedLogLevel(logLevel)
 
 	logger := log.NewLogger(log.Config{

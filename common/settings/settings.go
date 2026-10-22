@@ -109,6 +109,16 @@ type settings struct {
 	initialized bool
 	filePath    string
 	mu          sync.Mutex
+	// pending holds writes whose save failed, reapplied on top of the file
+	// until one succeeds, so a later write cannot resurrect the state they
+	// replaced. Guarded by mu.
+	pending map[string]pendingWrite
+}
+
+// pendingWrite is one unpersisted write; deleted marks a tombstone.
+type pendingWrite struct {
+	value   any
+	deleted bool
 }
 
 var k = &settings{}
@@ -377,11 +387,11 @@ func Exists(key _key) bool {
 	return snapshot().Exists(key.String())
 }
 
-// mutate applies the caller's changes on top of the file's current contents,
-// not this process's snapshot, so a write can't clobber keys another process
-// changed. The next snapshot is published even when persisting fails, so the
-// new value is visible in this process.
-func mutate(apply func(next *koanf.Koanf) error) error {
+// mutate applies updates on top of the file's current contents, not this
+// process's snapshot, so a write can't clobber keys another process changed.
+// The next snapshot is published even when persisting fails, so the new value
+// is visible in this process.
+func mutate(updates map[string]pendingWrite) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	unlock := lockSettingsFile(k.filePath)
@@ -390,20 +400,55 @@ func mutate(apply func(next *koanf.Koanf) error) error {
 	if err != nil {
 		return err
 	}
-	if err := apply(next); err != nil {
+	if err := applyWrites(next, updates); err != nil {
 		return err
 	}
 	saveErr := save(next)
+	if saveErr != nil {
+		if k.pending == nil {
+			k.pending = make(map[string]pendingWrite)
+		}
+		for key, w := range updates {
+			k.pending[key] = w
+		}
+	} else {
+		k.pending = nil
+	}
 	k.k.Store(next)
 	return saveErr
 }
 
-// writeBase returns the state a write starts from: the file's contents over
-// the defaults, so values another process persisted — deletions included —
-// are adopted. A missing or corrupt file falls back to the current snapshot,
-// which turns a corrupt file back into valid state on the next write; any
-// other read error fails the write.
+func applyWrites(next *koanf.Koanf, updates map[string]pendingWrite) error {
+	for key, w := range updates {
+		if w.deleted {
+			next.Delete(key)
+			continue
+		}
+		if err := next.Set(key, w.value); err != nil {
+			return fmt.Errorf("could not set key %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// writeBase returns the state a write starts from: the file's base state
+// with this process's pending writes reapplied on top.
 func writeBase() (*koanf.Koanf, error) {
+	next, err := diskBase()
+	if err != nil {
+		return nil, err
+	}
+	if err := applyWrites(next, k.pending); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// diskBase returns the file's contents over the defaults. A missing or
+// corrupt file falls back to the current snapshot, which turns a corrupt
+// file back into valid state on the next write; any other read error fails
+// the write.
+func diskBase() (*koanf.Koanf, error) {
 	if k.filePath == "" {
 		return clone(snapshot())
 	}
@@ -429,9 +474,13 @@ func lockSettingsFile(path string) func() {
 		return func() {}
 	}
 	fl := flock.New(path + ".lock")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A healthy holder keeps the lock for one read-modify-write; a holder
+	// that waits longer is suspended (iOS freezes apps mid-write), and
+	// startup paths write several keys against a ~7.5s iOS tunnel budget,
+	// so waiting longer per write risks the whole process.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	locked, err := fl.TryLockContext(ctx, 100*time.Millisecond)
+	locked, err := fl.TryLockContext(ctx, 50*time.Millisecond)
 	if err != nil || !locked {
 		slog.Warn("settings file lock unavailable; writing without it", "path", path, "error", err)
 		return func() {}
@@ -444,21 +493,15 @@ func lockSettingsFile(path string) func() {
 }
 
 func Set(key _key, value any) error {
-	return mutate(func(next *koanf.Koanf) error {
-		if err := next.Set(key.String(), value); err != nil {
-			return fmt.Errorf("could not set key %s: %w", key, err)
-		}
-		return nil
-	})
+	return mutate(map[string]pendingWrite{key.String(): {value: value}})
 }
 
 func Clear(keys ..._key) error {
-	return mutate(func(next *koanf.Koanf) error {
-		for _, key := range keys {
-			next.Delete(key.String())
-		}
-		return nil
-	})
+	updates := make(map[string]pendingWrite, len(keys))
+	for _, key := range keys {
+		updates[key.String()] = pendingWrite{deleted: true}
+	}
+	return mutate(updates)
 }
 
 type Settings map[_key]any
@@ -495,14 +538,11 @@ func GetAllFor(keys ..._key) Settings {
 
 // Patch takes a map of settings to update and applies them all at once.
 func Patch(updates Settings) error {
-	return mutate(func(next *koanf.Koanf) error {
-		for key, value := range updates {
-			if err := next.Set(key.String(), value); err != nil {
-				return fmt.Errorf("could not set key %s: %w", key, err)
-			}
-		}
-		return nil
-	})
+	writes := make(map[string]pendingWrite, len(updates))
+	for key, value := range updates {
+		writes[key.String()] = pendingWrite{value: value}
+	}
+	return mutate(writes)
 }
 
 func save(next *koanf.Koanf) error {
@@ -523,6 +563,7 @@ func Reset() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.k.Store(koanf.New("."))
+	k.pending = nil
 	k.initialized = false
 }
 
@@ -530,8 +571,9 @@ func Reset() {
 //
 // Mobile keeps the tunnel in a separate process that persists to the same file, so long-lived
 // callers must reload before using cross-process metadata. The file supersedes memory rather than
-// merging over it, so keys removed by another process do not linger. A missing file is not an
-// error, and failed reloads leave the current settings untouched.
+// merging over it, so keys removed by another process do not linger; this process's unpersisted
+// writes are reapplied on top. A missing file is not an error, and failed reloads leave the
+// current settings untouched.
 func Reload() error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -544,6 +586,9 @@ func Reload() error {
 		return nil
 	case err != nil:
 		return fmt.Errorf("reloading settings: %w", err)
+	}
+	if err := applyWrites(next, k.pending); err != nil {
+		return err
 	}
 	k.k.Store(next)
 	return nil
