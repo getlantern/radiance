@@ -39,12 +39,12 @@ require (
 	github.com/getlantern/broflake v0.0.0-20261018030031-c6268bfc1b56
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
-	github.com/getlantern/kindling v0.0.0-20261014210827-0f4a89dbe1ee
+	github.com/getlantern/kindling v0.0.0-20261022160625-48c13b1454d3
 	github.com/getlantern/lantern-box v0.0.169
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20261020020737-084d1daf4879
-	github.com/getlantern/soar v0.2.3
+	github.com/getlantern/soar v0.2.4
 	github.com/goccy/go-yaml v1.19.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
