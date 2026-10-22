@@ -1,0 +1,25 @@
+name: govulncheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ['**.go', go.mod, go.sum, .github/workflows/govulncheck.yml]
+  schedule:
+    - cron: "0 14 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan reachable vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -tags with_clash_api ./...
