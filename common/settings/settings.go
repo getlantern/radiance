@@ -64,6 +64,10 @@ const (
 	// forwarded on their router for the peer-proxy inbound (single-
 	// port 1:1 NAT). Valid range is 1..65535; 0 means unset.
 	PeerManualPortKey _key = "peer_manual_port" // int (0 = unset; 1..65535 = manual port)
+	// PeerServePoolKey says whether the peer proxy also serves the general
+	// pool ("help others too") rather than only its helper pairings. Unset
+	// means true.
+	PeerServePoolKey _key = "peer_serve_pool" // bool (unset = true)
 	// UnboundedKey is the local opt-in (bool) for the Unbounded widget proxy.
 	UnboundedKey      _key = "unbounded"       // bool
 	SelectedServerKey _key = "selected_server" // [servers.Server] Server.Options is not stored
