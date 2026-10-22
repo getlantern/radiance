@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -22,6 +24,7 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 	lblog "github.com/getlantern/lantern-box/log"
+	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
 	"github.com/getlantern/radiance/common/env"
@@ -133,6 +136,8 @@ type Config struct {
 	// BoxCloseTimeout bounds how long teardown waits for a sing-box Close.
 	// Zero means defaultBoxCloseTimeout.
 	BoxCloseTimeout time.Duration
+	// Now is the clock for pairing-set expiry. Nil means time.Now.
+	Now func() time.Time
 	// OnSelfStop is called after the client stops itself, rather than on a
 	// caller's Stop: the server dropped its route, or a credential rotation
 	// left nothing serving what the server advertises. It runs on its own
@@ -228,6 +233,34 @@ type Client struct {
 	// kept for diagnostics and so the rotation path doesn't need to
 	// re-derive it from the (also-stored) box reference.
 	boxOptions string
+	// baseShortIDs are the inbound's short IDs from the current launch config.
+	// They are always kept when pairing short IDs are applied, because
+	// lantern-cloud's verifier and pool clients authenticate with them.
+	baseShortIDs []string
+	// pairingShortIDs is the newest pairing set the server vouched for;
+	// pairingKnown says there is one. A response that does not vouch for a
+	// set leaves both alone, so a server that cannot tell never revokes, and
+	// a rotated box gets this set again. pairingApplied says the current box
+	// holds it; when a push failed it does not, and each heartbeat retries.
+	pairingShortIDs []string
+	pairingKnown    bool
+	pairingApplied  bool
+	// pairingRevision is the server's revision of the newest set accepted,
+	// the highest seen this session, 0 before any. It survives expiry, so a
+	// set older than one already accepted is never taken.
+	pairingRevision int64
+	// pairingConfirmedAt is when a known set was last accepted. A rotation
+	// that reuses the record keeps it.
+	pairingConfirmedAt time.Time
+	// shortIDsMu serializes recording a set with pushing it onto the box,
+	// so the box and pairingApplied agree. It is held across those local
+	// pushes only, never across network I/O or a box's Start or Close.
+	// Taken before c.mu, never while holding it.
+	shortIDsMu sync.Mutex
+	// warnedNoBaseShortIDs and warnedNoUpdater keep their warnings to one
+	// per client, since every heartbeat would otherwise repeat them.
+	warnedNoBaseShortIDs atomic.Bool
+	warnedNoUpdater      atomic.Bool
 	// runCtx is captured here for the cred-rotation goroutine to bind
 	// the new libbox lifetime to the same context as the original Start.
 	// Stop's cancelRun() teardown still applies to the rebuilt box.
@@ -301,6 +334,9 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.HeartbeatTimeout == 0 {
 		cfg.HeartbeatTimeout = 30 * time.Second
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	return &Client{
 		cfg:        cfg,
@@ -453,6 +489,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
+		ServePool:    servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
@@ -490,6 +527,22 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		cancelRun()
 		return fmt.Errorf("build sing-box: %w", err)
 	}
+
+	// Paired inviters authenticate with per-pairing short IDs that
+	// lantern-cloud rotates. The launch config's own ID stays. Only a set the
+	// server vouches for is applied, and before Start, so the box never
+	// serves without it; otherwise the box keeps its base ID.
+	baseShortIDs := inboundShortIDs(options)
+	var startPairing []string
+	var startRevision int64
+	startPairingKnown := regResp.PairingShortIDsKnown && regResp.PairingShortIDsRevision > 0
+	startPairingApplied := false
+	if startPairingKnown {
+		startPairing = slices.Clone(regResp.PairingShortIDs)
+		startRevision = int64(regResp.PairingShortIDsRevision)
+		startPairingApplied = c.applyShortIDs(box, baseShortIDs, startPairing)
+	}
+
 	if err := box.Start(); err != nil {
 		cancelRun()
 		return fmt.Errorf("start sing-box: %w", err)
@@ -575,6 +628,15 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.externalPort = mapping.ExternalPort
 	c.internalPort = mapping.InternalPort
 	c.boxOptions = options
+	c.baseShortIDs = baseShortIDs
+	c.pairingShortIDs = startPairing
+	c.pairingKnown = startPairingKnown
+	// With no known set the new box holds what it should: its base ID.
+	c.pairingApplied = !startPairingKnown || startPairingApplied
+	c.pairingRevision = startRevision
+	if startPairingKnown {
+		c.pairingConfirmedAt = c.cfg.Now()
+	}
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
@@ -702,6 +764,12 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.externalPort = 0
 	c.internalPort = 0
 	c.boxOptions = ""
+	c.baseShortIDs = nil
+	c.pairingShortIDs = nil
+	c.pairingKnown = false
+	c.pairingApplied = false
+	c.pairingRevision = 0
+	c.pairingConfirmedAt = time.Time{}
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
 	stoppingSnapshot := c.status
@@ -940,8 +1008,20 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
+			resp, err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
 			cancel()
+			if err == nil && resp.PairingShortIDsKnown {
+				// Replaces the pairing set, so an ended pairing stops working
+				// here, unless a newer set was accepted while it was in
+				// flight.
+				c.applyPairingShortIDs(resp.PairingShortIDs, true, int64(resp.PairingShortIDsRevision))
+			} else {
+				// A failed heartbeat, or one that does not vouch for a set,
+				// says nothing about pairings, so the last set stays, and is
+				// pushed again if the box does not hold it.
+				c.applyPairingShortIDs(nil, false, 0)
+			}
+			c.expireUnconfirmedPairing()
 			if err != nil {
 				// A single transient blip shouldn't kill the registration —
 				// the server-side reaper will deprecate the row if heartbeats
@@ -1086,6 +1166,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
+		ServePool:    servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
@@ -1096,6 +1177,11 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.registration++
 	registration := c.registration
 	c.mu.Unlock()
+	if regResp.PairingShortIDsKnown {
+		// Offered like a heartbeat's set: taken only if newer than the
+		// one held, and pushed onto the box serving now.
+		c.applyPairingShortIDs(regResp.PairingShortIDs, true, int64(regResp.PairingShortIDsRevision))
+	}
 	sameRoute := regResp.RouteID == oldRouteID
 	// abandon undoes a registration this rotation can no longer use. A new
 	// route_id is deregistered so the bandit doesn't hand out creds for a box
@@ -1161,8 +1247,27 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if closeErr := c.closeBox(oldBox); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
+	// The new box is built with its base ID only. Before it starts it is
+	// given the newest recorded set, which includes this register's if it
+	// was newer, so paired users reconnecting after the old box closed are
+	// never refused. A heartbeat that records a newer set before the swap
+	// pushes it onto the old box; the swap below gives the new box it.
+	newBase := inboundShortIDs(options)
+	var (
+		rotPairing []string
+		rotKnown   bool
+		rotApplied bool
+	)
 	newBox, err := buildAndStartWithRetry(ctx, func() (boxService, error) {
-		return c.cfg.BuildBoxService(sessionRunCtx, options)
+		b, err := c.cfg.BuildBoxService(sessionRunCtx, options)
+		if err != nil {
+			return b, err
+		}
+		c.mu.Lock()
+		rotPairing, rotKnown = slices.Clone(c.pairingShortIDs), c.pairingKnown
+		c.mu.Unlock()
+		rotApplied = rotKnown && c.applyShortIDs(b, newBase, rotPairing)
+		return b, nil
 	}, c.closeBox)
 	if err != nil {
 		// The old box is closed and the new one isn't up: nothing listens.
@@ -1176,9 +1281,12 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// runCtx-check above and now would have cleared active AND set it
 	// back true, but the new session's runCtx differs from sessionRunCtx
 	// — so we'd otherwise resurrect old-session state into the new one.
+	// shortIDsMu orders the swap against a heartbeat's record and push.
+	c.shortIDsMu.Lock()
 	c.mu.Lock()
 	if !c.active || c.runCtx != sessionRunCtx {
 		c.mu.Unlock()
+		c.shortIDsMu.Unlock()
 		// Either Stop cleared state, or Stop→Start replaced the session.
 		// Close the new box we just brought up (the current session has
 		// no reference to it) and clean up a separate new route. Don't
@@ -1194,9 +1302,33 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.box = newBox
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
+	c.baseShortIDs = newBase
+	// Reconcile the new box with the current record, which a heartbeat may
+	// have replaced, or expiry cleared, since the push before Start. The
+	// box holds the pairing set that push took, or none; the record wants
+	// its set, or none when it is not known. If they differ, the box is
+	// given the record now, base ID only when there is none, and a failure
+	// leaves pairingApplied false for the next heartbeat to retry.
+	var pushed, want []string
+	if rotKnown && rotApplied {
+		pushed = rotPairing
+	}
+	if c.pairingKnown {
+		want = slices.Clone(c.pairingShortIDs)
+	}
+	held := slices.Equal(pushed, want)
+	c.pairingApplied = held
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
+	if !held && c.applyShortIDs(newBox, newBase, want) {
+		c.mu.Lock()
+		if c.box == newBox {
+			c.pairingApplied = true
+		}
+		c.mu.Unlock()
+	}
+	c.shortIDsMu.Unlock()
 
 	if !sameRoute {
 		// Deregister the prior route so the bandit stops handing the old
@@ -1385,6 +1517,202 @@ func pickManualForwarder() portForwarder {
 
 func pickInternalPort() uint16 {
 	return uint16(internalPortMin + rand.IntN(internalPortMax-internalPortMin))
+}
+
+// servePool returns nil when this peer also serves the general pool, so the
+// register request leaves serve_pool out and the server applies its default,
+// and a pointer to false when the user has limited it to helper pairings.
+// It is read at each registration, so a change takes effect at the next one:
+// the next Start or the hourly credential rotation.
+func servePool() *bool {
+	if settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey) {
+		return nil
+	}
+	off := false
+	return &off
+}
+
+// peerInboundTag is the tag lantern-cloud gives the peer's samizdat inbound.
+const peerInboundTag = "samizdat-in"
+
+// shortIDUpdater is lantern-box's samizdat inbound's runtime short-ID setter.
+type shortIDUpdater interface {
+	UpdateShortIDs(ids []string) error
+}
+
+// samizdatInbound finds b's samizdat inbound. A test double can implement
+// shortIDUpdater itself; a real box is searched by tag.
+func samizdatInbound(b boxService) (shortIDUpdater, bool) {
+	if u, ok := b.(shortIDUpdater); ok {
+		return u, true
+	}
+	sb, ok := b.(interface{ Inbound() adapter.InboundManager })
+	if !ok {
+		return nil, false
+	}
+	in, found := sb.Inbound().Get(peerInboundTag)
+	if !found {
+		return nil, false
+	}
+	u, ok := in.(shortIDUpdater)
+	return u, ok
+}
+
+// inboundShortIDs returns the samizdat inbound's short IDs from a launch
+// config, or nil if it has none or cannot be read.
+func inboundShortIDs(options string) []string {
+	opts, err := json.UnmarshalExtendedContext[option.Options](box.Context(context.Background()), []byte(options))
+	if err != nil {
+		return nil
+	}
+	for _, in := range opts.Inbounds {
+		if in.Tag != peerInboundTag {
+			continue
+		}
+		if o, ok := in.Options.(*lbO.SamizdatInboundOptions); ok {
+			return o.ShortIDs
+		}
+	}
+	return nil
+}
+
+// mergeShortIDs is base followed by the valid pairing IDs not already
+// present, lowercased. An invalid ID is dropped rather than passed on,
+// because lantern-box refuses a whole set over one bad entry.
+func mergeShortIDs(base, pairing []string) []string {
+	out := append([]string(nil), base...)
+	seen := make(map[string]bool, len(base)+len(pairing))
+	for _, id := range base {
+		seen[strings.ToLower(id)] = true
+	}
+	for _, id := range pairing {
+		id = strings.ToLower(id)
+		if b, err := hex.DecodeString(id); err != nil || len(b) != 8 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// applyShortIDs sets b's inbound to accept base plus the pairing short IDs,
+// and reports whether it did. Without a base ID it changes nothing:
+// replacing the set would cut off lantern-cloud's verifier and every pool
+// client. The IDs are credentials, so neither they nor their number are
+// logged.
+func (c *Client) applyShortIDs(b boxService, base, pairing []string) bool {
+	if len(base) == 0 {
+		if !c.warnedNoBaseShortIDs.Swap(true) {
+			slog.Warn("peer: launch config has no samizdat short IDs; not applying pairing short IDs")
+		}
+		return false
+	}
+	u, ok := samizdatInbound(b)
+	if !ok {
+		if !c.warnedNoUpdater.Swap(true) {
+			slog.Warn("peer: samizdat inbound cannot update short IDs; paired clients cannot connect")
+		}
+		return false
+	}
+	if err := u.UpdateShortIDs(mergeShortIDs(base, pairing)); err != nil {
+		slog.Warn("peer: updating samizdat short IDs failed; keeping the previous set", "err", err)
+		return false
+	}
+	slog.Debug("peer: samizdat short IDs updated")
+	return true
+}
+
+// acceptsPairingRevision reports whether a known set at revision rev is newer
+// than the one held, so that a response computed earlier but answered later
+// (a heartbeat in flight across a rotation's register, say) never replaces
+// it. The server sends known and the revision together, so a known set with
+// revision 0 is never taken. Called with c.mu held.
+func (c *Client) acceptsPairingRevision(rev int64) bool {
+	return rev > c.pairingRevision
+}
+
+// applyPairingShortIDs offers a pairing set to the box serving now. With
+// known true it is the server's set at revision rev: if newer than the one
+// held, it is recorded, confirmed now, and pushed. Whether or not it was,
+// if the box does not hold the record (its set, or the base ID only when
+// none is known) because a push failed, it is pushed again; with known
+// false that is all it does.
+func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
+	c.shortIDsMu.Lock()
+	defer c.shortIDsMu.Unlock()
+	c.mu.Lock()
+	b, base := c.box, c.baseShortIDs
+	if b == nil {
+		c.mu.Unlock()
+		return
+	}
+	if known && c.acceptsPairingRevision(rev) {
+		c.pairingShortIDs = slices.Clone(pairing)
+		c.pairingKnown = true
+		c.pairingRevision = rev
+		c.pairingConfirmedAt = c.cfg.Now()
+		c.pairingApplied = false
+	}
+	if c.pairingApplied {
+		c.mu.Unlock()
+		return
+	}
+	// Base ID only when no set is known: a rotation's box may still hold
+	// a set that expired before its swap.
+	var record []string
+	if c.pairingKnown {
+		record = slices.Clone(c.pairingShortIDs)
+	}
+	c.mu.Unlock()
+	if !c.applyShortIDs(b, base, record) {
+		return
+	}
+	c.mu.Lock()
+	if c.box == b {
+		c.pairingApplied = true
+	}
+	c.mu.Unlock()
+}
+
+// pairingMaxUnconfirmed is how long a pairing set is kept without the server
+// vouching for it again. A pairing short ID is valid for epochs e-1..e+1 of
+// 24 hours, so none in a set is still valid this long after it was issued.
+// Without the bound, a server that keeps answering without a set (replicas
+// without the ticket key, say) would keep an ended pairing working forever.
+const pairingMaxUnconfirmed = 48 * time.Hour
+
+// expireUnconfirmedPairing drops the pairing set, leaving the box with its
+// base ID only, once the server has not vouched for it for
+// pairingMaxUnconfirmed. A failed push keeps the record so the next heartbeat
+// tries again.
+func (c *Client) expireUnconfirmedPairing() {
+	c.shortIDsMu.Lock()
+	defer c.shortIDsMu.Unlock()
+	c.mu.Lock()
+	if !c.pairingKnown || c.cfg.Now().Sub(c.pairingConfirmedAt) < pairingMaxUnconfirmed {
+		c.mu.Unlock()
+		return
+	}
+	b, base := c.box, c.baseShortIDs
+	c.mu.Unlock()
+	if b == nil {
+		return
+	}
+	// Without a base ID no pairing ID was ever pushed, so there is nothing
+	// to take off the box.
+	if len(base) > 0 && !c.applyShortIDs(b, base, nil) {
+		return
+	}
+	c.mu.Lock()
+	if c.box == b {
+		c.pairingShortIDs = nil
+		c.pairingKnown = false
+		c.pairingApplied = true
+		c.pairingConfirmedAt = time.Time{}
+	}
+	c.mu.Unlock()
+	slog.Info("peer: pairing short IDs unconfirmed for too long; dropped")
 }
 
 // defaultBuildBoxService builds the sing-box service for one peer box.
