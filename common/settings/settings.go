@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -22,6 +23,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/getlantern/radiance/common/atomicfile"
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/fileperm"
 )
 
@@ -160,7 +162,12 @@ func InitSettings(fileDir string) error {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
-	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
+	// Migration candidates reach outside fileDir — the pre-9.x YAML lives in
+	// the user's real Lantern profile — so under test it would import the
+	// developer's live account, pro token included, into the test's store.
+	if !testing.Testing() && !env.GetBool(env.Testing) {
+		migrateLegacySettingsIfNeeded(fileDir, k.filePath)
+	}
 	next, err := clone(snapshot())
 	if err != nil {
 		return err
