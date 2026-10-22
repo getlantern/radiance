@@ -35,3 +35,49 @@ func TestWriteRecoveredPanic_NoLogDir(t *testing.T) {
 	}()
 	assert.NoFileExists(t, internal.CrashLogFileName)
 }
+
+func TestSeedLogLevel(t *testing.T) {
+	t.Setenv(env.LogLevel.String(), "")
+
+	reinit := func(t *testing.T) {
+		t.Helper()
+		settings.Reset()
+		t.Cleanup(settings.Reset)
+		require.NoError(t, settings.InitSettings(t.TempDir()))
+	}
+
+	t.Run("seeds a missing value", func(t *testing.T) {
+		reinit(t)
+		seedLogLevel("info")
+		require.Equal(t, "info", settings.GetString(settings.LogLevelKey))
+	})
+
+	t.Run("demotes a stale trace", func(t *testing.T) {
+		reinit(t)
+		require.NoError(t, settings.Set(settings.LogLevelKey, "trace"))
+		seedLogLevel("info")
+		require.Equal(t, "info", settings.GetString(settings.LogLevelKey))
+	})
+
+	t.Run("keeps a persisted non-trace value", func(t *testing.T) {
+		reinit(t)
+		require.NoError(t, settings.Set(settings.LogLevelKey, "debug"))
+		seedLogLevel("info")
+		require.Equal(t, "debug", settings.GetString(settings.LogLevelKey))
+	})
+
+	t.Run("a trace build keeps a persisted trace", func(t *testing.T) {
+		reinit(t)
+		require.NoError(t, settings.Set(settings.LogLevelKey, "trace"))
+		seedLogLevel("trace")
+		require.Equal(t, "trace", settings.GetString(settings.LogLevelKey))
+	})
+
+	t.Run("env override wins and is persisted", func(t *testing.T) {
+		reinit(t)
+		t.Setenv(env.LogLevel.String(), "warn")
+		require.NoError(t, settings.Set(settings.LogLevelKey, "trace"))
+		seedLogLevel("info")
+		require.Equal(t, "warn", settings.GetString(settings.LogLevelKey))
+	})
+}
