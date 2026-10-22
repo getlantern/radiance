@@ -379,8 +379,24 @@ func GetDuration(key _key) time.Duration {
 	return snapshot().Duration(key.String())
 }
 
+// GetStruct decodes the value at key into out by JSON field names, the form
+// every value takes once it has passed through the settings file. A missing
+// key is not an error and leaves out untouched.
 func GetStruct(key _key, out any) error {
-	return snapshot().Unmarshal(key.String(), out)
+	raw := snapshot().Get(key.String())
+	if raw == nil {
+		return nil
+	}
+	// Not koanf's Unmarshal: it matches the koanf tag or the Go field name, so
+	// a JSON name differing by more than case (user_level) is dropped.
+	encoded, err := jsonpkg.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("could not encode value for %s: %w", key, err)
+	}
+	if err := jsonpkg.Unmarshal(encoded, out); err != nil {
+		return fmt.Errorf("could not decode value for %s: %w", key, err)
+	}
+	return nil
 }
 
 func Exists(key _key) bool {

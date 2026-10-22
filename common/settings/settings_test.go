@@ -764,3 +764,29 @@ func TestFailedSaveIsNotRevertedByLaterWrites(t *testing.T) {
 	assert.False(t, tokenOnDisk, "the pending deletion must reach the file with the next save")
 	assert.Equal(t, "fa-IR", onDisk["locale"])
 }
+
+func TestStructValuesSurviveUnrelatedWrites(t *testing.T) {
+	type location struct {
+		CountryCode string `json:"country_code,omitempty"`
+	}
+	type server struct {
+		Tag      string   `json:"tag"`
+		Location location `json:"location,omitempty"`
+	}
+	Reset()
+	t.Cleanup(Reset)
+	require.NoError(t, InitSettings(t.TempDir()))
+	require.NoError(t, Set(SelectedServerKey, server{Tag: "manual", Location: location{CountryCode: "IR"}}))
+
+	var immediate server
+	require.NoError(t, GetStruct(SelectedServerKey, &immediate))
+	assert.Equal(t, "IR", immediate.Location.CountryCode)
+
+	require.NoError(t, Set(LocaleKey, "en-US"))
+
+	var afterWrite server
+	require.NoError(t, GetStruct(SelectedServerKey, &afterWrite))
+	assert.Equal(t, "manual", afterWrite.Tag)
+	assert.Equal(t, "IR", afterWrite.Location.CountryCode,
+		"JSON-tagged fields must survive the disk round-trip an unrelated write performs")
+}
