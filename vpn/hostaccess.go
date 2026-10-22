@@ -13,7 +13,7 @@ import (
 
 func allowedOutbounds(outbounds []O.Outbound) []O.Outbound {
 	allowed := slices.DeleteFunc(slices.Clone(outbounds), func(o O.Outbound) bool {
-		return dropDenied(o.Tag, hostaccess.CheckOutbound(o))
+		return dropDenied(o.Tag, hostaccess.CheckOutbound(o)) || dropDenied(o.Tag, tlsidentity.CheckUnbounded(o.Options))
 	})
 	for i := range allowed {
 		allowed[i].Options = tlsidentity.Options(allowed[i].Options)
@@ -33,7 +33,11 @@ func allowedEndpoints(endpoints []O.Endpoint) []O.Endpoint {
 
 func allowedServers(list servers.ServerList) servers.ServerList {
 	list.Servers = slices.DeleteFunc(slices.Clone(list.Servers), func(s *servers.Server) bool {
-		return dropDenied(s.Tag, s.CheckHostAccess())
+		if dropDenied(s.Tag, s.CheckHostAccess()) {
+			return true
+		}
+		outbound, ok := s.Options.(O.Outbound)
+		return ok && dropDenied(s.Tag, tlsidentity.CheckUnbounded(outbound.Options))
 	})
 	for i, server := range list.Servers {
 		list.Servers[i] = server.WithTLSVerification()
@@ -45,6 +49,6 @@ func dropDenied(tag string, err error) bool {
 	if err == nil {
 		return false
 	}
-	slog.Warn("Dropping server whose options grant host access", "tag", tag, "error", err)
+	slog.Warn("Dropping server with unsafe options", "tag", tag, "error", err)
 	return true
 }

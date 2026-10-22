@@ -353,16 +353,17 @@ func warnIfReaderStarved(caller string, wait time.Duration) {
 	)
 }
 
-// AddServers adds new servers. If force is true, it will overwrite any
-// existing servers with the same tags. If force is false, it returns an error
-// if any of the tags already exist. If any server fails
-// [Server.CheckHostAccess], none are added.
+// AddServers validates the batch before adding servers.
+// Existing tags are replaced only when force is true.
 func (m *Manager) AddServers(list ServerList, force bool) error {
 	if len(list.Servers) == 0 {
 		return nil
 	}
 	for _, srv := range list.Servers {
 		if err := srv.CheckHostAccess(); err != nil {
+			return fmt.Errorf("server %q: %w", srv.Tag, err)
+		}
+		if err := srv.CheckTLSIdentity(); err != nil {
 			return fmt.Errorf("server %q: %w", srv.Tag, err)
 		}
 	}
@@ -499,14 +500,8 @@ const (
 	modeUser    = "user"
 )
 
-// loadServers reads servers.json into the in-memory map, salvaging every
-// parseable, allowed entry. A single unparseable server (e.g. an outbound type
-// or option field this build's sing-box doesn't recognize after a version
-// downgrade) or one denied by [Server.CheckHostAccess] is skipped rather than
-// discarding the whole file.
-//
-// It returns a non-nil error enumerating any skipped entries (or a wholly
-// unparseable file); the in-memory state is still valid when it does.
+// loadServers loads valid entries from servers.json and reports rejected entries
+// without discarding valid in-memory state.
 func (m *Manager) loadServers() error {
 	rawServersFile, err := atomicfile.ReadFile(m.serversFile)
 	if errors.Is(err, os.ErrNotExist) {
@@ -527,9 +522,7 @@ func (m *Manager) loadServers() error {
 	return m.loadOldFormat(rawServersFile)
 }
 
-// loadServerList handles the current array-based on-disk format and salvages
-// every entry that can still be decoded by this build and passes
-// [Server.CheckHostAccess].
+// loadServerList salvages valid entries and reports rejected servers without rewriting the file.
 func (m *Manager) loadServerList(buf []byte) error {
 	var rawServers []stdjson.RawMessage
 	if err := stdjson.Unmarshal(buf, &rawServers); err != nil {
@@ -548,6 +541,10 @@ func (m *Manager) loadServerList(buf []byte) error {
 			skippedErrors = append(skippedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
 			continue
 		}
+		if err := srv.CheckTLSIdentity(); err != nil {
+			skippedErrors = append(skippedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
+			continue
+		}
 		m.servers[srv.Tag] = srv.WithTLSVerification()
 	}
 
@@ -562,7 +559,7 @@ func (m *Manager) loadServerList(buf []byte) error {
 
 // loadOldFormat loads the legacy map layout and saves it in the current format.
 // Decode failures quarantine the file without loading entries. Entries denied
-// by [Server.CheckHostAccess] are skipped and reported as errors after migration,
+// by the host-access or TLS policy are skipped and reported as errors after migration,
 // and the original file is quarantined.
 //
 // TODO: remove once the legacy map layout no longer appears on disk in the field.
@@ -581,6 +578,10 @@ func (m *Manager) loadOldFormat(buf []byte) error {
 	var deniedErrors []error
 	add := func(srv *Server) {
 		if err := srv.CheckHostAccess(); err != nil {
+			deniedErrors = append(deniedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
+			return
+		}
+		if err := srv.CheckTLSIdentity(); err != nil {
 			deniedErrors = append(deniedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
 			return
 		}
@@ -762,18 +763,23 @@ func (m *Manager) privateServerRequest(method, ip string, port int, path, access
 	return resp, nil
 }
 
+type serverConfig struct {
+	Outbounds []option.Outbound `json:"outbounds,omitempty"`
+	Endpoints []option.Endpoint `json:"endpoints,omitempty"`
+}
+
 // AddServersByJSON adds any outbounds and endpoints defined in the provided sing-box JSON config.
 func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerList, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBySingboxJSON")
 	defer span.End()
-	type singboxConfig struct {
-		Outbounds []option.Outbound `json:"outbounds,omitempty"`
-		Endpoints []option.Endpoint `json:"endpoints,omitempty"`
-	}
-	cfg, err := json.UnmarshalExtendedContext[singboxConfig](m.regContext(), config)
+	cfg, err := json.UnmarshalExtendedContext[serverConfig](m.regContext(), config)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
+	return m.addServerConfig(ctx, cfg)
+}
+
+func (m *Manager) addServerConfig(ctx context.Context, cfg serverConfig) (*ServerList, error) {
 	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
 		return nil, traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
@@ -787,7 +793,7 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 			Type:    out.Type,
 			Options: out,
 		}
-		servers = append(servers, server.WithTLSVerification())
+		servers = append(servers, server)
 	}
 	for _, ep := range cfg.Endpoints {
 		if ep.Tag == "" {
@@ -798,11 +804,14 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 			Type:    ep.Type,
 			Options: ep,
 		}
-		servers = append(servers, server.WithTLSVerification())
+		servers = append(servers, server)
 	}
 	list := ServerList{Servers: servers}
 	if err := m.AddServers(list, false); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
+	}
+	for i, server := range list.Servers {
+		list.Servers[i] = server.WithTLSVerification()
 	}
 	return &list, nil
 }
@@ -827,6 +836,13 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVe
 	if !ok || len(cfgURLs) == 0 {
 		return nil, traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
 	}
+	bypass := make([]bool, len(cfgURLs))
+	for i, u := range cfgURLs {
+		bypass[i], err = urlRequestsTLSBypass(u)
+		if err != nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("URL %d: %w", i+1, err))
+		}
+	}
 
 	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
 	if !loaded {
@@ -836,6 +852,28 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVe
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
 	}
+	options, err := json.UnmarshalExtendedContext[serverConfig](m.regContext(), singBoxCfg)
+	if err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse converted config: %w", err))
+	}
+	if len(options.Outbounds) != len(cfgURLs) || len(options.Endpoints) != 0 {
+		return nil, traces.RecordError(ctx, errors.New("URL conversion produced an unexpected server count"))
+	}
+	for i, insecure := range bypass {
+		if !insecure {
+			continue
+		}
+		wrapper, ok := options.Outbounds[i].Options.(option.OutboundTLSOptionsWrapper)
+		if !ok || wrapper.TakeOutboundTLSOptions() == nil || !wrapper.TakeOutboundTLSOptions().Enabled {
+			return nil, traces.RecordError(ctx, fmt.Errorf("URL %d: %w", i+1, errTLSIdentityRequired))
+		}
+		// Preserve the bypass request even when a URL parser drops the flag.
+		wrapper.TakeOutboundTLSOptions().Insecure = true
+	}
+	list, err := m.addServerConfig(ctx, options)
+	if err != nil {
+		return nil, err
+	}
 	m.logger.Info("Added servers based on URLs", "serverCount", len(cfgURLs))
-	return m.AddServersByJSON(ctx, singBoxCfg)
+	return list, nil
 }
