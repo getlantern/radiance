@@ -652,7 +652,14 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 //
 // Tests are cancelled and results discarded if ctx is cancelled or
 // [VPNClient.Connect] is called while they are running.
-func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
+func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (results map[string]uint16, err error) {
+	defer func() {
+		if err != nil {
+			results = nil
+		}
+	}()
+	defer recoverToError(&err, "running offline URL tests")
+
 	c.mu.Lock()
 	if c.tunnel != nil {
 		c.mu.Unlock()
@@ -724,7 +731,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	if !ok {
 		return nil, fmt.Errorf("offline-test outbound (type %q) does not implement URLTestGroup", outbound.Type())
 	}
-	results, err := tester.URLTest(ctx)
+	results, err = tester.URLTest(ctx)
 	if err != nil {
 		c.logger.Error("offline URL test failed", "error", err)
 		return nil, fmt.Errorf("offline URL test failed: %w", err)

@@ -2,6 +2,14 @@
 	"log": {
 		"disabled": true
 	},
+	"dns": {
+		"servers": [
+			{
+				"type": "local",
+				"tag": "local"
+			}
+		]
+	},
 	"inbounds": [
 		{
 			"type": "socks",
@@ -44,6 +52,7 @@
 		}
 	],
 	"route": {
+		"default_domain_resolver": "local",
 		"rules": [
 			{
 				"clash_mode": "auto",

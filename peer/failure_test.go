@@ -59,7 +59,7 @@ func TestClassifyStartFailure_OfflineKindlingTreeBecomesOneLine(t *testing.T) {
 	err := fmt.Errorf("register with lantern-cloud: %w",
 		kindlingTree(dnsFailure("api.iantem.io"), dnsFailure("api.iantem.io"), routeFailure()))
 
-	got := classifyStartFailure(PhaseRegistering, err)
+	got := classifyStartFailure(PhaseRegistering, err, 0)
 	require.NotNil(t, got)
 	assert.Equal(t, ReasonNoInternet, got.Reason)
 	assert.Equal(t, "No internet connection.", got.Error())
@@ -83,7 +83,7 @@ func TestClassifyStartFailure_OneReachableTransportIsNotOffline(t *testing.T) {
 		errors.New("http status 503"),
 	))
 
-	assert.Nil(t, classifyStartFailure(PhaseRegistering, err),
+	assert.Nil(t, classifyStartFailure(PhaseRegistering, err, 0),
 		"a tree containing a reachable transport must not be called offline")
 }
 
@@ -98,7 +98,7 @@ func TestClassifyStartFailure_CancellationIsNeverReportedAsNoInternet(t *testing
 	err := fmt.Errorf("register with lantern-cloud: %w",
 		errors.Join(kindlingTree(dnsFailure("api.iantem.io")), context.Canceled))
 
-	got := classifyStartFailure(PhaseRegistering, err)
+	got := classifyStartFailure(PhaseRegistering, err, 0)
 	require.NotNil(t, got)
 	assert.Equal(t, ReasonCanceled, got.Reason)
 	assert.NotEqual(t, ReasonNoInternet, got.Reason)
@@ -109,14 +109,14 @@ func TestClassifyStartFailure_NoPortForwarding(t *testing.T) {
 	err := fmt.Errorf("map port 38190: %w",
 		fmt.Errorf("add port mapping: %w", portforward.ErrNoPortForwarding))
 
-	got := classifyStartFailure(PhaseMappingPort, err)
+	got := classifyStartFailure(PhaseMappingPort, err, 0)
 	require.NotNil(t, got)
 	assert.Equal(t, ReasonNoPortForwarding, got.Reason)
 	assert.Contains(t, got.Error(), "UPnP")
 }
 
-// The 422 under investigation: MapPort succeeded, so the router accepted the
-// mapping, but lantern-cloud's dial-back never arrived.
+// In UPnP mode a 422 at verify means the router accepted the mapping but
+// lantern-cloud's dial-back never arrived.
 func TestClassifyStartFailure_VerifyUnprocessableMeansTheRouterLied(t *testing.T) {
 	err := fmt.Errorf("verify with lantern-cloud: %w",
 		fmt.Errorf("verify: %w", &APIError{
@@ -124,7 +124,7 @@ func TestClassifyStartFailure_VerifyUnprocessableMeansTheRouterLied(t *testing.T
 			Body:   "could not connect to peer port",
 		}))
 
-	got := classifyStartFailure(PhaseVerifying, err)
+	got := classifyStartFailure(PhaseVerifying, err, 0)
 	require.NotNil(t, got)
 	assert.Equal(t, ReasonPortUnreachable, got.Reason)
 	assert.Contains(t, got.Error(), "forwarding traffic")
@@ -137,7 +137,7 @@ func TestClassifyStartFailure_ServerErrorAtVerifyIsNotTheRoutersFault(t *testing
 	err := fmt.Errorf("verify with lantern-cloud: %w",
 		fmt.Errorf("verify: %w", &APIError{Status: http.StatusInternalServerError}))
 
-	assert.Nil(t, classifyStartFailure(PhaseVerifying, err))
+	assert.Nil(t, classifyStartFailure(PhaseVerifying, err, 0))
 }
 
 // Regression for a bug this classifier shipped with in review: a phase-keyed
@@ -149,7 +149,7 @@ func TestClassifyStartFailure_PhaseAloneNeverNamesAFailure(t *testing.T) {
 	for _, phase := range []Phase{PhaseMappingPort, PhaseDetectingIP, PhaseRegistering, PhaseVerifying, PhaseStartingBox} {
 		err := fmt.Errorf("launch_cfg failed abuse-rule sanity check: %w",
 			errors.New("inbound 0 is missing rule set"))
-		assert.Nil(t, classifyStartFailure(phase, err),
+		assert.Nil(t, classifyStartFailure(phase, err, 0),
 			"phase %s must not be enough to name an unrelated failure", phase)
 	}
 }
@@ -204,4 +204,20 @@ func TestClient_Start_OfflineRegisterSurfacesOneLineAndAReason(t *testing.T) {
 			t.Fatal("no PhaseError status event within 1s")
 		}
 	}
+}
+
+// In manual mode no mapping was requested, so the message must not claim one
+// was accepted.
+func TestClassifyStartFailure_VerifyUnprocessableWithManualPortNamesThePort(t *testing.T) {
+	err := fmt.Errorf("verify with lantern-cloud: %w",
+		fmt.Errorf("verify: %w", &APIError{
+			Status: http.StatusUnprocessableEntity,
+			Body:   "could not connect to peer port",
+		}))
+
+	got := classifyStartFailure(PhaseVerifying, err, 5698)
+	require.NotNil(t, got)
+	assert.Equal(t, ReasonPortUnreachable, got.Reason)
+	assert.Contains(t, got.Error(), "5698")
+	assert.NotContains(t, got.Error(), "accepted the port mapping")
 }
