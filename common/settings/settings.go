@@ -2,19 +2,21 @@
 package settings
 
 import (
+	"context"
 	jsonpkg "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
@@ -99,20 +101,42 @@ var errParseSettings = errors.New("settings file is not valid JSON")
 
 func (k _key) String() string { return string(k) }
 
+// settings holds the live state as an immutable snapshot: readers load k
+// without locking, and writers build the next snapshot under mu and swap it
+// in, so a load can never mutate a map a reader is traversing.
 type settings struct {
-	k           *koanf.Koanf
+	k           atomic.Pointer[koanf.Koanf]
 	initialized bool
 	filePath    string
 	mu          sync.Mutex
 }
 
-var k = &settings{
-	k: koanf.New("."),
-}
+var k = &settings{}
 
 func init() {
-	// set default values.
-	k.k.Set(UserLevelKey.String(), "free")
+	k.k.Store(defaultSnapshot())
+}
+
+func defaultSnapshot() *koanf.Koanf {
+	next := koanf.New(".")
+	next.Set(UserLevelKey.String(), "free")
+	return next
+}
+
+func snapshot() *koanf.Koanf { return k.k.Load() }
+
+// clone deep-copies src through a marshal round-trip, giving values the same
+// types they would have after being persisted and loaded.
+func clone(src *koanf.Koanf) (*koanf.Koanf, error) {
+	out, err := src.Marshal(json.Parser())
+	if err != nil {
+		return nil, fmt.Errorf("could not marshal settings: %w", err)
+	}
+	next := koanf.New(".")
+	if err := next.Load(rawbytes.Provider(out), &settingsJSON{}); err != nil {
+		return nil, fmt.Errorf("could not copy settings: %w", err)
+	}
+	return next, nil
 }
 
 // InitSettings initializes the config for user settings.
@@ -127,10 +151,14 @@ func InitSettings(fileDir string) error {
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
 	migrateLegacySettingsIfNeeded(fileDir, k.filePath)
-	switch err := loadSettings(k.filePath); {
+	next, err := clone(snapshot())
+	if err != nil {
+		return err
+	}
+	switch err := loadInto(next, k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		slog.Warn("settings file not found", "path", k.filePath) // file may not have been created yet
-		if err := save(); err != nil {
+		if err := save(next); err != nil {
 			return err
 		}
 	case errors.Is(err, errParseSettings):
@@ -138,12 +166,13 @@ func InitSettings(fileDir string) error {
 		// from in-memory defaults and overwrite the bad file with them.
 		slog.Error("Settings file is invalid; starting from defaults", "path", k.filePath, "error", err)
 		quarantineInvalidSettings(k.filePath)
-		if err := save(); err != nil {
+		if err := save(next); err != nil {
 			return err
 		}
 	case err != nil:
 		return fmt.Errorf("loading settings: %w", err)
 	}
+	k.k.Store(next)
 	k.initialized = true
 	return nil
 }
@@ -266,29 +295,16 @@ func userLevelInJSON(contents []byte) string {
 	return s.UserLevel
 }
 
-// loadSettings applies the file to the in-memory settings.
-//
-// Koanf parses before taking its write lock, so malformed files leave the live settings untouched.
-// Without opts the file merges over current settings; pass replaceAll when omitted keys must be
-// dropped.
-func loadSettings(path string, opts ...koanf.Option) error {
+// loadInto merges the settings file at path into target. Koanf parses before
+// merging, so a malformed file leaves target untouched.
+func loadInto(target *koanf.Koanf, path string) error {
 	contents, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
-	if err := k.k.Load(rawbytes.Provider(contents), &settingsJSON{}, opts...); err != nil {
+	if err := target.Load(rawbytes.Provider(contents), &settingsJSON{}); err != nil {
 		return fmt.Errorf("parsing settings: %w", errors.Join(errParseSettings, err))
 	}
-	return nil
-}
-
-// replaceAll makes a koanf load overwrite rather than merge, so keys the source omits are dropped.
-//
-// Koanf re-flattens dest after this returns, so dest must be mutated in place; replacing the map
-// header would silently lose the load.
-func replaceAll(src, dest map[string]any) error {
-	clear(dest)
-	maps.Copy(dest, src)
 	return nil
 }
 
@@ -310,7 +326,7 @@ func quarantineInvalidSettings(path string) {
 }
 
 func Get(key _key) any {
-	return k.k.Get(key.String())
+	return snapshot().Get(key.String())
 }
 
 func GetString(key _key) string {
@@ -330,57 +346,119 @@ func GetString(key _key) string {
 }
 
 func GetBool(key _key) bool {
-	return k.k.Bool(key.String())
+	return snapshot().Bool(key.String())
 }
 
 func GetInt(key _key) int {
-	return k.k.Int(key.String())
+	return snapshot().Int(key.String())
 }
 
 func GetInt64(key _key) int64 {
-	return k.k.Int64(key.String())
+	return snapshot().Int64(key.String())
 }
 
 func GetFloat64(key _key) float64 {
-	return k.k.Float64(key.String())
+	return snapshot().Float64(key.String())
 }
 
 func GetStringSlice(key _key) []string {
-	return k.k.Strings(key.String())
+	return snapshot().Strings(key.String())
 }
 
 func GetDuration(key _key) time.Duration {
-	return k.k.Duration(key.String())
+	return snapshot().Duration(key.String())
 }
 
 func GetStruct(key _key, out any) error {
-	return k.k.Unmarshal(key.String(), out)
+	return snapshot().Unmarshal(key.String(), out)
 }
 
 func Exists(key _key) bool {
-	return k.k.Exists(key.String())
+	return snapshot().Exists(key.String())
+}
+
+// mutate applies the caller's changes on top of the file's current contents,
+// not this process's snapshot, so a write can't clobber keys another process
+// changed. The next snapshot is published even when persisting fails, so the
+// new value is visible in this process.
+func mutate(apply func(next *koanf.Koanf) error) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	unlock := lockSettingsFile(k.filePath)
+	defer unlock()
+	next, err := writeBase()
+	if err != nil {
+		return err
+	}
+	if err := apply(next); err != nil {
+		return err
+	}
+	saveErr := save(next)
+	k.k.Store(next)
+	return saveErr
+}
+
+// writeBase returns the state a write starts from: the file's contents over
+// the defaults, so values another process persisted — deletions included —
+// are adopted. A missing or corrupt file falls back to the current snapshot,
+// which turns a corrupt file back into valid state on the next write; any
+// other read error fails the write.
+func writeBase() (*koanf.Koanf, error) {
+	if k.filePath == "" {
+		return clone(snapshot())
+	}
+	next := defaultSnapshot()
+	switch err := loadInto(next, k.filePath); {
+	case err == nil:
+		return next, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return clone(snapshot())
+	case errors.Is(err, errParseSettings):
+		slog.Warn("settings file invalid; overwriting with current settings", "path", k.filePath, "error", err)
+		return clone(snapshot())
+	default:
+		return nil, err
+	}
+}
+
+// lockSettingsFile takes the lock that serializes settings writers across
+// processes, returning its release func. Failure to lock degrades to
+// in-process serialization only, rather than failing the write.
+func lockSettingsFile(path string) func() {
+	if path == "" {
+		return func() {}
+	}
+	fl := flock.New(path + ".lock")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	locked, err := fl.TryLockContext(ctx, 100*time.Millisecond)
+	if err != nil || !locked {
+		slog.Warn("settings file lock unavailable; writing without it", "path", path, "error", err)
+		return func() {}
+	}
+	return func() {
+		if err := fl.Unlock(); err != nil {
+			slog.Warn("releasing settings file lock", "path", path, "error", err)
+		}
+	}
 }
 
 func Set(key _key, value any) error {
-	// take lock for the entire duration of the Set + save sequence to prevent multiple Set
-	// calls from interleaving and leaving the file in an inconsistent state until the next write.
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	err := k.k.Set(key.String(), value)
-	if err != nil {
-		return fmt.Errorf("could not set key %s: %w", key, err)
-	}
-	return save()
+	return mutate(func(next *koanf.Koanf) error {
+		if err := next.Set(key.String(), value); err != nil {
+			return fmt.Errorf("could not set key %s: %w", key, err)
+		}
+		return nil
+	})
 }
 
 func Clear(keys ..._key) error {
-	// take lock for the entire duration. See [Set] for explanation.
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	for _, key := range keys {
-		k.k.Delete(key.String())
-	}
-	return save()
+	return mutate(func(next *koanf.Koanf) error {
+		for _, key := range keys {
+			next.Delete(key.String())
+		}
+		return nil
+	})
 }
 
 type Settings map[_key]any
@@ -397,7 +475,7 @@ func (s Settings) Diff(s2 Settings) Settings {
 
 func GetAll() Settings {
 	s := make(Settings)
-	for key, value := range k.k.All() {
+	for key, value := range snapshot().All() {
 		s[_key(key)] = value
 	}
 	return s
@@ -407,28 +485,28 @@ func GetAllFor(keys ..._key) Settings {
 	if len(keys) == 0 {
 		return GetAll()
 	}
+	cur := snapshot()
 	s := make(Settings)
 	for _, key := range keys {
-		s[key] = k.k.Get(key.String())
+		s[key] = cur.Get(key.String())
 	}
 	return s
 }
 
 // Patch takes a map of settings to update and applies them all at once.
 func Patch(updates Settings) error {
-	// take lock for the entire duration. See [Set] for explanation.
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	for key, value := range updates {
-		if err := k.k.Set(_key(key).String(), value); err != nil {
-			return fmt.Errorf("could not set key %s: %w", key, err)
+	return mutate(func(next *koanf.Koanf) error {
+		for key, value := range updates {
+			if err := next.Set(key.String(), value); err != nil {
+				return fmt.Errorf("could not set key %s: %w", key, err)
+			}
 		}
-	}
-	return save()
+		return nil
+	})
 }
 
-func save() error {
-	out, err := k.k.Marshal(json.Parser())
+func save(next *koanf.Koanf) error {
+	out, err := next.Marshal(json.Parser())
 	if err != nil {
 		return fmt.Errorf("could not marshal koanf file: %w", err)
 	}
@@ -444,7 +522,7 @@ func save() error {
 func Reset() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.k = koanf.New(".")
+	k.k.Store(koanf.New("."))
 	k.initialized = false
 }
 
@@ -460,12 +538,14 @@ func Reload() error {
 	if !k.initialized {
 		return errors.New("settings not initialized")
 	}
-	switch err := loadSettings(k.filePath, koanf.WithMergeFunc(replaceAll)); {
+	next := defaultSnapshot()
+	switch err := loadInto(next, k.filePath); {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
 		return fmt.Errorf("reloading settings: %w", err)
 	}
+	k.k.Store(next)
 	return nil
 }
 

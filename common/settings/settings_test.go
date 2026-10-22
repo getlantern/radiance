@@ -1,11 +1,14 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/knadh/koanf/v2"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,7 +107,7 @@ func TestInitSettings(t *testing.T) {
 		path := filepath.Join(t.TempDir(), settingsFileName)
 		content := []byte(`{invalid json}`)
 		require.NoError(t, os.WriteFile(path, content, 0644), "failed to create test config file")
-		require.Error(t, loadSettings(path), "expected error for invalid config file")
+		require.Error(t, loadInto(koanf.New("."), path), "expected error for invalid config file")
 	})
 
 	t.Run("invalid config file recovers", func(t *testing.T) {
@@ -118,7 +121,7 @@ func TestInitSettings(t *testing.T) {
 
 		invalidPath := filepath.Join(tempDir, settingsInvalidFileName)
 		assert.FileExists(t, invalidPath, "the invalid file must be preserved for diagnostics")
-		assert.NoError(t, loadSettings(path), "settings.json must be rewritten with a parseable default")
+		assert.NoError(t, loadInto(koanf.New("."), path), "settings.json must be rewritten with a parseable default")
 	})
 }
 
@@ -661,4 +664,75 @@ func TestReloadRacesNothing(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+func TestWriteAdoptsOtherProcessState(t *testing.T) {
+	initAt := func(t *testing.T, contents string) string {
+		t.Helper()
+		Reset()
+		t.Cleanup(Reset)
+		dir := t.TempDir()
+		path := filepath.Join(dir, settingsFileName)
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0644))
+		require.NoError(t, InitSettings(dir))
+		return path
+	}
+
+	t.Run("keeps keys another process persisted", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"locale": "en-US", "token": "fresh"}`), 0644))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		assert.Equal(t, "fresh", GetString(TokenKey), "another process's write must survive this write")
+		assert.Equal(t, "UTC", GetString(TimeZoneKey))
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var onDisk map[string]any
+		require.NoError(t, json.Unmarshal(got, &onDisk))
+		assert.Equal(t, "fresh", onDisk["token"])
+		assert.Equal(t, "UTC", onDisk["time_zone"])
+	})
+
+	t.Run("adopts deletions by another process", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US", "token": "old"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"locale": "en-US"}`), 0644))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		assert.False(t, Exists(TokenKey), "a key another process deleted must stay deleted")
+		assert.Equal(t, "free", GetString(UserLevelKey), "defaults reapply when the file omits them")
+	})
+
+	t.Run("recreates a missing file from the current snapshot", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.Remove(path))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+		assert.FileExists(t, path)
+	})
+
+	t.Run("replaces a corrupt file with valid state", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{nope`), 0644))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.True(t, validSettingsJSON(got), "the corrupt file must be overwritten with valid JSON")
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+	})
+
+	t.Run("patch keeps unrelated cross-process writes", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"locale": "en-US", "user_level": "pro"}`), 0644))
+
+		require.NoError(t, Patch(Settings{CountryCodeKey: "IR", TimeZoneKey: "Asia/Tehran"}))
+
+		assert.Equal(t, "pro", GetString(UserLevelKey), "another process's write must survive a patch")
+		assert.Equal(t, "IR", GetString(CountryCodeKey))
+	})
 }
