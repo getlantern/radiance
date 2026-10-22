@@ -162,9 +162,8 @@ func InitSettings(fileDir string) error {
 	}
 	k.filePath = filepath.Join(fileDir, settingsFileName)
 	// Migration candidates reach outside fileDir — the pre-9.x YAML lives in
-	// the user's real Lantern profile — so under test it imports the
-	// developer's live account, pro token included, into the test's store (it
-	// presented as "flaky" backend and config tests).
+	// the user's real Lantern profile — so under test it would import the
+	// developer's live account, pro token included, into the test's store.
 	if !env.GetBool(env.Testing) {
 		migrateLegacySettingsIfNeeded(fileDir, k.filePath)
 	}
