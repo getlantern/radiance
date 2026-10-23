@@ -59,7 +59,8 @@ func TestOwnerCanPatchOrdinaryPreferences(t *testing.T) {
 		settings.TelemetryKey: false, settings.SmartRoutingKey: true, settings.AdBlockKey: false,
 		settings.SplitTunnelKey: false, settings.SplitTunnelPolicyKey: "exclude",
 		settings.AutoConnectKey: false, settings.PeerShareEnabledKey: false,
-		settings.PeerManualPortKey: float64(0), settings.UnboundedKey: false,
+		settings.PeerManualPortKey: float64(0), settings.PeerServePoolKey: true,
+		settings.UnboundedKey: false,
 	}
 	require.NoError(t, settings.Patch(preferences))
 	api := newLocalAPI(&backend.LocalBackend{}, true)
@@ -68,6 +69,11 @@ func TestOwnerCanPatchOrdinaryPreferences(t *testing.T) {
 	require.NoError(t, err)
 	response := servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, string(body))
 	require.Equal(t, http.StatusOK, response.Code)
+
+	// "Help others too" is the owner's to turn off.
+	response = servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, `{"peer_serve_pool":false}`)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.False(t, settings.GetBool(settings.PeerServePoolKey))
 }
 
 func TestOwnerCannotAccessEnvironment(t *testing.T) {

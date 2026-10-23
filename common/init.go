@@ -81,14 +81,8 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		return fmt.Errorf("failed to initialize settings: %w", err)
 	}
 
-	settings.Set(settings.DataPathKey, data)
-	settings.Set(settings.LogPathKey, logs)
-	// env override wins; otherwise preserve any persisted value; otherwise seed from the arg.
-	if v := env.GetString(env.LogLevel); v != "" {
-		settings.Set(settings.LogLevelKey, v)
-	} else if !settings.Exists(settings.LogLevelKey) {
-		settings.Set(settings.LogLevelKey, logLevel)
-	}
+	settings.Patch(settings.Settings{settings.DataPathKey: data, settings.LogPathKey: logs})
+	seedLogLevel(logLevel)
 
 	logger := log.NewLogger(log.Config{
 		LogPath: loggerPath(logs),
@@ -101,6 +95,24 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 	createCrashReporter()
 	logBuildInfo()
 	return nil
+}
+
+// seedLogLevel reconciles the persisted log level with the configured one.
+// The persisted value outranks the configured one, and builds through
+// v10.0.x persisted "trace", so without the demotion an upgraded install
+// logs at trace forever.
+func seedLogLevel(configured string) {
+	if v := env.GetString(env.LogLevel); v != "" {
+		settings.Set(settings.LogLevelKey, v)
+		return
+	}
+	if configured == "" {
+		return
+	}
+	settings.SetIfAbsent(settings.LogLevelKey, configured)
+	if configured != "trace" {
+		settings.ReplaceString(settings.LogLevelKey, "trace", configured)
+	}
 }
 
 // extraLoadBearingDeps are non-getlantern modules whose linked versions are

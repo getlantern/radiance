@@ -4,7 +4,7 @@ go 1.26.10
 
 // replace github.com/sagernet/sing => github.com/getlantern/sing v0.7.18-lantern
 
-// replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.14.2-lantern
+replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.14.2-lantern.1
 
 // replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4
 
@@ -14,13 +14,11 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 
 // replace github.com/getlantern/kindling => ../kindling
 
-replace github.com/getlantern/common => ../common
-
-replace github.com/getlantern/lantern-box => ../lantern-box-sing-box-1.14
+// replace github.com/getlantern/common => ../common
 
 // replace github.com/sagernet/sing => ../sing
 
-replace github.com/sagernet/sing-box => ../sing-box-minimal
+// replace github.com/sagernet/sing-box => ../sing-box-minimal
 
 // replace github.com/sagernet/wireguard-go => ../wireguard-go
 
@@ -39,15 +37,16 @@ require (
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/broflake v0.0.0-20261018030031-c6268bfc1b56
-	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
+	github.com/getlantern/common v1.2.1-0.20261023000844-304e5b63344b
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
-	github.com/getlantern/kindling v0.0.0-20261014210827-0f4a89dbe1ee
-	github.com/getlantern/lantern-box v0.0.166-0.20261021190447-9e00ad5d3899
+	github.com/getlantern/kindling v0.0.0-20261022170147-217b175b5057
+	github.com/getlantern/lantern-box v0.0.172-0.20261023001007-af6dd88fab15
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20261020020737-084d1daf4879
-	github.com/getlantern/soar v0.2.3
+	github.com/getlantern/soar v0.2.4
 	github.com/goccy/go-yaml v1.19.0
+	github.com/gofrs/flock v0.12.1
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8

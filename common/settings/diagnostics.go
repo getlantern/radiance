@@ -4,8 +4,16 @@ package settings
 func SetRuntimePaths(dataDir, logDir string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if err := k.k.Set(DataPathKey.String(), dataDir); err != nil {
+	next, err := clone(snapshot())
+	if err != nil {
 		return err
 	}
-	return k.k.Set(LogPathKey.String(), logDir)
+	if err := next.Set(DataPathKey.String(), dataDir); err != nil {
+		return err
+	}
+	if err := next.Set(LogPathKey.String(), logDir); err != nil {
+		return err
+	}
+	k.k.Store(next)
+	return nil
 }
