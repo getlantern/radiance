@@ -15,7 +15,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,28 +26,42 @@ import (
 )
 
 const (
-	// RefreshInterval is how long after a successful fetch the next is due.
-	// Tickets live 15 minutes, so readers always hold valid ones.
+	// RefreshInterval is the longest a successful fetch is trusted before the
+	// next is due. Tickets live 15 minutes, so readers always hold valid ones.
 	RefreshInterval = 10 * time.Minute
 	// RetryInterval is how long after a failed fetch the next is due. The
-	// last tickets are kept meanwhile.
+	// last tickets are kept meanwhile, until they expire.
 	RetryInterval = time.Minute
 	// DisabledInterval is how long after a 404, which means helper_invites is
 	// off for this client, the next fetch is due.
 	DisabledInterval = time.Hour
 
-	fetchTimeout = 30 * time.Second
-	maxBody      = 1 << 20
+	// defaultLifetime is a ticket's life when neither the response nor the
+	// ticket says.
+	defaultLifetime = 15 * time.Minute
+	maxLifetime     = 24 * time.Hour
+	fetchTimeout    = 30 * time.Second
+	maxBody         = 1 << 20
 )
 
-// ErrDisabled is Fetch's error when lantern-cloud has helper invites off for
-// this client.
-var ErrDisabled = errors.New("helper invites are off for this client")
+var (
+	// ErrDisabled is Fetch's error when lantern-cloud has helper invites off
+	// for this client.
+	ErrDisabled = errors.New("helper invites are off for this client")
+	// ErrUnavailable wraps Fetch's error when lantern-cloud asks the client to
+	// back off (429 or 503).
+	ErrUnavailable = errors.New("helper ticket service is busy")
+
+	errPanicked = errors.New("ticket fetch panicked")
+)
 
 // Tickets are a device's pairing tickets, by role.
 type Tickets struct {
 	Inviter   []string
 	Volunteer []string
+	// Lifetime is how long lantern-cloud says the tickets live from now, or
+	// 0 if it did not say.
+	Lifetime time.Duration
 }
 
 // Split sorts tickets by the role each claims. It does not verify them:
@@ -97,79 +110,155 @@ func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		return Tickets{}, ErrDisabled
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
+		return Tickets{}, fmt.Errorf("ticket request: status %d: %w", resp.StatusCode, ErrUnavailable)
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
 		return Tickets{}, fmt.Errorf("ticket request: status %d", resp.StatusCode)
 	}
 	var body struct {
-		Tickets []string `json:"tickets"`
+		Tickets         []string `json:"tickets"`
+		LifetimeSeconds int64    `json:"lifetime_seconds"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&body); err != nil {
 		return Tickets{}, errors.New("ticket response: malformed JSON")
 	}
-	return Split(body.Tickets), nil
+	t := Split(body.Tickets)
+	if body.LifetimeSeconds > 0 && body.LifetimeSeconds <= int64(maxLifetime/time.Second) {
+		t.Lifetime = time.Duration(body.LifetimeSeconds) * time.Second
+	}
+	return t, nil
+}
+
+// held is a ticket and when this device stops serving it.
+type held struct {
+	ticket  string
+	expires time.Time
 }
 
 // Source keeps a device's tickets fresh for code that reads them on its
-// signaling path. A read never blocks: it returns what the last fetch got,
-// and when a fetch is due it starts one in the background. So a reader that
-// keeps reading always holds valid tickets, and one that paused for longer
-// than a ticket's life sends stale ones once (freddie ignores them) and fresh
-// ones from its next read after the fetch. Nothing is fetched until the first
-// read, so a device that never reads never calls the API.
+// signaling path. A read never blocks: it returns the unexpired tickets the
+// last successful fetch got, and when a fetch is due it starts one in the
+// background. Nothing is fetched until the first read, so a device that never
+// reads never calls the API. Source is safe for concurrent use.
 type Source struct {
+	ctx   context.Context
 	fetch func(context.Context) (Tickets, error)
 	now   func() time.Time
 
-	mu       sync.Mutex
-	tickets  Tickets
-	due      time.Time // zero: due at the first read
-	fetching bool
+	mu        sync.Mutex
+	inviter   []held
+	volunteer []held
+	due       time.Time // zero: due at the first read
+	fetching  bool
+	busy      time.Duration // the backoff after the last 429 or 503 in a row
 }
 
 // NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
-// tests.
-func NewSource(fetch func(context.Context) (Tickets, error)) *Source {
-	return &Source{fetch: fetch, now: time.Now}
+// tests. Cancelling ctx cancels a fetch in flight and stops further fetches.
+func NewSource(ctx context.Context, fetch func(context.Context) (Tickets, error)) *Source {
+	return &Source{ctx: ctx, fetch: fetch, now: time.Now}
 }
 
 // Inviter returns the current inviter tickets.
 func (s *Source) Inviter() []string {
-	return s.read(func(t Tickets) []string { return t.Inviter })
+	return s.read(helperticket.RoleInviter)
 }
 
 // Volunteer returns the current volunteer tickets.
 func (s *Source) Volunteer() []string {
-	return s.read(func(t Tickets) []string { return t.Volunteer })
+	return s.read(helperticket.RoleVolunteer)
 }
 
-func (s *Source) read(pick func(Tickets) []string) []string {
+func (s *Source) read(role helperticket.Role) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.fetching && !s.now().Before(s.due) {
+	now := s.now()
+	if !s.fetching && !now.Before(s.due) && s.ctx.Err() == nil {
 		s.fetching = true
 		go s.refresh()
 	}
-	return slices.Clone(pick(s.tickets))
+	hs := s.volunteer
+	if role == helperticket.RoleInviter {
+		hs = s.inviter
+	}
+	var out []string
+	for _, h := range hs {
+		if now.Before(h.expires) {
+			out = append(out, h.ticket)
+		}
+	}
+	return out
 }
 
 func (s *Source) refresh() {
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
-	defer cancel()
-	t, err := s.fetch(ctx)
+	t, err := s.safeFetch()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	now := s.now()
 	s.fetching = false
 	switch {
 	case errors.Is(err, ErrDisabled):
-		s.tickets = Tickets{}
-		s.due = s.now().Add(DisabledInterval)
+		s.inviter, s.volunteer = nil, nil
+		s.busy = 0
+		s.due = now.Add(DisabledInterval)
+	case errors.Is(err, ErrUnavailable):
+		s.busy = min(max(2*s.busy, 2*RetryInterval), RefreshInterval)
+		s.due = now.Add(s.busy)
 	case err != nil:
-		slog.Debug("helper: fetching pairing tickets failed; keeping the last ones", "error", err)
-		s.due = s.now().Add(RetryInterval)
+		s.busy = 0
+		s.due = now.Add(RetryInterval)
 	default:
-		s.tickets = t
-		s.due = s.now().Add(RefreshInterval)
+		s.inviter = hold(t.Inviter, now, t.Lifetime)
+		s.volunteer = hold(t.Volunteer, now, t.Lifetime)
+		s.busy = 0
+		s.due = now.Add(refreshAfter(t.Lifetime))
 	}
+	s.mu.Unlock()
+
+	switch {
+	case errors.Is(err, errPanicked):
+		slog.Warn("helper: fetching pairing tickets panicked")
+	case err != nil && !errors.Is(err, ErrDisabled):
+		slog.Debug("helper: fetching pairing tickets failed; keeping the last ones", "error", err)
+	}
+}
+
+// safeFetch calls fetch, turning a panic into errPanicked.
+func (s *Source) safeFetch() (t Tickets, err error) {
+	defer func() {
+		if recover() != nil {
+			t, err = Tickets{}, errPanicked
+		}
+	}()
+	ctx, cancel := context.WithTimeout(s.ctx, fetchTimeout)
+	defer cancel()
+	return s.fetch(ctx)
+}
+
+// hold stamps tickets fetched at fetchedAt with their expiry. The response's
+// lifetime comes first because it is measured on this device's clock, which
+// may be skewed from the server's; the ticket's own claim is the fallback.
+func hold(tickets []string, fetchedAt time.Time, lifetime time.Duration) []held {
+	out := make([]held, 0, len(tickets))
+	for _, tk := range tickets {
+		exp := fetchedAt.Add(defaultLifetime)
+		if lifetime > 0 {
+			exp = fetchedAt.Add(lifetime)
+		} else if c, ok := helperticket.Claims(tk); ok {
+			exp = c.Expires
+		}
+		out = append(out, held{ticket: tk, expires: exp})
+	}
+	return out
+}
+
+// refreshAfter is how long after a successful fetch the next is due: two
+// thirds of the tickets' life, at most RefreshInterval and at least
+// RetryInterval.
+func refreshAfter(lifetime time.Duration) time.Duration {
+	if lifetime <= 0 {
+		return RefreshInterval
+	}
+	return max(min(RefreshInterval, lifetime*2/3), RetryInterval)
 }
 
 // isFetching reports whether a fetch is in flight. For tests.
