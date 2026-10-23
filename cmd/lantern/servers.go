@@ -140,7 +140,7 @@ func runServers(ctx context.Context, c *ipc.Client, cmd *ServersCmd) error {
 func runPrivateServer(ctx context.Context, c *ipc.Client, cmd *PrivateServerCmd) error {
 	switch {
 	case cmd.Add != nil:
-		return c.AddPrivateServer(ctx, cmd.Add.Tag, cmd.Add.IP, cmd.Add.Port, cmd.Add.Token)
+		return c.AddPrivateServer(ctx, cmd.Add.Tag, cmd.Add.IP, cmd.Add.Port, cmd.Add.Token, C.ServerLocation{}, false)
 	case cmd.Invite != nil:
 		code, err := c.InviteToPrivateServer(ctx, cmd.Invite.IP, cmd.Invite.Port, cmd.Invite.Token, cmd.Invite.Name)
 		if err != nil {
