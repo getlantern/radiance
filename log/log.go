@@ -115,6 +115,7 @@ func NewLogger(cfg Config) *slog.Logger {
 	if !cfg.DisablePublisher {
 		logWriter = io.MultiWriter(logWriter, Publisher())
 	}
+	logWriter = newRedactingWriter(logWriter)
 	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		Level:       leveler,
 		ReplaceAttr: replaceLogAttr,

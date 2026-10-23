@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
 )
 
@@ -41,4 +43,23 @@ func TestVPNClientPassesItsInviterTicketsToTheTunnel(t *testing.T) {
 	require.NotNil(t, get)
 	get()
 	assert.Equal(t, 1, src.n)
+}
+
+// Status errors reach the UI, and sing-box names the failing outbound in them.
+func TestStatusErrorsRedactHelperTags(t *testing.T) {
+	got := make(chan StatusUpdateEvent, 1)
+	sub := events.Subscribe(func(evt StatusUpdateEvent) {
+		if evt.Status == ErrorStatus {
+			got <- evt
+		}
+	})
+	defer sub.Unsubscribe()
+	c := NewVPNClient(t.TempDir(), nil, nil)
+	c.setStatus(ErrorStatus, errors.New("start service: outbound/unbounded[helper-0123456789ab]: dial failed"))
+	select {
+	case evt := <-got:
+		assert.Equal(t, "start service: outbound/unbounded[helper]: dial failed", evt.Error)
+	case <-time.After(2 * time.Second):
+		t.Fatal("no status event")
+	}
 }

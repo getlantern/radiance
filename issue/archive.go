@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	lbA "github.com/getlantern/lantern-box/adapter"
 )
 
 const (
@@ -62,7 +64,25 @@ func buildIssueArchive(logger *slog.Logger, logDir string, additionalFiles []str
 	primaryPath := filepath.Join(logDir, logArchiveName)
 	primaryLogData = prependMostRecentBackup(logger, primaryPath, primaryLogData, maxSize)
 
+	// Logs and attachments (config.json, servers.json, debug-box-options.json)
+	// can name helper- outbounds, which clients must not export.
+	primaryLogData = redactHelperTags(primaryLogData)
+	for i := range secondaryLogs {
+		secondaryLogs[i].data = redactHelperTags(secondaryLogs[i].data)
+	}
+	for i := range attachments {
+		attachments[i].data = redactHelperTags(attachments[i].data)
+	}
+
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
+}
+
+// redactHelperTags replaces helper- outbound tags in b with "helper".
+func redactHelperTags(b []byte) []byte {
+	if !bytes.Contains(b, []byte(lbA.HelperTagPrefix)) {
+		return b
+	}
+	return []byte(lbA.RedactHelperTags(string(b)))
 }
 
 // prependMostRecentBackup prepends the newest rotated gzip backup, if present,

@@ -225,7 +225,7 @@ func initTracer(ctx context.Context, res *resource.Resource, cfg common.OTEL) (f
 	}
 	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.TracesSampleRate))),
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithBatcher(newRedactingExporter(exporter)),
 		sdktrace.WithResource(res),
 	)
 
