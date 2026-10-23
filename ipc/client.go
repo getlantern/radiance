@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	C "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/account"
@@ -378,8 +379,8 @@ func (c *Client) AddServersByURL(ctx context.Context, urls []string, skipCertVer
 }
 
 // AddPrivateServer adds a private server.
-func (c *Client) AddPrivateServer(ctx context.Context, tag, ip string, port int, accessToken string) error {
-	_, err := c.do(ctx, http.MethodPost, serversPrivateEndpoint, PrivateServerRequest{Tag: tag, IP: ip, Port: port, AccessToken: accessToken})
+func (c *Client) AddPrivateServer(ctx context.Context, tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
+	_, err := c.do(ctx, http.MethodPost, serversPrivateEndpoint, PrivateServerRequest{Tag: tag, IP: ip, Port: port, AccessToken: accessToken, Location: loc, Joined: joined})
 	return err
 }
 
