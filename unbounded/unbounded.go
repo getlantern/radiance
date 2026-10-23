@@ -269,14 +269,14 @@ func servePool() bool {
 	return settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
 }
 
-// applyRooms gives a widget's options the current volunteer tickets and the
-// serve-pool setting.
+// applyRooms points a new widget's options at the volunteer tickets and sets
+// the serve-pool setting. broflake calls the source at every genesis message,
+// so fresh tickets reach the widget as soon as the source has them; the source
+// is a cache whose reads never block. Call it before NewBroflake.
 func applyRooms(rtcOpt *clientcore.WebRTCOptions, tickets roomTickets) {
-	var vt []string
 	if tickets != nil {
-		vt = tickets.Volunteer()
+		rtcOpt.RoomTicketSource = tickets.Volunteer
 	}
-	rtcOpt.SetRoomTickets(vt)
 	rtcOpt.SetServePool(servePool())
 }
 
@@ -292,13 +292,19 @@ func volunteerPairings(tickets []string) map[string]bool {
 	return out
 }
 
-// syncRooms keeps a running widget's room tickets and pool setting current
-// until ctx ends. When a pairing it volunteers for is missing from the fresh
-// set, the pairing has ended. freddie stops new matches by itself, but a
-// WebRTC session already open outlives the tickets, and the widget cannot tell
-// which session came through which room. So it restarts, ending every session.
-func (m *unboundedManager) syncRooms(ctx context.Context, rtcOpt *clientcore.WebRTCOptions, tickets roomTickets, interval time.Duration) {
+// syncRooms keeps a running widget's pool setting current and watches for
+// changes that must end its open sessions, until ctx ends. done identifies the
+// run. Two changes restart the widget:
+//
+//   - a pairing it volunteers for is missing from the fresh tickets: the
+//     pairing has ended. freddie stops new matches by itself, but a WebRTC
+//     session already open outlives the tickets, and the widget cannot tell
+//     which session came through which room;
+//   - "help others too" turned off: sessions already open with strangers
+//     must end too.
+func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rtcOpt *clientcore.WebRTCOptions, interval time.Duration) {
 	prev := volunteerPairings(rtcOpt.CurrentRoomTickets())
+	prevPool := rtcOpt.ServesPool()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -307,25 +313,48 @@ func (m *unboundedManager) syncRooms(ctx context.Context, rtcOpt *clientcore.Web
 			return
 		case <-t.C:
 		}
-		applyRooms(rtcOpt, tickets)
+		pool := servePool()
+		rtcOpt.SetServePool(pool)
 		cur := volunteerPairings(rtcOpt.CurrentRoomTickets())
+		reason := ""
+		if prevPool && !pool {
+			reason = "Unbounded: helping others turned off; restarting the widget to close its sessions"
+		}
 		for id := range prev {
 			if !cur[id] {
-				slog.Info("Unbounded: a helper pairing ended; restarting the widget to close its sessions")
-				go func() {
-					// This run may already have been stopped some other way;
-					// then there is nothing to restart.
-					if ctx.Err() != nil {
-						return
-					}
-					m.stop()
-					m.start()
-				}()
-				return
+				reason = "Unbounded: a helper pairing ended; restarting the widget to close its sessions"
+				break
 			}
 		}
-		prev = cur
+		if reason != "" {
+			slog.Info(reason)
+			go m.restartIfCurrent(done)
+			return
+		}
+		prev, prevPool = cur, pool
 	}
+}
+
+// restartIfCurrent stops and restarts the widget if the run done identifies
+// is still the live one. The check and the restart hold transitionMu
+// together, so a run that something else already stopped or replaced is
+// never bounced.
+func (m *unboundedManager) restartIfCurrent(done chan struct{}) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	m.mu.Lock()
+	current := done != nil && m.done == done
+	m.mu.Unlock()
+	if !current {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), internalStopTimeout)
+	defer cancel()
+	if err := m.stopLocked(ctx, false); err != nil {
+		slog.Warn("Unbounded: internal stop timed out before worker exited",
+			"error", err, "timeout", internalStopTimeout)
+	}
+	m.startLocked()
 }
 
 // Enabled reports whether the local opt-in is set. Doesn't say whether
@@ -530,6 +559,11 @@ func SetApplyHookForTest(h func()) {
 func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
+	return m.stopLocked(ctx, disarm)
+}
+
+// stopLocked is stopCtx for a caller that holds transitionMu.
+func (m *unboundedManager) stopLocked(ctx context.Context, disarm bool) error {
 	m.mu.Lock()
 	if disarm {
 		m.armed = false
@@ -572,7 +606,11 @@ func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
 func (m *unboundedManager) start() {
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
+	m.startLocked()
+}
 
+// startLocked is start for a caller that holds transitionMu.
+func (m *unboundedManager) startLocked() {
 	m.mu.Lock()
 	if !m.armed {
 		// Disarmed by public Stop. Re-check inside transitionMu so a
@@ -713,7 +751,7 @@ func (m *unboundedManager) start() {
 		syncDone := make(chan struct{})
 		go func() {
 			defer close(syncDone)
-			m.syncRooms(ctx, rtcOpt, tickets, syncInterval)
+			m.syncRooms(ctx, done, rtcOpt, syncInterval)
 		}()
 		<-ctx.Done()
 		slog.Info("Unbounded: stopping broflake widget proxy")

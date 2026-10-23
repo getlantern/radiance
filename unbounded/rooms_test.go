@@ -152,3 +152,62 @@ func TestVolunteerPairings(t *testing.T) {
 	got := volunteerPairings([]string{volunteerTicket(t, priv, pairingA), volunteerTicket(t, priv, pairingA), "junk"})
 	assert.Equal(t, map[string]bool{pairingA: true}, got)
 }
+
+// Tickets reach a new widget at its next genesis message, not the next sync.
+func TestWidgetReadsFreshTicketsWithoutWaitingForASync(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+	count, opts, _ := recordingWidgets(t)
+	src := &fakeTickets{}
+	SetTicketSource(src)
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	require.Empty(t, opts(0).CurrentRoomTickets())
+
+	a := volunteerTicket(t, priv, pairingA)
+	src.set(a)
+	assert.Equal(t, []string{a}, opts(0).CurrentRoomTickets())
+}
+
+// Turning "help others too" off ends sessions already open with strangers.
+func TestWidgetRestartsWhenServePoolTurnsOff(t *testing.T) {
+	fastRoomSync(t)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, true))
+	t.Cleanup(func() { _ = settings.Set(settings.PeerServePoolKey, true) })
+	count, opts, widgets := recordingWidgets(t)
+	SetTicketSource(&fakeTickets{})
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	require.True(t, opts(0).ServesPool())
+
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	waitForCount(t, count, 2, 2*time.Second)
+	assert.EqualValues(t, 1, widgets(0).stopCalled.Load(), "the old widget, and its sessions, stopped")
+	assert.False(t, opts(1).ServesPool())
+	assert.Never(t, func() bool { return count.Load() > 2 }, 100*time.Millisecond, 10*time.Millisecond,
+		"one flip is one restart")
+}
+
+func TestRestartIfCurrentIgnoresStaleRuns(t *testing.T) {
+	count, _, widgets := recordingWidgets(t)
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+
+	manager.restartIfCurrent(make(chan struct{}))
+	manager.restartIfCurrent(nil)
+	assert.EqualValues(t, 1, count.Load(), "a stale run is not restarted")
+	assert.Zero(t, widgets(0).stopCalled.Load())
+
+	manager.mu.Lock()
+	done := manager.done
+	manager.mu.Unlock()
+	manager.restartIfCurrent(done)
+	waitForCount(t, count, 2, 2*time.Second)
+	assert.EqualValues(t, 1, widgets(0).stopCalled.Load())
+
+	manager.restartIfCurrent(done)
+	assert.Never(t, func() bool { return count.Load() > 2 }, 50*time.Millisecond, 5*time.Millisecond,
+		"the replaced run's done no longer restarts anything")
+}
