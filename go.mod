@@ -39,13 +39,14 @@ require (
 	github.com/getlantern/broflake v0.0.0-20261018030031-c6268bfc1b56
 	github.com/getlantern/common v1.2.1-0.20260910154003-08e030318f24
 	github.com/getlantern/domainfront v0.0.0-20260915172349-4984689a8667
-	github.com/getlantern/kindling v0.0.0-20261014210827-0f4a89dbe1ee
-	github.com/getlantern/lantern-box v0.0.167
+	github.com/getlantern/kindling v0.0.0-20261022170147-217b175b5057
+	github.com/getlantern/lantern-box v0.0.169
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20261020020737-084d1daf4879
-	github.com/getlantern/soar v0.2.3
+	github.com/getlantern/soar v0.2.4
 	github.com/goccy/go-yaml v1.19.0
+	github.com/gofrs/flock v0.12.1
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
@@ -126,7 +127,7 @@ require (
 	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20261009194109-22f33eaeac6e // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
-	github.com/getlantern/samizdat v0.0.3-0.20261019142234-18bd41c612f1 // indirect
+	github.com/getlantern/samizdat v0.0.3-0.20261021183544-34a7d2563eef // indirect
 	github.com/getlantern/twiddle v0.0.0-20260914204124-f698a0d67d2f // indirect
 	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced // indirect

@@ -294,17 +294,46 @@ type PurchaseResponse struct {
 	Status               string      `json:"status"`
 }
 
-// ActivationCode is used to purchase a subscription using a reseller code.
+// UnmarshalJSON accepts plan as either a full plan object (reseller codes) or
+// a bare plan ID string (web licenses).
+func (p *PurchaseResponse) UnmarshalJSON(b []byte) error {
+	type alias PurchaseResponse
+	aux := struct {
+		*alias
+		Plan json.RawMessage `json:"plan"`
+	}{alias: (*alias)(p)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if len(aux.Plan) == 0 || string(aux.Plan) == "null" {
+		return nil
+	}
+	if aux.Plan[0] == '"' {
+		return json.Unmarshal(aux.Plan, &p.Plan.Id)
+	}
+	return json.Unmarshal(aux.Plan, &p.Plan)
+}
+
+// ActivationCode purchases a subscription with resellerCode, redeeming it as a
+// website license key if it starts with "PRO" (case-insensitive, ignoring
+// leading whitespace).
 func (a *Client) ActivationCode(ctx context.Context, email, resellerCode string) (*PurchaseResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "activation_code")
 	defer span.End()
 
 	data := map[string]any{
 		"idempotencyKey": strconv.FormatInt(time.Now().UnixNano(), 10),
-		"provider":       "reseller-code",
 		"email":          email,
 		"deviceName":     settings.GetString(settings.DeviceIDKey),
-		"resellerCode":   resellerCode,
+	}
+	// Every website license key the pro server issues starts with PRO and no
+	// reseller code does; the server stores the prefix, so it is not stripped.
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(resellerCode)), "PRO") {
+		data["provider"] = "web-license"
+		data["licenseKey"] = resellerCode
+	} else {
+		data["provider"] = "reseller-code"
+		data["resellerCode"] = resellerCode
 	}
 	resp, err := a.sendProRequest(ctx, "POST", "/purchase", nil, nil, data)
 	if err != nil {

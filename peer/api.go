@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/getlantern/radiance/common"
@@ -18,12 +20,59 @@ type RegisterRequest struct {
 	ExternalIP   string `json:"external_ip"`
 	ExternalPort uint16 `json:"external_port"`
 	InternalPort uint16 `json:"internal_port"`
+	// ServePool is set, to false, only when the route should serve just this
+	// device's helper pairings. Absent means the route also serves the
+	// general pool, which is what servers that predate the field assume.
+	ServePool *bool `json:"serve_pool,omitempty"`
 }
 
 type RegisterResponse struct {
 	RouteID                  string `json:"route_id"`
 	ServerConfig             string `json:"server_config"`
 	HeartbeatIntervalSeconds int64  `json:"heartbeat_interval_seconds"`
+	// PairingShortIDs are the short IDs, 16 lowercase hex characters each,
+	// the inbound must accept for this device's helper pairings, beside the
+	// launch config's own. They are only meaningful when
+	// PairingShortIDsKnown is true.
+	PairingShortIDs []string `json:"pairing_short_ids"`
+	// PairingShortIDsKnown says the server vouches for PairingShortIDs as the
+	// complete set, so an empty list means no pairings. False, or absent
+	// from an older server, means the peer keeps the set it has.
+	PairingShortIDsKnown bool `json:"pairing_short_ids_known"`
+	// PairingShortIDsRevision is when the server computed PairingShortIDs,
+	// in Unix milliseconds, so the peer never replaces a set with an older
+	// one. Non-zero exactly when PairingShortIDsKnown is true.
+	PairingShortIDsRevision Revision `json:"pairing_short_ids_revision"`
+}
+
+// Revision is an int64 that decodes from a JSON number or, as lantern-cloud's
+// protojson encoding sends int64s, a JSON string.
+type Revision int64
+
+func (r *Revision) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		b = []byte(s)
+	}
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return fmt.Errorf("revision: %w", err)
+	}
+	*r = Revision(n)
+	return nil
+}
+
+// HeartbeatResponse carries the current pairing short IDs, which rotate with
+// the server's 24-hour epoch. When PairingShortIDsKnown is true the peer
+// replaces its pairing set with PairingShortIDs, so an ended pairing drops
+// out here; otherwise it keeps the set it has.
+type HeartbeatResponse struct {
+	PairingShortIDs         []string `json:"pairing_short_ids"`
+	PairingShortIDsKnown    bool     `json:"pairing_short_ids_known"`
+	PairingShortIDsRevision Revision `json:"pairing_short_ids_revision"`
 }
 
 type LifecycleRequest struct {
@@ -41,6 +90,13 @@ type HeartbeatRequest struct {
 	// overstate how many people are actually being helped.
 	ActiveClients int `json:"active_clients"`
 }
+
+// decodeError is a 2xx response whose body did not decode, so callers can
+// tell it from a request the server never accepted.
+type decodeError struct{ err error }
+
+func (e *decodeError) Error() string { return "decode response: " + e.err.Error() }
+func (e *decodeError) Unwrap() error { return e.err }
 
 // APIError carries the server's HTTP status and body.
 type APIError struct {
@@ -98,12 +154,26 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 // variants, and a peer serves samizdat. Reporting also self-corrects — a count
 // measured now cannot go stale the way an assignment log does when clients
 // simply disappear.
-func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) error {
+//
+// It returns the pairing short IDs the inbound must accept. A 2xx means the
+// server has recorded the heartbeat, so a body that doesn't decode, including
+// the empty body of a server that predates the IDs, never fails it: the
+// response comes back as not known and the peer keeps the set it has.
+func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) (*HeartbeatResponse, error) {
 	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients}
-	if err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, nil); err != nil {
-		return fmt.Errorf("heartbeat: %w", err)
+	var resp HeartbeatResponse
+	err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, &resp)
+	var de *decodeError
+	if errors.As(err, &de) {
+		if !errors.Is(de.err, io.EOF) {
+			slog.Debug("peer heartbeat response unreadable; pairing short IDs not known")
+		}
+		return &HeartbeatResponse{}, nil
 	}
-	return nil
+	if err != nil {
+		return nil, fmt.Errorf("heartbeat: %w", err)
+	}
+	return &resp, nil
 }
 
 func (a *API) Deregister(ctx context.Context, routeID string) error {
@@ -159,7 +229,7 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+			return &decodeError{err: err}
 		}
 	}
 	return nil
