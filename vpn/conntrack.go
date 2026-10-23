@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"io"
 	"net"
 	"sync"
@@ -8,14 +9,22 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid/v5"
-	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
+	A "github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/trafficcontrol"
+	R "github.com/sagernet/sing-box/route/rule"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 
 	lsync "github.com/getlantern/common/sync"
 	"github.com/getlantern/lantern-box/adapter/groups"
 )
 
-var _ groups.ConnectionManager = (*connTracker)(nil)
+var (
+	_ groups.ConnectionManager = (*connTracker)(nil)
+	_ A.ConnectionTracker      = (*connTracker)(nil)
+)
 
 // record holds the lean per-connection state radiance actually reads. It is built once when a
 // connection is routed and never retains the full adapter.InboundContext; the scalars below are
@@ -72,8 +81,8 @@ func (r *record) attrs() ConnAttrs {
 // trackerMetadata synthesizes the upstream metadata view required by the lantern-box group manager.
 // ClosedAt is left zero because only active records are ever exposed.
 // Upload/Download point at the live atomics so the value is safe to marshal.
-func (r *record) trackerMetadata() trafficontrol.TrackerMetadata {
-	return trafficontrol.TrackerMetadata{
+func (r *record) trackerMetadata() trafficcontrol.TrackerMetadata {
+	return trafficcontrol.TrackerMetadata{
 		ID:           r.id,
 		CreatedAt:    r.createdAt,
 		Upload:       &r.upload,
@@ -124,9 +133,46 @@ type connTracker struct {
 
 	obsMu    sync.RWMutex
 	observer ConnObserver
+
+	// outbound resolves the chain of each routed connection.
+	outbound      A.OutboundManager
+	admissionGate atomic.Value // dialAdmissionGate; set once before the box routes, read lock-free on the dial path
+
+	sampler io.Closer
 }
 
 func newConnTracker() *connTracker { return &connTracker{} }
+
+// startConnTracker returns a tracker for connections the box routes through
+// outbound, sampling throughput until Close.
+func startConnTracker(ctx context.Context, outbound A.OutboundManager) *connTracker {
+	m := newConnTracker()
+	m.outbound = outbound
+	m.tp = newThroughputTracker(m, 0)
+	m.sampler = runUntilClosed(ctx, m.tp.Run)
+	return m
+}
+
+// Close stops sampling throughput. Tracked connections stay open.
+func (m *connTracker) Close() error {
+	if m.sampler == nil {
+		return nil
+	}
+	return m.sampler.Close()
+}
+
+// dialAdmissionGate is notified via RecordDial on each dial, with the dial time.
+type dialAdmissionGate interface {
+	RecordDial(time.Time)
+}
+
+// SetAdmissionGate installs the admission gate consulted on each dial. Nil
+// is ignored, so the gate can be updated but not cleared.
+func (m *connTracker) SetAdmissionGate(gate dialAdmissionGate) {
+	if gate != nil {
+		m.admissionGate.Store(gate)
+	}
+}
 
 // SetObserver sets the telemetry observer, or nil to detach. It is re-set on each tunnel connect
 // because the tracker is recreated per tunnel while the observer outlives it.
@@ -185,9 +231,9 @@ func (m *connTracker) leave(r *record) {
 }
 
 // Connections satisfies groups.ConnectionManager (github.com/getlantern/lantern-box/adapter/groups),
-// returning the active connections as synthesized trafficontrol.TrackerMetadata.
-func (m *connTracker) Connections() []trafficontrol.TrackerMetadata {
-	out := make([]trafficontrol.TrackerMetadata, 0, m.activeCount.Load())
+// returning the active connections as synthesized trafficcontrol.TrackerMetadata.
+func (m *connTracker) Connections() []trafficcontrol.TrackerMetadata {
+	out := make([]trafficcontrol.TrackerMetadata, 0, m.activeCount.Load())
 	for _, r := range m.conns.Iter() {
 		out = append(out, r.trackerMetadata())
 	}
@@ -252,6 +298,169 @@ func (m *connTracker) closeMatchedTo(tag string) {
 	}
 }
 
+// newRecord builds a lean record for a routed connection, copying the scalars radiance reads out of
+// metadata and resolving the outbound chain.
+func (m *connTracker) newRecord(metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) *record {
+	id, _ := uuid.NewV4()
+	outbound, outboundType, chain := m.resolveChain(matchOutbound)
+	return &record{
+		id:            id,
+		createdAt:     time.Now(),
+		outbound:      outbound,
+		outboundType:  outboundType,
+		chain:         chain,
+		outboundLabel: outboundType + "/" + outbound,
+		inboundLabel:  metadata.InboundType + "/" + metadata.Inbound,
+
+		ipVersion:    metadata.IPVersion,
+		network:      metadata.Network,
+		source:       metadata.Source.String(),
+		destination:  metadata.Destination.String(),
+		domain:       metadata.Domain,
+		protocol:     metadata.Protocol,
+		fromOutbound: metadata.Outbound,
+		ruleStr:      formatRule(matchedRule),
+	}
+}
+
+func (m *connTracker) resolveChain(matchOutbound A.Outbound) (outbound, outboundType string, chain []string) {
+	var next string
+	if matchOutbound != nil {
+		next = matchOutbound.Tag()
+	} else {
+		next = m.outbound.Default().Tag()
+	}
+
+	for next != "" {
+		detour, loaded := m.outbound.Outbound(next)
+		if !loaded {
+			if outbound == "" {
+				outbound = next
+			}
+			break
+		}
+
+		chain = append(chain, next)
+		outbound = detour.Tag()
+		outboundType = detour.Type()
+
+		group, isGroup := detour.(A.OutboundGroup)
+		if !isGroup {
+			break
+		}
+		next = group.Now()
+	}
+
+	return outbound, outboundType, common.Reverse(chain)
+}
+
+func formatRule(rule A.Rule) string {
+	if rule == nil {
+		return ""
+	}
+	return rule.String() + " => " + rule.Action().String()
+}
+
+func (m *connTracker) countUpload(r *record, n int64) {
+	r.upload.Add(n)
+	m.pushUploaded(n)
+}
+
+func (m *connTracker) countDownload(r *record, n int64) {
+	r.download.Add(n)
+	m.pushDownloaded(n)
+}
+
+func (m *connTracker) uploadCounter(r *record) N.CountFunc {
+	return func(n int64) { m.countUpload(r, n) }
+}
+
+func (m *connTracker) downloadCounter(r *record) N.CountFunc {
+	return func(n int64) { m.countDownload(r, n) }
+}
+
+func (m *connTracker) admitConnection(now time.Time) {
+	if gate, _ := m.admissionGate.Load().(dialAdmissionGate); gate != nil {
+		gate.RecordDial(now)
+	}
+}
+
+func (m *connTracker) RoutedConnection(ctx context.Context, conn net.Conn, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) net.Conn {
+	m.admitConnection(time.Now())
+
+	r := m.newRecord(metadata, matchedRule, matchOutbound)
+	c := &tcpConn{
+		ExtendedConn: bufio.NewCounterConn(
+			conn,
+			[]N.CountFunc{m.uploadCounter(r)},
+			[]N.CountFunc{m.downloadCounter(r)},
+		),
+		rec: r,
+		ct:  m,
+	}
+	r.closer = c
+	m.join(r)
+	return c
+}
+
+func (m *connTracker) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) N.PacketConn {
+	m.admitConnection(time.Now())
+
+	r := m.newRecord(metadata, matchedRule, matchOutbound)
+	c := &udpConn{
+		PacketConn: bufio.NewCounterPacketConn(
+			conn,
+			[]N.CountFunc{m.uploadCounter(r)},
+			[]N.CountFunc{m.downloadCounter(r)},
+		),
+		rec: r,
+		ct:  m,
+	}
+	r.closer = c
+	m.join(r)
+	return c
+}
+
+// RoutedFlow tracks a flow that sing-tun forwards to the outbound as packets
+// instead of as a connection, such as traffic to a WireGuard endpoint.
+func (m *connTracker) RoutedFlow(ctx context.Context, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) tun.FlowTracker {
+	m.admitConnection(time.Now())
+	r := m.newRecord(metadata, matchedRule, matchOutbound)
+	r.chain = m.flowChain(matchedRule, matchOutbound)
+	f := &flowConn{rec: r, ct: m}
+	r.closer = f
+	return f
+}
+
+// flowChain returns a flow's chain, leaf first, like resolveChain's. sing-box
+// resolves groups before it calls RoutedFlow, so leaf is a group's selection at
+// routing time rather than the group the rule names; the chain keeps leaf and
+// takes the groups from the rule's outbound, whose selection may have changed.
+func (m *connTracker) flowChain(matchedRule A.Rule, leaf A.Outbound) []string {
+	var tag string
+	if matchedRule != nil {
+		switch action := matchedRule.Action().(type) {
+		case *R.RuleActionRoute:
+			tag = action.Outbound
+		case *R.RuleActionBypass:
+			tag = action.Outbound
+		}
+	}
+	target, loaded := m.outbound.Outbound(tag)
+	if !loaded {
+		target = m.outbound.Default()
+	}
+	if target == nil || target.Tag() == leaf.Tag() {
+		return []string{leaf.Tag()}
+	}
+	_, _, chain := m.resolveChain(target)
+	if len(chain) == 0 {
+		return []string{leaf.Tag()}
+	}
+	chain[0] = leaf.Tag()
+	return chain
+}
+
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
 // bufio unwrap to the underlying conn for its vectorised and read-waiter fast paths. Close first
 // closes the wrapped conn, then folds the connection out of the tracker so the final accounting
@@ -288,8 +497,73 @@ func (c *udpConn) Upstream() any           { return c.PacketConn }
 func (c *udpConn) ReaderReplaceable() bool { return true }
 func (c *udpConn) WriterReplaceable() bool { return true }
 
+// flowConn tracks a flow that sing-tun forwards as packets. It joins the tracker
+// once sing-tun attaches it, leaves when sing-tun closes it, and Close ends it
+// through sing-tun's handle. sing-tun can close a flow before attaching it, so a
+// flow closed first never joins.
+type flowConn struct {
+	rec *record
+	ct  *connTracker
+
+	access sync.Mutex
+	handle tun.FlowHandle
+	closed bool
+}
+
+func (f *flowConn) AttachFlow(handle tun.FlowHandle) {
+	f.access.Lock()
+	defer f.access.Unlock()
+	if f.closed {
+		return
+	}
+	f.handle = handle
+	f.ct.join(f.rec)
+}
+
+// CountForward and CountReverse drop bytes counted after CloseFlow, which
+// sing-tun can call concurrently: leave has already reported the flow's total.
+func (f *flowConn) CountForward(n int) {
+	f.access.Lock()
+	defer f.access.Unlock()
+	if !f.closed {
+		f.ct.countUpload(f.rec, int64(n))
+	}
+}
+
+func (f *flowConn) CountReverse(n int) {
+	f.access.Lock()
+	defer f.access.Unlock()
+	if !f.closed {
+		f.ct.countDownload(f.rec, int64(n))
+	}
+}
+
+func (f *flowConn) FlowEstablished() {}
+
+func (f *flowConn) CloseFlow(tun.FlowCloseReason) {
+	f.access.Lock()
+	joined := f.handle != nil && !f.closed
+	f.closed = true
+	f.access.Unlock()
+	// leave runs the close observer, so it runs unlocked.
+	if joined {
+		f.ct.leave(f.rec)
+	}
+}
+
+func (f *flowConn) Close() error {
+	f.access.Lock()
+	handle := f.handle
+	f.access.Unlock()
+	if handle != nil {
+		handle.CloseFlow()
+	}
+	return nil
+}
+
 // Compile-time guard that the wrappers implement the interfaces sing-box's router expects.
 var (
-	_ net.Conn     = (*tcpConn)(nil)
-	_ N.PacketConn = (*udpConn)(nil)
+	_ net.Conn        = (*tcpConn)(nil)
+	_ N.PacketConn    = (*udpConn)(nil)
+	_ tun.FlowTracker = (*flowConn)(nil)
 )

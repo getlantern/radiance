@@ -206,11 +206,6 @@ func baseOpts(basePath string) O.Options {
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
-			ClashAPI: &O.ClashAPIOptions{
-				DefaultMode:        AutoSelectTag,
-				ModeList:           []string{ManualSelectTag, AutoSelectTag},
-				ExternalController: "", // intentionally left empty
-			},
 			CacheFile: &O.CacheFileOptions{
 				Enabled:     true,
 				Path:        cacheFile,
@@ -385,14 +380,15 @@ func tunHasIPv6(opts O.Options) bool {
 }
 
 // buildOptions builds the box options using the config options and user servers.
-// Denied outbounds and endpoints are dropped; denied DNS or route options fail
-// the build with an error wrapping [hostaccess.ErrDenied].
+// Denied outbounds, endpoints and services are dropped; denied DNS or route
+// options fail the build with an error wrapping [hostaccess.ErrDenied].
 func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
 	bOptions.Options.Outbounds = allowedOutbounds(bOptions.Options.Outbounds)
 	bOptions.Options.Endpoints = allowedEndpoints(bOptions.Options.Endpoints)
+	bOptions.Options.Services = allowedServices(bOptions.Options.Services)
 	if err := hostaccess.CheckOptions(bOptions.Options); err != nil {
 		return O.Options{}, err
 	}
@@ -428,17 +424,13 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
 
-	initial := bOptions.InitialServer
-	if initial == "" || initial == AutoSelectTag {
-		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
-	} else {
+	if initial := bOptions.InitialServer; modeForServer(initial) == ManualSelectTag {
 		// The manual selector defaults to its first tag, so place initial at index 0.
 		i := slices.Index(tags, initial)
 		if i == -1 {
 			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
 		}
 		tags[0], tags[i] = tags[i], tags[0]
-		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
 	if tunHasIPv6(opts) {
@@ -491,6 +483,7 @@ func jsonRoundTrip(path string, opts O.Options) (O.Options, error) {
 func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
+	dst.Services = append(dst.Services, src.Services...)
 
 	if src.Route != nil {
 		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
@@ -582,6 +575,13 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 	}
 }
 
+func modeForServer(server string) string {
+	if server == "" || server == AutoSelectTag {
+		return AutoSelectTag
+	}
+	return ManualSelectTag
+}
+
 func selectModeRule(mode string) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
@@ -643,8 +643,10 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 	if domainResolver != "" {
 		remoteOpts.RawLocalDNSServerOptions = O.RawLocalDNSServerOptions{
 			DialerOptions: O.DialerOptions{
-				DomainResolver: &O.DomainResolveOptions{
-					Server: domainResolver,
+				AbstractDialerOptions: O.AbstractDialerOptions{
+					DomainResolver: &O.DomainResolveOptions{
+						Server: domainResolver,
+					},
 				},
 			},
 		}

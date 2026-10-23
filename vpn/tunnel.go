@@ -16,7 +16,6 @@ import (
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/experimental"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
@@ -29,7 +28,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	lsync "github.com/getlantern/common/sync"
-	box "github.com/getlantern/lantern-box"
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
 	lblog "github.com/getlantern/lantern-box/log"
@@ -39,6 +37,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/kindling"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -54,7 +53,8 @@ const devicePauseTimeout = time.Minute
 type tunnel struct {
 	ctx                  context.Context
 	boxInstance          *sbox.Box
-	clashServer          *clashServer
+	clashModeManager     *clashModeManager
+	connTracker          *connTracker
 	selectionHistory     lbA.AutoSelectHistoryStorage
 	selectionHistorySeed map[string]lbA.TagHistory
 	logFactory           sblog.ObservableFactory
@@ -78,12 +78,13 @@ type tunnel struct {
 	// nonSelectableTags so an outbound dropped before the first reconcile is still
 	// torn down rather than left dialable.
 	initialNonSelectable []string
+	initialMode          string
 
 	// memoryMonitor starts during tunnel init in visibility-only mode.
-	// On iOS, its executor is installed later, after the clash server exists.
+	// On iOS, its executor is installed later, after the connection tracker exists.
 	memoryMonitor *memmon.Monitor
 
-	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
+	// connObserver, if non-nil, is attached to connTracker at connect to receive
 	// connection-close pushes for telemetry.
 	connObserver ConnObserver
 
@@ -170,9 +171,6 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 		slog.Warn("Failed to apply deferred tunnel cache clear", "path", t.dataPath, "error", err)
 	}
 
-	// Must overwrite the clash server constructor before calling sbox.New
-	experimental.RegisterClashServerConstructor(newClashServer)
-
 	slog.Log(nil, rlog.LevelTrace, "Initializing tunnel")
 
 	t.ctx, t.cancel = context.WithCancel(context.Background())
@@ -192,7 +190,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 		libbox.Setup(&libbox.SetupOptions{FixAndroidStack: true})
 	}
 
-	boxCtx := box.Context(t.ctx)
+	boxCtx := hostaccess.Context(t.ctx)
 	if platformIfce != nil {
 		boxCtx = service.ContextWith[adapter.PlatformInterface](boxCtx, libbox.NewPlatformInterfaceWrapper(platformIfce))
 	}
@@ -240,6 +238,14 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 
 	t.closers = append(t.closers, instance)
 	t.boxInstance = instance
+
+	t.clashModeManager, err = newClashModeManager(t.ctx, t.logFactory.NewLogger("clash-mode"), t.initialMode)
+	if err != nil {
+		return fmt.Errorf("create clash mode manager: %w", err)
+	}
+	t.connTracker = startConnTracker(t.ctx, instance.Outbound())
+	instance.Router().AppendTracker(t.connTracker)
+	t.closers = append(t.closers, t.connTracker)
 
 	slog.Info("Tunnel initialized")
 	return nil
@@ -353,9 +359,8 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	slog.Debug("Libbox service started")
 	bypass.ProxyStateChanged()
 
-	t.clashServer = service.FromContext[adapter.ClashServer](t.ctx).(*clashServer)
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
-	t.clashServer.connTracker.SetObserver(t.connObserver)
+	t.connTracker.SetObserver(t.connObserver)
 	if pm := service.FromContext[pause.Manager](t.ctx); pm != nil {
 		t.pauseManager = pm
 		t.netRecovery = newNetRecovery(t.boxInstance.Network(), pm.IsNetworkPaused)
@@ -391,14 +396,14 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	if common.IsIOS() {
 		// Only iOS enforces a hard memory cap, so only it gets reclaim and
 		// admission control. Android runs the monitor for visibility only.
-		initExecutor(t.memoryMonitor, t.clashServer)
+		initExecutor(t.memoryMonitor, t.connTracker, t.clashModeManager)
 	}
 
 	var mutGrpMgr *groups.MutableGroupManager
 	if err := traceSpan(ctx, "newMutableGroupManager", func() error {
 		var err error
 		mutGrpMgr, err = newMutableGroupManager(
-			t.ctx, t.logFactory.NewLogger("groupsManager"), t.clashServer.connTracker,
+			t.ctx, t.logFactory.NewLogger("groupsManager"), t.connTracker,
 		)
 		return err
 	}); err != nil {
@@ -467,13 +472,13 @@ func (t *tunnel) selectMode(mode string) error {
 		return fmt.Errorf("tunnel not running")
 	}
 
-	prev, err := t.clashServer.SetMode(mode)
+	prev, err := t.clashModeManager.SetMode(mode)
 	if err != nil {
 		return fmt.Errorf("switching mode: %w", err)
 	}
 	if prev != mode {
 		// Flows matched to the outgoing mode keep its server until closed.
-		t.clashServer.connTracker.closeMatchedTo(prev)
+		t.connTracker.closeMatchedTo(prev)
 		go func() {
 			time.Sleep(time.Second)
 			runtimeDebug.FreeOSMemory()
@@ -571,7 +576,7 @@ func (t *tunnel) deviceWake() {
 
 func (t *tunnel) resetNetwork() {
 	if t.boxInstance != nil {
-		t.boxInstance.Network().ResetNetwork()
+		t.boxInstance.Network().ResetNetwork(t.ctx)
 	}
 }
 
@@ -919,6 +924,24 @@ type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
 
+// runUntilClosed runs run in a goroutine until Close cancels its context and
+// waits for it to return.
+func runUntilClosed(ctx context.Context, run func(context.Context)) io.Closer {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		run(ctx)
+	}()
+
+	return closerFunc(func() error {
+		cancel()
+		<-done
+		return nil
+	})
+}
+
 func contextDone(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
@@ -951,8 +974,9 @@ func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 }
 
 // cacheFileWrapper suppresses libbox's persistence of the selected outbound
-// so BoxOptions.InitialServer controls the selection on each connect rather
-// than a stale value from disk.
+// and the clash mode so BoxOptions.InitialServer controls them on each connect
+// rather than stale values from disk. Persisting the mode would also restore
+// reject mode after a crash.
 type cacheFileWrapper struct {
 	adapter.CacheFile
 }
@@ -962,5 +986,13 @@ func (c *cacheFileWrapper) LoadSelected(_ string) string {
 }
 
 func (c *cacheFileWrapper) StoreSelected(_, _ string) error {
+	return nil
+}
+
+func (c *cacheFileWrapper) LoadMode() string {
+	return ""
+}
+
+func (c *cacheFileWrapper) StoreMode(string) error {
 	return nil
 }

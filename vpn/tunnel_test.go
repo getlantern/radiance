@@ -23,6 +23,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	sblog "github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -187,23 +188,15 @@ func (stubDNSRouter) ClearCache() {}
 // newModeTestTunnel returns a tunnel in auto mode that passes selectMode's running check.
 func newModeTestTunnel(t *testing.T) *tunnel {
 	t.Helper()
-	srv, err := newClashServer(context.Background(), nil, O.ClashAPIOptions{
-		ModeList:    []string{ManualSelectTag, AutoSelectTag},
-		DefaultMode: AutoSelectTag,
-	})
-	require.NoError(t, err)
-	cs := srv.(*clashServer)
-	cs.dnsRouter = stubDNSRouter{}
-	t.Cleanup(func() { cs.Close() })
-	return &tunnel{boxInstance: &sbox.Box{}, clashServer: cs}
+	return &tunnel{boxInstance: &sbox.Box{}, clashModeManager: newTestClashModeManager(t), connTracker: newConnTracker()}
 }
 
 func TestSelectMode_ClosesOnlyOutgoingModeFlows(t *testing.T) {
 	for _, rejecting := range []bool{false, true} {
 		t.Run(fmt.Sprintf("rejecting=%t", rejecting), func(t *testing.T) {
 			tun := newModeTestTunnel(t)
-			tun.clashServer.setRejectMode(rejecting)
-			ct := tun.clashServer.connTracker
+			tun.clashModeManager.setRejectMode(rejecting)
+			ct := tun.connTracker
 			auto := joinClosable(ct, "srv-a", time.Now(), "srv-a", AutoSelectTag)
 			manual := joinClosable(ct, "srv-b", time.Now(), "srv-b", ManualSelectTag)
 
@@ -310,6 +303,10 @@ func (r *infoRecorder) RoutedPacketConnection(_ context.Context, conn N.PacketCo
 	return conn
 }
 
+func (r *infoRecorder) RoutedFlow(context.Context, adapter.InboundContext, adapter.Rule, adapter.Outbound) tun.FlowTracker {
+	return nil
+}
+
 // startInfoServer starts an HTTP and SOCKS proxy that decodes client info like a lantern
 // server, and returns its port and a recorder of connections routed to dest.
 func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
@@ -365,11 +362,10 @@ func TestTunnelClientInfo(t *testing.T) {
 				URL:       probe.URL,
 			}},
 		},
-		// The clash server needs at least one clash mode.
 		Route: &O.RouteOptions{Rules: []O.Rule{{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{ClashMode: "rule"},
+				RawDefaultRule: O.RawDefaultRule{ClashMode: ManualSelectTag},
 				RuleAction: O.RuleAction{
 					Action:       C.RuleActionTypeRoute,
 					RouteOptions: O.RouteActionOptions{Outbound: ManualSelectTag},
@@ -377,7 +373,6 @@ func TestTunnelClientInfo(t *testing.T) {
 			},
 		}}},
 		Experimental: &O.ExperimentalOptions{
-			ClashAPI:  &O.ClashAPIOptions{DefaultMode: "rule"},
 			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
 		},
 	}
@@ -386,14 +381,14 @@ func TestTunnelClientInfo(t *testing.T) {
 		dataPath:             t.TempDir(),
 		initialLanternTags:   []string{"lantern", "infra"},
 		initialNonSelectable: []string{"infra"},
+		initialMode:          ManualSelectTag,
 	}
 	t.Cleanup(func() { assert.NoError(t, tun.close()) })
 	require.NoError(t, tun.init(t.Context(), options, nil))
 	require.NoError(t, tun.boxInstance.Start())
 	tun.optsMap = makeOutboundOptsMap(tun.ctx, options)
 	tun.nonSelectableTags = makeNonSelectableTagSet(tun.initialNonSelectable, options)
-	clash := service.FromContext[adapter.ClashServer](tun.ctx).(*clashServer)
-	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), clash.connTracker)
+	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), tun.connTracker)
 	require.NoError(t, err)
 	tun.mutGrpMgr = mutGrpMgr
 	t.Cleanup(mutGrpMgr.Close)

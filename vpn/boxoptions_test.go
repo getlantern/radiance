@@ -200,6 +200,14 @@ func TestBuildOptions_DropsHostAccess(t *testing.T) {
 		"a dropped outbound must not be referenced by the selector")
 }
 
+func TestBuildOptions_DropsDeniedServices(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Options.Services = []O.Service{{Type: C.TypeSSMAPI, Tag: "ssm", Options: &O.SSMAPIServiceOptions{}}}
+	opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+	require.NoError(t, err)
+	assert.Empty(t, opts.Services)
+}
+
 func TestBuildOptions_RejectsHostAccessDNS(t *testing.T) {
 	cfg := testConfig(t)
 	var dns O.DNSOptions
@@ -208,7 +216,7 @@ func TestBuildOptions_RejectsHostAccessDNS(t *testing.T) {
 	}
 	dns.Servers = append(slices.Clone(dns.Servers), O.DNSServerOptions{
 		Type: C.DNSTypeUDP, Tag: "planted", Options: &O.RemoteDNSServerOptions{
-			RawLocalDNSServerOptions: O.RawLocalDNSServerOptions{DialerOptions: O.DialerOptions{NetNs: "/proc/1/ns/net"}},
+			RawLocalDNSServerOptions: O.RawLocalDNSServerOptions{DialerOptions: O.DialerOptions{AbstractDialerOptions: O.AbstractDialerOptions{NetNs: "/proc/1/ns/net"}}},
 			DNSServerAddressOptions:  O.DNSServerAddressOptions{Server: "192.0.2.1"},
 		},
 	})
