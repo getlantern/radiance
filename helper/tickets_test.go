@@ -360,3 +360,28 @@ func TestSourceCancelsFetchWithItsContext(t *testing.T) {
 	src.Inviter()
 	assert.Never(t, func() bool { return calls.Load() > 1 }, 50*time.Millisecond, time.Millisecond, "a cancelled Source never fetches again")
 }
+
+// Expiry runs from when the request was sent, so a slow response does not
+// stretch a ticket's life.
+func TestSourceExpiryRunsFromTheRequest(t *testing.T) {
+	inv, _ := testTickets(t)
+	clock := &fakeClock{t: time.Unix(1_800_000_000, 0)}
+	start := clock.now()
+	var calls atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		if calls.Add(1) == 1 {
+			clock.add(20 * time.Second)
+			return Tickets{Inviter: []string{inv}, Lifetime: 15 * time.Minute}, nil
+		}
+		return Tickets{}, errors.New("network down")
+	})
+	src.now = clock.now
+	src.Inviter()
+	settle(t, src)
+	clock.add(start.Add(15*time.Minute - time.Second).Sub(clock.now()))
+	assert.Equal(t, []string{inv}, src.Inviter())
+	settle(t, src)
+	clock.add(start.Add(15 * time.Minute).Sub(clock.now()))
+	assert.Empty(t, src.Inviter(), "expired 15 minutes after the request, not the response")
+	settle(t, src)
+}

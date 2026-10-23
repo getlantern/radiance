@@ -191,6 +191,9 @@ func (s *Source) read(role helperticket.Role) []string {
 }
 
 func (s *Source) refresh() {
+	// Expiry runs from when the request was sent, so latency never stretches
+	// a ticket's life past what lantern-cloud granted.
+	start := s.now()
 	t, err := s.safeFetch()
 	s.mu.Lock()
 	now := s.now()
@@ -207,8 +210,8 @@ func (s *Source) refresh() {
 		s.busy = 0
 		s.due = now.Add(RetryInterval)
 	default:
-		s.inviter = hold(t.Inviter, now, t.Lifetime)
-		s.volunteer = hold(t.Volunteer, now, t.Lifetime)
+		s.inviter = hold(t.Inviter, start, t.Lifetime)
+		s.volunteer = hold(t.Volunteer, start, t.Lifetime)
 		s.busy = 0
 		s.due = now.Add(refreshAfter(t.Lifetime))
 	}
