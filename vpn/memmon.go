@@ -90,23 +90,23 @@ func startMemoryMonitor(ctx context.Context) (*memmon.Monitor, io.Closer) {
 		nil,
 	)
 
-	return monitor, runMonitor(ctx, monitor)
+	return monitor, runUntilClosed(ctx, monitor.Run)
 }
 
-// initExecutor attaches reclaim and admission control after the clash server
-// becomes available. The monitor starts earlier in visibility-only mode.
-func initExecutor(monitor *memmon.Monitor, server *clashServer) {
+// initExecutor attaches reclaim and admission control after the connection
+// tracker becomes available. The monitor starts earlier in visibility-only mode.
+func initExecutor(monitor *memmon.Monitor, tracker *connTracker, modes *clashModeManager) {
 	// Use a dedicated sensor here. Sharing the monitor sensor would race its
 	// reused runtime/metrics buffers.
 	limit := getLimit()
 	gate := memmon.NewAdmissionGate(
 		memmon.AdmissionConfig{},
 		memmon.NewSensor(limit),
-		admissionRejectionHandler(server),
+		admissionRejectionHandler(modes),
 	)
-	server.SetAdmissionGate(gate)
+	tracker.SetAdmissionGate(gate)
 
-	reclaimer := &memoryReclaimer{tracker: server.connTracker}
+	reclaimer := &memoryReclaimer{tracker: tracker}
 	executor := memmon.NewExecutor(
 		reclaimer,
 		settings.GetString(settings.LogPathKey),
@@ -150,29 +150,13 @@ func memoryMonitorConfig(limit memmon.LimitProvider) memmon.Config {
 	return cfg
 }
 
-func admissionRejectionHandler(cs *clashServer) func(bool) {
+func admissionRejectionHandler(modes *clashModeManager) func(bool) {
 	if !settings.GetBool(settings.AdmissionRejectionDisabledKey) {
-		return cs.setRejectMode
+		return modes.setRejectMode
 	}
 
 	slog.Warn("[DEV] Admission rejection disabled; connections will not be rejected under high memory pressure")
 	return func(reject bool) {
 		slog.Warn("[DEV] Rejection toggle fired (notice-only)", "reject", reject)
 	}
-}
-
-func runMonitor(ctx context.Context, mon *memmon.Monitor) io.Closer {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		mon.Run(ctx)
-	}()
-
-	return closerFunc(func() error {
-		cancel()
-		<-done
-		return nil
-	})
 }

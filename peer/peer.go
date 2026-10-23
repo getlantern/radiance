@@ -27,6 +27,7 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/portforward"
 )
 
@@ -1384,6 +1385,10 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 	if err != nil {
 		return nil, fmt.Errorf("decode sing-box options: %w", err)
 	}
+	// The registry checks don't see route rule actions.
+	if err := hostaccess.CheckOptions(opts); err != nil {
+		return nil, fmt.Errorf("check sing-box options: %w", err)
+	}
 	bs, err := sbox.New(sbox.Options{
 		Context: ctx,
 		Options: opts,
@@ -1397,17 +1402,18 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 // newPeerBoxContext augments ctx with everything one peer box needs: the
 // sing-box and lantern-box protocol registries plus this box's own sing-box
 // log factory. The caller's cancellation is preserved, so a Stop-induced
-// cancel still reaches the box.
+// cancel still reaches the box. The registries refuse outbounds, endpoints,
+// DNS servers and services that [hostaccess] denies.
 //
 // The registries are what let sing-box decode custom inbounds like the
 // samizdat stanza from /peer/register; without them the decode fails with
 // "missing inbound fields registry in context". Registering the log factory
 // routes this box's router and dial errors to lantern.log instead of
 // sing-box's stderr default. Both are scoped to the fresh registry
-// box.Context installs, so the peer and the main tunnel coexist without
+// hostaccess.Context installs, so the peer and the main tunnel coexist without
 // stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
-	ctx = box.Context(ctx)
+	ctx = hostaccess.Context(ctx)
 	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
 	return ctx
 }

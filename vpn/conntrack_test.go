@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,7 @@ type dummyAddr string
 func (a dummyAddr) Network() string { return string(a) }
 func (a dummyAddr) String() string  { return string(a) }
 
-// wrapTCP mirrors clashServer.RoutedConnection's counter wiring so byte counting can be exercised
+// wrapTCP mirrors connTracker.RoutedConnection's counter wiring so byte counting can be exercised
 // without a full tunnel.
 func wrapTCP(ct *connTracker, r *record, conn net.Conn) *tcpConn {
 	c := &tcpConn{
@@ -328,4 +329,37 @@ func TestConnTracker_CloseWaitsForInFlightWriteAccounting(t *testing.T) {
 	assert.Equal(t, int64(len(msg)), tr.pending[0].down)
 	require.Len(t, obs.closes, 1)
 	assert.Equal(t, int64(len(msg)), obs.closes[0].Downlink)
+}
+
+type fakeFlowHandle struct {
+	flow   *flowConn
+	closes int
+}
+
+func (h *fakeFlowHandle) CloseFlow() {
+	h.closes++
+	h.flow.CloseFlow(tun.FlowCloseReset)
+}
+
+func TestFlowConnTracksFlow(t *testing.T) {
+	ct := newConnTracker()
+	r := newRec("wg")
+	f := &flowConn{rec: r, ct: ct}
+	r.closer = f
+	assert.Zero(t, ct.activeConnectionCount(), "a flow joins only once attached")
+
+	handle := &fakeFlowHandle{flow: f}
+	f.AttachFlow(handle)
+	require.EqualValues(t, 1, ct.activeConnectionCount())
+	f.CountForward(3)
+	f.CountReverse(5)
+	up, down := ct.Total()
+	assert.EqualValues(t, 3, up)
+	assert.EqualValues(t, 5, down)
+
+	ct.closeRecord(r)
+	assert.Equal(t, 1, handle.closes, "closing the record ends the flow through its handle")
+	assert.Zero(t, ct.activeConnectionCount())
+	f.CloseFlow(tun.FlowCloseFinished)
+	assert.Zero(t, ct.activeConnectionCount(), "a flow leaves once")
 }

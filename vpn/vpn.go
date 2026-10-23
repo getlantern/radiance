@@ -29,6 +29,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -185,6 +186,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 			selectionHistorySeed: boxOptions.SelectionHistorySeed,
 			initialLanternTags:   boxOptions.LanternServerTags,
 			initialNonSelectable: boxOptions.NonSelectableOutbounds,
+			initialMode:          modeForServer(boxOptions.InitialServer),
 			connObserver:         c.connObserver,
 		}
 		err := t.start(ctx, options, c.platformIfce, isRestart)
@@ -299,7 +301,7 @@ func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListen
 	if !ok || current != listener {
 		return
 	}
-	network.ResetNetwork()
+	network.ResetNetwork(c.tunnel.ctx)
 }
 
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
@@ -369,7 +371,7 @@ func (c *VPNClient) SelectServer(tag string) error {
 		return ErrTunnelNotConnected
 	}
 	t := c.tunnel
-	if tag == AutoSelectTag || tag == "" {
+	if modeForServer(tag) == AutoSelectTag {
 		return c.tunnel.selectMode(AutoSelectTag)
 	}
 
@@ -432,7 +434,7 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	if c.tunnel == nil {
 		return nil, fmt.Errorf("failed to get connections: %w", ErrTunnelNotConnected)
 	}
-	return c.tunnel.clashServer.connTracker.activeConnections(), nil
+	return c.tunnel.connTracker.activeConnections(), nil
 }
 
 // ActiveConnectionCount returns the number of active connections, or 0 if the tunnel is not
@@ -443,7 +445,7 @@ func (c *VPNClient) ActiveConnectionCount() int64 {
 	if c.tunnel == nil {
 		return 0
 	}
-	return c.tunnel.clashServer.connTracker.activeConnectionCount()
+	return c.tunnel.connTracker.activeConnectionCount()
 }
 
 // ClearTunnelCache removes the tunnel cache file at dataPath. If the tunnel is active it records
@@ -475,7 +477,7 @@ func (c *VPNClient) Bytes() (up, down int64, ok bool) {
 	if c.tunnel == nil {
 		return 0, 0, false
 	}
-	up, down = c.tunnel.clashServer.connTracker.Total()
+	up, down = c.tunnel.connTracker.Total()
 	return up, down, true
 }
 
@@ -487,8 +489,8 @@ func (c *VPNClient) Throughput() (ThroughputSnapshot, error) {
 	if c.tunnel == nil {
 		return ThroughputSnapshot{}, ErrTunnelNotConnected
 	}
-	tt := c.tunnel.clashServer.ThroughputTracker()
-	active, perOut := c.tunnel.clashServer.connTracker.activeStats()
+	tt := c.tunnel.connTracker.tp
+	active, perOut := c.tunnel.connTracker.activeStats()
 	return ThroughputSnapshot{
 		Global:            tt.Global(),
 		PerOutbound:       tt.PerOutbound(),
@@ -504,8 +506,8 @@ func (c *VPNClient) SetConnObserver(observer ConnObserver) {
 	c.connObserver = observer
 
 	var tracker *connTracker
-	if c.tunnel != nil && c.tunnel.clashServer != nil {
-		tracker = c.tunnel.clashServer.connTracker
+	if c.tunnel != nil {
+		tracker = c.tunnel.connTracker
 	}
 
 	c.mu.Unlock()
@@ -561,7 +563,7 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	if c.tunnel == nil {
 		return "", ErrTunnelNotConnected
 	}
-	mode := c.tunnel.clashServer.selectedMode()
+	mode := c.tunnel.clashModeManager.selectedMode()
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(mode)
 	if !loaded {
 		return "", fmt.Errorf("%s group not found", mode)
@@ -672,7 +674,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 		return nil, errors.New("offline tests already running")
 	}
 
-	ctx, cancel := context.WithCancel(box.Context(ctx))
+	ctx, cancel := context.WithCancel(hostaccess.Context(ctx))
 	defer cancel()
 	c.offlineTestCancel = cancel
 	done := make(chan struct{})

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/portforward"
 )
 
@@ -980,31 +982,50 @@ var _ boxService = (*fakeBoxService)(nil)
 // fields registry" error and this test fails before any of the runtime
 // cycle (rebuild, redeploy, toggle UI, dial-back) — what used to take a
 // 5-minute round-trip is now a 0.1s test failure.
-func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
-	// Minimal but complete samizdat inbound — every field that
-	// option.SamizdatInboundOptions's json tags require to round-trip.
-	// Values are placeholders; we don't run the box, just decode.
-	const opts = `{
-		"inbounds": [{
-			"type": "samizdat",
-			"tag": "samizdat-in",
-			"listen": "127.0.0.1",
-			"listen_port": 5698,
-			"private_key": "0000000000000000000000000000000000000000000000000000000000000000",
-			"short_ids": ["0000000000000000"],
-			"cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgIQCHOFXAcuEzPfyHK6LdwxwzAKBggqhkjOPQQDAjATMREw\nDwYDVQQKEwhJbnRlcm5ldDAeFw0yNjA1MDYwMDAwMDBaFw0yNzA1MDYwMDAwMDBa\nMBMxETAPBgNVBAoTCEludGVybmV0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\nb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyDUwmfVTZiQ+wR\nkQXjrkAwsOWK99JsM3R2bqNIMEYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwEQYDVR0RBAowCIIGdGVzdC5xMAoGCCqG\nSM49BAMCA0kAMEYCIQCqhyaQaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaIh\nAOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n-----END CERTIFICATE-----\n",
-			"key_pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaoAoGCCqGSM49\nAwEHoUQDQgAEb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyD\nUwmfVTZiQ+wRkQXjrkAwsOWK99JsM3R2bg==\n-----END EC PRIVATE KEY-----\n",
-			"masquerade_domain": "example.com"
-		}]
-	}`
+// samizdatInboundJSON is a minimal but complete samizdat inbound: every field
+// option.SamizdatInboundOptions's json tags require to round-trip. Values are
+// placeholders; the box is never started.
+const samizdatInboundJSON = `{
+	"type": "samizdat",
+	"tag": "samizdat-in",
+	"listen": "127.0.0.1",
+	"listen_port": 5698,
+	"private_key": "0000000000000000000000000000000000000000000000000000000000000000",
+	"short_ids": ["0000000000000000"],
+	"cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgIQCHOFXAcuEzPfyHK6LdwxwzAKBggqhkjOPQQDAjATMREw\nDwYDVQQKEwhJbnRlcm5ldDAeFw0yNjA1MDYwMDAwMDBaFw0yNzA1MDYwMDAwMDBa\nMBMxETAPBgNVBAoTCEludGVybmV0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\nb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyDUwmfVTZiQ+wR\nkQXjrkAwsOWK99JsM3R2bqNIMEYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwEQYDVR0RBAowCIIGdGVzdC5xMAoGCCqG\nSM49BAMCA0kAMEYCIQCqhyaQaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaIh\nAOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n-----END CERTIFICATE-----\n",
+	"key_pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaoAoGCCqGSM49\nAwEHoUQDQgAEb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyD\nUwmfVTZiQ+wRkQXjrkAwsOWK99JsM3R2bg==\n-----END EC PRIVATE KEY-----\n",
+	"masquerade_domain": "example.com"
+}`
 
-	bs, err := defaultBuildBoxService(context.Background(), opts)
+func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
+	bs, err := defaultBuildBoxService(context.Background(), `{"inbounds":[`+samizdatInboundJSON+`]}`)
 	require.NoError(t, err, "defaultBuildBoxService must decode a samizdat inbound — "+
 		"the lantern-box protocol registries have to be in ctx")
 	require.NotNil(t, bs)
 	// We never call Start; just verifying the decode path. Close drops
 	// any background structures the box might have stood up.
 	_ = bs.Close()
+}
+
+func TestDefaultBuildBoxService_BuildsAbuseBlockingLaunchCfg(t *testing.T) {
+	// Building binds the inbound, and an unstarted box keeps it bound after Close.
+	inbound := strings.Replace(samizdatInboundJSON, `"listen_port": 5698`, `"listen_port": 0`, 1)
+	cfg := strings.Replace(minimalValidLaunchCfg, `{"type":"samizdat","tag":"samizdat-in"}`, inbound, 1)
+	require.NotEqual(t, minimalValidLaunchCfg, cfg)
+	bs, err := defaultBuildBoxService(context.Background(), cfg)
+	require.NoError(t, err)
+	_ = bs.Close()
+}
+
+func TestDefaultBuildBoxService_DeniesHostAccess(t *testing.T) {
+	denied := map[string]string{
+		"outbound":     `{"outbounds":[{"type":"bridge","tag":"bridge"}]}`,
+		"route action": `{"route":{"rules":[{"action":"route-options","tls_spoof":"example.com"}]}}`,
+	}
+	for name, cfg := range denied {
+		_, err := defaultBuildBoxService(context.Background(), cfg)
+		assert.ErrorIs(t, err, hostaccess.ErrDenied, name)
+	}
 }
 
 func TestNewPeerBoxContext_LogFactoryIsRetrievable(t *testing.T) {

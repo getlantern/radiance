@@ -41,7 +41,7 @@ func (f *fakeNetwork) NetworkInterfaces() []adapter.NetworkInterface {
 	return make([]adapter.NetworkInterface, f.current)
 }
 
-func (f *fakeNetwork) ResetNetwork() { f.resets.Add(1) }
+func (f *fakeNetwork) ResetNetwork(context.Context) { f.resets.Add(1) }
 
 func (f *fakeNetwork) setPending(n int) {
 	f.mu.Lock()

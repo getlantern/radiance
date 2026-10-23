@@ -24,21 +24,40 @@ var deniedTypes = map[string]bool{
 	C.TypeTor:       true,
 	C.TypeTailscale: true,
 	lbC.TypeWATER:   true,
+	// Creates interfaces and installs firewall, NAT and routing rules.
+	C.TypeBridge: true,
+	// Runs its wrapper_path programs and reads host keys and certificates.
+	C.TypeOpenConnect: true,
+	// Reads host keys and certificates; the server also listens.
+	C.TypeOpenVPNClient: true,
+	C.TypeOpenVPNServer: true,
+}
+
+// allowedServiceTypes is an allowlist: most sing-box services listen on the
+// device or drive host components.
+var allowedServiceTypes = map[string]bool{
+	// TODO: use lbC.TypeOutboundEval once the lantern-box version radiance
+	// pins defines it; until then the constant does not exist.
+	"outbound-eval": true,
 }
 
 var deniedDNSTypes = map[string]bool{
-	C.DNSTypeDHCP:      true,
-	C.DNSTypeTailscale: true,
+	C.DNSTypeDHCP:        true,
+	C.DNSTypeTailscale:   true,
+	C.DNSTypeOpenConnect: true,
+	C.DNSTypeOpenVPN:     true,
 }
 
 var deniedFields = map[reflect.Type][]string{
-	reflect.TypeFor[option.OutboundTLSOptions]():       {"certificate_path", "client_certificate_path", "client_key_path"},
-	reflect.TypeFor[option.DialerOptions]():            {"protect_path", "netns"},
-	reflect.TypeFor[option.DirectActionOptions]():      {"protect_path", "netns"},
-	reflect.TypeFor[option.SSHOutboundOptions]():       {"private_key_path"},
-	reflect.TypeFor[option.WireGuardEndpointOptions](): {"listen_port"},
-	reflect.TypeFor[lbO.ReflexOutboundOptions]():       {"cert_path", "key_path"},
-	reflect.TypeFor[lbO.TwiddleOutboundOptions]():      {"hello_pool_path", "hello_pool_device_path"},
+	// spoof opens raw sockets and, on Windows, installs the WinDivert driver.
+	reflect.TypeFor[option.OutboundTLSOptions]():           {"certificate_path", "client_certificate_path", "client_key_path", "spoof"},
+	reflect.TypeFor[option.AbstractDialerOptions]():        {"protect_path", "netns"},
+	reflect.TypeFor[option.RawRouteOptionsActionOptions](): {"tls_spoof"},
+	reflect.TypeFor[option.RouteOptionsActionOptions]():    {"tls_spoof"},
+	reflect.TypeFor[option.SSHOutboundOptions]():           {"private_key_path"},
+	reflect.TypeFor[option.WireGuardEndpointOptions]():     {"listen_port"},
+	reflect.TypeFor[lbO.ReflexOutboundOptions]():           {"cert_path", "key_path"},
+	reflect.TypeFor[lbO.TwiddleOutboundOptions]():          {"hello_pool_path", "hello_pool_device_path"},
 }
 
 // TypeAllowed reports whether options of the given outbound or endpoint type
@@ -58,7 +77,7 @@ func CheckEndpoint(e option.Endpoint) error {
 }
 
 // CheckOptions returns an error wrapping [ErrDenied] if any outbound, endpoint,
-// DNS server or route rule in o may not be built.
+// service, DNS server or route rule in o may not be built.
 func CheckOptions(o option.Options) error {
 	for _, out := range o.Outbounds {
 		if err := CheckOutbound(out); err != nil {
@@ -70,10 +89,15 @@ func CheckOptions(o option.Options) error {
 			return err
 		}
 	}
+	for _, s := range o.Services {
+		if err := CheckService(s); err != nil {
+			return err
+		}
+	}
 	if o.DNS != nil {
 		for _, server := range o.DNS.Servers {
-			if deniedDNSTypes[server.Type] {
-				return fmt.Errorf("%w: dns server %s %q: type not allowed", ErrDenied, server.Type, server.Tag)
+			if err := checkDNS(server.Type, server.Tag, nil); err != nil {
+				return err
 			}
 		}
 	}
@@ -86,12 +110,29 @@ func CheckOptions(o option.Options) error {
 	return nil
 }
 
+// CheckService returns an error wrapping [ErrDenied] if s may not be built.
+func CheckService(s option.Service) error {
+	return checkService(s.Type, s.Tag, s.Options)
+}
+
+func checkService(typ, tag string, opts any) error {
+	return checkKind("service ", allowedServiceTypes[typ], typ, tag, opts)
+}
+
+func checkDNS(typ, tag string, opts any) error {
+	return checkKind("dns server ", !deniedDNSTypes[typ], typ, tag, opts)
+}
+
 func check(typ, tag string, opts any) error {
-	if !TypeAllowed(typ) {
-		return fmt.Errorf("%w: %s %q: type not allowed", ErrDenied, typ, tag)
+	return checkKind("", TypeAllowed(typ), typ, tag, opts)
+}
+
+func checkKind(kind string, typeAllowed bool, typ, tag string, opts any) error {
+	if !typeAllowed {
+		return fmt.Errorf("%w: %s%s %q: type not allowed", ErrDenied, kind, typ, tag)
 	}
 	if field := setDeniedField(reflect.ValueOf(opts)); field != "" {
-		return fmt.Errorf("%w: %s %q: %s is set", ErrDenied, typ, tag, field)
+		return fmt.Errorf("%w: %s%s %q: %s is set", ErrDenied, kind, typ, tag, field)
 	}
 	return nil
 }

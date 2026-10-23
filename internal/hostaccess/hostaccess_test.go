@@ -27,6 +27,10 @@ func TestCheckOutboundDenied(t *testing.T) {
 	}{
 		{"tor", option.Outbound{Type: C.TypeTor, Options: &option.TorOutboundOptions{}}},
 		{"water", option.Outbound{Type: lbC.TypeWATER, Options: &lbO.WATEROutboundOptions{}}},
+		{"bridge", option.Outbound{Type: C.TypeBridge, Options: &option.BridgeOutboundOptions{}}},
+		{"tls spoof", option.Outbound{Type: C.TypeTrojan, Options: &option.TrojanOutboundOptions{
+			OutboundTLSOptionsContainer: tls(option.OutboundTLSOptions{Enabled: true, Spoof: "example.com"}),
+		}}},
 		{"tls certificate", option.Outbound{Type: C.TypeTrojan, Options: &option.TrojanOutboundOptions{
 			OutboundTLSOptionsContainer: tls(option.OutboundTLSOptions{Enabled: true, CertificatePath: "/etc/ca.pem"}),
 		}}},
@@ -42,10 +46,10 @@ func TestCheckOutboundDenied(t *testing.T) {
 		{"twiddle hello pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPoolPath: "/etc/shadow"}}},
 		{"twiddle device hello pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPoolDevicePath: "/etc/shadow"}}},
 		{"dialer protect path", option.Outbound{Type: C.TypeShadowsocks, Options: &option.ShadowsocksOutboundOptions{
-			DialerOptions: option.DialerOptions{ProtectPath: "/run/protect.sock"},
+			DialerOptions: option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{ProtectPath: "/run/protect.sock"}},
 		}}},
 		{"dialer netns", option.Outbound{Type: C.TypeDirect, Options: &option.DirectOutboundOptions{
-			DialerOptions: option.DialerOptions{NetNs: "/proc/1/ns/net"},
+			DialerOptions: option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{NetNs: "/proc/1/ns/net"}},
 		}}},
 		{"options by value", option.Outbound{Type: C.TypeSSH, Options: option.SSHOutboundOptions{PrivateKeyPath: "/k"}}},
 	}
@@ -90,6 +94,9 @@ func TestCheckOutboundAllowed(t *testing.T) {
 func TestCheckEndpoint(t *testing.T) {
 	denied := []option.Endpoint{
 		{Type: C.TypeTailscale, Options: &option.TailscaleEndpointOptions{}},
+		{Type: C.TypeOpenConnect, Options: &option.OpenConnectEndpointOptions{}},
+		{Type: C.TypeOpenVPNClient, Options: &option.OpenVPNClientEndpointOptions{}},
+		{Type: C.TypeOpenVPNServer, Options: &option.OpenVPNServerEndpointOptions{}},
 		{Type: C.TypeWireGuard, Options: &option.WireGuardEndpointOptions{ListenPort: 51820, Name: "../../tmp/x"}},
 		{Type: lbC.TypeAmnezia, Options: &lbO.AmneziaEndpointOptions{
 			WireGuardEndpointOptions: option.WireGuardEndpointOptions{ListenPort: 51820},
@@ -117,14 +124,18 @@ var reviewedFields = map[reflect.Type]map[string]string{
 	reflect.TypeFor[option.OutboundECHOptions](): {
 		"config_path": "TLS ECH config; read and parsed, never sent",
 	},
-	reflect.TypeFor[option.DialerOptions](): {
+	reflect.TypeFor[option.AbstractDialerOptions](): {
 		"tcp_multi_path": "bool enabling MPTCP",
 		"bind_interface": "binds an outgoing connection to an existing interface",
 	},
-	reflect.TypeFor[option.HTTPOutboundOptions]():     {"path": "URL path of the proxy request"},
-	reflect.TypeFor[option.V2RayHTTPOptions]():        {"path": "URL path of the transport request"},
-	reflect.TypeFor[option.V2RayHTTPUpgradeOptions](): {"path": "URL path of the transport request"},
-	reflect.TypeFor[option.V2RayWebsocketOptions]():   {"path": "URL path of the transport request"},
+	reflect.TypeFor[option.QUICOptions]():              {"disable_path_mtu_discovery": "bool disabling QUIC path MTU discovery"},
+	reflect.TypeFor[option.Hysteria2OutboundOptions](): {"bbr_profile": "BBR congestion-control profile name"},
+	reflect.TypeFor[option.MDNSDNSServerOptions]():     {"interface": "existing interfaces to send mDNS queries on"},
+	reflect.TypeFor[option.RemoteRuleSet]():            {"initial_path": "rule-set file loaded before the first download; read and parsed, never sent"},
+	reflect.TypeFor[option.HTTPOutboundOptions]():      {"path": "URL path of the proxy request"},
+	reflect.TypeFor[option.V2RayHTTPOptions]():         {"path": "URL path of the transport request"},
+	reflect.TypeFor[option.V2RayHTTPUpgradeOptions]():  {"path": "URL path of the transport request"},
+	reflect.TypeFor[option.V2RayWebsocketOptions]():    {"path": "URL path of the transport request"},
 	reflect.TypeFor[option.WireGuardEndpointOptions](): {
 		"system": "WireGuard interface used by Lantern's desktop servers; executes and writes nothing",
 	},
@@ -134,10 +145,6 @@ var reviewedFields = map[reflect.Type]map[string]string{
 	reflect.TypeFor[option.LocalRuleSet]():                {"path": "rule-set file; read and parsed, never sent"},
 	reflect.TypeFor[option.GeoIPOptions]():                {"path": "never read by sing-box"},
 	reflect.TypeFor[option.GeositeOptions]():              {"path": "never read by sing-box"},
-	reflect.TypeFor[option.DirectActionOptions](): {
-		"tcp_multi_path": "bool enabling MPTCP",
-		"bind_interface": "binds an outgoing connection to an existing interface",
-	},
 	reflect.TypeFor[option.RawDefaultRule](): {
 		"process_path": "matcher", "process_path_regex": "matcher",
 		"interface_address": "matcher", "network_interface_address": "matcher", "default_interface_address": "matcher",
@@ -153,6 +160,7 @@ var reviewedFields = map[reflect.Type]map[string]string{
 	reflect.TypeFor[option.RouteOptions](): {
 		"auto_detect_interface": "selects an existing interface",
 		"default_interface":     "selects an existing interface",
+		"dhcp_lease_files":      "DHCP lease files; read and parsed for neighbor matching, never sent",
 	},
 }
 
@@ -169,6 +177,7 @@ func TestRegisteredOptionFieldsReviewed(t *testing.T) {
 		"outbound": service.FromContext[option.OutboundOptionsRegistry](ctx).(registry),
 		"endpoint": service.FromContext[option.EndpointOptionsRegistry](ctx).(registry),
 		"dns":      service.FromContext[option.DNSTransportOptionsRegistry](ctx).(registry),
+		"service":  service.FromContext[option.ServiceOptionsRegistry](ctx).(registry),
 	}
 	assertReviewed := func(kind, typ string, opts reflect.Type) {
 		for _, f := range hostInputFields(opts, map[reflect.Type]bool{}) {
@@ -184,8 +193,19 @@ func TestRegisteredOptionFieldsReviewed(t *testing.T) {
 		require.NotEmpty(t, types, kind)
 		slices.Sort(types)
 		for _, typ := range types {
-			if kind == "dns" && deniedDNSTypes[typ] || kind != "dns" && !TypeAllowed(typ) {
-				continue
+			switch kind {
+			case "dns":
+				if deniedDNSTypes[typ] {
+					continue
+				}
+			case "service":
+				if !allowedServiceTypes[typ] {
+					continue
+				}
+			default:
+				if !TypeAllowed(typ) {
+					continue
+				}
 			}
 			opts, ok := registry.CreateOptions(typ)
 			require.True(t, ok, typ)
@@ -233,23 +253,34 @@ func TestCheckOptions(t *testing.T) {
 			Servers: []option.DNSServerOptions{{Type: C.DNSTypeTLS, Tag: "dot", Options: opts}},
 		}}}
 	}
-	directRule := func(d option.DirectActionOptions) option.Options {
+	actionRule := func(a option.RuleAction) option.Options {
 		return option.Options{Route: &option.RouteOptions{Rules: []option.Rule{{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: option.DefaultRule{RuleAction: option.RuleAction{
-				Action: C.RuleActionTypeDirect, DirectOptions: d,
-			}},
+			Type:           C.RuleTypeDefault,
+			DefaultOptions: option.DefaultRule{RuleAction: a},
 		}}}}
+	}
+	directRule := func(d option.DirectActionOptions) option.Options {
+		return actionRule(option.RuleAction{Action: C.RuleActionTypeDirect, DirectOptions: d})
 	}
 	denied := map[string]option.Options{
 		"dns netns": dnsServer(&option.RemoteTLSDNSServerOptions{RemoteDNSServerOptions: option.RemoteDNSServerOptions{
-			RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{NetNs: "/proc/1/ns/net"}},
+			RawLocalDNSServerOptions: option.RawLocalDNSServerOptions{DialerOptions: option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{NetNs: "/proc/1/ns/net"}}},
 		}}),
 		"dns tls client key": dnsServer(&option.RemoteTLSDNSServerOptions{OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{
 			TLS: &option.OutboundTLSOptions{Enabled: true, ClientKeyPath: "/etc/key.pem"},
 		}}),
-		"direct action protect path": directRule(option.DirectActionOptions{ProtectPath: "/run/protect.sock"}),
-		"denied outbound":            {Outbounds: []option.Outbound{{Type: C.TypeTor}}},
+		"direct action protect path": directRule(option.DirectActionOptions{AbstractDialerOptions: option.AbstractDialerOptions{ProtectPath: "/run/protect.sock"}}),
+		"route action tls spoof": actionRule(option.RuleAction{Action: C.RuleActionTypeRoute, RouteOptions: option.RouteActionOptions{
+			RawRouteOptionsActionOptions: option.RawRouteOptionsActionOptions{TLSSpoof: "example.com"},
+		}}),
+		"route-options action tls spoof": actionRule(option.RuleAction{Action: C.RuleActionTypeRouteOptions,
+			RouteOptionsOptions: option.RouteOptionsActionOptions{TLSSpoof: "example.com"},
+		}),
+		"denied outbound": {Outbounds: []option.Outbound{{Type: C.TypeTor}}},
+		"denied service":  {Services: []option.Service{{Type: C.TypeSSMAPI, Options: &option.SSMAPIServiceOptions{}}}},
+		"openvpn dns server": {DNS: &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
+			Servers: []option.DNSServerOptions{{Type: C.DNSTypeOpenVPN, Tag: "openvpn"}},
+		}}},
 		"dhcp dns server": {DNS: &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
 			Servers: []option.DNSServerOptions{{Type: C.DNSTypeDHCP, Tag: "dhcp", Options: &option.DHCPDNSServerOptions{}}},
 		}}},
