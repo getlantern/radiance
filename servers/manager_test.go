@@ -417,3 +417,39 @@ func testManager(t *testing.T) *Manager {
 		logger:      log.NoOpLogger(),
 	}
 }
+
+func TestAddPrivateServerPersistsLocationAndJoined(t *testing.T) {
+	manager := testManager(t)
+	manager.httpClient = &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+	srv := newLanternServerManagerMock()
+	defer srv.Close()
+	parsedURL, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(parsedURL.Port())
+
+	loc := C.ServerLocation{City: "Frankfurt", CountryCode: "DE"}
+	require.NoError(t, manager.AddPrivateServer("de", parsedURL.Hostname(), port, "rootToken", loc, true))
+
+	// In memory.
+	got, ok := manager.servers["de"]
+	require.True(t, ok)
+	assert.Equal(t, loc, got.Location)
+	assert.True(t, got.Credentials.IsJoined)
+
+	// On disk, as the IPC /servers response would serialize it.
+	raw, err := os.ReadFile(manager.serversFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"country_code":"DE"`)
+	assert.Contains(t, string(raw), `"city":"Frankfurt"`)
+	assert.Contains(t, string(raw), `"is_joined":true`)
+
+	// Reloaded by a fresh manager.
+	reloaded := testManager(t)
+	reloaded.serversFile = manager.serversFile
+	require.NoError(t, reloaded.loadServers())
+	got, ok = reloaded.servers["de"]
+	require.True(t, ok)
+	assert.Equal(t, loc, got.Location)
+	assert.True(t, got.Credentials.IsJoined)
+}
