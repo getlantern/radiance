@@ -87,6 +87,10 @@ type tunnel struct {
 	// connection-close pushes for telemetry.
 	connObserver ConnObserver
 
+	// inviterTickets, if non-nil, supplies the Unbounded consumer's helper
+	// inviter tickets.
+	inviterTickets InviterTickets
+
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
 
@@ -201,6 +205,12 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	// recursively re-enters itself. streamingRoundTripper forces kindling to
 	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	boxCtx = lbA.ContextWithDirectTransport(boxCtx, streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	// An Unbounded consumer joins its helper pairings' rooms on freddie with
+	// the inviter tickets lantern-cloud issues this device. lantern-box gives
+	// the source only to helper-tagged Unbounded outbounds, which read it at
+	// every subscribe; the source fetches on first use and renews in the
+	// background, outside the tunnel like the signaling itself.
+	boxCtx = withHelperRoomTickets(boxCtx, t.inviterTickets)
 
 	t.ctx = boxCtx
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
@@ -963,4 +973,13 @@ func (c *cacheFileWrapper) LoadSelected(_ string) string {
 
 func (c *cacheFileWrapper) StoreSelected(_, _ string) error {
 	return nil
+}
+
+// withHelperRoomTickets gives the Unbounded outbound src's inviter tickets.
+// With no source, ctx is returned unchanged.
+func withHelperRoomTickets(ctx context.Context, src InviterTickets) context.Context {
+	if src == nil {
+		return ctx
+	}
+	return lbA.ContextWithRoomTicketSource(ctx, src.Inviter)
 }

@@ -219,6 +219,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
+	vpnClient.SetInviterTickets(r.helperTickets)
 	backend = r
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
