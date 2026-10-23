@@ -29,6 +29,9 @@ func Context(ctx context.Context) context.Context {
 	wrap[adapter.ServiceRegistry, serviceRegistry](ctx, func(r adapter.ServiceRegistry) adapter.ServiceRegistry {
 		return serviceRegistry{r}
 	})
+	wrap[adapter.CertificateProviderRegistry, certificateProviderRegistry](ctx, func(r adapter.CertificateProviderRegistry) adapter.CertificateProviderRegistry {
+		return certificateProviderRegistry{r}
+	})
 	return ctx
 }
 
@@ -82,4 +85,17 @@ func (r serviceRegistry) Create(ctx context.Context, logger log.ContextLogger, t
 		return nil, err
 	}
 	return r.ServiceRegistry.Create(ctx, logger, tag, typ, options)
+}
+
+type certificateProviderRegistry struct {
+	adapter.CertificateProviderRegistry
+}
+
+func (r certificateProviderRegistry) Upstream() any { return r.CertificateProviderRegistry }
+
+func (r certificateProviderRegistry) Create(ctx context.Context, logger log.ContextLogger, tag, typ string, options any) (adapter.CertificateProviderService, error) {
+	if err := checkCertificateProvider(typ, tag, options); err != nil {
+		return nil, err
+	}
+	return r.CertificateProviderRegistry.Create(ctx, logger, tag, typ, options)
 }

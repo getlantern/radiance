@@ -34,6 +34,9 @@ func TestContextDeniesConfiguredOptions(t *testing.T) {
 			Servers: []option.DNSServerOptions{{Type: C.DNSTypeOpenVPN, Tag: "ovpn-dns"}},
 		}}},
 		"service": {Services: []option.Service{{Type: C.TypeSSMAPI, Tag: "ssm", Options: &option.SSMAPIServiceOptions{}}}},
+		"certificate provider": {CertificateProviders: []option.CertificateProvider{{
+			Type: C.TypeCloudflareOriginCA, Tag: "origin-ca", Options: &option.CloudflareOriginCACertificateProviderOptions{},
+		}}},
 	}
 	for name, options := range denied {
 		_, _, err := newCheckedBox(t, options)
@@ -50,6 +53,9 @@ func TestContextDeniesRuntimeCreate(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDenied)
 	err = instance.Endpoint().Create(ctx, instance.Router(), logger, "ovpn", C.TypeOpenVPNClient, &option.OpenVPNClientEndpointOptions{})
 	assert.ErrorIs(t, err, ErrDenied)
+
+	_, err = service.FromContext[adapter.CertificateProviderRegistry](ctx).Create(ctx, logger, "", C.TypeACME, &option.ACMECertificateProviderOptions{})
+	assert.ErrorIs(t, err, ErrDenied, "inline certificate providers are created through the registry")
 
 	require.NoError(t, instance.Outbound().Create(ctx, instance.Router(), logger, "direct", C.TypeDirect, &option.DirectOutboundOptions{}))
 	_, found := instance.Outbound().Outbound("direct")

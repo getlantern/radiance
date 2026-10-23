@@ -451,3 +451,20 @@ func TestRoutedFlowChainStartsAtRuleOutbound(t *testing.T) {
 	assert.Equal(t, 1, handle.closes, "a mode switch closes flows routed through the group")
 	assert.Zero(t, ct.activeConnectionCount())
 }
+
+func TestRoutedFlowKeepsResolvedEndpointAfterGroupSwitch(t *testing.T) {
+	endpoint := taggedOutbound{tag: "wg-a"}
+	ct := newConnTracker()
+	ct.outbound = stubOutboundManager{outbounds: map[string]A.Outbound{
+		AutoSelectTag: taggedGroup{taggedOutbound: taggedOutbound{tag: AutoSelectTag}, now: "wg-b"},
+		"wg-a":        endpoint,
+		"wg-b":        taggedOutbound{tag: "wg-b"},
+	}}
+	rule := routeRule{action: &R.RuleActionRoute{Outbound: AutoSelectTag}}
+
+	// auto switched to wg-b after sing-box routed the flow to wg-a.
+	f, ok := ct.RoutedFlow(context.Background(), A.InboundContext{}, rule, endpoint).(*flowConn)
+	require.True(t, ok)
+	assert.Equal(t, "wg-a", f.rec.outbound)
+	assert.Equal(t, []string{"wg-a", AutoSelectTag}, f.rec.chain)
+}

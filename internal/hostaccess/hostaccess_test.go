@@ -284,11 +284,27 @@ func TestCheckOptions(t *testing.T) {
 		"dhcp dns server": {DNS: &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
 			Servers: []option.DNSServerOptions{{Type: C.DNSTypeDHCP, Tag: "dhcp", Options: &option.DHCPDNSServerOptions{}}},
 		}}},
+		"http client netns": {HTTPClients: []option.HTTPClient{{Tag: "client",
+			DialerOptions: option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{NetNs: "/proc/1/ns/net"}},
+		}}},
+		"http client tls spoof": {HTTPClients: []option.HTTPClient{{Tag: "client",
+			OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{TLS: &option.OutboundTLSOptions{Enabled: true, Spoof: "example.com"}},
+		}}},
+		"remote rule set http client netns": {Route: &option.RouteOptions{RuleSet: []option.RuleSet{{
+			Type: C.RuleSetTypeRemote,
+			RemoteOptions: option.RemoteRuleSet{HTTPClient: &option.HTTPClientOptions{
+				DialerOptions: option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{NetNs: "/proc/1/ns/net"}},
+			}},
+		}}}},
+		"certificate provider": {CertificateProviders: []option.CertificateProvider{{
+			Type: C.TypeCloudflareOriginCA, Tag: "origin-ca", Options: &option.CloudflareOriginCACertificateProviderOptions{},
+		}}},
 	}
 	for name, o := range denied {
 		assert.ErrorIs(t, CheckOptions(o), ErrDenied, name)
 	}
 	assert.NoError(t, CheckOptions(dnsServer(&option.RemoteTLSDNSServerOptions{})))
 	assert.NoError(t, CheckOptions(directRule(option.DirectActionOptions{})))
+	assert.NoError(t, CheckOptions(option.Options{HTTPClients: []option.HTTPClient{{Tag: "client"}}}))
 	assert.NoError(t, CheckOptions(option.Options{}))
 }

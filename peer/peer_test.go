@@ -1109,6 +1109,9 @@ func TestDefaultBuildBoxService_DeniesHostAccess(t *testing.T) {
 	denied := map[string]string{
 		"outbound":     `{"outbounds":[{"type":"bridge","tag":"bridge"}]}`,
 		"route action": `{"route":{"rules":[{"action":"route-options","tls_spoof":"example.com"}]}}`,
+		"http client":  `{"http_clients":[{"tag":"client","netns":"/proc/1/ns/net"}]}`,
+		"certificate provider": `{"certificate_providers":[{"type":"cloudflare-origin-ca","tag":"origin-ca",` +
+			`"domain":["example.com"],"api_token":"token","data_directory":"/etc"}]}`,
 	}
 	for name, cfg := range denied {
 		_, err := defaultBuildBoxService(context.Background(), cfg)

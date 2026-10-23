@@ -77,7 +77,8 @@ func CheckEndpoint(e option.Endpoint) error {
 }
 
 // CheckOptions returns an error wrapping [ErrDenied] if any outbound, endpoint,
-// service, DNS server or route rule in o may not be built.
+// service, DNS server, HTTP client, certificate provider or route rule in o may
+// not be built.
 func CheckOptions(o option.Options) error {
 	for _, out := range o.Outbounds {
 		if err := CheckOutbound(out); err != nil {
@@ -101,6 +102,16 @@ func CheckOptions(o option.Options) error {
 			}
 		}
 	}
+	for _, c := range o.HTTPClients {
+		if field := setDeniedField(reflect.ValueOf(c)); field != "" {
+			return fmt.Errorf("%w: http client %q: %s is set", ErrDenied, c.Tag, field)
+		}
+	}
+	for _, p := range o.CertificateProviders {
+		if err := checkCertificateProvider(p.Type, p.Tag, p.Options); err != nil {
+			return err
+		}
+	}
 	if field := setDeniedField(reflect.ValueOf(o.DNS)); field != "" {
 		return fmt.Errorf("%w: dns: %s is set", ErrDenied, field)
 	}
@@ -117,6 +128,12 @@ func CheckService(s option.Service) error {
 
 func checkService(typ, tag string, opts any) error {
 	return checkKind("service ", allowedServiceTypes[typ], typ, tag, opts)
+}
+
+// checkCertificateProvider denies every certificate provider: they write
+// certificate state to the host, and radiance has no use for one.
+func checkCertificateProvider(typ, tag string, opts any) error {
+	return checkKind("certificate provider ", false, typ, tag, opts)
 }
 
 func checkDNS(typ, tag string, opts any) error {

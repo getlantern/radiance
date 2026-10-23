@@ -425,30 +425,40 @@ func (m *connTracker) RoutedPacketConnection(ctx context.Context, conn N.PacketC
 // instead of as a connection, such as traffic to a WireGuard endpoint.
 func (m *connTracker) RoutedFlow(ctx context.Context, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) tun.FlowTracker {
 	m.admitConnection(time.Now())
-	r := m.newRecord(metadata, matchedRule, m.routeTarget(matchedRule, matchOutbound))
+	r := m.newRecord(metadata, matchedRule, matchOutbound)
+	r.chain = m.flowChain(matchedRule, matchOutbound)
 	f := &flowConn{rec: r, ct: m}
 	r.closer = f
 	return f
 }
 
-// routeTarget returns the outbound matchedRule routed to, nil for the default
-// outbound. sing-box resolves groups before it calls RoutedFlow, so a flow's
-// matchOutbound is the group's selection rather than the group the rule names.
-func (m *connTracker) routeTarget(matchedRule A.Rule, resolved A.Outbound) A.Outbound {
-	if matchedRule == nil {
-		return nil
-	}
+// flowChain returns a flow's chain, leaf first, like resolveChain's. sing-box
+// resolves groups before it calls RoutedFlow, so leaf is a group's selection at
+// routing time rather than the group the rule names; the chain keeps leaf and
+// takes the groups from the rule's outbound, whose selection may have changed.
+func (m *connTracker) flowChain(matchedRule A.Rule, leaf A.Outbound) []string {
 	var tag string
-	switch action := matchedRule.Action().(type) {
-	case *R.RuleActionRoute:
-		tag = action.Outbound
-	case *R.RuleActionBypass:
-		tag = action.Outbound
+	if matchedRule != nil {
+		switch action := matchedRule.Action().(type) {
+		case *R.RuleActionRoute:
+			tag = action.Outbound
+		case *R.RuleActionBypass:
+			tag = action.Outbound
+		}
 	}
-	if target, loaded := m.outbound.Outbound(tag); loaded {
-		return target
+	target, loaded := m.outbound.Outbound(tag)
+	if !loaded {
+		target = m.outbound.Default()
 	}
-	return resolved
+	if target == nil || target.Tag() == leaf.Tag() {
+		return []string{leaf.Tag()}
+	}
+	_, _, chain := m.resolveChain(target)
+	if len(chain) == 0 {
+		return []string{leaf.Tag()}
+	}
+	chain[0] = leaf.Tag()
+	return chain
 }
 
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
