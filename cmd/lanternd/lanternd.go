@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -316,8 +317,11 @@ func spawnChild(args []string, logger *slog.Logger) (*childProcess, error) {
 	if h, ok := logger.Handler().(*rlog.Handler); ok {
 		w = h.Writer()
 	}
-	// Same writer value for both streams so output stays serialized through one sink.
-	out := &bestEffortWriter{w: w}
+	// Same writer value for both streams so exec shares one pipe and one
+	// copying goroutine between them, and output stays serialized through one
+	// sink. lineWriter hands the sink whole lines, so the sink's helper-tag
+	// redaction never sees a tag split across two pipe reads.
+	out := &lineWriter{w: &bestEffortWriter{w: w}}
 	cmd.Stdout = out
 	cmd.Stderr = out
 	cmd.WaitDelay = childWaitDelay
@@ -328,7 +332,12 @@ func spawnChild(args []string, logger *slog.Logger) (*childProcess, error) {
 	logger.Info("Started daemon process", "pid", cmd.Process.Pid)
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		// Wait returns after exec's copying goroutine, so nothing else writes.
+		out.Flush()
+		done <- err
+	}()
 
 	return &childProcess{
 		cmd:    cmd,
@@ -383,6 +392,47 @@ func (b *bestEffortWriter) Write(p []byte) (int, error) {
 		fmt.Fprintf(os.Stderr, "lanternd: dropping daemon output, log writer failed: %v\n", err)
 	}
 	return len(p), nil
+}
+
+// maxChildLine bounds how much of an unended line lineWriter holds.
+const maxChildLine = 64 << 10
+
+// lineWriter passes w only whole lines, holding a trailing partial line until
+// the rest arrives, so a filter on w sees each line in one Write. A line
+// longer than maxChildLine is passed on as it is. Not safe for concurrent
+// use; exec gives it one goroutine.
+type lineWriter struct {
+	w   io.Writer
+	buf []byte
+}
+
+func (l *lineWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	last := bytes.LastIndexByte(p, '\n')
+	if last < 0 {
+		l.buf = append(l.buf, p...)
+		if len(l.buf) >= maxChildLine {
+			l.Flush()
+		}
+		return n, nil
+	}
+	if len(l.buf) > 0 {
+		l.buf = append(l.buf, p[:last+1]...)
+		_, _ = l.w.Write(l.buf)
+		l.buf = l.buf[:0]
+	} else {
+		_, _ = l.w.Write(p[:last+1])
+	}
+	l.buf = append(l.buf, p[last+1:]...)
+	return n, nil
+}
+
+// Flush passes on a held partial line.
+func (l *lineWriter) Flush() {
+	if len(l.buf) > 0 {
+		_, _ = l.w.Write(l.buf)
+		l.buf = l.buf[:0]
+	}
 }
 
 // HandleCrash cleans up stale VPN network state left by a crashed child.

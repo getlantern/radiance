@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +15,8 @@ import (
 	"time"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+
+	"github.com/getlantern/radiance/internal/redact"
 )
 
 const (
@@ -65,24 +69,93 @@ func buildIssueArchive(logger *slog.Logger, logDir string, additionalFiles []str
 	primaryLogData = prependMostRecentBackup(logger, primaryPath, primaryLogData, maxSize)
 
 	// Logs and attachments (config.json, servers.json, debug-box-options.json)
-	// can name helper- outbounds, which clients must not export.
-	primaryLogData = redactHelperTags(primaryLogData)
+	// can name helper outbounds and the helpers' addresses, which clients
+	// must not export.
+	attachments = stubHelperAttachments(logger, attachments)
+	primaryLogData = redact.HelperBytes(primaryLogData)
 	for i := range secondaryLogs {
-		secondaryLogs[i].data = redactHelperTags(secondaryLogs[i].data)
+		secondaryLogs[i].data = redact.HelperBytes(secondaryLogs[i].data)
 	}
 	for i := range attachments {
-		attachments[i].data = redactHelperTags(attachments[i].data)
+		attachments[i].data = redact.HelperBytes(attachments[i].data)
 	}
 
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
 }
 
-// redactHelperTags replaces helper- outbound tags in b with "helper".
-func redactHelperTags(b []byte) []byte {
-	if !bytes.Contains(b, []byte(lbA.HelperTagPrefix)) {
-		return b
+// stubHelperAttachments replaces every helper outbound or endpoint in the
+// JSON attachments with a stub that keeps only its type, so no helper's
+// address, port or keys are uploaded. A JSON attachment that does not parse is
+// dropped rather than uploaded raw.
+func stubHelperAttachments(logger *slog.Logger, files []extraFile) []extraFile {
+	out := files[:0]
+	for _, f := range files {
+		if strings.EqualFold(filepath.Ext(f.name), ".json") {
+			data, err := stubHelperOutbounds(f.data)
+			if err != nil {
+				logger.Warn("Dropping unparseable JSON attachment from issue report", "name", f.name)
+				continue
+			}
+			f.data = data
+		}
+		out = append(out, f)
 	}
-	return []byte(lbA.RedactHelperTags(string(b)))
+	return out
+}
+
+// stubHelperOutbounds rewrites a JSON document so that every object tagged
+// with a helper tag, and every value keyed by one, becomes
+// {"type": <its type>, "tag": "helper"}, and every helper tag string becomes
+// "helper". The result is indented, one value per line.
+func stubHelperOutbounds(data []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("trailing data after JSON document")
+	}
+	return json.MarshalIndent(stubHelpers(v), "", "  ")
+}
+
+func stubHelpers(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		if tag, ok := t["tag"].(string); ok && lbA.IsHelperTag(tag) {
+			return helperStub(t)
+		}
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			if lbA.IsHelperTag(k) {
+				out["helper"] = helperStub(e)
+				continue
+			}
+			out[k] = stubHelpers(e)
+		}
+		return out
+	case []any:
+		for i := range t {
+			t[i] = stubHelpers(t[i])
+		}
+		return t
+	case string:
+		if lbA.IsHelperTag(t) {
+			return "helper"
+		}
+	}
+	return v
+}
+
+func helperStub(v any) map[string]any {
+	stub := map[string]any{"tag": "helper"}
+	if m, ok := v.(map[string]any); ok {
+		if typ, ok := m["type"].(string); ok {
+			stub["type"] = typ
+		}
+	}
+	return stub
 }
 
 // prependMostRecentBackup prepends the newest rotated gzip backup, if present,

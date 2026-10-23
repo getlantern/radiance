@@ -261,6 +261,10 @@ func initMeterProvider(ctx context.Context, res *resource.Resource, cfg common.O
 	} else {
 		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)))
 	}
+	// Metric attributes are exported as recorded: unlike spans and logs there
+	// is no redacting layer here. Any attribute built from an outbound tag (see
+	// newConnAttributeSet) must go through lbA.RedactHelperTags, since helper-
+	// tags are client-side pseudonyms that must not leave the client.
 	meterProvider := sdkmetric.NewMeterProvider(
 		opts...,
 	)

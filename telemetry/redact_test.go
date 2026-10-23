@@ -63,3 +63,32 @@ func TestConnMetricAttributesRedactHelperTags(t *testing.T) {
 	v, _ := set.Value("outbound_name")
 	assert.Equal(t, "helper", v.AsString())
 }
+
+func TestSpanExportRedactsVolunteerAddresses(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(newRedactingExporter(mem)))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	_, span := tp.Tracer("test").Start(context.Background(), "connect")
+	span.RecordError(errors.New("outbound/samizdat[" + helperTag + "]: dial tcp [2001:db8::7]:443"))
+	span.SetStatus(codes.Error, "outbound/samizdat["+helperTag+"]: dial tcp 203.0.113.7:443")
+	span.SetAttributes(attribute.String("peer", "198.51.100.9:443"))
+	span.End()
+
+	s := mem.GetSpans()[0]
+	assert.Equal(t, "outbound/samizdat[helper]: dial tcp <redacted>", s.Status.Description)
+	evAttrs := attribute.NewSet(s.Events[0].Attributes...)
+	msg, _ := evAttrs.Value("exception.message")
+	assert.Equal(t, "outbound/samizdat[helper]: dial tcp <redacted>", msg.AsString())
+	assert.Contains(t, s.Attributes, attribute.String("peer", "198.51.100.9:443"), "no helper outbound named: kept")
+}
+
+func TestRedactedSpanReturnsOriginalsWhenNothingChanges(t *testing.T) {
+	ro := tracetest.SpanStub{
+		Name:   "clean",
+		Events: []sdktrace.Event{{Name: "e", Attributes: []attribute.KeyValue{attribute.String("k", "v")}}},
+		Links:  []sdktrace.Link{{Attributes: []attribute.KeyValue{attribute.String("k", "v")}}},
+	}.Snapshot()
+	rs := redactedSpan{ReadOnlySpan: ro}
+	assert.Same(t, &ro.Events()[0], &rs.Events()[0])
+	assert.Same(t, &ro.Links()[0], &rs.Links()[0])
+}

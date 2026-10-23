@@ -27,9 +27,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
-	lbA "github.com/getlantern/lantern-box/adapter"
 
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -372,7 +372,7 @@ func (c *VPNClient) setStatus(s VPNStatus, err error) {
 	if err != nil {
 		// sing-box errors name the failing outbound, and a helper- tag must
 		// not leave the client; the UI may forward this text.
-		evt.Error = lbA.RedactHelperTags(err.Error())
+		evt.Error = redact.Helper(err.Error())
 	}
 	events.Emit(evt)
 }

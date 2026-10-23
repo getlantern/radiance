@@ -41,3 +41,17 @@ func TestRedactingWriterReportsTheCallersLength(t *testing.T) {
 	assert.Equal(t, len(plain), n)
 	assert.Equal(t, "no tags here\n", buf.String())
 }
+
+// Ruling R3: a sing-box dial error names the volunteer's address next to the
+// helper outbound.
+func TestLogOutputRedactsVolunteerAddressesOnHelperLines(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(newRedactingWriter(&buf), &slog.HandlerOptions{ReplaceAttr: replaceLogAttr}))
+	logger.Warn("dial failed", "error", errors.New("outbound/samizdat["+helperTag+"]: dial tcp 203.0.113.7:443"))
+	logger.Warn("dial failed", "error", errors.New("outbound/samizdat["+helperTag+"]: dial tcp [2001:db8::7]:443"))
+	logger.Warn("dial failed", "error", errors.New("outbound/samizdat[lantern-1]: dial tcp 198.51.100.9:443"))
+	out := buf.String()
+	assert.NotContains(t, out, "203.0.113.7")
+	assert.NotContains(t, out, "2001:db8::7")
+	assert.Contains(t, out, "198.51.100.9:443", "lines without a helper outbound keep their addresses")
+}
