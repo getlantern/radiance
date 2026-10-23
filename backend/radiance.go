@@ -32,6 +32,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
@@ -97,6 +98,12 @@ type LocalBackend struct {
 	selectionReporter            *selectionReporter
 
 	exhaustionGate exhaustionGate
+
+	// helperTickets is this device's helper pairing tickets: the one source
+	// for the process, shared by the widget's volunteer side and the tunnel's
+	// inviter side so they draw on a single fetch budget. It stops fetching
+	// when ctx ends.
+	helperTickets *helper.Source
 }
 
 type Options struct {
@@ -211,6 +218,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
+	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
 	backend = r
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
@@ -333,6 +341,13 @@ func (r *LocalBackend) Start() {
 	// Start runs) so an opted-in user auto-starts the widget on
 	// launch instead of waiting for the next config refresh.
 	cachedCfg, _ := r.confHandler.GetConfig()
+	// The widget joins its helper pairings' rooms on freddie with the
+	// volunteer tickets lantern-cloud issues this device, fetched on first use
+	// and renewed in the background. A nil *helper.Source would be a non-nil
+	// interface, so partial backends in tests skip it.
+	if r.helperTickets != nil {
+		unbounded.SetTicketSource(r.helperTickets)
+	}
 	unbounded.InitSubscription(cachedCfg)
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
