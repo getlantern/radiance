@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"io"
 	"net"
 	"runtime"
@@ -8,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	A "github.com/sagernet/sing-box/adapter"
+	R "github.com/sagernet/sing-box/route/rule"
 	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
@@ -362,4 +365,89 @@ func TestFlowConnTracksFlow(t *testing.T) {
 	assert.Zero(t, ct.activeConnectionCount())
 	f.CloseFlow(tun.FlowCloseFinished)
 	assert.Zero(t, ct.activeConnectionCount(), "a flow leaves once")
+}
+
+func TestFlowConnClosedBeforeAttachNeverJoins(t *testing.T) {
+	ct := newConnTracker()
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+	r := newRec("wg")
+	f := &flowConn{rec: r, ct: ct}
+	r.closer = f
+
+	f.CloseFlow(tun.FlowCloseReset)
+	f.AttachFlow(&fakeFlowHandle{flow: f})
+	assert.Zero(t, ct.activeConnectionCount())
+	_, ok := ct.conns.Load(r.id)
+	assert.False(t, ok)
+	assert.Empty(t, obs.closes, "a flow that never joined reports no close")
+}
+
+func TestFlowConnConcurrentAttachAndClose(t *testing.T) {
+	ct := newConnTracker()
+	for range 200 {
+		r := newRec("wg")
+		f := &flowConn{rec: r, ct: ct}
+		r.closer = f
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.AttachFlow(&fakeFlowHandle{flow: f})
+		}()
+		go func() {
+			defer wg.Done()
+			f.CloseFlow(tun.FlowCloseReset)
+		}()
+		wg.Wait()
+	}
+	assert.Zero(t, ct.activeConnectionCount())
+	for range ct.conns.Iter() {
+		t.Fatal("a flow outlived its close")
+	}
+}
+
+type taggedOutbound struct {
+	A.Outbound
+	tag string
+}
+
+func (o taggedOutbound) Tag() string  { return o.tag }
+func (o taggedOutbound) Type() string { return "stub" }
+
+type taggedGroup struct {
+	taggedOutbound
+	now string
+}
+
+func (g taggedGroup) Now() string   { return g.now }
+func (g taggedGroup) All() []string { return []string{g.now} }
+
+type routeRule struct {
+	A.Rule
+	action A.RuleAction
+}
+
+func (r routeRule) Action() A.RuleAction { return r.action }
+func (r routeRule) String() string       { return "stub" }
+
+func TestRoutedFlowChainStartsAtRuleOutbound(t *testing.T) {
+	endpoint := taggedOutbound{tag: "wg"}
+	ct := newConnTracker()
+	ct.outbound = stubOutboundManager{outbounds: map[string]A.Outbound{
+		AutoSelectTag: taggedGroup{taggedOutbound: taggedOutbound{tag: AutoSelectTag}, now: "wg"},
+		"wg":          endpoint,
+	}}
+	rule := routeRule{action: &R.RuleActionRoute{Outbound: AutoSelectTag}}
+
+	// sing-box passes the endpoint the group resolved to, not the group.
+	f, ok := ct.RoutedFlow(context.Background(), A.InboundContext{}, rule, endpoint).(*flowConn)
+	require.True(t, ok)
+	assert.Equal(t, []string{"wg", AutoSelectTag}, f.rec.chain)
+
+	handle := &fakeFlowHandle{flow: f}
+	f.AttachFlow(handle)
+	ct.closeMatchedTo(AutoSelectTag)
+	assert.Equal(t, 1, handle.closes, "a mode switch closes flows routed through the group")
+	assert.Zero(t, ct.activeConnectionCount())
 }

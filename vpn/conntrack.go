@@ -11,6 +11,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	A "github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/trafficcontrol"
+	R "github.com/sagernet/sing-box/route/rule"
 	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
@@ -424,10 +425,30 @@ func (m *connTracker) RoutedPacketConnection(ctx context.Context, conn N.PacketC
 // instead of as a connection, such as traffic to a WireGuard endpoint.
 func (m *connTracker) RoutedFlow(ctx context.Context, metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) tun.FlowTracker {
 	m.admitConnection(time.Now())
-	r := m.newRecord(metadata, matchedRule, matchOutbound)
+	r := m.newRecord(metadata, matchedRule, m.routeTarget(matchedRule, matchOutbound))
 	f := &flowConn{rec: r, ct: m}
 	r.closer = f
 	return f
+}
+
+// routeTarget returns the outbound matchedRule routed to, nil for the default
+// outbound. sing-box resolves groups before it calls RoutedFlow, so a flow's
+// matchOutbound is the group's selection rather than the group the rule names.
+func (m *connTracker) routeTarget(matchedRule A.Rule, resolved A.Outbound) A.Outbound {
+	if matchedRule == nil {
+		return nil
+	}
+	var tag string
+	switch action := matchedRule.Action().(type) {
+	case *R.RuleActionRoute:
+		tag = action.Outbound
+	case *R.RuleActionBypass:
+		tag = action.Outbound
+	}
+	if target, loaded := m.outbound.Outbound(tag); loaded {
+		return target
+	}
+	return resolved
 }
 
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
@@ -468,14 +489,23 @@ func (c *udpConn) WriterReplaceable() bool { return true }
 
 // flowConn tracks a flow that sing-tun forwards as packets. It joins the tracker
 // once sing-tun attaches it, leaves when sing-tun closes it, and Close ends it
-// through sing-tun's handle.
+// through sing-tun's handle. sing-tun can close a flow before attaching it, so a
+// flow closed first never joins.
 type flowConn struct {
-	rec    *record
-	ct     *connTracker
+	rec *record
+	ct  *connTracker
+
+	access sync.Mutex
 	handle tun.FlowHandle
+	closed bool
 }
 
 func (f *flowConn) AttachFlow(handle tun.FlowHandle) {
+	f.access.Lock()
+	defer f.access.Unlock()
+	if f.closed {
+		return
+	}
 	f.handle = handle
 	f.ct.join(f.rec)
 }
@@ -491,11 +521,23 @@ func (f *flowConn) CountReverse(n int) {
 func (f *flowConn) FlowEstablished() {}
 
 func (f *flowConn) CloseFlow(tun.FlowCloseReason) {
-	f.ct.leave(f.rec)
+	f.access.Lock()
+	joined := f.handle != nil && !f.closed
+	f.closed = true
+	f.access.Unlock()
+	// leave runs the close observer, so it runs unlocked.
+	if joined {
+		f.ct.leave(f.rec)
+	}
 }
 
 func (f *flowConn) Close() error {
-	f.handle.CloseFlow()
+	f.access.Lock()
+	handle := f.handle
+	f.access.Unlock()
+	if handle != nil {
+		handle.CloseFlow()
+	}
 	return nil
 }
 
