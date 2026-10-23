@@ -468,3 +468,59 @@ func TestRoutedFlowKeepsResolvedEndpointAfterGroupSwitch(t *testing.T) {
 	assert.Equal(t, "wg-a", f.rec.outbound)
 	assert.Equal(t, []string{"wg-a", AutoSelectTag}, f.rec.chain)
 }
+
+func TestFlowConnDropsBytesCountedAfterClose(t *testing.T) {
+	ct := newConnTracker()
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+	r := newRec("wg")
+	f := &flowConn{rec: r, ct: ct}
+	r.closer = f
+	f.AttachFlow(&fakeFlowHandle{flow: f})
+	f.CountForward(3)
+
+	f.CloseFlow(tun.FlowCloseReset)
+	f.CountForward(7)
+	f.CountReverse(5)
+	require.Len(t, obs.closes, 1)
+	assert.EqualValues(t, 3, obs.closes[0].Uplink)
+	assert.Zero(t, obs.closes[0].Downlink)
+	up, down := ct.Total()
+	assert.EqualValues(t, 3, up)
+	assert.Zero(t, down)
+}
+
+func TestFlowConnCountsConcurrentlyWithClose(t *testing.T) {
+	ct := newConnTracker()
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+	for range 100 {
+		r := newRec("wg")
+		f := &flowConn{rec: r, ct: ct}
+		r.closer = f
+		f.AttachFlow(&fakeFlowHandle{flow: f})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				f.CountForward(1)
+				f.CountReverse(1)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			f.CloseFlow(tun.FlowCloseReset)
+		}()
+		wg.Wait()
+	}
+	// Every counted byte lands in a flow's close report.
+	var up, down int64
+	for _, c := range obs.closes {
+		up += c.Uplink
+		down += c.Downlink
+	}
+	totalUp, totalDown := ct.Total()
+	assert.Equal(t, totalUp, up)
+	assert.Equal(t, totalDown, down)
+}

@@ -520,12 +520,22 @@ func (f *flowConn) AttachFlow(handle tun.FlowHandle) {
 	f.ct.join(f.rec)
 }
 
+// CountForward and CountReverse drop bytes counted after CloseFlow, which
+// sing-tun can call concurrently: leave has already reported the flow's total.
 func (f *flowConn) CountForward(n int) {
-	f.ct.countUpload(f.rec, int64(n))
+	f.access.Lock()
+	defer f.access.Unlock()
+	if !f.closed {
+		f.ct.countUpload(f.rec, int64(n))
+	}
 }
 
 func (f *flowConn) CountReverse(n int) {
-	f.ct.countDownload(f.rec, int64(n))
+	f.access.Lock()
+	defer f.access.Unlock()
+	if !f.closed {
+		f.ct.countDownload(f.rec, int64(n))
+	}
 }
 
 func (f *flowConn) FlowEstablished() {}
