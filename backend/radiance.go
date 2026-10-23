@@ -969,9 +969,9 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // across config updates.
 const maxRetainedLanternServers = 60
 
-// updateServers adds the servers in list that are not already present and
-// pass [servers.Server.CheckHostAccess]. When evict is set it first evicts
-// retained Lantern servers (see lanternServersToEvict). Only a newly received
+// updateServers adds new servers that pass host-access and TLS identity checks.
+// When evict is set it first evicts retained Lantern servers (see
+// lanternServersToEvict). Only a newly received
 // config may evict: a config that was already applied, such as the cached one
 // at startup, would judge its own offers a second time.
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
@@ -983,6 +983,10 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 		}
 		if err := srv.CheckHostAccess(); err != nil {
 			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
+			return true
+		}
+		if err := srv.CheckTLSIdentity(); err != nil {
+			slog.Warn("Dropping config server without TLS authentication", "error", err)
 			return true
 		}
 		return false
