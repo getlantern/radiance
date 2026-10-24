@@ -16,6 +16,11 @@ import (
 // pairings, and an error naming a helper outbound may carry the helper's
 // address; clients must export neither. sing-box errors name the failing
 // outbound, so any span that records one can carry both.
+// roomTicketsHeaderAttr is the attribute traces' header annotation would give
+// broflake's X-BF-Room-Tickets header. traces never records it; the exporter
+// drops it too, in case anything else does.
+const roomTicketsHeaderAttr attribute.Key = "http.request.header.x-bf-room-tickets"
+
 type redactingExporter struct {
 	sdktrace.SpanExporter
 }
@@ -103,6 +108,13 @@ func sameAttrs(a, b []attribute.KeyValue) bool {
 func redactAttrs(attrs []attribute.KeyValue) []attribute.KeyValue {
 	var out []attribute.KeyValue
 	for i, kv := range attrs {
+		if kv.Key == roomTicketsHeaderAttr {
+			// Bearer credentials: drop the attribute outright.
+			if out == nil {
+				out = append(make([]attribute.KeyValue, 0, len(attrs)), attrs[:i]...)
+			}
+			continue
+		}
 		red, changed := redactValue(kv)
 		if !changed {
 			if out != nil {

@@ -92,3 +92,19 @@ func TestRedactedSpanReturnsOriginalsWhenNothingChanges(t *testing.T) {
 	assert.Same(t, &ro.Events()[0], &rs.Events()[0])
 	assert.Same(t, &ro.Links()[0], &rs.Links()[0])
 }
+
+// Defense in depth: a room-tickets header attribute never leaves the client,
+// whoever records it.
+func TestSpanExportDropsRoomTicketHeaders(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(newRedactingExporter(mem)))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	_, span := tp.Tracer("test").Start(context.Background(), "subscribe")
+	span.SetAttributes(
+		attribute.StringSlice("http.request.header.x-bf-room-tickets", []string{"eyJ2IjoxfQ.c2ln"}),
+		attribute.String("http.request.method", "GET"),
+	)
+	span.End()
+	s := mem.GetSpans()[0]
+	assert.Equal(t, []attribute.KeyValue{attribute.String("http.request.method", "GET")}, s.Attributes)
+}
