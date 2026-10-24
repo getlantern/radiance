@@ -23,7 +23,7 @@ var (
 	// ipCandidate matches text that may be an IP address, with or without a
 	// port: a bracketed host, or a run of hex digits, dots and colons. Each
 	// match is checked with net.ParseIP before it is replaced.
-	ipCandidate = regexp.MustCompile(`\[[0-9A-Fa-f:.]+(?:%[0-9A-Za-z_.\-]+)?\](?::[0-9]{1,5})?|[0-9A-Fa-f]*[.:][0-9A-Fa-f.:%]*`)
+	ipCandidate = regexp.MustCompile(`\[[0-9A-Fa-f:.]+(?:%[0-9A-Za-z_.\-]+)?\](?::[0-9]{1,5})?|[0-9A-Fa-f]*[.:][0-9A-Fa-f.:]*(?:%[0-9A-Za-z_.\-]+)?`)
 )
 
 // Helper returns s with helper tags replaced by "helper" and, on every line
@@ -54,10 +54,20 @@ func HelperBytes(b []byte) []byte {
 	return []byte(Helper(string(b)))
 }
 
+// redactIP replaces m with Redacted if m is an IP address, or is one followed
+// by trailing dots or colons, which the candidate pattern takes in from the
+// surrounding text ("… to 2001:db8::." or "203.0.113.7: refused"). m is
+// checked whole first, since "::" can end a valid IPv6 address; then one
+// trailing character at a time is set aside and the rest checked again.
+// Other punctuation never enters a candidate.
 func redactIP(m string) string {
-	core := strings.TrimRight(m, ".:")
-	if isIPAddr(core) {
-		return Redacted + m[len(core):]
+	for core := m; core != ""; core = core[:len(core)-1] {
+		if isIPAddr(core) {
+			return Redacted + m[len(core):]
+		}
+		if last := core[len(core)-1]; last != '.' && last != ':' {
+			return m
+		}
 	}
 	return m
 }

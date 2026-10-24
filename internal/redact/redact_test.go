@@ -41,3 +41,25 @@ func TestHelperLeavesOtherLinesAlone(t *testing.T) {
 	plain := "nothing to see 198.51.100.9"
 	assert.Equal(t, plain, Helper(plain))
 }
+
+func TestHelperRedactsEveryIPv6Form(t *testing.T) {
+	const pre = "outbound/samizdat[" + tag + "]: "
+	for _, tc := range []struct{ in, want string }{
+		{"dial ::1", "dial <redacted>"},
+		{"dial fe80::", "dial <redacted>"},
+		{"dial 2001:db8::", "dial <redacted>"},
+		{"dial 2001:db8:1234::", "dial <redacted>"},
+		{"no route to 2001:db8::.", "no route to <redacted>."},
+		{"dial tcp [2001:db8::]:443", "dial tcp <redacted>"},
+		{"dial tcp [fe80::1%eth0]:443", "dial tcp <redacted>"},
+		{"dial fe80::1%eth0, retrying", "dial <redacted>, retrying"},
+		{"dial (2001:db8::7); retrying", "dial (<redacted>); retrying"},
+		{"dial 203.0.113.7: refused", "dial <redacted>: refused"},
+		{"at 12:34:56 and 13:30:00.000, step 1.2", "at 12:34:56 and 13:30:00.000, step 1.2"},
+		{"code dead:beef ok", "code dead:beef ok"},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			assert.Equal(t, "outbound/samizdat[helper]: "+tc.want, Helper(pre+tc.in))
+		})
+	}
+}
