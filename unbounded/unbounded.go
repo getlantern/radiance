@@ -705,6 +705,9 @@ func (m *unboundedManager) startLocked() {
 		bfOpt.OnUpstreamChunkFunc = chunkCounter(slots, false)
 
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
+		// A genesis POST carries this widget's room tickets; never let a
+		// redirect replay it to another origin.
+		rtcOpt.HTTPClient = sameOriginRedirects(rtcOpt.HTTPClient)
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		if ucfg != nil {
 			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
