@@ -89,7 +89,9 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
 		// outbounds but keep them out of the proxy-selection groups) so the server can
 		// gate such outbounds on the capability rather than the client version.
-		Capabilities: []string{C.CapabilityNonSelectableOutbounds},
+		// Advertise UnboundedTuning because our lantern-box's Unbounded outbound
+		// accepts a "tuning" option, which the server withholds from older clients.
+		Capabilities: []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning},
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred
