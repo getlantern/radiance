@@ -399,3 +399,24 @@ func TestSourceRenewalRunsFromTheRequest(t *testing.T) {
 	settle(t, src)
 	assert.Equal(t, 4*time.Minute-25*time.Second, src.dueIn())
 }
+
+// AnsweredVolunteer keeps what lantern-cloud last answered, expired or not,
+// until a fetch answers again; a 404 clears it.
+func TestSourceAnsweredVolunteerOutlivesExpiry(t *testing.T) {
+	_, vol := testTickets(t)
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, clock := newTestSource(f)
+	f.results <- fetchResult{t: Tickets{Volunteer: []string{vol}, Lifetime: 15 * time.Minute}}
+	src.Volunteer()
+	settle(t, src)
+	clock.add(20 * time.Minute)
+	f.results <- fetchResult{err: errors.New("network down")}
+	assert.Empty(t, src.Volunteer(), "expired tickets leave the wire")
+	settle(t, src)
+	assert.Equal(t, []string{vol}, src.AnsweredVolunteer(), "a failed fetch ends no pairing")
+	clock.add(RetryInterval)
+	f.results <- fetchResult{err: ErrDisabled}
+	src.AnsweredVolunteer()
+	settle(t, src)
+	assert.Empty(t, src.AnsweredVolunteer(), "a 404 does")
+}

@@ -161,15 +161,24 @@ func NewSource(ctx context.Context, fetch func(context.Context) (Tickets, error)
 
 // Inviter returns the current inviter tickets.
 func (s *Source) Inviter() []string {
-	return s.read(helperticket.RoleInviter)
+	return s.read(helperticket.RoleInviter, false)
 }
 
 // Volunteer returns the current volunteer tickets.
 func (s *Source) Volunteer() []string {
-	return s.read(helperticket.RoleVolunteer)
+	return s.read(helperticket.RoleVolunteer, false)
 }
 
-func (s *Source) read(role helperticket.Role) []string {
+// AnsweredVolunteer returns the volunteer tickets from the last fetch
+// lantern-cloud answered, expired ones included: nil after it said helper
+// invites are off, and unchanged while fetches fail. A pairing missing from it
+// has ended; one missing only from Volunteer may just have lapsed while
+// lantern-cloud was unreachable. It never goes on the wire.
+func (s *Source) AnsweredVolunteer() []string {
+	return s.read(helperticket.RoleVolunteer, true)
+}
+
+func (s *Source) read(role helperticket.Role, expired bool) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -183,7 +192,7 @@ func (s *Source) read(role helperticket.Role) []string {
 	}
 	var out []string
 	for _, h := range hs {
-		if now.Before(h.expires) {
+		if expired || now.Before(h.expires) {
 			out = append(out, h.ticket)
 		}
 	}

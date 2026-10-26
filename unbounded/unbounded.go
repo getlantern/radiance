@@ -248,6 +248,7 @@ func donorSTUNBatch(servers []string) func(uint32) ([]string, error) {
 // helper.Source in production.
 type roomTickets interface {
 	Volunteer() []string
+	AnsweredVolunteer() []string
 }
 
 // SetTicketSource sets where the widget gets its volunteer tickets. A widget
@@ -296,14 +297,21 @@ func volunteerPairings(tickets []string) map[string]bool {
 // changes that must end its open sessions, until ctx ends. done identifies the
 // run. Two changes restart the widget:
 //
-//   - a pairing it volunteers for is missing from the fresh tickets: the
-//     pairing has ended. freddie stops new matches by itself, but a WebRTC
-//     session already open outlives the tickets, and the widget cannot tell
-//     which session came through which room;
+//   - a pairing it volunteers for is missing from the tickets lantern-cloud
+//     last answered with: the pairing has ended. freddie stops new matches by
+//     itself, but a WebRTC session already open outlives the tickets, and the
+//     widget cannot tell which session came through which room. Tickets that
+//     only expired, say while lantern-cloud is unreachable, end nothing;
 //   - "help others too" turned off: sessions already open with strangers
 //     must end too.
-func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rtcOpt *clientcore.WebRTCOptions, interval time.Duration) {
-	prev := volunteerPairings(rtcOpt.CurrentRoomTickets())
+func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rtcOpt *clientcore.WebRTCOptions, tickets roomTickets, interval time.Duration) {
+	pairings := func() map[string]bool {
+		if tickets == nil {
+			return nil
+		}
+		return volunteerPairings(tickets.AnsweredVolunteer())
+	}
+	prev := pairings()
 	prevPool := rtcOpt.ServesPool()
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -315,7 +323,7 @@ func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rt
 		}
 		pool := servePool()
 		rtcOpt.SetServePool(pool)
-		cur := volunteerPairings(rtcOpt.CurrentRoomTickets())
+		cur := pairings()
 		reason := ""
 		if prevPool && !pool {
 			reason = "Unbounded: helping others turned off; restarting the widget to close its sessions"
@@ -754,7 +762,7 @@ func (m *unboundedManager) startLocked() {
 		syncDone := make(chan struct{})
 		go func() {
 			defer close(syncDone)
-			m.syncRooms(ctx, done, rtcOpt, syncInterval)
+			m.syncRooms(ctx, done, rtcOpt, tickets, syncInterval)
 		}()
 		<-ctx.Done()
 		slog.Info("Unbounded: stopping broflake widget proxy")

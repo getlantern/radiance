@@ -16,16 +16,33 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// fakeTickets is a settable ticket source.
+// fakeTickets is a settable ticket source. lapsed hides the tickets from
+// Volunteer, as expiry does, while AnsweredVolunteer still returns them.
 type fakeTickets struct {
-	mu sync.Mutex
-	v  []string
+	mu     sync.Mutex
+	v      []string
+	lapsed bool
 }
 
 func (f *fakeTickets) Volunteer() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.lapsed {
+		return nil
+	}
 	return slices.Clone(f.v)
+}
+
+func (f *fakeTickets) AnsweredVolunteer() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.v)
+}
+
+func (f *fakeTickets) lapse() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lapsed = true
 }
 
 func (f *fakeTickets) set(v ...string) {
@@ -145,6 +162,26 @@ func TestWidgetRestartsWhenAPairingEnds(t *testing.T) {
 	assert.Equal(t, []string{b, c}, opts(1).CurrentRoomTickets())
 	assert.Never(t, func() bool { return count.Load() > 2 }, 100*time.Millisecond, 10*time.Millisecond,
 		"one ended pairing is one restart")
+}
+
+// Tickets that lapse because lantern-cloud is unreachable end no pairing, so
+// the widget keeps its open sessions.
+func TestWidgetKeepsRunningWhenTicketsOnlyLapse(t *testing.T) {
+	fastRoomSync(t)
+	_, priv, _ := ed25519.GenerateKey(nil)
+	count, opts, _ := recordingWidgets(t)
+	src := &fakeTickets{}
+	src.set(volunteerTicket(t, priv, pairingA))
+	SetTicketSource(src)
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+
+	src.lapse()
+	require.Eventually(t, func() bool { return len(opts(0).CurrentRoomTickets()) == 0 },
+		2*time.Second, 10*time.Millisecond, "lapsed tickets leave the wire")
+	assert.Never(t, func() bool { return count.Load() > 1 }, 100*time.Millisecond, 10*time.Millisecond,
+		"lapsed tickets must not restart the widget")
 }
 
 func TestVolunteerPairings(t *testing.T) {
