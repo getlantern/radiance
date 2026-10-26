@@ -382,6 +382,9 @@ func TestSignUp(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, salt)
 	assert.NotNil(t, signupResponse)
+	saved, err := readSalt(ac.saltPath)
+	require.NoError(t, err)
+	assert.Equal(t, salt, saved, "the signup salt must survive a restart")
 }
 
 func TestSignUpKeepsSaltWhenSaveFails(t *testing.T) {

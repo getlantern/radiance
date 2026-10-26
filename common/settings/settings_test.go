@@ -971,23 +971,19 @@ func TestWriteAdoptsOtherProcessState(t *testing.T) {
 }
 
 func TestFailedApplyIsNotRevertedByLaterWrites(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a read-only directory to force save failures")
-	}
 	Reset()
 	t.Cleanup(Reset)
 	dir := t.TempDir()
 	require.NoError(t, InitSettings(dir))
 	require.NoError(t, Set(DataPathKey, "old"))
 
-	require.NoError(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	restore := readOnlyDir(t, dir)
 	require.Error(t, Apply(Settings{DataPathKey: "new"}), "save must fail in a read-only directory")
 	assert.Equal(t, "new", GetString(DataPathKey), "Apply takes effect despite the failed save")
 	require.Error(t, Set(LocaleKey, "en-US"))
 	assert.Equal(t, "new", GetString(DataPathKey), "a failed later write must not revert it")
 
-	require.NoError(t, os.Chmod(dir, 0o755))
+	restore()
 	require.NoError(t, Set(LocaleKey, "fa-IR"))
 
 	assert.Equal(t, "new", GetString(DataPathKey), "a later write must not revert the applied value")
@@ -1073,6 +1069,9 @@ func TestConditionalWritesDecideAgainstFile(t *testing.T) {
 func TestUnreadableFileLeavesSettings(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses file permissions to force read failures")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of mode")
 	}
 	Reset()
 	t.Cleanup(Reset)

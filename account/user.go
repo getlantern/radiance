@@ -217,12 +217,14 @@ func (a *Client) SignUp(ctx context.Context, email, password string) ([]byte, *p
 		settings.OAuthLoginKey:    false,
 		settings.OAuthProviderKey: "",
 	})
-	if err == nil {
-		a.salt = salt
+	if err != nil {
+		a.mu.Unlock()
+		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
 	}
+	err = a.storeSaltLocked(salt)
 	a.mu.Unlock()
 	if err != nil {
-		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup identity: %w", err))
+		return nil, nil, traces.RecordError(ctx, fmt.Errorf("saving signup salt: %w", err))
 	}
 
 	return salt, &signupData, nil
