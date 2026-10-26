@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"syscall"
@@ -37,8 +38,8 @@ const (
 	ReasonNoInternet Reason = "no_internet"
 	// ReasonNoPortForwarding means the router declined to map a port.
 	ReasonNoPortForwarding Reason = "no_port_forwarding"
-	// ReasonPortUnreachable means the router accepted the mapping and then
-	// did not honor it: lantern-cloud's dial-back never arrived.
+	// ReasonPortUnreachable means lantern-cloud's dial-back to the peer port
+	// never arrived, whether the port was mapped by UPnP or configured by hand.
 	ReasonPortUnreachable Reason = "port_unreachable"
 	// ReasonCanceled means the caller gave up — usually the user toggling
 	// sharing back off mid-start.
@@ -62,6 +63,9 @@ func (e *StartError) Unwrap() error { return e.cause }
 // by the error's own identity, and the one that consults phase is narrow
 // enough to stay sound.
 //
+// manualPort is the router port the user forwarded by hand, or 0 when UPnP
+// mapped it.
+//
 // It deliberately has no catch-all "something network-ish went wrong at this
 // phase" rule. A phase spans more than one operation — validating the
 // server's launch config and patching it for the local VPN both happen after
@@ -71,7 +75,7 @@ func (e *StartError) Unwrap() error { return e.cause }
 // user at their network for a server-side problem. Guessing from position is
 // how you get a confident wrong answer; an unnamed error at least stays
 // honest.
-func classifyStartFailure(phase Phase, err error) *StartError {
+func classifyStartFailure(phase Phase, err error, manualPort uint16) *StartError {
 	if err == nil {
 		return nil
 	}
@@ -98,8 +102,9 @@ func classifyStartFailure(phase Phase, err error) *StartError {
 		return named(ReasonNoInternet, "No internet connection.")
 	}
 
-	// A 422 from verify is the router lying: it accepted the mapping, so
-	// MapPort returned success, but lantern-cloud's dial-back never arrived.
+	// A 422 from verify means lantern-cloud's dial-back never arrived: the
+	// router either accepted a UPnP mapping and didn't honor it, or the user's
+	// manual forward isn't working.
 	// Distinguished from a plain unreachable server because the fix is
 	// entirely different — this one is the user's router, not our outage.
 	//
@@ -114,6 +119,11 @@ func classifyStartFailure(phase Phase, err error) *StartError {
 	var apiErr *APIError
 	if phase == PhaseVerifying && errors.As(err, &apiErr) &&
 		apiErr.Status == http.StatusUnprocessableEntity {
+		if manualPort != 0 {
+			return named(ReasonPortUnreachable, fmt.Sprintf(
+				"Port %d isn't reachable from the internet. Check that your router forwards it to this computer.",
+				manualPort))
+		}
 		return named(ReasonPortUnreachable,
 			"Your router accepted the port mapping but isn't forwarding traffic to this computer.")
 	}

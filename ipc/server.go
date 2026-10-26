@@ -955,7 +955,8 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 				case settings.LocaleKey, settings.TimeZoneKey, settings.TelemetryKey,
 					settings.SmartRoutingKey, settings.SplitTunnelKey, settings.SplitTunnelPolicyKey,
 					settings.AdBlockKey, settings.AutoConnectKey, settings.PeerShareEnabledKey,
-					settings.PeerManualPortKey, settings.UnboundedKey, settings.LogLevelKey:
+					settings.PeerManualPortKey, settings.PeerServePoolKey, settings.UnboundedKey,
+					settings.LogLevelKey:
 				default:
 					http.Error(w, "permission denied", http.StatusForbidden)
 					return

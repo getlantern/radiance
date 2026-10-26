@@ -51,10 +51,16 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 func legacyYAMLPath(fileDir string) (path, layout string) {
 	switch runtime.GOOS {
 	case "darwin", "windows":
+		if !readsHostProfile() {
+			break
+		}
 		if cfg, err := os.UserConfigDir(); err == nil {
 			return filepath.Join(cfg, "Lantern", "settings.yaml"), "desktop"
 		}
 	case "linux":
+		if !readsHostProfile() {
+			break
+		}
 		// Pre-9.x appdir lowercased the app name on linux only.
 		if cfg, err := os.UserConfigDir(); err == nil {
 			return filepath.Join(cfg, "lantern", "settings.yaml"), "desktop"

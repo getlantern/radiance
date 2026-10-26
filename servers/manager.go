@@ -672,12 +672,16 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
-	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
-		return fmt.Errorf("no endpoints or outbounds in response")
+	if len(cfg.Outbounds) == 0 {
+		if len(cfg.Endpoints) == 0 {
+			return fmt.Errorf("no endpoints or outbounds in response")
+		}
+		return fmt.Errorf("endpoints-only private server responses are not supported")
+	}
+	if len(cfg.Endpoints) > 0 {
+		m.logger.Warn("Ignoring endpoints in private server response", "tag", tag, "endpoints", len(cfg.Endpoints))
 	}
 
-	// TODO: this assumes a single outbound; once we support endpoints it must
-	// also handle cfg.Endpoints instead of indexing Outbounds[0].
 	cfg.Outbounds[0].Tag = tag
 	srv := &Server{
 		Tag:       tag,

@@ -17,7 +17,7 @@ var windowsCrossDirCandidatesFn = windowsCrossDirCandidates
 // windowsCrossDirCandidates returns the v9.0.x local.json from ${PUBLIC}\Lantern\data, which the
 // same-dir candidates miss because radiance's data dir moved to ${ProgramData}\Lantern.
 func windowsCrossDirCandidates(fileDir string) []candidateSource {
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != "windows" || !readsHostProfile() {
 		return nil
 	}
 	pub := os.Getenv("PUBLIC")

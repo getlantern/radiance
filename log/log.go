@@ -54,6 +54,8 @@ type Config struct {
 //
 // When env.Testing is set, a no-op logger is returned before any file is created. A "disable"
 // level is different: it only filters records, so the log file is still created.
+//
+// Top-level "level" attributes with non-slog.Level values are emitted as "attr.level".
 func NewLogger(cfg Config) *slog.Logger {
 	if env.GetBool(env.Testing) {
 		return NoOpLogger()
@@ -114,21 +116,8 @@ func NewLogger(cfg Config) *slog.Logger {
 		logWriter = io.MultiWriter(logWriter, Publisher())
 	}
 	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
-		Level: leveler,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			switch a.Key {
-			case slog.TimeKey:
-				if t, ok := a.Value.Any().(time.Time); ok {
-					a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
-				}
-				return a
-			case slog.LevelKey:
-				// slog renders custom levels like trace as "DEBUG-4"; FormatLogLevel gives them real names.
-				level := a.Value.Any().(slog.Level)
-				a.Value = slog.StringValue(FormatLogLevel(level))
-			}
-			return a
-		},
+		Level:       leveler,
+		ReplaceAttr: replaceLogAttr,
 	})
 	handler = newSourceHandler(handler)
 	handler = &Handler{Handler: handler, w: logWriter}
@@ -145,6 +134,23 @@ func NewLogger(cfg Config) *slog.Logger {
 		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", cfg.LogPath, FormatLogLevel(slevel))
 	}
 	return logger
+}
+
+func replaceLogAttr(groups []string, a slog.Attr) slog.Attr {
+	switch a.Key {
+	case slog.TimeKey:
+		if t, ok := a.Value.Any().(time.Time); ok {
+			a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
+		}
+	case slog.LevelKey:
+		// slog renders custom levels like trace as "DEBUG-4"; FormatLogLevel gives them real names.
+		if level, ok := a.Value.Any().(slog.Level); ok {
+			a.Value = slog.StringValue(FormatLogLevel(level))
+		} else if len(groups) == 0 {
+			a.Key = "attr." + slog.LevelKey
+		}
+	}
+	return a
 }
 
 type Handler struct {

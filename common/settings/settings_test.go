@@ -8,10 +8,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/knadh/koanf/v2"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	_ "github.com/getlantern/radiance/common/env"
+	"github.com/getlantern/radiance/common/env"
 )
 
 func TestWindowsCrossDirCandidates(t *testing.T) {
@@ -143,7 +145,7 @@ func TestInitSettings(t *testing.T) {
 		path := filepath.Join(t.TempDir(), settingsFileName)
 		content := []byte(`{invalid json}`)
 		require.NoError(t, os.WriteFile(path, content, 0644), "failed to create test config file")
-		require.Error(t, loadSettings(path), "expected error for invalid config file")
+		require.Error(t, loadInto(koanf.New("."), path), "expected error for invalid config file")
 	})
 
 	t.Run("invalid config file recovers", func(t *testing.T) {
@@ -155,7 +157,7 @@ func TestInitSettings(t *testing.T) {
 
 		invalidPath := filepath.Join(tempDir, settingsInvalidFileName)
 		assert.FileExists(t, invalidPath, "the invalid file must be preserved for diagnostics")
-		assert.NoError(t, loadSettings(path), "settings.json must be rewritten with a parseable default")
+		assert.NoError(t, loadInto(koanf.New("."), path), "settings.json must be rewritten with a parseable default")
 	})
 
 	t.Run("changes before InitSettings stay in memory", func(t *testing.T) {
@@ -894,4 +896,208 @@ func TestReloadRacesNothing(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+func TestWriteAdoptsOtherProcessState(t *testing.T) {
+	initAt := func(t *testing.T, contents string) string {
+		t.Helper()
+		Reset()
+		t.Cleanup(Reset)
+		dir := t.TempDir()
+		path := filepath.Join(dir, settingsFileName)
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0644))
+		require.NoError(t, InitSettings(dir))
+		return path
+	}
+
+	t.Run("keeps keys another process persisted", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"locale": "en-US", "token": "fresh"}`), 0644))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		assert.Equal(t, "fresh", GetString(TokenKey), "another process's write must survive this write")
+		assert.Equal(t, "UTC", GetString(TimeZoneKey))
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var onDisk map[string]any
+		require.NoError(t, json.Unmarshal(got, &onDisk))
+		assert.Equal(t, "fresh", onDisk["token"])
+		assert.Equal(t, "UTC", onDisk["time_zone"])
+	})
+
+	t.Run("adopts deletions by another process", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US", "token": "old"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"locale": "en-US"}`), 0644))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		assert.False(t, Exists(TokenKey), "a key another process deleted must stay deleted")
+		assert.Equal(t, "free", GetString(UserLevelKey), "defaults reapply when the file omits them")
+	})
+
+	t.Run("recreates a missing file from the current snapshot", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.Remove(path))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+		assert.FileExists(t, path)
+	})
+
+	t.Run("replaces a corrupt file with valid state", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{nope`), 0644))
+
+		require.NoError(t, Set(TimeZoneKey, "UTC"))
+
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var onDisk map[string]any
+		assert.NoError(t, json.Unmarshal(got, &onDisk), "the corrupt file must be overwritten with valid JSON")
+		assert.Equal(t, "en-US", GetString(LocaleKey))
+	})
+
+	t.Run("patch keeps unrelated cross-process writes", func(t *testing.T) {
+		path := initAt(t, `{"locale": "en-US"}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"locale": "en-US", "user_level": "pro"}`), 0644))
+
+		require.NoError(t, Patch(Settings{CountryCodeKey: "IR", TimeZoneKey: "Asia/Tehran"}))
+
+		assert.Equal(t, "pro", GetString(UserLevelKey), "another process's write must survive a patch")
+		assert.Equal(t, "IR", GetString(CountryCodeKey))
+	})
+}
+
+func TestFailedApplyIsNotRevertedByLaterWrites(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a read-only directory to force save failures")
+	}
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	require.NoError(t, InitSettings(dir))
+	require.NoError(t, Set(DataPathKey, "old"))
+
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	require.Error(t, Apply(Settings{DataPathKey: "new"}), "save must fail in a read-only directory")
+	assert.Equal(t, "new", GetString(DataPathKey), "Apply takes effect despite the failed save")
+	require.Error(t, Set(LocaleKey, "en-US"))
+	assert.Equal(t, "new", GetString(DataPathKey), "a failed later write must not revert it")
+
+	require.NoError(t, os.Chmod(dir, 0o755))
+	require.NoError(t, Set(LocaleKey, "fa-IR"))
+
+	assert.Equal(t, "new", GetString(DataPathKey), "a later write must not revert the applied value")
+	got, err := os.ReadFile(filepath.Join(dir, settingsFileName))
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(got, &onDisk))
+	assert.Equal(t, "new", onDisk["data_path"], "the journaled value must reach the file with the next save")
+	assert.Equal(t, "fa-IR", onDisk["locale"])
+}
+
+func TestStructValuesSurviveUnrelatedWrites(t *testing.T) {
+	type location struct {
+		CountryCode string `json:"country_code,omitempty"`
+	}
+	type server struct {
+		Tag      string   `json:"tag"`
+		Location location `json:"location,omitempty"`
+	}
+	Reset()
+	t.Cleanup(Reset)
+	require.NoError(t, InitSettings(t.TempDir()))
+	require.NoError(t, Set(SelectedServerKey, server{Tag: "manual", Location: location{CountryCode: "IR"}}))
+
+	var immediate server
+	require.NoError(t, GetStruct(SelectedServerKey, &immediate))
+	assert.Equal(t, "IR", immediate.Location.CountryCode)
+
+	require.NoError(t, Set(LocaleKey, "en-US"))
+
+	var afterWrite server
+	require.NoError(t, GetStruct(SelectedServerKey, &afterWrite))
+	assert.Equal(t, "manual", afterWrite.Tag)
+	assert.Equal(t, "IR", afterWrite.Location.CountryCode,
+		"JSON-tagged fields must survive the disk round-trip an unrelated write performs")
+}
+
+func TestConditionalWritesDecideAgainstFile(t *testing.T) {
+	initAt := func(t *testing.T, contents string) string {
+		t.Helper()
+		Reset()
+		t.Cleanup(Reset)
+		dir := t.TempDir()
+		path := filepath.Join(dir, settingsFileName)
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0644))
+		require.NoError(t, InitSettings(dir))
+		return path
+	}
+
+	t.Run("ReplaceString spares a newer value another process wrote", func(t *testing.T) {
+		path := initAt(t, `{}`)
+		require.NoError(t, Set(LogLevelKey, "trace"))
+		require.NoError(t, os.WriteFile(path, []byte(`{"log_level": "debug"}`), 0644))
+
+		require.NoError(t, ReplaceString(LogLevelKey, "trace", "info"))
+
+		assert.Equal(t, "debug", GetString(LogLevelKey),
+			"a deliberate level persisted by another process must survive the demotion")
+	})
+
+	t.Run("ReplaceString replaces a matching value", func(t *testing.T) {
+		initAt(t, `{"log_level": "trace"}`)
+		require.NoError(t, ReplaceString(LogLevelKey, "trace", "info"))
+		assert.Equal(t, "info", GetString(LogLevelKey))
+	})
+
+	t.Run("SetIfAbsent spares a value another process wrote", func(t *testing.T) {
+		path := initAt(t, `{}`)
+		require.NoError(t, os.WriteFile(path, []byte(`{"log_level": "warn"}`), 0644))
+
+		require.NoError(t, SetIfAbsent(LogLevelKey, "info"))
+
+		assert.Equal(t, "warn", GetString(LogLevelKey))
+	})
+
+	t.Run("SetIfAbsent seeds a missing value", func(t *testing.T) {
+		initAt(t, `{}`)
+		require.NoError(t, SetIfAbsent(LogLevelKey, "info"))
+		assert.Equal(t, "info", GetString(LogLevelKey))
+	})
+}
+
+func TestUnreadableFileLeavesSettings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses file permissions to force read failures")
+	}
+	Reset()
+	t.Cleanup(Reset)
+	dir := t.TempDir()
+	path := filepath.Join(dir, settingsFileName)
+	require.NoError(t, InitSettings(dir))
+	require.NoError(t, Set(TokenKey, "live-token"))
+
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+	require.Error(t, Clear(TokenKey), "an unreadable file must surface as an error")
+	assert.Equal(t, "live-token", GetString(TokenKey), "a write that wasn't saved must not take effect")
+
+	require.NoError(t, os.Chmod(path, 0o644))
+	require.NoError(t, Clear(TokenKey))
+	assert.False(t, Exists(TokenKey))
+}
+
+func TestTestsDontReadTheHostProfile(t *testing.T) {
+	t.Setenv(env.Testing.String(), "yes")
+	dir := t.TempDir()
+
+	path, _ := legacyYAMLPath(dir)
+	if runtime.GOOS != "ios" {
+		assert.Empty(t, path, "a malformed RADIANCE_TESTING value must not enable host lookups in a test binary")
+	}
+	assert.Nil(t, windowsCrossDirCandidates(dir))
 }

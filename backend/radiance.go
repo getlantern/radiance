@@ -644,7 +644,6 @@ func baseIssueAttachments() []string {
 	logPath := settings.GetString(settings.LogPathKey)
 	dataPath := settings.GetString(settings.DataPathKey)
 	files := []string{
-		filepath.Join(logPath, internal.CrashLogFileName),
 		filepath.Join(dataPath, internal.ConfigFileName),
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
@@ -706,14 +705,13 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
+	var peerOn bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
 			return fmt.Errorf("invalid %s: %v", settings.PeerShareEnabledKey, peerValue)
 		}
-		if err := r.applyPeerShare(on); err != nil {
-			errs = errors.Join(errs, err)
-		}
+		peerOn = on
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
 	}
@@ -725,11 +723,23 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 			patch = r.accountClient.PatchAccountSettings
 		}
 	}
+	// The rest of the patch is persisted before the toggle applies, so a
+	// peer it starts registers with this patch's peer settings, such as
+	// peer_serve_pool, rather than the previous ones.
+	var patchErr error
+	if len(diff) > 0 {
+		patchErr = patch(diff)
+	}
+	if peerRequested {
+		if err := r.applyPeerShare(peerOn); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
 	if len(diff) == 0 {
 		return errs
 	}
-	if err := patch(diff); err != nil {
-		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", err))
+	if patchErr != nil {
+		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", patchErr))
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
 		r.RefreshUserMessages()

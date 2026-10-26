@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/fileperm"
@@ -80,19 +81,10 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 		return fmt.Errorf("failed to initialize settings: %w", err)
 	}
 
-	startup := settings.Settings{
-		settings.DataPathKey: data,
-		settings.LogPathKey:  logs,
-	}
-	// env override wins; otherwise preserve any persisted value; otherwise seed from the arg.
-	if v := env.GetString(env.LogLevel); v != "" {
-		startup[settings.LogLevelKey] = v
-	} else if !settings.Exists(settings.LogLevelKey) {
-		startup[settings.LogLevelKey] = logLevel
-	}
-	if err := settings.Apply(startup); err != nil {
+	if err := settings.Apply(settings.Settings{settings.DataPathKey: data, settings.LogPathKey: logs}); err != nil {
 		slog.Warn("Failed to save startup settings", "error", err)
 	}
+	seedLogLevel(logLevel)
 
 	logger := log.NewLogger(log.Config{
 		LogPath: loggerPath(logs),
@@ -105,6 +97,24 @@ func Init(dataDir, logDir, logLevel string) (err error) {
 	createCrashReporter()
 	logBuildInfo()
 	return nil
+}
+
+// seedLogLevel reconciles the persisted log level with the configured one.
+// The persisted value outranks the configured one, and builds through
+// v10.0.x persisted "trace", so without the demotion an upgraded install
+// logs at trace forever.
+func seedLogLevel(configured string) {
+	if v := env.GetString(env.LogLevel); v != "" {
+		settings.Set(settings.LogLevelKey, v)
+		return
+	}
+	if configured == "" {
+		return
+	}
+	settings.SetIfAbsent(settings.LogLevelKey, configured)
+	if configured != "trace" {
+		settings.ReplaceString(settings.LogLevelKey, "trace", configured)
+	}
 }
 
 // extraLoadBearingDeps are non-getlantern modules whose linked versions are
@@ -163,15 +173,39 @@ func logBuildInfo() {
 	}
 }
 
+func openCrashLog() (*os.File, error) {
+	path := filepath.Join(settings.GetString(settings.LogPathKey), internal.CrashLogFileName)
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileperm.File)
+}
+
 func createCrashReporter() {
-	crashFilePath := filepath.Join(settings.GetString(settings.LogPathKey), internal.CrashLogFileName)
-	f, err := os.OpenFile(crashFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileperm.File)
+	f, err := openCrashLog()
 	if err != nil {
 		slog.Error("Failed to open crash log file", "error", err)
 	} else {
 		debug.SetCrashOutput(f, debug.CrashOptions{})
 		// We can close f after SetCrashOutput because it duplicates the file descriptor.
 		f.Close()
+	}
+}
+
+// WriteRecoveredPanic appends a recovered panic and the calling goroutine's stack to the crash log.
+// The stack includes the panicking frames only while the recovering deferred call is still running.
+// Nothing is written when the log directory is unset.
+func WriteRecoveredPanic(operation string, recovered any) {
+	if settings.GetString(settings.LogPathKey) == "" {
+		return
+	}
+	f, err := openCrashLog()
+	if err != nil {
+		slog.Error("Failed to open crash log file", "error", err)
+		return
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s recovered panic %s: %v\n%s\n",
+		time.Now().UTC().Format(time.RFC3339Nano), operation, recovered, debug.Stack())
+	if err != nil {
+		slog.Error("Failed to write recovered panic to crash log", "error", err)
 	}
 }
 
