@@ -79,7 +79,7 @@ func TestSpanExportRedactsVolunteerAddresses(t *testing.T) {
 	evAttrs := attribute.NewSet(s.Events[0].Attributes...)
 	msg, _ := evAttrs.Value("exception.message")
 	assert.Equal(t, "outbound/samizdat[helper]: dial tcp <redacted>", msg.AsString())
-	assert.Contains(t, s.Attributes, attribute.String("peer", "198.51.100.9:443"), "no helper outbound named: kept")
+	assert.Contains(t, s.Attributes, attribute.String("peer", "<redacted>"), "the span names a helper, so every address in it goes")
 }
 
 func TestRedactedSpanReturnsOriginalsWhenNothingChanges(t *testing.T) {
@@ -107,4 +107,36 @@ func TestSpanExportDropsRoomTicketHeaders(t *testing.T) {
 	span.End()
 	s := mem.GetSpans()[0]
 	assert.Equal(t, []attribute.KeyValue{attribute.String("http.request.method", "GET")}, s.Attributes)
+}
+
+// lantern-box records a helper's dial failure as an event whose outbound
+// attribute is already "helper" and whose error attribute carries the address,
+// so a span naming a helper anywhere loses every address. Other spans keep
+// theirs.
+func TestSpanExportRedactsAddressesInSpansNamingAHelper(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(newRedactingExporter(mem)))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	tr := tp.Tracer("test")
+
+	_, span := tr.Start(context.Background(), "mutableurltest.dial")
+	span.SetAttributes(attribute.String("server", "198.51.100.9:443"))
+	span.AddEvent("dial_failed", trace.WithAttributes(
+		attribute.String("outbound", "helper"),
+		attribute.String("error", "dial tcp 203.0.113.7:443: connect: connection refused"),
+	))
+	span.End()
+	_, other := tr.Start(context.Background(), "mutableurltest.dial")
+	other.AddEvent("dial_failed", trace.WithAttributes(
+		attribute.String("outbound", "lantern-1"),
+		attribute.String("error", "dial tcp 198.51.100.9:443: connect: connection refused"),
+	))
+	other.End()
+
+	spans := mem.GetSpans()
+	require.Len(t, spans, 2)
+	assert.Contains(t, spans[0].Attributes, attribute.String("server", "<redacted>"))
+	assert.Contains(t, spans[0].Events[0].Attributes, attribute.String("error", "dial tcp <redacted>: connect: connection refused"))
+	assert.Contains(t, spans[1].Events[0].Attributes, attribute.String("error", "dial tcp 198.51.100.9:443: connect: connection refused"),
+		"a span that names no helper keeps its addresses")
 }

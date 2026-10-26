@@ -267,3 +267,31 @@ func TestRestartIfCurrentIgnoresStaleRuns(t *testing.T) {
 	assert.Never(t, func() bool { return count.Load() > 2 }, 50*time.Millisecond, 5*time.Millisecond,
 		"the replaced run's done no longer restarts anything")
 }
+
+// A restart whose stop times out still brings the widget back once the old
+// worker exits.
+func TestRestartIfCurrentStartsAfterASlowStop(t *testing.T) {
+	prevTimeout := internalStopTimeout
+	internalStopTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { internalStopTimeout = prevTimeout })
+	block := make(chan struct{})
+	var count atomic.Int32
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		if count.Add(1) == 1 {
+			return &fakeWidget{stopBlock: block}, nil
+		}
+		return &fakeWidget{}, nil
+	})
+	t.Cleanup(func() { manager.stop() })
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, &count, 1, 2*time.Second)
+
+	manager.mu.Lock()
+	done := manager.done
+	manager.mu.Unlock()
+	manager.restartIfCurrent(done)
+	assert.EqualValues(t, 1, count.Load(), "the old worker still holds the run")
+	close(block)
+	waitForCount(t, &count, 2, 2*time.Second)
+}

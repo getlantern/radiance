@@ -17,13 +17,13 @@ import (
 const Redacted = "<redacted>"
 
 var (
-	// helperNamed matches a helper outbound named in a line: its tag, or what
-	// lantern-box's redaction leaves of a logger name, "[helper]" from
-	// sing-box's "outbound/<type>[helper-…]" or "outbound/helper[" from the
-	// tunnel's "outbound/helper-…[<type>]" (endpoints likewise). Like
-	// lbA.RedactHelperTags it has no trailing boundary, so every line whose tag
-	// gets redacted also gets its addresses redacted ("helper-…_failed").
-	helperNamed = regexp.MustCompile(`\b` + lbA.HelperTagPrefix + `[0-9a-f]{12}|\[helper\]|\b(?:outbound|endpoint)/helper\[`)
+	// helperNamed matches text that may name a helper outbound: a helper tag,
+	// or the word "helper" that lbA.RedactHelperTags leaves in its place.
+	// lantern-box redacts tags before radiance sees most lines, leaving forms
+	// such as "outbound/samizdat[helper]", "outbound/helper[samizdat]",
+	// "outbound helper", outbound="helper" and "helper_failed", so the word
+	// itself is the marker. Matching it in unrelated text only redacts more.
+	helperNamed = regexp.MustCompile(`\bhelper(?:\b|_)`)
 	// ipCandidate matches text that may be an IP address, with or without a
 	// port: a bracketed host, or a run of hex digits, dots and colons. Each
 	// match is checked with net.ParseIP before it is replaced.
@@ -34,19 +34,29 @@ var (
 // that names a helper outbound, every IP address (with any port) replaced by
 // Redacted. Lines that name no helper outbound keep their addresses.
 func Helper(s string) string {
-	if !strings.Contains(s, "helper") {
+	if !NamesHelper(s) {
 		return s
 	}
-	if helperNamed.MatchString(s) {
-		lines := strings.SplitAfter(s, "\n")
-		for i, line := range lines {
-			if helperNamed.MatchString(line) {
-				lines[i] = ipCandidate.ReplaceAllStringFunc(line, redactIP)
-			}
+	lines := strings.SplitAfter(s, "\n")
+	for i, line := range lines {
+		if NamesHelper(line) {
+			lines[i] = Addresses(line)
 		}
-		s = strings.Join(lines, "")
 	}
-	return lbA.RedactHelperTags(s)
+	return lbA.RedactHelperTags(strings.Join(lines, ""))
+}
+
+// NamesHelper reports whether s may name a helper outbound, by its tag or by
+// the "helper" a redaction left in its place.
+func NamesHelper(s string) bool {
+	return strings.Contains(s, "helper") && helperNamed.MatchString(s)
+}
+
+// Addresses returns s with every IP address (with any port) replaced by
+// Redacted, for text that belongs with something naming a helper outbound,
+// such as the attributes of a span event that does.
+func Addresses(s string) string {
+	return ipCandidate.ReplaceAllStringFunc(s, redactIP)
 }
 
 // HelperBytes is Helper for a byte slice. It returns b itself when there is

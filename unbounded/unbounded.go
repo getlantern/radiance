@@ -306,12 +306,20 @@ func (s *servedPairings) add(tickets []string) {
 	}
 }
 
-// endedIn reports whether a served pairing is missing from answered.
-func (s *servedPairings) endedIn(answered map[string]bool) bool {
+// endedIn reports whether a served pairing is missing from the tickets answered
+// returns. It copies the served set before calling answered: a pairing served
+// by then was in an earlier answer, so missing from this one it has ended,
+// while one served only afterwards may come from a newer answer than this.
+func (s *servedPairings) endedIn(answered func() []string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	served := make([]string, 0, len(s.ids))
 	for id := range s.ids {
-		if !answered[id] {
+		served = append(served, id)
+	}
+	s.mu.Unlock()
+	cur := volunteerPairings(answered())
+	for _, id := range served {
+		if !cur[id] {
 			return true
 		}
 	}
@@ -357,7 +365,7 @@ func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rt
 		if prevPool && !pool {
 			reason = "Unbounded: helping others turned off; restarting the widget to close its sessions"
 		}
-		if tickets != nil && served.endedIn(volunteerPairings(tickets.AnsweredVolunteer())) {
+		if tickets != nil && served.endedIn(tickets.AnsweredVolunteer) {
 			reason = "Unbounded: a helper pairing ended; restarting the widget to close its sessions"
 		}
 		if reason != "" {
@@ -387,6 +395,14 @@ func (m *unboundedManager) restartIfCurrent(done chan struct{}) {
 	if err := m.stopLocked(ctx, false); err != nil {
 		slog.Warn("Unbounded: internal stop timed out before worker exited",
 			"error", err, "timeout", internalStopTimeout)
+		// The old worker still holds the run, so startLocked would do
+		// nothing. Start once it exits; start re-checks that the manager is
+		// armed and nothing else started, so a public Stop meanwhile wins.
+		go func() {
+			<-done
+			m.start()
+		}()
+		return
 	}
 	m.startLocked()
 }
