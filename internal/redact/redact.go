@@ -68,22 +68,36 @@ func HelperBytes(b []byte) []byte {
 	return []byte(Helper(string(b)))
 }
 
-// redactIP replaces m with Redacted if m is an IP address, or is one followed
-// by trailing dots or colons, which the candidate pattern takes in from the
-// surrounding text ("… to 2001:db8::." or "203.0.113.7: refused"). m is
-// checked whole first, since "::" can end a valid IPv6 address; then one
-// trailing character at a time is set aside and the rest checked again.
-// Other punctuation never enters a candidate.
+// redactIP replaces the IP address in m with Redacted. The candidate pattern
+// can take in dots and colons from the surrounding text on either side
+// ("peer:203.0.113.7:443", "… to 2001:db8::." or "203.0.113.7: refused"), so
+// redactIP tries m whole and then from just after each dot or colon, leftmost
+// first so the longest address wins ("::1" stays whole). At each start, the
+// rest is checked whole first, since "::" can end a valid IPv6 address, then
+// with one trailing dot or colon at a time set aside. Other punctuation never
+// enters a candidate.
 func redactIP(m string) string {
-	for core := m; core != ""; core = core[:len(core)-1] {
-		if isIPAddr(core) {
-			return Redacted + m[len(core):]
+	for start := 0; start < len(m); start++ {
+		if start > 0 && m[start-1] != '.' && m[start-1] != ':' {
+			continue
 		}
-		if last := core[len(core)-1]; last != '.' && last != ':' {
-			return m
+		if r, ok := redactTrailing(m[start:]); ok {
+			return m[:start] + r
 		}
 	}
 	return m
+}
+
+func redactTrailing(m string) (string, bool) {
+	for core := m; core != ""; core = core[:len(core)-1] {
+		if isIPAddr(core) {
+			return Redacted + m[len(core):], true
+		}
+		if last := core[len(core)-1]; last != '.' && last != ':' {
+			return m, false
+		}
+	}
+	return m, false
 }
 
 // isIPAddr reports whether s is an IP address, optionally bracketed, zoned or

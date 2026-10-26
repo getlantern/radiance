@@ -243,6 +243,7 @@ func readGzipTail(path string, maxRead int64) ([]byte, error) {
 	defer gz.Close()
 
 	var tail []byte
+	cut := false
 	chunk := make([]byte, 32*1024)
 	for {
 		n, readErr := gz.Read(chunk)
@@ -250,9 +251,13 @@ func readGzipTail(path string, maxRead int64) ([]byte, error) {
 			tail = append(tail, chunk[:n]...)
 			if int64(len(tail)) > maxRead {
 				tail = append(tail[:0], tail[int64(len(tail))-maxRead:]...)
+				cut = true
 			}
 		}
 		if readErr == io.EOF {
+			if cut {
+				tail = dropPartialFirstLine(tail)
+			}
 			return tail, nil
 		}
 		if readErr != nil {
@@ -307,7 +312,21 @@ func snapshotLogFile(logPath string, maxCompressed int64) ([]byte, error) {
 	if err != nil && err != io.ErrUnexpectedEOF {
 		return nil, fmt.Errorf("reading log file: %w", err)
 	}
+	if size > readSize {
+		return dropPartialFirstLine(data[:n]), nil
+	}
 	return data[:n], nil
+}
+
+// dropPartialFirstLine drops b's first line, which a read starting mid-file
+// has cut: redaction works line by line, and the cut could separate an
+// address from the helper outbound its line names.
+func dropPartialFirstLine(b []byte) []byte {
+	i := bytes.IndexByte(b, '\n')
+	if i < 0 {
+		return nil
+	}
+	return b[i+1:]
 }
 
 type extraFile struct {

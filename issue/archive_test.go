@@ -33,15 +33,15 @@ func TestSnapshotLogFile(t *testing.T) {
 		logPath := filepath.Join(dir, "test.log")
 
 		// maxCompressed=100 → maxRead = 100*20 = 2000
-		// Write 5000 bytes so the file exceeds the cap.
-		full := bytes.Repeat([]byte("X"), 5000)
+		// Write 5040 bytes of 120-byte lines so the file exceeds the cap and
+		// the read starts at byte 3040, 40 bytes into a line.
+		full := bytes.Repeat(append(bytes.Repeat([]byte("X"), 119), '\n'), 42)
 		require.NoError(t, os.WriteFile(logPath, full, 0644))
 
 		data, err := snapshotLogFile(logPath, 100)
 		require.NoError(t, err)
-		assert.Equal(t, 2000, len(data))
-		// Should be the tail of the file.
-		assert.Equal(t, string(full[3000:]), string(data))
+		// The tail of the file, without the line the read cut.
+		assert.Equal(t, string(full[3120:]), string(data))
 	})
 
 	t.Run("returns nil for empty file", func(t *testing.T) {
@@ -513,20 +513,20 @@ func TestReadGzipTail(t *testing.T) {
 	t.Run("keeps the tail when over cap", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "backup.log.gz")
-		writeGzipFile(t, path, []byte("0123456789"))
+		writeGzipFile(t, path, []byte("01234\n6789\n"))
 
-		data, err := readGzipTail(path, 4)
+		data, err := readGzipTail(path, 7)
 		require.NoError(t, err)
-		assert.Equal(t, "6789", string(data))
+		assert.Equal(t, "6789\n", string(data), "the tail, without the line the cap cut")
 	})
 
 	t.Run("keeps the tail across multiple read chunks", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "backup.log.gz")
-		content := append(bytes.Repeat([]byte("A"), 100*1024), []byte("TAILMARKER")...)
+		content := append(bytes.Repeat([]byte("A"), 100*1024), []byte("\nTAILMARKER")...)
 		writeGzipFile(t, path, content)
 
-		data, err := readGzipTail(path, 10)
+		data, err := readGzipTail(path, 14)
 		require.NoError(t, err)
 		assert.Equal(t, "TAILMARKER", string(data))
 	})

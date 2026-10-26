@@ -66,3 +66,23 @@ func TestIssueArchiveStubsHelperOutbounds(t *testing.T) {
 	assert.Contains(t, names["attachments/servers.json"], `"tag": "helper"`)
 	assert.Contains(t, names["attachments/debug-box-options.json"], `"type": "samizdat"`)
 }
+
+// A tail read that starts mid-line, here 30 bytes before the end of the first
+// line, drops that line rather than upload a fragment whose helper outbound
+// was cut off and whose address was not.
+func TestLogTailsDropTheLineTheyCut(t *testing.T) {
+	const line = "outbound/samizdat[helper-0123456789ab]: dial tcp 203.0.113.7:443\n"
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "lantern-crash.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(line+line), 0644))
+	data, err := snapshotLogFile(logPath, int64(len(line)+30)/maxLogReadFactor+1)
+	require.NoError(t, err)
+	assert.Equal(t, line, string(data))
+
+	gzPath := filepath.Join(dir, "lantern.log.1.gz")
+	writeGzipFile(t, gzPath, []byte(line+line))
+	data, err = readGzipTail(gzPath, int64(len(line)+30))
+	require.NoError(t, err)
+	assert.Equal(t, line, string(data))
+}
