@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/getlantern/radiance/common/fileperm"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,14 +12,15 @@ import (
 	"time"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn"
 )
 
 func run(ctx context.Context) error {
 	dir, target := os.Getenv("DATA"), os.Getenv("TARGET_URL")
-	if dir == "" || target == "" {
-		return errors.New("DATA and TARGET_URL are required")
+	if dir == "" {
+		return errors.New("DATA is required")
 	}
 	for _, name := range []string{"success", "fetch.json", "connection.txt", "output.txt", "timing.txt"} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -28,6 +28,9 @@ func run(ctx context.Context) error {
 		}
 	}
 	seconds := 20
+	if target == "" {
+		return errors.New("TARGET_URL is required")
+	}
 	if value := os.Getenv("FETCH_TIMEOUT_SECONDS"); value != "" {
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 || n > 600 {
@@ -47,14 +50,27 @@ func run(ctx context.Context) error {
 	}
 	sticky := os.Getenv("STICKY") == "true"
 	tag := os.Getenv("TARGET_TAG")
+	clientDir, err := os.MkdirTemp(dir, "client-")
+	if err != nil {
+		return err
+	}
+	for key, value := range map[string]string{
+		"RADIANCE_DATA_PATH": clientDir, "RADIANCE_LOG_PATH": clientDir,
+		"RADIANCE_DISABLE_FETCH_CONFIG": strconv.FormatBool(sticky),
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
 	if sticky {
 		if tag == "" {
 			return errors.New("TARGET_TAG is required with STICKY")
 		}
-		if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
+		data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
 			return fmt.Errorf("sticky config: %w", err)
 		}
-		if err := os.Setenv("RADIANCE_DISABLE_FETCH_CONFIG", "true"); err != nil {
+		if err := os.WriteFile(filepath.Join(clientDir, "config.json"), data, fileperm.Private); err != nil {
 			return err
 		}
 	} else {
@@ -64,7 +80,7 @@ func run(ctx context.Context) error {
 	if err != nil || uid <= 0 || os.Getenv("TOKEN") == "" || os.Getenv("DEVICE_ID") == "" {
 		return errors.New("USER_ID, TOKEN and DEVICE_ID are required")
 	}
-	be, err := backend.NewLocalBackend(ctx, backend.Options{DataDir: dir, LogDir: dir, Locale: "en-US"})
+	be, err := backend.NewLocalBackend(ctx, backend.Options{DataDir: clientDir, LogDir: clientDir, Locale: "en-US"})
 	if err != nil {
 		return fmt.Errorf("create radiance: %w", err)
 	}

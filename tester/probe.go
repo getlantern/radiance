@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/getlantern/radiance/common/fileperm"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/getlantern/radiance/common/fileperm"
 )
 
 func fetch(ctx context.Context, target, proxy, dir string, timeout time.Duration) error {
@@ -22,7 +23,9 @@ func fetch(ctx context.Context, target, proxy, dir string, timeout time.Duration
 		"--proto", "=https", "--proto-redir", "=https", "--max-time", strconv.FormatFloat(timeout.Seconds(), 'f', 3, 64),
 		"--output", filepath.Join(dir, "output.txt"), "--write-out", "%{json}"}
 	if proxy != "" {
-		args = append(args, "--proxy", "socks5h://"+proxy)
+		args = append(args, "--proxy", "socks5h://"+proxy, "--noproxy", "")
+	} else {
+		args = append(args, "--proxy", "", "--noproxy", "*")
 	}
 	cmd := exec.CommandContext(ctx, "curl", append(args, target)...)
 	cmd.Stderr = os.Stderr

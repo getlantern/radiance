@@ -32,8 +32,14 @@ All of these are required.
 
 ## CLI usage
 
+Build with `go build -tags novpn,with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api -o tester-bin ./tester`.
+The default local SOCKS listener is `127.0.0.1:1080`; set
+`RADIANCE_SOCKS_ADDRESS` to use a different address. Each invocation uses a fresh
+client state directory below `DATA`, so retained server assignments cannot affect
+either pinned targets or normal configuration fetching.
+
 ```bash
-RADIANCE_ENV=staging DEVICE_ID=1234 USER_ID=123 TOKEN=1234 RUN_ID=1234 TARGET_URL=https://example.com DATA=./mydir ./tester
+RADIANCE_ENV=staging DEVICE_ID=1234 USER_ID=123 TOKEN=1234 RUN_ID=1234 TARGET_URL=https://example.com DATA=./mydir ./tester-bin
 ```
 
 The tester will start Radiance tunnel, fetch the config & proxies and try to reach the target URL via the tunnel.
