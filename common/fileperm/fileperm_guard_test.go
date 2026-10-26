@@ -38,7 +38,6 @@ var allowedFiles = map[string]string{
 	"cmd/lanternd/lanternd_darwin.go": "installs the launchd plist, which launchd must read",
 	"ipc/socket.go":                   "the IPC socket's mode controls which users can connect",
 	"ipc/socket_mobile.go":            "the IPC socket's mode controls which users can connect",
-	"tester/main.go":                  "test tool output",
 	"cmd/kindling-tester/main.go":     "test tool output",
 }
 
