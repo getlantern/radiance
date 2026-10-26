@@ -164,6 +164,25 @@ func TestWidgetRestartsWhenAPairingEnds(t *testing.T) {
 		"one ended pairing is one restart")
 }
 
+// A pairing whose tickets reached signaling before the room sync first looked
+// still restarts the widget when it ends.
+func TestWidgetRestartsForAPairingServedBeforeTheFirstSync(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+	count, opts, _ := recordingWidgets(t)
+	src := &fakeTickets{}
+	src.set(volunteerTicket(t, priv, pairingA))
+	SetTicketSource(src)
+	prev := roomSyncInterval
+	roomSyncInterval = 200 * time.Millisecond
+	t.Cleanup(func() { roomSyncInterval = prev })
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	require.Len(t, opts(0).CurrentRoomTickets(), 1, "the first genesis carries pairing A")
+	src.set()
+	waitForCount(t, count, 2, 2*time.Second)
+}
+
 // Tickets that lapse because lantern-cloud is unreachable end no pairing, so
 // the widget keeps its open sessions.
 func TestWidgetKeepsRunningWhenTicketsOnlyLapse(t *testing.T) {

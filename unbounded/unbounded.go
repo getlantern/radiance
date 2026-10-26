@@ -273,12 +273,49 @@ func servePool() bool {
 // applyRooms points a new widget's options at the volunteer tickets and sets
 // the serve-pool setting. broflake calls the source at every genesis message,
 // so fresh tickets reach the widget as soon as the source has them; the source
-// is a cache whose reads never block. Call it before NewBroflake.
-func applyRooms(rtcOpt *clientcore.WebRTCOptions, tickets roomTickets) {
+// is a cache whose reads never block. The returned set records each pairing
+// whose tickets reach signaling, for syncRooms. Call it before NewBroflake.
+func applyRooms(rtcOpt *clientcore.WebRTCOptions, tickets roomTickets) *servedPairings {
+	served := &servedPairings{ids: make(map[string]bool)}
 	if tickets != nil {
-		rtcOpt.RoomTicketSource = tickets.Volunteer
+		rtcOpt.RoomTicketSource = func() []string {
+			tks := tickets.Volunteer()
+			served.add(tks)
+			return tks
+		}
 	}
 	rtcOpt.SetServePool(servePool())
+	return served
+}
+
+// servedPairings is the set of pairing IDs whose tickets a widget has handed
+// to signaling. Recording them as they go out, from the widget's first
+// genesis, means a pairing that ends before syncRooms first looks still ends
+// its sessions. Like volunteerPairings, it is never logged.
+type servedPairings struct {
+	mu  sync.Mutex
+	ids map[string]bool
+}
+
+func (s *servedPairings) add(tickets []string) {
+	ids := volunteerPairings(tickets)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range ids {
+		s.ids[id] = true
+	}
+}
+
+// endedIn reports whether a served pairing is missing from answered.
+func (s *servedPairings) endedIn(answered map[string]bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.ids {
+		if !answered[id] {
+			return true
+		}
+	}
+	return false
 }
 
 // volunteerPairings is the set of pairing IDs tickets claim. It is unverified
@@ -297,21 +334,14 @@ func volunteerPairings(tickets []string) map[string]bool {
 // changes that must end its open sessions, until ctx ends. done identifies the
 // run. Two changes restart the widget:
 //
-//   - a pairing it volunteers for is missing from the tickets lantern-cloud
-//     last answered with: the pairing has ended. freddie stops new matches by
+//   - a pairing it has served is missing from the tickets lantern-cloud last
+//     answered with: the pairing has ended. freddie stops new matches by
 //     itself, but a WebRTC session already open outlives the tickets, and the
 //     widget cannot tell which session came through which room. Tickets that
 //     only expired, say while lantern-cloud is unreachable, end nothing;
 //   - "help others too" turned off: sessions already open with strangers
 //     must end too.
-func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rtcOpt *clientcore.WebRTCOptions, tickets roomTickets, interval time.Duration) {
-	pairings := func() map[string]bool {
-		if tickets == nil {
-			return nil
-		}
-		return volunteerPairings(tickets.AnsweredVolunteer())
-	}
-	prev := pairings()
+func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rtcOpt *clientcore.WebRTCOptions, tickets roomTickets, served *servedPairings, interval time.Duration) {
 	prevPool := rtcOpt.ServesPool()
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -323,23 +353,19 @@ func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rt
 		}
 		pool := servePool()
 		rtcOpt.SetServePool(pool)
-		cur := pairings()
 		reason := ""
 		if prevPool && !pool {
 			reason = "Unbounded: helping others turned off; restarting the widget to close its sessions"
 		}
-		for id := range prev {
-			if !cur[id] {
-				reason = "Unbounded: a helper pairing ended; restarting the widget to close its sessions"
-				break
-			}
+		if tickets != nil && served.endedIn(volunteerPairings(tickets.AnsweredVolunteer())) {
+			reason = "Unbounded: a helper pairing ended; restarting the widget to close its sessions"
 		}
 		if reason != "" {
 			slog.Info(reason)
 			go m.restartIfCurrent(done)
 			return
 		}
-		prev, prevPool = cur, pool
+		prevPool = pool
 	}
 }
 
@@ -729,7 +755,7 @@ func (m *unboundedManager) startLocked() {
 		// Helper pairing rooms: freddie offers this widget's genesis messages
 		// to its paired consumers first, and with "help others too" off to
 		// nobody else.
-		applyRooms(rtcOpt, tickets)
+		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
 		if ucfg != nil {
@@ -762,7 +788,7 @@ func (m *unboundedManager) startLocked() {
 		syncDone := make(chan struct{})
 		go func() {
 			defer close(syncDone)
-			m.syncRooms(ctx, done, rtcOpt, tickets, syncInterval)
+			m.syncRooms(ctx, done, rtcOpt, tickets, served, syncInterval)
 		}()
 		<-ctx.Done()
 		slog.Info("Unbounded: stopping broflake widget proxy")

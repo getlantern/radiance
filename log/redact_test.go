@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,24 @@ func TestLogOutputRedactsVolunteerAddressesOnHelperLines(t *testing.T) {
 	logger.Warn("dial failed", "error", errors.New("outbound/samizdat["+helperTag+"]: dial tcp [2001:db8::7]:443"))
 	logger.Warn("dial failed", "error", errors.New("outbound/samizdat[lantern-1]: dial tcp 198.51.100.9:443"))
 	out := buf.String()
+	assert.NotContains(t, out, "203.0.113.7")
+	assert.NotContains(t, out, "2001:db8::7")
+	assert.Contains(t, out, "198.51.100.9:443", "lines without a helper outbound keep their addresses")
+}
+
+// The tunnel names live-added outbounds' loggers "outbound/<tag>[<type>]", and
+// lantern-box's factory redacts the tag in that name before the line reaches
+// the writer, so the line names its helper outbound only as
+// "outbound/helper[<type>]".
+func TestLogOutputRedactsAddressesUnderTunnelHelperLoggers(t *testing.T) {
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(newRedactingWriter(&buf), &slog.HandlerOptions{ReplaceAttr: replaceLogAttr})
+	f := lblog.NewFactory(h)
+	f.NewLogger("outbound/" + helperTag + "[samizdat]").Error("dial tcp 203.0.113.7:443: connection refused")
+	f.NewLogger("endpoint/" + helperTag + "[wireguard]").Error("handshake with [2001:db8::7]:51820 failed")
+	f.NewLogger("outbound/lantern-1[samizdat]").Error("dial tcp 198.51.100.9:443: connection refused")
+	out := buf.String()
+	assert.NotContains(t, out, helperTag)
 	assert.NotContains(t, out, "203.0.113.7")
 	assert.NotContains(t, out, "2001:db8::7")
 	assert.Contains(t, out, "198.51.100.9:443", "lines without a helper outbound keep their addresses")

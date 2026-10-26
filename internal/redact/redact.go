@@ -17,11 +17,13 @@ import (
 const Redacted = "<redacted>"
 
 var (
-	// helperNamed matches a helper outbound named in a line: its tag, or the
-	// "[helper]" an earlier redaction left of "outbound/<type>[helper-…]". Like
+	// helperNamed matches a helper outbound named in a line: its tag, or what
+	// lantern-box's redaction leaves of a logger name, "[helper]" from
+	// sing-box's "outbound/<type>[helper-…]" or "outbound/helper[" from the
+	// tunnel's "outbound/helper-…[<type>]" (endpoints likewise). Like
 	// lbA.RedactHelperTags it has no trailing boundary, so every line whose tag
 	// gets redacted also gets its addresses redacted ("helper-…_failed").
-	helperNamed = regexp.MustCompile(`\b` + lbA.HelperTagPrefix + `[0-9a-f]{12}|\[helper\]`)
+	helperNamed = regexp.MustCompile(`\b` + lbA.HelperTagPrefix + `[0-9a-f]{12}|\[helper\]|\b(?:outbound|endpoint)/helper\[`)
 	// ipCandidate matches text that may be an IP address, with or without a
 	// port: a bracketed host, or a run of hex digits, dots and colons. Each
 	// match is checked with net.ParseIP before it is replaced.
