@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/getlantern/radiance/common/fileperm"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,6 +22,11 @@ func run(ctx context.Context) error {
 	if dir == "" || target == "" {
 		return errors.New("DATA and TARGET_URL are required")
 	}
+	for _, name := range []string{"success", "fetch.json", "connection.txt", "output.txt", "timing.txt"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	seconds := 20
 	if value := os.Getenv("FETCH_TIMEOUT_SECONDS"); value != "" {
 		n, err := strconv.Atoi(value)
@@ -32,11 +38,6 @@ func run(ctx context.Context) error {
 	timeout := time.Duration(seconds) * time.Second
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
-	}
-	for _, name := range []string{"success", "fetch.json", "connection.txt"} {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
 	}
 	if os.Getenv("DIRECT") == "true" {
 		return fetch(ctx, target, "", dir, timeout)
@@ -80,13 +81,13 @@ func run(ctx context.Context) error {
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connecting"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connecting"), fileperm.Private); err != nil {
 		return err
 	}
 	if err := be.ConnectVPN(connectCtx, tag); err != nil {
 		return fmt.Errorf("connect assigned target: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connected"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connected"), fileperm.Private); err != nil {
 		return err
 	}
 	defer be.DisconnectVPN()

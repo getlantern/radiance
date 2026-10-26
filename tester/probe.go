@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/getlantern/radiance/common/fileperm"
 	"net/url"
 	"os"
 	"os/exec"
@@ -26,11 +27,11 @@ func fetch(ctx context.Context, target, proxy, dir string, timeout time.Duration
 	cmd := exec.CommandContext(ctx, "curl", append(args, target)...)
 	cmd.Stderr = os.Stderr
 	stats, fetchErr := cmd.Output()
-	if err := os.WriteFile(filepath.Join(dir, "fetch.json"), stats, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fetch.json"), stats, fileperm.Private); err != nil {
 		return fmt.Errorf("write fetch metadata: %w", err)
 	}
 	if fetchErr != nil {
 		return fmt.Errorf("fetch: %w", fetchErr)
 	}
-	return os.WriteFile(filepath.Join(dir, "success"), nil, 0o600)
+	return os.WriteFile(filepath.Join(dir, "success"), nil, fileperm.Private)
 }
