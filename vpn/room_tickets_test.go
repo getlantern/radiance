@@ -8,6 +8,8 @@ import (
 	"time"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbC "github.com/getlantern/lantern-box/constant"
+	O "github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -62,4 +64,20 @@ func TestStatusErrorsRedactHelperTags(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no status event")
 	}
+}
+
+// A tunnel starts the inviter ticket fetch as soon as it gets a helper
+// Unbounded outbound, so its first subscribe is likely to carry tickets, and
+// never for other outbounds.
+func TestPrefetchInviterTicketsOnlyForHelperUnbounded(t *testing.T) {
+	src := &countingInviter{}
+	tn := &tunnel{inviterTickets: src}
+	tn.prefetchInviterTickets([]O.Outbound{
+		{Type: lbC.TypeUnbounded, Tag: "unbounded-pool"},
+		{Type: lbC.TypeSamizdat, Tag: "helper-0123456789ab"},
+	})
+	assert.Equal(t, 0, src.n)
+	tn.prefetchInviterTickets([]O.Outbound{{Type: lbC.TypeUnbounded, Tag: "helper-0123456789ab"}})
+	assert.Equal(t, 1, src.n)
+	(&tunnel{}).prefetchInviterTickets([]O.Outbound{{Type: lbC.TypeUnbounded, Tag: "helper-0123456789ab"}})
 }

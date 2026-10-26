@@ -32,6 +32,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
+	lbC "github.com/getlantern/lantern-box/constant"
 	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/clientcontext"
 
@@ -211,6 +212,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	// every subscribe; the source fetches on first use and renews in the
 	// background, outside the tunnel like the signaling itself.
 	boxCtx = withHelperRoomTickets(boxCtx, t.inviterTickets)
+	t.prefetchInviterTickets(options.Outbounds)
 
 	t.ctx = boxCtx
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
@@ -618,6 +620,8 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 		isLantern[srv.Tag] = srv.IsLantern
 	}
 
+	t.prefetchInviterTickets(newOutbounds)
+
 	var errs []error
 	var (
 		mutGrpMgr = t.mutGrpMgr
@@ -739,7 +743,9 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 		t.optsMap.Delete(tag)
 	}
 
-	for _, outbound := range removeDuplicates(ctx, t.optsMap, list).Outbounds() {
+	newOutbounds := removeDuplicates(ctx, t.optsMap, list).Outbounds()
+	t.prefetchInviterTickets(newOutbounds)
+	for _, outbound := range newOutbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
 		if err := t.outboundMgr.Create(ctx, router, logger, outbound.Tag, outbound.Type, outbound.Options); err != nil {
 			slog.Warn("Failed to load non-selectable outbound",
@@ -973,6 +979,23 @@ func (c *cacheFileWrapper) LoadSelected(_ string) string {
 
 func (c *cacheFileWrapper) StoreSelected(_, _ string) error {
 	return nil
+}
+
+// prefetchInviterTickets starts the inviter ticket fetch, without waiting for
+// it, when outbounds include a helper-tagged Unbounded outbound. The fetch then
+// usually lands before that outbound's first subscribe, which would otherwise
+// go out without tickets on a cold start and could settle on a pool volunteer
+// for the session. Tunnels with no such outbound still never call the API.
+func (t *tunnel) prefetchInviterTickets(outbounds []O.Outbound) {
+	if t.inviterTickets == nil {
+		return
+	}
+	for _, out := range outbounds {
+		if out.Type == lbC.TypeUnbounded && lbA.IsHelperTag(out.Tag) {
+			t.inviterTickets.Inviter()
+			return
+		}
+	}
 }
 
 // withHelperRoomTickets gives the Unbounded outbound src's inviter tickets.

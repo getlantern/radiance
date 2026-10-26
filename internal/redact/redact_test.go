@@ -18,6 +18,8 @@ func TestHelperRedactsTagsAndIPsOnHelperLines(t *testing.T) {
 			"outbound/samizdat[helper]: dial tcp <redacted>: refused"},
 		{"bare ipv6", "outbound/samizdat[" + tag + "]: unreachable 2001:db8::7",
 			"outbound/samizdat[helper]: unreachable <redacted>"},
+		{"suffixed tag", tag + "_failed: dial tcp 203.0.113.7:443",
+			"helper_failed: dial tcp <redacted>"},
 		{"already tag-redacted", "outbound/samizdat[helper]: dial tcp 203.0.113.7:443",
 			"outbound/samizdat[helper]: dial tcp <redacted>"},
 		{"timestamps survive", `time="2026-10-23 13:30:00.000 UTC" msg="outbound/samizdat[` + tag + `]: dial tcp 203.0.113.7:443"`,

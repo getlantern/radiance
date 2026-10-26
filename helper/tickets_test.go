@@ -385,3 +385,17 @@ func TestSourceExpiryRunsFromTheRequest(t *testing.T) {
 	assert.Empty(t, src.Inviter(), "expired 15 minutes after the request, not the response")
 	settle(t, src)
 }
+
+// Renewal also runs from when the request was sent, so a slow response does
+// not eat into the margin before the tickets expire.
+func TestSourceRenewalRunsFromTheRequest(t *testing.T) {
+	clock := &fakeClock{t: time.Unix(1_800_000_000, 0)}
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		clock.add(25 * time.Second)
+		return Tickets{Lifetime: 6 * time.Minute}, nil
+	})
+	src.now = clock.now
+	src.Inviter()
+	settle(t, src)
+	assert.Equal(t, 4*time.Minute-25*time.Second, src.dueIn())
+}

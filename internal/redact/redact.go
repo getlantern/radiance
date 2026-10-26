@@ -18,8 +18,10 @@ const Redacted = "<redacted>"
 
 var (
 	// helperNamed matches a helper outbound named in a line: its tag, or the
-	// "[helper]" an earlier redaction left of "outbound/<type>[helper-…]".
-	helperNamed = regexp.MustCompile(`\b` + lbA.HelperTagPrefix + `[0-9a-f]{12}\b|\[helper\]`)
+	// "[helper]" an earlier redaction left of "outbound/<type>[helper-…]". Like
+	// lbA.RedactHelperTags it has no trailing boundary, so every line whose tag
+	// gets redacted also gets its addresses redacted ("helper-…_failed").
+	helperNamed = regexp.MustCompile(`\b` + lbA.HelperTagPrefix + `[0-9a-f]{12}|\[helper\]`)
 	// ipCandidate matches text that may be an IP address, with or without a
 	// port: a bracketed host, or a run of hex digits, dots and colons. Each
 	// match is checked with net.ParseIP before it is replaced.

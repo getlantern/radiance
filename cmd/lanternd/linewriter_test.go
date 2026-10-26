@@ -29,13 +29,21 @@ func TestLineWriterPassesWholeLines(t *testing.T) {
 	assert.Len(t, sink.writes, 3)
 }
 
-func TestLineWriterBoundsAnUnendedLine(t *testing.T) {
+// A line past the bound is dropped through its newline rather than passed on
+// in pieces, which could split a helper tag across two writes.
+func TestLineWriterDropsAnOverlongLine(t *testing.T) {
 	sink := &recordingSink{}
 	lw := &lineWriter{w: sink}
-	long := make([]byte, maxChildLine+10)
+	long := make([]byte, maxChildLine-4)
 	for i := range long {
 		long[i] = 'a'
 	}
-	lw.Write(long)
-	assert.Len(t, sink.writes, 1, "a line past the bound is passed on rather than held")
+	lw.Write(append([]byte("ok\n"), long...))
+	lw.Write([]byte("helper-0123"))
+	assert.Equal(t, []string{"ok\n", droppedLineNotice}, sink.writes)
+	lw.Write([]byte("456789ab 203.0.113.7:443"))
+	lw.Write([]byte(" more\nnext line\n"))
+	assert.Equal(t, []string{"ok\n", droppedLineNotice, "next line\n"}, sink.writes)
+	lw.Flush()
+	assert.Len(t, sink.writes, 3)
 }

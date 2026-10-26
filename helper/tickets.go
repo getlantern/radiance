@@ -213,7 +213,9 @@ func (s *Source) refresh() {
 		s.inviter = hold(t.Inviter, start, t.Lifetime)
 		s.volunteer = hold(t.Volunteer, start, t.Lifetime)
 		s.busy = 0
-		s.due = now.Add(refreshAfter(t.Lifetime))
+		// Renewal runs from the request's start too, like expiry, so a
+		// slow fetch never eats into the margin before the tickets expire.
+		s.due = start.Add(refreshAfter(t.Lifetime))
 	}
 	s.mu.Unlock()
 
