@@ -291,8 +291,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 		writeJSON(w, http.StatusOK, unbounded.CurrentSnapshot())
 	}))
 
-	// Helper invites. Not traced: the tracer records error bodies, and these
-	// carry invite hashes and encrypted names.
+	// Helper invites. Not traced: a span per relay call would show in
+	// exported telemetry that the device uses helper invites, and how many
+	// operations it ran.
 	mux.HandleFunc("POST "+helperRelayEndpoint, s.helperRelayHandler)
 	// Not traced either: a traced poll would mark the device as a helper
 	// volunteer in exported telemetry.

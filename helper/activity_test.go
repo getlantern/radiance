@@ -198,17 +198,36 @@ func TestActivityDropsADayFarInTheFuture(t *testing.T) {
 	assert.Equal(t, Activity{Day: "2026-10-23", ActiveSeconds: 60}, tr.Today())
 }
 
-// Run takes a last sample when it stops, so the minute before a shutdown is
-// saved.
-func TestActivityRunSamplesBeforeItStops(t *testing.T) {
+// Flush counts the time since the last tick or flush, at most one interval,
+// and saves; a second Flush right after adds nothing more.
+func TestActivityFlushCountsTheLastPartialInterval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a.json")
 	sh := &fakeSharing{running: true, epoch: "e"}
 	tr := NewActivityTracker(path, sh.read)
+	tr.every = time.Minute
+	tr.lastTick = time.Now().Add(-40 * time.Second)
 	sh.bytes = 42
+	tr.Flush()
+	tr.Flush()
+	saved := NewActivityTracker(path, sh.read).Today()
+	assert.Equal(t, int64(40), saved.ActiveSeconds)
+	assert.Equal(t, uint64(42), saved.RelayedBytes)
+
+	tr.lastTick = time.Now().Add(-3 * time.Hour) // the device slept
+	tr.Flush()
+	assert.Equal(t, int64(100), tr.Today().ActiveSeconds, "capped at one interval")
+}
+
+// Run stops without sampling: Close flushes, and a tick and a flush never
+// count the same interval twice.
+func TestActivityRunStopsWithoutSampling(t *testing.T) {
+	sh := &fakeSharing{running: true, epoch: "e"}
+	tr := NewActivityTracker(filepath.Join(t.TempDir(), "a.json"), sh.read)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { tr.Run(ctx, time.Hour); close(done) }()
 	cancel()
 	<-done
-	assert.Equal(t, uint64(42), NewActivityTracker(path, sh.read).Today().RelayedBytes)
+	tr.Flush()
+	assert.LessOrEqual(t, tr.Today().ActiveSeconds, int64(1))
 }

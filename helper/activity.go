@@ -46,6 +46,10 @@ type ActivityTracker struct {
 	// construction, so bytes still count from process start.
 	lastEpoch string
 	lastBytes uint64
+	// every is Run's interval and lastTick when the last tick or Flush
+	// sampled; Flush counts the time since, at most every.
+	every    time.Duration
+	lastTick time.Time
 }
 
 // NewActivityTracker returns a tracker that saves to path and samples read.
@@ -138,7 +142,7 @@ func (t *ActivityTracker) Sample(elapsed time.Duration) {
 		t.cur = Activity{Day: today}
 	}
 	if running {
-		t.cur.ActiveSeconds += int64(elapsed / time.Second)
+		t.cur.ActiveSeconds += int64(elapsed.Round(time.Second) / time.Second)
 	}
 	if epoch == t.lastEpoch && bytes >= t.lastBytes {
 		t.cur.RelayedBytes += bytes - t.lastBytes
@@ -147,25 +151,40 @@ func (t *ActivityTracker) Sample(elapsed time.Duration) {
 }
 
 // Run samples every interval until ctx ends, saving after a sample that
-// changed something, and takes a last sample when ctx ends. A device that
-// never shares writes nothing but the first sample of each day.
+// changed something. A device that never shares writes nothing but the
+// first sample of each day. It takes no sample when ctx ends: the backend's
+// Close calls Flush first, while sharing is still running.
 func (t *ActivityTracker) Run(ctx context.Context, every time.Duration) {
+	t.mu.Lock()
+	t.every, t.lastTick = every, time.Now()
+	t.mu.Unlock()
 	tk := time.NewTicker(every)
 	defer tk.Stop()
-	last := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
-			// Capped at one interval, like a tick: time the device slept
-			// is not time it shared.
-			t.Sample(min(time.Since(last), every))
-			t.save()
 			return
-		case last = <-tk.C:
-			t.Sample(every)
-			t.save()
+		case <-tk.C:
+			t.Flush()
 		}
 	}
+}
+
+// Flush samples the time since the last tick or Flush, capped at one
+// interval because time the device slept is not time it shared, and saves.
+// Ticks and flushes each claim the span since the one before, so no interval
+// counts twice. Before Run starts it counts bytes only.
+func (t *ActivityTracker) Flush() {
+	t.mu.Lock()
+	now := time.Now()
+	var elapsed time.Duration
+	if !t.lastTick.IsZero() {
+		elapsed = min(now.Sub(t.lastTick), t.every)
+	}
+	t.lastTick = now
+	t.mu.Unlock()
+	t.Sample(elapsed)
+	t.save()
 }
 
 func (t *ActivityTracker) save() {

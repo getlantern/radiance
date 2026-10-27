@@ -13,6 +13,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
@@ -79,6 +82,34 @@ func TestRelayCutsLongErrorsOnARuneBoundary(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, utf8.ValidString(res.Error), "no split rune")
 	assert.Equal(t, prefix, res.Error)
+}
+
+// spanEventer stands in for kindling's race observer, which adds events to
+// the span in a request's context.
+type spanEventer struct{ next http.RoundTripper }
+
+func (s spanEventer) RoundTrip(r *http.Request) (*http.Response, error) {
+	trace.SpanFromContext(r.Context()).AddEvent("kindling.attempt")
+	return s.next.RoundTrip(r)
+}
+
+// The relay detaches the caller's span, so nothing about a helper call is
+// recorded on it.
+func TestRelayDetachesTheCallersSpan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	ctx, span := tp.Tracer("test").Start(context.Background(), "caller")
+	client := &http.Client{Transport: spanEventer{next: srv.Client().Transport}}
+	_, err := NewRelayer(client, srv.URL+"/v1", nil).Relay(ctx, "pairings", nil)
+	require.NoError(t, err)
+	span.End()
+	spans := mem.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Empty(t, spans[0].Events)
 }
 
 func TestRelayRejectsANonJSONSuccess(t *testing.T) {

@@ -1204,3 +1204,16 @@ func TestReregisterPeer_SkipsAClosedBackend(t *testing.T) {
 	b.peerWG.Wait()
 	assert.Zero(t, fake.reregisterCalls.Load())
 }
+
+// Once closePeerClient has begun waiting, a re-register starts nothing, even
+// before Close cancels the backend's context.
+func TestReregisterPeer_AfterCloseStartsNothing(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newCloseableTestBackend(t, fake)
+	fake.active.Store(true)
+	b.closePeerClient()
+	fake.active.Store(true)
+	b.reregisterPeer()
+	b.peerWG.Wait()
+	assert.Zero(t, fake.reregisterCalls.Load())
+}

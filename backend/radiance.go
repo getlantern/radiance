@@ -72,6 +72,10 @@ type LocalBackend struct {
 	peerClient   peerController
 	peerToggleMu sync.Mutex
 	peerWG       sync.WaitGroup
+	// peerWGMu orders peerWG.Add against closePeerClient's Wait: once
+	// peerClosing is set, nothing adds to peerWG.
+	peerWGMu    sync.Mutex
+	peerClosing bool
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -499,6 +503,10 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		// Count the last partial interval while sharing still runs.
+		if r.helperActivity != nil {
+			r.helperActivity.Flush()
+		}
 		r.closePeerClient()
 		// unbounded.start spawns its worker on a context.Background-
 		// derived ctx (it has to outlive any single NewConfigEvent),

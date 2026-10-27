@@ -135,15 +135,15 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 // changes. Re-registering rotates the credentials and rebuilds the inbound,
 // so every open session, paired ones included, drops and reconnects within
 // seconds; the switch's caption warns of it (help_others_too_note). The
-// widget picks the setting up by itself within roomSyncInterval, and plan 3
-// restarts it when helping others turns off, with the same brief drop.
+// Unbounded widget needs nothing from here: its syncRooms re-reads the
+// setting within roomSyncInterval and restarts the widget when helping others
+// turns off, with the same brief drop.
 func (r *LocalBackend) reregisterPeer() {
 	// A closed backend's peer is stopped or stopping; there is nothing to
 	// re-register.
-	if r.peerClient == nil || r.ctx.Err() != nil {
+	if r.peerClient == nil || r.ctx.Err() != nil || !r.addPeerWork() {
 		return
 	}
-	r.peerWG.Add(1)
 	go func() {
 		defer r.peerWG.Done()
 		r.peerToggleMu.Lock()
@@ -195,7 +195,9 @@ func (r *LocalBackend) resumePeerShareIfEnabled() {
 	if !settings.GetBool(settings.PeerShareEnabledKey) {
 		return
 	}
-	r.peerWG.Add(1)
+	if !r.addPeerWork() {
+		return
+	}
 	go func() {
 		defer r.peerWG.Done()
 		if r.ctx.Err() != nil {
@@ -205,6 +207,18 @@ func (r *LocalBackend) resumePeerShareIfEnabled() {
 			slog.Warn("peer share auto-resume failed", "error", err)
 		}
 	}()
+}
+
+// addPeerWork adds one to peerWG unless the backend is closing, so an Add
+// can never race closePeerClient's Wait. It reports whether it added.
+func (r *LocalBackend) addPeerWork() bool {
+	r.peerWGMu.Lock()
+	defer r.peerWGMu.Unlock()
+	if r.peerClosing {
+		return false
+	}
+	r.peerWG.Add(1)
+	return true
 }
 
 // closePeerClient runs at backend shutdown. It waits for any in-flight
@@ -220,6 +234,9 @@ func (r *LocalBackend) closePeerClient() {
 	if r.peerClient == nil {
 		return
 	}
+	r.peerWGMu.Lock()
+	r.peerClosing = true
+	r.peerWGMu.Unlock()
 	r.peerWG.Wait()
 	if !r.peerClient.IsActive() {
 		return

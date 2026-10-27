@@ -124,3 +124,12 @@ func TestHelperActivityClientRoundTrip(t *testing.T) {
 	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, a.Day)
 	assert.Zero(t, a.RelayedBytes)
 }
+
+// A body that is not JSON is refused before marshalling, with fixed text
+// rather than an encoder error that could quote it.
+func TestHelperRelayClientRefusesANonJSONBody(t *testing.T) {
+	c := newClient()
+	c.http.Transport = localTransport{api: newLocalAPI(&backend.LocalBackend{}, false)}
+	_, err := c.HelperRelay(context.Background(), "invites", []byte("not json secret"))
+	assert.EqualError(t, err, "helper relay: body is not JSON")
+}

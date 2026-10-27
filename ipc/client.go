@@ -899,6 +899,10 @@ func (c *Client) UnboundedSnapshot(ctx context.Context) (unbounded.Snapshot, err
 // helper.Relayer). lantern-cloud's status is in the result; an error means
 // the relay itself failed.
 func (c *Client) HelperRelay(ctx context.Context, op string, body []byte) (helper.RelayResult, error) {
+	if len(body) > 0 && !json.Valid(body) {
+		// Fixed text: the encoder's error would quote the body.
+		return helper.RelayResult{}, errors.New("helper relay: body is not JSON")
+	}
 	var res helper.RelayResult
 	err := c.doJSON(ctx, http.MethodPost, helperRelayEndpoint, HelperRelayRequest{Op: op, Body: body}, &res)
 	return res, err
