@@ -294,7 +294,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Helper invites. Not traced: the tracer records error bodies, and these
 	// carry invite hashes and encrypted names.
 	mux.HandleFunc("POST "+helperRelayEndpoint, s.helperRelayHandler)
-	mux.HandleFunc("GET "+helperActivityEndpoint, traced(s.helperActivityHandler))
+	// Not traced either: a traced poll would mark the device as a helper
+	// volunteer in exported telemetry.
+	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
