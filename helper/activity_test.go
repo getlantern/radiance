@@ -153,21 +153,58 @@ func TestActivityIgnoresAClockSteppingBack(t *testing.T) {
 	assert.Equal(t, Activity{Day: "2026-10-24", ActiveSeconds: 120}, tr.Today())
 }
 
-// Both counters start at zero with the process, so bytes count from the
-// first sample on, not from the second.
-func TestActivityCountsBytesFromProcessStart(t *testing.T) {
-	sh := &fakeSharing{running: true, epoch: "e", bytes: 700}
+// The baseline is taken at construction, where a fresh process's counters
+// are zero, so bytes count from the first sample on, not from the second.
+func TestActivityCountsBytesFromConstruction(t *testing.T) {
+	sh := &fakeSharing{running: true, epoch: "e"}
 	tr := NewActivityTracker(filepath.Join(t.TempDir(), "a.json"), sh.read)
+	sh.bytes = 700
 	tr.Sample(time.Minute)
 	assert.Equal(t, uint64(700), tr.Today().RelayedBytes)
+}
+
+// A backend rebuilt in the same process (the mobile fallback) gets a new
+// tracker on the same file while the process-wide counters are already
+// non-zero. It must not add them again.
+func TestActivitySecondTrackerInAProcessAddsNothingTwice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.json")
+	sh := &fakeSharing{running: true, epoch: "e"}
+	first := NewActivityTracker(path, sh.read)
+	sh.bytes = 500
+	first.Sample(time.Minute)
+	first.save()
+
+	second := NewActivityTracker(path, sh.read)
+	second.Sample(time.Minute)
+	assert.Equal(t, uint64(500), second.Today().RelayedBytes, "counters that have not moved add nothing")
+	sh.bytes = 800
+	second.Sample(time.Minute)
+	assert.Equal(t, uint64(800), second.Today().RelayedBytes)
+}
+
+// A day saved while the clock ran ahead is dropped once the clock is
+// corrected by more than a day, rather than holding until the calendar
+// catches up.
+func TestActivityDropsADayFarInTheFuture(t *testing.T) {
+	sh := &fakeSharing{running: true, epoch: "e"}
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	tr := NewActivityTracker(filepath.Join(t.TempDir(), "a.json"), sh.read)
+	tr.loc = func() *time.Location { return time.UTC }
+	tr.now = func() time.Time { return now }
+	tr.Sample(time.Minute)
+	now = time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	assert.Equal(t, Activity{Day: "2026-10-23"}, tr.Today())
+	tr.Sample(time.Minute)
+	assert.Equal(t, Activity{Day: "2026-10-23", ActiveSeconds: 60}, tr.Today())
 }
 
 // Run takes a last sample when it stops, so the minute before a shutdown is
 // saved.
 func TestActivityRunSamplesBeforeItStops(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a.json")
-	sh := &fakeSharing{running: true, epoch: "e", bytes: 42}
+	sh := &fakeSharing{running: true, epoch: "e"}
 	tr := NewActivityTracker(path, sh.read)
+	sh.bytes = 42
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { tr.Run(ctx, time.Hour); close(done) }()

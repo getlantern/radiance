@@ -35,20 +35,23 @@ type ActivityTracker struct {
 	now  func() time.Time
 	loc  func() *time.Location
 
-	mu        sync.Mutex
-	zone      *time.Location // loc's last answer; Sample refreshes it
-	cur       Activity
-	saved     Activity // what the file holds; save writes only when cur differs
+	mu    sync.Mutex
+	zone  *time.Location // loc's last answer; Sample refreshes it
+	cur   Activity
+	saved Activity // what the file holds; save writes only when cur differs
+	// lastEpoch and lastBytes are the counters at the last sample, or at
+	// construction. The counters are process-wide, so a tracker built for a
+	// backend recreated in the same process must not count what an earlier
+	// one already did; in a fresh process they are near zero at
+	// construction, so bytes still count from process start.
 	lastEpoch string
-	// lastBytes starts at 0 because both counters start at 0 with the
-	// process; the first sample adopts its epoch rather than re-baselining.
 	lastBytes uint64
-	epochSeen bool
 }
 
 // NewActivityTracker returns a tracker that saves to path and samples read.
 func NewActivityTracker(path string, read Sharing) *ActivityTracker {
 	t := &ActivityTracker{path: path, read: read, now: time.Now, loc: LocalZone}
+	_, t.lastEpoch, t.lastBytes = read()
 	if data, err := os.ReadFile(path); err == nil {
 		var a Activity
 		if json.Unmarshal(data, &a) == nil {
@@ -76,22 +79,45 @@ func zoneOrLocal(name string) *time.Location {
 	return loc
 }
 
-// today returns the current day in the device's zone. t.mu is held. The
-// zone is resolved once per sample, not per read, since resolving it can
-// walk the zone database and the app polls Today often.
-func (t *ActivityTracker) today(refresh bool) string {
-	if refresh || t.zone == nil {
-		t.zone = t.loc()
-	}
-	return t.now().In(t.zone).Format("2006-01-02")
+// days returns today and tomorrow in zone.
+func (t *ActivityTracker) days(zone *time.Location) (today, tomorrow string) {
+	now := t.now().In(zone)
+	return now.Format("2006-01-02"), now.AddDate(0, 0, 1).Format("2006-01-02")
 }
 
-// Today returns today's totals. Days are YYYY-MM-DD, so they compare as
-// strings; a clock that stepped back across midnight keeps the later day.
+// isNewDay reports whether today replaces day. Days are YYYY-MM-DD, so they
+// compare as strings. A later day replaces it; so does one more than a day
+// earlier, which means day was saved while the clock ran ahead. A clock that
+// stepped back across midnight, by less than a day, keeps the later day.
+func isNewDay(day, today, tomorrow string) bool {
+	return today > day || day > tomorrow
+}
+
+// cachedZone returns the zone Sample last resolved, resolving it, outside
+// t.mu, only if no sample has run. Resolving can walk the zone database, and
+// the app polls Today often.
+func (t *ActivityTracker) cachedZone() *time.Location {
+	t.mu.Lock()
+	zone := t.zone
+	t.mu.Unlock()
+	if zone != nil {
+		return zone
+	}
+	zone = t.loc()
+	t.mu.Lock()
+	if t.zone == nil {
+		t.zone = zone
+	}
+	t.mu.Unlock()
+	return zone
+}
+
+// Today returns today's totals.
 func (t *ActivityTracker) Today() Activity {
+	today, tomorrow := t.days(t.cachedZone())
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if today := t.today(false); today > t.cur.Day {
+	if isNewDay(t.cur.Day, today, tomorrow) {
 		return Activity{Day: today}
 	}
 	return t.cur
@@ -102,19 +128,22 @@ func (t *ActivityTracker) Today() Activity {
 // reset in between. It holds the lock across read, which only copies two
 // snapshots, so concurrent samples cannot count the same bytes twice.
 func (t *ActivityTracker) Sample(elapsed time.Duration) {
+	zone := t.loc() // outside the lock: it can load many zones
+	today, tomorrow := t.days(zone)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.zone = zone
 	running, epoch, bytes := t.read()
-	if today := t.today(true); today > t.cur.Day {
+	if isNewDay(t.cur.Day, today, tomorrow) {
 		t.cur = Activity{Day: today}
 	}
 	if running {
 		t.cur.ActiveSeconds += int64(elapsed / time.Second)
 	}
-	if (!t.epochSeen || epoch == t.lastEpoch) && bytes >= t.lastBytes {
+	if epoch == t.lastEpoch && bytes >= t.lastBytes {
 		t.cur.RelayedBytes += bytes - t.lastBytes
 	}
-	t.lastEpoch, t.lastBytes, t.epochSeen = epoch, bytes, true
+	t.lastEpoch, t.lastBytes = epoch, bytes
 }
 
 // Run samples every interval until ctx ends, saving after a sample that
