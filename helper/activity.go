@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 )
@@ -32,18 +33,22 @@ type ActivityTracker struct {
 	path string
 	read Sharing
 	now  func() time.Time
+	loc  func() *time.Location
 
 	mu        sync.Mutex
+	zone      *time.Location // loc's last answer; Sample refreshes it
 	cur       Activity
 	saved     Activity // what the file holds; save writes only when cur differs
 	lastEpoch string
+	// lastBytes starts at 0 because both counters start at 0 with the
+	// process; the first sample adopts its epoch rather than re-baselining.
 	lastBytes uint64
-	primed    bool
+	epochSeen bool
 }
 
 // NewActivityTracker returns a tracker that saves to path and samples read.
 func NewActivityTracker(path string, read Sharing) *ActivityTracker {
-	t := &ActivityTracker{path: path, read: read, now: time.Now}
+	t := &ActivityTracker{path: path, read: read, now: time.Now, loc: LocalZone}
 	if data, err := os.ReadFile(path); err == nil {
 		var a Activity
 		if json.Unmarshal(data, &a) == nil {
@@ -53,13 +58,40 @@ func NewActivityTracker(path string, read Sharing) *ActivityTracker {
 	return t
 }
 
-func dayOf(t time.Time) string { return t.Local().Format("2006-01-02") }
+// LocalZone is the device's time zone. Go hard-wires time.Local to UTC on
+// Android and iOS, so the zone comes from common.LocalTimeZone, which asks
+// the host app; time.Local is the fallback when that is unknown.
+func LocalZone() *time.Location {
+	return zoneOrLocal(common.LocalTimeZone())
+}
 
-// Today returns today's totals.
+func zoneOrLocal(name string) *time.Location {
+	if name == "" {
+		return time.Local
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.Local
+	}
+	return loc
+}
+
+// today returns the current day in the device's zone. t.mu is held. The
+// zone is resolved once per sample, not per read, since resolving it can
+// walk the zone database and the app polls Today often.
+func (t *ActivityTracker) today(refresh bool) string {
+	if refresh || t.zone == nil {
+		t.zone = t.loc()
+	}
+	return t.now().In(t.zone).Format("2006-01-02")
+}
+
+// Today returns today's totals. Days are YYYY-MM-DD, so they compare as
+// strings; a clock that stepped back across midnight keeps the later day.
 func (t *ActivityTracker) Today() Activity {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if today := dayOf(t.now()); t.cur.Day != today {
+	if today := t.today(false); today > t.cur.Day {
 		return Activity{Day: today}
 	}
 	return t.cur
@@ -67,35 +99,40 @@ func (t *ActivityTracker) Today() Activity {
 
 // Sample adds one interval: elapsed counts as active if sharing runs now, and
 // the bytes relayed since the last sample are added unless the counters were
-// reset in between.
+// reset in between. It holds the lock across read, which only copies two
+// snapshots, so concurrent samples cannot count the same bytes twice.
 func (t *ActivityTracker) Sample(elapsed time.Duration) {
-	running, epoch, bytes := t.read()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if today := dayOf(t.now()); t.cur.Day != today {
+	running, epoch, bytes := t.read()
+	if today := t.today(true); today > t.cur.Day {
 		t.cur = Activity{Day: today}
 	}
 	if running {
 		t.cur.ActiveSeconds += int64(elapsed / time.Second)
 	}
-	if t.primed && epoch == t.lastEpoch && bytes >= t.lastBytes {
+	if (!t.epochSeen || epoch == t.lastEpoch) && bytes >= t.lastBytes {
 		t.cur.RelayedBytes += bytes - t.lastBytes
 	}
-	t.lastEpoch, t.lastBytes, t.primed = epoch, bytes, true
+	t.lastEpoch, t.lastBytes, t.epochSeen = epoch, bytes, true
 }
 
 // Run samples every interval until ctx ends, saving after a sample that
-// changed something. A device that never shares writes nothing but the
-// first sample of each day.
+// changed something, and takes a last sample when ctx ends. A device that
+// never shares writes nothing but the first sample of each day.
 func (t *ActivityTracker) Run(ctx context.Context, every time.Duration) {
 	tk := time.NewTicker(every)
 	defer tk.Stop()
+	last := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
+			// Capped at one interval, like a tick: time the device slept
+			// is not time it shared.
+			t.Sample(min(time.Since(last), every))
 			t.save()
 			return
-		case <-tk.C:
+		case last = <-tk.C:
 			t.Sample(every)
 			t.save()
 		}

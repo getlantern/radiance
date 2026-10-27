@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"os"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 type fakeSharing struct {
@@ -103,4 +106,72 @@ func TestActivityFileHoldsOnlyTheTotals(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	}
+}
+
+// Android and iOS hard-wire time.Local to UTC, so the day follows the
+// device's zone as radiance resolves it, not time.Local.
+func TestActivityDayFollowsTheDeviceZone(t *testing.T) {
+	prev := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = prev })
+	tehran, err := time.LoadLocation("Asia/Tehran")
+	require.NoError(t, err)
+
+	sh := &fakeSharing{running: true, epoch: "e"}
+	tr := NewActivityTracker(filepath.Join(t.TempDir(), "a.json"), sh.read)
+	tr.loc = func() *time.Location { return tehran }
+	tr.now = func() time.Time { return time.Date(2026, 10, 23, 21, 0, 0, 0, time.UTC) } // 00:30 on the 24th in Tehran
+	tr.Sample(time.Minute)
+	assert.Equal(t, "2026-10-24", tr.Today().Day)
+}
+
+func TestLocalZoneUsesTheDeviceZone(t *testing.T) {
+	prev := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = prev })
+	prevTZ := settings.GetString(settings.TimeZoneKey)
+	require.NoError(t, settings.Set(settings.TimeZoneKey, "Asia/Tehran"))
+	t.Cleanup(func() { _ = settings.Set(settings.TimeZoneKey, prevTZ) })
+	assert.Equal(t, "Asia/Tehran", LocalZone().String())
+
+	assert.Equal(t, time.Local, zoneOrLocal(""), "an unknown zone falls back to time.Local")
+	assert.Equal(t, time.Local, zoneOrLocal("Not/AZone"))
+}
+
+// A clock that steps back across midnight keeps today's totals rather than
+// starting the earlier day over.
+func TestActivityIgnoresAClockSteppingBack(t *testing.T) {
+	sh := &fakeSharing{running: true, epoch: "e"}
+	now := time.Date(2026, 10, 24, 0, 0, 30, 0, time.UTC)
+	tr := NewActivityTracker(filepath.Join(t.TempDir(), "a.json"), sh.read)
+	tr.loc = func() *time.Location { return time.UTC }
+	tr.now = func() time.Time { return now }
+	tr.Sample(time.Minute)
+	now = now.Add(-time.Minute) // 23:59:30 on the 23rd
+	assert.Equal(t, Activity{Day: "2026-10-24", ActiveSeconds: 60}, tr.Today())
+	tr.Sample(time.Minute)
+	assert.Equal(t, Activity{Day: "2026-10-24", ActiveSeconds: 120}, tr.Today())
+}
+
+// Both counters start at zero with the process, so bytes count from the
+// first sample on, not from the second.
+func TestActivityCountsBytesFromProcessStart(t *testing.T) {
+	sh := &fakeSharing{running: true, epoch: "e", bytes: 700}
+	tr := NewActivityTracker(filepath.Join(t.TempDir(), "a.json"), sh.read)
+	tr.Sample(time.Minute)
+	assert.Equal(t, uint64(700), tr.Today().RelayedBytes)
+}
+
+// Run takes a last sample when it stops, so the minute before a shutdown is
+// saved.
+func TestActivityRunSamplesBeforeItStops(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.json")
+	sh := &fakeSharing{running: true, epoch: "e", bytes: 42}
+	tr := NewActivityTracker(path, sh.read)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { tr.Run(ctx, time.Hour); close(done) }()
+	cancel()
+	<-done
+	assert.Equal(t, uint64(42), NewActivityTracker(path, sh.read).Today().RelayedBytes)
 }

@@ -1778,7 +1778,7 @@ func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
 // section.
 func (r *LocalBackend) HelperActivity() helper.Activity {
 	if r.helperActivity == nil {
-		return helper.Activity{Day: time.Now().Local().Format("2006-01-02")}
+		return helper.Activity{Day: time.Now().In(helper.LocalZone()).Format("2006-01-02")}
 	}
 	return r.helperActivity.Today()
 }
