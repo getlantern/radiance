@@ -1156,7 +1156,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.mu.Lock()
 	if !c.active {
 		c.mu.Unlock()
-		return errors.New("not active")
+		return ErrNotActive
 	}
 	fwd := c.forwarder
 	extPort := c.externalPort

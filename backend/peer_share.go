@@ -68,14 +68,23 @@ func newPeerClient(platformDeviceID string, onSelfStop func(error)) (*peer.Clien
 // is rolled back if Start fails. Stop errors are logged because a partial
 // teardown shouldn't keep the toggle on.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
+	_, err := r.applyPeerShareStarted(enabled)
+	return err
+}
+
+// applyPeerShareStarted is applyPeerShare, also reporting whether it called
+// Start, decided under peerToggleMu. A Start registers with the settings as
+// they are, so a caller that persisted a registration setting first knows
+// that registration already carries it.
+func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err error) {
 	if peerShareUnsupported() {
 		// A persisted "on" would otherwise survive every restart with nothing
 		// behind it.
 		persistErr := persistPeerShare(false)
 		if enabled {
-			return errors.Join(fmt.Errorf("peer share is not supported on %s", common.Platform), persistErr)
+			return false, errors.Join(fmt.Errorf("peer share is not supported on %s", common.Platform), persistErr)
 		}
-		return persistErr
+		return false, persistErr
 	}
 	// Construction degrades to a nil client rather than failing (the backend
 	// must always come up so a user can report an issue), so the toggle
@@ -83,9 +92,9 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	if r.peerClient == nil {
 		persistErr := persistPeerShare(false)
 		if enabled {
-			return errors.Join(errors.New("peer share unavailable: peer client failed to initialize"), persistErr)
+			return false, errors.Join(errors.New("peer share unavailable: peer client failed to initialize"), persistErr)
 		}
-		return persistErr
+		return false, persistErr
 	}
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()
@@ -96,15 +105,15 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 		if err := r.peerClient.Stop(toggleCtx); err != nil {
 			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
 		}
-		return persistErr
+		return false, persistErr
 	}
 	if err := persistPeerShare(true); err != nil {
-		return err
+		return false, err
 	}
 	// A second "on" that queued behind an in-flight Start must not fail on
 	// "already active" and roll the toggle back under a running peer.
 	if r.peerClient.IsActive() {
-		return nil
+		return false, nil
 	}
 	if err := r.peerClient.Start(toggleCtx); err != nil {
 		// Surface the underlying Start error so operators can see it in the
@@ -115,10 +124,10 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 			slog.Error("peer share rollback failed after Start error",
 				"start_error", err, "rollback_error", rbErr)
 		}
-		return fmt.Errorf("start peer share: %w", err)
+		return true, fmt.Errorf("start peer share: %w", err)
 	}
 	slog.Info("peer share start succeeded")
-	return nil
+	return true, nil
 }
 
 // reregisterPeer re-registers a running peer in the background, under the
@@ -129,7 +138,9 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 // widget picks the setting up by itself within roomSyncInterval, and plan 3
 // restarts it when helping others turns off, with the same brief drop.
 func (r *LocalBackend) reregisterPeer() {
-	if r.peerClient == nil {
+	// A closed backend's peer is stopped or stopping; there is nothing to
+	// re-register.
+	if r.peerClient == nil || r.ctx.Err() != nil {
 		return
 	}
 	r.peerWG.Add(1)
@@ -144,7 +155,9 @@ func (r *LocalBackend) reregisterPeer() {
 		defer cancel()
 		// The message does not name the setting that changed, so this
 		// line never ties "help others too" to the peer it describes.
-		if err := r.peerClient.Reregister(ctx); err != nil {
+		// ErrNotActive: the peer stopped itself since the check, and the
+		// next Start registers with the current value.
+		if err := r.peerClient.Reregister(ctx); err != nil && !errors.Is(err, peer.ErrNotActive) {
 			slog.Warn("peer re-register failed; the next rotation retries", "error", err)
 		}
 	}()

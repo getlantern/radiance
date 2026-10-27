@@ -1180,3 +1180,27 @@ func TestPatchSettings_ServePoolWithToggleOnDoesNotReregister(t *testing.T) {
 	assert.Equal(t, int64(1), fake.startCalls.Load())
 	assert.Zero(t, fake.reregisterCalls.Load())
 }
+
+// A patch that turns sharing on for a peer already running starts nothing,
+// so its serve-pool change still has to re-register.
+func TestPatchSettings_ServePoolWithToggleOnForARunningPeerReregisters(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, b.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true, settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Zero(t, fake.startCalls.Load())
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+}
+
+func TestReregisterPeer_SkipsAClosedBackend(t *testing.T) {
+	fake := &fakePeerController{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b := &LocalBackend{ctx: ctx, peerClient: fake}
+	fake.active.Store(true)
+	b.reregisterPeer()
+	b.peerWG.Wait()
+	assert.Zero(t, fake.reregisterCalls.Load())
+}

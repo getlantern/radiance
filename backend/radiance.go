@@ -730,7 +730,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
-	var peerOn bool
+	var peerOn, peerStarted bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
@@ -748,9 +748,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	if peerRequested {
-		if err := r.applyPeerShare(peerOn); err != nil {
+		started, err := r.applyPeerShareStarted(peerOn)
+		if err != nil {
 			errs = errors.Join(errs, err)
 		}
+		peerStarted = started
 	}
 	if len(diff) == 0 {
 		return errs
@@ -804,9 +806,12 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		}
 	}
 	// "Help others too" is sent when the peer registers, so a running peer
-	// re-registers now. A patch that also toggled sharing on has just
-	// registered with the new value through Start.
-	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerRequested {
+	// re-registers now. Not when this patch started the peer, whose Start
+	// registered with the new value already, or turned sharing off. A patch
+	// that turned sharing on for a peer already running started nothing, so
+	// it re-registers.
+	turnedOff := peerRequested && !peerOn
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff {
 		r.reregisterPeer()
 	}
 	return errs

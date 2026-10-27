@@ -539,3 +539,10 @@ func TestClient_ReregisterWithoutASession(t *testing.T) {
 	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
 	assert.ErrorIs(t, c.Reregister(context.Background()), ErrNotActive)
 }
+
+// A session that ended between Reregister's check and the rotation still
+// reports ErrNotActive, so callers can tell it from a failed re-register.
+func TestClient_RotateCredsWithoutASessionIsErrNotActive(t *testing.T) {
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
+	assert.ErrorIs(t, c.rotateCreds(context.Background()), ErrNotActive)
+}
