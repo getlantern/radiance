@@ -1312,3 +1312,20 @@ func TestReregisterPeer_ANewerRequestSupersedesTheRetry(t *testing.T) {
 	waitPeerWork(t, b)
 	assert.Equal(t, int64(2), fake.reregisterCalls.Load())
 }
+
+// Turning sharing off ends a pending retry: the session it was for is gone,
+// and a new session's Start has registered the current setting already.
+func TestReregisterPeer_StopAndStartEndTheRetry(t *testing.T) {
+	setReregisterBackoff(t, 50*time.Millisecond, 50*time.Millisecond)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return errUnreachable })
+	b.reregisterPeer()
+	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, b.applyPeerShare(false))
+	require.NoError(t, b.applyPeerShare(true))
+	waitPeerWork(t, b)
+	assert.Never(t, func() bool { return fake.reregisterCalls.Load() > 1 }, 200*time.Millisecond, 5*time.Millisecond,
+		"the stale retry never reaches the new session")
+}

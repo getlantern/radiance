@@ -101,6 +101,8 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	toggleCtx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
 	if !enabled {
+		// A pending re-register retry was for the session stopping now.
+		r.cancelPeerRereg()
 		persistErr := persistPeerShare(false)
 		if err := r.peerClient.Stop(toggleCtx); err != nil {
 			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
@@ -115,6 +117,9 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	if r.peerClient.IsActive() {
 		return false, nil
 	}
+	// Start registers the current settings, so a pending re-register retry,
+	// which was for an earlier session, has nothing left to do.
+	r.cancelPeerRereg()
 	if err := r.peerClient.Start(toggleCtx); err != nil {
 		// Surface the underlying Start error so operators can see it in the
 		// daemon log (UPnP failure, registration 4xx, etc.) rather than only
@@ -193,6 +198,16 @@ func (r *LocalBackend) reregisterPeer() {
 			wait = min(2*wait, reregisterRetryMax)
 		}
 	}()
+}
+
+// cancelPeerRereg ends the pending re-register retry, if any.
+func (r *LocalBackend) cancelPeerRereg() {
+	r.peerWGMu.Lock()
+	defer r.peerWGMu.Unlock()
+	if r.peerReregCancel != nil {
+		r.peerReregCancel()
+		r.peerReregCancel = nil
+	}
 }
 
 // reregisterOnce makes one re-register attempt under the toggle lock, so it
@@ -284,11 +299,9 @@ func (r *LocalBackend) closePeerClient() {
 	}
 	r.peerWGMu.Lock()
 	r.peerClosing = true
-	if r.peerReregCancel != nil {
-		// A re-register retry may be waiting out its backoff.
-		r.peerReregCancel()
-	}
 	r.peerWGMu.Unlock()
+	// A re-register retry may be waiting out its backoff.
+	r.cancelPeerRereg()
 	r.peerWG.Wait()
 	if !r.peerClient.IsActive() {
 		return
