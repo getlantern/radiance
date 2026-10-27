@@ -1,0 +1,97 @@
+package helper
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+)
+
+func TestRelayForwardsAllowedOps(t *testing.T) {
+	require.NoError(t, settings.Set(settings.DeviceIDKey, "device-R"))
+	var gotPath, gotDevice, gotBody, gotType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotDevice, gotType = r.URL.Path, r.Header.Get(common.DeviceIDHeader), r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = w.Write([]byte(`{"pairing_id":"p"}`))
+	}))
+	defer srv.Close()
+	rl := NewRelayer(srv.Client(), srv.URL+"/v1", nil)
+	for op, path := range relayPaths {
+		res, err := rl.Relay(context.Background(), op, []byte(`{"x":1}`))
+		require.NoError(t, err, op)
+		assert.Equal(t, path, gotPath[len("/v1"):], op)
+		assert.Equal(t, "device-R", gotDevice)
+		assert.Equal(t, "application/json", gotType)
+		assert.JSONEq(t, `{"x":1}`, gotBody)
+		assert.Equal(t, http.StatusOK, res.Status)
+		assert.JSONEq(t, `{"pairing_id":"p"}`, string(res.Body))
+		assert.Empty(t, res.Error)
+	}
+	res, err := rl.Relay(context.Background(), "pairings", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "{}", gotBody, "an empty body is sent as {}")
+	assert.Equal(t, http.StatusOK, res.Status)
+}
+
+func TestRelayRefusesOtherOps(t *testing.T) {
+	rl := NewRelayer(http.DefaultClient, "http://127.0.0.1:1/v1", nil)
+	for _, op := range []string{"", "tickets", "ticket-key", "../peer/register", "invites/../../peer"} {
+		_, err := rl.Relay(context.Background(), op, nil)
+		assert.ErrorIs(t, err, ErrUnknownOp, op)
+	}
+}
+
+func TestRelayReportsErrorsAsResults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "invite already claimed or expired", http.StatusConflict)
+	}))
+	defer srv.Close()
+	res, err := NewRelayer(srv.Client(), srv.URL+"/v1", nil).Relay(context.Background(), "invites/claim", []byte(`{}`))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, res.Status)
+	assert.Equal(t, "invite already claimed or expired", res.Error)
+	assert.Nil(t, res.Body)
+}
+
+func TestRelayRejectsANonJSONSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>captive portal</html>"))
+	}))
+	defer srv.Close()
+	_, err := NewRelayer(srv.Client(), srv.URL+"/v1", nil).Relay(context.Background(), "pairings", nil)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "captive", "an error never quotes the body")
+}
+
+// A pairing change runs onChange, so the backend's ticket Source fetches at
+// its next read and a new pairing's rooms work within one read, not one
+// refresh interval.
+func TestRelayCallsOnChangeWhenPairingsChange(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"pairing_id": "p"})
+	}))
+	defer srv.Close()
+	var changes atomic.Int32
+	rl := NewRelayer(srv.Client(), srv.URL+"/v1", func() { changes.Add(1) })
+	for _, op := range []string{"invites", "invites/get", "pairings"} {
+		_, err := rl.Relay(context.Background(), op, []byte(`{}`))
+		require.NoError(t, err)
+	}
+	assert.Zero(t, changes.Load(), "creating, reading and listing change no pairing")
+	for _, op := range []string{"invites/claim", "invites/decide", "pairings/end", OpRefreshTickets} {
+		_, err := rl.Relay(context.Background(), op, []byte(`{}`))
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int32(4), changes.Load())
+}

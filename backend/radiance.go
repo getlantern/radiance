@@ -104,6 +104,8 @@ type LocalBackend struct {
 	// inviter side so they draw on a single fetch budget. It stops fetching
 	// when ctx ends.
 	helperTickets *helper.Source
+	// helperRelay sends the app's helper-invite requests to lantern-cloud.
+	helperRelay *helper.Relayer
 }
 
 type Options struct {
@@ -220,6 +222,13 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
 	vpnClient.SetInviterTickets(r.helperTickets)
+	// The widget and the tunnel share r.helperTickets, so invalidating it
+	// reaches both when the app's pairings change.
+	r.helperRelay = helper.NewRelayer(kindling.HTTPClient(), common.GetBaseURL(), func() {
+		if r.helperTickets != nil {
+			r.helperTickets.Invalidate()
+		}
+	})
 	backend = r
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
@@ -1721,6 +1730,25 @@ func (r *LocalBackend) refetchOnExhaustion() {
 	if err := r.confHandler.Fetch(); err != nil {
 		slog.Warn("MutableAutoSelect exhaustion refetch failed", "error", err)
 	}
+}
+
+////////////////////
+// Helper invites //
+////////////////////
+
+var errHelperRelayUnavailable = errors.New("helper relay unavailable")
+
+// HelperRelay sends one helper-invite request for the app (see
+// helper.Relayer). The op is checked first, so an unknown op is refused even
+// on a backend whose relayer failed to build.
+func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) (helper.RelayResult, error) {
+	if op != helper.OpRefreshTickets && !helper.IsRelayOp(op) {
+		return helper.RelayResult{}, helper.ErrUnknownOp
+	}
+	if r.helperRelay == nil {
+		return helper.RelayResult{}, errHelperRelayUnavailable
+	}
+	return r.helperRelay.Relay(ctx, op, body)
 }
 
 //////////////////

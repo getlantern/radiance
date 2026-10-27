@@ -20,6 +20,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal/hostaccess"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
@@ -88,6 +89,10 @@ const (
 	// different in-process event type, so they need their own SSE bridge.
 	unboundedConnectionEventsEndpoint = "/unbounded/connection/events"
 	unboundedSnapshotEndpoint         = "/unbounded/snapshot"
+
+	// Helper invites
+	helperRelayEndpoint    = "/helper/relay"
+	helperActivityEndpoint = "/helper/activity"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -285,6 +290,10 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+unboundedSnapshotEndpoint, traced(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unbounded.CurrentSnapshot())
 	}))
+
+	// Helper invites. Not traced: the tracer records error bodies, and these
+	// carry invite hashes and encrypted names.
+	mux.HandleFunc("POST "+helperRelayEndpoint, s.helperRelayHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -1551,5 +1560,26 @@ func (s *localapi) logsStreamHandler(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		}
+	}
+}
+
+const maxHelperRelayRequest = 64 << 10
+
+// helperRelayHandler relays one helper-invite request for the app. Its
+// errors are fixed text: they reach logs and must not quote a body.
+func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
+	var req HelperRelayRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxHelperRelayRequest)).Decode(&req); err != nil {
+		http.Error(w, "bad helper relay request", http.StatusBadRequest)
+		return
+	}
+	res, err := s.backend(r.Context()).HelperRelay(r.Context(), req.Op, req.Body)
+	switch {
+	case errors.Is(err, helper.ErrUnknownOp):
+		http.Error(w, "unknown helper operation", http.StatusBadRequest)
+	case err != nil:
+		http.Error(w, "helper relay failed", http.StatusBadGateway)
+	default:
+		writeJSON(w, http.StatusOK, res)
 	}
 }

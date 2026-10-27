@@ -151,6 +151,7 @@ type Source struct {
 	due       time.Time // zero: due at the first read
 	fetching  bool
 	busy      time.Duration // the backoff after the last 429 or 503 in a row
+	gen       uint64        // bumped by Invalidate; a fetch started under an older gen is stale
 }
 
 // NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
@@ -178,13 +179,26 @@ func (s *Source) AnsweredVolunteer() []string {
 	return s.read(helperticket.RoleVolunteer, true)
 }
 
+// Invalidate makes the next read fetch, because this device's pairings have
+// changed: it ends a DisabledInterval wait, whose 404 a claim makes stale. A
+// fetch already in flight does not satisfy it (see gen). A Source backing off
+// after lantern-cloud said it was busy keeps its backoff.
+func (s *Source) Invalidate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gen++
+	if s.busy == 0 {
+		s.due = time.Time{}
+	}
+}
+
 func (s *Source) read(role helperticket.Role, expired bool) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	if !s.fetching && !now.Before(s.due) && s.ctx.Err() == nil {
 		s.fetching = true
-		go s.refresh()
+		go s.refresh(s.gen)
 	}
 	hs := s.volunteer
 	if role == helperticket.RoleInviter {
@@ -199,7 +213,7 @@ func (s *Source) read(role helperticket.Role, expired bool) []string {
 	return out
 }
 
-func (s *Source) refresh() {
+func (s *Source) refresh(gen uint64) {
 	// Expiry runs from when the request was sent, so latency never stretches
 	// a ticket's life past what lantern-cloud granted.
 	start := s.now()
@@ -225,6 +239,13 @@ func (s *Source) refresh() {
 		// Renewal runs from the request's start too, like expiry, so a
 		// slow fetch never eats into the margin before the tickets expire.
 		s.due = start.Add(refreshAfter(t.Lifetime))
+	}
+	if s.gen != gen && s.busy == 0 {
+		// The pairings changed while this fetch was in flight, so whatever it
+		// got (tickets, a 404 for a device not yet paired, an error) may
+		// predate the change: fetch again at the next read. A busy backoff
+		// stands.
+		s.due = time.Time{}
 	}
 	s.mu.Unlock()
 

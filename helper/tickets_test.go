@@ -420,3 +420,106 @@ func TestSourceAnsweredVolunteerOutlivesExpiry(t *testing.T) {
 	settle(t, src)
 	assert.Empty(t, src.AnsweredVolunteer(), "a 404 does")
 }
+
+func TestSourceInvalidate(t *testing.T) {
+	var fetches atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		fetches.Add(1)
+		return Tickets{Lifetime: 15 * time.Minute}, nil
+	})
+	src.Volunteer()
+	require.Eventually(t, func() bool { return !src.isFetching() && fetches.Load() == 1 }, time.Second, 5*time.Millisecond)
+	src.Volunteer()
+	time.Sleep(20 * time.Millisecond)
+	require.Equal(t, int32(1), fetches.Load(), "a fresh source does not refetch")
+	src.Invalidate()
+	src.Volunteer()
+	require.Eventually(t, func() bool { return !src.isFetching() && fetches.Load() == 2 }, time.Second, 5*time.Millisecond)
+}
+
+// TestSourceInvalidateDuringAFetchIsNotLost covers the race: a pairing that
+// changes while a fetch is in flight must not be hidden by that fetch's
+// success, whose tickets may predate the change.
+func TestSourceInvalidateDuringAFetchIsNotLost(t *testing.T) {
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		if fetches.Add(1) == 1 {
+			<-release
+		}
+		return Tickets{Lifetime: 15 * time.Minute}, nil
+	})
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 1 }, time.Second, 5*time.Millisecond)
+	src.Invalidate()
+	close(release)
+	require.Eventually(t, func() bool { return !src.isFetching() }, time.Second, 5*time.Millisecond)
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 2 }, time.Second, 5*time.Millisecond,
+		"the fetch that began before the change does not count as fresh")
+}
+
+// TestSourceInvalidateDuringADisabledFetchIsNotLost: a flag-off volunteer's
+// fetch answers 404 (ErrDisabled) until its pairing exists. An approval that
+// lands during that fetch must not wait out DisabledInterval.
+func TestSourceInvalidateDuringADisabledFetchIsNotLost(t *testing.T) {
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		if fetches.Add(1) == 1 {
+			<-release
+			return Tickets{}, ErrDisabled
+		}
+		return Tickets{Lifetime: 15 * time.Minute}, nil
+	})
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 1 }, time.Second, 5*time.Millisecond)
+	src.Invalidate()
+	close(release)
+	require.Eventually(t, func() bool { return !src.isFetching() }, time.Second, 5*time.Millisecond)
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 2 }, time.Second, 5*time.Millisecond,
+		"the 404 that raced the approval does not hold the next fetch for an hour")
+}
+
+// A 404 that already settled holds the next fetch for DisabledInterval; a
+// claim that succeeds after it makes that 404 stale, so Invalidate ends the
+// wait, and the tickets it then gets replace the cleared AnsweredVolunteer.
+func TestSourceInvalidateEndsTheDisabledWait(t *testing.T) {
+	_, vol := testTickets(t)
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, _ := newTestSource(f)
+	f.results <- fetchResult{err: ErrDisabled}
+	src.Volunteer()
+	settle(t, src)
+	require.Equal(t, DisabledInterval, src.dueIn())
+	src.Volunteer()
+	assert.Never(t, func() bool { return f.calls.Load() > 1 }, 30*time.Millisecond, time.Millisecond)
+
+	src.Invalidate()
+	f.results <- fetchResult{t: Tickets{Volunteer: []string{vol}, Lifetime: 15 * time.Minute}}
+	src.Volunteer()
+	settle(t, src)
+	assert.Equal(t, int32(2), f.calls.Load())
+	assert.Equal(t, []string{vol}, src.AnsweredVolunteer())
+}
+
+// lantern-cloud's 429 or 503 asked this device to back off; a pairing change
+// does not override that, so Invalidate leaves the backoff, in flight or
+// settled, as it is.
+func TestSourceInvalidateKeepsABusyBackoff(t *testing.T) {
+	busy := fetchResult{err: fmt.Errorf("ticket request: status 503: %w", ErrUnavailable)}
+	f := &fakeFetch{results: make(chan fetchResult)}
+	src, _ := newTestSource(f)
+	src.Volunteer()
+	require.Eventually(t, func() bool { return f.calls.Load() == 1 }, time.Second, time.Millisecond)
+	src.Invalidate()
+	f.results <- busy
+	settle(t, src)
+	assert.Equal(t, 2*time.Minute, src.dueIn(), "an invalidation during a busy fetch keeps its backoff")
+
+	src.Invalidate()
+	assert.Equal(t, 2*time.Minute, src.dueIn(), "and one after it")
+	src.Volunteer()
+	assert.Never(t, func() bool { return f.calls.Load() > 1 }, 30*time.Millisecond, time.Millisecond)
+}
