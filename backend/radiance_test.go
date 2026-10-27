@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
@@ -1328,4 +1329,75 @@ func TestReregisterPeer_StopAndStartEndTheRetry(t *testing.T) {
 	waitPeerWork(t, b)
 	assert.Never(t, func() bool { return fake.reregisterCalls.Load() > 1 }, 200*time.Millisecond, 5*time.Millisecond,
 		"the stale retry never reaches the new session")
+}
+
+// Close stops the activity ticker and flushes before it returns, so the file
+// does not change afterwards.
+func TestClose_NoActivitySaveAfterItReturns(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newCloseableTestBackend(t, fake)
+	path := filepath.Join(t.TempDir(), "helper-activity.json")
+	b.helperActivity = helper.NewActivityTracker(path, func() (bool, string, uint64) { return true, "e", 0 })
+	go b.helperActivity.Run(b.ctx, time.Millisecond)
+	require.Eventually(t, func() bool { _, err := os.Stat(path); return err == nil }, time.Second, time.Millisecond)
+	b.Close()
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}
+
+// A newer toggle supersedes the retry loop, not the attempt already running:
+// cancelling that could abort a rotation between its register and its box
+// rebuild and stop sharing.
+func TestReregisterPeer_ANewerRequestLetsTheRunningAttemptFinish(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	fake.setReregister(func(ctx context.Context, n int64) error {
+		if n == 1 {
+			started <- ctx
+			<-release
+		}
+		return nil
+	})
+	b.reregisterPeer()
+	first := <-started
+	b.reregisterPeer()
+	assert.Never(t, func() bool { return first.Err() != nil }, 30*time.Millisecond, time.Millisecond,
+		"the running attempt is not cancelled")
+	close(release)
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(2), fake.reregisterCalls.Load(), "the newer request's attempt runs after it")
+}
+
+// Turning sharing off cancels a running attempt at once rather than waiting
+// for it under the toggle lock.
+func TestReregisterPeer_TurningOffCancelsTheRunningAttempt(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	started := make(chan struct{})
+	fake.setReregister(func(ctx context.Context, n int64) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	b.reregisterPeer()
+	<-started
+	done := make(chan error, 1)
+	go func() { done <- b.applyPeerShare(false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("turning sharing off waited for the attempt")
+	}
+	waitPeerWork(t, b)
 }

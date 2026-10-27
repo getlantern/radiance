@@ -96,13 +96,17 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		}
 		return false, persistErr
 	}
+	if !enabled {
+		// A re-register retry, and an attempt it has running, were for the
+		// session stopping now. Cancelled before taking the toggle lock,
+		// which a running attempt holds, so turning off is prompt.
+		r.cancelPeerRereg()
+	}
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()
 	toggleCtx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
 	if !enabled {
-		// A pending re-register retry was for the session stopping now.
-		r.cancelPeerRereg()
 		persistErr := persistPeerShare(false)
 		if err := r.peerClient.Stop(toggleCtx); err != nil {
 			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
@@ -166,10 +170,18 @@ func (r *LocalBackend) reregisterPeer() {
 		r.peerWGMu.Unlock()
 		return
 	}
+	// Superseding cancels the older loop, its backoff and any later attempt,
+	// but not an attempt already running: that one could be between its
+	// register and its box rebuild. Attempts run under attemptCtx, which
+	// only turning sharing off, starting it, or Close cancels.
 	if r.peerReregCancel != nil {
 		r.peerReregCancel()
 	}
-	ctx, cancel := context.WithCancel(r.ctx)
+	if r.peerReregAttemptCtx == nil {
+		r.peerReregAttemptCtx, r.peerReregAttemptCancel = context.WithCancel(r.ctx)
+	}
+	attemptCtx := r.peerReregAttemptCtx
+	ctx, cancel := context.WithCancel(attemptCtx)
 	r.peerReregCancel = cancel
 	r.peerWG.Add(1)
 	r.peerWGMu.Unlock()
@@ -178,7 +190,7 @@ func (r *LocalBackend) reregisterPeer() {
 		defer cancel()
 		wait := reregisterRetryFirst
 		for attempt := 0; ; attempt++ {
-			err := r.reregisterOnce(ctx)
+			err := r.reregisterOnce(ctx, attemptCtx)
 			// ErrNotActive: the peer stopped, and its next Start registers
 			// with the current value.
 			if err == nil || errors.Is(err, peer.ErrNotActive) || ctx.Err() != nil {
@@ -200,7 +212,8 @@ func (r *LocalBackend) reregisterPeer() {
 	}()
 }
 
-// cancelPeerRereg ends the pending re-register retry, if any.
+// cancelPeerRereg ends the re-register retry, if any, and the attempt it has
+// running: sharing is stopping or starting, or the backend is closing.
 func (r *LocalBackend) cancelPeerRereg() {
 	r.peerWGMu.Lock()
 	defer r.peerWGMu.Unlock()
@@ -208,22 +221,27 @@ func (r *LocalBackend) cancelPeerRereg() {
 		r.peerReregCancel()
 		r.peerReregCancel = nil
 	}
+	if r.peerReregAttemptCancel != nil {
+		r.peerReregAttemptCancel()
+		r.peerReregAttemptCtx, r.peerReregAttemptCancel = nil, nil
+	}
 }
 
 // reregisterOnce makes one re-register attempt under the toggle lock, so it
-// cannot overlap a Start or Stop.
-func (r *LocalBackend) reregisterOnce(ctx context.Context) error {
+// cannot overlap a Start or Stop. loop is the retry loop's ctx: a superseded
+// loop starts no attempt. The attempt itself runs under attemptCtx.
+func (r *LocalBackend) reregisterOnce(loop, attemptCtx context.Context) error {
 	r.peerToggleMu.Lock()
 	defer r.peerToggleMu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := loop.Err(); err != nil {
 		return err
 	}
 	if !r.peerClient.IsActive() {
 		return peer.ErrNotActive
 	}
-	attemptCtx, cancel := context.WithTimeout(ctx, peerToggleTimeout)
+	ctx, cancel := context.WithTimeout(attemptCtx, peerToggleTimeout)
 	defer cancel()
-	return r.peerClient.Reregister(attemptCtx)
+	return r.peerClient.Reregister(ctx)
 }
 
 func persistPeerShare(on bool) error {

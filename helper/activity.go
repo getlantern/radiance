@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
@@ -29,20 +31,26 @@ type Sharing func() (running bool, epoch string, bytes uint64)
 // ActivityTracker builds today's Activity from periodic samples and keeps it
 // in a file, so a restart on the same day carries on. The file holds only
 // the Activity: no pairing, peer or count of either.
+//
+// More than one tracker can share the file: on mobile, the app can build a
+// fallback backend while the extension's keeps running. So a tracker keeps
+// only what it has counted and not yet saved (pending), and save adds that to
+// the file under a cross-process lock. No tracker writes its own view of the
+// totals over another's.
 type ActivityTracker struct {
 	path string
 	read Sharing
 	now  func() time.Time
 	loc  func() *time.Location
 
-	// saveMu serializes save, so two saves cannot write the file out of
-	// order; it is taken before mu.
+	// saveMu serializes this tracker's saves, and Today against them, so a
+	// reader never sees pending both in the file and in memory; it is taken
+	// before mu.
 	saveMu sync.Mutex
 
-	mu    sync.Mutex
-	zone  *time.Location // loc's last answer; Sample refreshes it
-	cur   Activity
-	saved Activity // what the file holds; save writes only when cur differs
+	mu      sync.Mutex
+	zone    *time.Location // loc's last answer; Sample refreshes it
+	pending Activity       // counted since the last save, for pending.Day
 	// lastEpoch and lastBytes are the counters at the last sample, or at
 	// construction. The counters are process-wide, so a tracker built for a
 	// backend recreated in the same process must not count what an earlier
@@ -54,19 +62,55 @@ type ActivityTracker struct {
 	// sampled; Flush counts the time since, at most every.
 	every    time.Duration
 	lastTick time.Time
+	// stopRun ends Run and runDone closes when it has; stopped makes a Run
+	// that starts after Stop return at once.
+	stopRun context.CancelFunc
+	runDone chan struct{}
+	stopped bool
 }
 
 // NewActivityTracker returns a tracker that saves to path and samples read.
 func NewActivityTracker(path string, read Sharing) *ActivityTracker {
 	t := &ActivityTracker{path: path, read: read, now: time.Now, loc: LocalZone}
 	_, t.lastEpoch, t.lastBytes = read()
+	return t
+}
+
+// readActivity reads the file, or the zero Activity if there is none. A save
+// replaces the file by renaming, so a read sees one whole version.
+func readActivity(path string) Activity {
+	var a Activity
 	if data, err := os.ReadFile(path); err == nil {
-		var a Activity
-		if json.Unmarshal(data, &a) == nil {
-			t.cur, t.saved = a, a
+		_ = json.Unmarshal(data, &a)
+	}
+	return a
+}
+
+// combine is the day's totals from the file's and the pending ones. Each
+// counts only if its day is not stale (see isNewDay); the later of the days
+// that count is the day, and only parts for that day add up. With neither,
+// it is today with nothing.
+func combine(file, pending Activity, today, tomorrow string) Activity {
+	fileOK := file.Day != "" && !isNewDay(file.Day, today, tomorrow)
+	pendingOK := pending.Day != "" && !isNewDay(pending.Day, today, tomorrow)
+	out := Activity{Day: today}
+	switch {
+	case fileOK && pendingOK:
+		out.Day = max(file.Day, pending.Day)
+	case fileOK:
+		out.Day = file.Day
+	case pendingOK:
+		out.Day = pending.Day
+	default:
+		return out
+	}
+	for _, part := range []Activity{file, pending} {
+		if part.Day == out.Day {
+			out.ActiveSeconds += part.ActiveSeconds
+			out.RelayedBytes += part.RelayedBytes
 		}
 	}
-	return t
+	return out
 }
 
 // LocalZone is the device's time zone. Go hard-wires time.Local to UTC on
@@ -120,15 +164,19 @@ func (t *ActivityTracker) cachedZone() *time.Location {
 	return zone
 }
 
-// Today returns today's totals.
+// Today returns today's totals: the file's, which every tracker on it has
+// added to, plus this tracker's pending ones. The file is read without the
+// cross-process lock, since a save replaces it whole, by renaming; saveMu
+// keeps this tracker's own save from landing between the two reads.
 func (t *ActivityTracker) Today() Activity {
 	today, tomorrow := t.days(t.cachedZone())
+	t.saveMu.Lock()
+	defer t.saveMu.Unlock()
+	file := readActivity(t.path)
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if isNewDay(t.cur.Day, today, tomorrow) {
-		return Activity{Day: today}
-	}
-	return t.cur
+	pending := t.pending
+	t.mu.Unlock()
+	return combine(file, pending, today, tomorrow)
 }
 
 // Sample adds one interval: elapsed counts as active if sharing runs now, and
@@ -142,25 +190,35 @@ func (t *ActivityTracker) Sample(elapsed time.Duration) {
 	defer t.mu.Unlock()
 	t.zone = zone
 	running, epoch, bytes := t.read()
-	if isNewDay(t.cur.Day, today, tomorrow) {
-		t.cur = Activity{Day: today}
+	if isNewDay(t.pending.Day, today, tomorrow) {
+		// Unsaved counts for an earlier day are dropped with that day.
+		t.pending = Activity{Day: today}
 	}
 	if running {
-		t.cur.ActiveSeconds += int64(elapsed.Round(time.Second) / time.Second)
+		t.pending.ActiveSeconds += int64(elapsed.Round(time.Second) / time.Second)
 	}
 	if epoch == t.lastEpoch && bytes >= t.lastBytes {
-		t.cur.RelayedBytes += bytes - t.lastBytes
+		t.pending.RelayedBytes += bytes - t.lastBytes
 	}
 	t.lastEpoch, t.lastBytes = epoch, bytes
 }
 
-// Run samples every interval until ctx ends, saving after a sample that
-// changed something. A device that never shares writes nothing but the
-// first sample of each day. It takes no sample when ctx ends: the backend's
-// Close calls Flush first, while sharing is still running.
+// Run samples every interval until ctx ends or Stop is called, saving after
+// a sample that changed something. A device that never shares writes nothing
+// but the first sample of each day. It takes no sample when it ends: the
+// backend's Close stops it and then calls Flush, while sharing still runs.
 func (t *ActivityTracker) Run(ctx context.Context, every time.Duration) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	defer close(done)
 	t.mu.Lock()
+	if t.stopped {
+		t.mu.Unlock()
+		return
+	}
 	t.every, t.lastTick = every, time.Now()
+	t.stopRun, t.runDone = cancel, done
 	t.mu.Unlock()
 	tk := time.NewTicker(every)
 	defer tk.Stop()
@@ -171,6 +229,19 @@ func (t *ActivityTracker) Run(ctx context.Context, every time.Duration) {
 		case <-tk.C:
 			t.Flush()
 		}
+	}
+}
+
+// Stop ends Run and waits for it, so no tick saves after Stop returns. A Run
+// that starts afterwards returns at once.
+func (t *ActivityTracker) Stop() {
+	t.mu.Lock()
+	t.stopped = true
+	stop, done := t.stopRun, t.runDone
+	t.mu.Unlock()
+	if stop != nil {
+		stop()
+		<-done
 	}
 }
 
@@ -191,29 +262,46 @@ func (t *ActivityTracker) Flush() {
 	t.save()
 }
 
+// save adds the pending counts to the file. It holds an exclusive lock on a
+// sibling lock file across reading the file, rolling its day forward by the
+// usual rules, adding, and writing it back, so trackers in other processes
+// never lose each other's counts. What it saved is then taken off pending.
+// It writes nothing when the file would not change.
 func (t *ActivityTracker) save() {
 	t.saveMu.Lock()
 	defer t.saveMu.Unlock()
+	today, tomorrow := t.days(t.cachedZone())
 	t.mu.Lock()
-	cur := t.cur
-	unchanged := cur == t.saved
+	pending := t.pending
 	t.mu.Unlock()
-	if unchanged {
+	if pending.Day == "" {
 		return
 	}
-	data, err := json.Marshal(cur)
-	if err != nil {
+	// Fixed text only: these errors quote the file's path, which can name
+	// the device's user.
+	lock := flock.New(t.path + ".lock")
+	if lock.Lock() != nil {
+		slog.Debug("helper: locking activity failed")
 		return
 	}
-	// Fixed text only: the error quotes the file's path, which can name the
-	// device's user.
-	// Private: only the backend that writes the file reads it; the app asks
-	// over IPC.
-	if atomicfile.WriteFile(t.path, data, fileperm.Private) != nil {
-		slog.Debug("helper: saving activity failed")
-		return
+	defer func() { _ = lock.Unlock() }()
+	file := readActivity(t.path)
+	merged := combine(file, pending, today, tomorrow)
+	if merged != file {
+		data, err := json.Marshal(merged)
+		if err != nil {
+			return
+		}
+		// Private: only the backend reads the file; the app asks over IPC.
+		if atomicfile.WriteFile(t.path, data, fileperm.Private) != nil {
+			slog.Debug("helper: saving activity failed")
+			return
+		}
 	}
 	t.mu.Lock()
-	t.saved = cur
+	if t.pending.Day == pending.Day {
+		t.pending.ActiveSeconds -= pending.ActiveSeconds
+		t.pending.RelayedBytes -= pending.RelayedBytes
+	}
 	t.mu.Unlock()
 }

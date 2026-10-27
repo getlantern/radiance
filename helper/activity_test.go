@@ -231,3 +231,70 @@ func TestActivityRunStopsWithoutSampling(t *testing.T) {
 	tr.Flush()
 	assert.LessOrEqual(t, tr.Today().ActiveSeconds, int64(1))
 }
+
+// Two trackers on one file, as when the app builds a fallback backend while
+// the extension's runs, add up rather than overwrite each other.
+func TestActivityTrackersOnOneFileAddUp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.json")
+	a := &fakeSharing{running: true, epoch: "a"}
+	b := &fakeSharing{running: true, epoch: "b"}
+	ta, tb := NewActivityTracker(path, a.read), NewActivityTracker(path, b.read)
+	a.bytes, b.bytes = 100, 7
+	ta.Sample(time.Minute)
+	tb.Sample(30 * time.Second)
+	ta.save()
+	tb.save()
+	ta.Sample(time.Minute)
+	ta.save()
+	want := Activity{Day: tb.Today().Day, ActiveSeconds: 150, RelayedBytes: 107}
+	assert.Equal(t, want, ta.Today())
+	assert.Equal(t, want, tb.Today())
+	assert.Equal(t, want, NewActivityTracker(path, a.read).Today())
+}
+
+// A tracker with nothing new to add never lowers what another has saved,
+// even when it saves last.
+func TestActivityAStaleFlushKeepsNewerTotals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.json")
+	sh := &fakeSharing{running: true, epoch: "e"}
+	stale := NewActivityTracker(path, sh.read)
+	fresh := NewActivityTracker(path, sh.read)
+	fresh.Sample(time.Minute)
+	fresh.save()
+	stale.Flush()
+	assert.Equal(t, int64(60), NewActivityTracker(path, sh.read).Today().ActiveSeconds)
+}
+
+// Stop ends Run and waits for it, so nothing saves after Stop and the
+// Flush that follows it.
+func TestActivityStopEndsRunBeforeItReturns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.json")
+	sh := &fakeSharing{running: true, epoch: "e"}
+	tr := NewActivityTracker(path, sh.read)
+	done := make(chan struct{})
+	go func() { tr.Run(context.Background(), time.Millisecond); close(done) }()
+	require.Eventually(t, func() bool { _, err := os.Stat(path); return err == nil }, time.Second, time.Millisecond)
+	tr.Stop()
+	select {
+	case <-done:
+	default:
+		t.Fatal("Run still running after Stop returned")
+	}
+	tr.Flush()
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "no save after Stop and Flush")
+
+	again := NewActivityTracker(path, sh.read)
+	again.Stop()
+	finished := make(chan struct{})
+	go func() { again.Run(context.Background(), time.Millisecond); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("a Run after Stop must return at once")
+	}
+}

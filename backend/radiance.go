@@ -77,8 +77,12 @@ type LocalBackend struct {
 	peerWGMu    sync.Mutex
 	peerClosing bool
 	// peerReregCancel cancels the running re-register retry loop, so only the
-	// latest request's loop runs. Guarded by peerWGMu.
-	peerReregCancel context.CancelFunc
+	// latest request's loop runs. peerReregAttemptCtx is what attempts run
+	// under; a newer request leaves it alone, and turning sharing off or on,
+	// or Close, cancels it. Guarded by peerWGMu.
+	peerReregCancel        context.CancelFunc
+	peerReregAttemptCtx    context.Context
+	peerReregAttemptCancel context.CancelFunc
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -506,8 +510,11 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
-		// Count the last partial interval while sharing still runs.
+		// Stop the activity ticker and wait for it, then count the last
+		// partial interval while sharing still runs, so nothing saves
+		// after Close returns.
 		if r.helperActivity != nil {
+			r.helperActivity.Stop()
 			r.helperActivity.Flush()
 		}
 		r.closePeerClient()

@@ -546,3 +546,41 @@ func TestClient_RotateCredsWithoutASessionIsErrNotActive(t *testing.T) {
 	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
 	assert.ErrorIs(t, c.rotateCreds(context.Background()), ErrNotActive)
 }
+
+// The Reregister twin of TestClient_StopDuringHungRotationRegisterReturnsPromptly:
+// Stop cancels the session, which must end a re-register hung in Register
+// even though the caller's ctx never ends.
+func TestClient_StopDuringHungReregisterReturnsPromptly(t *testing.T) {
+	srv := newStubServer(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	var registers atomic.Int64
+	inRegister := make(chan struct{}, 1)
+	srv.registerRespFn = func() RegisterResponse {
+		if registers.Add(1) > 1 {
+			inRegister <- struct{}{}
+			<-hang
+		}
+		return srv.registerResp
+	}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.CredRotationInterval = time.Hour
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	reregistered := make(chan error, 1)
+	go func() { reregistered <- c.Reregister(context.Background()) }()
+	<-inRegister
+
+	start := time.Now()
+	require.NoError(t, c.Stop(ctx))
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.False(t, c.IsActive())
+	select {
+	case err := <-reregistered:
+		assert.Error(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reregister did not end with the session")
+	}
+}

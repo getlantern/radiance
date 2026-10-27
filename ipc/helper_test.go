@@ -12,6 +12,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	semconv "github.com/getlantern/semconv"
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/helper"
@@ -132,4 +136,36 @@ func TestHelperRelayClientRefusesANonJSONBody(t *testing.T) {
 	c.http.Transport = localTransport{api: newLocalAPI(&backend.LocalBackend{}, false)}
 	_, err := c.HelperRelay(context.Background(), "invites", []byte("not json secret"))
 	assert.EqualError(t, err, "helper relay: body is not JSON")
+}
+
+// In-process calls carry the caller's span into the handler chain. The logger
+// must not mark it with a /helper/ route, which would show the device uses
+// helper invites; other routes are still annotated.
+func TestLoggerSkipsHelperRoutes(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	api := newLocalAPI(&backend.LocalBackend{}, false)
+	routeOf := func(method, path string) (string, bool) {
+		mem.Reset()
+		ctx, span := tp.Tracer("caller").Start(context.Background(), "caller")
+		r := httptest.NewRequest(method, path, strings.NewReader(`{"op":"pairings"}`)).WithContext(ctx)
+		api.ServeHTTP(httptest.NewRecorder(), r)
+		span.End()
+		for _, s := range mem.GetSpans() {
+			for _, kv := range s.Attributes {
+				if kv.Key == semconv.HTTPRouteKey {
+					return kv.Value.AsString(), true
+				}
+			}
+		}
+		return "", false
+	}
+	_, ok := routeOf(http.MethodPost, helperRelayEndpoint)
+	assert.False(t, ok, "relay")
+	_, ok = routeOf(http.MethodGet, helperActivityEndpoint)
+	assert.False(t, ok, "activity")
+	route, ok := routeOf(http.MethodGet, "/not-a-route")
+	assert.True(t, ok)
+	assert.Equal(t, "/not-a-route", route)
 }

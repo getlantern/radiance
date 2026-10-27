@@ -1124,7 +1124,10 @@ var ErrNotActive = errors.New("peer: no session is running")
 // strangers when "help others too" turns off; paired clients reconnect with
 // their pairing IDs.
 func (c *Client) Reregister(ctx context.Context) (err error) {
-	if !c.IsActive() {
+	c.mu.Lock()
+	active, session := c.active, c.runCtx
+	c.mu.Unlock()
+	if !active || session == nil {
 		return ErrNotActive
 	}
 	defer func() {
@@ -1132,6 +1135,12 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
+	// Bound to the session too, as the hourly rotation is: Stop cancels the
+	// session and then waits for the lifecycle slot, so a re-register hung
+	// in ExternalIP or Register must end with it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(session, cancel)()
 	return c.rotateCreds(ctx)
 }
 
