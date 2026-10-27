@@ -4,35 +4,80 @@ import (
 	"log/slog"
 	"slices"
 
+	lcommon "github.com/getlantern/common"
 	O "github.com/sagernet/sing-box/option"
 
 	"github.com/getlantern/radiance/internal/hostaccess"
+	"github.com/getlantern/radiance/internal/tlsidentity"
 	"github.com/getlantern/radiance/servers"
 )
 
 func allowedOutbounds(outbounds []O.Outbound) []O.Outbound {
-	return slices.DeleteFunc(slices.Clone(outbounds), func(o O.Outbound) bool {
-		return dropDenied(o.Tag, hostaccess.CheckOutbound(o))
+	allowed := slices.DeleteFunc(slices.Clone(outbounds), func(o O.Outbound) bool {
+		return dropDenied(o.Tag, hostaccess.CheckOutbound(o)) || dropDenied(o.Tag, tlsidentity.CheckCustomOptions(o.Options))
 	})
+	for i := range allowed {
+		allowed[i].Options = tlsidentity.Options(allowed[i].Options)
+	}
+	return allowed
 }
 
 func allowedEndpoints(endpoints []O.Endpoint) []O.Endpoint {
-	return slices.DeleteFunc(slices.Clone(endpoints), func(e O.Endpoint) bool {
+	allowed := slices.DeleteFunc(slices.Clone(endpoints), func(e O.Endpoint) bool {
 		return dropDenied(e.Tag, hostaccess.CheckEndpoint(e))
 	})
+	for i := range allowed {
+		allowed[i].Options = tlsidentity.Options(allowed[i].Options)
+	}
+	return allowed
 }
 
-func allowedServers(list servers.ServerList) servers.ServerList {
-	list.Servers = slices.DeleteFunc(slices.Clone(list.Servers), func(s *servers.Server) bool {
-		return dropDenied(s.Tag, s.CheckHostAccess())
-	})
+func allowedServers(list servers.ServerList, retainedTags ...string) servers.ServerList {
+	list, _ = NormalizeServers(list, nil, retainedTags...)
 	return list
+}
+
+// NormalizeServers enforces proxy policy and removes missing dependencies without modifying its inputs.
+// Retained tags identify dependencies supplied outside the list.
+func NormalizeServers(list servers.ServerList, rules lcommon.SmartRoutingRules, retainedTags ...string) (servers.ServerList, lcommon.SmartRoutingRules) {
+	options, rules := normalizeOutbounds(O.Options{Outbounds: list.Outbounds(), Endpoints: list.Endpoints()}, rules, retainedTags...)
+	normalized := make(map[string]any, len(options.Outbounds)+len(options.Endpoints))
+	for _, out := range options.Outbounds {
+		normalized[out.Tag] = out
+	}
+	for _, endpoint := range options.Endpoints {
+		normalized[endpoint.Tag] = endpoint
+	}
+	allowed := make([]*servers.Server, 0, len(normalized))
+	for _, server := range list.Servers {
+		if options, ok := normalized[server.Tag]; ok {
+			copy := *server
+			copy.Options = options
+			allowed = append(allowed, &copy)
+		}
+	}
+	list.Servers = allowed
+	return list, rules
+}
+
+// ServerDependencies returns the outbound tags referenced by the servers in list.
+func ServerDependencies(list servers.ServerList) []string {
+	var tags []string
+	for _, srv := range list.Servers {
+		switch opts := srv.Options.(type) {
+		case O.Outbound:
+			tags = append(tags, outboundDependencies(opts.Options)...)
+		case O.Endpoint:
+			tags = append(tags, outboundDependencies(opts.Options)...)
+		}
+	}
+	return tags
 }
 
 func dropDenied(tag string, err error) bool {
 	if err == nil {
 		return false
 	}
-	slog.Warn("Dropping server whose options grant host access", "tag", tag, "error", err)
+	slog.Warn("Dropping server with unsafe options", "tag", tag, "error", err)
 	return true
 }

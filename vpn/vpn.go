@@ -20,6 +20,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
@@ -419,6 +420,70 @@ func (c *VPNClient) UpdateOutbounds(list servers.ServerList) error {
 	return c.tunnel.updateOutbounds(list)
 }
 
+// NonSelectableServers returns active infrastructure for new dependencies, or an empty list when disconnected.
+func (c *VPNClient) NonSelectableServers() (servers.ServerList, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return servers.ServerList{}, nil
+	}
+	t := c.tunnel
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	if t.optsMap == nil {
+		return servers.ServerList{}, nil
+	}
+	selectable := make(map[string]bool)
+	for _, tag := range reservedTags {
+		selectable[tag] = true
+	}
+	endpointManager := service.FromContext[adapter.EndpointManager](t.ctx)
+	for _, tag := range []string{ManualSelectTag, AutoSelectTag} {
+		if group, exists := t.mutGrpMgr.OutboundGroup(tag); exists {
+			for _, member := range group.All() {
+				selectable[member] = true
+			}
+		}
+	}
+	var list servers.ServerList
+	for tag, encoded := range t.optsMap.Iter() {
+		_, retired := t.pendingRemovalTags[tag]
+		if selectable[tag] || retired {
+			continue
+		}
+		if _, exists := t.outboundMgr.Outbound(tag); !exists {
+			continue
+		}
+		srv := &servers.Server{Tag: tag}
+		if _, endpoint := endpointManager.Get(tag); endpoint {
+			opts, err := json.UnmarshalExtendedContext[option.Endpoint](t.ctx, encoded)
+			if err != nil {
+				return servers.ServerList{}, fmt.Errorf("decode infrastructure endpoint %q: %w", tag, err)
+			}
+			srv.Type, srv.Options = opts.Type, opts
+		} else {
+			opts, err := json.UnmarshalExtendedContext[option.Outbound](t.ctx, encoded)
+			if err != nil {
+				return servers.ServerList{}, fmt.Errorf("decode infrastructure outbound %q: %w", tag, err)
+			}
+			srv.Type, srv.Options = opts.Type, opts
+		}
+		list.Servers = append(list.Servers, srv)
+	}
+	return list, nil
+}
+
+// UpdateConfigOutbounds reconciles selectable servers and their non-selectable dependencies together.
+// It returns ErrTunnelNotConnected when no tunnel is running.
+func (c *VPNClient) UpdateConfigOutbounds(list, nonSelectable servers.ServerList) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.updateConfigOutbounds(list, nonSelectable)
+}
+
 func (c *VPNClient) AddOutbounds(list servers.ServerList) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -712,7 +777,8 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	// Extract bandit trace context for distributed tracing
 	traceCtx, hasTrace := traces.ExtractBanditTraceContext(banditURLs)
 
-	outbounds = allowedOutbounds(outbounds)
+	normalized, _ := normalizeOutbounds(option.Options{Outbounds: outbounds}, nil)
+	outbounds = normalized.Outbounds
 	c.logger.Info("Performing offline URL tests", "outbound_count", len(outbounds), "timeout", offlineURLTestTimeout)
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {

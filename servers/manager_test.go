@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	C "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
@@ -24,6 +25,47 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUpdateLanternServerOptionsPreservesCurrentMetadata(t *testing.T) {
+	m := testManager(t)
+	outbound := func(tag string, port uint16) option.Outbound {
+		return option.Outbound{Tag: tag, Type: "http", Options: &option.HTTPOutboundOptions{
+			ServerOptions: option.ServerOptions{Server: "127.0.0.1", ServerPort: port},
+		}}
+	}
+	original := &Server{Tag: "lantern", Type: "http", IsLantern: true, Options: outbound("lantern", 80),
+		Credentials:      &ServerCredentials{AccessToken: "kept"},
+		SelectionHistory: &SelectionHistory{UpdatedAt: time.Unix(1, 0).UTC()},
+	}
+	user := &Server{Tag: "user", Type: "http", Options: outbound("user", 80)}
+	require.NoError(t, m.AddServers(ServerList{Servers: []*Server{original, user}}, false))
+	stale, found := m.GetServerByTag(original.Tag)
+	require.True(t, found)
+	latest := SelectionHistory{UpdatedAt: time.Unix(2, 0).UTC(), HardDemoted: true}
+	require.NoError(t, m.UpdateSelectionHistory(map[string]SelectionHistory{original.Tag: latest}))
+	stale.Options = outbound(original.Tag, 443)
+	stale.Credentials = nil
+	user.Options = outbound(user.Tag, 443)
+	missing := &Server{Tag: "missing", Type: "http", IsLantern: true, Options: outbound("missing", 443)}
+	require.NoError(t, m.UpdateLanternServerOptions(ServerList{Servers: []*Server{stale, user, missing}}))
+	got, found := m.GetServerByTag(original.Tag)
+	require.True(t, found)
+	assert.Equal(t, stale.Options, got.Options)
+	assert.Equal(t, original.Credentials, got.Credentials)
+	assert.Equal(t, latest, *got.SelectionHistory)
+	got, found = m.GetServerByTag(user.Tag)
+	require.True(t, found)
+	assert.Equal(t, uint16(80), got.Options.(option.Outbound).Options.(*option.HTTPOutboundOptions).ServerPort)
+	_, found = m.GetServerByTag(missing.Tag)
+	assert.False(t, found)
+	loaded := testManager(t)
+	loaded.serversFile = m.serversFile
+	require.NoError(t, loaded.loadServers())
+	got, found = loaded.GetServerByTag(original.Tag)
+	require.True(t, found)
+	assert.Equal(t, latest, *got.SelectionHistory)
+	assert.Equal(t, uint16(443), got.Options.(option.Outbound).Options.(*option.HTTPOutboundOptions).ServerPort)
+}
 
 func TestPrivateServerIntegration(t *testing.T) {
 	manager := testManager(t)
@@ -247,7 +289,7 @@ func TestAddServersByURL(t *testing.T) {
 		_, exists = m.GetServerByTag("Trojan+with+TLS")
 		assert.True(t, exists, "Trojan server should be added")
 	})
-	t.Run("skip certificate", func(t *testing.T) {
+	t.Run("legacy skip flag requires certificate verification", func(t *testing.T) {
 		m := testManager(t)
 		_, err := m.AddServersByURL(t.Context(), urls, true)
 		require.NoError(t, err)
@@ -258,7 +300,7 @@ func TestAddServersByURL(t *testing.T) {
 		require.IsType(t, &option.TrojanOutboundOptions{}, options)
 		trojanOpts := options.(*option.TrojanOutboundOptions)
 		require.NotNil(t, trojanOpts.TLS)
-		assert.True(t, trojanOpts.TLS.Insecure, "TLS.Insecure should be true")
+		assert.False(t, trojanOpts.TLS.Insecure)
 	})
 	t.Run("empty urls", func(t *testing.T) {
 		m := testManager(t)

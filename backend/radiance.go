@@ -392,7 +392,6 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 	if cfg == nil {
 		return
 	}
-	list := serverListFromConfig(cfg)
 	if len(cfg.BanditURLOverrides) > 0 {
 		if ctx, ok := traces.ExtractBanditTraceContext(cfg.BanditURLOverrides); ok {
 			// Link this marker span to the API's bandit trace so config receipt
@@ -406,12 +405,8 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 			span.End()
 		}
 	}
-	if err := r.updateServers(list, evict); err != nil {
+	if err := r.updateServers(cfg, evict); err != nil {
 		slog.Error("updating servers in manager", "error", err)
-	}
-	if err := r.vpnClient.UpdateNonSelectableOutbounds(nonSelectableOutboundsFromConfig(cfg)); err != nil &&
-		!errors.Is(err, vpn.ErrTunnelNotConnected) {
-		slog.Error("updating non-selectable outbounds", "error", err)
 	}
 }
 
@@ -433,6 +428,7 @@ func setCountryCodeFromConfig(cfg *config.Config) {
 
 // serverListFromConfig converts config outbounds and endpoints into managed
 // Lantern servers while preserving location and bandit URL metadata.
+// TLS bypass flags are normalized without modifying cfg.
 func serverListFromConfig(cfg *config.Config) servers.ServerList {
 	nonSelectable := nonSelectableSet(cfg)
 	srvs := make([]*servers.Server, 0, len(cfg.Options.Outbounds)+len(cfg.Options.Endpoints))
@@ -449,7 +445,7 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 		if loc != nil {
 			s.Location = *loc
 		}
-		srvs = append(srvs, s)
+		srvs = append(srvs, s.WithTLSVerification())
 	}
 	for _, out := range cfg.Options.Outbounds {
 		addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
@@ -466,21 +462,6 @@ func nonSelectableSet(cfg *config.Config) map[string]struct{} {
 		set[tag] = struct{}{}
 	}
 	return set
-}
-
-// nonSelectableOutboundsFromConfig returns the config's non-selectable outbounds for
-// the tunnel to instantiate off the managed-server path. Endpoints are excluded: a
-// non-selectable endpoint stays build-time only.
-func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
-	nonSelectable := nonSelectableSet(cfg)
-	srvs := make([]*servers.Server, 0, len(nonSelectable))
-	for _, out := range cfg.Options.Outbounds {
-		if _, ok := nonSelectable[out.Tag]; !ok {
-			continue
-		}
-		srvs = append(srvs, &servers.Server{Tag: out.Tag, Type: out.Type, IsLantern: true, Options: out})
-	}
-	return servers.ServerList{Servers: srvs}
 }
 
 func (r *LocalBackend) Close() {
@@ -985,66 +966,169 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // across config updates.
 const maxRetainedLanternServers = 60
 
-// updateServers adds the servers in list that are not already present and
-// pass [servers.Server.CheckHostAccess]. When evict is set it first evicts
-// retained Lantern servers (see lanternServersToEvict). Only a newly received
-// config may evict: a config that was already applied, such as the cached one
-// at startup, would judge its own offers a second time.
-func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
+// updateServers applies safe config servers while preserving retained dependencies.
+// Only fresh configs may evict retained Lantern servers; reapplying a cached
+// config must not count its offers again.
+func (r *LocalBackend) updateServers(cfg *config.Config, evict bool) error {
 	existing := r.srvManager.AllServers()
-	existingTags := serverTagSet(existing)
-	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
-		if _, exists := existingTags[srv.Tag]; exists {
-			return true
-		}
-		if err := srv.CheckHostAccess(); err != nil {
-			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
-			return true
-		}
-		return false
-	})
-
-	if evict {
-		var selectedTag string
-		var selected servers.Server
-		if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil {
-			selectedTag = selected.Tag
-		}
-
-		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
-
-		if len(tagsToEvict) > 0 {
-			slog.Debug(
-				"Evicting retained Lantern servers to make room for new config batch",
-				"count", len(tagsToEvict),
-				"tags", tagsToEvict,
-			)
-			if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
-				return fmt.Errorf("remove retained Lantern servers: %w", err)
-			}
+	existingByTag := make(map[string]*servers.Server, len(existing))
+	demoted := make(map[string]bool)
+	for _, srv := range existing {
+		existingByTag[srv.Tag] = srv
+		if evict && srv.IsLantern && isHardDemoted(srv) {
+			demoted[srv.Tag] = true
 		}
 	}
-
-	slog.Debug(
-		"Adding new Lantern servers from config update",
-		"count", len(list.Servers),
-		"tags", slices.Collect(maps.Keys(serverTagSet(list.Servers))),
-	)
+	infrastructure, err := r.vpnClient.NonSelectableServers()
+	if err != nil {
+		return fmt.Errorf("read retained infrastructure: %w", err)
+	}
+	allConfig := *cfg
+	allConfig.NonSelectableOutbounds = nil
+	incoming := serverListFromConfig(&allConfig)
+	incomingTags := serverTagSet(incoming.Servers)
+	helperTags := nonSelectableSet(cfg)
+	for _, srv := range infrastructure.Servers {
+		if _, reoffered := incomingTags[srv.Tag]; !reoffered {
+			helperTags[srv.Tag] = struct{}{}
+		}
+	}
+	for _, srv := range existing {
+		if !srv.IsLantern {
+			delete(helperTags, srv.Tag)
+		}
+	}
+	incoming.Servers = slices.DeleteFunc(incoming.Servers, func(srv *servers.Server) bool {
+		previous := existingByTag[srv.Tag]
+		return demoted[srv.Tag] || previous != nil && !previous.IsLantern
+	})
+	incomingTags = serverTagSet(incoming.Servers)
+	combined := incoming
+	present := serverTagSet(combined.Servers)
+	for _, list := range [][]*servers.Server{existing, infrastructure.Servers} {
+		for _, srv := range list {
+			if _, exists := present[srv.Tag]; exists || demoted[srv.Tag] {
+				continue
+			}
+			combined.Servers = append(combined.Servers, srv)
+			present[srv.Tag] = struct{}{}
+		}
+	}
+	var smartRouting C.SmartRoutingRules
+	if settings.GetBool(settings.SmartRoutingKey) {
+		smartRouting = cfg.SmartRouting
+	}
+	combined, smartRouting = vpn.NormalizeServers(combined, smartRouting, vpn.ReservedTags()...)
+	graph := make(map[string]*servers.Server, len(combined.Servers))
+	for _, srv := range combined.Servers {
+		graph[srv.Tag] = srv
+	}
+	var selected servers.Server
+	_ = settings.GetStruct(settings.SelectedServerKey, &selected)
+	protectedTags := []string{selected.Tag}
+	for _, srv := range combined.Servers {
+		_, incoming := incomingTags[srv.Tag]
+		previous := existingByTag[srv.Tag]
+		if incoming || previous != nil && !previous.IsLantern {
+			protectedTags = append(protectedTags, vpn.ServerDependencies(servers.ServerList{Servers: []*servers.Server{srv}})...)
+		}
+	}
+	for _, rule := range smartRouting {
+		protectedTags = append(protectedTags, rule.Outbounds...)
+	}
+	protectedTags = serverDependencyTags(protectedTags, graph)
+	incomingCount := 0
+	for _, srv := range combined.Servers {
+		if _, helper := helperTags[srv.Tag]; existingByTag[srv.Tag] == nil && !helper {
+			incomingCount++
+		}
+	}
+	var retained []*servers.Server
+	for _, srv := range existing {
+		_, helper := helperTags[srv.Tag]
+		if _, survives := graph[srv.Tag]; survives && !helper || !srv.IsLantern {
+			retained = append(retained, srv)
+		}
+	}
+	if evict {
+		capacityEvictions := lanternServersToEvict(retained, incomingCount, maxRetainedLanternServers, selected.Tag, protectedTags...)
+		combined.Servers = slices.DeleteFunc(combined.Servers, func(srv *servers.Server) bool {
+			return slices.Contains(capacityEvictions, srv.Tag)
+		})
+		combined, _ = vpn.NormalizeServers(combined, smartRouting, vpn.ReservedTags()...)
+		clear(graph)
+		for _, srv := range combined.Servers {
+			graph[srv.Tag] = srv
+		}
+	}
+	var tagsToEvict []string
+	for _, srv := range existing {
+		_, helper := helperTags[srv.Tag]
+		if _, survives := graph[srv.Tag]; srv.IsLantern && (!survives || helper) {
+			tagsToEvict = append(tagsToEvict, srv.Tag)
+		}
+	}
+	list := servers.ServerList{URLOverrides: cfg.BanditURLOverrides}
+	var updates servers.ServerList
+	for _, srv := range combined.Servers {
+		if _, helper := helperTags[srv.Tag]; helper {
+			continue
+		}
+		if previous := existingByTag[srv.Tag]; previous != nil {
+			if previous.IsLantern && !reflect.DeepEqual(previous.Options, srv.Options) {
+				updates.Servers = append(updates.Servers, srv)
+			}
+		} else {
+			list.Servers = append(list.Servers, srv)
+		}
+	}
+	if len(tagsToEvict) > 0 {
+		if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
+			return fmt.Errorf("remove retained Lantern servers: %w", err)
+		}
+	}
+	if err := r.srvManager.UpdateLanternServerOptions(updates); err != nil {
+		return fmt.Errorf("update Lantern server options: %w", err)
+	}
 	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("add Lantern servers: %w", err)
 	}
-	// updateOutbounds evicts any outbound absent from the list; include all
-	// servers so user-added outbounds aren't removed on a Lantern config update.
+	// Include user servers because the tunnel removes tags absent from this list.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
-	outboundErr := r.vpnClient.UpdateOutbounds(allList)
-	// This update preserves the selected server unless hard-demoted, so clearing
-	// an evicted selection is safe even while connected. Run it even when the
-	// outbound update failed, since an evicted pin is already gone from the manager.
+	helperDependencies := vpn.ServerDependencies(allList)
+	helperDependencies = append(helperDependencies, cfg.NonSelectableOutbounds...)
+	var nonSelectable servers.ServerList
+	for _, tag := range serverDependencyTags(helperDependencies, graph) {
+		if _, helper := helperTags[tag]; !helper {
+			continue
+		}
+		if srv := graph[tag]; srv != nil {
+			if _, outbound := srv.Options.(option.Outbound); outbound {
+				nonSelectable.Servers = append(nonSelectable.Servers, srv)
+			}
+		}
+	}
+	outboundErr := r.vpnClient.UpdateConfigOutbounds(allList, nonSelectable)
+	// Clear an evicted pin even if the tunnel update failed.
 	r.clearSelectedIfMissing()
 	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
 	}
 	return nil
+}
+
+func serverDependencyTags(tags []string, graph map[string]*servers.Server) []string {
+	seen := make(map[string]bool)
+	for i := 0; i < len(tags); i++ {
+		if seen[tags[i]] {
+			continue
+		}
+		seen[tags[i]] = true
+		if srv := graph[tags[i]]; srv != nil {
+			tags = append(tags, vpn.ServerDependencies(servers.ServerList{Servers: []*servers.Server{srv}})...)
+		}
+	}
+	return slices.Collect(maps.Keys(seen))
 }
 
 func serverTagSet(list []*servers.Server) map[string]struct{} {
@@ -1055,13 +1139,13 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 	return tags
 }
 
-// lanternServersToEvict returns Lantern server tags to evict, always including
-// hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
-// are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
+// lanternServersToEvict preserves selectedTag and protected dependencies unless hard-demoted.
+// Other servers are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
 func lanternServersToEvict(
 	existing []*servers.Server,
 	incomingCount, limit int,
 	selectedTag string,
+	protectedTags ...string,
 ) []string {
 	tagsToEvict := make([]string, 0)
 	retentionCandidates := make([]*servers.Server, 0, len(existing))
@@ -1075,8 +1159,7 @@ func lanternServersToEvict(
 			tagsToEvict = append(tagsToEvict, srv.Tag)
 			continue
 		}
-		if srv.Tag == selectedTag {
-			// The retained selection occupies one retention slot.
+		if srv.Tag == selectedTag || slices.Contains(protectedTags, srv.Tag) {
 			limit--
 			continue
 		}

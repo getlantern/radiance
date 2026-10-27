@@ -70,7 +70,11 @@ type tunnel struct {
 	// nonSelectableTags is the set of non-selectable outbound tags the tunnel manages
 	// directly through outboundMgr, never joined to a selection group, so a later
 	// reconcile can remove the ones a config drops. Guarded by outboundMu.
-	nonSelectableTags map[string]struct{}
+	nonSelectableTags  map[string]struct{}
+	pendingRemovalTags map[string]struct{}
+	// DNS and rule-set dialers retain their outbound instances until reconnect.
+	auxiliaryDetours map[string]string
+	routeTargets     []string
 
 	injector *clientcontext.Injector
 
@@ -169,6 +173,8 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 		}
 		span.End()
 	}()
+	t.auxiliaryDetours = auxiliaryDetours(options)
+	t.routeTargets = routeOutboundTags(options.Route)
 
 	// Must run before sbox.New, which acquires the cache flock.
 	if err := consumeCacheClearMarker(t.dataPath); err != nil {
@@ -287,20 +293,16 @@ func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
 	}, lanternTags...)
 }
 
-// updateInjectionLocked enables client info injection only for selectable
-// Lantern outbounds that load successfully.
-//
+// updateInjectionLocked updates injection for a selectable outbound.
 // The caller must hold t.outboundMu.
 func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
 	if t.injector == nil {
 		return
 	}
-	_, nonSelectable := t.nonSelectableTags[tag]
 	switch {
-	case !lantern || nonSelectable:
+	case !lantern:
 		t.injector.RemoveOutboundTags(tag)
 	case loaded:
-		// Failed loads leave the tag unchanged.
 		t.injector.AddOutboundTags(tag)
 	}
 }
@@ -331,7 +333,7 @@ func newMutableGroupManager(
 
 	var mutGroups []lbA.MutableOutboundGroup
 	for _, out := range oMgr.Outbounds() {
-		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
+		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup && (out.Tag() == ManualSelectTag || out.Tag() == AutoSelectTag) {
 			mutGroups = append(mutGroups, g)
 		}
 	}
@@ -592,94 +594,84 @@ var errLibboxClosed = errors.New("libbox closed")
 func (t *tunnel) addOutbounds(list servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
-	return t.addOutboundsLocked(list)
+	return t.addOutboundsLocked(allowedServers(list, t.retainedOutboundTagsLocked(nil)...))
 }
 
-// addOutboundsLocked adds the servers in list to the tunnel. The caller must
+// addOutboundsLocked adds normalized servers to the tunnel. The caller must
 // hold t.outboundMu.
 func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
-	list = allowedServers(list)
-	outbounds := list.Outbounds()
-	endpoints := list.Endpoints()
-	if len(outbounds) == 0 && len(endpoints) == 0 {
+	return t.addServerOutboundsLocked(list, nil)
+}
+
+func (t *tunnel) addServerOutboundsLocked(list servers.ServerList, nonSelectable map[string]struct{}) error {
+	changed, err := t.changedServersLocked(list)
+	if err != nil {
+		return err
+	}
+	return t.applyServerOutboundsLocked(list, changed, nonSelectable)
+}
+
+func (t *tunnel) applyServerOutboundsLocked(list, changed servers.ServerList, nonSelectable map[string]struct{}) error {
+	if len(list.Servers) == 0 && len(list.URLOverrides) == 0 {
 		slog.Debug("No outbounds or endpoints to add")
 		return nil
 	}
+	if nonSelectable == nil {
+		nonSelectable = t.nonSelectableTags
+	}
 
 	slog.Info("Adding servers", "tags", list.Tags())
-	// remove duplicates from list before adding to avoid unnecessary reloads
-	newList := removeDuplicates(t.ctx, t.optsMap, list)
-	newOutbounds := newList.Outbounds()
-	newEndpoints := newList.Endpoints()
+	incoming := list.Tags()
 
-	ctx := t.ctx
-	router := service.FromContext[adapter.Router](ctx)
-
-	isLantern := make(map[string]bool, len(newList.Servers))
-	for _, srv := range newList.Servers {
-		isLantern[srv.Tag] = srv.IsLantern
-	}
-
-	t.prefetchInviterTickets(newOutbounds)
+	t.prefetchInviterTickets(changed.Outbounds())
 
 	var errs []error
-	var (
-		mutGrpMgr = t.mutGrpMgr
-		added     = 0
-	)
-	for _, outbound := range newOutbounds {
-		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
-		err := mutGrpMgr.CreateOutboundForGroup(
-			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
-		)
-		// Before the auto-select group gets the outbound: it probes new members
-		// immediately, and those probes must go through the exchange.
-		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
-		if err == nil {
-			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
+	added := 0
+	for _, srv := range changed.Servers {
+		if contextDone(t.ctx) {
+			return t.ctx.Err()
 		}
+		_, helper := nonSelectable[srv.Tag]
+		helper = helper || !slices.Contains(incoming, srv.Tag)
+		err := t.replaceServerLocked(srv, !helper)
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
 		}
 		if err != nil {
-			slog.Warn("Failed to load outbound",
-				"tag", outbound.Tag,
-				"type", outbound.Type,
+			slog.Warn("Failed to load server",
+				"tag", srv.Tag,
+				"type", srv.Type,
 				"error", err,
 			)
 			errs = append(errs, err)
 		} else {
-			t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 			added++
 		}
 	}
-
-	if contextDone(ctx) {
-		return ctx.Err()
-	}
-
-	for _, endpoint := range newEndpoints {
-		logger := t.logFactory.NewLogger("endpoint/" + endpoint.Tag + "[" + endpoint.Type + "]")
-		err := mutGrpMgr.CreateEndpointForGroup(
-			ctx, router, logger, ManualSelectTag, endpoint.Tag, endpoint.Type, endpoint.Options,
-		)
-		if err == nil {
-			err = mutGrpMgr.AddToGroup(AutoSelectTag, endpoint.Tag)
+	for _, srv := range list.Servers {
+		if _, helper := nonSelectable[srv.Tag]; helper {
+			continue
 		}
-		if errors.Is(err, groups.ErrIsClosed) {
-			return errLibboxClosed
+		stored, exists := t.optsMap.Load(srv.Tag)
+		if !exists || !bytes.Equal(stored, marshalOptions(t.ctx, srv.Options)) {
+			continue
 		}
-		if err != nil {
-			slog.Warn("Failed to load endpoint",
-				"tag", endpoint.Tag,
-				"type", endpoint.Type,
-				"error", err,
-			)
-			errs = append(errs, err)
-		} else {
-			t.optsMap.Store(endpoint.Tag, marshalOptions(ctx, endpoint))
-			added++
+		if _, outbound := srv.Options.(O.Outbound); outbound {
+			t.updateInjectionLocked(srv.Tag, srv.IsLantern, true)
 		}
+		for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
+			group, exists := t.mutGrpMgr.OutboundGroup(groupTag)
+			if !exists || slices.Contains(group.All(), srv.Tag) {
+				continue
+			}
+			if err := t.mutGrpMgr.AddToGroup(groupTag, srv.Tag); err != nil {
+				if errors.Is(err, groups.ErrIsClosed) {
+					return errLibboxClosed
+				}
+				errs = append(errs, err)
+			}
+		}
+		delete(t.pendingRemovalTags, srv.Tag)
 	}
 
 	if len(list.URLOverrides) > 0 {
@@ -704,6 +696,70 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	return errors.Join(errs...)
 }
 
+func (t *tunnel) replaceServerLocked(srv *servers.Server, selectable bool) error {
+	ctx := t.ctx
+	router := service.FromContext[adapter.Router](ctx)
+	var err error
+	switch opts := srv.Options.(type) {
+	case O.Outbound:
+		logger := t.logFactory.NewLogger("outbound/" + opts.Tag + "[" + opts.Type + "]")
+		err = service.FromContext[adapter.OutboundManager](ctx).Create(ctx, router, logger, opts.Tag, opts.Type, opts.Options)
+		// Auto-select probes new members immediately, so install injection first.
+		if selectable {
+			t.updateInjectionLocked(opts.Tag, srv.IsLantern, err == nil)
+		}
+	case O.Endpoint:
+		logger := t.logFactory.NewLogger("endpoint/" + opts.Tag + "[" + opts.Type + "]")
+		err = service.FromContext[adapter.EndpointManager](ctx).Create(ctx, router, logger, opts.Tag, opts.Type, opts.Options)
+	default:
+		return nil
+	}
+	if err == nil {
+		err = t.refreshOutboundGroupsLocked(srv.Tag, selectable)
+	}
+	if err == nil {
+		t.optsMap.Store(srv.Tag, marshalOptions(ctx, srv.Options))
+		delete(t.pendingRemovalTags, srv.Tag)
+	}
+	return err
+}
+
+func (t *tunnel) refreshOutboundGroupsLocked(tag string, selectable bool) error {
+	for groupTag := range t.optsMap.Iter() {
+		out, exists := service.FromContext[adapter.OutboundManager](t.ctx).Outbound(groupTag)
+		if !exists {
+			continue
+		}
+		group, mutable := out.(lbA.MutableOutboundGroup)
+		if !mutable || out.Tag() == tag {
+			continue
+		}
+		contains := slices.Contains(group.All(), tag)
+		selectionGroup := groupTag == ManualSelectTag || groupTag == AutoSelectTag
+		if !contains && (!selectable || !selectionGroup) {
+			continue
+		}
+		selected := group.Now() == tag
+		if contains {
+			// Groups cache outbound instances, not just tags.
+			if _, err := group.Remove(tag); err != nil {
+				return err
+			}
+		}
+		if selectionGroup {
+			if err := t.mutGrpMgr.AddToGroup(groupTag, tag); err != nil {
+				return err
+			}
+		} else if _, err := group.Add(tag); err != nil {
+			return err
+		}
+		if selector, ok := group.(Selector); selected && ok {
+			selector.SelectOutbound(tag)
+		}
+	}
+	return nil
+}
+
 // updateNonSelectableOutbounds reconciles the tunnel's non-selectable outbounds
 // against list. Each is created directly through the outbound manager and never
 // joined to a selection group, so it is dialable by tag but can never carry user
@@ -718,9 +774,19 @@ func (t *tunnel) updateNonSelectableOutbounds(list servers.ServerList) error {
 // updateNonSelectableOutboundsLocked implements updateNonSelectableOutbounds. The
 // caller must hold t.outboundMu.
 func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) error {
-	list = allowedServers(list)
-	ctx := t.ctx
-	router := service.FromContext[adapter.Router](ctx)
+	var previous []string
+	for tag := range t.nonSelectableTags {
+		previous = append(previous, tag)
+	}
+	list.Servers = slices.DeleteFunc(slices.Clone(list.Servers), func(srv *servers.Server) bool {
+		_, ok := srv.Options.(O.Outbound)
+		return !ok
+	})
+	list = allowedServers(list, t.retainedOutboundTagsLocked(previous)...)
+	changed, err := t.changedServersLocked(list)
+	if err != nil {
+		return err
+	}
 
 	next := make(map[string]struct{}, len(list.Servers))
 	for _, srv := range list.Servers {
@@ -730,6 +796,10 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 	var errs []error
 	for tag := range t.nonSelectableTags {
 		if _, keep := next[tag]; keep {
+			continue
+		}
+		if t.hasOutboundDependentsLocked(tag) {
+			next[tag] = struct{}{}
 			continue
 		}
 		if err := t.outboundMgr.Remove(tag); err != nil {
@@ -743,17 +813,12 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 		t.optsMap.Delete(tag)
 	}
 
-	newOutbounds := removeDuplicates(ctx, t.optsMap, list).Outbounds()
-	t.prefetchInviterTickets(newOutbounds)
-	for _, outbound := range newOutbounds {
-		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
-		if err := t.outboundMgr.Create(ctx, router, logger, outbound.Tag, outbound.Type, outbound.Options); err != nil {
-			slog.Warn("Failed to load non-selectable outbound",
-				"tag", outbound.Tag, "type", outbound.Type, "error", err)
+	t.prefetchInviterTickets(changed.Outbounds())
+	for _, srv := range changed.Servers {
+		if err := t.replaceServerLocked(srv, false); err != nil {
+			slog.Warn("Failed to load server", "tag", srv.Tag, "type", srv.Type, "error", err)
 			errs = append(errs, err)
-			continue
 		}
-		t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
 	}
 
 	t.nonSelectableTags = next
@@ -766,49 +831,120 @@ func (t *tunnel) removeOutbounds(tags []string) error {
 	return t.removeOutboundsLocked(tags)
 }
 
-// removeOutboundsLocked removes the outbounds with the given tags from the
-// tunnel. The caller must hold t.outboundMu.
-func (t *tunnel) removeOutboundsLocked(tags []string) error {
+// removeOutboundsLocked detaches tags from selection; retained tags stay dialable.
+// The caller must hold t.outboundMu.
+func (t *tunnel) removeOutboundsLocked(tags []string, retainedTags ...string) error {
 	var (
 		mutGrpMgr = t.mutGrpMgr
 		removed   []string
 		errs      []error
 	)
+	protected := t.auxiliaryOutboundTagsLocked()
+	for tag := range t.outboundDependencyTagsLocked(t.routeTargets) {
+		protected[tag] = true
+	}
 	for _, tag := range tags {
-		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
-			if _, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
-				continue // skip nested groups
+		retained := slices.Contains(retainedTags, tag)
+		var err error
+		for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
+			if protected[tag] || retained {
+				group, exists := mutGrpMgr.OutboundGroup(groupTag)
+				if !exists {
+					err = fmt.Errorf("outbound group %q is unavailable", groupTag)
+				} else {
+					_, err = group.Remove(tag)
+				}
+			} else {
+				err = mutGrpMgr.RemoveFromGroup(groupTag, tag)
 			}
-		}
-		err := mutGrpMgr.RemoveFromGroup(ManualSelectTag, tag)
-		if err == nil {
-			err = mutGrpMgr.RemoveFromGroup(AutoSelectTag, tag)
+			if err != nil {
+				break
+			}
 		}
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
 		}
 		if err != nil {
 			errs = append(errs, err)
+		} else if retained {
+			delete(t.pendingRemovalTags, tag)
+			removed = append(removed, tag)
 		} else {
-			t.optsMap.Delete(tag)
+			if t.pendingRemovalTags == nil {
+				t.pendingRemovalTags = make(map[string]struct{})
+			}
+			t.pendingRemovalTags[tag] = struct{}{}
+			if !protected[tag] {
+				t.optsMap.Delete(tag)
+			}
 			removed = append(removed, tag)
 		}
 	}
 	if t.injector != nil {
 		t.injector.RemoveOutboundTags(removed...)
 	}
+	errs = append(errs, t.removeUnusedGroupsLocked())
 	slog.Debug("Removed servers", "removed", len(removed))
 	return errors.Join(errs...)
+}
+
+func (t *tunnel) removeUnusedGroupsLocked() error {
+	active := make(map[string]bool)
+	if t.clashServer != nil {
+		for _, conn := range t.clashServer.connTracker.Connections() {
+			active[conn.Outbound] = true
+			for _, tag := range conn.Chain {
+				active[tag] = true
+			}
+		}
+	}
+	var errs []error
+	for {
+		removed := false
+		for tag := range t.pendingRemovalTags {
+			out, exists := t.outboundMgr.Outbound(tag)
+			if !exists {
+				delete(t.pendingRemovalTags, tag)
+				continue
+			}
+			if _, group := out.(adapter.OutboundGroup); !group || active[tag] || t.hasOutboundDependentsLocked(tag) {
+				continue
+			}
+			if err := t.outboundMgr.Remove(tag); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			delete(t.pendingRemovalTags, tag)
+			removed = true
+		}
+		if !removed {
+			return errors.Join(errs...)
+		}
+	}
 }
 
 func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
+	return t.updateOutboundsLocked(list, nil)
+}
 
+func (t *tunnel) updateConfigOutbounds(list, nonSelectable servers.ServerList) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	return t.updateOutboundsLocked(list, &nonSelectable)
+}
+
+func (t *tunnel) updateOutboundsLocked(list servers.ServerList, nonSelectable *servers.ServerList) error {
+	for tag := range t.pendingRemovalTags {
+		if _, exists := t.outboundMgr.Outbound(tag); !exists {
+			delete(t.pendingRemovalTags, tag)
+		}
+	}
 	var errs []error
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
-	if len(outbounds) == 0 && len(endpoints) == 0 && len(list.URLOverrides) == 0 {
+	if nonSelectable == nil && len(outbounds) == 0 && len(endpoints) == 0 && len(list.URLOverrides) == 0 {
 		slog.Debug("No outbounds, endpoints, or bandit overrides to update, skipping")
 		return nil
 	}
@@ -825,8 +961,32 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 		return t.ctx.Err()
 	}
 
+	excluded := slices.Clone(selector.All())
+	var helperTags map[string]struct{}
+	if nonSelectable != nil {
+		helperTags = make(map[string]struct{})
+		list.Servers = append(slices.Clone(list.Servers), nonSelectable.Servers...)
+		for _, srv := range nonSelectable.Servers {
+			helperTags[srv.Tag] = struct{}{}
+		}
+		for tag := range t.nonSelectableTags {
+			excluded = append(excluded, tag)
+		}
+		if err := t.retainDependenciesLocked(&list, helperTags); err != nil {
+			return err
+		}
+	}
+	list = allowedServers(list, t.retainedOutboundTagsLocked(excluded)...)
+	changed, err := t.changedServersLocked(list)
+	if err != nil {
+		return err
+	}
+
 	// collect tags present in the current group but absent from the new config
-	newTags := list.Tags()
+	newTags := slices.DeleteFunc(list.Tags(), func(tag string) bool {
+		_, helper := helperTags[tag]
+		return helper
+	})
 	var toRemove []string
 	for _, tag := range selector.All() {
 		if !slices.Contains(newTags, tag) {
@@ -837,7 +997,7 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	// Add new outbounds first, before removing old ones. If all new
 	// outbounds fail to load (e.g. invalid config), we keep the old
 	// working outbounds to maintain connectivity.
-	addErr := t.addOutboundsLocked(list)
+	addErr := t.applyServerOutboundsLocked(list, changed, helperTags)
 	if errors.Is(addErr, errLibboxClosed) {
 		return addErr
 	}
@@ -855,12 +1015,57 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	}
 
 	if hasNewOutbound {
-		if err := t.removeOutboundsLocked(toRemove); errors.Is(err, errLibboxClosed) {
+		var retainedHelpers []string
+		for _, srv := range list.Servers {
+			if _, helper := helperTags[srv.Tag]; helper {
+				if _, loaded := t.optsMap.Load(srv.Tag); loaded {
+					retainedHelpers = append(retainedHelpers, srv.Tag)
+				}
+			}
+		}
+		if err := t.removeOutboundsLocked(toRemove, retainedHelpers...); errors.Is(err, errLibboxClosed) {
 			return err
 		} else if err != nil {
 			errs = append(errs, err)
 		}
+		if nonSelectable != nil {
+			next := make(map[string]struct{})
+			for _, srv := range list.Servers {
+				if _, helper := helperTags[srv.Tag]; helper {
+					if _, loaded := t.optsMap.Load(srv.Tag); loaded {
+						next[srv.Tag] = struct{}{}
+					}
+				}
+			}
+			for tag := range t.nonSelectableTags {
+				if slices.Contains(newTags, tag) {
+					continue
+				}
+				if _, keep := next[tag]; keep {
+					continue
+				}
+				if t.hasOutboundDependentsLocked(tag) {
+					next[tag] = struct{}{}
+					continue
+				}
+				if err := t.outboundMgr.Remove(tag); err != nil {
+					errs = append(errs, err)
+					next[tag] = struct{}{}
+				} else {
+					t.optsMap.Delete(tag)
+				}
+			}
+			t.nonSelectableTags = next
+		}
 	} else {
+		for tag := range helperTags {
+			if _, loaded := t.optsMap.Load(tag); loaded {
+				if t.nonSelectableTags == nil {
+					t.nonSelectableTags = make(map[string]struct{})
+				}
+				t.nonSelectableTags[tag] = struct{}{}
+			}
+		}
 		slog.Warn("All new outbounds failed to load, keeping old outbounds",
 			"failed_tags", newTags, "would_remove_tags", toRemove)
 	}
@@ -868,16 +1073,189 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	return errors.Join(errs...)
 }
 
+func (t *tunnel) hasOutboundDependentsLocked(tag string) bool {
+	if _, used := t.auxiliaryDetours[tag]; used {
+		return true
+	}
+	if slices.Contains(t.routeTargets, tag) {
+		return true
+	}
+	depends := func(candidate string) bool {
+		out, exists := t.outboundMgr.Outbound(candidate)
+		if !exists {
+			return false
+		}
+		if group, ok := out.(adapter.OutboundGroup); ok {
+			return slices.Contains(group.All(), tag)
+		}
+		return slices.Contains(out.Dependencies(), tag)
+	}
+	for candidate := range t.optsMap.Iter() {
+		if depends(candidate) {
+			return true
+		}
+	}
+	for candidate := range t.pendingRemovalTags {
+		if depends(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *tunnel) retainDependenciesLocked(list *servers.ServerList, helperTags map[string]struct{}) error {
+	present := make(map[string]bool)
+	for _, tag := range list.Tags() {
+		present[tag] = true
+	}
+	for i := 0; i < len(list.Servers); i++ {
+		for _, tag := range ServerDependencies(servers.ServerList{Servers: list.Servers[i : i+1]}) {
+			if _, helper := t.nonSelectableTags[tag]; !helper || present[tag] {
+				continue
+			}
+			encoded, ok := t.optsMap.Load(tag)
+			if !ok {
+				continue
+			}
+			out, err := json.UnmarshalExtendedContext[O.Outbound](t.ctx, encoded)
+			if err != nil {
+				return fmt.Errorf("decode retained dependency %q: %w", tag, err)
+			}
+			list.Servers = append(list.Servers, &servers.Server{Tag: tag, Type: out.Type, Options: out})
+			present[tag] = true
+			helperTags[tag] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (t *tunnel) changedServersLocked(list servers.ServerList) (servers.ServerList, error) {
+	changed := removeDuplicates(t.ctx, t.optsMap, list)
+	incoming := make(map[string]*servers.Server, len(list.Servers))
+	for _, srv := range list.Servers {
+		incoming[srv.Tag] = srv
+	}
+	tags := make(map[string]bool, len(changed.Servers))
+	for _, srv := range changed.Servers {
+		tags[srv.Tag] = true
+	}
+	manager := service.FromContext[adapter.OutboundManager](t.ctx)
+	for {
+		count := len(changed.Servers)
+		for tag, encoded := range t.optsMap.Iter() {
+			if tags[tag] {
+				continue
+			}
+			out, exists := manager.Outbound(tag)
+			if !exists {
+				continue
+			}
+			// Mutable groups refresh their cached members in place.
+			if _, mutable := out.(lbA.MutableOutboundGroup); mutable {
+				continue
+			}
+			if !slices.ContainsFunc(out.Dependencies(), func(dependency string) bool { return tags[dependency] }) {
+				continue
+			}
+			srv := incoming[tag]
+			if srv != nil {
+				changed.Servers = append(changed.Servers, srv)
+				tags[tag] = true
+				continue
+			}
+			srv = &servers.Server{Tag: tag, Type: out.Type()}
+			if _, endpoint := service.FromContext[adapter.EndpointManager](t.ctx).Get(tag); endpoint {
+				options, err := json.UnmarshalExtendedContext[O.Endpoint](t.ctx, encoded)
+				if err != nil {
+					return servers.ServerList{}, fmt.Errorf("decode dependent endpoint %q: %w", tag, err)
+				}
+				srv.Options = options
+			} else {
+				options, err := json.UnmarshalExtendedContext[O.Outbound](t.ctx, encoded)
+				if err != nil {
+					return servers.ServerList{}, fmt.Errorf("decode dependent outbound %q: %w", tag, err)
+				}
+				srv.Options = options
+			}
+			changed.Servers = append(changed.Servers, srv)
+			tags[tag] = true
+		}
+		if len(changed.Servers) == count {
+			break
+		}
+	}
+	protected := t.auxiliaryOutboundTagsLocked()
+	for _, srv := range changed.Servers {
+		if protected[srv.Tag] {
+			return servers.ServerList{}, fmt.Errorf("outbound %q is in use by DNS or rule sets; reconnect to apply its changes", srv.Tag)
+		}
+	}
+	return orderServersByDependencies(changed), nil
+}
+
+func (t *tunnel) auxiliaryOutboundTagsLocked() map[string]bool {
+	var roots []string
+	for tag := range t.auxiliaryDetours {
+		roots = append(roots, tag)
+	}
+	return t.outboundDependencyTagsLocked(roots)
+}
+
+func (t *tunnel) outboundDependencyTagsLocked(roots []string) map[string]bool {
+	protected := make(map[string]bool)
+	manager := service.FromContext[adapter.OutboundManager](t.ctx)
+	var visit func(string)
+	visit = func(tag string) {
+		if protected[tag] {
+			return
+		}
+		protected[tag] = true
+		if tag == AutoSelectTag || tag == ManualSelectTag {
+			return
+		}
+		out, exists := manager.Outbound(tag)
+		if !exists {
+			return
+		}
+		dependencies := out.Dependencies()
+		if group, ok := out.(adapter.OutboundGroup); ok {
+			dependencies = group.All()
+		}
+		for _, dependency := range dependencies {
+			visit(dependency)
+		}
+	}
+	for _, tag := range roots {
+		visit(tag)
+	}
+	return protected
+}
+
 func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte], list servers.ServerList) servers.ServerList {
 	slog.Log(nil, rlog.LevelTrace, "Removing duplicate outbounds/endpoints")
+	changed := make(map[string]bool)
+	for _, srv := range list.Servers {
+		stored, exists := curr.Load(srv.Tag)
+		changed[srv.Tag] = !exists || !bytes.Equal(stored, marshalOptions(ctx, srv.Options))
+	}
+	for {
+		propagated := false
+		for _, srv := range list.Servers {
+			if !changed[srv.Tag] && slices.ContainsFunc(ServerDependencies(servers.ServerList{Servers: []*servers.Server{srv}}), func(tag string) bool { return changed[tag] }) {
+				changed[srv.Tag] = true
+				propagated = true
+			}
+		}
+		if !propagated {
+			break
+		}
+	}
 	var deduped []*servers.Server
 	var dropped []string
 	for _, srv := range list.Servers {
-		if currOpts, exists := curr.Load(srv.Tag); exists {
-			if bytes.Equal(currOpts, marshalOptions(ctx, srv.Options)) {
-				dropped = append(dropped, srv.Tag)
-				continue
-			}
+		if !changed[srv.Tag] {
+			dropped = append(dropped, srv.Tag)
+			continue
 		}
 		deduped = append(deduped, srv)
 	}
@@ -888,6 +1266,57 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		Servers:      deduped,
 		URLOverrides: list.URLOverrides,
 	}
+}
+
+// retainedOutboundTagsLocked excludes tags being reconciled; the caller must hold t.outboundMu.
+func (t *tunnel) retainedOutboundTagsLocked(excluded []string) []string {
+	exclude := make(map[string]bool, len(excluded))
+	for _, tag := range excluded {
+		exclude[tag] = true
+	}
+	var tags []string
+	for tag := range t.optsMap.Iter() {
+		if !exclude[tag] {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
+}
+
+// orderServersByDependencies copies the list with batch dependencies before their users.
+func orderServersByDependencies(list servers.ServerList) servers.ServerList {
+	byTag := make(map[string]int, len(list.Servers))
+	for i, srv := range list.Servers {
+		byTag[srv.Tag] = i
+	}
+	ordered := make([]*servers.Server, 0, len(list.Servers))
+	visited := make([]bool, len(list.Servers))
+	var visit func(int)
+	visit = func(i int) {
+		if visited[i] {
+			return
+		}
+		visited[i] = true
+		srv := list.Servers[i]
+		var options any
+		switch opts := srv.Options.(type) {
+		case O.Outbound:
+			options = opts.Options
+		case O.Endpoint:
+			options = opts.Options
+		}
+		for _, dependency := range outboundDependencies(options) {
+			if index, ok := byTag[dependency]; ok {
+				visit(index)
+			}
+		}
+		ordered = append(ordered, srv)
+	}
+	for i := range list.Servers {
+		visit(i)
+	}
+	list.Servers = ordered
+	return list
 }
 
 func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap[string, []byte] {

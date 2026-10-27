@@ -393,6 +393,8 @@ func TestTunnelClientInfo(t *testing.T) {
 	tun.optsMap = makeOutboundOptsMap(tun.ctx, options)
 	tun.nonSelectableTags = makeNonSelectableTagSet(tun.initialNonSelectable, options)
 	clash := service.FromContext[adapter.ClashServer](tun.ctx).(*clashServer)
+	tun.clashServer = clash
+	tun.outboundMgr = service.FromContext[adapter.OutboundManager](tun.ctx)
 	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), clash.connTracker)
 	require.NoError(t, err)
 	tun.mutGrpMgr = mutGrpMgr
@@ -453,6 +455,51 @@ func TestTunnelClientInfo(t *testing.T) {
 		requireInfo(t, "other", false)
 		requireInfo(t, "infra", false)
 	})
+	for _, changed := range []bool{false, true} {
+		for _, lantern := range []bool{false, true} {
+			t.Run(fmt.Sprintf("promote helper changed=%t lantern=%t", changed, lantern), func(t *testing.T) {
+				working := &servers.Server{Tag: "lantern", Type: C.TypeHTTP, IsLantern: true, Options: proxyOutbound("lantern")}
+				other := &servers.Server{Tag: "other", Type: C.TypeHTTP, Options: proxyOutbound("other")}
+				helper := &servers.Server{Tag: "promoted", Type: C.TypeHTTP, IsLantern: lantern, Options: proxyOutbound("promoted")}
+				base := servers.ServerList{Servers: []*servers.Server{working, other}}
+				infra := &servers.Server{Tag: "infra", Type: C.TypeHTTP, IsLantern: true, Options: proxyOutbound("infra")}
+				helpers := servers.ServerList{Servers: []*servers.Server{infra}}
+				withHelper := servers.ServerList{Servers: []*servers.Server{infra, helper}}
+				list := servers.ServerList{Servers: []*servers.Server{working, other, helper}}
+				require.NoError(t, tun.updateConfigOutbounds(base, withHelper))
+				requireInfo(t, helper.Tag, false)
+				original, exists := tun.outboundMgr.Outbound(helper.Tag)
+				require.True(t, exists)
+				if changed {
+					helper.Type = C.TypeSOCKS
+					helper.Options = O.Outbound{Type: C.TypeSOCKS, Tag: helper.Tag, Options: &O.SOCKSOutboundOptions{
+						ServerOptions: O.ServerOptions{Server: "127.0.0.1", ServerPort: port},
+					}}
+				}
+				for range 2 {
+					require.NoError(t, tun.updateConfigOutbounds(list, helpers))
+					requireInfo(t, helper.Tag, lantern)
+					assert.NotContains(t, tun.nonSelectableTags, helper.Tag)
+					for _, tag := range []string{ManualSelectTag, AutoSelectTag} {
+						group, exists := tun.mutGrpMgr.OutboundGroup(tag)
+						require.True(t, exists)
+						assert.Contains(t, group.All(), helper.Tag)
+					}
+				}
+				current, exists := tun.outboundMgr.Outbound(helper.Tag)
+				require.True(t, exists)
+				if changed {
+					assert.NotSame(t, original, current)
+				} else {
+					assert.Same(t, original, current)
+				}
+				require.NoError(t, tun.updateConfigOutbounds(base, withHelper))
+				requireInfo(t, helper.Tag, false)
+				require.NoError(t, tun.updateConfigOutbounds(list, helpers))
+				requireInfo(t, helper.Tag, lantern)
+			})
+		}
+	}
 	t.Run("added", func(t *testing.T) {
 		addServer(t, "added", true)
 		requireInfo(t, "added", true)

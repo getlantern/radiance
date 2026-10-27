@@ -385,14 +385,15 @@ func tunHasIPv6(opts O.Options) bool {
 }
 
 // buildOptions builds the box options using the config options and user servers.
-// Denied outbounds and endpoints are dropped; denied DNS or route options fail
-// the build with an error wrapping [hostaccess.ErrDenied].
+// Denied outbounds and endpoints are dropped; unavailable DNS or rule-set detours
+// fail the build. Host-access violations in DNS or route options produce errors
+// wrapping [hostaccess.ErrDenied].
 func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
-	bOptions.Options.Outbounds = allowedOutbounds(bOptions.Options.Outbounds)
-	bOptions.Options.Endpoints = allowedEndpoints(bOptions.Options.Endpoints)
+	var smartRoutingRules lcommon.SmartRoutingRules
+	bOptions.Options, smartRoutingRules = normalizeOutbounds(bOptions.Options, bOptions.SmartRouting, reservedTags...)
 	if err := hostaccess.CheckOptions(bOptions.Options); err != nil {
 		return O.Options{}, err
 	}
@@ -406,7 +407,6 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	slog.Debug("Base options initialized")
 
 	// add smart routing and ad block rules
-	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
 	if len(smartRoutingRules) > 0 {
 		slog.Info("Adding smart-routing rules")
 		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
@@ -453,14 +453,48 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	// catch-all rule to ensure no fallthrough
 	opts.Route.Rules = append(opts.Route.Rules, catchAllBlockerRule())
+	opts.Route.Rules = rejectMissingOutboundRoutes(opts.Route.Rules, availableOutboundTags(opts))
 	slog.Debug("Finished building options", "env", common.Env())
 
 	opts, err := jsonRoundTrip(bOptions.BasePath, opts)
 	if err != nil {
 		return opts, fmt.Errorf("validating options: %w", err)
 	}
+	if err := validateAuxiliaryDetours(opts); err != nil {
+		return opts, err
+	}
 
 	return opts, nil
+}
+
+func validateAuxiliaryDetours(options O.Options) error {
+	available := availableOutboundTags(options)
+	for detour, consumer := range auxiliaryDetours(options) {
+		if !available[detour] {
+			return fmt.Errorf("%s: detour %q is unavailable; update its detour or restore the outbound", consumer, detour)
+		}
+	}
+	return nil
+}
+
+func auxiliaryDetours(options O.Options) map[string]string {
+	detours := make(map[string]string)
+	if options.DNS != nil {
+		for _, server := range options.DNS.Servers {
+			for _, detour := range requiredOutboundDependencies(server.Options) {
+				detours[detour] = fmt.Sprintf("DNS server %q", server.Tag)
+			}
+		}
+	}
+	if options.Route != nil {
+		for _, ruleSet := range options.Route.RuleSet {
+			detour := ruleSet.RemoteOptions.DownloadDetour
+			if ruleSet.Type == C.RuleSetTypeRemote && detour != "" {
+				detours[detour] = fmt.Sprintf("rule set %q", ruleSet.Tag)
+			}
+		}
+	}
+	return detours
 }
 
 // jsonRoundTrip marshals and unmarshals the options to let sing-box set defaults and validate it.
@@ -522,13 +556,13 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	return tags
 }
 
-func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRoutingRules {
+func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules, available map[string]bool) lcommon.SmartRoutingRules {
 	normalized := make(lcommon.SmartRoutingRules, 0, len(rules))
 	for _, sr := range rules {
 		cleaned := make([]string, 0, len(sr.Outbounds))
 		for _, outbound := range sr.Outbounds {
 			tag := strings.TrimSpace(outbound)
-			if tag == "" {
+			if tag == "" || !available[tag] {
 				continue
 			}
 			cleaned = append(cleaned, tag)
