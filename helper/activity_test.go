@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -109,11 +110,9 @@ func TestActivityFileHoldsOnlyTheTotals(t *testing.T) {
 }
 
 // Android and iOS hard-wire time.Local to UTC, so the day follows the
-// device's zone as radiance resolves it, not time.Local.
+// device's zone as radiance resolves it, not time.Local. (time.Local is not
+// reassigned here: the runtime's timers read it, so that races.)
 func TestActivityDayFollowsTheDeviceZone(t *testing.T) {
-	prev := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = prev })
 	tehran, err := time.LoadLocation("Asia/Tehran")
 	require.NoError(t, err)
 
@@ -126,9 +125,6 @@ func TestActivityDayFollowsTheDeviceZone(t *testing.T) {
 }
 
 func TestLocalZoneUsesTheDeviceZone(t *testing.T) {
-	prev := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = prev })
 	prevTZ := settings.GetString(settings.TimeZoneKey)
 	require.NoError(t, settings.Set(settings.TimeZoneKey, "Asia/Tehran"))
 	t.Cleanup(func() { _ = settings.Set(settings.TimeZoneKey, prevTZ) })
@@ -297,4 +293,61 @@ func TestActivityStopEndsRunBeforeItReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("a Run after Stop must return at once")
 	}
+}
+
+// A lock held elsewhere (an iOS app suspended mid-save, say) bounds the wait:
+// save gives up, keeping its counts for the next save, and Today never waits
+// on the lock at all.
+func TestActivitySaveGivesUpOnAHeldLock(t *testing.T) {
+	prev := activityLockWait
+	activityLockWait = 100 * time.Millisecond
+	t.Cleanup(func() { activityLockWait = prev })
+	path := filepath.Join(t.TempDir(), "a.json")
+	held := flock.New(path + ".lock")
+	require.NoError(t, held.Lock())
+	sh := &fakeSharing{running: true, epoch: "e"}
+	tr := NewActivityTracker(path, sh.read)
+	tr.Sample(time.Minute)
+
+	saved := make(chan struct{})
+	start := time.Now()
+	go func() { tr.save(); close(saved) }()
+	todayDone := make(chan Activity, 1)
+	go func() { todayDone <- tr.Today() }()
+	select {
+	case a := <-todayDone:
+		assert.Equal(t, int64(60), a.ActiveSeconds)
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Today waited on the file lock")
+	}
+	<-saved
+	assert.Less(t, time.Since(start), time.Second)
+	assert.NoFileExists(t, path)
+	assert.Equal(t, int64(60), tr.Today().ActiveSeconds, "the counts are kept")
+
+	require.NoError(t, held.Unlock())
+	tr.save()
+	assert.Equal(t, int64(60), NewActivityTracker(path, sh.read).Today().ActiveSeconds)
+}
+
+// After a save for day D, a clock stepped back across midnight and a new
+// tracker count toward D-1. Those counts join D, the later day kept, rather
+// than being dropped.
+func TestActivityCountsAfterAStepBackJoinTheSavedDay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.json")
+	sh := &fakeSharing{running: true, epoch: "e"}
+	utc := func() *time.Location { return time.UTC }
+	now := time.Date(2026, 10, 24, 0, 0, 30, 0, time.UTC)
+	first := NewActivityTracker(path, sh.read)
+	first.loc, first.now = utc, func() time.Time { return now }
+	first.Sample(time.Minute)
+	first.save()
+
+	now = time.Date(2026, 10, 23, 23, 59, 30, 0, time.UTC)
+	second := NewActivityTracker(path, sh.read)
+	second.loc, second.now = utc, func() time.Time { return now }
+	second.Sample(time.Minute)
+	second.save()
+	assert.Equal(t, Activity{Day: "2026-10-24", ActiveSeconds: 120}, second.Today())
+	assert.Equal(t, Activity{Day: "2026-10-24", ActiveSeconds: 120}, readActivity(path))
 }

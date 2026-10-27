@@ -43,10 +43,12 @@ type ActivityTracker struct {
 	now  func() time.Time
 	loc  func() *time.Location
 
-	// saveMu serializes this tracker's saves, and Today against them, so a
-	// reader never sees pending both in the file and in memory; it is taken
-	// before mu.
-	saveMu sync.Mutex
+	// writeMu serializes this tracker's saves, including the wait for the
+	// cross-process lock. saveMu is held across a save's read and write of
+	// the file, and by Today, so a reader never sees pending both in the
+	// file and in memory. Order: writeMu, the file lock, saveMu, mu.
+	writeMu sync.Mutex
+	saveMu  sync.Mutex
 
 	mu      sync.Mutex
 	zone    *time.Location // loc's last answer; Sample refreshes it
@@ -86,11 +88,14 @@ func readActivity(path string) Activity {
 	return a
 }
 
-// combine is the day's totals from the file's and the pending ones. Each
-// counts only if its day is not stale (see isNewDay); the later of the days
-// that count is the day, and only parts for that day add up. With neither,
+// combine is the day's totals from the file's and the pending ones, and
+// whether the pending ones are in them. Each part counts only if its day is
+// not stale (see isNewDay). The later of the days that count is the day: the
+// file's counts join it only when they are for that day, and pending counts
+// that count always join it, even when they are for an earlier day (a clock
+// stepped back across midnight), since days only move forward. With neither,
 // it is today with nothing.
-func combine(file, pending Activity, today, tomorrow string) Activity {
+func combine(file, pending Activity, today, tomorrow string) (Activity, bool) {
 	fileOK := file.Day != "" && !isNewDay(file.Day, today, tomorrow)
 	pendingOK := pending.Day != "" && !isNewDay(pending.Day, today, tomorrow)
 	out := Activity{Day: today}
@@ -101,16 +106,16 @@ func combine(file, pending Activity, today, tomorrow string) Activity {
 		out.Day = file.Day
 	case pendingOK:
 		out.Day = pending.Day
-	default:
-		return out
 	}
-	for _, part := range []Activity{file, pending} {
-		if part.Day == out.Day {
-			out.ActiveSeconds += part.ActiveSeconds
-			out.RelayedBytes += part.RelayedBytes
-		}
+	if fileOK && file.Day == out.Day {
+		out.ActiveSeconds += file.ActiveSeconds
+		out.RelayedBytes += file.RelayedBytes
 	}
-	return out
+	if pendingOK {
+		out.ActiveSeconds += pending.ActiveSeconds
+		out.RelayedBytes += pending.RelayedBytes
+	}
+	return out, pendingOK
 }
 
 // LocalZone is the device's time zone. Go hard-wires time.Local to UTC on
@@ -176,7 +181,8 @@ func (t *ActivityTracker) Today() Activity {
 	t.mu.Lock()
 	pending := t.pending
 	t.mu.Unlock()
-	return combine(file, pending, today, tomorrow)
+	a, _ := combine(file, pending, today, tomorrow)
+	return a
 }
 
 // Sample adds one interval: elapsed counts as active if sharing runs now, and
@@ -262,31 +268,50 @@ func (t *ActivityTracker) Flush() {
 	t.save()
 }
 
+// activityLockWait bounds how long save waits for the cross-process lock. A
+// healthy holder keeps it for one read-modify-write; one that holds it longer
+// is suspended (iOS freezes apps mid-write), as for the settings file. A var
+// so tests can shorten it.
+var activityLockWait = 500 * time.Millisecond
+
 // save adds the pending counts to the file. It holds an exclusive lock on a
 // sibling lock file across reading the file, rolling its day forward by the
 // usual rules, adding, and writing it back, so trackers in other processes
-// never lose each other's counts. What it saved is then taken off pending.
-// It writes nothing when the file would not change.
+// never lose each other's counts. It waits at most activityLockWait for that
+// lock; without it, the counts stay pending for the next save. What it wrote
+// is then taken off pending. It writes nothing when the file would not change.
+//
+// writeMu serializes this tracker's saves across the lock wait; saveMu is
+// held only for the read and write, so Today never waits on the lock.
 func (t *ActivityTracker) save() {
-	t.saveMu.Lock()
-	defer t.saveMu.Unlock()
-	today, tomorrow := t.days(t.cachedZone())
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
 	t.mu.Lock()
-	pending := t.pending
+	empty := t.pending.Day == ""
 	t.mu.Unlock()
-	if pending.Day == "" {
+	if empty {
 		return
 	}
 	// Fixed text only: these errors quote the file's path, which can name
 	// the device's user.
 	lock := flock.New(t.path + ".lock")
-	if lock.Lock() != nil {
-		slog.Debug("helper: locking activity failed")
+	ctx, cancel := context.WithTimeout(context.Background(), activityLockWait)
+	locked, err := lock.TryLockContext(ctx, 25*time.Millisecond)
+	cancel()
+	if err != nil || !locked {
+		slog.Debug("helper: activity file lock unavailable; saving later")
 		return
 	}
 	defer func() { _ = lock.Unlock() }()
+
+	today, tomorrow := t.days(t.cachedZone())
+	t.saveMu.Lock()
+	defer t.saveMu.Unlock()
+	t.mu.Lock()
+	pending := t.pending
+	t.mu.Unlock()
 	file := readActivity(t.path)
-	merged := combine(file, pending, today, tomorrow)
+	merged, counted := combine(file, pending, today, tomorrow)
 	if merged != file {
 		data, err := json.Marshal(merged)
 		if err != nil {
@@ -297,6 +322,9 @@ func (t *ActivityTracker) save() {
 			slog.Debug("helper: saving activity failed")
 			return
 		}
+	}
+	if !counted {
+		return
 	}
 	t.mu.Lock()
 	if t.pending.Day == pending.Day {
