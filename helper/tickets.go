@@ -1,0 +1,283 @@
+// Package helper fetches and renews this device's helper pairing tickets: the
+// short-lived credentials lantern-cloud issues for each pairing the device is
+// in, which put it in the pairing's room on freddie. A volunteer widget sends
+// its volunteer tickets with every genesis message; an Unbounded consumer sends
+// its inviter tickets when it subscribes.
+//
+// Tickets are credentials: nothing here logs them or a response body.
+package helper
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/getlantern/broflake/common/helperticket"
+
+	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+)
+
+const (
+	// RefreshInterval is the longest a successful fetch is trusted before the
+	// next is due. Tickets live 15 minutes, so readers always hold valid ones.
+	RefreshInterval = 10 * time.Minute
+	// RetryInterval is how long after a failed fetch the next is due. The
+	// last tickets are kept meanwhile, until they expire.
+	RetryInterval = time.Minute
+	// DisabledInterval is how long after a 404, which means helper_invites is
+	// off for this client, the next fetch is due.
+	DisabledInterval = time.Hour
+
+	// defaultLifetime is a ticket's life when neither the response nor the
+	// ticket says.
+	defaultLifetime = 15 * time.Minute
+	maxLifetime     = 24 * time.Hour
+	fetchTimeout    = 30 * time.Second
+	maxBody         = 1 << 20
+)
+
+var (
+	// ErrDisabled is Fetch's error when lantern-cloud has helper invites off
+	// for this client.
+	ErrDisabled = errors.New("helper invites are off for this client")
+	// ErrUnavailable wraps Fetch's error when lantern-cloud asks the client to
+	// back off (429 or 503).
+	ErrUnavailable = errors.New("helper ticket service is busy")
+
+	errPanicked = errors.New("ticket fetch panicked")
+)
+
+// Tickets are a device's pairing tickets, by role.
+type Tickets struct {
+	Inviter   []string
+	Volunteer []string
+	// Lifetime is how long lantern-cloud says the tickets live from now, or
+	// 0 if it did not say.
+	Lifetime time.Duration
+}
+
+// Split sorts tickets by the role each claims. It does not verify them:
+// freddie does.
+func Split(tickets []string) Tickets {
+	var t Tickets
+	for _, tk := range tickets {
+		switch role, _ := helperticket.Peek(tk); role {
+		case helperticket.RoleInviter:
+			t.Inviter = append(t.Inviter, tk)
+		case helperticket.RoleVolunteer:
+			t.Volunteer = append(t.Volunteer, tk)
+		}
+	}
+	return t
+}
+
+// Fetcher asks lantern-cloud for this device's tickets.
+type Fetcher struct {
+	httpClient *http.Client
+	baseURL    string
+}
+
+// NewFetcher returns a Fetcher. baseURL includes the API version segment,
+// as common.GetBaseURL() returns it.
+func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
+	return &Fetcher{httpClient: httpClient, baseURL: baseURL}
+}
+
+// Fetch calls POST {baseURL}/helper/tickets, authenticated by the device ID
+// header like the peer API, and splits the tickets by role.
+func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
+	r, err := common.NewRequestWithHeaders(ctx, http.MethodPost, f.baseURL+"/helper/tickets", strings.NewReader("{}"))
+	if err != nil {
+		return Tickets{}, fmt.Errorf("build ticket request: %w", err)
+	}
+	r.Header.Set("Content-Type", "application/json")
+	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
+		r.Header.Set("X-Lantern-Feature-Override", val)
+	}
+	resp, err := f.httpClient.Do(r)
+	if err != nil {
+		return Tickets{}, fmt.Errorf("send ticket request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return Tickets{}, ErrDisabled
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
+		return Tickets{}, fmt.Errorf("ticket request: status %d: %w", resp.StatusCode, ErrUnavailable)
+	case resp.StatusCode < 200 || resp.StatusCode >= 300:
+		return Tickets{}, fmt.Errorf("ticket request: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Tickets         []string `json:"tickets"`
+		LifetimeSeconds int64    `json:"lifetime_seconds"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&body); err != nil {
+		return Tickets{}, errors.New("ticket response: malformed JSON")
+	}
+	t := Split(body.Tickets)
+	if body.LifetimeSeconds > 0 && body.LifetimeSeconds <= int64(maxLifetime/time.Second) {
+		t.Lifetime = time.Duration(body.LifetimeSeconds) * time.Second
+	}
+	return t, nil
+}
+
+// held is a ticket and when this device stops serving it.
+type held struct {
+	ticket  string
+	expires time.Time
+}
+
+// Source keeps a device's tickets fresh for code that reads them on its
+// signaling path. A read never blocks: it returns the unexpired tickets the
+// last successful fetch got, and when a fetch is due it starts one in the
+// background. Nothing is fetched until the first read, so a device that never
+// reads never calls the API. Source is safe for concurrent use.
+type Source struct {
+	ctx   context.Context
+	fetch func(context.Context) (Tickets, error)
+	now   func() time.Time
+
+	mu        sync.Mutex
+	inviter   []held
+	volunteer []held
+	due       time.Time // zero: due at the first read
+	fetching  bool
+	busy      time.Duration // the backoff after the last 429 or 503 in a row
+}
+
+// NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
+// tests. Cancelling ctx cancels a fetch in flight and stops further fetches.
+func NewSource(ctx context.Context, fetch func(context.Context) (Tickets, error)) *Source {
+	return &Source{ctx: ctx, fetch: fetch, now: time.Now}
+}
+
+// Inviter returns the current inviter tickets.
+func (s *Source) Inviter() []string {
+	return s.read(helperticket.RoleInviter, false)
+}
+
+// Volunteer returns the current volunteer tickets.
+func (s *Source) Volunteer() []string {
+	return s.read(helperticket.RoleVolunteer, false)
+}
+
+// AnsweredVolunteer returns the volunteer tickets from the last fetch
+// lantern-cloud answered, expired ones included: nil after it said helper
+// invites are off, and unchanged while fetches fail. A pairing missing from it
+// has ended; one missing only from Volunteer may just have lapsed while
+// lantern-cloud was unreachable. It never goes on the wire.
+func (s *Source) AnsweredVolunteer() []string {
+	return s.read(helperticket.RoleVolunteer, true)
+}
+
+func (s *Source) read(role helperticket.Role, expired bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if !s.fetching && !now.Before(s.due) && s.ctx.Err() == nil {
+		s.fetching = true
+		go s.refresh()
+	}
+	hs := s.volunteer
+	if role == helperticket.RoleInviter {
+		hs = s.inviter
+	}
+	var out []string
+	for _, h := range hs {
+		if expired || now.Before(h.expires) {
+			out = append(out, h.ticket)
+		}
+	}
+	return out
+}
+
+func (s *Source) refresh() {
+	// Expiry runs from when the request was sent, so latency never stretches
+	// a ticket's life past what lantern-cloud granted.
+	start := s.now()
+	t, err := s.safeFetch()
+	s.mu.Lock()
+	now := s.now()
+	s.fetching = false
+	switch {
+	case errors.Is(err, ErrDisabled):
+		s.inviter, s.volunteer = nil, nil
+		s.busy = 0
+		s.due = now.Add(DisabledInterval)
+	case errors.Is(err, ErrUnavailable):
+		s.busy = min(max(2*s.busy, 2*RetryInterval), RefreshInterval)
+		s.due = now.Add(s.busy)
+	case err != nil:
+		s.busy = 0
+		s.due = now.Add(RetryInterval)
+	default:
+		s.inviter = hold(t.Inviter, start, t.Lifetime)
+		s.volunteer = hold(t.Volunteer, start, t.Lifetime)
+		s.busy = 0
+		// Renewal runs from the request's start too, like expiry, so a
+		// slow fetch never eats into the margin before the tickets expire.
+		s.due = start.Add(refreshAfter(t.Lifetime))
+	}
+	s.mu.Unlock()
+
+	switch {
+	case errors.Is(err, errPanicked):
+		slog.Warn("helper: fetching pairing tickets panicked")
+	case err != nil && !errors.Is(err, ErrDisabled):
+		slog.Debug("helper: fetching pairing tickets failed; keeping the last ones", "error", err)
+	}
+}
+
+// safeFetch calls fetch, turning a panic into errPanicked.
+func (s *Source) safeFetch() (t Tickets, err error) {
+	defer func() {
+		if recover() != nil {
+			t, err = Tickets{}, errPanicked
+		}
+	}()
+	ctx, cancel := context.WithTimeout(s.ctx, fetchTimeout)
+	defer cancel()
+	return s.fetch(ctx)
+}
+
+// hold stamps tickets fetched at fetchedAt with their expiry. The response's
+// lifetime comes first because it is measured on this device's clock, which
+// may be skewed from the server's; the ticket's own claim is the fallback.
+func hold(tickets []string, fetchedAt time.Time, lifetime time.Duration) []held {
+	out := make([]held, 0, len(tickets))
+	for _, tk := range tickets {
+		exp := fetchedAt.Add(defaultLifetime)
+		if lifetime > 0 {
+			exp = fetchedAt.Add(lifetime)
+		} else if c, ok := helperticket.Claims(tk); ok {
+			exp = c.Expires
+		}
+		out = append(out, held{ticket: tk, expires: exp})
+	}
+	return out
+}
+
+// refreshAfter is how long after a successful fetch the next is due: two
+// thirds of the tickets' life, at most RefreshInterval and at least
+// RetryInterval.
+func refreshAfter(lifetime time.Duration) time.Duration {
+	if lifetime <= 0 {
+		return RefreshInterval
+	}
+	return max(min(RefreshInterval, lifetime*2/3), RetryInterval)
+}
+
+// isFetching reports whether a fetch is in flight. For tests.
+func (s *Source) isFetching() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fetching
+}

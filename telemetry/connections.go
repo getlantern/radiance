@@ -10,6 +10,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	lbA "github.com/getlantern/lantern-box/adapter"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/vpn"
 )
@@ -167,14 +169,20 @@ func (o *connObserver) record(ctx context.Context, closeEvent vpn.ConnClose) {
 }
 
 func newConnAttributeSet(attrs vpn.ConnAttrs) attribute.Set {
+	// helper- outbound tags are client-side pseudonyms that must not be
+	// exported; they are all counted as "helper".
+	chain := make([]string, len(attrs.ChainList))
+	for i, tag := range attrs.ChainList {
+		chain[i] = lbA.RedactHelperTags(tag)
+	}
 	return attribute.NewSet(
-		attribute.String("from_outbound", attrs.FromOutbound),
-		attribute.String("outbound_name", attrs.Outbound),
+		attribute.String("from_outbound", lbA.RedactHelperTags(attrs.FromOutbound)),
+		attribute.String("outbound_name", lbA.RedactHelperTags(attrs.Outbound)),
 		attribute.String("inbound", attrs.Inbound),
 		attribute.String("network", attrs.Network),
 		attribute.String("protocol", attrs.Protocol),
 		attribute.Int("ip_version", attrs.IPVersion),
-		attribute.String("rule", attrs.Rule),
-		attribute.StringSlice("chain_list", attrs.ChainList),
+		attribute.String("rule", lbA.RedactHelperTags(attrs.Rule)),
+		attribute.StringSlice("chain_list", chain),
 	)
 }

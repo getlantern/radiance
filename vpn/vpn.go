@@ -30,6 +30,7 @@ import (
 
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal/hostaccess"
+	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -77,7 +78,40 @@ type VPNClient struct {
 	// and is re-attached to each tunnel's tracker at connect.
 	connObserver ConnObserver
 
+	// inviterTickets, if set, gives each tunnel's Unbounded consumer this
+	// device's helper inviter tickets. Guarded by mu.
+	inviterTickets InviterTickets
+
 	mu sync.RWMutex
+}
+
+// InviterTickets is where a tunnel's Unbounded consumer gets the inviter
+// tickets for this device's helper pairings; helper.Source in production.
+// Inviter is called on the signaling path, so it must not block.
+type InviterTickets interface {
+	Inviter() []string
+}
+
+// SetInviterTickets sets the inviter ticket source for tunnels started from
+// now on. Pass the process's one helper.Source, which the Unbounded widget
+// shares, so the two draw on a single fetch budget.
+func (c *VPNClient) SetInviterTickets(src InviterTickets) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inviterTickets = src
+}
+
+// newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
+func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
+	return &tunnel{
+		dataPath:             boxOptions.BasePath,
+		selectionHistorySeed: boxOptions.SelectionHistorySeed,
+		initialLanternTags:   boxOptions.LanternServerTags,
+		initialNonSelectable: boxOptions.NonSelectableOutbounds,
+		initialMode:          modeForServer(boxOptions.InitialServer),
+		connObserver:         c.connObserver,
+		inviterTickets:       c.inviterTickets,
+	}
 }
 
 // PlatformInterface defines the methods to interact with platform-specific services
@@ -181,17 +215,10 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
 	for attempt := 1; ; attempt++ {
-		t := tunnel{
-			dataPath:             boxOptions.BasePath,
-			selectionHistorySeed: boxOptions.SelectionHistorySeed,
-			initialLanternTags:   boxOptions.LanternServerTags,
-			initialNonSelectable: boxOptions.NonSelectableOutbounds,
-			initialMode:          modeForServer(boxOptions.InitialServer),
-			connObserver:         c.connObserver,
-		}
+		t := c.newTunnel(boxOptions)
 		err := t.start(ctx, options, c.platformIfce, isRestart)
 		if err == nil {
-			c.tunnel = &t
+			c.tunnel = t
 			c.setStatus(Connected, nil)
 			c.logger.Debug("Tunnel started")
 			return nil
@@ -345,7 +372,9 @@ func (c *VPNClient) setStatus(s VPNStatus, err error) {
 	c.logger.Info("[vpn-state-trace]", "hop", "daemon_setstatus", "status", s, "ts_ms", time.Now().UnixMilli())
 	evt := StatusUpdateEvent{Status: s}
 	if err != nil {
-		evt.Error = err.Error()
+		// sing-box errors name the failing outbound, and a helper- tag must
+		// not leave the client; the UI may forward this text.
+		evt.Error = redact.Helper(err.Error())
 	}
 	events.Emit(evt)
 }
