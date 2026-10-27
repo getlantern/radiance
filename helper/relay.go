@@ -128,10 +128,11 @@ func (r *Relayer) Relay(ctx context.Context, op string, body []byte) (RelayResul
 		}
 		return out, nil
 	}
-	text := strings.ToValidUTF8(strings.TrimSpace(string(data)), "")
+	text := strings.TrimSpace(string(data))
 	if len(text) > maxRelayErrLen {
 		text = text[:maxRelayErrLen]
 	}
-	out.Error = text
+	// After the cut, so a rune it split is dropped.
+	out.Error = strings.ToValidUTF8(text, "")
 	return out, nil
 }

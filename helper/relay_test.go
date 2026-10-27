@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +19,9 @@ import (
 )
 
 func TestRelayForwardsAllowedOps(t *testing.T) {
+	prev := settings.GetString(settings.DeviceIDKey)
 	require.NoError(t, settings.Set(settings.DeviceIDKey, "device-R"))
+	t.Cleanup(func() { _ = settings.Set(settings.DeviceIDKey, prev) })
 	var gotPath, gotDevice, gotBody, gotType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotDevice, gotType = r.URL.Path, r.Header.Get(common.DeviceIDHeader), r.Header.Get("Content-Type")
@@ -62,6 +66,19 @@ func TestRelayReportsErrorsAsResults(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, res.Status)
 	assert.Equal(t, "invite already claimed or expired", res.Error)
 	assert.Nil(t, res.Body)
+}
+
+// The error text is cut to maxRelayErrLen bytes, never inside a rune.
+func TestRelayCutsLongErrorsOnARuneBoundary(t *testing.T) {
+	prefix := strings.Repeat("a", maxRelayErrLen-1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, prefix+"é and more", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	res, err := NewRelayer(srv.Client(), srv.URL+"/v1", nil).Relay(context.Background(), "invites", nil)
+	require.NoError(t, err)
+	assert.True(t, utf8.ValidString(res.Error), "no split rune")
+	assert.Equal(t, prefix, res.Error)
 }
 
 func TestRelayRejectsANonJSONSuccess(t *testing.T) {

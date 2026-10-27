@@ -1751,6 +1751,12 @@ func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) 
 	return r.helperRelay.Relay(ctx, op, body)
 }
 
+// SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
+// IPC route, which cannot build a full backend.
+func (r *LocalBackend) SetHelperRelayForTest(rl *helper.Relayer) {
+	r.helperRelay = rl
+}
+
 //////////////////
 // Split Tunnel //
 /////////////////
