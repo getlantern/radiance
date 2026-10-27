@@ -130,39 +130,85 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	return true, nil
 }
 
-// reregisterPeer re-registers a running peer in the background, under the
-// toggle lock so it cannot overlap a Start or Stop, after "help others too"
-// changes. Re-registering rotates the credentials and rebuilds the inbound.
-// Turning helping others off cuts strangers' sessions on the current box at
-// once. Closing the rotated box ends the sessions it still has, so paired
-// ones reconnect within seconds; the switch's caption warns of it
-// (help_others_too_note). The
-// Unbounded widget needs nothing from here: its syncRooms re-reads the
+// reregisterRetryFirst and reregisterRetryMax bound the backoff between
+// re-register attempts. Vars so tests can shorten them.
+var (
+	reregisterRetryFirst = 30 * time.Second
+	reregisterRetryMax   = 5 * time.Minute
+)
+
+// reregisterPeer re-registers a running peer in the background after "help
+// others too" changes, so the change applies at once rather than at the
+// hourly rotation. Re-registering sends the current setting and rotates the
+// credentials; closing the old box ends its sessions, so strangers are cut
+// off and paired clients reconnect within seconds with their pairing IDs.
+// The switch's caption warns of it (help_others_too_note). If lantern-cloud
+// is unreachable it retries, backing off from reregisterRetryFirst to
+// reregisterRetryMax, until it succeeds, the peer stops, the backend closes,
+// or a newer request replaces it: only the latest request's loop runs.
+//
+// The Unbounded widget needs nothing from here: its syncRooms re-reads the
 // setting within roomSyncInterval and restarts the widget when helping others
 // turns off, with the same brief drop.
 func (r *LocalBackend) reregisterPeer() {
 	// A closed backend's peer is stopped or stopping; there is nothing to
 	// re-register.
-	if r.peerClient == nil || r.ctx.Err() != nil || !r.addPeerWork() {
+	if r.peerClient == nil || r.ctx.Err() != nil {
 		return
 	}
+	r.peerWGMu.Lock()
+	if r.peerClosing {
+		r.peerWGMu.Unlock()
+		return
+	}
+	if r.peerReregCancel != nil {
+		r.peerReregCancel()
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	r.peerReregCancel = cancel
+	r.peerWG.Add(1)
+	r.peerWGMu.Unlock()
 	go func() {
 		defer r.peerWG.Done()
-		r.peerToggleMu.Lock()
-		defer r.peerToggleMu.Unlock()
-		if !r.peerClient.IsActive() {
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 		defer cancel()
-		// Fixed text: the message does not name the setting that changed,
-		// and the error, which can quote an API body or URL, is not logged.
-		// ErrNotActive: the peer stopped itself since the check, and the
-		// next Start registers with the current value.
-		if err := r.peerClient.Reregister(ctx); err != nil && !errors.Is(err, peer.ErrNotActive) {
-			slog.Warn("peer re-register failed; the next rotation retries")
+		wait := reregisterRetryFirst
+		for attempt := 0; ; attempt++ {
+			err := r.reregisterOnce(ctx)
+			// ErrNotActive: the peer stopped, and its next Start registers
+			// with the current value.
+			if err == nil || errors.Is(err, peer.ErrNotActive) || ctx.Err() != nil {
+				return
+			}
+			// Fixed text: the error can quote an API body or URL.
+			if attempt == 0 {
+				slog.Warn("peer re-register failed; retrying")
+			} else {
+				slog.Debug("peer re-register retry failed")
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			wait = min(2*wait, reregisterRetryMax)
 		}
 	}()
+}
+
+// reregisterOnce makes one re-register attempt under the toggle lock, so it
+// cannot overlap a Start or Stop.
+func (r *LocalBackend) reregisterOnce(ctx context.Context) error {
+	r.peerToggleMu.Lock()
+	defer r.peerToggleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !r.peerClient.IsActive() {
+		return peer.ErrNotActive
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, peerToggleTimeout)
+	defer cancel()
+	return r.peerClient.Reregister(attemptCtx)
 }
 
 func persistPeerShare(on bool) error {
@@ -238,6 +284,10 @@ func (r *LocalBackend) closePeerClient() {
 	}
 	r.peerWGMu.Lock()
 	r.peerClosing = true
+	if r.peerReregCancel != nil {
+		// A re-register retry may be waiting out its backoff.
+		r.peerReregCancel()
+	}
 	r.peerWGMu.Unlock()
 	r.peerWG.Wait()
 	if !r.peerClient.IsActive() {

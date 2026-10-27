@@ -386,6 +386,9 @@ type fakePeerController struct {
 	// is what that Start's registration sends.
 	servePoolAtStart atomic.Value // any
 	reregisterCalls  atomic.Int64
+	// reregisterFn, when set, answers Reregister; it gets the call's number,
+	// from 1.
+	reregisterFn atomic.Pointer[func(context.Context, int64) error]
 }
 
 func (f *fakePeerController) Start(_ context.Context) error {
@@ -405,9 +408,16 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 	return nil
 }
 
-func (f *fakePeerController) Reregister(_ context.Context) error {
-	f.reregisterCalls.Add(1)
+func (f *fakePeerController) Reregister(ctx context.Context) error {
+	n := f.reregisterCalls.Add(1)
+	if fn := f.reregisterFn.Load(); fn != nil {
+		return (*fn)(ctx, n)
+	}
 	return nil
+}
+
+func (f *fakePeerController) setReregister(fn func(context.Context, int64) error) {
+	f.reregisterFn.Store(&fn)
 }
 
 func (f *fakePeerController) IsActive() bool               { return f.active.Load() }
@@ -1216,4 +1226,89 @@ func TestReregisterPeer_AfterCloseStartsNothing(t *testing.T) {
 	b.reregisterPeer()
 	b.peerWG.Wait()
 	assert.Zero(t, fake.reregisterCalls.Load())
+}
+
+// setReregisterBackoff shortens or lengthens the re-register retry for a test.
+func setReregisterBackoff(t *testing.T, first, longest time.Duration) {
+	prevFirst, prevMax := reregisterRetryFirst, reregisterRetryMax
+	reregisterRetryFirst, reregisterRetryMax = first, longest
+	t.Cleanup(func() { reregisterRetryFirst, reregisterRetryMax = prevFirst, prevMax })
+}
+
+// waitPeerWork waits for the backend's background peer work, failing the
+// test if it does not finish.
+func waitPeerWork(t *testing.T, b *LocalBackend) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { b.peerWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer work did not finish")
+	}
+}
+
+var errUnreachable = errors.New("lantern-cloud unreachable")
+
+func TestReregisterPeer_RetriesUntilItSucceeds(t *testing.T) {
+	setReregisterBackoff(t, time.Millisecond, 4*time.Millisecond)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(_ context.Context, n int64) error {
+		if n < 3 {
+			return errUnreachable
+		}
+		return nil
+	})
+	b.reregisterPeer()
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(3), fake.reregisterCalls.Load())
+}
+
+func TestReregisterPeer_StopsWhenThePeerStops(t *testing.T) {
+	setReregisterBackoff(t, time.Millisecond, time.Millisecond)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return peer.ErrNotActive })
+	b.reregisterPeer()
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+}
+
+// Close cancels a retry waiting out its backoff, so it neither hangs Close nor
+// outlives the backend.
+func TestReregisterPeer_CloseEndsTheRetry(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newCloseableTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return errUnreachable })
+	b.reregisterPeer()
+	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 1 }, time.Second, time.Millisecond)
+	closed := make(chan struct{})
+	go func() { b.closePeerClient(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waited out the backoff")
+	}
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+}
+
+// Only the latest request's retry keeps running: a newer toggle cancels the
+// older loop, which would otherwise sit in its hour-long backoff.
+func TestReregisterPeer_ANewerRequestSupersedesTheRetry(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return errUnreachable })
+	b.reregisterPeer()
+	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 1 }, time.Second, time.Millisecond)
+	fake.setReregister(func(context.Context, int64) error { return nil })
+	b.reregisterPeer()
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(2), fake.reregisterCalls.Load())
 }

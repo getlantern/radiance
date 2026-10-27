@@ -76,6 +76,9 @@ type LocalBackend struct {
 	// peerClosing is set, nothing adds to peerWG.
 	peerWGMu    sync.Mutex
 	peerClosing bool
+	// peerReregCancel cancels the running re-register retry loop, so only the
+	// latest request's loop runs. Guarded by peerWGMu.
+	peerReregCancel context.CancelFunc
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once

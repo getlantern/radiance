@@ -257,10 +257,6 @@ type Client struct {
 	// pushes only, never across network I/O or a box's Start or Close.
 	// Taken before c.mu, never while holding it.
 	shortIDsMu sync.Mutex
-	// poolCut says c.box's pool sessions were cut (see cutPoolSessions), so
-	// short-ID pushes onto it leave the base IDs off. A new box clears it:
-	// it has new credentials, and lantern-cloud's verifier needs its base ID.
-	poolCut bool
 	// warnedNoBaseShortIDs and warnedNoUpdater keep their warnings to one
 	// per client, since every heartbeat would otherwise repeat them.
 	warnedNoBaseShortIDs atomic.Bool
@@ -564,17 +560,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		cancelRun()
 		return fmt.Errorf("verify with lantern-cloud: %w", err)
 	}
-	// Verified with the base ID; with "help others too" off the box is cut
-	// now, before it is installed and handed to anyone (see
-	// cutPoolSessionsOn).
-	startCut := !poolServed()
-	if startCut {
-		var keep []string
-		if startPairingKnown {
-			keep = startPairing
-		}
-		c.pushPoolCut(box, keep)
-	}
 
 	// Forward inbound accept/close events from lantern-box's samizdat
 	// inbound to the radiance event bus. Consumers (lantern-core's
@@ -639,7 +624,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.registration++
 	c.forwarder = fwd
 	c.box = box
-	c.poolCut = startCut
 	c.routeID = regResp.RouteID
 	c.externalPort = mapping.ExternalPort
 	c.internalPort = mapping.InternalPort
@@ -776,7 +760,6 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.runDone = nil
 	c.forwarder = nil
 	c.box = nil
-	c.poolCut = false
 	c.routeID = ""
 	c.externalPort = 0
 	c.internalPort = 0
@@ -1136,16 +1119,10 @@ var ErrNotActive = errors.New("peer: no session is running")
 // Reregister re-registers the running session now rather than at its next
 // rotation, so a change to what registration sends, such as peer_serve_pool,
 // takes effect at once. It rotates the credentials exactly as the hourly
-// rotation does, and like it turns a libbox panic into an error.
-//
-// With peer_serve_pool off it first cuts strangers' sessions on the current
-// box (see cutPoolSessions) at once: locally, and without waiting for the
-// lifecycle slot, which a stalled rotation can hold past ctx's deadline.
-// Paired sessions keep going. A box installed afterwards while the setting
-// is off is cut as it is installed (see cutPoolSessionsOn), so a rotation
-// that registered before the change cannot undo the cut. If the rest fails,
-// the box stays cut and serving. Closing the rotated box ends the sessions it
-// still has.
+// rotation does, and like it turns a libbox panic into an error. The new
+// credentials plus closing the old box, which ends its sessions, cut off
+// strangers when "help others too" turns off; paired clients reconnect with
+// their pairing IDs.
 func (c *Client) Reregister(ctx context.Context) (err error) {
 	if !c.IsActive() {
 		return ErrNotActive
@@ -1155,12 +1132,7 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
-	c.cutPoolSessionsOn(nil)
-	if err := c.acquireLifecycle(ctx); err != nil {
-		return err
-	}
-	defer c.releaseLifecycle()
-	return c.rotateCredsHeld(ctx)
+	return c.rotateCreds(ctx)
 }
 
 // rotateCreds swaps the peer's samizdat credentials by re-registering and
@@ -1184,11 +1156,6 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		return err
 	}
 	defer c.releaseLifecycle()
-	return c.rotateCredsHeld(ctx)
-}
-
-// rotateCredsHeld is rotateCreds with the lifecycle slot already held.
-func (c *Client) rotateCredsHeld(ctx context.Context) error {
 	c.mu.Lock()
 	if !c.active {
 		c.mu.Unlock()
@@ -1355,7 +1322,6 @@ func (c *Client) rotateCredsHeld(ctx context.Context) error {
 		return errors.New("session changed during rotation")
 	}
 	c.box = newBox
-	c.poolCut = false
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
@@ -1408,9 +1374,6 @@ func (c *Client) rotateCredsHeld(ctx context.Context) error {
 		slog.Warn("verify after rotation failed; box left running",
 			"err", verifyErr, "route_id", regResp.RouteID)
 	}
-	// The verifier needed the base ID; with "help others too" off, now the
-	// new box is cut, whichever value this rotation registered with.
-	c.cutPoolSessionsOn(newBox)
 
 	slog.Info("peer cred rotation succeeded",
 		"new_route_id", regResp.RouteID,
@@ -1635,69 +1598,6 @@ func inboundShortIDs(options string) []string {
 	return nil
 }
 
-// cutPoolSessionsOn, when "help others too" is off, cuts strangers' sessions
-// on box, which must be the current box, or on whatever box is current when
-// box is nil. Replacing the inbound's short IDs closes every connection whose
-// ID was removed, so the box is left with the pairing IDs only (see
-// poolCutIDs) and paired sessions keep going. The box stays cut (poolCut)
-// until a new box replaces it. It needs no lifecycle slot.
-//
-// Invariant: a box installed while the setting is off is cut before it
-// serves anyone but lantern-cloud's verifier, which authenticates with the
-// base ID: Start cuts after Verify, before installing the box, and a
-// rotation cuts right after its post-swap Verify.
-func (c *Client) cutPoolSessionsOn(box boxService) {
-	if poolServed() {
-		return
-	}
-	c.shortIDsMu.Lock()
-	defer c.shortIDsMu.Unlock()
-	c.mu.Lock()
-	cur := c.box
-	if cur == nil || (box != nil && cur != box) {
-		c.mu.Unlock()
-		return
-	}
-	c.poolCut = true
-	c.mu.Unlock()
-	c.pushPoolCut(cur, c.poolCutPairing())
-}
-
-func poolServed() bool {
-	sp := servePool()
-	return sp == nil || *sp
-}
-
-// poolCutPairing is the pairing set a cut box keeps: the known one, or none.
-func (c *Client) poolCutPairing() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.pairingKnown {
-		return nil
-	}
-	return slices.Clone(c.pairingShortIDs)
-}
-
-// poolCutIDs is the short-ID set for a box whose pool sessions are cut: the
-// valid pairing IDs only, or one random ID nobody holds when there are none,
-// because the set must not be empty.
-func poolCutIDs(pairing []string) []string {
-	if ids := mergeShortIDs(nil, pairing); len(ids) > 0 {
-		return ids
-	}
-	return []string{fmt.Sprintf("%016x", rand.Uint64())}
-}
-
-func (c *Client) pushPoolCut(b boxService, pairing []string) {
-	u, ok := samizdatInbound(b)
-	if !ok {
-		return
-	}
-	if u.UpdateShortIDs(poolCutIDs(pairing)) != nil {
-		slog.Warn("peer: cutting pool sessions failed")
-	}
-}
-
 // mergeShortIDs is base followed by the valid pairing IDs not already
 // present, lowercased. An invalid ID is dropped rather than passed on,
 // because lantern-box refuses a whole set over one bad entry.
@@ -1724,17 +1624,6 @@ func mergeShortIDs(base, pairing []string) []string {
 // client. The IDs are credentials, so neither they nor their number are
 // logged.
 func (c *Client) applyShortIDs(b boxService, base, pairing []string) bool {
-	c.mu.Lock()
-	cut := c.poolCut && c.box == b
-	c.mu.Unlock()
-	if cut {
-		u, ok := samizdatInbound(b)
-		if !ok || u.UpdateShortIDs(poolCutIDs(pairing)) != nil {
-			slog.Warn("peer: updating a cut box's short IDs failed")
-			return false
-		}
-		return true
-	}
 	if len(base) == 0 {
 		if !c.warnedNoBaseShortIDs.Swap(true) {
 			slog.Warn("peer: launch config has no samizdat short IDs; not applying pairing short IDs")
