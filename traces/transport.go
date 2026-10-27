@@ -63,6 +63,9 @@ func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Respo
 	if span != nil {
 		for k, v := range req.Header {
 			headerName := strings.ToLower(k)
+			if isUnrecordedHeader(headerName) {
+				continue
+			}
 			if isSensitiveHeader(headerName) {
 				if len(v) > 0 && len(v[0]) > 5 {
 					span.SetAttributes(
@@ -82,6 +85,16 @@ func (h *headerAnnotatingRoundTripper) RoundTrip(req *http.Request) (*http.Respo
 	}
 
 	return h.next.RoundTrip(req)
+}
+
+// roomTicketsHeader is broflake's common.RoomTicketsHeader, lowercased.
+const roomTicketsHeader = "x-bf-room-tickets"
+
+// isUnrecordedHeader reports whether a header must not appear in traces at
+// all, not even as a prefix. Helper room tickets are short-lived bearer
+// credentials whose payload carries the pairing ID.
+func isUnrecordedHeader(header string) bool {
+	return header == roomTicketsHeader
 }
 
 func isSensitiveHeader(header string) bool {
