@@ -1113,6 +1113,25 @@ func (c *Client) runRotation(ctx context.Context) {
 	}
 }
 
+// ErrNotActive is Reregister's error when no session runs.
+var ErrNotActive = errors.New("peer: no session is running")
+
+// Reregister re-registers the running session now rather than at its next
+// rotation, so a change to what registration sends, such as peer_serve_pool,
+// takes effect at once. It rotates the credentials exactly as the hourly
+// rotation does, and like it turns a libbox panic into an error.
+func (c *Client) Reregister(ctx context.Context) (err error) {
+	if !c.IsActive() {
+		return ErrNotActive
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("peer re-register panicked: %v", r)
+		}
+	}()
+	return c.rotateCreds(ctx)
+}
+
 // rotateCreds swaps the peer's samizdat credentials by re-registering and
 // rebuilding the libbox inbound against the new launch config.
 //

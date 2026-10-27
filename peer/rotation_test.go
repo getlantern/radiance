@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 // portBoxes models how production boxes share the peer's one listening port:
@@ -505,4 +507,35 @@ func TestClient_RotationVerifyFailureKeepsClientRunning(t *testing.T) {
 	port.mu.Lock()
 	defer port.mu.Unlock()
 	assert.False(t, port.boxes[len(port.boxes)-1].closed.Load(), "the serving box must stay open")
+}
+
+// TestClient_ReregisterSendsTheCurrentServePool checks that turning "help
+// others too" off reaches lantern-cloud at once, not at the next hourly
+// rotation.
+func TestClient_ReregisterSendsTheCurrentServePool(t *testing.T) {
+	srv := newStubServer(t)
+	port := &portBoxes{}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = port.build
+	})
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool, "Start sent the default")
+	require.NoError(t, c.Reregister(context.Background()))
+	assert.Equal(t, int64(2), srv.registerCount.Load())
+	req := srv.lastRegisterReq.Load().(RegisterRequest)
+	require.NotNil(t, req.ServePool)
+	assert.False(t, *req.ServePool)
+	assert.True(t, c.IsActive(), "re-registering keeps the peer serving")
+}
+
+func TestClient_ReregisterWithoutASession(t *testing.T) {
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
+	assert.ErrorIs(t, c.Reregister(context.Background()), ErrNotActive)
 }

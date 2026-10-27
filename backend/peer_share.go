@@ -23,6 +23,7 @@ type peerController interface {
 	IsActive() bool
 	CurrentStatus() peer.Status
 	RelaySnapshot() peer.Snapshot
+	Reregister(ctx context.Context) error
 }
 
 // peerToggleTimeout caps blocking time on a slow router; UPnP M-SEARCH +
@@ -118,6 +119,35 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	}
 	slog.Info("peer share start succeeded")
 	return nil
+}
+
+// reregisterPeer re-registers a running peer in the background, under the
+// toggle lock so it cannot overlap a Start or Stop, after "help others too"
+// changes. Re-registering rotates the credentials and rebuilds the inbound,
+// so every open session, paired ones included, drops and reconnects within
+// seconds; the switch's caption warns of it (help_others_too_note). The
+// widget picks the setting up by itself within roomSyncInterval, and plan 3
+// restarts it when helping others turns off, with the same brief drop.
+func (r *LocalBackend) reregisterPeer() {
+	if r.peerClient == nil {
+		return
+	}
+	r.peerWG.Add(1)
+	go func() {
+		defer r.peerWG.Done()
+		r.peerToggleMu.Lock()
+		defer r.peerToggleMu.Unlock()
+		if !r.peerClient.IsActive() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
+		defer cancel()
+		// The message does not name the setting that changed, so this
+		// line never ties "help others too" to the peer it describes.
+		if err := r.peerClient.Reregister(ctx); err != nil {
+			slog.Warn("peer re-register failed; the next rotation retries", "error", err)
+		}
+	}()
 }
 
 func persistPeerShare(on bool) error {

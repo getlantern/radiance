@@ -803,6 +803,12 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 			slog.Warn("unbounded apply failed", "error", err)
 		}
 	}
+	// "Help others too" is sent when the peer registers, so a running peer
+	// re-registers now. A patch that also toggled sharing on has just
+	// registered with the new value through Start.
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerRequested {
+		r.reregisterPeer()
+	}
 	return errs
 }
 

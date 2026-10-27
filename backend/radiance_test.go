@@ -385,6 +385,7 @@ type fakePeerController struct {
 	// servePoolAtStart is peer_serve_pool as the first Start saw it, which
 	// is what that Start's registration sends.
 	servePoolAtStart atomic.Value // any
+	reregisterCalls  atomic.Int64
 }
 
 func (f *fakePeerController) Start(_ context.Context) error {
@@ -401,6 +402,11 @@ func (f *fakePeerController) Start(_ context.Context) error {
 func (f *fakePeerController) Stop(_ context.Context) error {
 	f.stopCalls.Add(1)
 	f.active.Store(false)
+	return nil
+}
+
+func (f *fakePeerController) Reregister(_ context.Context) error {
+	f.reregisterCalls.Add(1)
 	return nil
 }
 
@@ -722,9 +728,10 @@ func (f *slowStartFake) Stop(_ context.Context) error {
 	f.active.Store(false)
 	return nil
 }
-func (f *slowStartFake) IsActive() bool               { return f.active.Load() }
-func (f *slowStartFake) CurrentStatus() peer.Status   { return peer.Status{Active: f.active.Load()} }
-func (f *slowStartFake) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
+func (f *slowStartFake) IsActive() bool                   { return f.active.Load() }
+func (f *slowStartFake) CurrentStatus() peer.Status       { return peer.Status{Active: f.active.Load()} }
+func (f *slowStartFake) RelaySnapshot() peer.Snapshot     { return peer.Snapshot{} }
+func (f *slowStartFake) Reregister(context.Context) error { return nil }
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path
@@ -1139,4 +1146,37 @@ func TestSetCountryCodeFromConfigFollowsCorrections(t *testing.T) {
 
 	setCountryCodeFromConfig(&config.Config{})
 	assert.Equal(t, "IR", settings.GetString(settings.CountryCodeKey), "a config without a country keeps the last one")
+}
+
+func TestPatchSettings_ServePoolChangeReregistersARunningPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, b.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+
+	require.NoError(t, b.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load(), "an unchanged value re-registers nothing")
+}
+
+func TestPatchSettings_ServePoolChangeLeavesAStoppedPeerAlone(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	require.NoError(t, b.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Zero(t, fake.reregisterCalls.Load())
+}
+
+// A patch that also turns sharing on registers once, through Start, with the
+// new value already persisted.
+func TestPatchSettings_ServePoolWithToggleOnDoesNotReregister(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	require.NoError(t, b.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true, settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.Zero(t, fake.reregisterCalls.Load())
 }
