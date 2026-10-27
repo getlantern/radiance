@@ -903,3 +903,10 @@ func (c *Client) HelperRelay(ctx context.Context, op string, body []byte) (helpe
 	err := c.doJSON(ctx, http.MethodPost, helperRelayEndpoint, HelperRelayRequest{Op: op, Body: body}, &res)
 	return res, err
 }
+
+// HelperActivity reads today's sharing totals (see helper.Activity).
+func (c *Client) HelperActivity(ctx context.Context) (helper.Activity, error) {
+	var a helper.Activity
+	err := c.doJSON(ctx, http.MethodGet, helperActivityEndpoint, nil, &a)
+	return a, err
+}

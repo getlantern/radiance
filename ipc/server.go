@@ -294,6 +294,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Helper invites. Not traced: the tracer records error bodies, and these
 	// carry invite hashes and encrypted names.
 	mux.HandleFunc("POST "+helperRelayEndpoint, s.helperRelayHandler)
+	mux.HandleFunc("GET "+helperActivityEndpoint, traced(s.helperActivityHandler))
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -1582,4 +1583,8 @@ func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, res)
 	}
+}
+
+func (s *localapi) helperActivityHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperActivity())
 }

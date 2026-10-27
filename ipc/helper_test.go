@@ -101,3 +101,26 @@ func TestHelperRelayClientRoundTrip(t *testing.T) {
 	require.ErrorAs(t, err, &ipcErr)
 	assert.Equal(t, http.StatusBadRequest, ipcErr.Status)
 }
+
+func TestHelperActivityEndpoint(t *testing.T) {
+	api := newLocalAPI(&backend.LocalBackend{}, false)
+	w := serveHelper(t, api, http.MethodGet, helperActivityEndpoint, nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var a struct {
+		Day           string `json:"day"`
+		ActiveSeconds int64  `json:"active_seconds"`
+		RelayedBytes  uint64 `json:"relayed_bytes"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &a))
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, a.Day)
+	assert.Zero(t, a.ActiveSeconds)
+}
+
+func TestHelperActivityClientRoundTrip(t *testing.T) {
+	c := newClient()
+	c.http.Transport = localTransport{api: newLocalAPI(&backend.LocalBackend{}, false)}
+	a, err := c.HelperActivity(context.Background())
+	require.NoError(t, err)
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, a.Day)
+	assert.Zero(t, a.RelayedBytes)
+}

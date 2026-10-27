@@ -106,6 +106,8 @@ type LocalBackend struct {
 	helperTickets *helper.Source
 	// helperRelay sends the app's helper-invite requests to lantern-cloud.
 	helperRelay *helper.Relayer
+	// helperActivity is today's sharing time and bytes, kept on the device.
+	helperActivity *helper.ActivityTracker
 }
 
 type Options struct {
@@ -230,6 +232,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		}
 	})
 	backend = r
+	r.helperActivity = helper.NewActivityTracker(filepath.Join(dataDir, "helper-activity.json"), r.sharingCounters)
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
@@ -340,6 +343,7 @@ func (r *LocalBackend) Start() {
 	r.startSessionAutoSelectListener()
 
 	r.resumePeerShareIfEnabled()
+	go r.helperActivity.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
 	// updates. This single subscription handles all three start/stop
@@ -1760,6 +1764,23 @@ func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) 
 		return helper.RelayResult{}, errHelperRelayUnavailable
 	}
 	return r.helperRelay.Relay(ctx, op, body)
+}
+
+// sharingCounters reads both sharing modes' snapshots for the activity
+// tracker.
+func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
+	ps := r.PeerRelaySnapshot()
+	us := unbounded.CurrentSnapshot()
+	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
+}
+
+// HelperActivity is today's sharing totals for the app's "You're helping"
+// section.
+func (r *LocalBackend) HelperActivity() helper.Activity {
+	if r.helperActivity == nil {
+		return helper.Activity{Day: time.Now().Local().Format("2006-01-02")}
+	}
+	return r.helperActivity.Today()
 }
 
 // SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
