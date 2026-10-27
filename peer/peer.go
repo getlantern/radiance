@@ -564,6 +564,17 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		cancelRun()
 		return fmt.Errorf("verify with lantern-cloud: %w", err)
 	}
+	// Verified with the base ID; with "help others too" off the box is cut
+	// now, before it is installed and handed to anyone (see
+	// cutPoolSessionsOn).
+	startCut := !poolServed()
+	if startCut {
+		var keep []string
+		if startPairingKnown {
+			keep = startPairing
+		}
+		c.pushPoolCut(box, keep)
+	}
 
 	// Forward inbound accept/close events from lantern-box's samizdat
 	// inbound to the radiance event bus. Consumers (lantern-core's
@@ -628,7 +639,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.registration++
 	c.forwarder = fwd
 	c.box = box
-	c.poolCut = false
+	c.poolCut = startCut
 	c.routeID = regResp.RouteID
 	c.externalPort = mapping.ExternalPort
 	c.internalPort = mapping.InternalPort
@@ -1128,11 +1139,13 @@ var ErrNotActive = errors.New("peer: no session is running")
 // rotation does, and like it turns a libbox panic into an error.
 //
 // With peer_serve_pool off it first cuts strangers' sessions on the current
-// box (see cutPoolSessions), locally, so an API outage cannot leave them
-// connected; paired sessions keep going. The cut and the rotation's swap
-// happen under one lifecycle slot, so no other rotation can install a box
-// between them. If the network part fails, the box stays cut and serving.
-// Closing the rotated box then ends whatever sessions it still has.
+// box (see cutPoolSessions) at once: locally, and without waiting for the
+// lifecycle slot, which a stalled rotation can hold past ctx's deadline.
+// Paired sessions keep going. A box installed afterwards while the setting
+// is off is cut as it is installed (see cutPoolSessionsOn), so a rotation
+// that registered before the change cannot undo the cut. If the rest fails,
+// the box stays cut and serving. Closing the rotated box ends the sessions it
+// still has.
 func (c *Client) Reregister(ctx context.Context) (err error) {
 	if !c.IsActive() {
 		return ErrNotActive
@@ -1142,11 +1155,11 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
+	c.cutPoolSessionsOn(nil)
 	if err := c.acquireLifecycle(ctx); err != nil {
 		return err
 	}
 	defer c.releaseLifecycle()
-	c.cutPoolSessions()
 	return c.rotateCredsHeld(ctx)
 }
 
@@ -1395,6 +1408,9 @@ func (c *Client) rotateCredsHeld(ctx context.Context) error {
 		slog.Warn("verify after rotation failed; box left running",
 			"err", verifyErr, "route_id", regResp.RouteID)
 	}
+	// The verifier needed the base ID; with "help others too" off, now the
+	// new box is cut, whichever value this rotation registered with.
+	c.cutPoolSessionsOn(newBox)
 
 	slog.Info("peer cred rotation succeeded",
 		"new_route_id", regResp.RouteID,
@@ -1619,12 +1635,18 @@ func inboundShortIDs(options string) []string {
 	return nil
 }
 
-// cutPoolSessions, when "help others too" is off, cuts strangers' sessions
-// on the current box at once: replacing the inbound's short IDs closes every
-// connection whose ID was removed, so the box is left with the pairing IDs
-// only (see poolCutIDs) and paired sessions keep going. The box stays cut
-// (poolCut) until a new box replaces it. The caller holds the lifecycle slot.
-func (c *Client) cutPoolSessions() {
+// cutPoolSessionsOn, when "help others too" is off, cuts strangers' sessions
+// on box, which must be the current box, or on whatever box is current when
+// box is nil. Replacing the inbound's short IDs closes every connection whose
+// ID was removed, so the box is left with the pairing IDs only (see
+// poolCutIDs) and paired sessions keep going. The box stays cut (poolCut)
+// until a new box replaces it. It needs no lifecycle slot.
+//
+// Invariant: a box installed while the setting is off is cut before it
+// serves anyone but lantern-cloud's verifier, which authenticates with the
+// base ID: Start cuts after Verify, before installing the box, and a
+// rotation cuts right after its post-swap Verify.
+func (c *Client) cutPoolSessionsOn(box boxService) {
 	if poolServed() {
 		return
 	}
@@ -1632,13 +1654,13 @@ func (c *Client) cutPoolSessions() {
 	defer c.shortIDsMu.Unlock()
 	c.mu.Lock()
 	cur := c.box
-	if cur != nil {
-		c.poolCut = true
+	if cur == nil || (box != nil && cur != box) {
+		c.mu.Unlock()
+		return
 	}
+	c.poolCut = true
 	c.mu.Unlock()
-	if cur != nil {
-		c.pushPoolCut(cur, c.poolCutPairing())
-	}
+	c.pushPoolCut(cur, c.poolCutPairing())
 }
 
 func poolServed() bool {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -633,24 +632,24 @@ func (l *boxList) build(context.Context, string) (boxService, error) {
 	return b, nil
 }
 
-// A rotation already holding the lifecycle slot, registered with pool on,
-// finishes its swap before the cut: the cut waits for the slot, so it lands
-// on the box that rotation installed instead of being undone by it.
-func TestClient_ReregisterCutWaitsForARotationInFlight(t *testing.T) {
+// A rotation stalled in its register holds the lifecycle slot past
+// Reregister's deadline. The current box is cut at once anyway, and the box
+// that rotation later installs is cut too, because pool is off by then.
+func TestClient_ReregisterCutsAtOnceWhileARotationStalls(t *testing.T) {
 	gate := make(chan struct{})
 	var registers atomic.Int64
 	srv := newStubServer(t)
 	srv.registerRespFn = func() RegisterResponse {
 		if registers.Add(1) == 2 {
-			<-gate // the hourly rotation's register, in flight
+			<-gate // the hourly rotation's register, stalled
 		}
 		return RegisterResponse{
 			RouteID: "00000000-0000-0000-0000-000000000123", ServerConfig: launchCfgWithShortID(),
 			HeartbeatIntervalSeconds: 60, PairingShortIDs: []string{"1111111111111111"}, PairingShortIDsKnown: true,
 		}
 	}
-	first, second, third := &fakeBoxService{}, &fakeBoxService{}, &fakeBoxService{}
-	boxes := &boxList{boxes: []boxService{first, second, third}}
+	first, second := &fakeBoxService{}, &fakeBoxService{}
+	boxes := &boxList{boxes: []boxService{first, second}}
 	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
 		cfg.CredRotationInterval = time.Hour
 		cfg.HeartbeatInterval = time.Hour
@@ -665,16 +664,37 @@ func TestClient_ReregisterCutWaitsForARotationInFlight(t *testing.T) {
 	go func() { rotated <- c.rotateCreds(context.Background()) }()
 	require.Eventually(t, func() bool { return registers.Load() == 2 }, time.Second, time.Millisecond)
 	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
-	reregistered := make(chan error, 1)
-	go func() { reregistered <- c.Reregister(context.Background()) }()
-	assert.Never(t, func() bool { return !slices.Contains(first.lastShortIDs(), testBaseShortID) },
-		50*time.Millisecond, time.Millisecond, "the cut waits for the rotation holding the slot")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	assert.Error(t, c.Reregister(ctx), "the slot stays held past the deadline")
+	assert.Equal(t, []string{"1111111111111111"}, first.lastShortIDs(), "cut at once, without the slot")
 
 	close(gate)
 	require.NoError(t, <-rotated)
-	require.NoError(t, <-reregistered)
-	assert.Contains(t, second.shortIDUpdates(), []string{"1111111111111111"},
-		"the box the rotation installed is cut")
+	assert.Equal(t, []string{"1111111111111111"}, second.lastShortIDs(),
+		"the box installed while pool is off is cut")
+}
+
+// Start with pool off verifies with the base ID, which lantern-cloud's
+// verifier uses, and installs the box cut.
+func TestClient_StartWithServePoolOffInstallsACutBox(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
+	srv.registerResp.PairingShortIDsKnown = true
+	box := &fakeBoxService{}
+	var atVerify atomic.Value
+	srv.onVerify = func(LifecycleRequest) int { atVerify.Store(box.lastShortIDs()); return 0 }
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, box, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+	})
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, atVerify.Load(), "verify sees the base ID")
+	assert.Equal(t, []string{"1111111111111111"}, box.lastShortIDs())
 }
 
 // The cut is local and comes first, so an API outage does not leave
