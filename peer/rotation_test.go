@@ -551,23 +551,32 @@ func TestClient_RotateCredsWithoutASessionIsErrNotActive(t *testing.T) {
 // whose register answers with pairing, returning it and its boxes.
 func startRotatingPeer(t *testing.T, pairing []string) (*Client, *portBoxes) {
 	t.Helper()
+	port := &portBoxes{}
+	c, _ := startPoolPeer(t, pairing, &fakeForwarder{externalIP: "203.0.113.42"}, func(cfg *Config) {
+		cfg.BuildBoxService = port.build
+	})
+	return c, port
+}
+
+// startPoolPeer starts a peer whose launch config has a base short ID and
+// whose register answers with pairing, with settings initialized.
+func startPoolPeer(t *testing.T, pairing []string, fwd *fakeForwarder, opts ...func(*Config)) (*Client, *stubServer) {
+	t.Helper()
 	srv := newStubServer(t)
 	srv.registerResp.ServerConfig = launchCfgWithShortID()
 	if pairing != nil {
 		srv.registerResp.PairingShortIDs = pairing
 		srv.registerResp.PairingShortIDsKnown = true
 	}
-	port := &portBoxes{}
-	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+	c := newTestClient(t, fwd, &fakeBoxService{}, srv, append([]func(*Config){func(cfg *Config) {
 		cfg.CredRotationInterval = time.Hour
 		cfg.HeartbeatInterval = time.Hour
-		cfg.BuildBoxService = port.build
-	})
+	}}, opts...)...)
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
-	return c, port
+	return c, srv
 }
 
 func (p *portBoxes) box(i int) *portBox {
@@ -606,4 +615,93 @@ func TestClient_RotationWithServePoolOnLeavesTheOldBoxsIDs(t *testing.T) {
 	c, port := startRotatingPeer(t, []string{"1111111111111111"})
 	require.NoError(t, c.Reregister(context.Background()))
 	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, port.box(0).lastShortIDs())
+}
+
+// boxList builds the given boxes in order.
+type boxList struct {
+	mu    sync.Mutex
+	boxes []boxService
+	next  int
+}
+
+func (l *boxList) build(context.Context, string) (boxService, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.boxes[l.next]
+	l.next++
+	return b, nil
+}
+
+// An earlier rotation's box that is still draining is cut too: closeBox gave
+// up on it, so nothing else would end its strangers' sessions.
+func TestClient_ReregisterWithServePoolOffCutsADrainingBox(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	draining := &drainingBox{fakeBoxService: &fakeBoxService{}, release: release}
+	boxes := &boxList{boxes: []boxService{draining, &fakeBoxService{}, &fakeBoxService{}}}
+	c, _ := startPoolPeer(t, []string{"1111111111111111"}, &fakeForwarder{externalIP: "203.0.113.42"}, func(cfg *Config) {
+		cfg.BoxCloseTimeout = 20 * time.Millisecond
+		cfg.BuildBoxService = boxes.build
+	})
+	require.NoError(t, c.Reregister(context.Background())) // pool on: the first box drains
+	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, draining.lastShortIDs())
+
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.NoError(t, c.Reregister(context.Background()))
+	assert.Equal(t, []string{"1111111111111111"}, draining.lastShortIDs(), "the draining box is cut")
+}
+
+// The cut is local and comes first, so an API outage does not leave
+// strangers connected until the next rotation.
+func TestClient_ReregisterWithServePoolOffCutsBeforeTheNetwork(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	box := &fakeBoxService{}
+	c, _ := startPoolPeer(t, []string{"1111111111111111"}, fwd, func(cfg *Config) {
+		cfg.BuildBoxService = func(context.Context, string) (boxService, error) { return box, nil }
+	})
+	fwd.mu.Lock()
+	fwd.extIPErr = errors.New("router unreachable")
+	fwd.mu.Unlock()
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.Error(t, c.Reregister(context.Background()))
+	assert.Equal(t, []string{"1111111111111111"}, box.lastShortIDs())
+	assert.True(t, c.IsActive(), "the paired sessions keep being served")
+}
+
+// A heartbeat's new pairing set does not put the base ID back on a cut box.
+func TestClient_HeartbeatKeepsACutBoxCut(t *testing.T) {
+	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
+	box := &fakeBoxService{}
+	c, _ := startPoolPeer(t, []string{"1111111111111111"}, fwd, func(cfg *Config) {
+		cfg.BuildBoxService = func(context.Context, string) (boxService, error) { return box, nil }
+	})
+	fwd.mu.Lock()
+	fwd.extIPErr = errors.New("router unreachable")
+	fwd.mu.Unlock()
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.Error(t, c.Reregister(context.Background()))
+	c.applyPairingShortIDs([]string{"2222222222222222"}, true, 1<<62)
+	assert.Equal(t, []string{"2222222222222222"}, box.lastShortIDs())
+}
+
+// With serve pool on, nothing is cut: every set any box held keeps the base
+// ID.
+func TestClient_ReregisterWithServePoolOnCutsNothing(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	draining := &drainingBox{fakeBoxService: &fakeBoxService{}, release: release}
+	second := &fakeBoxService{}
+	third := &fakeBoxService{}
+	boxes := &boxList{boxes: []boxService{draining, second, third}}
+	c, _ := startPoolPeer(t, []string{"1111111111111111"}, &fakeForwarder{externalIP: "203.0.113.42"}, func(cfg *Config) {
+		cfg.BoxCloseTimeout = 20 * time.Millisecond
+		cfg.BuildBoxService = boxes.build
+	})
+	require.NoError(t, c.Reregister(context.Background()))
+	require.NoError(t, c.Reregister(context.Background()))
+	for _, b := range []*fakeBoxService{draining.fakeBoxService, second, third} {
+		for _, ids := range b.shortIDUpdates() {
+			assert.Contains(t, ids, testBaseShortID)
+		}
+	}
 }

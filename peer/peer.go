@@ -257,6 +257,14 @@ type Client struct {
 	// pushes only, never across network I/O or a box's Start or Close.
 	// Taken before c.mu, never while holding it.
 	shortIDsMu sync.Mutex
+	// poolCut says c.box's pool sessions were cut (see cutPoolSessions), so
+	// short-ID pushes onto it leave the base IDs off. A new box clears it:
+	// it has new credentials, and lantern-cloud's verifier needs its base ID.
+	poolCut bool
+	// draining holds the boxes closeBox is still closing, which may be
+	// serving sessions after closeBox gave up waiting. drainingMu guards it.
+	drainingMu sync.Mutex
+	draining   map[boxService]struct{}
 	// warnedNoBaseShortIDs and warnedNoUpdater keep their warnings to one
 	// per client, since every heartbeat would otherwise repeat them.
 	warnedNoBaseShortIDs atomic.Bool
@@ -624,6 +632,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.registration++
 	c.forwarder = fwd
 	c.box = box
+	c.poolCut = false
 	c.routeID = regResp.RouteID
 	c.externalPort = mapping.ExternalPort
 	c.internalPort = mapping.InternalPort
@@ -760,6 +769,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.runDone = nil
 	c.forwarder = nil
 	c.box = nil
+	c.poolCut = false
 	c.routeID = ""
 	c.externalPort = 0
 	c.internalPort = 0
@@ -1131,6 +1141,9 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
+	// First, and with no network call, so an API outage cannot leave
+	// strangers connected until the next rotation.
+	c.cutAllPoolSessions()
 	return c.rotateCreds(ctx)
 }
 
@@ -1322,6 +1335,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		return errors.New("session changed during rotation")
 	}
 	c.box = newBox
+	c.poolCut = false
 	c.routeID = regResp.RouteID
 	c.boxOptions = options
 	c.baseShortIDs = newBase
@@ -1432,8 +1446,20 @@ func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error
 // A Close still draining client connections keeps running in the background;
 // by then the listening port is already released, so the peer can rebind it.
 func (c *Client) closeBox(box boxService) error {
+	c.drainingMu.Lock()
+	if c.draining == nil {
+		c.draining = make(map[boxService]struct{})
+	}
+	c.draining[box] = struct{}{}
+	c.drainingMu.Unlock()
 	done := make(chan error, 1)
-	go func() { done <- box.Close() }()
+	go func() {
+		err := box.Close()
+		c.drainingMu.Lock()
+		delete(c.draining, box)
+		c.drainingMu.Unlock()
+		done <- err
+	}()
 	select {
 	case err := <-done:
 		return err
@@ -1602,29 +1628,78 @@ func inboundShortIDs(options string) []string {
 // box about to close. Close does not: samizdat's server waits for live
 // sessions, and closeBox gives up after BoxCloseTimeout, so they would keep
 // being served. Replacing the inbound's short IDs closes every connection
-// whose ID was removed, so the box is left with the pairing IDs only, and
-// paired sessions keep going until the box closes under them. With no
-// pairing set the box gets one random ID nobody holds, because the set must
-// not be empty. With "help others too" on, the old box drains as before.
+// whose ID was removed, so the box is left with the pairing IDs only (see
+// poolCutIDs), and paired sessions keep going until the box closes under
+// them. With "help others too" on, the old box drains as before.
 func (c *Client) cutPoolSessions(b boxService) {
-	if sp := servePool(); sp == nil || *sp {
+	if poolServed() {
 		return
 	}
+	c.pushPoolCut(b, c.poolCutPairing())
+}
+
+// cutAllPoolSessions, when "help others too" is off, cuts the pool sessions
+// on the current box and on every box still draining, and keeps the current
+// box cut until a new box replaces it.
+func (c *Client) cutAllPoolSessions() {
+	if poolServed() {
+		return
+	}
+	c.shortIDsMu.Lock()
+	defer c.shortIDsMu.Unlock()
 	c.mu.Lock()
-	var ids []string
-	if c.pairingKnown {
-		ids = mergeShortIDs(nil, c.pairingShortIDs)
+	cur := c.box
+	if cur != nil {
+		c.poolCut = true
 	}
 	c.mu.Unlock()
-	if len(ids) == 0 {
-		ids = []string{fmt.Sprintf("%016x", rand.Uint64())}
+	pairing := c.poolCutPairing()
+	c.drainingMu.Lock()
+	boxes := make([]boxService, 0, len(c.draining)+1)
+	for b := range c.draining {
+		boxes = append(boxes, b)
 	}
+	c.drainingMu.Unlock()
+	if cur != nil {
+		boxes = append(boxes, cur)
+	}
+	for _, b := range boxes {
+		c.pushPoolCut(b, pairing)
+	}
+}
+
+func poolServed() bool {
+	sp := servePool()
+	return sp == nil || *sp
+}
+
+// poolCutPairing is the pairing set a cut box keeps: the known one, or none.
+func (c *Client) poolCutPairing() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.pairingKnown {
+		return nil
+	}
+	return slices.Clone(c.pairingShortIDs)
+}
+
+// poolCutIDs is the short-ID set for a box whose pool sessions are cut: the
+// valid pairing IDs only, or one random ID nobody holds when there are none,
+// because the set must not be empty.
+func poolCutIDs(pairing []string) []string {
+	if ids := mergeShortIDs(nil, pairing); len(ids) > 0 {
+		return ids
+	}
+	return []string{fmt.Sprintf("%016x", rand.Uint64())}
+}
+
+func (c *Client) pushPoolCut(b boxService, pairing []string) {
 	u, ok := samizdatInbound(b)
 	if !ok {
 		return
 	}
-	if u.UpdateShortIDs(ids) != nil {
-		slog.Warn("peer: cutting pool sessions before closing the box failed")
+	if u.UpdateShortIDs(poolCutIDs(pairing)) != nil {
+		slog.Warn("peer: cutting pool sessions failed")
 	}
 }
 
@@ -1654,6 +1729,17 @@ func mergeShortIDs(base, pairing []string) []string {
 // client. The IDs are credentials, so neither they nor their number are
 // logged.
 func (c *Client) applyShortIDs(b boxService, base, pairing []string) bool {
+	c.mu.Lock()
+	cut := c.poolCut && c.box == b
+	c.mu.Unlock()
+	if cut {
+		u, ok := samizdatInbound(b)
+		if !ok || u.UpdateShortIDs(poolCutIDs(pairing)) != nil {
+			slog.Warn("peer: updating a cut box's short IDs failed")
+			return false
+		}
+		return true
+	}
 	if len(base) == 0 {
 		if !c.warnedNoBaseShortIDs.Swap(true) {
 			slog.Warn("peer: launch config has no samizdat short IDs; not applying pairing short IDs")
