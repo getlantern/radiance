@@ -129,6 +129,8 @@ type fakeBoxService struct {
 	started   atomic.Bool
 	closed    atomic.Bool
 	gotConfig string
+	// updatedAfterClose is set by an UpdateShortIDs that came after Close.
+	updatedAfterClose atomic.Bool
 
 	idsMu     sync.Mutex
 	shortIDs  [][]string
@@ -168,6 +170,9 @@ func (b *fakeBoxService) Close() error {
 func (b *fakeBoxService) UpdateShortIDs(ids []string) error {
 	b.idsMu.Lock()
 	defer b.idsMu.Unlock()
+	if b.closed.Load() {
+		b.updatedAfterClose.Store(true)
+	}
 	if b.updateErr != nil {
 		return b.updateErr
 	}

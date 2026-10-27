@@ -14,11 +14,23 @@ import (
 )
 
 // NewRoundTripper wraps the provided http.RoundTripper with OpenTelemetry instrumentation.
+// Helper-invite requests are not traced (see untracedRequest).
 func NewRoundTripper(original http.RoundTripper) http.RoundTripper {
 	if original == nil {
 		original = http.DefaultTransport
 	}
-	return otelhttp.NewTransport(original, otelhttp.WithClientTrace(httpTrace))
+	return otelhttp.NewTransport(original,
+		otelhttp.WithClientTrace(httpTrace),
+		otelhttp.WithFilter(func(r *http.Request) bool { return !untracedRequest(r) }))
+}
+
+// untracedRequest reports whether r is a helper-invite request: the
+// HelperService calls and the ticket fetch, all under /helper/. A span for
+// one would carry the device ID header and show the device uses helper
+// invites, and how often; with no span, the header annotator and kindling's
+// race observer find nothing to record on either.
+func untracedRequest(r *http.Request) bool {
+	return r.URL != nil && strings.Contains(r.URL.Path, "/helper/")
 }
 
 func httpTrace(ctx context.Context) *httptrace.ClientTrace {

@@ -132,8 +132,9 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 
 // reregisterPeer re-registers a running peer in the background, under the
 // toggle lock so it cannot overlap a Start or Stop, after "help others too"
-// changes. Re-registering rotates the credentials and rebuilds the inbound,
-// so every open session, paired ones included, drops and reconnects within
+// changes. Re-registering rotates the credentials and rebuilds the inbound.
+// Turning helping others off cuts strangers' open sessions at once; paired
+// sessions keep going until the old box closes, then reconnect within
 // seconds; the switch's caption warns of it (help_others_too_note). The
 // Unbounded widget needs nothing from here: its syncRooms re-reads the
 // setting within roomSyncInterval and restarts the widget when helping others

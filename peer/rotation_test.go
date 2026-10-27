@@ -546,3 +546,64 @@ func TestClient_RotateCredsWithoutASessionIsErrNotActive(t *testing.T) {
 	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
 	assert.ErrorIs(t, c.rotateCreds(context.Background()), ErrNotActive)
 }
+
+// startRotatingPeer starts a peer whose launch config has a base short ID and
+// whose register answers with pairing, returning it and its boxes.
+func startRotatingPeer(t *testing.T, pairing []string) (*Client, *portBoxes) {
+	t.Helper()
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	if pairing != nil {
+		srv.registerResp.PairingShortIDs = pairing
+		srv.registerResp.PairingShortIDsKnown = true
+	}
+	port := &portBoxes{}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = port.build
+	})
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	return c, port
+}
+
+func (p *portBoxes) box(i int) *portBox {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.boxes[i]
+}
+
+// With "help others too" off, a rotation cuts the old box's pool sessions
+// before closing it: they came in on the base short ID, which Close alone
+// does not end. Paired sessions keep going.
+func TestClient_RotationWithServePoolOffCutsPoolSessions(t *testing.T) {
+	c, port := startRotatingPeer(t, []string{"1111111111111111"})
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.NoError(t, c.Reregister(context.Background()))
+	old := port.box(0)
+	assert.Equal(t, []string{"1111111111111111"}, old.lastShortIDs(), "only the pairing IDs remain on the old box")
+	assert.True(t, old.closed.Load())
+	assert.False(t, old.updatedAfterClose.Load(), "the cut comes before the close")
+}
+
+// Without a pairing set, the old box gets one random ID nobody holds, so
+// the set is non-empty and every base-ID session ends.
+func TestClient_RotationWithServePoolOffAndNoPairingsCutsEverySession(t *testing.T) {
+	c, port := startRotatingPeer(t, nil)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	require.NoError(t, c.Reregister(context.Background()))
+	ids := port.box(0).lastShortIDs()
+	require.Len(t, ids, 1)
+	assert.NotEqual(t, testBaseShortID, ids[0])
+	assert.Equal(t, []string{ids[0]}, mergeShortIDs(nil, ids), "a valid short ID")
+}
+
+// With serve pool on, rotation still drains the old box as before.
+func TestClient_RotationWithServePoolOnLeavesTheOldBoxsIDs(t *testing.T) {
+	c, port := startRotatingPeer(t, []string{"1111111111111111"})
+	require.NoError(t, c.Reregister(context.Background()))
+	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, port.box(0).lastShortIDs())
+}

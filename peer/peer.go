@@ -1119,7 +1119,9 @@ var ErrNotActive = errors.New("peer: no session is running")
 // Reregister re-registers the running session now rather than at its next
 // rotation, so a change to what registration sends, such as peer_serve_pool,
 // takes effect at once. It rotates the credentials exactly as the hourly
-// rotation does, and like it turns a libbox panic into an error.
+// rotation does, and like it turns a libbox panic into an error. With
+// peer_serve_pool off, the rotation cuts the old box's pool sessions (see
+// cutPoolSessions); paired sessions keep going.
 func (c *Client) Reregister(ctx context.Context) (err error) {
 	if !c.IsActive() {
 		return ErrNotActive
@@ -1263,6 +1265,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		return errors.New("client stopped during rotation")
 	}
 
+	c.cutPoolSessions(oldBox)
 	if closeErr := c.closeBox(oldBox); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
@@ -1593,6 +1596,36 @@ func inboundShortIDs(options string) []string {
 		}
 	}
 	return nil
+}
+
+// cutPoolSessions, when "help others too" is off, ends the pool sessions on a
+// box about to close. Close does not: samizdat's server waits for live
+// sessions, and closeBox gives up after BoxCloseTimeout, so they would keep
+// being served. Replacing the inbound's short IDs closes every connection
+// whose ID was removed, so the box is left with the pairing IDs only, and
+// paired sessions keep going until the box closes under them. With no
+// pairing set the box gets one random ID nobody holds, because the set must
+// not be empty. With "help others too" on, the old box drains as before.
+func (c *Client) cutPoolSessions(b boxService) {
+	if sp := servePool(); sp == nil || *sp {
+		return
+	}
+	c.mu.Lock()
+	var ids []string
+	if c.pairingKnown {
+		ids = mergeShortIDs(nil, c.pairingShortIDs)
+	}
+	c.mu.Unlock()
+	if len(ids) == 0 {
+		ids = []string{fmt.Sprintf("%016x", rand.Uint64())}
+	}
+	u, ok := samizdatInbound(b)
+	if !ok {
+		return
+	}
+	if u.UpdateShortIDs(ids) != nil {
+		slog.Warn("peer: cutting pool sessions before closing the box failed")
+	}
 }
 
 // mergeShortIDs is base followed by the valid pairing IDs not already

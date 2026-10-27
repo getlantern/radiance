@@ -35,6 +35,10 @@ type ActivityTracker struct {
 	now  func() time.Time
 	loc  func() *time.Location
 
+	// saveMu serializes save, so two saves cannot write the file out of
+	// order; it is taken before mu.
+	saveMu sync.Mutex
+
 	mu    sync.Mutex
 	zone  *time.Location // loc's last answer; Sample refreshes it
 	cur   Activity
@@ -188,6 +192,8 @@ func (t *ActivityTracker) Flush() {
 }
 
 func (t *ActivityTracker) save() {
+	t.saveMu.Lock()
+	defer t.saveMu.Unlock()
 	t.mu.Lock()
 	cur := t.cur
 	unchanged := cur == t.saved

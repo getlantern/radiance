@@ -9,6 +9,7 @@ import (
 	bfcommon "github.com/getlantern/broflake/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -45,4 +46,33 @@ func TestHeaderAnnotationNeverRecordsRoomTickets(t *testing.T) {
 	}
 	assert.NotContains(t, keys, "http.request.header.x-bf-room-tickets")
 	assert.Contains(t, keys, "http.request.header.x-other")
+}
+
+// Helper-invite requests carry the device ID and say the device uses helper
+// invites, so the production wrapper records no span for them; other API
+// requests still get one.
+func TestRoundTripperSkipsHelperRequests(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	rt := NewRoundTripper(NewHeaderAnnotatingRoundTripper(okTransport{}))
+	send := func(path string) {
+		req, err := http.NewRequest(http.MethodPost, "https://api.example"+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Lantern-Device-Id", "device-1")
+		resp, err := rt.RoundTrip(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close() // ends otelhttp's span
+	}
+	for _, p := range []string{"/v1/helper/invites/claim", "/v1/helper/pairings", "/v1/helper/tickets", "/api/v1/helper/invites"} {
+		send(p)
+	}
+	assert.Empty(t, mem.GetSpans(), "no span for a helper request")
+	send("/v1/config-new")
+	assert.Len(t, mem.GetSpans(), 1, "other requests are still traced")
 }
