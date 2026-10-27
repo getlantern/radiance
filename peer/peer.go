@@ -261,10 +261,6 @@ type Client struct {
 	// short-ID pushes onto it leave the base IDs off. A new box clears it:
 	// it has new credentials, and lantern-cloud's verifier needs its base ID.
 	poolCut bool
-	// draining holds the boxes closeBox is still closing, which may be
-	// serving sessions after closeBox gave up waiting. drainingMu guards it.
-	drainingMu sync.Mutex
-	draining   map[boxService]struct{}
 	// warnedNoBaseShortIDs and warnedNoUpdater keep their warnings to one
 	// per client, since every heartbeat would otherwise repeat them.
 	warnedNoBaseShortIDs atomic.Bool
@@ -1129,9 +1125,14 @@ var ErrNotActive = errors.New("peer: no session is running")
 // Reregister re-registers the running session now rather than at its next
 // rotation, so a change to what registration sends, such as peer_serve_pool,
 // takes effect at once. It rotates the credentials exactly as the hourly
-// rotation does, and like it turns a libbox panic into an error. With
-// peer_serve_pool off, the rotation cuts the old box's pool sessions (see
-// cutPoolSessions); paired sessions keep going.
+// rotation does, and like it turns a libbox panic into an error.
+//
+// With peer_serve_pool off it first cuts strangers' sessions on the current
+// box (see cutPoolSessions), locally, so an API outage cannot leave them
+// connected; paired sessions keep going. The cut and the rotation's swap
+// happen under one lifecycle slot, so no other rotation can install a box
+// between them. If the network part fails, the box stays cut and serving.
+// Closing the rotated box then ends whatever sessions it still has.
 func (c *Client) Reregister(ctx context.Context) (err error) {
 	if !c.IsActive() {
 		return ErrNotActive
@@ -1141,10 +1142,12 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
-	// First, and with no network call, so an API outage cannot leave
-	// strangers connected until the next rotation.
-	c.cutAllPoolSessions()
-	return c.rotateCreds(ctx)
+	if err := c.acquireLifecycle(ctx); err != nil {
+		return err
+	}
+	defer c.releaseLifecycle()
+	c.cutPoolSessions()
+	return c.rotateCredsHeld(ctx)
 }
 
 // rotateCreds swaps the peer's samizdat credentials by re-registering and
@@ -1161,13 +1164,18 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 // deregistered on failure and the old box keeps serving.
 //
 // The old box is closed before the new one is built, because building the
-// samizdat inbound binds the listening port. Close releases the port at once;
-// closeBox does not wait for its client connections to drain.
+// samizdat inbound binds the listening port. Close releases the port at once
+// and ends the box's sessions; closeBox bounds the wait as a safety net.
 func (c *Client) rotateCreds(ctx context.Context) error {
 	if err := c.acquireLifecycle(ctx); err != nil {
 		return err
 	}
 	defer c.releaseLifecycle()
+	return c.rotateCredsHeld(ctx)
+}
+
+// rotateCredsHeld is rotateCreds with the lifecycle slot already held.
+func (c *Client) rotateCredsHeld(ctx context.Context) error {
 	c.mu.Lock()
 	if !c.active {
 		c.mu.Unlock()
@@ -1278,7 +1286,6 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		return errors.New("client stopped during rotation")
 	}
 
-	c.cutPoolSessions(oldBox)
 	if closeErr := c.closeBox(oldBox); closeErr != nil {
 		slog.Warn("close old box during rotation", "err", closeErr)
 	}
@@ -1446,20 +1453,8 @@ func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error
 // A Close still draining client connections keeps running in the background;
 // by then the listening port is already released, so the peer can rebind it.
 func (c *Client) closeBox(box boxService) error {
-	c.drainingMu.Lock()
-	if c.draining == nil {
-		c.draining = make(map[boxService]struct{})
-	}
-	c.draining[box] = struct{}{}
-	c.drainingMu.Unlock()
 	done := make(chan error, 1)
-	go func() {
-		err := box.Close()
-		c.drainingMu.Lock()
-		delete(c.draining, box)
-		c.drainingMu.Unlock()
-		done <- err
-	}()
+	go func() { done <- box.Close() }()
 	select {
 	case err := <-done:
 		return err
@@ -1624,24 +1619,12 @@ func inboundShortIDs(options string) []string {
 	return nil
 }
 
-// cutPoolSessions, when "help others too" is off, ends the pool sessions on a
-// box about to close. Close does not: samizdat's server waits for live
-// sessions, and closeBox gives up after BoxCloseTimeout, so they would keep
-// being served. Replacing the inbound's short IDs closes every connection
-// whose ID was removed, so the box is left with the pairing IDs only (see
-// poolCutIDs), and paired sessions keep going until the box closes under
-// them. With "help others too" on, the old box drains as before.
-func (c *Client) cutPoolSessions(b boxService) {
-	if poolServed() {
-		return
-	}
-	c.pushPoolCut(b, c.poolCutPairing())
-}
-
-// cutAllPoolSessions, when "help others too" is off, cuts the pool sessions
-// on the current box and on every box still draining, and keeps the current
-// box cut until a new box replaces it.
-func (c *Client) cutAllPoolSessions() {
+// cutPoolSessions, when "help others too" is off, cuts strangers' sessions
+// on the current box at once: replacing the inbound's short IDs closes every
+// connection whose ID was removed, so the box is left with the pairing IDs
+// only (see poolCutIDs) and paired sessions keep going. The box stays cut
+// (poolCut) until a new box replaces it. The caller holds the lifecycle slot.
+func (c *Client) cutPoolSessions() {
 	if poolServed() {
 		return
 	}
@@ -1653,18 +1636,8 @@ func (c *Client) cutAllPoolSessions() {
 		c.poolCut = true
 	}
 	c.mu.Unlock()
-	pairing := c.poolCutPairing()
-	c.drainingMu.Lock()
-	boxes := make([]boxService, 0, len(c.draining)+1)
-	for b := range c.draining {
-		boxes = append(boxes, b)
-	}
-	c.drainingMu.Unlock()
 	if cur != nil {
-		boxes = append(boxes, cur)
-	}
-	for _, b := range boxes {
-		c.pushPoolCut(b, pairing)
+		c.pushPoolCut(cur, c.poolCutPairing())
 	}
 }
 

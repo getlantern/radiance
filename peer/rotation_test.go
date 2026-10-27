@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -632,27 +633,52 @@ func (l *boxList) build(context.Context, string) (boxService, error) {
 	return b, nil
 }
 
-// An earlier rotation's box that is still draining is cut too: closeBox gave
-// up on it, so nothing else would end its strangers' sessions.
-func TestClient_ReregisterWithServePoolOffCutsADrainingBox(t *testing.T) {
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	draining := &drainingBox{fakeBoxService: &fakeBoxService{}, release: release}
-	boxes := &boxList{boxes: []boxService{draining, &fakeBoxService{}, &fakeBoxService{}}}
-	c, _ := startPoolPeer(t, []string{"1111111111111111"}, &fakeForwarder{externalIP: "203.0.113.42"}, func(cfg *Config) {
-		cfg.BoxCloseTimeout = 20 * time.Millisecond
+// A rotation already holding the lifecycle slot, registered with pool on,
+// finishes its swap before the cut: the cut waits for the slot, so it lands
+// on the box that rotation installed instead of being undone by it.
+func TestClient_ReregisterCutWaitsForARotationInFlight(t *testing.T) {
+	gate := make(chan struct{})
+	var registers atomic.Int64
+	srv := newStubServer(t)
+	srv.registerRespFn = func() RegisterResponse {
+		if registers.Add(1) == 2 {
+			<-gate // the hourly rotation's register, in flight
+		}
+		return RegisterResponse{
+			RouteID: "00000000-0000-0000-0000-000000000123", ServerConfig: launchCfgWithShortID(),
+			HeartbeatIntervalSeconds: 60, PairingShortIDs: []string{"1111111111111111"}, PairingShortIDsKnown: true,
+		}
+	}
+	first, second, third := &fakeBoxService{}, &fakeBoxService{}, &fakeBoxService{}
+	boxes := &boxList{boxes: []boxService{first, second, third}}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
 		cfg.BuildBoxService = boxes.build
 	})
-	require.NoError(t, c.Reregister(context.Background())) // pool on: the first box drains
-	assert.Equal(t, []string{testBaseShortID, "1111111111111111"}, draining.lastShortIDs())
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 
+	rotated := make(chan error, 1)
+	go func() { rotated <- c.rotateCreds(context.Background()) }()
+	require.Eventually(t, func() bool { return registers.Load() == 2 }, time.Second, time.Millisecond)
 	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
-	require.NoError(t, c.Reregister(context.Background()))
-	assert.Equal(t, []string{"1111111111111111"}, draining.lastShortIDs(), "the draining box is cut")
+	reregistered := make(chan error, 1)
+	go func() { reregistered <- c.Reregister(context.Background()) }()
+	assert.Never(t, func() bool { return !slices.Contains(first.lastShortIDs(), testBaseShortID) },
+		50*time.Millisecond, time.Millisecond, "the cut waits for the rotation holding the slot")
+
+	close(gate)
+	require.NoError(t, <-rotated)
+	require.NoError(t, <-reregistered)
+	assert.Contains(t, second.shortIDUpdates(), []string{"1111111111111111"},
+		"the box the rotation installed is cut")
 }
 
 // The cut is local and comes first, so an API outage does not leave
-// strangers connected until the next rotation.
+// strangers connected; the cut box keeps serving paired sessions.
 func TestClient_ReregisterWithServePoolOffCutsBeforeTheNetwork(t *testing.T) {
 	fwd := &fakeForwarder{externalIP: "203.0.113.42"}
 	box := &fakeBoxService{}
@@ -687,19 +713,14 @@ func TestClient_HeartbeatKeepsACutBoxCut(t *testing.T) {
 // With serve pool on, nothing is cut: every set any box held keeps the base
 // ID.
 func TestClient_ReregisterWithServePoolOnCutsNothing(t *testing.T) {
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	draining := &drainingBox{fakeBoxService: &fakeBoxService{}, release: release}
-	second := &fakeBoxService{}
-	third := &fakeBoxService{}
-	boxes := &boxList{boxes: []boxService{draining, second, third}}
+	first, second, third := &fakeBoxService{}, &fakeBoxService{}, &fakeBoxService{}
+	boxes := &boxList{boxes: []boxService{first, second, third}}
 	c, _ := startPoolPeer(t, []string{"1111111111111111"}, &fakeForwarder{externalIP: "203.0.113.42"}, func(cfg *Config) {
-		cfg.BoxCloseTimeout = 20 * time.Millisecond
 		cfg.BuildBoxService = boxes.build
 	})
 	require.NoError(t, c.Reregister(context.Background()))
 	require.NoError(t, c.Reregister(context.Background()))
-	for _, b := range []*fakeBoxService{draining.fakeBoxService, second, third} {
+	for _, b := range []*fakeBoxService{first, second, third} {
 		for _, ids := range b.shortIDUpdates() {
 			assert.Contains(t, ids, testBaseShortID)
 		}

@@ -133,9 +133,10 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 // reregisterPeer re-registers a running peer in the background, under the
 // toggle lock so it cannot overlap a Start or Stop, after "help others too"
 // changes. Re-registering rotates the credentials and rebuilds the inbound.
-// Turning helping others off cuts strangers' open sessions at once; paired
-// sessions keep going until the old box closes, then reconnect within
-// seconds; the switch's caption warns of it (help_others_too_note). The
+// Turning helping others off cuts strangers' sessions on the current box at
+// once. Closing the rotated box ends the sessions it still has, so paired
+// ones reconnect within seconds; the switch's caption warns of it
+// (help_others_too_note). The
 // Unbounded widget needs nothing from here: its syncRooms re-reads the
 // setting within roomSyncInterval and restarts the widget when helping others
 // turns off, with the same brief drop.
@@ -154,12 +155,12 @@ func (r *LocalBackend) reregisterPeer() {
 		}
 		ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 		defer cancel()
-		// The message does not name the setting that changed, so this
-		// line never ties "help others too" to the peer it describes.
+		// Fixed text: the message does not name the setting that changed,
+		// and the error, which can quote an API body or URL, is not logged.
 		// ErrNotActive: the peer stopped itself since the check, and the
 		// next Start registers with the current value.
 		if err := r.peerClient.Reregister(ctx); err != nil && !errors.Is(err, peer.ErrNotActive) {
-			slog.Warn("peer re-register failed; the next rotation retries", "error", err)
+			slog.Warn("peer re-register failed; the next rotation retries")
 		}
 	}()
 }
