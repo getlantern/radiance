@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 func TestCurlFromRequestPreservesBody(t *testing.T) {
@@ -44,4 +46,32 @@ func TestErrorResponseBodyOmittedFromLog(t *testing.T) {
 	assert.NotContains(t, buf.String(), echoed, "echoed response body reached the log")
 	assert.Contains(t, buf.String(), "status=400", "error log dropped the status")
 	assert.Contains(t, err.Error(), "invalid_code", "returned error dropped the server error code")
+}
+
+func TestSendRequestOmitsDeviceIDAndQuery(t *testing.T) {
+	const deviceID = "device-id-value"
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.DeviceIDKey, deviceID))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	a := &Client{
+		httpClient: srv.Client(),
+		logger:     slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+	_, err := a.sendRequest(context.Background(), http.MethodGet, srv.URL+"/datacap/"+deviceID, nil, nil, nil)
+	require.Error(t, err)
+	assert.NotContains(t, buf.String(), deviceID)
+	assert.Contains(t, buf.String(), "path=/datacap/[device-id]")
+
+	srv.Close()
+	_, err = a.sendRequest(context.Background(), http.MethodGet, srv.URL+"/datacap/"+deviceID, map[string]string{"email": "a@example.com"}, nil, nil)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), deviceID)
+	assert.NotContains(t, err.Error(), "example.com")
 }

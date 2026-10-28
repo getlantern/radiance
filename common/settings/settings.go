@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -573,6 +575,16 @@ func Clear(keys ..._key) error {
 }
 
 type Settings map[_key]any
+
+// LogValue renders s as a group with one attribute per setting, sorted by key, so a
+// logger's per-key redaction applies to each setting.
+func (s Settings) LogValue() slog.Value {
+	attrs := make([]slog.Attr, 0, len(s))
+	for _, key := range slices.Sorted(maps.Keys(s)) {
+		attrs = append(attrs, slog.Any(string(key), s[key]))
+	}
+	return slog.GroupValue(attrs...)
+}
 
 func (s Settings) Diff(s2 Settings) Settings {
 	diff := make(Settings)

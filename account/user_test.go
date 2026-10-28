@@ -381,10 +381,10 @@ func TestLogoutOmitsCredentials(t *testing.T) {
 
 	_, err := ac.Logout(context.Background(), "test@example.com")
 	require.NoError(t, err)
-	for _, secret := range []string{legacyToken, jwtToken, "test@example.com"} {
+	for _, secret := range []string{legacyToken, jwtToken, "test@example.com", "deviceId"} {
 		assert.NotContains(t, buf.String(), secret, "credential or PII leaked into the log")
 	}
-	assert.Contains(t, buf.String(), "deviceId=deviceId", "logout log dropped the device ID")
+	assert.Contains(t, buf.String(), "Logout request")
 }
 
 func TestStartRecoveryByEmail(t *testing.T) {

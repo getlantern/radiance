@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -86,6 +88,23 @@ func (a *Client) baseURL() string {
 	return common.GetBaseURL()
 }
 
+// withoutURL returns the error a *url.Error in err wraps, dropping the request URL,
+// which can carry the device ID and query values such as the email. Other errors are
+// returned unchanged.
+func withoutURL(err error) error {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		return urlErr.Err
+	}
+	return err
+}
+
+func redactDeviceID(path string) string {
+	if id := settings.GetString(settings.DeviceIDKey); id != "" {
+		return strings.ReplaceAll(path, id, "[device-id]")
+	}
+	return path
+}
+
 // sendRequest sends an HTTP request to the specified URL with the given method, query parameters,
 // headers, and body. If the URL is relative, the base URL will be prepended.
 //
@@ -152,7 +171,7 @@ func (a *Client) sendRequest(
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("sending request: %w", err)
+		return nil, fmt.Errorf("sending request: %w", withoutURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -162,7 +181,7 @@ func (a *Client) sendRequest(
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		a.logger.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode)
+		a.logger.Debug("error response", "path", redactDeviceID(req.URL.Path), "status", resp.StatusCode)
 		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitizeResponseBody(respBody))
 	}
 

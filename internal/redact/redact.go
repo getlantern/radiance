@@ -11,10 +11,9 @@ import (
 	"strings"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
-)
 
-// Redacted replaces an address on a line that names a helper outbound.
-const Redacted = "<redacted>"
+	"github.com/getlantern/radiance/internal/logsafe"
+)
 
 var (
 	// helperNamed matches text that may name a helper outbound: a helper tag,
@@ -32,7 +31,7 @@ var (
 
 // Helper returns s with helper tags replaced by "helper" and, on every line
 // that names a helper outbound, every IP address (with any port) replaced by
-// Redacted. Lines that name no helper outbound keep their addresses.
+// [logsafe.Redacted]. Lines that name no helper outbound keep their addresses.
 func Helper(s string) string {
 	if !NamesHelper(s) {
 		return s
@@ -53,7 +52,7 @@ func NamesHelper(s string) bool {
 }
 
 // Addresses returns s with every IP address (with any port) replaced by
-// Redacted, for text that belongs with something naming a helper outbound,
+// [logsafe.Redacted], for text that belongs with something naming a helper outbound,
 // such as the attributes of a span event that does.
 func Addresses(s string) string {
 	return ipCandidate.ReplaceAllStringFunc(s, redactIP)
@@ -68,7 +67,7 @@ func HelperBytes(b []byte) []byte {
 	return []byte(Helper(string(b)))
 }
 
-// redactIP replaces the IP address in m with Redacted. The candidate pattern
+// redactIP replaces the IP address in m with [logsafe.Redacted]. The candidate pattern
 // can take in dots and colons from the surrounding text on either side
 // ("peer:203.0.113.7:443", "… to 2001:db8::." or "203.0.113.7: refused"), so
 // redactIP tries m whole and then from just after each dot or colon, leftmost
@@ -91,7 +90,7 @@ func redactIP(m string) string {
 func redactTrailing(m string) (string, bool) {
 	for core := m; core != ""; core = core[:len(core)-1] {
 		if isIPAddr(core) {
-			return Redacted + m[len(core):], true
+			return logsafe.Redacted + m[len(core):], true
 		}
 		if last := core[len(core)-1]; last != '.' && last != ':' {
 			return m, false

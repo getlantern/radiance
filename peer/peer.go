@@ -30,6 +30,7 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/portforward"
 )
 
@@ -661,7 +662,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	go c.credRotationLoop(runCtx, rotation)
 
 	slog.Info("peer client started",
-		"external_ip", externalIP,
 		"external_port", mapping.ExternalPort,
 		"internal_port", mapping.InternalPort,
 		"method", mapping.Method,
@@ -1781,6 +1781,6 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 // stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
 	ctx = box.Context(ctx)
-	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
+	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(rlog.RedactConnectionInfo(slog.Default().Handler())))
 	return ctx
 }

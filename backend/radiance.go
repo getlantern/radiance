@@ -742,8 +742,8 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// Reject an invalid split-tunnel policy before applying or persisting anything, so settings.json
 	// can't hold a value the runtime would silently fall back to exclude for.
 	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
-		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
-			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
+		if p, _ := v.(string); !vpn.SplitTunnelPolicy(p).Valid() {
+			return fmt.Errorf("invalid %s: %q (%T)", settings.SplitTunnelPolicyKey, p, v)
 		}
 	}
 	// An explicit peer toggle is applied whether or not it changes the stored
@@ -756,7 +756,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
-			return fmt.Errorf("invalid %s: %v", settings.PeerShareEnabledKey, peerValue)
+			return fmt.Errorf("invalid %s: want a bool, got %T", settings.PeerShareEnabledKey, peerValue)
 		}
 		peerOn = on
 		diff = maps.Clone(diff)
