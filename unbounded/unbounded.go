@@ -26,6 +26,7 @@ package unbounded
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"math/rand"
 	"net"
 	"slices"
@@ -519,6 +520,7 @@ func applyConfig(cfg config.Config) {
 	if cfg.Unbounded != nil {
 		copied := *cfg.Unbounded
 		copied.STUNServers = slices.Clone(cfg.Unbounded.STUNServers)
+		copied.Tuning = maps.Clone(cfg.Unbounded.Tuning)
 		manager.lastCfg = &copied
 	}
 	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
@@ -766,6 +768,11 @@ func (m *unboundedManager) startLocked() {
 			}
 			if ucfg.DiscoveryEndpoint != "" {
 				rtcOpt.Endpoint = ucfg.DiscoveryEndpoint
+			}
+			var ignored []string
+			rtcOpt.Tuning, ignored = clientcore.ParseWebRTCTuning(ucfg.Tuning)
+			if len(ignored) > 0 {
+				slog.Warn("Unbounded: ignoring widget tuning", "ignored", ignored)
 			}
 		}
 		// Helper pairing rooms: freddie offers this widget's genesis messages

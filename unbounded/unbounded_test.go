@@ -841,3 +841,50 @@ func TestApplyConfigDoesNotRestartOnSTUNReorder(t *testing.T) {
 	require.Equal(t, originalDone, currentDone)
 	require.Equal(t, int32(1), starts.Load())
 }
+
+func TestDonorTuningConfiguration(t *testing.T) {
+	received := make(chan clientcore.WebRTCTuning, 1)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		received <- rtc.Tuning
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	cfg := testCfg()
+	cfg.Tuning = map[string]string{"ice_max_binding_requests": "40", "from_a_newer_server": "1"}
+	primeManager(t, cfg)
+	manager.start()
+	select {
+	case tuning := <-received:
+		require.Equal(t, clientcore.WebRTCTuning{ICEMaxBindingRequests: 40}, tuning)
+	case <-time.After(time.Second):
+		t.Fatal("donor startup blocked")
+	}
+}
+
+func TestApplyConfigRestartsOnTuningChange(t *testing.T) {
+	received := make(chan clientcore.WebRTCTuning, 3)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		received <- rtc.Tuning
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	cfg := testCfg()
+	cfg.Tuning = map[string]string{"ice_max_binding_requests": "40"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	select {
+	case tuning := <-received:
+		require.Equal(t, uint16(40), tuning.ICEMaxBindingRequests)
+	case <-time.After(time.Second):
+		t.Fatal("first donor did not start")
+	}
+	// Mutating the map in place must still restart: applyConfig keeps its own copy.
+	cfg.Tuning["ice_max_binding_requests"] = "60"
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	select {
+	case tuning := <-received:
+		require.Equal(t, uint16(60), tuning.ICEMaxBindingRequests)
+	case <-time.After(time.Second):
+		t.Fatal("tuning change did not restart donor")
+	}
+}
