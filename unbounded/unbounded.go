@@ -25,11 +25,13 @@ package unbounded
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"math/rand"
 	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -231,6 +233,37 @@ func cfgUsable(cfg *C.UnboundedConfig) bool {
 	}
 	return cfg.DiscoverySrv != "" && cfg.DiscoveryEndpoint != "" &&
 		cfg.EgressAddr != "" && cfg.EgressEndpoint != ""
+}
+
+// natFailTimeoutKey sets how long the widget waits, once signaling completes,
+// for a consumer's data channel to open. broflake also checks ICE pairs for
+// that whole window, so raising it lengthens both.
+const natFailTimeoutKey = "nat_fail_timeout_ms"
+
+const (
+	minNATFailTimeout = time.Second
+	maxNATFailTimeout = 30 * time.Second
+)
+
+// widgetTuning splits the server's widget tuning map into the NAT fail timeout,
+// which isn't WebRTC tuning, and everything clientcore.ParseWebRTCTuning reads.
+// A zero timeout means the key was absent or invalid; keep broflake's default.
+func widgetTuning(opts map[string]string) (natFail time.Duration, tuning clientcore.WebRTCTuning, ignored []string) {
+	raw, ok := opts[natFailTimeoutKey]
+	if ok {
+		opts = maps.Clone(opts)
+		delete(opts, natFailTimeoutKey)
+	}
+	tuning, ignored = clientcore.ParseWebRTCTuning(opts)
+	if !ok {
+		return 0, tuning, ignored
+	}
+	ms, err := strconv.ParseUint(raw, 10, 32)
+	natFail = time.Duration(ms) * time.Millisecond
+	if err != nil || natFail < minNATFailTimeout || natFail > maxNATFailTimeout {
+		return 0, tuning, append(ignored, fmt.Sprintf("%s=%q", natFailTimeoutKey, raw))
+	}
+	return natFail, tuning, ignored
 }
 
 func donorSTUNBatch(servers []string) func(uint32) ([]string, error) {
@@ -769,8 +802,11 @@ func (m *unboundedManager) startLocked() {
 			if ucfg.DiscoveryEndpoint != "" {
 				rtcOpt.Endpoint = ucfg.DiscoveryEndpoint
 			}
-			var ignored []string
-			rtcOpt.Tuning, ignored = clientcore.ParseWebRTCTuning(ucfg.Tuning)
+			natFail, tuning, ignored := widgetTuning(ucfg.Tuning)
+			rtcOpt.Tuning = tuning
+			if natFail > 0 {
+				rtcOpt.NATFailTimeout = natFail
+			}
 			if len(ignored) > 0 {
 				slog.Warn("Unbounded: ignoring widget tuning", "ignored", ignored)
 			}
