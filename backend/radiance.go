@@ -32,6 +32,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
@@ -97,6 +98,12 @@ type LocalBackend struct {
 	selectionReporter            *selectionReporter
 
 	exhaustionGate exhaustionGate
+
+	// helperTickets is this device's helper pairing tickets: the one source
+	// for the process, shared by the widget's volunteer side and the tunnel's
+	// inviter side so they draw on a single fetch budget. It stops fetching
+	// when ctx ends.
+	helperTickets *helper.Source
 }
 
 type Options struct {
@@ -211,6 +218,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
+	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
+	vpnClient.SetInviterTickets(r.helperTickets)
 	backend = r
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
@@ -333,6 +342,13 @@ func (r *LocalBackend) Start() {
 	// Start runs) so an opted-in user auto-starts the widget on
 	// launch instead of waiting for the next config refresh.
 	cachedCfg, _ := r.confHandler.GetConfig()
+	// The widget joins its helper pairings' rooms on freddie with the
+	// volunteer tickets lantern-cloud issues this device, fetched on first use
+	// and renewed in the background. A nil *helper.Source would be a non-nil
+	// interface, so partial backends in tests skip it.
+	if r.helperTickets != nil {
+		unbounded.SetTicketSource(r.helperTickets)
+	}
 	unbounded.InitSubscription(cachedCfg)
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
@@ -644,7 +660,6 @@ func baseIssueAttachments() []string {
 	logPath := settings.GetString(settings.LogPathKey)
 	dataPath := settings.GetString(settings.DataPathKey)
 	files := []string{
-		filepath.Join(logPath, internal.CrashLogFileName),
 		filepath.Join(dataPath, internal.ConfigFileName),
 		filepath.Join(dataPath, internal.ServersFileName),
 		filepath.Join(dataPath, internal.DebugBoxOptionsFileName),
@@ -706,22 +721,33 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
+	var peerOn bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
 			return fmt.Errorf("invalid %s: %v", settings.PeerShareEnabledKey, peerValue)
 		}
-		if err := r.applyPeerShare(on); err != nil {
-			errs = errors.Join(errs, err)
-		}
+		peerOn = on
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
+	}
+	// The rest of the patch is persisted before the toggle applies, so a
+	// peer it starts registers with this patch's peer settings, such as
+	// peer_serve_pool, rather than the previous ones.
+	var patchErr error
+	if len(diff) > 0 {
+		patchErr = settings.Patch(diff)
+	}
+	if peerRequested {
+		if err := r.applyPeerShare(peerOn); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 	if len(diff) == 0 {
 		return errs
 	}
-	if err := settings.Patch(diff); err != nil {
-		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", err))
+	if patchErr != nil {
+		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", patchErr))
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
 		r.RefreshUserMessages()

@@ -29,6 +29,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/traces"
@@ -76,7 +77,39 @@ type VPNClient struct {
 	// and is re-attached to each tunnel's tracker at connect.
 	connObserver ConnObserver
 
+	// inviterTickets, if set, gives each tunnel's Unbounded consumer this
+	// device's helper inviter tickets. Guarded by mu.
+	inviterTickets InviterTickets
+
 	mu sync.RWMutex
+}
+
+// InviterTickets is where a tunnel's Unbounded consumer gets the inviter
+// tickets for this device's helper pairings; helper.Source in production.
+// Inviter is called on the signaling path, so it must not block.
+type InviterTickets interface {
+	Inviter() []string
+}
+
+// SetInviterTickets sets the inviter ticket source for tunnels started from
+// now on. Pass the process's one helper.Source, which the Unbounded widget
+// shares, so the two draw on a single fetch budget.
+func (c *VPNClient) SetInviterTickets(src InviterTickets) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inviterTickets = src
+}
+
+// newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
+func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
+	return &tunnel{
+		dataPath:             boxOptions.BasePath,
+		selectionHistorySeed: boxOptions.SelectionHistorySeed,
+		initialLanternTags:   boxOptions.LanternServerTags,
+		initialNonSelectable: boxOptions.NonSelectableOutbounds,
+		connObserver:         c.connObserver,
+		inviterTickets:       c.inviterTickets,
+	}
 }
 
 // PlatformInterface defines the methods to interact with platform-specific services
@@ -180,16 +213,10 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
 	for attempt := 1; ; attempt++ {
-		t := tunnel{
-			dataPath:             boxOptions.BasePath,
-			selectionHistorySeed: boxOptions.SelectionHistorySeed,
-			initialLanternTags:   boxOptions.LanternServerTags,
-			initialNonSelectable: boxOptions.NonSelectableOutbounds,
-			connObserver:         c.connObserver,
-		}
+		t := c.newTunnel(boxOptions)
 		err := t.start(ctx, options, c.platformIfce, isRestart)
 		if err == nil {
-			c.tunnel = &t
+			c.tunnel = t
 			c.setStatus(Connected, nil)
 			c.logger.Debug("Tunnel started")
 			return nil
@@ -343,7 +370,9 @@ func (c *VPNClient) setStatus(s VPNStatus, err error) {
 	c.logger.Info("[vpn-state-trace]", "hop", "daemon_setstatus", "status", s, "ts_ms", time.Now().UnixMilli())
 	evt := StatusUpdateEvent{Status: s}
 	if err != nil {
-		evt.Error = err.Error()
+		// sing-box errors name the failing outbound, and a helper- tag must
+		// not leave the client; the UI may forward this text.
+		evt.Error = redact.Helper(err.Error())
 	}
 	events.Emit(evt)
 }
@@ -561,7 +590,7 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	if c.tunnel == nil {
 		return "", ErrTunnelNotConnected
 	}
-	mode := c.tunnel.clashServer.Mode()
+	mode := c.tunnel.clashServer.selectedMode()
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(mode)
 	if !loaded {
 		return "", fmt.Errorf("%s group not found", mode)
@@ -652,7 +681,14 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 //
 // Tests are cancelled and results discarded if ctx is cancelled or
 // [VPNClient.Connect] is called while they are running.
-func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (map[string]uint16, error) {
+func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (results map[string]uint16, err error) {
+	defer func() {
+		if err != nil {
+			results = nil
+		}
+	}()
+	defer recoverToError(&err, "running offline URL tests")
+
 	c.mu.Lock()
 	if c.tunnel != nil {
 		c.mu.Unlock()
@@ -724,7 +760,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	if !ok {
 		return nil, fmt.Errorf("offline-test outbound (type %q) does not implement URLTestGroup", outbound.Type())
 	}
-	results, err := tester.URLTest(ctx)
+	results, err = tester.URLTest(ctx)
 	if err != nil {
 		c.logger.Error("offline URL test failed", "error", err)
 		return nil, fmt.Errorf("offline URL test failed: %w", err)

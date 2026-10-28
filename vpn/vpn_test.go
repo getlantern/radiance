@@ -3,12 +3,21 @@ package vpn
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	box "github.com/getlantern/lantern-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/log"
+	O "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/direct"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -258,6 +267,96 @@ func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
 }
 
+type offlinePanicOutbound struct {
+	adapter.Outbound
+	phase  string
+	closed *atomic.Bool
+}
+
+func (o *offlinePanicOutbound) Start(stage adapter.StartStage) error {
+	if o.phase == "close" && stage == adapter.StartStateInitialize {
+		return assert.AnError
+	}
+	if o.phase == "initialize" && stage == adapter.StartStateInitialize ||
+		o.phase == "start" && stage == adapter.StartStateStart {
+		panic(o.phase)
+	}
+	return nil
+}
+
+func (o *offlinePanicOutbound) Close() error {
+	o.closed.Store(true)
+	if o.phase == "close" {
+		panic(o.phase)
+	}
+	if closer, ok := o.Outbound.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func registerWrappedDirect(ctx context.Context, typ string, wrap func(context.Context, adapter.Outbound) adapter.Outbound) {
+	registry := service.FromContext[adapter.OutboundRegistry](ctx).(*outbound.Registry)
+	outbound.Register[O.DirectOutboundOptions](registry, typ,
+		func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, opts O.DirectOutboundOptions) (adapter.Outbound, error) {
+			ob, err := direct.NewOutbound(ctx, router, logger, tag, opts)
+			if err != nil {
+				return nil, err
+			}
+			return wrap(ctx, ob), nil
+		})
+}
+
+func TestRunOfflineURLTests_Panic(t *testing.T) {
+	for _, phase := range []string{"construct", "initialize", "start", "close"} {
+		t.Run(phase, func(t *testing.T) {
+			crashLog := useTempCrashLog(t)
+			ctx, cancel := context.WithCancel(box.Context(t.Context()))
+			defer cancel()
+			var factoryCtx context.Context
+			var closed atomic.Bool
+			registerWrappedDirect(ctx, "panic-test", func(ctx context.Context, ob adapter.Outbound) adapter.Outbound {
+				factoryCtx = ctx
+				if phase == "construct" {
+					panic(phase)
+				}
+				return &offlinePanicOutbound{Outbound: ob, phase: phase, closed: &closed}
+			})
+
+			client := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+			results, err := client.RunOfflineURLTests(ctx, "", []O.Outbound{{Type: "panic-test", Tag: "panic"}}, nil)
+			require.ErrorContains(t, err, "panic running offline URL tests:")
+			assert.Contains(t, err.Error(), phase)
+			assert.NotContains(t, err.Error(), "\n")
+			crash := readCrashLog(t, crashLog)
+			assert.Contains(t, crash, "recovered panic running offline URL tests")
+			assert.Contains(t, crash, "vpn/vpn.go:")
+			switch phase {
+			case "construct":
+				assert.Contains(t, crash, "adapter/outbound/registry.go:")
+			case "initialize", "start":
+				assert.Contains(t, crash, "(*offlinePanicOutbound).Start")
+			case "close":
+				assert.Contains(t, crash, "(*offlinePanicOutbound).Close")
+			}
+			assert.Nil(t, results)
+			require.NotNil(t, factoryCtx)
+			assert.ErrorIs(t, factoryCtx.Err(), context.Canceled)
+			assert.Equal(t, phase != "construct", closed.Load())
+			select {
+			case <-client.offlineTestDone:
+			default:
+				t.Fatal("offline test completion was not signalled")
+			}
+
+			results, err = client.RunOfflineURLTests(t.Context(), "", []O.Outbound{{Type: "missing-outbound", Tag: "invalid"}}, nil)
+			require.ErrorContains(t, err, "failed to create sing-box instance")
+			assert.NotContains(t, err.Error(), "offline tests already running")
+			assert.Nil(t, results)
+		})
+	}
+}
+
 func TestClearTunnelCache(t *testing.T) {
 	newClient := func(t *testing.T, s VPNStatus, tun *tunnel, dir string) (*VPNClient, string) {
 		t.Helper()
@@ -311,4 +410,35 @@ func TestConsumeCacheClearMarker(t *testing.T) {
 		assert.NoError(t, consumeCacheClearMarker(dir))
 		assert.FileExists(t, cacheFilePath(dir))
 	})
+}
+
+type stubOutboundManager struct {
+	adapter.OutboundManager
+	outbounds map[string]adapter.Outbound
+}
+
+func (m stubOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	o, ok := m.outbounds[tag]
+	return o, ok
+}
+
+type stubGroup struct {
+	adapter.OutboundGroup
+	now string
+}
+
+func (g stubGroup) Now() string { return g.now }
+
+func TestCurrentSelectedServer_WhileRejecting(t *testing.T) {
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{
+		AutoSelectTag: stubGroup{now: "srv-a"},
+	}}
+	tun.clashServer.setRejectMode(true)
+	c := &VPNClient{tunnel: tun}
+	c.status.Store(Connected)
+
+	tag, err := c.CurrentSelectedServer()
+	require.NoError(t, err)
+	assert.Equal(t, "srv-a", tag)
 }

@@ -152,8 +152,9 @@ func (m *connTracker) Total() (up, down int64) {
 }
 
 func (m *connTracker) join(r *record) {
-	m.conns.Store(r.id, r)
+	// A published record can be reclaimed before join returns.
 	m.activeCount.Add(1)
+	m.conns.Store(r.id, r)
 }
 
 // leave folds the connection's final accounting exactly once, gated by record.closed.
@@ -235,6 +236,18 @@ func (m *connTracker) closeConn(id uuid.UUID) {
 
 func (m *connTracker) closeAllTracked() {
 	for _, r := range m.conns.Iter() {
+		m.closeRecord(r)
+	}
+}
+
+// closeMatchedTo closes the connections whose route rule matched tag, not those that only pass
+// through it.
+func (m *connTracker) closeMatchedTo(tag string) {
+	for _, r := range m.conns.Iter() {
+		chain := r.chain
+		if len(chain) == 0 || chain[len(chain)-1] != tag {
+			continue
+		}
 		m.closeRecord(r)
 	}
 }

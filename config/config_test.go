@@ -37,8 +37,11 @@ func TestSaveConfig(t *testing.T) {
 		},
 	}
 	// Save the config
-	err := saveConfig(&expectedConfig, configPath)
+	withIP := expectedConfig
+	withIP.IP = "203.0.113.7"
+	err := saveConfig(&withIP, configPath)
 	require.NoError(t, err, "Should not return an error when saving config")
+	assert.Equal(t, "203.0.113.7", withIP.IP, "saving must not modify the in-memory config")
 
 	// Read the file content
 	data, err := os.ReadFile(configPath)
@@ -51,6 +54,25 @@ func TestSaveConfig(t *testing.T) {
 	// Verify the content matches the expected config
 	assert.Equal(t, expectedConfig, actualConfig, "Saved config should match the expected config")
 }
+
+func TestLoad_DropsClientIP(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), internal.ConfigFileName)
+	require.NoError(t, os.WriteFile(configPath, []byte(`{"country":"US","ip":"203.0.113.7"}`), 0o600))
+
+	cfg, err := load(configPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "US", cfg.Country)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "203.0.113.7")
+	reloaded, err := load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, "US", reloaded.Country)
+	assert.Empty(t, reloaded.IP)
+}
+
 func TestLoadQuarantinesUnparseableConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, internal.ConfigFileName)

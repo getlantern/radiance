@@ -413,3 +413,96 @@ func TestClient_StopCompletesAfterRotationReleasesSlot(t *testing.T) {
 	assert.False(t, c.IsActive())
 	assert.GreaterOrEqual(t, srv.deregisterCount.Load(), int64(1), "teardown runs on its own context, not the expired one")
 }
+
+func rotatingRoutes(srv *stubServer) {
+	var seq atomic.Int64
+	srv.registerRespFn = func() RegisterResponse {
+		return RegisterResponse{
+			RouteID:                  fmt.Sprintf("00000000-0000-0000-0000-0000000001%02d", seq.Add(1)),
+			ServerConfig:             minimalValidLaunchCfg,
+			HeartbeatIntervalSeconds: 60,
+		}
+	}
+}
+
+// Register's upsert resets the route's verification server-side, so a
+// rotation must verify the new route once its new box is listening.
+func TestClient_RotationVerifiesNewRouteAfterNewBoxStarts(t *testing.T) {
+	srv := newStubServer(t)
+	rotatingRoutes(srv)
+	var (
+		mu         sync.Mutex
+		boxes      []*fakeBoxService
+		verifies   []string
+		startedAtV []int
+	)
+	srv.onVerify = func(req LifecycleRequest) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, b := range boxes {
+			if b.started.Load() {
+				n++
+			}
+		}
+		verifies = append(verifies, req.RouteID)
+		startedAtV = append(startedAtV, n)
+		return 0
+	}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = 50 * time.Millisecond
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = func(_ context.Context, options string) (boxService, error) {
+			b := &fakeBoxService{gotConfig: options}
+			mu.Lock()
+			boxes = append(boxes, b)
+			mu.Unlock()
+			return b, nil
+		}
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(verifies) >= 2
+	}, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, "00000000-0000-0000-0000-000000000102", verifies[1], "rotation must verify the new route_id")
+	assert.Equal(t, 2, startedAtV[1], "the new box must be started before verify is called")
+}
+
+// A verify failure after rotation must not tear down the box that is serving.
+func TestClient_RotationVerifyFailureKeepsClientRunning(t *testing.T) {
+	srv := newStubServer(t)
+	rotatingRoutes(srv)
+	var verifies atomic.Int64
+	srv.onVerify = func(LifecycleRequest) int {
+		if verifies.Add(1) > 1 {
+			return http.StatusInternalServerError
+		}
+		return 0
+	}
+	var selfStops atomic.Int64
+	port := &portBoxes{}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = 50 * time.Millisecond
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = port.build
+		cfg.OnSelfStop = func(error) { selfStops.Add(1) }
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool { return verifies.Load() >= 3 }, 2*time.Second, 10*time.Millisecond,
+		"rotation should keep rotating and verifying after a verify failure")
+	require.NoError(t, c.acquireLifecycle(context.Background()))
+	defer c.releaseLifecycle()
+	assert.True(t, c.IsActive())
+	assert.Zero(t, selfStops.Load())
+	port.mu.Lock()
+	defer port.mu.Unlock()
+	assert.False(t, port.boxes[len(port.boxes)-1].closed.Load(), "the serving box must stay open")
+}

@@ -2,140 +2,137 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
 	"os"
-	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
-	"github.com/getlantern/radiance/config"
-	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/ipc"
 	"github.com/getlantern/radiance/vpn"
 )
 
-func performLanternPing(urlToHit string, runId string, deviceId string, userId int64, token string, dataDir string, isSticky bool) error {
-	if !isSticky {
-		os.RemoveAll(dataDir)
+func run(ctx context.Context) error {
+	dir, target := os.Getenv("DATA"), os.Getenv("TARGET_URL")
+	if dir == "" {
+		return errors.New("DATA is required")
 	}
-	os.MkdirAll(dataDir, 0o755)
-	be, err := backend.NewLocalBackend(context.Background(), backend.Options{
-		DataDir: dataDir,
-		LogDir:  dataDir,
-		Locale:  "en-US",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create radiance instance: %w", err)
-	}
-	defer be.Close()
-	settings.Set(settings.UserIDKey, userId)
-	settings.Set(settings.TokenKey, token)
-	settings.Set(settings.UserLevelKey, "")
-	settings.Set(settings.EmailKey, "pinger@pinger.com")
-	settings.Set(settings.DevicesKey, []settings.Device{
-		{
-			ID:   deviceId,
-			Name: deviceId,
-		},
-	})
-
-	be.Start()
-
-	ipcServer := ipc.NewServer(be, false)
-	err = ipcServer.Start()
-	if err != nil {
-		return fmt.Errorf("failed to initialize IPC server: %w", err)
-	}
-	exit := func() {
-		if be.VPNStatus() != vpn.Disconnected {
-			be.DisconnectVPN()
-		}
-		ipcServer.Close()
-	}
-	defer exit()
-
-	// in sticky mode we assume config exists. otherwise we need to wait for a new one to arrive
-	if !isSticky {
-		resultCh := make(chan error)
-		go events.SubscribeOnce(func(evt config.NewConfigEvent) {
-			fmt.Printf("Received new config event: %+v\n", evt)
-			resultCh <- nil
-		})
-		// wait for something to arrive to resultCh or timeout
-		select {
-		case <-resultCh:
-			break
-		case <-time.After(30 * time.Second):
-			slog.Error("Timeout waiting for config")
-			return fmt.Errorf("timeout waiting for config")
+	for _, name := range []string{"success", "fetch.json", "connection.txt", "output.txt", "timing.txt"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 	}
-	t1 := time.Now()
-	if err = be.ConnectVPN(context.Background(), vpn.AutoSelectTag); err != nil {
-		return fmt.Errorf("quick connect failed: %w", err)
+	seconds := 20
+	if target == "" {
+		return errors.New("TARGET_URL is required")
 	}
-	fmt.Println("Quick connect successful")
-
-	t2 := time.Now()
-
-	proxyAddr := os.Getenv("RADIANCE_SOCKS_ADDRESS")
-	if proxyAddr == "" {
-		proxyAddr = "127.0.0.1:6666"
+	if value := os.Getenv("FETCH_TIMEOUT_SECONDS"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 || n > 600 {
+			return errors.New("FETCH_TIMEOUT_SECONDS must be between 1 and 600")
+		}
+		seconds = n
 	}
-	cmd := exec.Command("curl", "-v", "-x", proxyAddr, "-s", urlToHit)
-
-	// Run the command and capture the output
-	outputB, err := cmd.Output()
-	if err != nil {
-		fmt.Println("Error executing command:", err)
+	timeout := time.Duration(seconds) * time.Second
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-
-	body := string(outputB)
-
-	t3 := time.Now()
-
-	fmt.Println("lantern ping completed successfully")
-	// create a marker file that will be used by the pinger to determine success
-	_ = os.WriteFile(dataDir+"/success", []byte(""), 0o644)
-	_ = os.WriteFile(dataDir+"/output.txt", []byte(body), 0o644)
-	return os.WriteFile(dataDir+"/timing.txt", []byte(fmt.Sprintf(`
-	result: %v
-	run-id: %s
-	err: %v
-	started: %s
-	connected: %d
-	fetched: %d
-	url: %s`,
-		true, runId, nil, t1, int32(t2.Sub(t1).Milliseconds()), int32(t3.Sub(t1).Milliseconds()), urlToHit)), 0o644)
+	if os.Getenv("DIRECT") == "true" {
+		return fetch(ctx, target, "", dir, timeout)
+	}
+	if env := os.Getenv("RADIANCE_ENV"); env != "staging" && env != "production" {
+		return errors.New("RADIANCE_ENV must explicitly select staging or production")
+	}
+	sticky := os.Getenv("STICKY") == "true"
+	tag := os.Getenv("TARGET_TAG")
+	clientDir, err := os.MkdirTemp(dir, "client-")
+	if err != nil {
+		return err
+	}
+	for key, value := range map[string]string{
+		"RADIANCE_DATA_PATH": clientDir, "RADIANCE_LOG_PATH": clientDir,
+		"RADIANCE_DISABLE_FETCH_CONFIG": strconv.FormatBool(sticky),
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	if sticky {
+		if tag == "" {
+			return errors.New("TARGET_TAG is required with STICKY")
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
+			return fmt.Errorf("sticky config: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(clientDir, "config.json"), data, fileperm.Private); err != nil {
+			return err
+		}
+	} else {
+		tag = vpn.AutoSelectTag
+	}
+	uid, err := strconv.ParseInt(os.Getenv("USER_ID"), 10, 64)
+	if err != nil || uid <= 0 || os.Getenv("TOKEN") == "" || os.Getenv("DEVICE_ID") == "" {
+		return errors.New("USER_ID, TOKEN and DEVICE_ID are required")
+	}
+	be, err := backend.NewLocalBackend(ctx, backend.Options{DataDir: clientDir, LogDir: clientDir, Locale: "en-US"})
+	if err != nil {
+		return fmt.Errorf("create radiance: %w", err)
+	}
+	defer be.Close()
+	settings.Set(settings.UserIDKey, uid)
+	settings.Set(settings.TokenKey, os.Getenv("TOKEN"))
+	settings.Set(settings.DevicesKey, []settings.Device{{ID: os.Getenv("DEVICE_ID"), Name: "pinger"}})
+	settings.Set(settings.ConfigFetchDisabledKey, sticky)
+	be.Start()
+	if sticky {
+		if _, found := be.GetServerByTag(tag); !found {
+			return errors.New("assigned target is absent from sticky configuration")
+		}
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connecting"), fileperm.Private); err != nil {
+		return err
+	}
+	if err := be.ConnectVPN(connectCtx, tag); err != nil {
+		return fmt.Errorf("connect assigned target: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connected"), fileperm.Private); err != nil {
+		return err
+	}
+	defer be.DisconnectVPN()
+	proxy := os.Getenv("RADIANCE_SOCKS_ADDRESS")
+	if proxy == "" {
+		proxy = "127.0.0.1:1080"
+	}
+	return fetch(ctx, target, proxy, dir, timeout)
 }
 
 func main() {
-	deviceId := os.Getenv("DEVICE_ID")
-	userId := os.Getenv("USER_ID")
-	token := os.Getenv("TOKEN")
-	runId := os.Getenv("RUN_ID")
-	targetUrl := os.Getenv("TARGET_URL")
-	data := os.Getenv("DATA")
-	isSticky := os.Getenv("STICKY") == "true"
-
-	if deviceId == "" || userId == "" || token == "" || runId == "" || targetUrl == "" || data == "" {
-		fmt.Println("missing required environment variable(s)")
-		fmt.Println("Required environment variables: DEVICE_ID, USER_ID, TOKEN, RUN_ID, TARGET_URL, DATA")
-		os.Exit(1)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	seconds, _ := strconv.Atoi(os.Getenv("FETCH_TIMEOUT_SECONDS"))
+	if seconds <= 0 || seconds > 600 {
+		seconds = 20
 	}
-
-	uid, err := strconv.ParseInt(userId, 10, 64)
-	if err != nil {
-		fmt.Println("failed to parse USER_ID")
-		os.Exit(1)
+	ctx, deadline := context.WithTimeout(ctx, time.Duration(2*seconds+15)*time.Second)
+	defer deadline()
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			return
+		}
+		fmt.Fprintln(os.Stderr, err)
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, ctx.Err())
 	}
-
-	if err := performLanternPing(targetUrl, runId, deviceId, uid, token, data, isSticky); err != nil {
-		fmt.Printf("failed to perform lantern ping: %v\n", err)
-		os.Exit(1)
-	}
+	os.Exit(1)
 }

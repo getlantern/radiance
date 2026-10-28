@@ -10,6 +10,7 @@ import (
 	"net/http"
 	runtimeDebug "runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
+	lbC "github.com/getlantern/lantern-box/constant"
 	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/tracker/clientcontext"
 
@@ -85,6 +87,10 @@ type tunnel struct {
 	// connObserver, if non-nil, is attached to clashServer's tracker at connect to receive
 	// connection-close pushes for telemetry.
 	connObserver ConnObserver
+
+	// inviterTickets, if non-nil, supplies the Unbounded consumer's helper
+	// inviter tickets.
+	inviterTickets InviterTickets
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
@@ -145,6 +151,15 @@ func traceSpan(ctx context.Context, name string, fn func() error) error {
 	return err
 }
 
+var lineBreakEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
+
+func recoverToError(err *error, operation string) {
+	if r := recover(); r != nil {
+		common.WriteRecoveredPanic(operation, r)
+		*err = fmt.Errorf("panic %s: %s", operation, lineBreakEscaper.Replace(fmt.Sprint(r)))
+	}
+}
+
 func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface) (err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "tunnel.init")
 	defer func() {
@@ -191,6 +206,13 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	// recursively re-enters itself. streamingRoundTripper forces kindling to
 	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	boxCtx = lbA.ContextWithDirectTransport(boxCtx, streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	// An Unbounded consumer joins its helper pairings' rooms on freddie with
+	// the inviter tickets lantern-cloud issues this device. lantern-box gives
+	// the source only to helper-tagged Unbounded outbounds, which read it at
+	// every subscribe; the source fetches on first use and renews in the
+	// background, outside the tunnel like the signaling itself.
+	boxCtx = withHelperRoomTickets(boxCtx, t.inviterTickets)
+	t.prefetchInviterTickets(options.Outbounds)
 
 	t.ctx = boxCtx
 	t.logFactory = lblog.NewFactory(slog.Default().Handler())
@@ -215,8 +237,8 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 
 	slog.Log(nil, rlog.LevelTrace, "Creating box instance")
 	var instance *sbox.Box
-	if err := traceSpan(ctx, "sbox.New", func() error {
-		var err error
+	if err := traceSpan(ctx, "sbox.New", func() (err error) {
+		defer recoverToError(&err, "creating box instance")
 		instance, err = sbox.New(sbox.Options{
 			Context: t.ctx,
 			Options: options,
@@ -457,10 +479,13 @@ func (t *tunnel) selectMode(mode string) error {
 		return fmt.Errorf("tunnel not running")
 	}
 
-	if t.clashServer.Mode() != mode {
-		t.clashServer.SetMode(mode)
-		// Reset connections on a mode switch since the user explicitly chose to switch
-		closeAllRouted(t.clashServer.connTracker)
+	prev, err := t.clashServer.SetMode(mode)
+	if err != nil {
+		return fmt.Errorf("switching mode: %w", err)
+	}
+	if prev != mode {
+		// Flows matched to the outgoing mode keep its server until closed.
+		t.clashServer.connTracker.closeMatchedTo(prev)
 		go func() {
 			time.Sleep(time.Second)
 			runtimeDebug.FreeOSMemory()
@@ -595,6 +620,8 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 		isLantern[srv.Tag] = srv.IsLantern
 	}
 
+	t.prefetchInviterTickets(newOutbounds)
+
 	var errs []error
 	var (
 		mutGrpMgr = t.mutGrpMgr
@@ -716,7 +743,9 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 		t.optsMap.Delete(tag)
 	}
 
-	for _, outbound := range removeDuplicates(ctx, t.optsMap, list).Outbounds() {
+	newOutbounds := removeDuplicates(ctx, t.optsMap, list).Outbounds()
+	t.prefetchInviterTickets(newOutbounds)
+	for _, outbound := range newOutbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
 		if err := t.outboundMgr.Create(ctx, router, logger, outbound.Tag, outbound.Type, outbound.Options); err != nil {
 			slog.Warn("Failed to load non-selectable outbound",
@@ -950,4 +979,30 @@ func (c *cacheFileWrapper) LoadSelected(_ string) string {
 
 func (c *cacheFileWrapper) StoreSelected(_, _ string) error {
 	return nil
+}
+
+// prefetchInviterTickets starts the inviter ticket fetch, without waiting for
+// it, when outbounds include a helper-tagged Unbounded outbound. The fetch then
+// usually lands before that outbound's first subscribe, which would otherwise
+// go out without tickets on a cold start and could settle on a pool volunteer
+// for the session. Tunnels with no such outbound still never call the API.
+func (t *tunnel) prefetchInviterTickets(outbounds []O.Outbound) {
+	if t.inviterTickets == nil {
+		return
+	}
+	for _, out := range outbounds {
+		if out.Type == lbC.TypeUnbounded && lbA.IsHelperTag(out.Tag) {
+			t.inviterTickets.Inviter()
+			return
+		}
+	}
+}
+
+// withHelperRoomTickets gives the Unbounded outbound src's inviter tickets.
+// With no source, ctx is returned unchanged.
+func withHelperRoomTickets(ctx context.Context, src InviterTickets) context.Context {
+	if src == nil {
+		return ctx
+	}
+	return lbA.ContextWithRoomTicketSource(ctx, src.Inviter)
 }

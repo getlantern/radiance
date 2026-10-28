@@ -373,6 +373,11 @@ func load(path string) (*Config, error) {
 	ctx := box.Context(context.Background())
 	cfg, err := singjson.UnmarshalExtendedContext[*Config](ctx, rawConfig)
 	if err == nil {
+		if cfg != nil && cfg.IP != "" {
+			if err := saveConfig(cfg, path); err != nil {
+				slog.Warn("Failed to remove client IP from saved config", "path", path, "error", err)
+			}
+		}
 		return cfg, nil
 	}
 
@@ -430,9 +435,11 @@ func migrateToNewFmt(data []byte) (*Config, error) {
 	return &opts, nil
 }
 
-// saveConfig saves the config to the disk. It creates the config file if it doesn't exist.
+// saveConfig omits the client IP so issue-report attachments do not expose it.
 func saveConfig(cfg *Config, path string) error {
-	buf, err := singjson.Marshal(cfg)
+	persisted := *cfg
+	persisted.IP = ""
+	buf, err := singjson.Marshal(&persisted)
 	if err != nil {
 		return fmt.Errorf("marshalling config: %w", err)
 	}

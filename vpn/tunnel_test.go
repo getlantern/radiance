@@ -3,10 +3,12 @@ package vpn
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,9 +31,62 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/servers"
 )
+
+func useTempCrashLog(t *testing.T) string {
+	t.Helper()
+	t.Cleanup(settings.Reset)
+	dir := t.TempDir()
+	require.NoError(t, settings.InitSettings(dir))
+	require.NoError(t, settings.Set(settings.LogPathKey, dir))
+	return filepath.Join(dir, internal.CrashLogFileName)
+}
+
+func readCrashLog(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(content)
+}
+
+func TestRecoverToError_LineBreaks(t *testing.T) {
+	crashLog := useTempCrashLog(t)
+	err := func() (err error) {
+		defer recoverToError(&err, "testing")
+		panic("first\r\nsecond")
+	}()
+	require.EqualError(t, err, `panic testing: first\r\nsecond`)
+	assert.Contains(t, readCrashLog(t, crashLog), "recovered panic testing: first\r\nsecond")
+}
+
+func TestTunnelStart_Panic(t *testing.T) {
+	crashLog := useTempCrashLog(t)
+	tun := &tunnel{dataPath: t.TempDir()}
+	t.Cleanup(func() { assert.NoError(t, tun.close()) })
+	options := O.Options{
+		Log: &O.LogOptions{Disabled: true},
+		Outbounds: []O.Outbound{{
+			// Mismatched options panic inside the registered outbound factory.
+			Type: C.TypeDirect, Tag: "panic", Options: &O.HTTPOutboundOptions{},
+		}},
+	}
+	err := tun.start(t.Context(), options, nil, false)
+	require.ErrorContains(t, err, "panic creating box instance")
+	require.ErrorContains(t, err, "initializing tunnel")
+	assert.NotContains(t, err.Error(), "\n")
+	crash := readCrashLog(t, crashLog)
+	assert.Contains(t, crash, "recovered panic creating box instance")
+	assert.Contains(t, crash, "adapter/outbound/registry.go:")
+	assert.Contains(t, crash, "vpn/tunnel.go:")
+	require.NotNil(t, tun.ctx)
+	assert.ErrorIs(t, tun.ctx.Err(), context.Canceled)
+	assert.Nil(t, tun.boxInstance)
+	assert.Empty(t, tun.closers)
+}
 
 // TestTunnelDevicePauseWake covers the non-iOS path: devicePause pauses the
 // manager and deviceWake resumes it. The iOS timer branch depends on
@@ -123,6 +178,43 @@ func TestSelectMode_NotConnected(t *testing.T) {
 	err := tun.selectMode(AutoSelectTag)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tunnel not running")
+}
+
+type stubDNSRouter struct{ adapter.DNSRouter }
+
+func (stubDNSRouter) ClearCache() {}
+
+// newModeTestTunnel returns a tunnel in auto mode that passes selectMode's running check.
+func newModeTestTunnel(t *testing.T) *tunnel {
+	t.Helper()
+	srv, err := newClashServer(context.Background(), nil, O.ClashAPIOptions{
+		ModeList:    []string{ManualSelectTag, AutoSelectTag},
+		DefaultMode: AutoSelectTag,
+	})
+	require.NoError(t, err)
+	cs := srv.(*clashServer)
+	cs.dnsRouter = stubDNSRouter{}
+	t.Cleanup(func() { cs.Close() })
+	return &tunnel{boxInstance: &sbox.Box{}, clashServer: cs}
+}
+
+func TestSelectMode_ClosesOnlyOutgoingModeFlows(t *testing.T) {
+	for _, rejecting := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rejecting=%t", rejecting), func(t *testing.T) {
+			tun := newModeTestTunnel(t)
+			tun.clashServer.setRejectMode(rejecting)
+			ct := tun.clashServer.connTracker
+			auto := joinClosable(ct, "srv-a", time.Now(), "srv-a", AutoSelectTag)
+			manual := joinClosable(ct, "srv-b", time.Now(), "srv-b", ManualSelectTag)
+
+			require.NoError(t, tun.selectMode(AutoSelectTag))
+			assert.False(t, auto.closed.Load(), "selecting the current mode must close nothing")
+
+			require.NoError(t, tun.selectMode(ManualSelectTag))
+			assert.True(t, auto.closed.Load(), "switching away from auto must close its flows")
+			assert.False(t, manual.closed.Load())
+		})
+	}
 }
 
 func TestRemoveDuplicates(t *testing.T) {
@@ -222,10 +314,7 @@ func (r *infoRecorder) RoutedPacketConnection(_ context.Context, conn N.PacketCo
 // server, and returns its port and a recorder of connections routed to dest.
 func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := uint16(l.Addr().(*net.TCPAddr).Port)
-	require.NoError(t, l.Close())
+	port := freePort(t)
 
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
 	server, err := sbox.New(sbox.Options{Context: box.Context(t.Context()), Options: O.Options{
