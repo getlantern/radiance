@@ -22,9 +22,14 @@ import (
 // from the radiance client's own.
 const serviceName = "radiance-tester"
 
-// flushGrace bounds the export of the spans still buffered when the tester
-// stops; the pinger removes the container shortly after its deadline.
-const flushGrace = 4 * time.Second
+// phaseGrace is how long a run past its deadline is given to return, so
+// the phase it was in ends its span; flushGrace then bounds the export of
+// the spans still buffered. Both fit inside the time the pinger leaves
+// the container after the deadline.
+const (
+	phaseGrace = 2 * time.Second
+	flushGrace = 4 * time.Second
+)
 
 // parentContext returns ctx carrying the W3C trace context in TRACEPARENT,
 // so the tester's spans join the trace of the run that started it. Without
@@ -42,7 +47,8 @@ func parentContext(ctx context.Context) context.Context {
 }
 
 // exporterHeaders parses OTEL_EXPORTER_OTLP_HEADERS, a comma-separated
-// list of key=value pairs with percent-encoded values.
+// list of key=value pairs with percent-encoded values; a literal "+" is
+// kept, as it is not an encoded space there.
 func exporterHeaders(value string) map[string]string {
 	headers := map[string]string{}
 	for pair := range strings.SplitSeq(value, ",") {
@@ -52,7 +58,7 @@ func exporterHeaders(value string) map[string]string {
 			continue
 		}
 		raw = strings.TrimSpace(raw)
-		if decoded, err := url.QueryUnescape(raw); err == nil {
+		if decoded, err := url.PathUnescape(raw); err == nil {
 			raw = decoded
 		}
 		headers[key] = raw

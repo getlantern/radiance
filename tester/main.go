@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/getlantern/semconv"
 
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/fileperm"
@@ -51,9 +52,9 @@ func run(ctx context.Context) error {
 		return err
 	}
 	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attribute.String("target_url", target), attribute.Int("fetch_timeout_seconds", seconds))
+	span.SetAttributes(semconv.URLFullKey.String(target), semconv.TesterFetchTimeoutSecondsKey.Int(seconds))
 	if os.Getenv("DIRECT") == "true" {
-		span.SetAttributes(attribute.String("mode", "direct"))
+		span.SetAttributes(semconv.TesterModeKey.String("direct"))
 		return fetch(ctx, target, "", dir, timeout)
 	}
 	if env := os.Getenv("RADIANCE_ENV"); env != "staging" && env != "production" {
@@ -61,7 +62,7 @@ func run(ctx context.Context) error {
 	}
 	sticky := os.Getenv("STICKY") == "true"
 	tag := os.Getenv("TARGET_TAG")
-	span.SetAttributes(attribute.String("mode", "client"), attribute.Bool("sticky", sticky), attribute.String("target_tag", tag))
+	span.SetAttributes(semconv.TesterModeKey.String("client"), semconv.TesterStickyKey.Bool(sticky), semconv.TesterTargetTagKey.String(tag))
 	clientDir, err := os.MkdirTemp(dir, "client-")
 	if err != nil {
 		return err
@@ -148,8 +149,9 @@ func main() {
 	if seconds <= 0 || seconds > 600 {
 		seconds = 20
 	}
-	// The pinger removes the container flushGrace after this deadline.
-	ctx, deadline := context.WithTimeout(ctx, time.Duration(2*seconds+10)*time.Second)
+	// The pinger removes the container phaseGrace+flushGrace after this
+	// deadline.
+	ctx, deadline := context.WithTimeout(ctx, time.Duration(2*seconds+8)*time.Second)
 	defer deadline()
 	flush, err := startTelemetry(ctx)
 	if err != nil {
@@ -160,7 +162,7 @@ func main() {
 	// provider with a no-op one, and the spans started here must outlive it.
 	tracer := otel.GetTracerProvider().Tracer(tracerName)
 	ctx, span := tracer.Start(parentContext(ctx), "tester.run",
-		trace.WithAttributes(attribute.String("run_id", os.Getenv("RUN_ID"))))
+		trace.WithAttributes(semconv.TesterRunIDKey.String(os.Getenv("RUN_ID"))))
 	done := make(chan error, 1)
 	go func() { done <- run(ctx) }()
 	var runErr error
@@ -168,6 +170,12 @@ func main() {
 	case runErr = <-done:
 	case <-ctx.Done():
 		runErr = ctx.Err()
+		// The phase in flight ends its span when run returns; a tunnel
+		// bring-up detached from ctx may not, so the wait is bounded.
+		select {
+		case <-done:
+		case <-time.After(phaseGrace):
+		}
 	}
 	if runErr != nil {
 		fmt.Fprintln(os.Stderr, runErr)

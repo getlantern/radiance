@@ -16,6 +16,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/getlantern/semconv"
+
 	"github.com/getlantern/radiance/common/fileperm"
 )
 
@@ -33,7 +35,7 @@ type fetchStats struct {
 // and leaves the response body and curl's metadata in dir.
 func fetch(ctx context.Context, target, proxy, dir string, timeout time.Duration) (err error) {
 	ctx, span := trace.SpanFromContext(ctx).TracerProvider().Tracer(tracerName).Start(ctx, "tester.fetch",
-		trace.WithAttributes(attribute.String("url", target), attribute.Bool("proxied", proxy != "")))
+		trace.WithAttributes(semconv.URLFullKey.String(target), semconv.TesterProxiedKey.Bool(proxy != "")))
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
@@ -74,16 +76,16 @@ func fetchAttributes(data []byte) []attribute.KeyValue {
 		return nil
 	}
 	attrs := []attribute.KeyValue{
-		attribute.Int("http.status", stats.Status),
-		attribute.Int("curl.exit_code", *stats.ExitCode),
-		attribute.Int("total_ms", int(stats.TimeTotal*1000)),
-		attribute.Int("first_byte_ms", int(stats.TimeFirstByte*1000)),
+		semconv.HTTPResponseStatusCodeKey.Int(stats.Status),
+		semconv.TesterCurlExitCodeKey.Int(*stats.ExitCode),
+		semconv.TesterTotalMsKey.Int(int(stats.TimeTotal * 1000)),
+		semconv.TesterFirstByteMsKey.Int(int(stats.TimeFirstByte * 1000)),
 	}
 	if stats.Error != "" {
-		attrs = append(attrs, attribute.String("curl.error", stats.Error))
+		attrs = append(attrs, semconv.TesterCurlErrorKey.String(stats.Error))
 	}
 	if stats.RemoteIP != "" {
-		attrs = append(attrs, attribute.String("remote_ip", stats.RemoteIP))
+		attrs = append(attrs, semconv.NetworkPeerAddressKey.String(stats.RemoteIP))
 	}
 	return attrs
 }

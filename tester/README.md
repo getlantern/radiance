@@ -33,10 +33,13 @@ All of these are required.
 ## Traces
 
 The tester reports what it did as OpenTelemetry spans under the service
-`radiance-tester`: `tester.run` for the whole run, `tester.connect` around the
+`radiance-tester`: `tester.run` for the whole run (`tester.run_id`, `tester.mode`,
+`tester.sticky`, `tester.target_tag`, `url.full`), `tester.connect` around the
 tunnel bring-up (with radiance's own `connect` and `tunnel.*` spans below it)
-and `tester.fetch` for the curl fetch, carrying curl's status, exit code and
-timings. Exporting is off unless these are set:
+and `tester.fetch` for the curl fetch (`http.response.status_code`,
+`tester.curl_exit_code`, `tester.curl_error`, `tester.total_ms`,
+`tester.first_byte_ms`, `network.peer.address`). The keys are
+`github.com/getlantern/semconv`'s. Exporting is off unless these are set:
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: the OTLP/gRPC collector, e.g. `ingest.us.signoz.cloud:443`.
 - `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs sent with every export,

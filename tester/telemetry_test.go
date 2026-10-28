@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/getlantern/semconv"
 )
 
 func TestParentContext(t *testing.T) {
@@ -26,8 +28,8 @@ func TestParentContext(t *testing.T) {
 
 func TestExporterHeaders(t *testing.T) {
 	assert.Empty(t, exporterHeaders(""))
-	assert.Equal(t, map[string]string{"signoz-ingestion-key": "abc", "x-other": "a b"},
-		exporterHeaders("signoz-ingestion-key=abc, x-other=a%20b,novalue,=empty"))
+	assert.Equal(t, map[string]string{"signoz-ingestion-key": "abc", "x-other": "a b", "x-plus": "a+b"},
+		exporterHeaders("signoz-ingestion-key=abc, x-other=a%20b,x-plus=a+b,novalue,=empty"))
 }
 
 func TestStartTelemetryWithoutEndpoint(t *testing.T) {
@@ -42,11 +44,11 @@ func TestFetchAttributes(t *testing.T) {
 	assert.Nil(t, fetchAttributes([]byte(`{"http_code":200}`)))
 	got := fetchAttributes([]byte(`{"http_code":503,"exitcode":0,"time_total":2.345,"time_starttransfer":0.9,"remote_ip":"192.0.2.1"}`))
 	assert.ElementsMatch(t, []attribute.KeyValue{
-		attribute.Int("http.status", 503), attribute.Int("curl.exit_code", 0),
-		attribute.Int("total_ms", 2345), attribute.Int("first_byte_ms", 900),
-		attribute.String("remote_ip", "192.0.2.1"),
+		semconv.HTTPResponseStatusCodeKey.Int(503), semconv.TesterCurlExitCodeKey.Int(0),
+		semconv.TesterTotalMsKey.Int(2345), semconv.TesterFirstByteMsKey.Int(900),
+		semconv.NetworkPeerAddressKey.String("192.0.2.1"),
 	}, got)
 	got = fetchAttributes([]byte(`{"http_code":0,"exitcode":28,"errormsg":"timeout"}`))
-	assert.Contains(t, got, attribute.String("curl.error", "timeout"))
-	assert.Contains(t, got, attribute.Int("curl.exit_code", 28))
+	assert.Contains(t, got, semconv.TesterCurlErrorKey.String("timeout"))
+	assert.Contains(t, got, semconv.TesterCurlExitCodeKey.Int(28))
 }

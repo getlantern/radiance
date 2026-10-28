@@ -217,14 +217,16 @@ func setupOTelSDK(ctx context.Context, attributes Attributes, cfg config.Config)
 // backend's telemetry, which [Close] stops, use it.
 func NewTracerProvider(ctx context.Context, serviceName, deviceID string, cfg config.Config) (*sdktrace.TracerProvider, error) {
 	attrs := Attributes{
-		App:        serviceName,
-		DeviceID:   deviceID,
-		AppVersion: rcommon.GetVersion(),
-		Platform:   rcommon.Platform,
-		GoVersion:  runtime.Version(),
-		OSName:     runtime.GOOS,
-		OSArch:     runtime.GOARCH,
-		GeoCountry: cfg.Country,
+		App:         serviceName,
+		DeviceID:    deviceID,
+		AppVersion:  rcommon.GetVersion(),
+		BuildCommit: rcommon.Commit,
+		BuildTime:   rcommon.BuildTime,
+		Platform:    rcommon.Platform,
+		GoVersion:   runtime.Version(),
+		OSName:      runtime.GOOS,
+		OSArch:      runtime.GOARCH,
+		GeoCountry:  cfg.Country,
 	}
 	if osStr, err := osversion.GetHumanReadable(); err == nil {
 		attrs.OSVersion = osStr
