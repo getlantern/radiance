@@ -404,6 +404,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", bOptions.BasePath)
 
 	opts := baseOpts(bOptions.BasePath)
+	configureSplitTunnelCapture(opts.Inbounds, bOptions.SplitTunnel, common.Platform)
 	slog.Debug("Base options initialized")
 
 	// add smart routing and ad block rules

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
@@ -19,7 +20,8 @@ import (
 // A failed apply closes the tunnel and reports an error status.
 func (c *VPNClient) ApplySplitTunnel(before SplitTunnelState, options BoxOptions) error {
 	after := options.SplitTunnel
-	if before.Enabled != after.Enabled || (after.Enabled && before.Policy != after.Policy) {
+	if before.Enabled != after.Enabled || (after.Enabled && before.Policy != after.Policy) ||
+		splitTunnelCaptureChanged(before, after, common.Platform) {
 		return c.Restart(options)
 	}
 	if !after.Enabled || reflect.DeepEqual(before, after) {
