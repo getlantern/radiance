@@ -211,7 +211,36 @@ func setupOTelSDK(ctx context.Context, attributes Attributes, cfg config.Config)
 	return shutdown, nil
 }
 
-func initTracer(ctx context.Context, res *resource.Resource, cfg common.OTEL) (func(context.Context) error, error) {
+// NewTracerProvider builds a tracer provider reporting under serviceName to
+// the collector in cfg, without installing it as the global one; the caller
+// shuts it down. Programs embedding radiance whose own spans outlive the
+// backend's telemetry, which [Close] stops, use it.
+func NewTracerProvider(ctx context.Context, serviceName, deviceID string, cfg config.Config) (*sdktrace.TracerProvider, error) {
+	attrs := Attributes{
+		App:        serviceName,
+		DeviceID:   deviceID,
+		AppVersion: rcommon.GetVersion(),
+		Platform:   rcommon.Platform,
+		GoVersion:  runtime.Version(),
+		OSName:     runtime.GOOS,
+		OSArch:     runtime.GOARCH,
+		GeoCountry: cfg.Country,
+	}
+	if osStr, err := osversion.GetHumanReadable(); err == nil {
+		attrs.OSVersion = osStr
+	}
+	res, err := resource.New(ctx, resource.WithAttributes(buildResources(serviceName, attrs)...))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource: %w", err)
+	}
+	tracerProvider, _, err := newTracerProvider(ctx, res, cfg.OTEL)
+	return tracerProvider, err
+}
+
+// newTracerProvider is the exporter and provider both Initialize and
+// NewTracerProvider build; shutting the provider down also stops the
+// exporter.
+func newTracerProvider(ctx context.Context, res *resource.Resource, cfg common.OTEL) (*sdktrace.TracerProvider, *otlptrace.Exporter, error) {
 	exporter, err := otlptrace.New(
 		ctx,
 		otlptracegrpc.NewClient(
@@ -221,13 +250,21 @@ func initTracer(ctx context.Context, res *resource.Resource, cfg common.OTEL) (f
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create exporter: %w", err)
+		return nil, nil, fmt.Errorf("failed to create exporter: %w", err)
 	}
 	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.TracesSampleRate))),
 		sdktrace.WithBatcher(newRedactingExporter(exporter)),
 		sdktrace.WithResource(res),
 	)
+	return tracerProvider, exporter, nil
+}
+
+func initTracer(ctx context.Context, res *resource.Resource, cfg common.OTEL) (func(context.Context) error, error) {
+	tracerProvider, exporter, err := newTracerProvider(ctx, res, cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	otel.SetTracerProvider(tracerProvider)
 	return func(ctx context.Context) error {

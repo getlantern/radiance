@@ -24,11 +24,28 @@ failure. Old result artifacts are cleared before each run.
 - `DEVICE_ID`: The device id to use.
 - `USER_ID`: The user id to use.
 - `TOKEN`: The token to use.
-- `RUN_ID`: The run id to use. It will be added to honeycomb traces as value of attribute `pinger-id`. (you can use it for looking up traces for the specific run)
+- `RUN_ID`: The run id to use. It is the `run_id` attribute of the tester's root span.
 - `TARGET_URL`: The target url to use. This is the url that will be pinged .
 - `DATA`: The path to use for config files and for logs. This is the path where the output will be written to (config.json, etc). You can place custom config there to use it instead of fetching. (together with `STICKY=true` env var, see below)
 
 All of these are required.
+
+## Traces
+
+The tester reports what it did as OpenTelemetry spans under the service
+`radiance-tester`: `tester.run` for the whole run, `tester.connect` around the
+tunnel bring-up (with radiance's own `connect` and `tunnel.*` spans below it)
+and `tester.fetch` for the curl fetch, carrying curl's status, exit code and
+timings. Exporting is off unless these are set:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: the OTLP/gRPC collector, e.g. `ingest.us.signoz.cloud:443`.
+- `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs sent with every export,
+  e.g. `signoz-ingestion-key=...`.
+- `TRACEPARENT`: a W3C trace context; the tester's spans then join that trace instead of
+  starting one. The pinger sets it to the span that started the container.
+
+Every span is kept; the parent's sampling decision, when there is one, is honoured.
+The run's spans are flushed before the process exits, within a few seconds of its deadline.
 
 ## CLI usage
 
