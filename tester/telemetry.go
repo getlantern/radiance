@@ -58,7 +58,7 @@ func exporterEndpoint(value string) (string, error) {
 		return value, nil
 	}
 	if u.Scheme != "https" {
-		return "", fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT %q: only https collectors are supported", value)
+		return "", fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT: scheme %q is not supported, only https", u.Scheme)
 	}
 	return u.Host, nil
 }
