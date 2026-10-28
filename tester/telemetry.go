@@ -46,6 +46,27 @@ func parentContext(ctx context.Context) context.Context {
 	return extracted
 }
 
+// exporterEndpoint reduces OTEL_EXPORTER_OTLP_ENDPOINT, which may be a URL
+// as the OTel specification has it, to the host:port radiance's exporter
+// takes; a bare host:port is kept.
+func exporterEndpoint(value string) string {
+	value = strings.TrimSpace(value)
+	if u, err := url.Parse(value); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Host
+	}
+	return value
+}
+
+// spanURL is target without any credentials in it, for span attributes.
+func spanURL(target string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	u.User = nil
+	return u.String()
+}
+
 // exporterHeaders parses OTEL_EXPORTER_OTLP_HEADERS, a comma-separated
 // list of key=value pairs with percent-encoded values; a literal "+" is
 // kept, as it is not an encoded space there.
@@ -74,7 +95,7 @@ func exporterHeaders(value string) map[string]string {
 // buffered and stops the exporter.
 func startTelemetry(ctx context.Context) (func(context.Context) error, error) {
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	endpoint := exporterEndpoint(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if endpoint == "" {
 		return func(context.Context) error { return nil }, nil
 	}

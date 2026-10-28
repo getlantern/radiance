@@ -32,6 +32,18 @@ func TestExporterHeaders(t *testing.T) {
 		exporterHeaders("signoz-ingestion-key=abc, x-other=a%20b,x-plus=a+b,novalue,=empty"))
 }
 
+func TestExporterEndpoint(t *testing.T) {
+	assert.Equal(t, "ingest.us.signoz.cloud:443", exporterEndpoint("ingest.us.signoz.cloud:443"))
+	assert.Equal(t, "collector.example:4317", exporterEndpoint(" https://collector.example:4317/v1/traces "))
+	assert.Equal(t, "", exporterEndpoint(""))
+}
+
+func TestSpanURL(t *testing.T) {
+	assert.Equal(t, "https://example.com/a?b=c", spanURL("https://user:secret@example.com/a?b=c"))
+	assert.Equal(t, "https://example.com/", spanURL("https://example.com/"))
+	assert.Equal(t, "::bad", spanURL("::bad"))
+}
+
 func TestStartTelemetryWithoutEndpoint(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	flush, err := startTelemetry(context.Background())

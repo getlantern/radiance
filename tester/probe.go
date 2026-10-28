@@ -35,7 +35,7 @@ type fetchStats struct {
 // and leaves the response body and curl's metadata in dir.
 func fetch(ctx context.Context, target, proxy, dir string, timeout time.Duration) (err error) {
 	ctx, span := trace.SpanFromContext(ctx).TracerProvider().Tracer(tracerName).Start(ctx, "tester.fetch",
-		trace.WithAttributes(semconv.URLFullKey.String(target), semconv.TesterProxiedKey.Bool(proxy != "")))
+		trace.WithAttributes(semconv.URLFullKey.String(spanURL(target)), semconv.TesterProxiedKey.Bool(proxy != "")))
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())

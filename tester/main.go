@@ -52,7 +52,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(semconv.URLFullKey.String(target), semconv.TesterFetchTimeoutSecondsKey.Int(seconds))
+	span.SetAttributes(semconv.URLFullKey.String(spanURL(target)), semconv.TesterFetchTimeoutSecondsKey.Int(seconds))
 	if os.Getenv("DIRECT") == "true" {
 		span.SetAttributes(semconv.TesterModeKey.String("direct"))
 		return fetch(ctx, target, "", dir, timeout)

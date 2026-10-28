@@ -39,13 +39,15 @@ tunnel bring-up (with radiance's own `connect` and `tunnel.*` spans below it)
 and `tester.fetch` for the curl fetch (`http.response.status_code`,
 `tester.curl_exit_code`, `tester.curl_error`, `tester.total_ms`,
 `tester.first_byte_ms`, `network.peer.address`). The keys are
-`github.com/getlantern/semconv`'s. Exporting is off unless these are set:
+`github.com/getlantern/semconv`'s, and URLs are recorded without credentials.
+Exporting is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set:
 
-- `OTEL_EXPORTER_OTLP_ENDPOINT`: the OTLP/gRPC collector, e.g. `ingest.us.signoz.cloud:443`.
-- `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs sent with every export,
-  e.g. `signoz-ingestion-key=...`.
-- `TRACEPARENT`: a W3C trace context; the tester's spans then join that trace instead of
-  starting one. The pinger sets it to the span that started the container.
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: the OTLP/gRPC collector, as `host:port` or a URL,
+  e.g. `ingest.us.signoz.cloud:443`.
+- `OTEL_EXPORTER_OTLP_HEADERS` (optional): comma-separated `key=value` pairs sent with
+  every export, for collectors that need them, e.g. `signoz-ingestion-key=...`.
+- `TRACEPARENT` (optional): a W3C trace context; the tester's spans then join that trace
+  instead of starting one. The pinger sets it to the span that started the container.
 
 Every span is kept; the parent's sampling decision, when there is one, is honoured.
 The run's spans are flushed before the process exits, within a few seconds of its deadline.
