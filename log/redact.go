@@ -254,7 +254,8 @@ func tokenHost(tok string) (string, netip.Addr, bool) {
 	}
 	host = strings.TrimRight(host, ":.,;!?-")
 	if i := strings.IndexByte(host, ':'); i > 0 && strings.Count(host, ":") == 1 && isDigits(host[i+1:]) {
-		host = host[:i]
+		// A fully qualified name keeps its root dot before the port.
+		host = strings.TrimSuffix(host[:i], ".")
 	}
 	if isHostname(host) {
 		return host, netip.Addr{}, true

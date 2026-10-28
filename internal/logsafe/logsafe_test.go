@@ -95,6 +95,11 @@ func TestRedactJSONFields(t *testing.T) {
 			kept: map[string]int{`"tag": "hy2"`: 1},
 		},
 		{
+			name: "escaped value ends at its line",
+			in:   `msg="cfg {\"credentials\":{\"a\":\"` + canary + `\",\"b\":1` + "\n" + `time=2 level=INFO msg="next line" x=1`,
+			kept: map[string]int{"\n" + `time=2 level=INFO msg="next line" x=1`: 1},
+		},
+		{
 			name: "number",
 			in:   `b {"token": 1.5e3, "tag":"hy2"}`,
 			gone: "1.5e3",

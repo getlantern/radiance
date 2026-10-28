@@ -44,8 +44,9 @@ var jsonKey = regexp.MustCompile(`(\\?)"([A-Za-z0-9_.-]+)\\?"\s*:\s*`)
 
 // RedactJSONFields returns data with the value of each field that satisfies
 // [IsSecretField] replaced by [Redacted], or nil if it has none. It also redacts
-// fields of JSON escaped inside a quoted string. An array or object may span lines,
-// but a value that is not closed, as in truncated text, ends at the end of its line.
+// fields of JSON escaped inside a quoted string. An unescaped array or object may span
+// lines; any other value, or one that is not closed, as in truncated text, can't extend
+// past its line.
 func RedactJSONFields(data []byte) []byte {
 	var out []byte
 	last := 0
@@ -54,12 +55,17 @@ func RedactJSONFields(data []byte) []byte {
 			continue
 		}
 		escaped := m[3] > m[2]
-		end, closed := jsonValueEnd(data, m[1], escaped)
-		if !closed {
-			lineEnd := len(data)
-			if n := bytes.IndexAny(data[m[1]:], "\r\n"); n >= 0 {
-				lineEnd = m[1] + n
-			}
+		lineEnd := len(data)
+		if n := bytes.IndexAny(data[m[1]:], "\r\n"); n >= 0 {
+			lineEnd = m[1] + n
+		}
+		// An escaped value sits inside a quoted string, which ends with its line.
+		limit := len(data)
+		if escaped {
+			limit = lineEnd
+		}
+		end, closed := jsonValueEnd(data[:limit], m[1], escaped)
+		if !closed && limit != lineEnd {
 			end, _ = jsonValueEnd(data[:lineEnd], m[1], escaped)
 		}
 		if end < 0 {

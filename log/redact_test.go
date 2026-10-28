@@ -181,6 +181,7 @@ func TestDestinationPlaceholder(t *testing.T) {
 		"api.iantem.io":            "",
 		"Backoffice.LANTR.net":     "",
 		"notiantem.io":             "[domain]",
+		"www.example.com.:443":     "[domain]",
 		"iantem.io.example.com":    "[domain]",
 		"127.0.0.1":                "",
 		"10.0.0.1":                 "",
