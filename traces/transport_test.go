@@ -76,3 +76,31 @@ func TestRoundTripperSkipsHelperRequests(t *testing.T) {
 	send("/v1/config-new")
 	assert.Len(t, mem.GetSpans(), 1, "other requests are still traced")
 }
+
+// A helper request made under a recording span (the ticket fetch does not
+// detach its caller's) must add nothing to that span.
+func TestRoundTripperDetachesTheCallersSpanFromHelperRequests(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	rt := NewRoundTripper(NewHeaderAnnotatingRoundTripper(okTransport{}))
+	ctx, parent := tp.Tracer("test").Start(context.Background(), "caller")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.example/v1/helper/tickets", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Lantern-Device-Id", "device-1")
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	parent.End()
+
+	spans := mem.GetSpans()
+	require.Len(t, spans, 1, "only the caller's own span")
+	assert.Equal(t, "caller", spans[0].Name)
+	assert.Empty(t, spans[0].Attributes)
+	assert.Empty(t, spans[0].Events)
+}

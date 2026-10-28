@@ -19,16 +19,30 @@ func NewRoundTripper(original http.RoundTripper) http.RoundTripper {
 	if original == nil {
 		original = http.DefaultTransport
 	}
-	return otelhttp.NewTransport(original,
+	return detachingRoundTripper{next: otelhttp.NewTransport(original,
 		otelhttp.WithClientTrace(httpTrace),
-		otelhttp.WithFilter(func(r *http.Request) bool { return !untracedRequest(r) }))
+		otelhttp.WithFilter(func(r *http.Request) bool { return !untracedRequest(r) }))}
+}
+
+// detachingRoundTripper strips the caller's span from helper-invite requests.
+// otelhttp's filter only stops a new span; without this, the header
+// annotator and kindling's race observer would record on the caller's.
+type detachingRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (d detachingRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	if untracedRequest(r) {
+		r = r.WithContext(trace.ContextWithSpanContext(r.Context(), trace.SpanContext{}))
+	}
+	return d.next.RoundTrip(r)
 }
 
 // untracedRequest reports whether r is a helper-invite request: the
 // HelperService calls and the ticket fetch, all under /helper/. A span for
 // one would carry the device ID header and show the device uses helper
-// invites, and how often; with no span, the header annotator and kindling's
-// race observer find nothing to record on either.
+// invites, and how often; with no span, and the caller's span detached, the
+// header annotator and kindling's race observer find nothing to record on.
 func untracedRequest(r *http.Request) bool {
 	return r.URL != nil && strings.Contains(r.URL.Path, "/helper/")
 }
