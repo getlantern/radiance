@@ -447,6 +447,7 @@ func TestPatchSettings_RejectsInvalidSplitTunnelPolicy(t *testing.T) {
 	err := r.PatchSettings(settings.Settings{settings.SplitTunnelPolicyKey: "bogus"})
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "invalid")
+	assert.NotContains(t, err.Error(), "bogus", "the error must not echo the client-supplied value")
 	assert.Empty(t, settings.GetString(settings.SplitTunnelPolicyKey),
 		"an invalid policy must not be persisted")
 }

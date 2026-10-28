@@ -107,6 +107,16 @@ func TestRedactLog(t *testing.T) {
 			},
 		},
 		{
+			name: "curl headers",
+			in: []string{
+				`level=DEBUG msg="CURL command" curl="curl -X GET -H 'Accept: */*' -H 'X-Lantern-Pro-Token: ` + canary +
+					`' -H 'Authorization: Bearer ` + canary + `' 'https://df.iantem.io/api/v1/user'"`,
+			},
+			kept: []string{
+				`-H 'Accept: */*' -H 'X-Lantern-Pro-Token: [REDACTED]' -H 'Authorization: [REDACTED]' 'https://df.iantem.io/api/v1/user'`,
+			},
+		},
+		{
 			name: "url queries",
 			in: []string{
 				`level=INFO url="https://example.com/v1?token=` + canary + `" next=1`,

@@ -85,6 +85,16 @@ func TestRedactJSONFields(t *testing.T) {
 			kept: map[string]int{"\nnext line ok": 1},
 		},
 		{
+			name: "dotted key",
+			in:   `{"settings.token":"` + canary + `","tag":"hy2"}`,
+			kept: map[string]int{`"tag":"hy2"}`: 1},
+		},
+		{
+			name: "container spanning lines",
+			in:   "{\n  \"tls\": {\n    \"key\": [\n      \"" + canary + "\"\n    ]\n  },\n  \"tag\": \"hy2\"\n}",
+			kept: map[string]int{`"tag": "hy2"`: 1},
+		},
+		{
 			name: "number",
 			in:   `b {"token": 1.5e3, "tag":"hy2"}`,
 			gone: "1.5e3",

@@ -40,25 +40,28 @@ func isWordChar(c byte) bool {
 
 // jsonKey matches a JSON object key and its colon, including one escaped inside a
 // quoted string, where group 1 holds the escaping backslash.
-var jsonKey = regexp.MustCompile(`(\\?)"([A-Za-z0-9_-]+)\\?"\s*:\s*`)
+var jsonKey = regexp.MustCompile(`(\\?)"([A-Za-z0-9_.-]+)\\?"\s*:\s*`)
 
 // RedactJSONFields returns data with the value of each field that satisfies
 // [IsSecretField] replaced by [Redacted], or nil if it has none. It also redacts
-// fields of JSON escaped inside a quoted string.
+// fields of JSON escaped inside a quoted string. An array or object may span lines,
+// but a value that is not closed, as in truncated text, ends at the end of its line.
 func RedactJSONFields(data []byte) []byte {
 	var out []byte
-	last, lineEnd := 0, -1
+	last := 0
 	for _, m := range jsonKey.FindAllSubmatchIndex(data, -1) {
 		if m[0] < last || !IsSecretField(string(data[m[4]:m[5]])) {
 			continue
 		}
-		if m[1] > lineEnd {
-			lineEnd = len(data)
+		escaped := m[3] > m[2]
+		end, closed := jsonValueEnd(data, m[1], escaped)
+		if !closed {
+			lineEnd := len(data)
 			if n := bytes.IndexAny(data[m[1]:], "\r\n"); n >= 0 {
 				lineEnd = m[1] + n
 			}
+			end, _ = jsonValueEnd(data[:lineEnd], m[1], escaped)
 		}
-		end := jsonValueEnd(data[:lineEnd], m[1], m[3] > m[2])
 		if end < 0 {
 			continue
 		}
@@ -73,13 +76,13 @@ func RedactJSONFields(data []byte) []byte {
 }
 
 // jsonValueEnd returns the end of the JSON string, number, array or object that
-// starts at i, or -1 if none does. An escaped value sits inside a quoted string, so
-// each of its quotes and backslashes carries an extra backslash. A string, array or
-// object that is not closed ends where the escaping level ends or at the end of
-// data, which must end where the value's line does.
-func jsonValueEnd(data []byte, i int, escaped bool) int {
+// starts at i, or -1 if none does, and whether the value is closed. An escaped value
+// sits inside a quoted string, so each of its quotes and backslashes carries an extra
+// backslash, and it also ends where that string does. A value that is not closed ends
+// at the end of data, or, for a string, at a line break, which JSON strings can't hold.
+func jsonValueEnd(data []byte, i int, escaped bool) (int, bool) {
 	if i >= len(data) {
-		return -1
+		return -1, false
 	}
 	switch c := data[i]; {
 	case c == '-' || isDigit(c):
@@ -87,7 +90,7 @@ func jsonValueEnd(data []byte, i int, escaped bool) int {
 		for j < len(data) && (isDigit(data[j]) || strings.IndexByte(".eE+-", data[j]) >= 0) {
 			j++
 		}
-		return j
+		return j, true
 	case c == '[' || c == '{':
 		return jsonContainerEnd(data, i, escaped)
 	default:
@@ -95,7 +98,7 @@ func jsonValueEnd(data []byte, i int, escaped bool) int {
 	}
 }
 
-func jsonContainerEnd(data []byte, i int, escaped bool) int {
+func jsonContainerEnd(data []byte, i int, escaped bool) (int, bool) {
 	depth := 0
 	for j := i; j < len(data); {
 		switch c := data[j]; {
@@ -106,16 +109,18 @@ func jsonContainerEnd(data []byte, i int, escaped bool) int {
 			depth--
 			j++
 			if depth == 0 {
-				return j
+				return j, true
 			}
 		case c == '"' || c == '\\':
-			end := jsonStringEnd(data, j, escaped)
+			end, closed := jsonStringEnd(data, j, escaped)
 			switch {
+			case end >= 0 && !closed:
+				return len(data), false
 			case end >= 0:
 				j = end
 			case c == '"':
 				// An unescaped quote in an escaped value closes the enclosing string.
-				return j
+				return j, true
 			default:
 				j++
 			}
@@ -123,27 +128,30 @@ func jsonContainerEnd(data []byte, i int, escaped bool) int {
 			j++
 		}
 	}
-	return len(data)
+	return len(data), false
 }
 
 // EscapedStringEnd returns the end of the string that starts with an escaped quote at
 // i, inside a quoted string, or -1 if none starts there. A string that is not closed
-// ends where the enclosing string does or at the end of data.
+// ends where the enclosing string does, at a line break or at the end of data.
 func EscapedStringEnd(data []byte, i int) int {
-	return jsonStringEnd(data, i, true)
+	end, _ := jsonStringEnd(data, i, true)
+	return end
 }
 
-func jsonStringEnd(data []byte, i int, escaped bool) int {
+func jsonStringEnd(data []byte, i int, escaped bool) (int, bool) {
 	quote := []byte{'"'}
 	if escaped {
 		quote = []byte{'\\', '"'}
 	}
 	if !bytes.HasPrefix(data[i:], quote) {
-		return -1
+		return -1, false
 	}
 	j := i + len(quote)
 	for j < len(data) {
 		switch {
+		case data[j] == '\n' || data[j] == '\r':
+			return j, false
 		case escaped && bytes.HasPrefix(data[j:], []byte{'\\', '\\'}):
 			// A JSON escape: the escaped character is itself escaped if it is a
 			// quote or a backslash.
@@ -154,16 +162,16 @@ func jsonStringEnd(data []byte, i int, escaped bool) int {
 				j = k + 1
 			}
 		case bytes.HasPrefix(data[j:], quote):
-			return j + len(quote)
-		case data[j] == '\\':
+			return j + len(quote), true
+		case data[j] == '\\' && j+1 < len(data) && data[j+1] != '\n' && data[j+1] != '\r':
 			j += 2
 		case escaped && data[j] == '"':
-			return j
+			return j, true
 		default:
 			j++
 		}
 	}
-	return len(data)
+	return len(data), false
 }
 
 func isDigit(c byte) bool {

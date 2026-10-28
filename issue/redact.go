@@ -9,9 +9,10 @@ import (
 )
 
 // logField matches a key=value attribute, a Go struct's Field:value, a Go map's
-// key:value or a Dart map's key: value. A braced value without nested braces is
-// matched whole so that the "{" stays the anchor of its first field.
-var logField = regexp.MustCompile(`(^|[\s{(]|map\[)([A-Za-z0-9_.-]+)(=|: ?)("(?:[^"\\]|\\.)*"|(?:\[[^\]]*\]|\{[^}]*\}|[^\s"}),])+)`)
+// key:value or a Dart map's key: value, or a header in a logged curl command's
+// -H 'key: value'. A braced value without nested braces is matched whole so that
+// the "{" stays the anchor of its first field.
+var logField = regexp.MustCompile(`(^|[\s{(']|map\[)([A-Za-z0-9_.-]+)(=|: ?)("(?:[^"\\]|\\.)*"|(?:\[[^\]]*\]|\{[^}]*\}|[^\s"}),])+)`)
 
 var urlSchemeSep = []byte("://")
 
@@ -103,6 +104,10 @@ func redactFields(data []byte, depth int) []byte {
 				if n := authCredentials.FindIndex(data[end:]); n != nil {
 					end += n[1]
 				}
+			}
+			if m[3] > m[2] && data[m[2]] == '\'' && data[end-1] == '\'' {
+				// Keep the quote that closes a curl header.
+				end--
 			}
 		} else if !logsafe.ContainsSecretKey(value) {
 			// Without a secret word, no nested field needs redacting.

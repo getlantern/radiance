@@ -743,7 +743,8 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// can't hold a value the runtime would silently fall back to exclude for.
 	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
 		if p, _ := v.(string); !vpn.SplitTunnelPolicy(p).Valid() {
-			return fmt.Errorf("invalid %s: %q (%T)", settings.SplitTunnelPolicyKey, p, v)
+			return fmt.Errorf("invalid %s: want %q or %q (got %T)",
+				settings.SplitTunnelPolicyKey, vpn.SplitTunnelPolicyExclude, vpn.SplitTunnelPolicyInclude, v)
 		}
 	}
 	// An explicit peer toggle is applied whether or not it changes the stored
