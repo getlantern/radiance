@@ -33,15 +33,30 @@ func TestExporterHeaders(t *testing.T) {
 }
 
 func TestExporterEndpoint(t *testing.T) {
-	assert.Equal(t, "ingest.us.signoz.cloud:443", exporterEndpoint("ingest.us.signoz.cloud:443"))
-	assert.Equal(t, "collector.example:4317", exporterEndpoint(" https://collector.example:4317/v1/traces "))
-	assert.Equal(t, "", exporterEndpoint(""))
+	for value, want := range map[string]string{
+		"ingest.us.signoz.cloud:443":                 "ingest.us.signoz.cloud:443",
+		" https://collector.example:4317/v1/traces ": "collector.example:4317",
+		"": "",
+	} {
+		got, err := exporterEndpoint(value)
+		require.NoError(t, err, value)
+		assert.Equal(t, want, got, value)
+	}
+	_, err := exporterEndpoint("http://collector.example:4317")
+	assert.Error(t, err, "the exporter only speaks TLS")
 }
 
 func TestSpanURL(t *testing.T) {
 	assert.Equal(t, "https://example.com/a?b=c", spanURL("https://user:secret@example.com/a?b=c"))
 	assert.Equal(t, "https://example.com/", spanURL("https://example.com/"))
-	assert.Equal(t, "::bad", spanURL("::bad"))
+	assert.Equal(t, "", spanURL("::bad"))
+	assert.Equal(t, "", spanURL("https://user:secret@example.com/%zz"), "credentials in a malformed URL must not be exported")
+}
+
+func TestStartTelemetryRejectsPlaintextEndpoint(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.example:4317")
+	_, err := startTelemetry(context.Background())
+	assert.Error(t, err)
 }
 
 func TestStartTelemetryWithoutEndpoint(t *testing.T) {

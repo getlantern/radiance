@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -48,20 +49,26 @@ func parentContext(ctx context.Context) context.Context {
 
 // exporterEndpoint reduces OTEL_EXPORTER_OTLP_ENDPOINT, which may be a URL
 // as the OTel specification has it, to the host:port radiance's exporter
-// takes; a bare host:port is kept.
-func exporterEndpoint(value string) string {
+// takes; a bare host:port is kept. The exporter only speaks TLS, so a URL
+// with any scheme but https is refused rather than exported to in vain.
+func exporterEndpoint(value string) (string, error) {
 	value = strings.TrimSpace(value)
-	if u, err := url.Parse(value); err == nil && u.Scheme != "" && u.Host != "" {
-		return u.Host
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return value, nil
 	}
-	return value
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT %q: only https collectors are supported", value)
+	}
+	return u.Host, nil
 }
 
-// spanURL is target without any credentials in it, for span attributes.
+// spanURL is target without any credentials in it, for span attributes;
+// a target that does not parse is left out rather than exported as is.
 func spanURL(target string) string {
 	u, err := url.Parse(target)
 	if err != nil {
-		return target
+		return ""
 	}
 	u.User = nil
 	return u.String()
@@ -95,7 +102,10 @@ func exporterHeaders(value string) map[string]string {
 // buffered and stops the exporter.
 func startTelemetry(ctx context.Context) (func(context.Context) error, error) {
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	endpoint := exporterEndpoint(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	endpoint, err := exporterEndpoint(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if err != nil {
+		return nil, err
+	}
 	if endpoint == "" {
 		return func(context.Context) error { return nil }, nil
 	}
