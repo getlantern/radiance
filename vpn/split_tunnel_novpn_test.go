@@ -29,6 +29,13 @@ func TestNoVPNSplitTunnelStubInert(t *testing.T) {
 	assert.False(t, st.IsEnabled())
 	assert.NoError(t, st.SetEnabled(true))
 	assert.False(t, st.IsEnabled(), "stub must stay disabled")
+	policy := SplitTunnelPolicyInclude
+	enabled := true
+	assert.NoError(t, st.SwitchPolicy(policy))
+	assert.NoError(t, st.Configure(&enabled, &policy))
+	assert.NoError(t, st.ImportLegacyPolicy(policy))
+	assert.NoError(t, st.ClearApps())
+	assert.Equal(t, SplitTunnelState{Policy: SplitTunnelPolicyExclude}, st.State())
 	assert.Equal(t, SplitTunnelFilter{}, st.Filters())
 	assert.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
 	assert.NoError(t, st.RemoveItems(SplitTunnelFilter{Domain: []string{"example.com"}}))

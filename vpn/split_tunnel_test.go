@@ -116,6 +116,16 @@ func TestRejectInvalidEnvelope(t *testing.T) {
 		{"invalid filter mode", func(rs *O.PlainRuleSet) {
 			rs.Rules[0].LogicalOptions.Rules[1].LogicalOptions.Mode = C.LogicalTypeAnd
 		}},
+		{"unsupported filter condition", func(rs *O.PlainRuleSet) {
+			rs.Rules[0].LogicalOptions.Rules[1].LogicalOptions.Rules = []O.HeadlessRule{
+				{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultHeadlessRule{IPCIDR: []string{"10.0.0.0/8"}}},
+			}
+		}},
+		{"inverted filter leaf", func(rs *O.PlainRuleSet) {
+			rs.Rules[0].LogicalOptions.Rules[1].LogicalOptions.Rules = []O.HeadlessRule{
+				{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultHeadlessRule{Domain: []string{"example.com"}, Invert: true}},
+			}
+		}},
 		{"nested filter", func(rs *O.PlainRuleSet) {
 			root := &rs.Rules[0].LogicalOptions
 			root.Rules[1].LogicalOptions.Rules = []O.HeadlessRule{root.Rules[0]}
@@ -262,11 +272,6 @@ func TestAddRemoveItems(t *testing.T) {
 	assert.Empty(t, f.ProcessName)
 }
 
-// TestConcurrentMutationPersistsParseableRuleSet drives the mutators
-// concurrently: they share activeFilter.Rules and rule.Mode, so without holding
-// s.access across the mutate and the subsequent save, saveLocked reads those
-// fields while another goroutine modifies them — flagged by -race and capable
-// of serializing a torn rule set.
 func TestConcurrentMutationPersistsParseableRuleSet(t *testing.T) {
 	tmpDir := t.TempDir()
 	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
@@ -290,14 +295,20 @@ func TestConcurrentMutationPersistsParseableRuleSet(t *testing.T) {
 			domain := fmt.Sprintf("d%d.example.com", i)
 			record(st.AddItems(SplitTunnelFilter{Domain: []string{domain}, ProcessName: []string{fmt.Sprintf("p%d", i)}}))
 			record(st.SetEnabled(i%2 == 0))
+			policy := SplitTunnelPolicyExclude
+			if i%2 == 0 {
+				policy = SplitTunnelPolicyInclude
+			}
+			record(st.SwitchPolicy(policy))
 			record(st.RemoveItems(SplitTunnelFilter{Domain: []string{domain}}))
 		})
 	}
 	wg.Wait()
 	assert.Empty(t, errs, "concurrent mutations must all succeed")
 
-	_, err = NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
-	require.NoError(t, err, "rule set persisted under concurrent mutation must still parse")
+	reloaded, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, st.State(), reloaded.State())
 }
 
 func TestFilterPersistence(t *testing.T) {
@@ -502,18 +513,16 @@ func TestPolicyInvertsMatch(t *testing.T) {
 	assert.True(t, rule.Match(unmatched), "include: unmatched should route direct")
 }
 
-func TestEmptyFilterModeInert(t *testing.T) {
+func TestEmptyIncludeRoutesDirect(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 	require.NoError(t, st.SetEnabled(true))
 	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
 
-	// Build the matcher after the state is set; an empty filter serializes to a
-	// disable-only rule set whose stringified form doesn't change on the
-	// enable/policy toggle, so there is no reload edge to wait on.
 	rule, _ := splitTunnelMatcher(t, st)
 
-	assert.False(t, rule.Match(&adapter.InboundContext{Domain: "anything.com"}),
-		"empty include filter should tunnel everything (route nothing direct)")
+	assert.True(t, rule.Match(&adapter.InboundContext{Domain: "anything.com"}))
+	assert.True(t, rule.Match(&adapter.InboundContext{Domain: "disable.rule"}))
+	assert.True(t, rule.Match(&adapter.InboundContext{}))
 }
 
 func TestPolicyPersistence(t *testing.T) {
@@ -531,26 +540,26 @@ func TestPolicyPersistence(t *testing.T) {
 	assert.ElementsMatch(t, []string{"example.com"}, st2.Filters().Domain)
 }
 
-func TestEmptyFilterPolicyReloadAndReconcile(t *testing.T) {
-	tmpDir := t.TempDir()
-	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
-	require.NoError(t, err)
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude)) // empty filter
-
-	st2, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
-	require.NoError(t, err)
-	require.Equal(t, SplitTunnelPolicyExclude, st2.Policy(), "empty-filter policy is not persisted across reload")
-
-	// Reconcile from the durable intent, then add an item so it persists.
-	require.NoError(t, st2.SetPolicy(SplitTunnelPolicyInclude))
-	require.NoError(t, st2.AddItem(TypeDomain, "example.com"))
-
-	st3, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
-	require.NoError(t, err)
-	assert.Equal(t, SplitTunnelPolicyInclude, st3.Policy(), "policy persists once the filter is non-empty")
+func TestEmptyPolicyPersistence(t *testing.T) {
+	for _, policy := range []SplitTunnelPolicy{SplitTunnelPolicyExclude, SplitTunnelPolicyInclude} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%v", policy, enabled), func(t *testing.T) {
+				dir := t.TempDir()
+				st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+				require.NoError(t, err)
+				require.NoError(t, st.Configure(&enabled, &policy))
+				reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+				require.NoError(t, err)
+				assert.Equal(t, st.State(), reloaded.State())
+				rule, _ := splitTunnelMatcher(t, reloaded)
+				assert.Equal(t, enabled && policy == SplitTunnelPolicyInclude,
+					rule.Match(&adapter.InboundContext{Domain: "anything.com"}))
+			})
+		}
+	}
 }
 
-func TestSetPolicyIdempotentAndDefaults(t *testing.T) {
+func TestSetPolicyIdempotentAndValidation(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 	require.Equal(t, SplitTunnelPolicyExclude, st.Policy())
 
@@ -561,7 +570,7 @@ func TestSetPolicyIdempotentAndDefaults(t *testing.T) {
 	require.NoError(t, st.SetPolicy(SplitTunnelPolicyExclude))
 	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
 
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicy("bogus")), "unrecognized policy is treated as exclude")
+	require.Error(t, st.SetPolicy(SplitTunnelPolicy("bogus")))
 	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
 }
 
@@ -669,5 +678,277 @@ func TestMigration(t *testing.T) {
 }
 `
 	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
-	assert.Equal(t, rule, st.rule)
+	assert.Equal(t, rule, splitTunnelRule(st.State()))
+}
+
+func allSplitTunnelFilters() SplitTunnelFilter {
+	return SplitTunnelFilter{
+		Domain: []string{"example.com"}, DomainSuffix: []string{".ir"},
+		DomainKeyword: []string{"keyword"}, DomainRegex: []string{"^example"},
+		ProcessName: []string{"uninstalled"}, ProcessPath: []string{"/missing/app"},
+		ProcessPathRegex: []string{"/Applications/Browser.*"}, PackageName: []string{"org.example.app"},
+	}
+}
+
+func TestSwitchPolicyClearsOnce(t *testing.T) {
+	dir := t.TempDir()
+	st := newSplitTunnel(dir, rlog.NoOpLogger())
+	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
+	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, st.SwitchPolicy(SplitTunnelPolicyInclude))
+	assert.Equal(t, SplitTunnelState{Enabled: true, Policy: SplitTunnelPolicyInclude}, st.State())
+
+	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
+	want := st.State()
+	require.NoError(t, st.SwitchPolicy(SplitTunnelPolicyInclude))
+	assert.Equal(t, want, st.State())
+	require.Error(t, st.SwitchPolicy("invalid"))
+	assert.Equal(t, want, st.State())
+	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, want, reloaded.State())
+
+	require.NoError(t, st.SwitchPolicy(SplitTunnelPolicyExclude))
+	assert.Equal(t, SplitTunnelState{Enabled: true, Policy: SplitTunnelPolicyExclude}, st.State())
+}
+
+func TestClearAppsPreservesWebsites(t *testing.T) {
+	dir := t.TempDir()
+	st := newSplitTunnel(dir, rlog.NoOpLogger())
+	items := allSplitTunnelFilters()
+	require.NoError(t, st.AddItems(items))
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, st.ClearApps())
+	items.ProcessName, items.ProcessPath, items.ProcessPathRegex, items.PackageName = nil, nil, nil, nil
+	assert.Equal(t, items, st.Filters())
+	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, st.State(), reloaded.State())
+}
+
+func TestSplitTunnelMutationFailuresPreserveState(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
+	want := st.State()
+	path := st.ruleFile
+	persisted, err := os.ReadFile(path)
+	require.NoError(t, err)
+	st.ruleFile = t.TempDir()
+
+	for name, mutate := range map[string]func() error{
+		"enable": func() error { return st.SetEnabled(true) },
+		"policy": func() error { return st.SetPolicy(SplitTunnelPolicyInclude) },
+		"switch": func() error { return st.SwitchPolicy(SplitTunnelPolicyInclude) },
+		"clear":  st.ClearApps,
+		"add":    func() error { return st.AddItem(TypeDomain, "new.example") },
+		"remove": func() error { return st.RemoveItems(allSplitTunnelFilters()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Error(t, mutate())
+			assert.Equal(t, want, st.State())
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, persisted, got)
+		})
+	}
+}
+
+func TestSplitTunnelRejectsInvalidMatchers(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
+	want := st.State()
+	for _, items := range []SplitTunnelFilter{
+		{DomainSuffix: []string{""}},
+		{DomainRegex: []string{"("}},
+		{ProcessPathRegex: []string{"("}},
+	} {
+		require.Error(t, st.AddItems(items))
+		assert.Equal(t, want, st.State())
+	}
+}
+
+func TestSplitTunnelSnapshotIsIndependent(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	items := allSplitTunnelFilters()
+	require.NoError(t, st.AddItems(items))
+	items.Domain[0] = "changed.example"
+	snapshot := st.State()
+	snapshot.Filters.PackageName[0] = "changed.package"
+	assert.Equal(t, allSplitTunnelFilters(), st.Filters())
+}
+
+func TestImportLegacyPolicyOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	root := defaultRule()
+	root.Mode = C.LogicalTypeOr
+	root.Rules = root.Rules[:1]
+	writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
+	assert.True(t, st.IsEnabled())
+	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyExclude))
+	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+	assert.Equal(t, []string{"example.com"}, st.Filters().Domain)
+
+	require.NoError(t, st.SwitchPolicy(SplitTunnelPolicyExclude))
+	st, err = NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
+	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+	assert.Empty(t, st.Filters().Domain)
+}
+
+func TestSplitTunnelFileCompatibility(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		for _, policy := range []SplitTunnelPolicy{SplitTunnelPolicyExclude, SplitTunnelPolicyInclude} {
+			state := SplitTunnelState{Enabled: true, Policy: policy}
+			if !empty {
+				state.Filters = allSplitTunnelFilters()
+			}
+			root := splitTunnelRule(state)
+			require.NoError(t, validateSplitTunnelRule([]O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}))
+			assert.False(t, root.Invert)
+			require.Len(t, root.Rules, 2)
+			assert.Equal(t, defaultRule().Rules[0], root.Rules[0])
+			filter := root.Rules[1].LogicalOptions
+			assert.Equal(t, C.LogicalTypeOr, filter.Mode)
+			assert.Equal(t, policy == SplitTunnelPolicyInclude, filter.Invert)
+			for _, child := range filter.Rules {
+				assert.Equal(t, C.RuleTypeDefault, child.Type, "older readers only allow default filter children")
+			}
+			if empty {
+				matcher, err := R.NewHeadlessRule(context.Background(), O.HeadlessRule{Type: C.RuleTypeLogical, LogicalOptions: root})
+				require.NoError(t, err)
+				for _, domain := range []string{"", "a", "a^", "example.com", "disable.rule"} {
+					assert.Equal(t, policy == SplitTunnelPolicyInclude, matcher.Match(&adapter.InboundContext{Domain: domain}))
+				}
+			}
+		}
+	}
+}
+
+func TestLoadEmptyMatcherAfterLegacyMutation(t *testing.T) {
+	dir := t.TempDir()
+	root := splitTunnelRule(SplitTunnelState{Enabled: true, Policy: SplitTunnelPolicyInclude})
+	root.Rules[1].LogicalOptions.Rules[0].DefaultOptions.Domain = []string{"example.com"}
+	writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, SplitTunnelFilter{Domain: []string{"example.com"}}, st.Filters())
+	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+}
+
+func TestSplitTunnelAppOrWebsite(t *testing.T) {
+	for _, policy := range []SplitTunnelPolicy{SplitTunnelPolicyExclude, SplitTunnelPolicyInclude} {
+		for _, enabled := range []bool{false, true} {
+			state := SplitTunnelState{
+				Enabled: enabled, Policy: policy,
+				Filters: SplitTunnelFilter{DomainSuffix: []string{".ir"}, PackageName: []string{"org.example.app"}},
+			}
+			rule, err := R.NewHeadlessRule(context.Background(), O.HeadlessRule{
+				Type: C.RuleTypeLogical, LogicalOptions: splitTunnelRule(state),
+			})
+			require.NoError(t, err)
+			for _, tc := range []struct {
+				name     string
+				metadata adapter.InboundContext
+				selected bool
+			}{
+				{"website", adapter.InboundContext{Domain: "bank.co.ir"}, true},
+				{"app", adapter.InboundContext{Domain: "other.com", ProcessInfo: &adapter.ConnectionOwner{AndroidPackageNames: []string{"org.example.app"}}}, true},
+				{"both", adapter.InboundContext{Domain: "bank.co.ir", ProcessInfo: &adapter.ConnectionOwner{AndroidPackageNames: []string{"org.example.app"}}}, true},
+				{"neither", adapter.InboundContext{Domain: "other.com", ProcessInfo: &adapter.ConnectionOwner{AndroidPackageNames: []string{"other.app"}}}, false},
+				{"suffix boundary", adapter.InboundContext{Domain: "example.ir.com"}, false},
+				{"unknown", adapter.InboundContext{}, false},
+			} {
+				t.Run(fmt.Sprintf("%s/%v/%s", policy, enabled, tc.name), func(t *testing.T) {
+					wantDirect := tc.selected
+					if policy == SplitTunnelPolicyInclude {
+						wantDirect = !wantDirect
+					}
+					assert.Equal(t, enabled && wantDirect, rule.Match(&tc.metadata))
+				})
+			}
+		}
+	}
+}
+
+func TestRemoveLastSplitTunnelItemsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := newSplitTunnel(dir, rlog.NoOpLogger())
+	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
+	require.NoError(t, st.RemoveItems(allSplitTunnelFilters()))
+	assert.Equal(t, SplitTunnelFilter{}, st.Filters())
+	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, st.State(), reloaded.State())
+}
+
+func TestSplitTunnelEmptyMarkerIsNotASelection(t *testing.T) {
+	dir := t.TempDir()
+	st := newSplitTunnel(dir, rlog.NoOpLogger())
+	require.NoError(t, st.AddItem(TypeDomainRegex, emptySplitTunnelPattern))
+	assert.Equal(t, SplitTunnelFilter{}, st.Filters())
+	require.NoError(t, st.AddItems(SplitTunnelFilter{DomainRegex: []string{emptySplitTunnelPattern, "^example"}}))
+	assert.Equal(t, []string{"^example"}, st.Filters().DomainRegex)
+	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, st.State(), reloaded.State())
+}
+
+func TestImportLegacyPolicyPersistsCombinedFilterMigration(t *testing.T) {
+	dir := t.TempDir()
+	root := defaultRule()
+	root.Mode = C.LogicalTypeOr
+	root.Rules[1] = O.HeadlessRule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultHeadlessRule{
+			Domain: []string{"example.com"}, PackageName: []string{"org.example.app"},
+		},
+	}
+	writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	before := st.State()
+	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
+	assert.Equal(t, before, st.State())
+
+	rule, _ := splitTunnelMatcher(t, st)
+	assert.True(t, rule.Match(&adapter.InboundContext{Domain: "example.com"}))
+	assert.True(t, rule.Match(&adapter.InboundContext{
+		Domain: "other.com", ProcessInfo: &adapter.ConnectionOwner{AndroidPackageNames: []string{"org.example.app"}},
+	}))
+	assert.False(t, rule.Match(&adapter.InboundContext{Domain: "other.com"}))
+
+	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, before, reloaded.State())
+	assert.False(t, reloaded.legacyFormat)
+	assert.False(t, reloaded.legacyPolicy)
+	reloaded.ruleFile = t.TempDir()
+	require.NoError(t, reloaded.ImportLegacyPolicy(SplitTunnelPolicyInclude), "canonical files must not be rewritten")
+	assert.Equal(t, before, reloaded.State())
+}
+
+func TestImportLegacyFilterMigrationRetriesFailedWrite(t *testing.T) {
+	dir := t.TempDir()
+	root := defaultRule()
+	root.Rules[1] = O.HeadlessRule{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultHeadlessRule{Domain: []string{"example.com"}}}
+	writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	before := st.State()
+	path := st.ruleFile
+	st.ruleFile = t.TempDir()
+	require.Error(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
+	assert.Equal(t, before, st.State())
+	assert.True(t, st.legacyFormat)
+	st.ruleFile = path
+	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
+	assert.Equal(t, before, st.State())
+	assert.False(t, st.legacyFormat)
 }

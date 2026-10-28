@@ -26,3 +26,20 @@ func (s *SplitTunnel) Filters() SplitTunnelFilter { return SplitTunnelFilter{} }
 func (s *SplitTunnel) AddItems(_ SplitTunnelFilter) error { return nil }
 
 func (s *SplitTunnel) RemoveItems(_ SplitTunnelFilter) error { return nil }
+
+// State returns the disabled policy for a build without VPN support.
+func (s *SplitTunnel) State() SplitTunnelState {
+	return SplitTunnelState{Policy: SplitTunnelPolicyExclude}
+}
+
+// SwitchPolicy is inert in builds without VPN support.
+func (s *SplitTunnel) SwitchPolicy(_ SplitTunnelPolicy) error { return nil }
+
+// ClearApps is inert in builds without VPN support.
+func (s *SplitTunnel) ClearApps() error { return nil }
+
+// ImportLegacyPolicy is inert in builds without VPN support.
+func (s *SplitTunnel) ImportLegacyPolicy(_ SplitTunnelPolicy) error { return nil }
+
+// Configure is inert in builds without VPN support.
+func (s *SplitTunnel) Configure(_ *bool, _ *SplitTunnelPolicy) error { return nil }

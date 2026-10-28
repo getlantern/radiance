@@ -267,6 +267,11 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 		c.mu.Unlock()
 		return ErrTunnelNotConnected
 	}
+	if cs := c.tunnel.clashServer; cs != nil && cs.selectedMode() == ManualSelectTag {
+		if selected, ok := c.tunnel.outboundMgr.Outbound(ManualSelectTag); ok {
+			boxOptions.InitialServer = selected.(adapter.OutboundGroup).Now()
+		}
+	}
 
 	c.setStatus(Restarting, nil)
 	c.logger.Info("Restarting tunnel")
@@ -274,10 +279,16 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	if c.platformIfce != nil {
 		span.SetAttributes(attribute.String("path", "platform_ifce"))
 		c.mu.Unlock()
-		if err := c.platformIfce.RestartService(); err != nil {
+		err := c.platformIfce.RestartService()
+		if err == nil && c.Status() != Connected {
+			err = errors.New("platform restart returned before VPN connected")
+		}
+		if err != nil {
 			c.logger.Error("Failed to restart tunnel via platform interface", "error", err)
 			err = fmt.Errorf("platform interface restart failed: %w", err)
-			c.setStatus(ErrorStatus, err)
+			c.mu.Lock()
+			err = c.failLocked(err)
+			c.mu.Unlock()
 			return traces.RecordError(ctx, err)
 		}
 		c.logger.Info("Tunnel restarted successfully")
@@ -301,6 +312,14 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	}
 	c.logger.Info("Tunnel restarted successfully")
 	return nil
+}
+
+func (c *VPNClient) failLocked(err error) error {
+	if c.tunnel != nil {
+		err = errors.Join(err, c.close())
+	}
+	c.setStatus(ErrorStatus, err)
+	return err
 }
 
 // ResetNetwork drops the tunnel's connections and re-seeds its interface state,

@@ -433,8 +433,7 @@ func (c *Client) EnableSplitTunneling(ctx context.Context, enable bool) error {
 	return err
 }
 
-// SetSplitTunnelPolicy selects how the split-tunnel filter is interpreted (see
-// [vpn.SplitTunnelPolicy]).
+// SetSplitTunnelPolicy changes policy, clearing selections when the policy changes.
 func (c *Client) SetSplitTunnelPolicy(ctx context.Context, policy vpn.SplitTunnelPolicy) error {
 	if !policy.Valid() {
 		return fmt.Errorf("invalid split-tunnel policy: %q", policy)
@@ -490,6 +489,30 @@ func (c *Client) SplitTunnelFilters(ctx context.Context) (vpn.SplitTunnelFilter,
 	var filter vpn.SplitTunnelFilter
 	err := c.doJSON(ctx, http.MethodGet, splitTunnelEndpoint, nil, &filter)
 	return filter, err
+}
+
+// SplitTunnelState returns the saved split-tunnel state.
+func (c *Client) SplitTunnelState(ctx context.Context) (vpn.SplitTunnelState, error) {
+	var state vpn.SplitTunnelState
+	err := c.doJSON(ctx, http.MethodGet, splitTunnelStateEndpoint, nil, &state)
+	return state, err
+}
+
+// SwitchSplitTunnelPolicy changes policy and clears selections only when the policy changes.
+func (c *Client) SwitchSplitTunnelPolicy(ctx context.Context, policy vpn.SplitTunnelPolicy) (vpn.SplitTunnelState, error) {
+	var state vpn.SplitTunnelState
+	if !policy.Valid() {
+		return state, fmt.Errorf("invalid split-tunnel policy: %q", policy)
+	}
+	err := c.doJSON(ctx, http.MethodPut, splitTunnelPolicyEndpoint, splitTunnelPolicyRequest{Policy: policy}, &state)
+	return state, err
+}
+
+// ClearSplitTunnelApps removes all app selectors while preserving website selectors.
+func (c *Client) ClearSplitTunnelApps(ctx context.Context) (vpn.SplitTunnelState, error) {
+	var state vpn.SplitTunnelState
+	err := c.doJSON(ctx, http.MethodDelete, splitTunnelAppsEndpoint, nil, &state)
+	return state, err
 }
 
 // AddSplitTunnelItems adds items to the split tunnel filter.

@@ -3,6 +3,7 @@ package vpn
 import (
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -68,6 +69,26 @@ func buildDNSServers() []option.DNSServerOptions {
 		remote,
 		local,
 		fakeIP,
+	}
+}
+
+func configureSplitTunnelDNS(opts *option.Options) {
+	opts.DNS.IndependentCache = true
+	if !slices.ContainsFunc(opts.DNS.Servers, func(server option.DNSServerOptions) bool {
+		return server.Tag == "dns_local"
+	}) {
+		for _, server := range buildDNSServers() {
+			if server.Tag == "dns_local" {
+				opts.DNS.Servers = append(slices.Clone(opts.DNS.Servers), server)
+				break
+			}
+		}
+	}
+	for _, outbound := range opts.Outbounds {
+		if outbound.Tag == "direct" {
+			outbound.Options.(*option.DirectOutboundOptions).DomainResolver = &option.DomainResolveOptions{Server: "dns_local"}
+			break
+		}
 	}
 }
 

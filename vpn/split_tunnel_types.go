@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -10,11 +11,7 @@ import (
 // asserting the rule-set is absent.
 const splitTunnelTag = "split-tunnel"
 
-// SplitTunnelPolicy selects how the split-tunnel filter list is interpreted.
-//
-// The values describe the user-facing behavior: whether matching filters are
-// excluded from the VPN tunnel or are the only traffic included in it. An empty
-// filter list keeps all traffic in the tunnel regardless of the policy.
+// SplitTunnelPolicy selects whether matching traffic bypasses or uses the VPN.
 type SplitTunnelPolicy string
 
 const (
@@ -44,6 +41,13 @@ const (
 	TypeProcessPathRegex = "processPathRegex"
 	TypePackageName      = "packageName"
 )
+
+// SplitTunnelState is the persisted policy and its selections.
+type SplitTunnelState struct {
+	Enabled bool              `json:"enabled"`
+	Policy  SplitTunnelPolicy `json:"policy"`
+	Filters SplitTunnelFilter `json:"filters"`
+}
 
 // SplitTunnelFilter is the set of domains, processes, and packages a user has
 // configured for split-tunnel routing.
@@ -85,4 +89,24 @@ func (f SplitTunnelFilter) String() string {
 		str = append(str, fmt.Sprintf("packageName: %v", f.PackageName))
 	}
 	return "{" + strings.Join(str, ", ") + "}"
+}
+
+func (f SplitTunnelFilter) clone() SplitTunnelFilter {
+	return SplitTunnelFilter{
+		Domain: slices.Clone(f.Domain), DomainSuffix: slices.Clone(f.DomainSuffix),
+		DomainKeyword: slices.Clone(f.DomainKeyword), DomainRegex: slices.Clone(f.DomainRegex),
+		ProcessName: slices.Clone(f.ProcessName), ProcessPath: slices.Clone(f.ProcessPath),
+		ProcessPathRegex: slices.Clone(f.ProcessPathRegex), PackageName: slices.Clone(f.PackageName),
+	}
+}
+
+func (f *SplitTunnelFilter) update(diff SplitTunnelFilter, fn func([]string, []string) []string) {
+	f.Domain = fn(f.Domain, diff.Domain)
+	f.DomainSuffix = fn(f.DomainSuffix, diff.DomainSuffix)
+	f.DomainKeyword = fn(f.DomainKeyword, diff.DomainKeyword)
+	f.DomainRegex = fn(f.DomainRegex, diff.DomainRegex)
+	f.ProcessName = fn(f.ProcessName, diff.ProcessName)
+	f.ProcessPath = fn(f.ProcessPath, diff.ProcessPath)
+	f.ProcessPathRegex = fn(f.ProcessPathRegex, diff.ProcessPathRegex)
+	f.PackageName = fn(f.PackageName, diff.PackageName)
 }

@@ -89,8 +89,10 @@ const (
 	unboundedConnectionEventsEndpoint = "/unbounded/connection/events"
 	unboundedSnapshotEndpoint         = "/unbounded/snapshot"
 
-	// Split tunnel endpoint
-	splitTunnelEndpoint = "/split-tunnel"
+	splitTunnelEndpoint       = "/split-tunnel"
+	splitTunnelStateEndpoint  = "/split-tunnel/state"
+	splitTunnelPolicyEndpoint = "/split-tunnel/policy"
+	splitTunnelAppsEndpoint   = "/split-tunnel/apps"
 
 	// Account endpoints
 	accountNewUserEndpoint          = "/account/new-user"
@@ -288,6 +290,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
+	mux.HandleFunc("GET "+splitTunnelStateEndpoint, traced(s.splitTunnelStateHandler))
+	mux.HandleFunc("PUT "+splitTunnelPolicyEndpoint, traced(s.splitTunnelPolicyHandler))
+	mux.HandleFunc("DELETE "+splitTunnelAppsEndpoint, traced(s.splitTunnelAppsHandler))
 
 	// Account
 	mux.HandleFunc("POST "+accountNewUserEndpoint, traced(s.accountNewUserHandler))
@@ -969,7 +974,7 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		fallthrough
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, settings.GetAll())
+		writeJSON(w, http.StatusOK, s.backend(r.Context()).Settings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1082,6 +1087,10 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.backend(r.Context()).SplitTunnelFilters())
 		return
 	}
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var items vpn.SplitTunnelFilter
 	if err := decodeJSON(r, &items); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1099,6 +1108,41 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+type splitTunnelPolicyRequest struct {
+	Policy vpn.SplitTunnelPolicy `json:"policy"`
+}
+
+func (s *localapi) splitTunnelStateHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).SplitTunnelState())
+}
+
+func (s *localapi) splitTunnelPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	var req splitTunnelPolicyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !req.Policy.Valid() {
+		http.Error(w, "invalid split-tunnel policy", http.StatusBadRequest)
+		return
+	}
+	b := s.backend(r.Context())
+	if err := b.SwitchSplitTunnelPolicy(req.Policy); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, b.SplitTunnelState())
+}
+
+func (s *localapi) splitTunnelAppsHandler(w http.ResponseWriter, r *http.Request) {
+	b := s.backend(r.Context())
+	if err := b.ClearSplitTunnelApps(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, b.SplitTunnelState())
 }
 
 /////////////
