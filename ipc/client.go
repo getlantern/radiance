@@ -518,9 +518,25 @@ func (c *Client) NewUser(ctx context.Context) (*account.UserData, error) {
 
 // Login authenticates the user with email and password.
 func (c *Client) Login(ctx context.Context, email, password string) (*account.UserData, error) {
+	return c.login(ctx, email, password, 0)
+}
+
+// LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
+func (c *Client) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	if expectedLegacyID <= 0 {
+		return nil, errors.New("expected account ID must be positive")
+	}
+	return c.login(ctx, email, password, expectedLegacyID)
+}
+
+func (c *Client) login(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	endpoint := accountLoginEndpoint
+	if expectedLegacyID != 0 {
+		endpoint += "/current"
+	}
 	var userData account.UserData
-	err := c.doJSON(ctx, http.MethodPost, accountLoginEndpoint,
-		EmailPasswordRequest{Email: email, Password: password}, &userData)
+	err := c.doJSON(ctx, http.MethodPost, endpoint,
+		LoginRequest{EmailPasswordRequest: EmailPasswordRequest{Email: email, Password: password}, ExpectedLegacyID: expectedLegacyID}, &userData)
 	if err != nil {
 		return nil, err
 	}
@@ -613,19 +629,6 @@ func (c *Client) StartChangeEmail(ctx context.Context, newEmail, password string
 func (c *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
 	_, err := c.do(ctx, http.MethodPost, accountEmailEndpoint+"/complete",
 		ChangeEmailCompleteRequest{NewEmail: newEmail, Password: password, Code: code})
-	return err
-}
-
-// StartBindLegacyEmail requests a verification code for a legacy account's new email.
-func (c *Client) StartBindLegacyEmail(ctx context.Context, email string) error {
-	_, err := c.do(ctx, http.MethodPost, accountBindLegacyEmailEndpoint+"/start", EmailRequest{Email: email})
-	return err
-}
-
-// CompleteBindLegacyEmail binds the verified email and password to the current legacy account.
-func (c *Client) CompleteBindLegacyEmail(ctx context.Context, email, password, code string) error {
-	_, err := c.do(ctx, http.MethodPost, accountBindLegacyEmailEndpoint+"/complete",
-		BindLegacyEmailCompleteRequest{Email: email, Password: password, Code: code})
 	return err
 }
 

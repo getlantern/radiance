@@ -157,17 +157,6 @@ message CompleteChangeEmailRequest {
   bytes new_verifier = 5;
 }
 
-message StartBindLegacyEmailRequest {
-  string email = 1;
-}
-
-message CompleteBindLegacyEmailRequest {
-  string email = 1;
-  string code = 2;
-  bytes new_salt = 3;
-  bytes new_verifier = 4;
-}
-
 // POST /users/delete
 message DeleteUserRequest {
   string email = 1;

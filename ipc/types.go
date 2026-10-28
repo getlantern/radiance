@@ -24,6 +24,12 @@ type EmailPasswordRequest struct {
 	Password string `json:"password"`
 }
 
+// LoginRequest requires a positive ExpectedLegacyID on the guarded login route.
+type LoginRequest struct {
+	EmailPasswordRequest
+	ExpectedLegacyID int64 `json:"expectedLegacyID,omitempty"`
+}
+
 type EmailCodeRequest struct {
 	Email string `json:"email"`
 	Code  string `json:"code"`
@@ -86,13 +92,6 @@ type RecoveryCompleteRequest struct {
 	Email       string `json:"email"`
 	NewPassword string `json:"newPassword"`
 	Code        string `json:"code"`
-}
-
-// BindLegacyEmailCompleteRequest supplies credentials for completing an email binding.
-type BindLegacyEmailCompleteRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Code     string `json:"code"`
 }
 
 type ActivationRequest struct {

@@ -1725,6 +1725,11 @@ func (r *LocalBackend) Login(ctx context.Context, email, password string) (*acco
 	return r.accountClient.Login(ctx, email, password)
 }
 
+// LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
+func (r *LocalBackend) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	return r.accountClient.LoginForAccount(ctx, email, password, expectedLegacyID)
+}
+
 func (r *LocalBackend) Logout(ctx context.Context, email string) (*account.UserData, error) {
 	return r.accountClient.Logout(ctx, email)
 }
@@ -1744,16 +1749,6 @@ func (r *LocalBackend) StartChangeEmail(ctx context.Context, newEmail, password 
 
 func (r *LocalBackend) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
 	return r.accountClient.CompleteChangeEmail(ctx, newEmail, password, code)
-}
-
-// StartBindLegacyEmail requests verification of a legacy account's new email.
-func (r *LocalBackend) StartBindLegacyEmail(ctx context.Context, email string) error {
-	return r.accountClient.StartBindLegacyEmail(ctx, email)
-}
-
-// CompleteBindLegacyEmail binds the verified email and password to the current legacy account.
-func (r *LocalBackend) CompleteBindLegacyEmail(ctx context.Context, email, password, code string) error {
-	return r.accountClient.CompleteBindLegacyEmail(ctx, email, password, code)
 }
 
 func (r *LocalBackend) StartRecoveryByEmail(ctx context.Context, email string) error {
