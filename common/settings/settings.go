@@ -348,6 +348,8 @@ func Get(key _key) any {
 	return snapshot().Get(key.String())
 }
 
+// GetString returns the value of key, which must hold a scalar, as a string. A float64
+// is truncated to an integer.
 func GetString(key _key) string {
 	value := Get(key)
 	if value == nil {
@@ -360,6 +362,7 @@ func GetString(key _key) string {
 	case string:
 		return v
 	default:
+		//logleak:ok GetString keys hold scalars
 		return fmt.Sprintf("%v", v)
 	}
 }

@@ -140,6 +140,7 @@ func mapKeyString(k reflect.Value) string {
 	if k.Kind() == reflect.String {
 		return k.String()
 	}
+	//logleak:ok keys are scalars; only isLoggableAny maps reach here
 	return fmt.Sprint(k.Interface())
 }
 

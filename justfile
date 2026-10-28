@@ -2,6 +2,7 @@ base_tags := "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme
 tags := if os() == "macos" { "standalone," + base_tags } else { base_tags }
 lanternd := if os() == "windows" { "lanternd.exe" } else { "lanternd" }
 lantern := if os() == "windows" { "lantern.exe" } else { "lantern" }
+logleak := if os() == "windows" { "logleak.exe" } else { "logleak" }
 version := env("VERSION", "")
 # Commit and build time identify the exact build in telemetry (vcs.ref.head.revision, build.time).
 commit := `git rev-parse --short=7 HEAD 2>/dev/null || echo unknown`
@@ -33,6 +34,12 @@ install-cli:
 
 install: install-daemon install-cli
 
+# logleak checks every package for GOOS, the host by default; the analyzer itself is
+# always built for the host.
+logleak:
+    GOOS= GOARCH= go build -o bin/{{logleak}} ./cmd/logleak
+    GOFLAGS="${GOFLAGS:-} -tags={{tags}}" bin/{{logleak}} -test=false ./...
+
 proto:
     go build -o build/protoc-gen-go google.golang.org/protobuf/cmd/protoc-gen-go
     protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative account/protos/auth.proto
@@ -40,7 +47,7 @@ proto:
     protoc --go_out=. --plugin=build/protoc-gen-go --go_opt=paths=source_relative issue/issue.proto
 
 test:
-    go test -v ./...
+    go test -v -tags "{{tags}}" ./...
 
 # Runs on a connected device or emulator. Set RADIANCE_SMART_NETWORK_TEST=1 to
 # include the tests that need real egress.
