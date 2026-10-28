@@ -38,7 +38,7 @@ type ServersAddJSONCmd struct {
 
 type ServersAddURLCmd struct {
 	URLs           []string `arg:"positional,required" help:"server URLs"`
-	SkipCertVerify bool     `arg:"--skip-cert-verify" help:"skip cert verification"`
+	SkipCertVerify bool     `arg:"--skip-cert-verify" help:"deprecated: TLS certificates are always verified"`
 }
 
 type ServersRemoveCmd struct {

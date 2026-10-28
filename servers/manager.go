@@ -145,6 +145,7 @@ func (s *Server) UnmarshalJSON(data []byte) error {
 	} else if sj.Endpoint != nil {
 		s.Options = *sj.Endpoint
 	}
+	*s = *s.WithTLSVerification()
 	return nil
 }
 
@@ -381,7 +382,7 @@ func (m *Manager) AddServers(list ServerList, force bool) error {
 			}
 		}
 		for _, srv := range list.Servers {
-			m.servers[srv.Tag] = srv.Clone()
+			m.servers[srv.Tag] = srv.WithTLSVerification()
 		}
 		return nil
 	}(); err != nil {
@@ -584,7 +585,7 @@ func (m *Manager) loadOldFormat(buf []byte) error {
 			deniedErrors = append(deniedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
 			return
 		}
-		m.servers[srv.Tag] = srv
+		m.servers[srv.Tag] = srv.WithTLSVerification()
 	}
 	for group, opts := range old {
 		isLantern := group == modeLantern
@@ -782,13 +783,13 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 		if out.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("outbound missing tag"))
 		}
-		servers = append(servers, &Server{Tag: out.Tag, Type: out.Type, Options: out})
+		servers = append(servers, (&Server{Tag: out.Tag, Type: out.Type, Options: out}).WithTLSVerification())
 	}
 	for _, ep := range cfg.Endpoints {
 		if ep.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("endpoint missing tag"))
 		}
-		servers = append(servers, &Server{Tag: ep.Tag, Type: ep.Type, Options: ep})
+		servers = append(servers, (&Server{Tag: ep.Tag, Type: ep.Type, Options: ep}).WithTLSVerification())
 	}
 	list := ServerList{Servers: servers}
 	if err := m.AddServers(list, false); err != nil {
@@ -797,8 +798,8 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 	return &list, nil
 }
 
-// AddServersByURL adds a server(s) by downloading and parsing the config from a list of URLs.
-func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVerification bool) (*ServerList, error) {
+// AddServersByURL imports server URLs; the legacy certificate-bypass flag is ignored.
+func (m *Manager) AddServersByURL(ctx context.Context, urls []string, _ bool) (*ServerList, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerByURLs")
 	defer span.End()
 	urlProvider, loaded := pluriconfig.GetProvider(string(model.ProviderURL))
@@ -814,17 +815,6 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVe
 		return nil, traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
 	}
 
-	if skipCertVerification {
-		urlsWithCustomOptions := make([]url.URL, 0, len(cfgURLs))
-		for _, v := range cfgURLs {
-			queryParams := v.Query()
-			queryParams.Add("allowInsecure", "1")
-			v.RawQuery = queryParams.Encode()
-			urlsWithCustomOptions = append(urlsWithCustomOptions, v)
-		}
-		cfg.Options = urlsWithCustomOptions
-	}
-
 	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
 	if !loaded {
 		return nil, traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))
@@ -833,6 +823,6 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, skipCertVe
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
 	}
-	m.logger.Info("Added servers based on URLs", "serverCount", len(cfgURLs), "skipCertVerification", skipCertVerification)
+	m.logger.Info("Added servers based on URLs", "serverCount", len(cfgURLs))
 	return m.AddServersByJSON(ctx, singBoxCfg)
 }
