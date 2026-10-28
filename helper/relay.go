@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/traces"
 )
 
 // relayPaths are the HelperService operations the app may relay, by the name
@@ -99,10 +98,10 @@ func (r *Relayer) Relay(ctx context.Context, op string, body []byte) (RelayResul
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
-	// Detach the caller's span: kindling records its attempts as events on
-	// the span in the request's context, and a helper call must not show
-	// up in the caller's trace.
-	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
+	// Kindling records its attempts as events on the span in the request's
+	// context, and a helper call, or a redirect from one, must not show up
+	// in any trace.
+	ctx = traces.Untraced(ctx)
 	ctx, cancel := context.WithTimeout(ctx, relayTimeout)
 	defer cancel()
 	req, err := common.NewRequestWithHeaders(ctx, http.MethodPost, r.baseURL+path, bytes.NewReader(body))

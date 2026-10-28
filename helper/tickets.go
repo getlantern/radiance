@@ -23,6 +23,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/traces"
 )
 
 const (
@@ -94,7 +95,8 @@ func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
 // Fetch calls POST {baseURL}/helper/tickets, authenticated by the device ID
 // header like the peer API, and splits the tickets by role.
 func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
-	r, err := common.NewRequestWithHeaders(ctx, http.MethodPost, f.baseURL+"/helper/tickets", strings.NewReader("{}"))
+	// Untraced also keeps a redirect off /helper/ out of traces.
+	r, err := common.NewRequestWithHeaders(traces.Untraced(ctx), http.MethodPost, f.baseURL+"/helper/tickets", strings.NewReader("{}"))
 	if err != nil {
 		return Tickets{}, fmt.Errorf("build ticket request: %w", err)
 	}

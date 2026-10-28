@@ -3,6 +3,7 @@ package traces
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -100,6 +101,45 @@ func TestRoundTripperDetachesTheCallersSpanFromHelperRequests(t *testing.T) {
 
 	spans := mem.GetSpans()
 	require.Len(t, spans, 1, "only the caller's own span")
+	assert.Equal(t, "caller", spans[0].Name)
+	assert.Empty(t, spans[0].Attributes)
+	assert.Empty(t, spans[0].Events)
+}
+
+// http.Client builds a redirect from the original request's context, so an
+// Untraced request stays untraced when it is redirected off /helper/.
+func TestUntracedSurvivesARedirectOffHelper(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/helper/") {
+			http.Redirect(w, r, "/v1/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	client := &http.Client{Transport: NewRoundTripper(NewHeaderAnnotatingRoundTripper(http.DefaultTransport))}
+
+	ctx, parent := tp.Tracer("test").Start(context.Background(), "caller")
+	req, err := http.NewRequestWithContext(Untraced(ctx), http.MethodPost, srv.URL+"/v1/helper/tickets", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("X-Lantern-Device-Id", "device-1")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.NotNil(t, resp.Request)
+	assert.Equal(t, "/v1/elsewhere", resp.Request.URL.Path, "the redirect was followed")
+	parent.End()
+
+	spans := mem.GetSpans()
+	require.Len(t, spans, 1, "no span for either hop")
 	assert.Equal(t, "caller", spans[0].Name)
 	assert.Empty(t, spans[0].Attributes)
 	assert.Empty(t, spans[0].Events)

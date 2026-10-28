@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,9 +18,13 @@ import (
 	"github.com/getlantern/broflake/common/helperticket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/traces"
 )
 
 func TestMain(m *testing.M) {
@@ -521,4 +526,30 @@ func TestSourceInvalidateKeepsABusyBackoff(t *testing.T) {
 	assert.Equal(t, 2*time.Minute, src.dueIn(), "and one after it")
 	src.Volunteer()
 	assert.Never(t, func() bool { return f.calls.Load() > 1 }, 30*time.Millisecond, time.Millisecond)
+}
+
+// A ticket fetch redirected off /helper/ must not be traced either, since the
+// redirect carries the device ID header.
+func TestFetcherRedirectIsNotTraced(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/helper/") {
+			http.Redirect(w, r, "/v1/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		_, _ = w.Write([]byte(`{"tickets":[],"lifetime_seconds":600}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := &http.Client{Transport: traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(http.DefaultTransport))}
+
+	_, err := NewFetcher(client, srv.URL+"/v1").Fetch(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, mem.GetSpans())
 }
