@@ -145,7 +145,6 @@ func (s *Server) UnmarshalJSON(data []byte) error {
 	} else if sj.Endpoint != nil {
 		s.Options = *sj.Endpoint
 	}
-	*s = *s.WithTLSVerification()
 	return nil
 }
 
@@ -356,8 +355,8 @@ func warnIfReaderStarved(caller string, wait time.Duration) {
 
 // AddServers adds new servers. If force is true, it will overwrite any
 // existing servers with the same tags. If force is false, it returns an error
-// if any of the tags already exist. If any server fails
-// [Server.CheckHostAccess], none are added.
+// if any of the tags already exist. If a server fails [Server.CheckHostAccess]
+// or a user server fails [Server.CheckTLSIdentity], none are added.
 func (m *Manager) AddServers(list ServerList, force bool) error {
 	if len(list.Servers) == 0 {
 		return nil
@@ -365,6 +364,11 @@ func (m *Manager) AddServers(list ServerList, force bool) error {
 	for _, srv := range list.Servers {
 		if err := srv.CheckHostAccess(); err != nil {
 			return fmt.Errorf("server %q: %w", srv.Tag, err)
+		}
+		if !srv.IsLantern {
+			if err := srv.CheckTLSIdentity(); err != nil {
+				return fmt.Errorf("server %q: %w", srv.Tag, err)
+			}
 		}
 	}
 
@@ -549,7 +553,7 @@ func (m *Manager) loadServerList(buf []byte) error {
 			skippedErrors = append(skippedErrors, fmt.Errorf("server %q: %w", srv.Tag, err))
 			continue
 		}
-		m.servers[srv.Tag] = srv
+		m.servers[srv.Tag] = srv.WithTLSVerification()
 	}
 
 	if len(skippedErrors) > 0 {
@@ -763,18 +767,23 @@ func (m *Manager) privateServerRequest(method, ip string, port int, path, access
 	return resp, nil
 }
 
+type serverConfig struct {
+	Outbounds []option.Outbound `json:"outbounds,omitempty"`
+	Endpoints []option.Endpoint `json:"endpoints,omitempty"`
+}
+
 // AddServersByJSON adds any outbounds and endpoints defined in the provided sing-box JSON config.
 func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerList, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "Manager.AddServerBySingboxJSON")
 	defer span.End()
-	type singboxConfig struct {
-		Outbounds []option.Outbound `json:"outbounds,omitempty"`
-		Endpoints []option.Endpoint `json:"endpoints,omitempty"`
-	}
-	cfg, err := json.UnmarshalExtendedContext[singboxConfig](m.regContext(), config)
+	cfg, err := json.UnmarshalExtendedContext[serverConfig](m.regContext(), config)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse config: %w", err))
 	}
+	return m.addServerConfig(ctx, cfg)
+}
+
+func (m *Manager) addServerConfig(ctx context.Context, cfg serverConfig) (*ServerList, error) {
 	if len(cfg.Endpoints) == 0 && len(cfg.Outbounds) == 0 {
 		return nil, traces.RecordError(ctx, fmt.Errorf("no endpoints or outbounds found in the provided configuration"))
 	}
@@ -783,17 +792,20 @@ func (m *Manager) AddServersByJSON(ctx context.Context, config []byte) (*ServerL
 		if out.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("outbound missing tag"))
 		}
-		servers = append(servers, (&Server{Tag: out.Tag, Type: out.Type, Options: out}).WithTLSVerification())
+		servers = append(servers, &Server{Tag: out.Tag, Type: out.Type, Options: out})
 	}
 	for _, ep := range cfg.Endpoints {
 		if ep.Tag == "" {
 			return nil, traces.RecordError(ctx, fmt.Errorf("endpoint missing tag"))
 		}
-		servers = append(servers, (&Server{Tag: ep.Tag, Type: ep.Type, Options: ep}).WithTLSVerification())
+		servers = append(servers, &Server{Tag: ep.Tag, Type: ep.Type, Options: ep})
 	}
 	list := ServerList{Servers: servers}
 	if err := m.AddServers(list, false); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to add servers: %w", err))
+	}
+	for i, server := range list.Servers {
+		list.Servers[i] = server.WithTLSVerification()
 	}
 	return &list, nil
 }
@@ -815,6 +827,14 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, _ bool) (*
 		return nil, traces.RecordError(ctx, fmt.Errorf("no valid URLs found in the provided configuration"))
 	}
 
+	bypass := make([]bool, len(cfgURLs))
+	for i, u := range cfgURLs {
+		bypass[i], err = urlRequestsTLSBypass(u)
+		if err != nil {
+			return nil, traces.RecordError(ctx, fmt.Errorf("URL %d: %w", i+1, err))
+		}
+	}
+
 	singBoxProvider, loaded := pluriconfig.GetProvider(string(model.ProviderSingBox))
 	if !loaded {
 		return nil, traces.RecordError(ctx, fmt.Errorf("singbox config provider not loaded"))
@@ -823,6 +843,28 @@ func (m *Manager) AddServersByURL(ctx context.Context, urls []string, _ bool) (*
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("failed to serialize sing-box config: %w", err))
 	}
+	options, err := json.UnmarshalExtendedContext[serverConfig](m.regContext(), singBoxCfg)
+	if err != nil {
+		return nil, traces.RecordError(ctx, fmt.Errorf("failed to parse converted config: %w", err))
+	}
+	if len(options.Outbounds) != len(cfgURLs) || len(options.Endpoints) != 0 {
+		return nil, traces.RecordError(ctx, errors.New("URL conversion produced an unexpected server count"))
+	}
+	for i, insecure := range bypass {
+		if !insecure {
+			continue
+		}
+		wrapper, ok := options.Outbounds[i].Options.(option.OutboundTLSOptionsWrapper)
+		if !ok || wrapper.TakeOutboundTLSOptions() == nil || !wrapper.TakeOutboundTLSOptions().Enabled {
+			return nil, traces.RecordError(ctx, fmt.Errorf("URL %d: %w", i+1, errTLSIdentityRequired))
+		}
+		// Preserve the bypass request even when a URL parser drops the flag.
+		wrapper.TakeOutboundTLSOptions().Insecure = true
+	}
+	list, err := m.addServerConfig(ctx, options)
+	if err != nil {
+		return nil, err
+	}
 	m.logger.Info("Added servers based on URLs", "serverCount", len(cfgURLs))
-	return m.AddServersByJSON(ctx, singBoxCfg)
+	return list, nil
 }
