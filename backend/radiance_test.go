@@ -1644,3 +1644,16 @@ func TestFreshConfigWithoutAHelperEndsItsPairing(t *testing.T) {
 		})
 	}
 }
+
+// The IPC AddServers path takes a server's tag and its outbound separately; an
+// outbound tagged with a reserved tag under another name is refused before
+// anything is stored or reaches the tunnel.
+func TestAddServersRefusesAHiddenReservedTag(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	srv := helperWithPort("mine", 1080)
+	srv.Options = helperWithPort(vpn.AutoSelectTag, 1080).Options
+	err := r.AddServers(servers.ServerList{Servers: []*servers.Server{srv}})
+	require.ErrorIs(t, err, servers.ErrTagMismatch)
+	require.ErrorContains(t, err, "ServerManager", "refused by the server manager, before the tunnel")
+	assert.Empty(t, r.AllServers())
+}

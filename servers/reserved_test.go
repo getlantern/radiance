@@ -45,3 +45,26 @@ func TestUserServersCannotUseReservedTags(t *testing.T) {
 	// A Lantern config may carry the built-in outbounds.
 	require.NoError(t, mgr.AddServers(ServerList{Servers: []*Server{socksServer("direct", true)}}, false))
 }
+
+// The tunnel creates a server's outbound under the tag the outbound carries,
+// so a user server's tag must match it; otherwise a server named "mine" could
+// carry an outbound tagged "auto" and replace the tunnel's own group.
+func TestUserServerTagMustMatchItsOutbound(t *testing.T) {
+	mgr, err := NewManager(t.TempDir(), log.NoOpLogger())
+	require.NoError(t, err)
+
+	mismatched := socksServer("mine", false)
+	mismatched.Options = socksServer("other", false).Options
+	require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{mismatched}}, false), ErrTagMismatch)
+
+	for _, tag := range ReservedTags() {
+		hidden := socksServer("mine", false)
+		hidden.Options = socksServer(tag, false).Options
+		require.Error(t, mgr.AddServers(ServerList{Servers: []*Server{hidden}}, false), tag)
+	}
+	endpoint := &Server{Tag: "mine", Type: "wireguard", Options: option.Endpoint{Tag: "manual", Type: "wireguard"}}
+	require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{endpoint}}, false), ErrTagMismatch)
+	assert.Empty(t, mgr.AllServers(), "nothing is stored")
+
+	require.NoError(t, mgr.AddServers(ServerList{Servers: []*Server{socksServer("mine", false)}}, false))
+}
