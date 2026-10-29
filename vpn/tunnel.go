@@ -98,10 +98,6 @@ type tunnel struct {
 	// replaced under the same tag since the last syncPersonalProxiesLocked,
 	// which swaps them into the personal proxies group. Guarded by outboundMu.
 	replacedHelpers map[string]struct{}
-	// reselectPersonalProxies is set while a rebuild of the selected personal
-	// proxies group has yet to select it again: the next sync that offers the
-	// group selects it. A selection clears it. Guarded by outboundMu.
-	reselectPersonalProxies bool
 
 	// closeTimeout bounds how long close() waits for closers to finish; a zero
 	// value uses defaultCloseTimeout.
@@ -510,15 +506,14 @@ var ErrPersonalProxiesUnavailable = errors.New("personal proxies unavailable")
 
 func (t *tunnel) selectOutbound(tag string) error {
 	// Held to the selection, so the personal proxies group cannot be removed
-	// between its check and its selection, nor a pending reselection of it
-	// override this one.
+	// between its check and its selection, and a swap of a replaced outbound
+	// in the manual selector, which restores its selection, cannot interleave.
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
 	// Checked before the mode switch, so a refused selection changes nothing.
 	if tag == PersonalProxiesTag && !t.offersPersonalProxies() {
 		return ErrPersonalProxiesUnavailable
 	}
-	t.reselectPersonalProxies = false
 	if err := t.selectMode(ManualSelectTag); err != nil {
 		return err
 	}
@@ -624,7 +619,6 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 	case len(helpers) == 0 && group == nil:
 		return nil
 	case len(helpers) == 0:
-		t.reselectPersonalProxies = false
 		return t.withdrawPersonalProxiesLocked(selector)
 	case group == nil:
 		if err := t.createPersonalProxiesLocked(helpers); err != nil {
@@ -648,7 +642,7 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 				return fmt.Errorf("update personal proxies group: %w", err)
 			}
 		}
-		if err := t.swapPersonalProxiesLocked(selector, group, helpers, swap); err != nil {
+		if err := swapPersonalProxiesLocked(group, swap); err != nil {
 			return err
 		}
 	}
@@ -657,59 +651,25 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 			return fmt.Errorf("offer personal proxies group: %w", err)
 		}
 	}
-	t.reselectPersonalProxiesLocked(selector)
 	return nil
 }
 
-// reselectPersonalProxiesLocked selects the personal proxies group again if a
-// rebuild left that pending. The caller must hold t.outboundMu.
-func (t *tunnel) reselectPersonalProxiesLocked(selector lbA.MutableOutboundGroup) {
-	if !t.reselectPersonalProxies {
-		return
-	}
-	if s, ok := selector.(Selector); ok && s.SelectOutbound(PersonalProxiesTag) {
-		t.reselectPersonalProxies = false
-	}
-}
-
 // swapPersonalProxiesLocked points the group's members in swap at their
-// replacement outbounds. The group holds a member by its outbound and skips
-// a tag it already has, so each is removed and added again; while another
-// member stays in the group that never empties it. When every member was
-// replaced the group is rebuilt instead, keeping the selection on it. The
-// caller must hold t.outboundMu.
-func (t *tunnel) swapPersonalProxiesLocked(
-	selector lbA.MutableOutboundGroup, group lbA.MutableOutboundGroup, helpers, swap []string,
-) error {
-	if len(swap) == 0 {
-		return nil
-	}
-	if len(swap) < len(group.All()) {
-		for _, tag := range swap {
-			if _, err := group.Remove(tag); err != nil {
-				return fmt.Errorf("update personal proxies group: %w", err)
-			}
-			if _, err := group.Add(tag); err != nil {
-				return fmt.Errorf("update personal proxies group: %w", err)
-			}
+// replacement outbounds, inside the group, so the manual selector's choice of
+// it never moves. The group holds a member by its outbound and skips a tag it
+// already has, so each is removed and added again. Removing a sole member
+// leaves the group briefly empty, which a url-test group started with members
+// tolerates: dials in the gap fail rather than going elsewhere, and its check
+// loop resumes on the next dial. The caller must hold t.outboundMu.
+func swapPersonalProxiesLocked(group lbA.MutableOutboundGroup, swap []string) error {
+	for _, tag := range swap {
+		if _, err := group.Remove(tag); err != nil {
+			return fmt.Errorf("update personal proxies group: %w", err)
 		}
-		return nil
+		if _, err := group.Add(tag); err != nil {
+			return fmt.Errorf("update personal proxies group: %w", err)
+		}
 	}
-	// Set first, so a later sync still selects the group again if this
-	// rebuild fails part way.
-	if selector.Now() == PersonalProxiesTag {
-		t.reselectPersonalProxies = true
-	}
-	if err := t.withdrawPersonalProxiesLocked(selector); err != nil {
-		return err
-	}
-	if err := t.createPersonalProxiesLocked(helpers); err != nil {
-		return err
-	}
-	if _, err := selector.Add(PersonalProxiesTag); err != nil {
-		return fmt.Errorf("offer personal proxies group: %w", err)
-	}
-	t.reselectPersonalProxiesLocked(selector)
 	return nil
 }
 

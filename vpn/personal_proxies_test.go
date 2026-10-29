@@ -206,7 +206,9 @@ func blockServer(tag string) *servers.Server {
 
 // A helper whose options change is replaced in the outbound manager under the
 // same tag; the group must dial through the replacement, not the closed
-// original, whether or not another member stays in the group meanwhile.
+// original, whether or not another member stays in the group meanwhile. The
+// group is swapped in place, so the manual selector never leaves it: traffic
+// never goes through another server during a credential refresh.
 func TestPersonalProxiesGroupFollowsAReplacedHelper(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(target.Close)
@@ -227,11 +229,33 @@ func TestPersonalProxiesGroupFollowsAReplacedHelper(t *testing.T) {
 			require.Error(t, err, "every member blocks")
 
 			require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
-
-			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
-			group = tun.personalProxiesGroup().(adapter.Outbound)
 			sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
+
+			// Watch the selection for the whole replacement.
+			var (
+				elsewhere []string
+				stop      = make(chan struct{})
+				done      = make(chan struct{})
+			)
+			go func() {
+				defer close(done)
+				for {
+					if now := sel.Now(); now != PersonalProxiesTag {
+						elsewhere = append(elsewhere, now)
+					}
+					select {
+					case <-stop:
+						return
+					default:
+					}
+				}
+			}()
+			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
+			close(stop)
+			<-done
+			assert.Empty(t, elsewhere, "the manual selector never left the group")
 			assert.Equal(t, PersonalProxiesTag, sel.Now(), "the selection stays on the group")
+			assert.Same(t, group, tun.personalProxiesGroup().(adapter.Outbound), "swapped in place, not rebuilt")
 			assert.ElementsMatch(t, append([]string{testHelper1}, tagsOf(tc.others)...), personalProxiesMembers(tun))
 			require.Eventually(t, func() bool {
 				conn, err := group.DialContext(t.Context(), "tcp", dest)
@@ -251,43 +275,6 @@ func tagsOf(list []*servers.Server) []string {
 		tags = append(tags, s.Tag)
 	}
 	return tags
-}
-
-// A rebuild of the selected group that fails after withdrawing it leaves the
-// selector on another tag; the sync that recreates the group selects it
-// again, unless the user has chosen something else meanwhile.
-func TestPersonalProxiesSelectionSurvivesAFailedRebuild(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		reselect string
-		want     string
-	}{
-		{"selected again", "", PersonalProxiesTag},
-		{"a later choice wins", "lantern-1", "lantern-1"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tun := startPersonalProxiesTestTunnel(t)
-			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{blockServer(testHelper1)}}))
-			require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
-			sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
-
-			// An interval beyond the idle timeout makes creating the group fail.
-			interval := personalProxiesProbeInterval
-			personalProxiesProbeInterval = urlTestIdleTimeout + time.Minute
-			err := tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}})
-			personalProxiesProbeInterval = interval
-			require.ErrorContains(t, err, "create personal proxies group")
-			require.Nil(t, tun.personalProxiesGroup())
-			require.NotEqual(t, PersonalProxiesTag, sel.Now())
-
-			if tc.reselect != "" {
-				require.NoError(t, tun.selectOutbound(tc.reselect))
-			}
-			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-2")}}))
-			require.NotNil(t, tun.personalProxiesGroup())
-			assert.Equal(t, tc.want, sel.Now())
-		})
-	}
 }
 
 // A config refresh delivers a helper under the same tag and type with new
@@ -378,4 +365,31 @@ func TestSelectionGroupsFollowAReplacedOutbound(t *testing.T) {
 // lists must agree.
 func TestServersReservesTheTunnelsTags(t *testing.T) {
 	assert.ElementsMatch(t, ReservedTags(), servers.ReservedTags())
+}
+
+// Swapping the group's sole member empties it for a moment. A dial then, with
+// the group selected, must fail rather than go through another server, and
+// once the member is back the group dials again.
+func TestPersonalProxiesGroupFailsClosedWhileEmpty(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	tun := startPersonalProxiesTestTunnel(t)
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
+	require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
+	require.Eventually(t, func() bool { return dialsThrough(t, tun, ManualSelectTag, dest) == nil },
+		5*time.Second, 50*time.Millisecond)
+
+	group := tun.personalProxiesGroup()
+	tun.outboundMu.Lock()
+	_, err := group.Remove(testHelper1)
+	require.NoError(t, err)
+	assert.Error(t, dialsThrough(t, tun, PersonalProxiesTag, dest), "the empty group fails closed")
+	assert.Error(t, dialsThrough(t, tun, ManualSelectTag, dest), "and so does the selector, rather than lantern-1")
+	_, err = group.Add(testHelper1)
+	tun.outboundMu.Unlock()
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return dialsThrough(t, tun, ManualSelectTag, dest) == nil },
+		5*time.Second, 50*time.Millisecond, "the group dials once its member is back")
 }
