@@ -190,7 +190,7 @@ func TestLanternServersToEvict(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing []*servers.Server
-		incoming int
+		offered  []string
 		limit    int
 		selected string
 		want     []string
@@ -206,13 +206,34 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:  []string{"demoted"},
 		},
 		{
-			name: "hard-demoted lantern server is evicted regardless of incoming config",
+			name: "hard-demoted lantern server is evicted even when offered",
 			existing: []*servers.Server{
 				newTestServer("demoted", true, true, baseTime),
 			},
-			incoming: 1,
-			limit:    60,
-			want:     []string{"demoted"},
+			offered: []string{"demoted"},
+			limit:   60,
+			want:    []string{"demoted"},
+		},
+		{
+			name: "offered hard-demoted server does not take a retention slot",
+			existing: []*servers.Server{
+				newTestServer("demoted", true, true, baseTime),
+				newTestServer("old", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("new", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered: []string{"demoted", "fresh"},
+			limit:   3,
+			want:    []string{"demoted"},
+		},
+		{
+			name: "offered tag held by a non-lantern server does not take a retention slot",
+			existing: []*servers.Server{
+				newTestServer("user", false, false, baseTime),
+				newTestServer("old", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("new", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered: []string{"user", "fresh"},
+			limit:   3,
 		},
 		{
 			name: "under the limit nothing is evicted",
@@ -220,8 +241,8 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("a", true, false, baseTime),
 				newTestServer("b", true, false, baseTime),
 			},
-			incoming: 2,
-			limit:    60,
+			offered: []string{"c", "d"},
+			limit:   60,
 		},
 		{
 			name: "over the limit evicts oldest working servers and keeps the newest",
@@ -230,19 +251,42 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("mid", true, false, baseTime.Add(2*time.Hour)),
 				newTestServer("new", true, false, baseTime.Add(3*time.Hour)),
 			},
-			incoming: 1,
-			limit:    3,
-			want:     []string{"old"},
+			offered: []string{"fresh"},
+			limit:   3,
+			want:    []string{"old"},
 		},
 		{
-			name: "incoming at the limit evicts all existing working servers",
+			name: "offered servers at the limit evict all servers no longer offered",
 			existing: []*servers.Server{
 				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
 				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
 			},
-			incoming: 3,
-			limit:    3,
-			want:     []string{"a", "b"},
+			offered: []string{"c", "d", "e"},
+			limit:   3,
+			want:    []string{"a", "b"},
+		},
+		{
+			name: "re-offered servers are kept and servers no longer offered are evicted",
+			existing: []*servers.Server{
+				newTestServer("offered-oldest", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("dropped-old", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("dropped-new", true, false, baseTime.Add(3*time.Hour)),
+				newTestServer("offered-newest", true, false, baseTime.Add(4*time.Hour)),
+			},
+			offered: []string{"offered-oldest", "offered-newest", "fresh"},
+			limit:   4,
+			want:    []string{"dropped-old"},
+		},
+		{
+			name: "offered servers over the limit are all kept",
+			existing: []*servers.Server{
+				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("dropped", true, false, baseTime.Add(3*time.Hour)),
+			},
+			offered: []string{"a", "b", "c"},
+			limit:   2,
+			want:    []string{"dropped"},
 		},
 		{
 			name: "selected working server is exempt but counts toward the limit",
@@ -252,10 +296,33 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("b", true, false, baseTime.Add(3*time.Hour)),
 				newTestServer("c", true, false, baseTime.Add(4*time.Hour)),
 			},
-			incoming: 1,
+			offered:  []string{"fresh"},
 			limit:    3,
 			selected: "old-selected",
 			want:     []string{"a", "b"},
+		},
+		{
+			name: "offered selected server counts toward the limit once",
+			existing: []*servers.Server{
+				newTestServer("selected", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("a", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(3*time.Hour)),
+			},
+			offered:  []string{"selected", "fresh"},
+			limit:    3,
+			selected: "selected",
+			want:     []string{"a"},
+		},
+		{
+			name: "selected server is kept when over the limit",
+			existing: []*servers.Server{
+				newTestServer("selected", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("a", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered:  []string{"b", "c"},
+			limit:    2,
+			selected: "selected",
+			want:     []string{"a"},
 		},
 		{
 			name: "selected server is still evicted when hard-demoted",
@@ -263,6 +330,7 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("selected-demoted", true, true, baseTime),
 				newTestServer("working", true, false, baseTime),
 			},
+			offered:  []string{"selected-demoted"},
 			limit:    60,
 			selected: "selected-demoted",
 			want:     []string{"selected-demoted"},
@@ -273,16 +341,20 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("no-history", true, false, time.Time{}),
 				newTestServer("probed", true, false, baseTime.Add(5*time.Hour)),
 			},
-			incoming: 1,
-			limit:    2,
-			want:     []string{"no-history"},
+			offered: []string{"fresh"},
+			limit:   2,
+			want:    []string{"no-history"},
 		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected)
+			offered := make(map[string]struct{}, len(tt.offered))
+			for _, tag := range tt.offered {
+				offered[tag] = struct{}{}
+			}
+			got := lanternServersToEvict(tt.existing, offered, tt.limit, tt.selected)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}

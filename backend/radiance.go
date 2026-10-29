@@ -1035,14 +1035,17 @@ const maxRetainedLanternServers = 60
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
+	offeredTags := make(map[string]struct{}, len(list.Servers))
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		if _, exists := existingTags[srv.Tag]; exists {
+			offeredTags[srv.Tag] = struct{}{}
 			return true
 		}
 		if err := srv.CheckHostAccess(); err != nil {
 			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
 			return true
 		}
+		offeredTags[srv.Tag] = struct{}{}
 		return false
 	})
 
@@ -1053,7 +1056,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 			selectedTag = selected.Tag
 		}
 
-		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
+		tagsToEvict := lanternServersToEvict(existing, offeredTags, maxRetainedLanternServers, selectedTag)
 
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
@@ -1097,46 +1100,48 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 	return tags
 }
 
-// lanternServersToEvict returns Lantern server tags to evict, always including
-// hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
-// are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
+// lanternServersToEvict returns Lantern tags to evict: hard-demoted servers,
+// then unoffered, unselected servers oldest-first by selection history.
+// Offered and selected servers may exceed limit.
 func lanternServersToEvict(
 	existing []*servers.Server,
-	incomingCount, limit int,
+	offered map[string]struct{},
+	limit int,
 	selectedTag string,
 ) []string {
-	tagsToEvict := make([]string, 0)
-	retentionCandidates := make([]*servers.Server, 0, len(existing))
+	existingTags := serverTagSet(existing)
+	remaining := 0
+	for tag := range offered {
+		if _, ok := existingTags[tag]; !ok {
+			remaining++
+		}
+	}
 
+	tagsToEvict := make([]string, 0)
+	candidates := make([]*servers.Server, 0, len(existing))
 	for _, srv := range existing {
 		if !srv.IsLantern {
 			continue
 		}
-		// Always evict hard-demoted servers.
 		if isHardDemoted(srv) {
 			tagsToEvict = append(tagsToEvict, srv.Tag)
 			continue
 		}
-		if srv.Tag == selectedTag {
-			// The retained selection occupies one retention slot.
-			limit--
+		remaining++
+		if _, isOffered := offered[srv.Tag]; isOffered || srv.Tag == selectedTag {
 			continue
 		}
-		retentionCandidates = append(retentionCandidates, srv)
+		candidates = append(candidates, srv)
 	}
 
-	retentionBudget := max(limit-incomingCount, 0)
-	if len(retentionCandidates) <= retentionBudget {
+	overflow := min(max(remaining-limit, 0), len(candidates))
+	if overflow == 0 {
 		return tagsToEvict
 	}
-
-	slices.SortFunc(retentionCandidates, compareSelectionAge)
-
-	overflow := len(retentionCandidates) - retentionBudget
-	for _, srv := range retentionCandidates[:overflow] {
+	slices.SortFunc(candidates, compareSelectionAge)
+	for _, srv := range candidates[:overflow] {
 		tagsToEvict = append(tagsToEvict, srv.Tag)
 	}
-
 	return tagsToEvict
 }
 
