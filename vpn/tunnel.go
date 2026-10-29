@@ -331,7 +331,9 @@ func newMutableGroupManager(
 
 	var mutGroups []lbA.MutableOutboundGroup
 	for _, out := range oMgr.Outbounds() {
-		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
+		// The personal proxies group stays out: the manager's map is fixed at
+		// construction, and the tunnel removes and recreates the group.
+		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup && g.Tag() != PersonalProxiesTag {
 			mutGroups = append(mutGroups, g)
 		}
 	}
@@ -494,7 +496,15 @@ func (t *tunnel) selectMode(mode string) error {
 	return nil
 }
 
+// ErrPersonalProxiesUnavailable is returned for a selection of
+// PersonalProxiesTag while the device has no helper outbound.
+var ErrPersonalProxiesUnavailable = errors.New("personal proxies unavailable")
+
 func (t *tunnel) selectOutbound(tag string) error {
+	// Checked before the mode switch, so a refused selection changes nothing.
+	if tag == PersonalProxiesTag && !t.offersPersonalProxies() {
+		return ErrPersonalProxiesUnavailable
+	}
 	if err := t.selectMode(ManualSelectTag); err != nil {
 		return err
 	}
@@ -505,6 +515,90 @@ func (t *tunnel) selectOutbound(tag string) error {
 		return fmt.Errorf("manual select group not found")
 	}
 	outbound.(Selector).SelectOutbound(tag)
+	return nil
+}
+
+// offersPersonalProxies reports whether the manual selector offers the
+// personal proxies group, which it does exactly while the group exists.
+func (t *tunnel) offersPersonalProxies() bool {
+	if t.mutGrpMgr == nil {
+		return false
+	}
+	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
+	return ok && slices.Contains(selector.All(), PersonalProxiesTag)
+}
+
+// personalProxiesGroup returns the personal proxies group, or nil while it
+// does not exist.
+func (t *tunnel) personalProxiesGroup() lbA.MutableOutboundGroup {
+	if t.outboundMgr == nil {
+		return nil
+	}
+	out, ok := t.outboundMgr.Outbound(PersonalProxiesTag)
+	if !ok {
+		return nil
+	}
+	g, _ := out.(lbA.MutableOutboundGroup)
+	return g
+}
+
+// syncPersonalProxiesLocked makes the personal proxies group hold exactly the
+// helper outbounds the manual selector offers. It creates the group with its
+// first member and removes it with its last (a url-test group must never be
+// empty), and keeps the selector offering it exactly while it exists. The
+// caller must hold t.outboundMu.
+func (t *tunnel) syncPersonalProxiesLocked() error {
+	if t.mutGrpMgr == nil || t.outboundMgr == nil {
+		return nil
+	}
+	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
+	if !ok {
+		return errors.New("manual select group not found")
+	}
+	helpers := helperTags(selector.All())
+	group := t.personalProxiesGroup()
+	switch {
+	case len(helpers) == 0 && group == nil:
+		return nil
+	case len(helpers) == 0:
+		// Withdrawn before it closes, so the selector never holds a closed group.
+		var errs []error
+		if _, err := selector.Remove(PersonalProxiesTag); err != nil {
+			errs = append(errs, err)
+		}
+		if err := t.outboundMgr.Remove(PersonalProxiesTag); err != nil {
+			errs = append(errs, fmt.Errorf("remove personal proxies group: %w", err))
+		}
+		return errors.Join(errs...)
+	case group == nil:
+		out := personalProxiesOutbound(helpers)
+		router := service.FromContext[adapter.Router](t.ctx)
+		logger := t.logFactory.NewLogger("outbound/" + out.Tag + "[" + out.Type + "]")
+		if err := t.outboundMgr.Create(t.ctx, router, logger, out.Tag, out.Type, out.Options); err != nil {
+			return fmt.Errorf("create personal proxies group: %w", err)
+		}
+	default:
+		// Added before the stale members go, so the group is never empty.
+		if _, err := group.Add(helpers...); err != nil {
+			return fmt.Errorf("update personal proxies group: %w", err)
+		}
+		var stale []string
+		for _, tag := range group.All() {
+			if !slices.Contains(helpers, tag) {
+				stale = append(stale, tag)
+			}
+		}
+		if len(stale) > 0 {
+			if _, err := group.Remove(stale...); err != nil {
+				return fmt.Errorf("update personal proxies group: %w", err)
+			}
+		}
+	}
+	if !slices.Contains(selector.All(), PersonalProxiesTag) {
+		if _, err := selector.Add(PersonalProxiesTag); err != nil {
+			return fmt.Errorf("offer personal proxies group: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -592,7 +686,11 @@ var errLibboxClosed = errors.New("libbox closed")
 func (t *tunnel) addOutbounds(list servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
-	return t.addOutboundsLocked(list)
+	err := t.addOutboundsLocked(list)
+	if errors.Is(err, errLibboxClosed) {
+		return err
+	}
+	return errors.Join(err, t.syncPersonalProxiesLocked())
 }
 
 // addOutboundsLocked adds the servers in list to the tunnel. The caller must
@@ -763,7 +861,11 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 func (t *tunnel) removeOutbounds(tags []string) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
-	return t.removeOutboundsLocked(tags)
+	err := t.removeOutboundsLocked(tags)
+	if errors.Is(err, errLibboxClosed) {
+		return err
+	}
+	return errors.Join(err, t.syncPersonalProxiesLocked())
 }
 
 // removeOutboundsLocked removes the outbounds with the given tags from the
@@ -775,6 +877,9 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 		errs      []error
 	)
 	for _, tag := range tags {
+		if tag == PersonalProxiesTag {
+			continue // the tunnel's own group: syncPersonalProxiesLocked manages it
+		}
 		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
 			if _, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
 				continue // skip nested groups
@@ -865,6 +970,9 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 			"failed_tags", newTags, "would_remove_tags", toRemove)
 	}
 
+	if err := t.syncPersonalProxiesLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 

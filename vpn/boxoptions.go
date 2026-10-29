@@ -23,18 +23,25 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/internal/hostaccess"
+	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/log"
 )
 
 const (
 	AutoSelectTag   = "auto"
 	ManualSelectTag = "manual"
+	// PersonalProxiesTag is the url-test group over every helper outbound
+	// (lbA.IsHelperTag). The tunnel creates it with its first member and
+	// removes it with its last, and the manual selector offers it while it
+	// exists. It is never a managed server, so it is never listed.
+	PersonalProxiesTag = redact.PersonalProxiesTag
 
 	urlTestInterval    = 3 * time.Minute
 	urlTestIdleTimeout = 15 * time.Minute
@@ -44,7 +51,7 @@ const (
 	cacheClearMarkerName = "lantern.cache.clear"
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, "direct", "block"}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -427,17 +434,25 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	helpers := helperTags(tags)
+	// The manual selector also offers the personal proxies group, which
+	// exists only while a helper outbound does: a url-test group must never
+	// start empty.
+	selectable := tags
+	if len(helpers) > 0 {
+		selectable = append(slices.Clone(tags), PersonalProxiesTag)
+	}
 
 	initial := bOptions.InitialServer
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
 	} else {
 		// The manual selector defaults to its first tag, so place initial at index 0.
-		i := slices.Index(tags, initial)
+		i := slices.Index(selectable, initial)
 		if i == -1 {
 			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
 		}
-		tags[0], tags[i] = tags[i], tags[0]
+		selectable[0], selectable[i] = selectable[i], selectable[0]
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
@@ -447,7 +462,10 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
-	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, tags))
+	if len(helpers) > 0 {
+		opts.Outbounds = append(opts.Outbounds, personalProxiesOutbound(helpers))
+	}
+	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
@@ -578,6 +596,32 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 		Tag:  tag,
 		Options: &lbO.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
+		},
+	}
+}
+
+// helperTags returns the tags in tags that are helper outbounds.
+func helperTags(tags []string) []string {
+	var out []string
+	for _, tag := range tags {
+		if lbA.IsHelperTag(tag) {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+// personalProxiesOutbound is the url-test group over helpers, which must not
+// be empty (see PersonalProxiesTag).
+func personalProxiesOutbound(helpers []string) O.Outbound {
+	return O.Outbound{
+		Type: lbC.TypeMutableURLTest,
+		Tag:  PersonalProxiesTag,
+		Options: &lbO.MutableURLTestOutboundOptions{
+			Outbounds:   helpers,
+			URL:         "https://google.com/generate_204",
+			Interval:    badoption.Duration(urlTestInterval),
+			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
 		},
 	}
 }
