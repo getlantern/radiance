@@ -1602,3 +1602,14 @@ func TestConfigUpdateLeavesAnUnchangedHelperAlone(t *testing.T) {
 	assert.True(t, info.ModTime().Equal(stamp), "identical options are not rewritten")
 	assert.Equal(t, uint16(1080), storedPort(t, r, h))
 }
+
+func TestImportRefusesThePersonalProxiesTag(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	_, err := r.AddServersByJSON(`{"outbounds":[{"type":"socks","tag":"personal-proxies","server":"203.0.113.7","server_port":1080}]}`)
+	require.ErrorIs(t, err, servers.ErrReservedTag)
+	require.ErrorIs(t, r.AddServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(vpn.PersonalProxiesTag, 1080)}}),
+		servers.ErrReservedTag)
+	assert.Empty(t, r.AllServers())
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found)
+}

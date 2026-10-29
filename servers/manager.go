@@ -389,6 +389,9 @@ func (m *Manager) AddServers(list ServerList, force bool) error {
 		return nil
 	}
 	for _, srv := range list.Servers {
+		if err := checkUserTag(srv); err != nil {
+			return err
+		}
 		if err := srv.CheckHostAccess(); err != nil {
 			return fmt.Errorf("server %q: %w", srv.Tag, err)
 		}
@@ -683,6 +686,9 @@ func (m *Manager) quarantineInvalidServers(buf []byte) {
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
 func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
+	if err := checkUserTag(&Server{Tag: tag}); err != nil {
+		return err
+	}
 	resp, err := m.privateServerRequest(http.MethodGet, ip, port, "/api/v1/connect-config", accessToken)
 	if err != nil {
 		return err

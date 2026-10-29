@@ -373,3 +373,9 @@ func TestSelectionGroupsFollowAReplacedOutbound(t *testing.T) {
 		})
 	}
 }
+
+// servers refuses user servers with the tags the tunnel reserves; the two
+// lists must agree.
+func TestServersReservesTheTunnelsTags(t *testing.T) {
+	assert.ElementsMatch(t, ReservedTags(), servers.ReservedTags())
+}
