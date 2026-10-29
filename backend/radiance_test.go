@@ -1401,3 +1401,68 @@ func TestReregisterPeer_TurningOffCancelsTheRunningAttempt(t *testing.T) {
 	}
 	waitPeerWork(t, b)
 }
+
+func newPersonalProxiesBackend(t *testing.T) *LocalBackend {
+	t.Helper()
+	dataDir := t.TempDir()
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(dataDir))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
+	require.NoError(t, err)
+	return &LocalBackend{
+		ctx:         ctx,
+		confHandler: config.NewConfigHandler(ctx, config.Options{DataPath: dataDir, Logger: log.NoOpLogger()}),
+		srvManager:  srvMgr,
+		vpnClient:   vpn.NewVPNClient(dataDir, log.NoOpLogger(), nil),
+	}
+}
+
+func addDirectServer(t *testing.T, r *LocalBackend, tag string) {
+	t.Helper()
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{{
+		Tag: tag, Type: "direct", IsLantern: true,
+		Options: option.Outbound{Tag: tag, Type: "direct", Options: &option.DirectOutboundOptions{}},
+	}}}, false))
+}
+
+func TestPersonalProxiesServerExistsWhileAHelperDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "lantern-1")
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found, "no helper outbound, no group")
+	assert.False(t, r.connectable(vpn.PersonalProxiesTag))
+
+	addDirectServer(t, r, "helper-0123456789ab")
+	srv, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	require.True(t, found)
+	assert.Equal(t, vpn.PersonalProxiesTag, srv.Tag)
+	assert.False(t, srv.IsLantern)
+	assert.Nil(t, srv.Options)
+	assert.True(t, r.connectable(vpn.PersonalProxiesTag))
+	for _, s := range r.AllServers() {
+		assert.NotEqual(t, vpn.PersonalProxiesTag, s.Tag, "never listed among servers")
+	}
+}
+
+func TestPersonalProxiesSelectionLastsWhileAHelperDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "helper-0123456789ab")
+	r.persistSelection(vpn.PersonalProxiesTag)
+	assert.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	sel, exists, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
+
+	r.clearSelectedIfMissing()
+	assert.False(t, settings.GetBool(settings.AutoConnectKey), "kept while a helper remains")
+
+	_, err = r.srvManager.RemoveServers([]string{"helper-0123456789ab"})
+	require.NoError(t, err)
+	r.clearSelectedIfMissing()
+	assert.True(t, settings.GetBool(settings.AutoConnectKey), "falls back to Smart Location")
+}

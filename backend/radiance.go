@@ -45,6 +45,7 @@ import (
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbC "github.com/getlantern/lantern-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 )
@@ -954,7 +955,27 @@ func (r *LocalBackend) AllServers() []*servers.Server {
 }
 
 func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
+	return r.serverByTag(tag)
+}
+
+// serverByTag is the manager's lookup plus the personal proxies group, which
+// is selectable by tag but never a managed server, so never listed.
+func (r *LocalBackend) serverByTag(tag string) (*servers.Server, bool) {
+	if tag == vpn.PersonalProxiesTag {
+		return r.personalProxiesServer()
+	}
 	return r.srvManager.GetServerByTag(tag)
+}
+
+// personalProxiesServer stands in for the tunnel's group over helper
+// outbounds. Like the group, it exists while a helper outbound does.
+func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
+	for _, srv := range r.srvManager.AllServers() {
+		if lbA.IsHelperTag(srv.Tag) {
+			return &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}, true
+		}
+	}
+	return nil, false
 }
 
 func (r *LocalBackend) RemoveServers(tags []string) error {
@@ -1162,7 +1183,7 @@ func (r *LocalBackend) clearSelectedIfMissing() {
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
 		return
 	}
-	if _, found := r.srvManager.GetServerByTag(selected.Tag); found {
+	if _, found := r.serverByTag(selected.Tag); found {
 		return
 	}
 	// Persist before notifying the VPN client so the auto-select choice
@@ -1347,7 +1368,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 		return err
 	}
 	if tag != vpn.AutoSelectTag {
-		if _, found := r.srvManager.GetServerByTag(tag); !found {
+		if _, found := r.serverByTag(tag); !found {
 			return fmt.Errorf("no server found with tag %s", tag)
 		}
 	}
@@ -1401,7 +1422,7 @@ func (r *LocalBackend) connectable(tag string) bool {
 		return true
 	}
 	if tag != vpn.AutoSelectTag {
-		_, found := r.srvManager.GetServerByTag(tag)
+		_, found := r.serverByTag(tag)
 		return found
 	}
 	return len(r.srvManager.AllServers()) > 0
@@ -1570,7 +1591,7 @@ func (r *LocalBackend) persistSelection(tag string) {
 		}
 		return
 	}
-	server, found := r.srvManager.GetServerByTag(tag)
+	server, found := r.serverByTag(tag)
 	if !found {
 		slog.Warn("no server found for tag, skipping settings persistence", "tag", tag)
 		return
@@ -1604,7 +1625,7 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
 		}
-		server, found := r.srvManager.GetServerByTag(tag)
+		server, found := r.serverByTag(tag)
 		return server, found, nil
 	}
 	if !settings.Exists(settings.SelectedServerKey) {
@@ -1615,14 +1636,14 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 		if tag == "" {
 			return nil, false, fmt.Errorf("no selected server")
 		}
-		server, found := r.srvManager.GetServerByTag(tag)
+		server, found := r.serverByTag(tag)
 		return server, found, nil
 	}
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
 		return nil, false, fmt.Errorf("failed to get selected server from settings: %w", err)
 	}
-	server, found := r.srvManager.GetServerByTag(selected.Tag)
+	server, found := r.serverByTag(selected.Tag)
 	stillExists := found &&
 		server.IsLantern == selected.IsLantern &&
 		server.Type == selected.Type &&
