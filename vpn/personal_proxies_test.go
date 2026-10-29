@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -367,33 +368,6 @@ func TestServersReservesTheTunnelsTags(t *testing.T) {
 	assert.ElementsMatch(t, ReservedTags(), servers.ReservedTags())
 }
 
-// Swapping the group's sole member empties it for a moment. A dial then, with
-// the group selected, must fail rather than go through another server, and
-// once the member is back the group dials again.
-func TestPersonalProxiesGroupFailsClosedWhileEmpty(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	t.Cleanup(target.Close)
-	dest := M.ParseSocksaddr(target.Listener.Addr().String())
-	tun := startPersonalProxiesTestTunnel(t)
-	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
-	require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
-	require.Eventually(t, func() bool { return dialsThrough(t, tun, ManualSelectTag, dest) == nil },
-		5*time.Second, 50*time.Millisecond)
-
-	group := tun.personalProxiesGroup()
-	tun.outboundMu.Lock()
-	_, err := group.Remove(testHelper1)
-	require.NoError(t, err)
-	assert.Error(t, dialsThrough(t, tun, PersonalProxiesTag, dest), "the empty group fails closed")
-	assert.Error(t, dialsThrough(t, tun, ManualSelectTag, dest), "and so does the selector, rather than lantern-1")
-	_, err = group.Add(testHelper1)
-	tun.outboundMu.Unlock()
-	require.NoError(t, err)
-
-	require.Eventually(t, func() bool { return dialsThrough(t, tun, ManualSelectTag, dest) == nil },
-		5*time.Second, 50*time.Millisecond, "the group dials once its member is back")
-}
-
 // A fresh config that ends every pairing leaves the managed list without
 // helpers. updateOutbounds alone keeps them dialable when that list is empty
 // or none of its new outbounds load, so the backend then removes them
@@ -436,5 +410,91 @@ func TestWithdrawnHelpersLeaveTheTunnelPastUpdateGuards(t *testing.T) {
 			require.NoError(t, dialsThrough(t, tun, ManualSelectTag, dest))
 			assert.Equal(t, "lantern-1", sel.Now(), "new dials go through the remaining server")
 		})
+	}
+}
+
+func timedDirectServer(tag string, timeout time.Duration) *servers.Server {
+	srv := directServer(tag)
+	srv.Options = O.Outbound{Tag: tag, Type: C.TypeDirect, Options: &O.DirectOutboundOptions{
+		DialerOptions: O.DialerOptions{ConnectTimeout: badoption.Duration(timeout)},
+	}}
+	return srv
+}
+
+// Replacing the sole helper, as each daily credential rotation does, swaps it
+// inside the group: the manual selector never leaves the group, the group
+// never empties, dials keep working throughout, and the group keeps probing.
+func TestPersonalProxiesGroupReplacesItsSoleMemberInPlace(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	tun := startPersonalProxiesTestTunnel(t)
+	setPersonalProxiesProbe(t, personalProxiesProbeURL, 50*time.Millisecond)
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{timedDirectServer(testHelper1, 5*time.Second)}}))
+	require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
+	require.Eventually(t, func() bool { return dialsThrough(t, tun, ManualSelectTag, dest) == nil },
+		5*time.Second, 10*time.Millisecond)
+	group := tun.personalProxiesGroup()
+	sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
+
+	var (
+		mu                        sync.Mutex
+		elsewhere, empty, dialErr []string
+		stop                      = make(chan struct{})
+		wg                        sync.WaitGroup
+	)
+	note := func(list *[]string, v string) { mu.Lock(); *list = append(*list, v); mu.Unlock() }
+	watch := func(check func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					check()
+				}
+			}
+		}()
+	}
+	watch(func() {
+		if now := sel.Now(); now != PersonalProxiesTag {
+			note(&elsewhere, now)
+		}
+	})
+	watch(func() {
+		if len(group.All()) == 0 {
+			note(&empty, "empty")
+		}
+	})
+	watch(func() {
+		if err := dialsThrough(t, tun, ManualSelectTag, dest); err != nil {
+			note(&dialErr, err.Error())
+		}
+	})
+	for i := range 20 {
+		timeout := 5*time.Second + time.Duration(i%2)*time.Second
+		require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{timedDirectServer(testHelper1, timeout)}}))
+	}
+	close(stop)
+	wg.Wait()
+	assert.Empty(t, elsewhere, "the manual selector never left the group")
+	assert.Empty(t, empty, "the group never emptied")
+	assert.Empty(t, dialErr, "no dial failed during the replacements")
+	assert.Same(t, group, tun.personalProxiesGroup(), "replaced in place, not rebuilt")
+	assert.Equal(t, []string{testHelper1}, personalProxiesMembers(tun))
+
+	history := service.FromContext[adapter.URLTestHistoryStorage](tun.ctx)
+	if history == nil {
+		history = tun.clashServer.HistoryStorage()
+	}
+	// Dialing keeps the check loop alive; each tick probes again.
+	for range 2 {
+		history.DeleteURLTestHistory(testHelper1)
+		require.Eventually(t, func() bool {
+			_ = dialsThrough(t, tun, ManualSelectTag, dest)
+			return history.LoadURLTestHistory(testHelper1) != nil
+		}, 5*time.Second, 20*time.Millisecond, "the group keeps probing its replaced member")
 	}
 }

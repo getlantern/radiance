@@ -564,36 +564,34 @@ func (t *tunnel) liveOutbound(tag string) adapter.Outbound {
 
 // swapIntoSelectionGroupsLocked points the manual selector and the auto
 // group at the outbound now under tag, after it replaced the one they hold.
-// Each group holds a member by its outbound and skips a tag it already has,
-// so the tag is removed and added again, directly on the group: through the
-// group manager the removal would queue the new outbound for teardown. A
-// group whose only member is tag is empty in between, which neither group
-// minds once started (the auto group looks up its pause manager when it
-// needs it). The manual selection stays on tag if it was there, and lands on
-// it if the selector was left with none. The caller must hold t.outboundMu.
+// The manual selector swaps it in place, keeping its selection and never
+// dropping the tag. The auto group cannot replace a member, so the tag is
+// removed and added again, directly on the group: through the group manager
+// the removal would queue the new outbound for teardown. A sole auto member
+// leaves the group empty in between, which it tolerates once started (it
+// looks up its pause manager when it needs it). The caller must hold
+// t.outboundMu.
 func (t *tunnel) swapIntoSelectionGroupsLocked(tag string) error {
-	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
-		group, ok := t.mutGrpMgr.OutboundGroup(groupTag)
-		if !ok {
-			return fmt.Errorf("group %s not found", groupTag)
+	if selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag); ok && slices.Contains(selector.All(), tag) {
+		if err := t.mutGrpMgr.ReplaceInGroup(ManualSelectTag, tag); err != nil {
+			return fmt.Errorf("swap %s in %s: %w", tag, ManualSelectTag, err)
 		}
-		selected := group.Now() == tag
-		if slices.Contains(group.All(), tag) {
-			if _, err := group.Remove(tag); err != nil {
-				return fmt.Errorf("swap %s in %s: %w", tag, groupTag, err)
-			}
+	}
+	auto, ok := t.mutGrpMgr.OutboundGroup(AutoSelectTag)
+	if !ok {
+		return fmt.Errorf("group %s not found", AutoSelectTag)
+	}
+	if !slices.Contains(auto.All(), tag) {
+		return t.mutGrpMgr.AddToGroup(AutoSelectTag, tag)
+	}
+	if _, err := auto.Remove(tag); err != nil {
+		return fmt.Errorf("swap %s in %s: %w", tag, AutoSelectTag, err)
+	}
+	if n, err := auto.Add(tag); err != nil || n == 0 {
+		if err == nil {
+			err = errors.New("not added")
 		}
-		if n, err := group.Add(tag); err != nil || n == 0 {
-			if err == nil {
-				err = errors.New("not added")
-			}
-			return fmt.Errorf("swap %s in %s: %w", tag, groupTag, err)
-		}
-		if groupTag == ManualSelectTag && (selected || group.Now() == "") {
-			if s, ok := group.(Selector); ok {
-				s.SelectOutbound(tag)
-			}
-		}
+		return fmt.Errorf("swap %s in %s: %w", tag, AutoSelectTag, err)
 	}
 	return nil
 }
@@ -655,20 +653,20 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 }
 
 // swapPersonalProxiesLocked points the group's members in swap at their
-// replacement outbounds, inside the group, so the manual selector's choice of
-// it never moves. The group holds a member by its outbound and skips a tag it
-// already has, so each is removed and added again. Removing a sole member
-// leaves the group briefly empty, which a url-test group started with members
-// tolerates: dials in the gap fail rather than going elsewhere, and its check
-// loop resumes on the next dial. The caller must hold t.outboundMu.
+// replacement outbounds in place: the group never drops or empties, and the
+// manual selector's choice of it never moves. The group is kept out of the
+// group manager, so it is replaced on directly. The caller must hold
+// t.outboundMu.
 func swapPersonalProxiesLocked(group lbA.MutableOutboundGroup, swap []string) error {
-	for _, tag := range swap {
-		if _, err := group.Remove(tag); err != nil {
-			return fmt.Errorf("update personal proxies group: %w", err)
-		}
-		if _, err := group.Add(tag); err != nil {
-			return fmt.Errorf("update personal proxies group: %w", err)
-		}
+	if len(swap) == 0 {
+		return nil
+	}
+	replacer, ok := group.(lbA.MemberReplacer)
+	if !ok {
+		return errors.New("update personal proxies group: group cannot replace members")
+	}
+	if _, err := replacer.Replace(swap...); err != nil {
+		return fmt.Errorf("update personal proxies group: %w", err)
 	}
 	return nil
 }
