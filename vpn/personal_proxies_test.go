@@ -228,9 +228,7 @@ func TestPersonalProxiesGroupFollowsAReplacedHelper(t *testing.T) {
 
 			require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
 
-			// addOutbounds also reports that the manual selector kept its own
-			// member (a pre-existing limit of replacing an outbound in place).
-			_ = tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}})
+			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
 			group = tun.personalProxiesGroup().(adapter.Outbound)
 			sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
 			assert.Equal(t, PersonalProxiesTag, sel.Now(), "the selection stays on the group")
@@ -311,7 +309,7 @@ func TestPersonalProxiesGroupFollowsARefreshedHelper(t *testing.T) {
 	_, err := group.DialContext(t.Context(), "tcp", dest)
 	require.Error(t, err, "the stale helper cannot dial")
 
-	_ = tun.updateOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-1"), directServer(testHelper1)}})
+	require.NoError(t, tun.updateOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-1"), directServer(testHelper1)}}))
 	assert.Equal(t, []string{testHelper1}, personalProxiesMembers(tun))
 	group = tun.personalProxiesGroup().(adapter.Outbound)
 	require.Eventually(t, func() bool {
@@ -322,4 +320,56 @@ func TestPersonalProxiesGroupFollowsARefreshedHelper(t *testing.T) {
 		_ = conn.Close()
 		return true
 	}, 5*time.Second, 50*time.Millisecond, "the group dials through the refreshed helper")
+}
+
+func dialsThrough(t *testing.T, tun *tunnel, groupTag string, dest M.Socksaddr) error {
+	t.Helper()
+	out, ok := tun.outboundMgr.Outbound(groupTag)
+	require.True(t, ok, groupTag)
+	conn, err := out.DialContext(t.Context(), "tcp", dest)
+	if err == nil {
+		_ = conn.Close()
+	}
+	return err
+}
+
+// An outbound with new options replaces the one under its tag; the manual
+// selector and the auto group must hold the replacement, not the closed
+// original, and keep the manual selection on it.
+func TestSelectionGroupsFollowAReplacedOutbound(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	for _, tc := range []struct {
+		name   string
+		others []*servers.Server
+	}{
+		// lantern-1 is the only member of both groups.
+		{"only member", nil},
+		{"alongside other members", []*servers.Server{blockServer("lantern-2"), blockServer(testHelper1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := startPersonalProxiesTestTunnel(t)
+			if len(tc.others) > 0 {
+				require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: tc.others}))
+			}
+			require.NoError(t, tun.selectOutbound("lantern-1"))
+			require.NoError(t, dialsThrough(t, tun, ManualSelectTag, dest))
+			require.NoError(t, tun.selectMode(AutoSelectTag))
+			require.Eventually(t, func() bool { return dialsThrough(t, tun, AutoSelectTag, dest) == nil },
+				5*time.Second, 50*time.Millisecond, "auto reaches the direct lantern-1")
+
+			// lantern-1 becomes a block outbound: every member now refuses.
+			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{blockServer("lantern-1")}}),
+				"no \"failed to add lantern-1 to manual\"")
+
+			manual, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
+			auto, _ := tun.mutGrpMgr.OutboundGroup(AutoSelectTag)
+			assert.Contains(t, manual.All(), "lantern-1")
+			assert.Contains(t, auto.All(), "lantern-1")
+			assert.Equal(t, "lantern-1", manual.Now(), "the manual selection stays on the replaced tag")
+			assert.Error(t, dialsThrough(t, tun, ManualSelectTag, dest), "manual holds the replacement")
+			assert.Error(t, dialsThrough(t, tun, AutoSelectTag, dest), "auto holds the replacement")
+		})
+	}
 }

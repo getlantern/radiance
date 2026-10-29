@@ -558,14 +558,49 @@ func (t *tunnel) personalProxiesGroup() lbA.MutableOutboundGroup {
 	return g
 }
 
-// helperOutbound returns the outbound manager's outbound for tag when tag is
-// a helper tag, or nil.
-func (t *tunnel) helperOutbound(tag string) adapter.Outbound {
-	if t.outboundMgr == nil || !lbA.IsHelperTag(tag) {
+// liveOutbound returns the outbound manager's outbound for tag, or nil.
+func (t *tunnel) liveOutbound(tag string) adapter.Outbound {
+	if t.outboundMgr == nil {
 		return nil
 	}
 	out, _ := t.outboundMgr.Outbound(tag)
 	return out
+}
+
+// swapIntoSelectionGroupsLocked points the manual selector and the auto
+// group at the outbound now under tag, after it replaced the one they hold.
+// Each group holds a member by its outbound and skips a tag it already has,
+// so the tag is removed and added again, directly on the group: through the
+// group manager the removal would queue the new outbound for teardown. A
+// group whose only member is tag is empty in between, which neither group
+// minds once started (the auto group looks up its pause manager when it
+// needs it). The manual selection stays on tag if it was there, and lands on
+// it if the selector was left with none. The caller must hold t.outboundMu.
+func (t *tunnel) swapIntoSelectionGroupsLocked(tag string) error {
+	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
+		group, ok := t.mutGrpMgr.OutboundGroup(groupTag)
+		if !ok {
+			return fmt.Errorf("group %s not found", groupTag)
+		}
+		selected := group.Now() == tag
+		if slices.Contains(group.All(), tag) {
+			if _, err := group.Remove(tag); err != nil {
+				return fmt.Errorf("swap %s in %s: %w", tag, groupTag, err)
+			}
+		}
+		if n, err := group.Add(tag); err != nil || n == 0 {
+			if err == nil {
+				err = errors.New("not added")
+			}
+			return fmt.Errorf("swap %s in %s: %w", tag, groupTag, err)
+		}
+		if groupTag == ManualSelectTag && (selected || group.Now() == "") {
+			if s, ok := group.(Selector); ok {
+				s.SelectOutbound(tag)
+			}
+		}
+	}
+	return nil
 }
 
 // syncPersonalProxiesLocked makes the personal proxies group hold exactly the
@@ -829,23 +864,34 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	)
 	for _, outbound := range newOutbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
-		prev := t.helperOutbound(outbound.Tag)
+		prev := t.liveOutbound(outbound.Tag)
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
-		if prev != nil && t.helperOutbound(outbound.Tag) != prev {
-			if t.replacedHelpers == nil {
-				t.replacedHelpers = make(map[string]struct{})
+		// An outbound with new options replaces the one under its tag. The
+		// selection groups skip a tag they already hold, so the manual
+		// selector refused it; it is swapped into both groups below.
+		replaced := prev != nil && t.liveOutbound(outbound.Tag) != prev
+		if replaced {
+			err = nil
+			if lbA.IsHelperTag(outbound.Tag) {
+				if t.replacedHelpers == nil {
+					t.replacedHelpers = make(map[string]struct{})
+				}
+				t.replacedHelpers[outbound.Tag] = struct{}{}
 			}
-			t.replacedHelpers[outbound.Tag] = struct{}{}
 		}
 		// Before the auto-select group gets the outbound: it probes new members
 		// immediately, and those probes must go through the exchange.
 		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
 		if err == nil {
-			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
+			if replaced {
+				err = t.swapIntoSelectionGroupsLocked(outbound.Tag)
+			} else {
+				err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
+			}
 		}
-		if errors.Is(err, groups.ErrIsClosed) {
+		if errors.Is(err, groups.ErrIsClosed) || errors.Is(err, lbA.ErrGroupClosed) {
 			return errLibboxClosed
 		}
 		if err != nil {
