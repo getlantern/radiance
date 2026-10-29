@@ -286,15 +286,15 @@ func TestLanternServersToEvict(t *testing.T) {
 			want: []string{"a"},
 		},
 		{
-			name: "helpers absent from the new config are evicted like other servers",
+			name: "helpers absent from the new config are always evicted",
 			existing: []*servers.Server{
 				newTestServer("helper-0123456789ab", true, false, time.Time{}),
 				newTestServer("helper-ba9876543210", true, false, time.Time{}),
 				newTestServer("helper-demoted00000", true, true, baseTime.Add(9*time.Hour)),
 				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
 			},
-			incoming:        1,
-			limit:           2,
+			incoming:        0,
+			limit:           60,
 			selected:        "personal-proxies",
 			incomingHelpers: map[string]struct{}{"helper-0123456789ab": {}},
 			want:            []string{"helper-ba9876543210", "helper-demoted00000"},
@@ -1612,4 +1612,35 @@ func TestImportRefusesThePersonalProxiesTag(t *testing.T) {
 	assert.Empty(t, r.AllServers())
 	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
 	assert.False(t, found)
+}
+
+// A fresh config that no longer carries a helper ended its pairing: the helper
+// is removed, and with the last one the personal proxies group and a selection
+// of it. A cached config applied at startup removes nothing.
+func TestFreshConfigWithoutAHelperEndsItsPairing(t *testing.T) {
+	const h = "helper-0123456789ab"
+	for _, tc := range []struct {
+		name  string
+		fresh bool
+	}{
+		{"fresh config", true},
+		{"cached config at startup", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newPersonalProxiesBackend(t)
+			require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+			r.persistSelection(vpn.PersonalProxiesTag)
+			require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+			require.NoError(t, r.updateServers(directServers("lantern-1"), tc.fresh))
+			_, helperKept := r.srvManager.GetServerByTag(h)
+			_, offered := r.GetServerByTag(vpn.PersonalProxiesTag)
+			_, stillThere := r.srvManager.GetServerByTag("lantern-1")
+			assert.True(t, stillThere)
+			assert.Equal(t, !tc.fresh, helperKept)
+			assert.Equal(t, !tc.fresh, offered)
+			assert.Equal(t, tc.fresh, settings.GetBool(settings.AutoConnectKey),
+				"a selection of the withdrawn group falls back to auto-select")
+		})
+	}
 }
