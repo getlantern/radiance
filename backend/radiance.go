@@ -72,6 +72,17 @@ type LocalBackend struct {
 	peerClient   peerController
 	peerToggleMu sync.Mutex
 	peerWG       sync.WaitGroup
+	// peerWGMu orders peerWG.Add against closePeerClient's Wait: once
+	// peerClosing is set, nothing adds to peerWG.
+	peerWGMu    sync.Mutex
+	peerClosing bool
+	// peerReregCancel cancels the running re-register retry loop, so only the
+	// latest request's loop runs. peerReregAttemptCtx is what attempts run
+	// under; a newer request leaves it alone, and turning sharing off or on,
+	// or Close, cancels it. Guarded by peerWGMu.
+	peerReregCancel        context.CancelFunc
+	peerReregAttemptCtx    context.Context
+	peerReregAttemptCancel context.CancelFunc
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -104,6 +115,10 @@ type LocalBackend struct {
 	// inviter side so they draw on a single fetch budget. It stops fetching
 	// when ctx ends.
 	helperTickets *helper.Source
+	// helperRelay sends the app's helper-invite requests to lantern-cloud.
+	helperRelay *helper.Relayer
+	// helperActivity is today's sharing time and bytes, kept on the device.
+	helperActivity *helper.ActivityTracker
 }
 
 type Options struct {
@@ -220,7 +235,15 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
 	vpnClient.SetInviterTickets(r.helperTickets)
+	// The widget and the tunnel share r.helperTickets, so invalidating it
+	// reaches both when the app's pairings change.
+	r.helperRelay = helper.NewRelayer(kindling.HTTPClient(), common.GetBaseURL(), func() {
+		if r.helperTickets != nil {
+			r.helperTickets.Invalidate()
+		}
+	})
 	backend = r
+	r.helperActivity = helper.NewActivityTracker(filepath.Join(dataDir, "helper-activity.json"), r.sharingCounters)
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
@@ -331,6 +354,7 @@ func (r *LocalBackend) Start() {
 	r.startSessionAutoSelectListener()
 
 	r.resumePeerShareIfEnabled()
+	go r.helperActivity.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
 	// updates. This single subscription handles all three start/stop
@@ -486,6 +510,13 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		// Stop the activity ticker and wait for it, then count the last
+		// partial interval while sharing still runs, so nothing saves
+		// after Close returns.
+		if r.helperActivity != nil {
+			r.helperActivity.Stop()
+			r.helperActivity.Flush()
+		}
 		r.closePeerClient()
 		// unbounded.start spawns its worker on a context.Background-
 		// derived ctx (it has to outlive any single NewConfigEvent),
@@ -721,7 +752,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
-	var peerOn bool
+	var peerOn, peerStarted bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
@@ -739,9 +770,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	if peerRequested {
-		if err := r.applyPeerShare(peerOn); err != nil {
+		started, err := r.applyPeerShareStarted(peerOn)
+		if err != nil {
 			errs = errors.Join(errs, err)
 		}
+		peerStarted = started
 	}
 	if len(diff) == 0 {
 		return errs
@@ -793,6 +826,15 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		if err := unbounded.Apply(); err != nil {
 			slog.Warn("unbounded apply failed", "error", err)
 		}
+	}
+	// "Help others too" is sent when the peer registers, so a running peer
+	// re-registers now. Not when this patch started the peer, whose Start
+	// registered with the new value already, or turned sharing off. A patch
+	// that turned sharing on for a peer already running started nothing, so
+	// it re-registers.
+	turnedOff := peerRequested && !peerOn
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff {
+		r.reregisterPeer()
 	}
 	return errs
 }
@@ -1721,6 +1763,48 @@ func (r *LocalBackend) refetchOnExhaustion() {
 	if err := r.confHandler.Fetch(); err != nil {
 		slog.Warn("MutableAutoSelect exhaustion refetch failed", "error", err)
 	}
+}
+
+////////////////////
+// Helper invites //
+////////////////////
+
+var errHelperRelayUnavailable = errors.New("helper relay unavailable")
+
+// HelperRelay sends one helper-invite request for the app (see
+// helper.Relayer). The op is checked first, so an unknown op is refused even
+// on a backend whose relayer failed to build.
+func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) (helper.RelayResult, error) {
+	if op != helper.OpRefreshTickets && !helper.IsRelayOp(op) {
+		return helper.RelayResult{}, helper.ErrUnknownOp
+	}
+	if r.helperRelay == nil {
+		return helper.RelayResult{}, errHelperRelayUnavailable
+	}
+	return r.helperRelay.Relay(ctx, op, body)
+}
+
+// sharingCounters reads both sharing modes' snapshots for the activity
+// tracker.
+func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
+	ps := r.PeerRelaySnapshot()
+	us := unbounded.CurrentSnapshot()
+	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
+}
+
+// HelperActivity is today's sharing totals for the app's "You're helping"
+// section.
+func (r *LocalBackend) HelperActivity() helper.Activity {
+	if r.helperActivity == nil {
+		return helper.Activity{Day: time.Now().In(helper.LocalZone()).Format("2006-01-02")}
+	}
+	return r.helperActivity.Today()
+}
+
+// SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
+// IPC route, which cannot build a full backend.
+func (r *LocalBackend) SetHelperRelayForTest(rl *helper.Relayer) {
+	r.helperRelay = rl
 }
 
 //////////////////
