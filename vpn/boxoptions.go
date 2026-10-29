@@ -51,6 +51,14 @@ const (
 	cacheClearMarkerName = "lantern.cache.clear"
 )
 
+// personalProxiesProbeURL and personalProxiesProbeInterval configure the
+// personal proxies group's URL tests. Variables so tests can probe a local
+// server, often.
+var (
+	personalProxiesProbeURL      = "https://google.com/generate_204"
+	personalProxiesProbeInterval = urlTestInterval
+)
+
 var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, "direct", "block"}
 
 func ReservedTags() []string {
@@ -619,8 +627,8 @@ func personalProxiesOutbound(helpers []string) O.Outbound {
 		Tag:  PersonalProxiesTag,
 		Options: &lbO.MutableURLTestOutboundOptions{
 			Outbounds:   helpers,
-			URL:         "https://google.com/generate_204",
-			Interval:    badoption.Duration(urlTestInterval),
+			URL:         personalProxiesProbeURL,
+			Interval:    badoption.Duration(personalProxiesProbeInterval),
 			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
 		},
 	}

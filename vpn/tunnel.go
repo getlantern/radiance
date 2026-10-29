@@ -94,6 +94,10 @@ type tunnel struct {
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
+	// replacedHelpers holds the helper tags whose outbound addOutboundsLocked
+	// replaced under the same tag since the last syncPersonalProxiesLocked,
+	// which swaps them into the personal proxies group. Guarded by outboundMu.
+	replacedHelpers map[string]struct{}
 
 	// closeTimeout bounds how long close() waits for closers to finish; a zero
 	// value uses defaultCloseTimeout.
@@ -501,9 +505,15 @@ func (t *tunnel) selectMode(mode string) error {
 var ErrPersonalProxiesUnavailable = errors.New("personal proxies unavailable")
 
 func (t *tunnel) selectOutbound(tag string) error {
-	// Checked before the mode switch, so a refused selection changes nothing.
-	if tag == PersonalProxiesTag && !t.offersPersonalProxies() {
-		return ErrPersonalProxiesUnavailable
+	if tag == PersonalProxiesTag {
+		// Held from the check to the selection, so the group cannot be
+		// removed in between. Checked before the mode switch, so a refused
+		// selection changes nothing.
+		t.outboundMu.Lock()
+		defer t.outboundMu.Unlock()
+		if !t.offersPersonalProxies() {
+			return ErrPersonalProxiesUnavailable
+		}
 	}
 	if err := t.selectMode(ManualSelectTag); err != nil {
 		return err
@@ -514,7 +524,9 @@ func (t *tunnel) selectOutbound(tag string) error {
 	if !loaded {
 		return fmt.Errorf("manual select group not found")
 	}
-	outbound.(Selector).SelectOutbound(tag)
+	if !outbound.(Selector).SelectOutbound(tag) && tag == PersonalProxiesTag {
+		return ErrPersonalProxiesUnavailable
+	}
 	return nil
 }
 
@@ -542,12 +554,24 @@ func (t *tunnel) personalProxiesGroup() lbA.MutableOutboundGroup {
 	return g
 }
 
+// helperOutbound returns the outbound manager's outbound for tag when tag is
+// a helper tag, or nil.
+func (t *tunnel) helperOutbound(tag string) adapter.Outbound {
+	if t.outboundMgr == nil || !lbA.IsHelperTag(tag) {
+		return nil
+	}
+	out, _ := t.outboundMgr.Outbound(tag)
+	return out
+}
+
 // syncPersonalProxiesLocked makes the personal proxies group hold exactly the
-// helper outbounds the manual selector offers. It creates the group with its
-// first member and removes it with its last (a url-test group must never be
-// empty), and keeps the selector offering it exactly while it exists. The
-// caller must hold t.outboundMu.
+// helper outbounds the manual selector offers, as the outbound manager now
+// holds them. It creates the group with its first member and removes it with
+// its last (a url-test group must never be empty), and keeps the selector
+// offering it exactly while it exists. The caller must hold t.outboundMu.
 func (t *tunnel) syncPersonalProxiesLocked() error {
+	replaced := t.replacedHelpers
+	t.replacedHelpers = nil
 	if t.mutGrpMgr == nil || t.outboundMgr == nil {
 		return nil
 	}
@@ -561,31 +585,22 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 	case len(helpers) == 0 && group == nil:
 		return nil
 	case len(helpers) == 0:
-		// Withdrawn before it closes, so the selector never holds a closed group.
-		var errs []error
-		if _, err := selector.Remove(PersonalProxiesTag); err != nil {
-			errs = append(errs, err)
-		}
-		if err := t.outboundMgr.Remove(PersonalProxiesTag); err != nil {
-			errs = append(errs, fmt.Errorf("remove personal proxies group: %w", err))
-		}
-		return errors.Join(errs...)
+		return t.withdrawPersonalProxiesLocked(selector)
 	case group == nil:
-		out := personalProxiesOutbound(helpers)
-		router := service.FromContext[adapter.Router](t.ctx)
-		logger := t.logFactory.NewLogger("outbound/" + out.Tag + "[" + out.Type + "]")
-		if err := t.outboundMgr.Create(t.ctx, router, logger, out.Tag, out.Type, out.Options); err != nil {
-			return fmt.Errorf("create personal proxies group: %w", err)
+		if err := t.createPersonalProxiesLocked(helpers); err != nil {
+			return err
 		}
 	default:
 		// Added before the stale members go, so the group is never empty.
 		if _, err := group.Add(helpers...); err != nil {
 			return fmt.Errorf("update personal proxies group: %w", err)
 		}
-		var stale []string
+		var stale, swap []string
 		for _, tag := range group.All() {
 			if !slices.Contains(helpers, tag) {
 				stale = append(stale, tag)
+			} else if _, ok := replaced[tag]; ok {
+				swap = append(swap, tag)
 			}
 		}
 		if len(stale) > 0 {
@@ -593,11 +608,81 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 				return fmt.Errorf("update personal proxies group: %w", err)
 			}
 		}
+		if err := t.swapPersonalProxiesLocked(selector, group, helpers, swap); err != nil {
+			return err
+		}
 	}
 	if !slices.Contains(selector.All(), PersonalProxiesTag) {
 		if _, err := selector.Add(PersonalProxiesTag); err != nil {
 			return fmt.Errorf("offer personal proxies group: %w", err)
 		}
+	}
+	return nil
+}
+
+// swapPersonalProxiesLocked points the group's members in swap at their
+// replacement outbounds. The group holds a member by its outbound and skips
+// a tag it already has, so each is removed and added again; while another
+// member stays in the group that never empties it. When every member was
+// replaced the group is rebuilt instead, keeping the selection on it. The
+// caller must hold t.outboundMu.
+func (t *tunnel) swapPersonalProxiesLocked(
+	selector lbA.MutableOutboundGroup, group lbA.MutableOutboundGroup, helpers, swap []string,
+) error {
+	if len(swap) == 0 {
+		return nil
+	}
+	if len(swap) < len(group.All()) {
+		for _, tag := range swap {
+			if _, err := group.Remove(tag); err != nil {
+				return fmt.Errorf("update personal proxies group: %w", err)
+			}
+			if _, err := group.Add(tag); err != nil {
+				return fmt.Errorf("update personal proxies group: %w", err)
+			}
+		}
+		return nil
+	}
+	selected := selector.Now() == PersonalProxiesTag
+	if err := t.withdrawPersonalProxiesLocked(selector); err != nil {
+		return err
+	}
+	if err := t.createPersonalProxiesLocked(helpers); err != nil {
+		return err
+	}
+	if _, err := selector.Add(PersonalProxiesTag); err != nil {
+		return fmt.Errorf("offer personal proxies group: %w", err)
+	}
+	if selected {
+		if s, ok := selector.(Selector); ok {
+			s.SelectOutbound(PersonalProxiesTag)
+		}
+	}
+	return nil
+}
+
+// withdrawPersonalProxiesLocked removes the group from the selector and then
+// from the outbound manager, so the selector never holds a closed group. The
+// caller must hold t.outboundMu.
+func (t *tunnel) withdrawPersonalProxiesLocked(selector lbA.MutableOutboundGroup) error {
+	var errs []error
+	if _, err := selector.Remove(PersonalProxiesTag); err != nil {
+		errs = append(errs, err)
+	}
+	if err := t.outboundMgr.Remove(PersonalProxiesTag); err != nil {
+		errs = append(errs, fmt.Errorf("remove personal proxies group: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+// createPersonalProxiesLocked creates the group over helpers, which must not
+// be empty. The caller must hold t.outboundMu.
+func (t *tunnel) createPersonalProxiesLocked(helpers []string) error {
+	out := personalProxiesOutbound(helpers)
+	router := service.FromContext[adapter.Router](t.ctx)
+	logger := t.logFactory.NewLogger("outbound/" + out.Tag + "[" + out.Type + "]")
+	if err := t.outboundMgr.Create(t.ctx, router, logger, out.Tag, out.Type, out.Options); err != nil {
+		return fmt.Errorf("create personal proxies group: %w", err)
 	}
 	return nil
 }
@@ -727,9 +812,16 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	)
 	for _, outbound := range newOutbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
+		prev := t.helperOutbound(outbound.Tag)
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
+		if prev != nil && t.helperOutbound(outbound.Tag) != prev {
+			if t.replacedHelpers == nil {
+				t.replacedHelpers = make(map[string]struct{})
+			}
+			t.replacedHelpers[outbound.Tag] = struct{}{}
+		}
 		// Before the auto-select group gets the outbound: it probes new members
 		// immediately, and those probes must go through the exchange.
 		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)

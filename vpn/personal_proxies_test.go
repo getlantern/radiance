@@ -41,6 +41,7 @@ func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(probe.Close)
+	setPersonalProxiesProbe(t, probe.URL, personalProxiesProbeInterval)
 	members := append([]string{"lantern-1"}, helpers...)
 	outbounds := []O.Outbound{{Type: C.TypeDirect, Tag: "lantern-1", Options: &O.DirectOutboundOptions{}}}
 	for _, h := range helpers {
@@ -81,6 +82,17 @@ func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 	tun.mutGrpMgr = mutGrpMgr
 	t.Cleanup(mutGrpMgr.Close)
 	return tun
+}
+
+// setPersonalProxiesProbe points the URL tests of groups the tunnel creates
+// at url, every interval, for the rest of the test.
+func setPersonalProxiesProbe(t *testing.T, url string, interval time.Duration) {
+	t.Helper()
+	prevURL, prevInterval := personalProxiesProbeURL, personalProxiesProbeInterval
+	personalProxiesProbeURL, personalProxiesProbeInterval = url, interval
+	t.Cleanup(func() {
+		personalProxiesProbeURL, personalProxiesProbeInterval = prevURL, prevInterval
+	})
 }
 
 func selectorMembers(t *testing.T, tun *tunnel, tag string) []string {
@@ -153,21 +165,90 @@ func TestPersonalProxiesGroupBuiltAtStartIsManagedLikeARuntimeOne(t *testing.T) 
 
 // A url-test group started empty never gets a pause manager, and its first
 // dial after an Add panics in its check loop. Dialing through a group the
-// tunnel recreated at runtime starts that loop.
+// tunnel recreated at runtime starts that loop; a URL test from one of its
+// ticks shows the loop got past registering with the pause manager.
 func TestPersonalProxiesGroupRecreatedAtRuntimeDials(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(target.Close)
 	tun := startPersonalProxiesTestTunnel(t)
+	setPersonalProxiesProbe(t, personalProxiesProbeURL, 50*time.Millisecond)
+	history := service.FromContext[adapter.URLTestHistoryStorage](tun.ctx)
+	if history == nil {
+		history = tun.clashServer.HistoryStorage()
+	}
+	probed := func() bool { return history.LoadURLTestHistory(testHelper1) != nil }
 	for range 2 {
 		require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
 		group, ok := tun.personalProxiesGroup().(adapter.Outbound)
 		require.True(t, ok)
+		require.Eventually(t, probed, 5*time.Second, 10*time.Millisecond, "the group probes on start")
 		conn, err := group.DialContext(t.Context(), "tcp", M.ParseSocksaddr(target.Listener.Addr().String()))
 		require.NoError(t, err)
 		require.NoError(t, conn.Close())
-		time.Sleep(100 * time.Millisecond) // let the check loop register with the pause manager
+		// The loop may probe once before registering, so wait out two probes.
+		for range 2 {
+			history.DeleteURLTestHistory(testHelper1)
+			require.Eventually(t, probed, 5*time.Second, 10*time.Millisecond, "the check loop ticks")
+		}
 
 		require.NoError(t, tun.removeOutbounds([]string{testHelper1}))
 		require.Nil(t, tun.personalProxiesGroup())
+		history.DeleteURLTestHistory(testHelper1)
 	}
+}
+
+func blockServer(tag string) *servers.Server {
+	return &servers.Server{Tag: tag, Type: C.TypeBlock, IsLantern: true,
+		Options: O.Outbound{Tag: tag, Type: C.TypeBlock, Options: &O.StubOptions{}}}
+}
+
+// A helper whose options change is replaced in the outbound manager under the
+// same tag; the group must dial through the replacement, not the closed
+// original, whether or not another member stays in the group meanwhile.
+func TestPersonalProxiesGroupFollowsAReplacedHelper(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	for _, tc := range []struct {
+		name   string
+		others []*servers.Server
+	}{
+		{"only member", nil},
+		{"alongside another member", []*servers.Server{blockServer(testHelper2)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := startPersonalProxiesTestTunnel(t)
+			require.NoError(t, tun.addOutbounds(servers.ServerList{
+				Servers: append([]*servers.Server{blockServer(testHelper1)}, tc.others...)}))
+			group := tun.personalProxiesGroup().(adapter.Outbound)
+			_, err := group.DialContext(t.Context(), "tcp", dest)
+			require.Error(t, err, "every member blocks")
+
+			require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
+
+			// addOutbounds also reports that the manual selector kept its own
+			// member (a pre-existing limit of replacing an outbound in place).
+			_ = tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}})
+			group = tun.personalProxiesGroup().(adapter.Outbound)
+			sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
+			assert.Equal(t, PersonalProxiesTag, sel.Now(), "the selection stays on the group")
+			assert.ElementsMatch(t, append([]string{testHelper1}, tagsOf(tc.others)...), personalProxiesMembers(tun))
+			require.Eventually(t, func() bool {
+				conn, err := group.DialContext(t.Context(), "tcp", dest)
+				if err != nil {
+					return false
+				}
+				_ = conn.Close()
+				return true
+			}, 5*time.Second, 50*time.Millisecond, "the group dials through the replaced helper")
+		})
+	}
+}
+
+func tagsOf(list []*servers.Server) []string {
+	var tags []string
+	for _, s := range list {
+		tags = append(tags, s.Tag)
+	}
+	return tags
 }
