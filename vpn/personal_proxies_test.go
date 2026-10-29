@@ -252,3 +252,40 @@ func tagsOf(list []*servers.Server) []string {
 	}
 	return tags
 }
+
+// A rebuild of the selected group that fails after withdrawing it leaves the
+// selector on another tag; the sync that recreates the group selects it
+// again, unless the user has chosen something else meanwhile.
+func TestPersonalProxiesSelectionSurvivesAFailedRebuild(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reselect string
+		want     string
+	}{
+		{"selected again", "", PersonalProxiesTag},
+		{"a later choice wins", "lantern-1", "lantern-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := startPersonalProxiesTestTunnel(t)
+			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{blockServer(testHelper1)}}))
+			require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
+			sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
+
+			// An interval beyond the idle timeout makes creating the group fail.
+			interval := personalProxiesProbeInterval
+			personalProxiesProbeInterval = urlTestIdleTimeout + time.Minute
+			err := tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}})
+			personalProxiesProbeInterval = interval
+			require.ErrorContains(t, err, "create personal proxies group")
+			require.Nil(t, tun.personalProxiesGroup())
+			require.NotEqual(t, PersonalProxiesTag, sel.Now())
+
+			if tc.reselect != "" {
+				require.NoError(t, tun.selectOutbound(tc.reselect))
+			}
+			require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-2")}}))
+			require.NotNil(t, tun.personalProxiesGroup())
+			assert.Equal(t, tc.want, sel.Now())
+		})
+	}
+}
