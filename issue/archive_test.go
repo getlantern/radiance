@@ -614,10 +614,17 @@ func TestBuildIssueArchiveIncludesCompressedBackup(t *testing.T) {
 	})
 }
 
+// randomBytes returns n incompressible bytes with no ':' or '=', so log redaction finds
+// no URL or field in them and leaves them unchanged.
 func randomBytes(t *testing.T, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
 	_, err := rand.Read(b)
 	require.NoError(t, err)
+	for i, c := range b {
+		if c == ':' || c == '=' {
+			b[i] = c + 1
+		}
+	}
 	return b
 }
