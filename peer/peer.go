@@ -1113,6 +1113,37 @@ func (c *Client) runRotation(ctx context.Context) {
 	}
 }
 
+// ErrNotActive is Reregister's error when no session runs.
+var ErrNotActive = errors.New("peer: no session is running")
+
+// Reregister re-registers the running session now rather than at its next
+// rotation, so a change to what registration sends, such as peer_serve_pool,
+// takes effect at once. It rotates the credentials exactly as the hourly
+// rotation does, and like it turns a libbox panic into an error. The new
+// credentials plus closing the old box, which ends its sessions, cut off
+// strangers when "help others too" turns off; paired clients reconnect with
+// their pairing IDs.
+func (c *Client) Reregister(ctx context.Context) (err error) {
+	c.mu.Lock()
+	active, session := c.active, c.runCtx
+	c.mu.Unlock()
+	if !active || session == nil {
+		return ErrNotActive
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("peer re-register panicked: %v", r)
+		}
+	}()
+	// Bound to the session too, as the hourly rotation is: Stop cancels the
+	// session and then waits for the lifecycle slot, so a re-register hung
+	// in ExternalIP or Register must end with it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(session, cancel)()
+	return c.rotateCreds(ctx)
+}
+
 // rotateCreds swaps the peer's samizdat credentials by re-registering and
 // rebuilding the libbox inbound against the new launch config.
 //
@@ -1127,8 +1158,8 @@ func (c *Client) runRotation(ctx context.Context) {
 // deregistered on failure and the old box keeps serving.
 //
 // The old box is closed before the new one is built, because building the
-// samizdat inbound binds the listening port. Close releases the port at once;
-// closeBox does not wait for its client connections to drain.
+// samizdat inbound binds the listening port. Close releases the port at once
+// and ends the box's sessions; closeBox bounds the wait as a safety net.
 func (c *Client) rotateCreds(ctx context.Context) error {
 	if err := c.acquireLifecycle(ctx); err != nil {
 		return err
@@ -1137,7 +1168,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.mu.Lock()
 	if !c.active {
 		c.mu.Unlock()
-		return errors.New("not active")
+		return ErrNotActive
 	}
 	fwd := c.forwarder
 	extPort := c.externalPort

@@ -11,11 +11,20 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/getlantern/semconv"
+
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/traces"
 	"github.com/getlantern/radiance/vpn"
 )
+
+const tracerName = "github.com/getlantern/radiance/tester"
 
 func run(ctx context.Context) error {
 	dir, target := os.Getenv("DATA"), os.Getenv("TARGET_URL")
@@ -42,7 +51,10 @@ func run(ctx context.Context) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(semconv.URLFullKey.String(spanURL(target)), semconv.TesterFetchTimeoutSecondsKey.Int(seconds))
 	if os.Getenv("DIRECT") == "true" {
+		span.SetAttributes(semconv.TesterModeKey.String("direct"))
 		return fetch(ctx, target, "", dir, timeout)
 	}
 	if env := os.Getenv("RADIANCE_ENV"); env != "staging" && env != "production" {
@@ -50,6 +62,7 @@ func run(ctx context.Context) error {
 	}
 	sticky := os.Getenv("STICKY") == "true"
 	tag := os.Getenv("TARGET_TAG")
+	span.SetAttributes(semconv.TesterModeKey.String("client"), semconv.TesterStickyKey.Bool(sticky), semconv.TesterTargetTagKey.String(tag))
 	clientDir, err := os.MkdirTemp(dir, "client-")
 	if err != nil {
 		return err
@@ -100,8 +113,8 @@ func run(ctx context.Context) error {
 	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connecting"), fileperm.Private); err != nil {
 		return err
 	}
-	if err := be.ConnectVPN(connectCtx, tag); err != nil {
-		return fmt.Errorf("connect assigned target: %w", err)
+	if err := connect(connectCtx, be, tag); err != nil {
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "connection.txt"), []byte("connected"), fileperm.Private); err != nil {
 		return err
@@ -114,6 +127,21 @@ func run(ctx context.Context) error {
 	return fetch(ctx, target, proxy, dir, timeout)
 }
 
+// connect brings up the assigned target as a span of its own, so the time
+// the tunnel took is read apart from the fetch that followed. Child spans
+// come from the run span's provider, not the global one, which the backend
+// replaces on Close.
+func connect(ctx context.Context, be *backend.LocalBackend, tag string) error {
+	ctx, span := trace.SpanFromContext(ctx).TracerProvider().Tracer(tracerName).Start(ctx, "tester.connect")
+	defer span.End()
+	if err := be.ConnectVPN(ctx, tag); err != nil {
+		err = fmt.Errorf("connect assigned target: %w", err)
+		span.SetStatus(codes.Error, err.Error())
+		return traces.RecordError(ctx, err)
+	}
+	return nil
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -121,18 +149,46 @@ func main() {
 	if seconds <= 0 || seconds > 600 {
 		seconds = 20
 	}
-	ctx, deadline := context.WithTimeout(ctx, time.Duration(2*seconds+15)*time.Second)
+	// The pinger removes the container phaseGrace+flushGrace after this
+	// deadline.
+	ctx, deadline := context.WithTimeout(ctx, time.Duration(2*seconds+8)*time.Second)
 	defer deadline()
+	flush, err := startTelemetry(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "telemetry:", err)
+		flush = func(context.Context) error { return nil }
+	}
+	// The tracer is taken once: the backend's Close replaces the global
+	// provider with a no-op one, and the spans started here must outlive it.
+	tracer := otel.GetTracerProvider().Tracer(tracerName)
+	ctx, span := tracer.Start(parentContext(ctx), "tester.run",
+		trace.WithAttributes(semconv.TesterRunIDKey.String(os.Getenv("RUN_ID"))))
 	done := make(chan error, 1)
 	go func() { done <- run(ctx) }()
+	var runErr error
 	select {
-	case err := <-done:
-		if err == nil {
-			return
-		}
-		fmt.Fprintln(os.Stderr, err)
+	case runErr = <-done:
 	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, ctx.Err())
+		runErr = ctx.Err()
+		// The phase in flight ends its span when run returns; a tunnel
+		// bring-up detached from ctx may not, so the wait is bounded.
+		select {
+		case <-done:
+		case <-time.After(phaseGrace):
+		}
 	}
-	os.Exit(1)
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, runErr)
+		span.SetStatus(codes.Error, runErr.Error())
+		span.RecordError(runErr)
+	}
+	span.End()
+	flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), flushGrace)
+	defer cancelFlush()
+	if err := flush(flushCtx); err != nil {
+		fmt.Fprintln(os.Stderr, "telemetry flush:", err)
+	}
+	if runErr != nil {
+		os.Exit(1)
+	}
 }

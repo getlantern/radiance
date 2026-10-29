@@ -21,6 +21,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
@@ -385,6 +386,10 @@ type fakePeerController struct {
 	// servePoolAtStart is peer_serve_pool as the first Start saw it, which
 	// is what that Start's registration sends.
 	servePoolAtStart atomic.Value // any
+	reregisterCalls  atomic.Int64
+	// reregisterFn, when set, answers Reregister; it gets the call's number,
+	// from 1.
+	reregisterFn atomic.Pointer[func(context.Context, int64) error]
 }
 
 func (f *fakePeerController) Start(_ context.Context) error {
@@ -402,6 +407,18 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 	f.stopCalls.Add(1)
 	f.active.Store(false)
 	return nil
+}
+
+func (f *fakePeerController) Reregister(ctx context.Context) error {
+	n := f.reregisterCalls.Add(1)
+	if fn := f.reregisterFn.Load(); fn != nil {
+		return (*fn)(ctx, n)
+	}
+	return nil
+}
+
+func (f *fakePeerController) setReregister(fn func(context.Context, int64) error) {
+	f.reregisterFn.Store(&fn)
 }
 
 func (f *fakePeerController) IsActive() bool               { return f.active.Load() }
@@ -722,9 +739,10 @@ func (f *slowStartFake) Stop(_ context.Context) error {
 	f.active.Store(false)
 	return nil
 }
-func (f *slowStartFake) IsActive() bool               { return f.active.Load() }
-func (f *slowStartFake) CurrentStatus() peer.Status   { return peer.Status{Active: f.active.Load()} }
-func (f *slowStartFake) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
+func (f *slowStartFake) IsActive() bool                   { return f.active.Load() }
+func (f *slowStartFake) CurrentStatus() peer.Status       { return peer.Status{Active: f.active.Load()} }
+func (f *slowStartFake) RelaySnapshot() peer.Snapshot     { return peer.Snapshot{} }
+func (f *slowStartFake) Reregister(context.Context) error { return nil }
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path
@@ -1139,4 +1157,247 @@ func TestSetCountryCodeFromConfigFollowsCorrections(t *testing.T) {
 
 	setCountryCodeFromConfig(&config.Config{})
 	assert.Equal(t, "IR", settings.GetString(settings.CountryCodeKey), "a config without a country keeps the last one")
+}
+
+func TestPatchSettings_ServePoolChangeReregistersARunningPeer(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, b.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+
+	require.NoError(t, b.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load(), "an unchanged value re-registers nothing")
+}
+
+func TestPatchSettings_ServePoolChangeLeavesAStoppedPeerAlone(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	require.NoError(t, b.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Zero(t, fake.reregisterCalls.Load())
+}
+
+// A patch that also turns sharing on registers once, through Start, with the
+// new value already persisted.
+func TestPatchSettings_ServePoolWithToggleOnDoesNotReregister(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	require.NoError(t, b.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true, settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.Zero(t, fake.reregisterCalls.Load())
+}
+
+// A patch that turns sharing on for a peer already running starts nothing,
+// so its serve-pool change still has to re-register.
+func TestPatchSettings_ServePoolWithToggleOnForARunningPeerReregisters(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	require.NoError(t, b.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true, settings.PeerServePoolKey: false}))
+	b.peerWG.Wait()
+	assert.Zero(t, fake.startCalls.Load())
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+}
+
+func TestReregisterPeer_SkipsAClosedBackend(t *testing.T) {
+	fake := &fakePeerController{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b := &LocalBackend{ctx: ctx, peerClient: fake}
+	fake.active.Store(true)
+	b.reregisterPeer()
+	b.peerWG.Wait()
+	assert.Zero(t, fake.reregisterCalls.Load())
+}
+
+// Once closePeerClient has begun waiting, a re-register starts nothing, even
+// before Close cancels the backend's context.
+func TestReregisterPeer_AfterCloseStartsNothing(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newCloseableTestBackend(t, fake)
+	fake.active.Store(true)
+	b.closePeerClient()
+	fake.active.Store(true)
+	b.reregisterPeer()
+	b.peerWG.Wait()
+	assert.Zero(t, fake.reregisterCalls.Load())
+}
+
+// setReregisterBackoff shortens or lengthens the re-register retry for a test.
+func setReregisterBackoff(t *testing.T, first, longest time.Duration) {
+	prevFirst, prevMax := reregisterRetryFirst, reregisterRetryMax
+	reregisterRetryFirst, reregisterRetryMax = first, longest
+	t.Cleanup(func() { reregisterRetryFirst, reregisterRetryMax = prevFirst, prevMax })
+}
+
+// waitPeerWork waits for the backend's background peer work, failing the
+// test if it does not finish.
+func waitPeerWork(t *testing.T, b *LocalBackend) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { b.peerWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer work did not finish")
+	}
+}
+
+var errUnreachable = errors.New("lantern-cloud unreachable")
+
+func TestReregisterPeer_RetriesUntilItSucceeds(t *testing.T) {
+	setReregisterBackoff(t, time.Millisecond, 4*time.Millisecond)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(_ context.Context, n int64) error {
+		if n < 3 {
+			return errUnreachable
+		}
+		return nil
+	})
+	b.reregisterPeer()
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(3), fake.reregisterCalls.Load())
+}
+
+func TestReregisterPeer_StopsWhenThePeerStops(t *testing.T) {
+	setReregisterBackoff(t, time.Millisecond, time.Millisecond)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return peer.ErrNotActive })
+	b.reregisterPeer()
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+}
+
+// Close cancels a retry waiting out its backoff, so it neither hangs Close nor
+// outlives the backend.
+func TestReregisterPeer_CloseEndsTheRetry(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newCloseableTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return errUnreachable })
+	b.reregisterPeer()
+	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 1 }, time.Second, time.Millisecond)
+	closed := make(chan struct{})
+	go func() { b.closePeerClient(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waited out the backoff")
+	}
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load())
+}
+
+// Only the latest request's retry keeps running: a newer toggle cancels the
+// older loop, which would otherwise sit in its hour-long backoff.
+func TestReregisterPeer_ANewerRequestSupersedesTheRetry(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return errUnreachable })
+	b.reregisterPeer()
+	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 1 }, time.Second, time.Millisecond)
+	fake.setReregister(func(context.Context, int64) error { return nil })
+	b.reregisterPeer()
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(2), fake.reregisterCalls.Load())
+}
+
+// Turning sharing off ends a pending retry: the session it was for is gone,
+// and a new session's Start has registered the current setting already.
+func TestReregisterPeer_StopAndStartEndTheRetry(t *testing.T) {
+	setReregisterBackoff(t, 50*time.Millisecond, 50*time.Millisecond)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	fake.setReregister(func(context.Context, int64) error { return errUnreachable })
+	b.reregisterPeer()
+	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, b.applyPeerShare(false))
+	require.NoError(t, b.applyPeerShare(true))
+	waitPeerWork(t, b)
+	assert.Never(t, func() bool { return fake.reregisterCalls.Load() > 1 }, 200*time.Millisecond, 5*time.Millisecond,
+		"the stale retry never reaches the new session")
+}
+
+// Close stops the activity ticker and flushes before it returns, so the file
+// does not change afterwards.
+func TestClose_NoActivitySaveAfterItReturns(t *testing.T) {
+	fake := &fakePeerController{}
+	b := newCloseableTestBackend(t, fake)
+	path := filepath.Join(t.TempDir(), "helper-activity.json")
+	b.helperActivity = helper.NewActivityTracker(path, func() (bool, string, uint64) { return true, "e", 0 })
+	go b.helperActivity.Run(b.ctx, time.Millisecond)
+	require.Eventually(t, func() bool { _, err := os.Stat(path); return err == nil }, time.Second, time.Millisecond)
+	b.Close()
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}
+
+// A newer toggle supersedes the retry loop, not the attempt already running:
+// cancelling that could abort a rotation between its register and its box
+// rebuild and stop sharing.
+func TestReregisterPeer_ANewerRequestLetsTheRunningAttemptFinish(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	fake.setReregister(func(ctx context.Context, n int64) error {
+		if n == 1 {
+			started <- ctx
+			<-release
+		}
+		return nil
+	})
+	b.reregisterPeer()
+	first := <-started
+	b.reregisterPeer()
+	assert.Never(t, func() bool { return first.Err() != nil }, 30*time.Millisecond, time.Millisecond,
+		"the running attempt is not cancelled")
+	close(release)
+	waitPeerWork(t, b)
+	assert.Equal(t, int64(2), fake.reregisterCalls.Load(), "the newer request's attempt runs after it")
+}
+
+// Turning sharing off cancels a running attempt at once rather than waiting
+// for it under the toggle lock.
+func TestReregisterPeer_TurningOffCancelsTheRunningAttempt(t *testing.T) {
+	setReregisterBackoff(t, time.Hour, time.Hour)
+	fake := &fakePeerController{}
+	b := newPeerTestBackend(t, fake)
+	fake.active.Store(true)
+	started := make(chan struct{})
+	fake.setReregister(func(ctx context.Context, n int64) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	b.reregisterPeer()
+	<-started
+	done := make(chan error, 1)
+	go func() { done <- b.applyPeerShare(false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("turning sharing off waited for the attempt")
+	}
+	waitPeerWork(t, b)
 }

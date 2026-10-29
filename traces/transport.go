@@ -14,11 +14,52 @@ import (
 )
 
 // NewRoundTripper wraps the provided http.RoundTripper with OpenTelemetry instrumentation.
+// Helper-invite requests are not traced (see untracedRequest).
 func NewRoundTripper(original http.RoundTripper) http.RoundTripper {
 	if original == nil {
 		original = http.DefaultTransport
 	}
-	return otelhttp.NewTransport(original, otelhttp.WithClientTrace(httpTrace))
+	return detachingRoundTripper{next: otelhttp.NewTransport(original,
+		otelhttp.WithClientTrace(httpTrace),
+		otelhttp.WithFilter(func(r *http.Request) bool { return !untracedRequest(r) }))}
+}
+
+// detachingRoundTripper strips the caller's span from helper-invite requests.
+// otelhttp's filter only stops a new span; without this, the header
+// annotator and kindling's race observer would record on the caller's.
+type detachingRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (d detachingRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	if untracedRequest(r) {
+		r = r.WithContext(Untraced(r.Context()))
+	}
+	return d.next.RoundTrip(r)
+}
+
+type untracedKey struct{}
+
+// Untraced marks ctx so that requests made with it are never traced, and
+// detaches the caller's span. http.Client builds each redirect from the
+// original request's context, so the mark covers a redirect off /helper/,
+// which the path check alone would not.
+func Untraced(ctx context.Context) context.Context {
+	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
+	return context.WithValue(ctx, untracedKey{}, true)
+}
+
+// untracedRequest reports whether r is a helper-invite request: one made
+// with an Untraced context, or any request under /helper/ (the HelperService
+// calls and the ticket fetch). A span for one would carry the device ID
+// header and show the device uses helper invites, and how often; with no
+// span, and the caller's span detached, the header annotator and kindling's
+// race observer find nothing to record on.
+func untracedRequest(r *http.Request) bool {
+	if marked, _ := r.Context().Value(untracedKey{}).(bool); marked {
+		return true
+	}
+	return r.URL != nil && strings.Contains(r.URL.Path, "/helper/")
 }
 
 func httpTrace(ctx context.Context) *httptrace.ClientTrace {
