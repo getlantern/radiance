@@ -140,3 +140,35 @@ func TestSpanExportRedactsAddressesInSpansNamingAHelper(t *testing.T) {
 	assert.Contains(t, spans[1].Events[0].Attributes, attribute.String("error", "dial tcp 198.51.100.9:443: connect: connection refused"),
 		"a span that names no helper keeps its addresses")
 }
+
+func TestConnMetricAttributesRedactThePersonalProxiesTag(t *testing.T) {
+	set := newConnAttributeSet(vpn.ConnAttrs{
+		FromOutbound: "personal-proxies",
+		Outbound:     helperTag,
+		Rule:         "final => personal-proxies",
+		ChainList:    []string{"manual", "personal-proxies", helperTag},
+	})
+	for _, kv := range set.ToSlice() {
+		assert.NotContains(t, kv.Value.Emit(), "personal-proxies", string(kv.Key))
+		assert.NotContains(t, kv.Value.Emit(), helperTag, string(kv.Key))
+	}
+	chain, _ := set.Value("chain_list")
+	assert.Equal(t, []string{"manual", "helper", "helper"}, chain.AsStringSlice())
+}
+
+func TestSpanExportRedactsThePersonalProxiesTag(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(newRedactingExporter(mem)))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	_, span := tp.Tracer("test").Start(context.Background(), "url test")
+	span.SetAttributes(attribute.String("tag", "personal-proxies"), attribute.String("peer", "198.51.100.9:443"))
+	span.SetStatus(codes.Error, "outbound/mutableurltest[personal-proxies]: dial tcp 203.0.113.7:443")
+	span.End()
+
+	s := mem.GetSpans()[0]
+	for _, kv := range s.Attributes {
+		assert.NotContains(t, kv.Value.Emit(), "personal-proxies", string(kv.Key))
+		assert.NotContains(t, kv.Value.Emit(), "198.51.100.9", string(kv.Key), "a span naming the group loses every address")
+	}
+	assert.Equal(t, "outbound/mutableurltest[helper]: dial tcp <redacted>", s.Status.Description)
+}

@@ -86,3 +86,29 @@ func TestLogTailsDropTheLineTheyCut(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, line, string(data))
 }
+
+// The group's tag marks a device as having personal proxies, so issue reports
+// treat it like a helper- tag: in logs, in debug-box-options.json and in the
+// persisted selection.
+func TestIssueArchiveRedactsThePersonalProxiesTag(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"),
+		[]byte("outbound/mutableurltest[personal-proxies]: dial tcp 203.0.113.7:443\n"), 0644))
+	opts := filepath.Join(dir, "debug-box-options.json")
+	require.NoError(t, os.WriteFile(opts, []byte(`{"outbounds":[
+ {"type":"mutableurltest","tag":"personal-proxies","outbounds":["helper-0123456789ab"]},
+ {"type":"mutableselector","tag":"manual","outbounds":["lantern-1","personal-proxies"]}]}`), 0644))
+	settingsFile := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.WriteFile(settingsFile,
+		[]byte(`{"selected_server":{"tag":"personal-proxies","type":"mutableurltest","isLantern":false}}`), 0644))
+
+	result, err := buildIssueArchive(log.NoOpLogger(), dir, []string{opts, settingsFile}, 1024*1024)
+	require.NoError(t, err)
+	entries := readZipEntries(t, result)
+	require.Len(t, entries, 3)
+	for _, e := range entries {
+		assert.NotContains(t, e.content, "personal-proxies", e.name)
+		assert.NotContains(t, e.content, "helper-0123456789ab", e.name)
+		assert.NotContains(t, e.content, "203.0.113.7", e.name)
+	}
+}
