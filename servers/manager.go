@@ -326,6 +326,33 @@ func (m *Manager) UpdateSelectionHistory(results map[string]SelectionHistory) er
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
 // the server was found.
+// HasOptions reports whether the manager holds a server tagged srv.Tag with
+// the options AddServers would store for srv.
+func (m *Manager) HasOptions(srv *Server) bool {
+	stored, exists := m.GetServerByTag(srv.Tag)
+	if !exists {
+		return false
+	}
+	have, err := m.marshalOptions(stored.Options)
+	if err != nil {
+		return false
+	}
+	want, err := m.marshalOptions(srv.WithTLSVerification().Options)
+	return err == nil && bytes.Equal(have, want)
+}
+
+// marshalOptions encodes server options. The sing-box encoder writes an
+// outbound's or endpoint's typed options only through a pointer to it.
+func (m *Manager) marshalOptions(opts any) ([]byte, error) {
+	switch o := opts.(type) {
+	case option.Outbound:
+		opts = &o
+	case option.Endpoint:
+		opts = &o
+	}
+	return json.MarshalContext(m.regContext(), opts)
+}
+
 func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
 	start := time.Now()
 	m.access.RLock()

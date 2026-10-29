@@ -1049,15 +1049,36 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 const maxRetainedLanternServers = 60
 
 // updateServers adds the servers in list that are not already present and
-// pass [servers.Server.CheckHostAccess]. When evict is set it first evicts
-// retained Lantern servers (see lanternServersToEvict). Only a newly received
-// config may evict: a config that was already applied, such as the cached one
-// at startup, would judge its own offers a second time.
+// pass [servers.Server.CheckHostAccess], and refreshes the helper servers in
+// list whose options changed. When evict is set it first evicts retained
+// Lantern servers (see lanternServersToEvict). Only a newly received config
+// may evict: a config that was already applied, such as the cached one at
+// startup, would judge its own offers a second time.
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
+	incomingHelpers := make(map[string]struct{})
+	for _, srv := range list.Servers {
+		if lbA.IsHelperTag(srv.Tag) {
+			incomingHelpers[srv.Tag] = struct{}{}
+		}
+	}
+	// A helper's tag is stable per pairing and route while the credentials in
+	// its options rotate, so a known helper tag with new options replaces the
+	// stored server. Other known tags keep the server first offered.
+	var refreshed []*servers.Server
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		if _, exists := existingTags[srv.Tag]; exists {
+			if stored, found := r.srvManager.GetServerByTag(srv.Tag); found &&
+				stored.IsLantern && lbA.IsHelperTag(srv.Tag) && !r.srvManager.HasOptions(srv) {
+				if err := srv.CheckHostAccess(); err != nil {
+					slog.Warn("Not refreshing helper server whose options grant host access", "tag", srv.Tag, "error", err)
+					return true
+				}
+				refresh := srv.Clone()
+				refresh.SelectionHistory = stored.SelectionHistory
+				refreshed = append(refreshed, refresh)
+			}
 			return true
 		}
 		if err := srv.CheckHostAccess(); err != nil {
@@ -1074,7 +1095,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 			selectedTag = selected.Tag
 		}
 
-		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
+		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag, incomingHelpers)
 
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
@@ -1095,6 +1116,12 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 	)
 	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("add Lantern servers: %w", err)
+	}
+	if len(refreshed) > 0 {
+		slog.Debug("Refreshing helper servers whose options changed", "count", len(refreshed))
+		if err := r.srvManager.AddServers(servers.ServerList{Servers: refreshed}, true); err != nil {
+			return fmt.Errorf("refresh helper servers: %w", err)
+		}
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
@@ -1121,18 +1148,25 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 // lanternServersToEvict returns Lantern server tags to evict, always including
 // hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
 // are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
-// Helper servers are never evicted: they are the user's pairings, not offers
-// to rotate, and the personal proxies group selection depends on them.
+// Helper servers the new config carries (incomingHelpers) are never evicted
+// and take no retention slot: they are the user's pairings, not offers to
+// rotate, and the personal proxies group selection depends on them. Helpers
+// the config no longer carries are evicted like any other server, so ended
+// pairings do not linger.
 func lanternServersToEvict(
 	existing []*servers.Server,
 	incomingCount, limit int,
 	selectedTag string,
+	incomingHelpers map[string]struct{},
 ) []string {
 	tagsToEvict := make([]string, 0)
 	retentionCandidates := make([]*servers.Server, 0, len(existing))
 
 	for _, srv := range existing {
-		if !srv.IsLantern || lbA.IsHelperTag(srv.Tag) {
+		if !srv.IsLantern {
+			continue
+		}
+		if _, carried := incomingHelpers[srv.Tag]; carried {
 			continue
 		}
 		// Always evict hard-demoted servers.

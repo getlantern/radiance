@@ -3,6 +3,7 @@ package vpn
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
@@ -288,4 +290,36 @@ func TestPersonalProxiesSelectionSurvivesAFailedRebuild(t *testing.T) {
 			assert.Equal(t, tc.want, sel.Now())
 		})
 	}
+}
+
+// A config refresh delivers a helper under the same tag and type with new
+// options, as when its rotating credentials change; updateOutbounds must
+// replace the live outbound, and the group must dial through the new one.
+func TestPersonalProxiesGroupFollowsARefreshedHelper(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	tun := startPersonalProxiesTestTunnel(t)
+
+	stale := directServer(testHelper1)
+	stale.Options = O.Outbound{Tag: testHelper1, Type: C.TypeDirect, Options: &O.DirectOutboundOptions{
+		// An address no local interface has: binding to it fails every dial.
+		DialerOptions: O.DialerOptions{Inet4BindAddress: (*badoption.Addr)(new(netip.MustParseAddr("192.0.2.1")))},
+	}}
+	require.NoError(t, tun.updateOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-1"), stale}}))
+	group := tun.personalProxiesGroup().(adapter.Outbound)
+	_, err := group.DialContext(t.Context(), "tcp", dest)
+	require.Error(t, err, "the stale helper cannot dial")
+
+	_ = tun.updateOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-1"), directServer(testHelper1)}})
+	assert.Equal(t, []string{testHelper1}, personalProxiesMembers(tun))
+	group = tun.personalProxiesGroup().(adapter.Outbound)
+	require.Eventually(t, func() bool {
+		conn, err := group.DialContext(t.Context(), "tcp", dest)
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}, 5*time.Second, 50*time.Millisecond, "the group dials through the refreshed helper")
 }

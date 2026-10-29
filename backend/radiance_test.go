@@ -193,7 +193,9 @@ func TestLanternServersToEvict(t *testing.T) {
 		incoming int
 		limit    int
 		selected string
-		want     []string
+		// incomingHelpers are the helper tags the new config carries.
+		incomingHelpers map[string]struct{}
+		want            []string
 	}{
 		{
 			name: "evicts only hard-demoted lantern servers",
@@ -268,7 +270,7 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:     []string{"selected-demoted"},
 		},
 		{
-			name: "helper servers are never evicted",
+			name: "helpers in the new config are never evicted",
 			existing: []*servers.Server{
 				newTestServer("helper-0123456789ab", true, false, time.Time{}),
 				newTestServer("helper-ba9876543210", true, true, baseTime),
@@ -278,7 +280,24 @@ func TestLanternServersToEvict(t *testing.T) {
 			incoming: 2,
 			limit:    3,
 			selected: "personal-proxies",
-			want:     []string{"a"},
+			incomingHelpers: map[string]struct{}{
+				"helper-0123456789ab": {}, "helper-ba9876543210": {},
+			},
+			want: []string{"a"},
+		},
+		{
+			name: "helpers absent from the new config are evicted like other servers",
+			existing: []*servers.Server{
+				newTestServer("helper-0123456789ab", true, false, time.Time{}),
+				newTestServer("helper-ba9876543210", true, false, time.Time{}),
+				newTestServer("helper-demoted00000", true, true, baseTime.Add(9*time.Hour)),
+				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
+			},
+			incoming:        1,
+			limit:           2,
+			selected:        "personal-proxies",
+			incomingHelpers: map[string]struct{}{"helper-0123456789ab": {}},
+			want:            []string{"helper-ba9876543210", "helper-demoted00000"},
 		},
 		{
 			name: "server with no selection history sorts oldest",
@@ -295,7 +314,7 @@ func TestLanternServersToEvict(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected)
+			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected, tt.incomingHelpers)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
@@ -1417,7 +1436,11 @@ func TestReregisterPeer_TurningOffCancelsTheRunningAttempt(t *testing.T) {
 
 func newPersonalProxiesBackend(t *testing.T) *LocalBackend {
 	t.Helper()
-	dataDir := t.TempDir()
+	return newPersonalProxiesBackendIn(t, t.TempDir())
+}
+
+func newPersonalProxiesBackendIn(t *testing.T, dataDir string) *LocalBackend {
+	t.Helper()
 	settings.Reset()
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.InitSettings(dataDir))
@@ -1505,7 +1528,7 @@ func TestConfigEvictionKeepsHelpersAndThePersonalProxiesSelection(t *testing.T) 
 	require.NoError(t, r.srvManager.AddServers(directServers(retained...), false))
 	r.persistSelection(vpn.PersonalProxiesTag)
 
-	var incoming []string
+	incoming := []string{h1, h2} // a config keeps carrying its pairings' helpers
 	for i := range 10 {
 		incoming = append(incoming, fmt.Sprintf("new-%d", i))
 	}
@@ -1522,4 +1545,60 @@ func TestConfigEvictionKeepsHelpersAndThePersonalProxiesSelection(t *testing.T) 
 	require.NoError(t, err)
 	assert.True(t, exists)
 	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
+}
+
+func helperWithPort(tag string, port uint16) *servers.Server {
+	return &servers.Server{
+		Tag: tag, Type: "socks", IsLantern: true,
+		Options: option.Outbound{Tag: tag, Type: "socks", Options: &option.SOCKSOutboundOptions{
+			ServerOptions: option.ServerOptions{Server: "203.0.113.7", ServerPort: port},
+		}},
+	}
+}
+
+func storedPort(t *testing.T, r *LocalBackend, tag string) uint16 {
+	t.Helper()
+	srv, found := r.srvManager.GetServerByTag(tag)
+	require.True(t, found, tag)
+	return srv.Options.(option.Outbound).Options.(*option.SOCKSOutboundOptions).ServerPort
+}
+
+// A helper's tag is stable per pairing and route, but the credentials in its
+// options rotate (the samizdat short ID changes daily), so a config carrying
+// a known helper tag with new options must replace the stored server.
+func TestConfigUpdateRefreshesAHelperWhoseOptionsChanged(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1080)}}, true))
+	require.Equal(t, uint16(1080), storedPort(t, r, h))
+	before, _ := r.srvManager.GetServerByTag(h)
+	before.SelectionHistory = &servers.SelectionHistory{UpdatedAt: time.Unix(100, 0).UTC()}
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{before}}, true))
+
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1081)}}, true))
+	assert.Equal(t, uint16(1081), storedPort(t, r, h), "the new options are stored")
+	after, _ := r.srvManager.GetServerByTag(h)
+	require.NotNil(t, after.SelectionHistory, "the server's history is kept")
+	assert.Equal(t, time.Unix(100, 0).UTC(), after.SelectionHistory.UpdatedAt)
+
+	// Non-helper servers keep the first offer, as before.
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort("lantern-x", 1080)}}, true))
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort("lantern-x", 1081)}}, true))
+	assert.Equal(t, uint16(1080), storedPort(t, r, "lantern-x"))
+}
+
+func TestConfigUpdateLeavesAnUnchangedHelperAlone(t *testing.T) {
+	const h = "helper-0123456789ab"
+	dataDir := t.TempDir()
+	r := newPersonalProxiesBackendIn(t, dataDir)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1080)}}, true))
+	serversFile := filepath.Join(dataDir, internal.ServersFileName)
+	stamp := time.Unix(1, 0)
+	require.NoError(t, os.Chtimes(serversFile, stamp, stamp))
+
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1080)}}, true))
+	info, err := os.Stat(serversFile)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(stamp), "identical options are not rewritten")
+	assert.Equal(t, uint16(1080), storedPort(t, r, h))
 }
