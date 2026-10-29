@@ -841,3 +841,87 @@ func TestApplyConfigDoesNotRestartOnSTUNReorder(t *testing.T) {
 	require.Equal(t, originalDone, currentDone)
 	require.Equal(t, int32(1), starts.Load())
 }
+
+func TestDonorTuningConfiguration(t *testing.T) {
+	received := make(chan clientcore.WebRTCOptions, 1)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		received <- *rtc
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	cfg := testCfg()
+	cfg.Tuning = map[string]string{
+		"ice_max_binding_requests": "40",
+		"nat_fail_timeout_ms":      "8000",
+		"from_a_newer_server":      "1",
+	}
+	primeManager(t, cfg)
+	manager.start()
+	select {
+	case rtc := <-received:
+		require.Equal(t, clientcore.WebRTCTuning{ICEMaxBindingRequests: 40}, rtc.Tuning)
+		require.Equal(t, 8*time.Second, rtc.NATFailTimeout)
+	case <-time.After(time.Second):
+		t.Fatal("donor startup blocked")
+	}
+	require.Equal(t, "8000", cfg.Tuning["nat_fail_timeout_ms"], "the config's own map must not be modified")
+}
+
+func TestWidgetTuningNATFailTimeout(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    time.Duration
+		ignored bool
+	}{
+		{raw: "1000", want: time.Second},
+		{raw: "15000", want: 15 * time.Second},
+		{raw: "30000", want: 30 * time.Second},
+		{raw: "999", ignored: true},
+		{raw: "30001", ignored: true},
+		{raw: "-5000", ignored: true},
+		{raw: "8s", ignored: true},
+		{raw: "99999999999999", ignored: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			natFail, _, ignored := widgetTuning(map[string]string{natFailTimeoutKey: tt.raw})
+			require.Equal(t, tt.want, natFail)
+			if tt.ignored {
+				require.Equal(t, []string{fmt.Sprintf("%s=%q", natFailTimeoutKey, tt.raw)}, ignored)
+			} else {
+				require.Empty(t, ignored)
+			}
+		})
+	}
+	natFail, _, ignored := widgetTuning(nil)
+	require.Zero(t, natFail)
+	require.Empty(t, ignored)
+}
+
+func TestApplyConfigRestartsOnTuningChange(t *testing.T) {
+	received := make(chan clientcore.WebRTCTuning, 3)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		received <- rtc.Tuning
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	cfg := testCfg()
+	cfg.Tuning = map[string]string{"ice_max_binding_requests": "40"}
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	select {
+	case tuning := <-received:
+		require.Equal(t, uint16(40), tuning.ICEMaxBindingRequests)
+	case <-time.After(time.Second):
+		t.Fatal("first donor did not start")
+	}
+	// Mutating the map in place must still restart: applyConfig keeps its own copy.
+	cfg.Tuning["ice_max_binding_requests"] = "60"
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: cfg})
+	select {
+	case tuning := <-received:
+		require.Equal(t, uint16(60), tuning.ICEMaxBindingRequests)
+	case <-time.After(time.Second):
+		t.Fatal("tuning change did not restart donor")
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/issue"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
@@ -888,4 +889,28 @@ func (c *Client) UnboundedSnapshot(ctx context.Context) (unbounded.Snapshot, err
 	var s unbounded.Snapshot
 	err = json.Unmarshal(data, &s)
 	return s, err
+}
+
+////////////////////
+// Helper invites //
+////////////////////
+
+// HelperRelay relays one helper-invite request to lantern-cloud (see
+// helper.Relayer). lantern-cloud's status is in the result; an error means
+// the relay itself failed.
+func (c *Client) HelperRelay(ctx context.Context, op string, body []byte) (helper.RelayResult, error) {
+	if len(body) > 0 && !json.Valid(body) {
+		// Fixed text: the encoder's error would quote the body.
+		return helper.RelayResult{}, errors.New("helper relay: body is not JSON")
+	}
+	var res helper.RelayResult
+	err := c.doJSON(ctx, http.MethodPost, helperRelayEndpoint, HelperRelayRequest{Op: op, Body: body}, &res)
+	return res, err
+}
+
+// HelperActivity reads today's sharing totals (see helper.Activity).
+func (c *Client) HelperActivity(ctx context.Context) (helper.Activity, error) {
+	var a helper.Activity
+	err := c.doJSON(ctx, http.MethodGet, helperActivityEndpoint, nil, &a)
+	return a, err
 }
