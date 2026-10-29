@@ -393,3 +393,48 @@ func TestPersonalProxiesGroupFailsClosedWhileEmpty(t *testing.T) {
 	require.Eventually(t, func() bool { return dialsThrough(t, tun, ManualSelectTag, dest) == nil },
 		5*time.Second, 50*time.Millisecond, "the group dials once its member is back")
 }
+
+// A fresh config that ends every pairing leaves the managed list without
+// helpers. updateOutbounds alone keeps them dialable when that list is empty
+// or none of its new outbounds load, so the backend then removes them
+// outright through VPNClient.RemoveOutbounds; this is that sequence.
+func TestWithdrawnHelpersLeaveTheTunnelPastUpdateGuards(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	broken := &servers.Server{Tag: "lantern-broken", Type: "no-such-type", IsLantern: true,
+		Options: O.Outbound{Tag: "lantern-broken", Type: "no-such-type"}}
+	for _, tc := range []struct {
+		name string
+		list servers.ServerList
+	}{
+		{"empty managed list", servers.ServerList{}},
+		{"no new outbound loads", servers.ServerList{Servers: []*servers.Server{broken}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := startPersonalProxiesTestTunnel(t, testHelper1, testHelper2)
+			c := &VPNClient{tunnel: tun}
+			require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
+
+			_ = c.UpdateOutbounds(tc.list)
+			require.NotNil(t, tun.personalProxiesGroup(), "the guard keeps the helpers")
+
+			require.NoError(t, c.RemoveOutbounds([]string{testHelper1, testHelper2}))
+			assert.Nil(t, tun.personalProxiesGroup(), "the group goes with the last helper")
+			manual := selectorMembers(t, tun, ManualSelectTag)
+			for _, tag := range []string{testHelper1, testHelper2, PersonalProxiesTag} {
+				assert.NotContains(t, manual, tag)
+				assert.NotContains(t, selectorMembers(t, tun, AutoSelectTag), tag)
+			}
+			require.Eventually(t, func() bool {
+				_, h1 := tun.outboundMgr.Outbound(testHelper1)
+				_, h2 := tun.outboundMgr.Outbound(testHelper2)
+				return !h1 && !h2
+			}, 10*time.Second, 50*time.Millisecond, "the helper outbounds are torn down")
+
+			sel, _ := tun.mutGrpMgr.OutboundGroup(ManualSelectTag)
+			require.NoError(t, dialsThrough(t, tun, ManualSelectTag, dest))
+			assert.Equal(t, "lantern-1", sel.Now(), "new dials go through the remaining server")
+		})
+	}
+}

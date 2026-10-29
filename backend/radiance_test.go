@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1656,4 +1657,29 @@ func TestAddServersRefusesAHiddenReservedTag(t *testing.T) {
 	require.ErrorIs(t, err, servers.ErrTagMismatch)
 	require.ErrorContains(t, err, "ServerManager", "refused by the server manager, before the tunnel")
 	assert.Empty(t, r.AllServers())
+}
+
+// A fresh config that ends every pairing of a helpers-only device leaves an
+// empty managed list, which the tunnel's update skips; the backend removes the
+// ended helpers from the tunnel outright. A cached config removes nothing.
+func TestFreshConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	for _, fresh := range []bool{true, false} {
+		r := newPersonalProxiesBackend(t)
+		var removed [][]string
+		r.removeLiveOutbounds = func(tags []string) error {
+			removed = append(removed, slices.Clone(tags))
+			return nil
+		}
+		require.NoError(t, r.updateServers(directServers(h1, h2), true))
+		require.NoError(t, r.updateServers(servers.ServerList{}, fresh))
+		if fresh {
+			require.Len(t, removed, 1)
+			assert.ElementsMatch(t, []string{h1, h2}, removed[0])
+			assert.Empty(t, r.AllServers())
+		} else {
+			assert.Empty(t, removed)
+			assert.Len(t, r.AllServers(), 2)
+		}
+	}
 }

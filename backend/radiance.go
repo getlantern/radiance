@@ -65,10 +65,13 @@ type LocalBackend struct {
 	accountClient *account.Client
 	userMessages  *clientmessage.Service
 
-	srvManager     *servers.Manager
-	vpnClient      *vpn.VPNClient
-	splitTunnelMgr *vpn.SplitTunnel
-	sessionHistory *vpn.SessionHistory
+	srvManager *servers.Manager
+	vpnClient  *vpn.VPNClient
+	// removeLiveOutbounds, if set, replaces vpnClient.RemoveOutbounds, for
+	// tests that have no tunnel.
+	removeLiveOutbounds func(tags []string) error
+	splitTunnelMgr      *vpn.SplitTunnel
+	sessionHistory      *vpn.SessionHistory
 
 	peerClient   peerController
 	peerToggleMu sync.Mutex
@@ -1088,6 +1091,8 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 		return false
 	})
 
+	// withdrawn are the helpers this config ended; see below.
+	var withdrawn []string
 	if evict {
 		var selectedTag string
 		var selected servers.Server
@@ -1105,6 +1110,11 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 			)
 			if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
 				return fmt.Errorf("remove retained Lantern servers: %w", err)
+			}
+			for _, tag := range tagsToEvict {
+				if lbA.IsHelperTag(tag) {
+					withdrawn = append(withdrawn, tag)
+				}
 			}
 		}
 	}
@@ -1127,6 +1137,19 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
 	outboundErr := r.vpnClient.UpdateOutbounds(allList)
+	// updateOutbounds skips an empty list and keeps old outbounds when every
+	// new one fails to load; neither may keep an ended pairing dialable, so
+	// its helpers are removed from the tunnel outright, which also withdraws
+	// the personal proxies group with the last of them.
+	if len(withdrawn) > 0 {
+		remove := r.vpnClient.RemoveOutbounds
+		if r.removeLiveOutbounds != nil {
+			remove = r.removeLiveOutbounds
+		}
+		if err := remove(withdrawn); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			outboundErr = errors.Join(outboundErr, fmt.Errorf("remove withdrawn helpers: %w", err))
+		}
+	}
 	// This update preserves the selected server unless hard-demoted, so clearing
 	// an evicted selection is safe even while connected. Run it even when the
 	// outbound update failed, since an evicted pin is already gone from the manager.
