@@ -1121,6 +1121,8 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 // lanternServersToEvict returns Lantern server tags to evict, always including
 // hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
 // are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
+// Helper servers are never evicted: they are the user's pairings, not offers
+// to rotate, and the personal proxies group selection depends on them.
 func lanternServersToEvict(
 	existing []*servers.Server,
 	incomingCount, limit int,
@@ -1130,7 +1132,7 @@ func lanternServersToEvict(
 	retentionCandidates := make([]*servers.Server, 0, len(existing))
 
 	for _, srv := range existing {
-		if !srv.IsLantern {
+		if !srv.IsLantern || lbA.IsHelperTag(srv.Tag) {
 			continue
 		}
 		// Always evict hard-demoted servers.

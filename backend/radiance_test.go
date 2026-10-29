@@ -268,6 +268,19 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:     []string{"selected-demoted"},
 		},
 		{
+			name: "helper servers are never evicted",
+			existing: []*servers.Server{
+				newTestServer("helper-0123456789ab", true, false, time.Time{}),
+				newTestServer("helper-ba9876543210", true, true, baseTime),
+				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
+			},
+			incoming: 2,
+			limit:    3,
+			selected: "personal-proxies",
+			want:     []string{"a"},
+		},
+		{
 			name: "server with no selection history sorts oldest",
 			existing: []*servers.Server{
 				newTestServer("no-history", true, false, time.Time{}),
@@ -1465,4 +1478,48 @@ func TestPersonalProxiesSelectionLastsWhileAHelperDoes(t *testing.T) {
 	require.NoError(t, err)
 	r.clearSelectedIfMissing()
 	assert.True(t, settings.GetBool(settings.AutoConnectKey), "falls back to Smart Location")
+}
+
+func directServers(tags ...string) servers.ServerList {
+	var list servers.ServerList
+	for _, tag := range tags {
+		list.Servers = append(list.Servers, &servers.Server{
+			Tag: tag, Type: "direct", IsLantern: true,
+			Options: option.Outbound{Tag: tag, Type: "direct", Options: &option.DirectOutboundOptions{}},
+		})
+	}
+	return list
+}
+
+// Helper outbounds arrive in the config, so they are Lantern servers, but
+// they are the user's pairings rather than offers to rotate out. With the
+// personal proxies group selected, evicting them all would drop the user's
+// choice back to Smart Location.
+func TestConfigEvictionKeepsHelpersAndThePersonalProxiesSelection(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	r := newPersonalProxiesBackend(t)
+	retained := []string{h1, h2}
+	for i := range maxRetainedLanternServers + 5 {
+		retained = append(retained, fmt.Sprintf("lantern-%d", i))
+	}
+	require.NoError(t, r.srvManager.AddServers(directServers(retained...), false))
+	r.persistSelection(vpn.PersonalProxiesTag)
+
+	var incoming []string
+	for i := range 10 {
+		incoming = append(incoming, fmt.Sprintf("new-%d", i))
+	}
+	require.NoError(t, r.updateServers(directServers(incoming...), true))
+
+	for _, tag := range []string{h1, h2} {
+		_, found := r.srvManager.GetServerByTag(tag)
+		assert.True(t, found, "helper %s must not be evicted", tag)
+	}
+	assert.Len(t, r.srvManager.AllServers(), maxRetainedLanternServers+2,
+		"other retained servers are still evicted down to the limit; the helpers sit outside it")
+	assert.False(t, settings.GetBool(settings.AutoConnectKey), "the personal proxies selection is kept")
+	sel, exists, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
 }
