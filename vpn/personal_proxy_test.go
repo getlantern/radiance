@@ -356,3 +356,21 @@ func TestPersonalProxyGroupDials(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 }
+
+// A rooms consumer with no connection (rooms-only, before its friend's
+// ticket or room arrives) fails its dials; the group then carries traffic
+// over the friend's direct outbound rather than failing.
+func TestPersonalProxyGroupFailsOverFromADeadConsumer(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	tun, _ := startPersonalProxyTestTunnel(t, friendA)
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	require.ElementsMatch(t, []string{friendA, consumer}, personalProxyMembers(tun))
+	group, ok := tun.personalProxyGroup().(adapter.Outbound)
+	require.True(t, ok)
+	for range 5 {
+		conn, err := group.DialContext(t.Context(), "tcp", M.ParseSocksaddr(target.Listener.Addr().String()))
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+	}
+}
