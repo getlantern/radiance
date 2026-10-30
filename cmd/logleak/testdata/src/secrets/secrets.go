@@ -245,6 +245,8 @@ func (a *account) Password() (string, bool)         { return a.token, true }
 func (a *account) GetHost() string                  { return a.host }
 func (a *account) Token(ctx context.Context) string { return a.token }
 
+type cookieList []*http.Cookie
+
 func sources(req *http.Request, u *url.URL, a *account, password string, ctx context.Context) {
 	slog.Info("account", "value", a.GetToken()) // want `slog.Info logs sensitive data from method GetToken`
 	pw, _ := a.Password()
@@ -258,9 +260,10 @@ func sources(req *http.Request, u *url.URL, a *account, password string, ctx con
 	slog.Info("auth", "value", user) // want `slog.Info logs sensitive data from http.Request.BasicAuth`
 	slog.Info("auth", "ok", ok)
 	c, _ := req.Cookie("session")
-	slog.Info("cookie", "value", c.Value)                   // want `slog.Info logs sensitive data from cookie`
-	slog.Info("cookie", "value", c.String())                // want `slog.Info logs sensitive data from cookie`
-	slog.Info("cookie", "value", fmt.Sprint(req.Cookies())) // want `slog.Info logs sensitive data from cookie`
+	slog.Info("cookie", "value", c.Value)                               // want `slog.Info logs sensitive data from cookie`
+	slog.Info("cookie", "value", c.String())                            // want `slog.Info logs sensitive data from cookie`
+	slog.Info("cookie", "value", fmt.Sprint(req.Cookies()))             // want `slog.Info logs sensitive data from cookie`
+	slog.Info("cookie", "value", fmt.Sprint(cookieList(req.Cookies()))) // want `slog.Info logs sensitive data from cookie`
 	slog.Info("cookie", "name", c.Name)
 	dump, _ := httputil.DumpRequest(req, false)
 	slog.Info("request", "dump", string(bytes.TrimSpace(dump)))      // want `slog.Info logs sensitive data from httputil.DumpRequest`
@@ -307,6 +310,8 @@ func compound(c config) {
 	value := n*1 | 0
 	slog.Info("arithmetic", "value", value) // want `slog.Info logs sensitive data from field Password`
 	slog.Info("compare", "ok", n > 0 && s != "")
+	slog.Info("unary", "n", -n, "m", ^n) // want `slog.Info logs sensitive data from field Password`
+	slog.Info("not", "ok", !(n > 0))
 }
 
 func methodExpressions(c config, a *account) {
@@ -324,7 +329,7 @@ func selfSlices() (string, selfSlice, genSelfSlice[int]) { return "", nil, nil }
 
 func nestedSlices(c config) {
 	a, b, g := selfSlices()
-	slog.Info("self", "a", a, "b", b, "g", g)
+	slog.Info("self", "a", a, "b", b, "g", g, "s", fmt.Sprint(b, g))
 
 	parts := bytes.Split([]byte(c.Password), []byte(","))
 	slog.Info("split", "part", string(parts[0])) // want `slog.Info logs sensitive data from field Password`

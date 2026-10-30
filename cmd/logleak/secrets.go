@@ -238,7 +238,7 @@ func (c taintChecker) taintOf(expr ast.Expr, state taintState) string {
 	case *ast.StarExpr:
 		return c.taintOf(n.X, state)
 	case *ast.UnaryExpr:
-		if n.Op == token.AND || n.Op == token.ARROW {
+		if n.Op != token.NOT {
 			return c.taintOf(n.X, state)
 		}
 	case *ast.TypeAssertExpr:
@@ -434,18 +434,20 @@ func isMethodOf(fn *types.Func, pkg, name string) bool {
 }
 
 // cookieSource returns "cookie" if t is an http.Cookie reached through any pointers and
-// slices, or "" otherwise. A cookie's String method prints its value.
+// slices, named or not, or "" otherwise. A cookie's String method prints its value.
 func cookieSource(t types.Type) string {
-	for t != nil {
-		switch u := t.(type) {
+	var seen []types.Type
+	for t != nil && !slices.ContainsFunc(seen, func(s types.Type) bool { return types.Identical(s, t) }) {
+		if isNamed(t, "net/http", "Cookie") {
+			return "cookie"
+		}
+		seen = append(seen, t)
+		switch u := t.Underlying().(type) {
 		case *types.Pointer:
 			t = u.Elem()
 		case *types.Slice:
 			t = u.Elem()
 		default:
-			if isNamed(t, "net/http", "Cookie") {
-				return "cookie"
-			}
 			return ""
 		}
 	}
