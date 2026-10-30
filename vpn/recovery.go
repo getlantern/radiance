@@ -21,7 +21,7 @@ const (
 type boxNetwork interface {
 	UpdateInterfaces() error
 	NetworkInterfaces() []adapter.NetworkInterface
-	ResetNetwork()
+	ResetNetwork(ctx context.Context)
 }
 
 // netRecovery re-polls interfaces while the pause manager reports the network paused.
@@ -90,7 +90,7 @@ func (r *netRecovery) run(ctx context.Context) {
 				slog.Debug("Network recovery: network unpaused, stopping")
 				break
 			}
-			if r.attempt() {
+			if r.attempt(ctx) {
 				slog.Debug("Network recovery: interfaces returned, network reset")
 			}
 		}
@@ -99,7 +99,7 @@ func (r *netRecovery) run(ctx context.Context) {
 
 // attempt re-polls interfaces and reports whether the list refilled from empty,
 // resetting the network once when it did so stale connections rebind.
-func (r *netRecovery) attempt() (recovered bool) {
+func (r *netRecovery) attempt(ctx context.Context) (recovered bool) {
 	had := len(r.network.NetworkInterfaces()) > 0
 	if err := r.network.UpdateInterfaces(); err != nil {
 		slog.Debug("Network recovery: update interfaces failed", "error", err)
@@ -107,7 +107,7 @@ func (r *netRecovery) attempt() (recovered bool) {
 	now := len(r.network.NetworkInterfaces()) > 0
 	slog.Debug("Network recovery: re-polled interfaces", "had", had, "now", now)
 	if !had && now {
-		r.network.ResetNetwork()
+		r.network.ResetNetwork(ctx)
 		return true
 	}
 	return false

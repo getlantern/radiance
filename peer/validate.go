@@ -84,7 +84,7 @@ func validateAbuseRules(optionsJSON string) error {
 func validateAbuseRuleSetTags(rulesets []option.RuleSet) error {
 	missing := make([]string, 0, len(abuseRuleSetTags))
 	for _, tag := range abuseRuleSetTags {
-		if !slices.ContainsFunc(rulesets, func(rs option.RuleSet) bool { return rs.Tag == tag }) {
+		if !slices.ContainsFunc(rulesets, func(rs option.RuleSet) bool { return slices.Contains(rs.Tag, tag) }) {
 			missing = append(missing, tag)
 		}
 	}

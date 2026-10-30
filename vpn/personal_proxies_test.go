@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -67,20 +68,17 @@ func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 		Outbounds: outbounds,
 		Route:     &O.RouteOptions{Rules: []O.Rule{selectModeRule(AutoSelectTag), selectModeRule(ManualSelectTag)}},
 		Experimental: &O.ExperimentalOptions{
-			ClashAPI:  &O.ClashAPIOptions{ModeList: []string{ManualSelectTag, AutoSelectTag}, DefaultMode: AutoSelectTag},
 			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
 		},
 	}
-	tun := &tunnel{dataPath: t.TempDir()}
+	tun := &tunnel{dataPath: t.TempDir(), initialMode: AutoSelectTag}
 	t.Cleanup(func() { assert.NoError(t, tun.close()) })
 	require.NoError(t, tun.init(t.Context(), options, nil))
 	require.NoError(t, tun.boxInstance.Start())
 	tun.optsMap = makeOutboundOptsMap(tun.ctx, options)
 	tun.nonSelectableTags = makeNonSelectableTagSet(nil, options)
 	tun.outboundMgr = service.FromContext[adapter.OutboundManager](tun.ctx)
-	clash := service.FromContext[adapter.ClashServer](tun.ctx).(*clashServer)
-	tun.clashServer = clash
-	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), clash.connTracker)
+	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), tun.connTracker)
 	require.NoError(t, err)
 	tun.mutGrpMgr = mutGrpMgr
 	t.Cleanup(mutGrpMgr.Close)
@@ -175,10 +173,8 @@ func TestPersonalProxiesGroupRecreatedAtRuntimeDials(t *testing.T) {
 	t.Cleanup(target.Close)
 	tun := startPersonalProxiesTestTunnel(t)
 	setPersonalProxiesProbe(t, personalProxiesProbeURL, 50*time.Millisecond)
-	history := service.FromContext[adapter.URLTestHistoryStorage](tun.ctx)
-	if history == nil {
-		history = tun.clashServer.HistoryStorage()
-	}
+	history := service.PtrFromContext[urltest.HistoryStorage](tun.ctx)
+	require.NotNil(t, history)
 	probed := func() bool { return history.LoadURLTestHistory(testHelper1) != nil }
 	for range 2 {
 		require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(testHelper1)}}))
@@ -290,7 +286,9 @@ func TestPersonalProxiesGroupFollowsARefreshedHelper(t *testing.T) {
 	stale := directServer(testHelper1)
 	stale.Options = O.Outbound{Tag: testHelper1, Type: C.TypeDirect, Options: &O.DirectOutboundOptions{
 		// An address no local interface has: binding to it fails every dial.
-		DialerOptions: O.DialerOptions{Inet4BindAddress: (*badoption.Addr)(new(netip.MustParseAddr("192.0.2.1")))},
+		DialerOptions: O.DialerOptions{AbstractDialerOptions: O.AbstractDialerOptions{
+			Inet4BindAddress: (*badoption.Addr)(new(netip.MustParseAddr("192.0.2.1"))),
+		}},
 	}}
 	require.NoError(t, tun.updateOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-1"), stale}}))
 	group := tun.personalProxiesGroup().(adapter.Outbound)
@@ -416,7 +414,7 @@ func TestWithdrawnHelpersLeaveTheTunnelPastUpdateGuards(t *testing.T) {
 func timedDirectServer(tag string, timeout time.Duration) *servers.Server {
 	srv := directServer(tag)
 	srv.Options = O.Outbound{Tag: tag, Type: C.TypeDirect, Options: &O.DirectOutboundOptions{
-		DialerOptions: O.DialerOptions{ConnectTimeout: badoption.Duration(timeout)},
+		DialerOptions: O.DialerOptions{AbstractDialerOptions: O.AbstractDialerOptions{ConnectTimeout: badoption.Duration(timeout)}},
 	}}
 	return srv
 }
@@ -485,10 +483,8 @@ func TestPersonalProxiesGroupReplacesItsSoleMemberInPlace(t *testing.T) {
 	assert.Same(t, group, tun.personalProxiesGroup(), "replaced in place, not rebuilt")
 	assert.Equal(t, []string{testHelper1}, personalProxiesMembers(tun))
 
-	history := service.FromContext[adapter.URLTestHistoryStorage](tun.ctx)
-	if history == nil {
-		history = tun.clashServer.HistoryStorage()
-	}
+	history := service.PtrFromContext[urltest.HistoryStorage](tun.ctx)
+	require.NotNil(t, history)
 	// Dialing keeps the check loop alive; each tick probes again.
 	for range 2 {
 		history.DeleteURLTestHistory(testHelper1)
@@ -512,11 +508,11 @@ func TestWithdrawingTheSelectedGroupSwitchesToAuto(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tun := startPersonalProxiesTestTunnel(t, testHelper1)
 			require.NoError(t, tun.selectOutbound(tc.selected))
-			require.Equal(t, ManualSelectTag, tun.clashServer.Mode())
+			require.Equal(t, ManualSelectTag, tun.clashModeManager.clashMode.Mode())
 
 			require.NoError(t, tun.removeOutbounds([]string{testHelper1}))
 			require.Nil(t, tun.personalProxiesGroup())
-			assert.Equal(t, tc.wantMode, tun.clashServer.Mode())
+			assert.Equal(t, tc.wantMode, tun.clashModeManager.clashMode.Mode())
 		})
 	}
 }
@@ -552,12 +548,12 @@ func TestReconcileHelpersMatchesTheTunnelToTheGivenSet(t *testing.T) {
 	assert.Equal(t, []string{testHelper2}, personalProxiesMembers(tun))
 	assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), testHelper1)
 	assert.NotContains(t, selectorMembers(t, tun, AutoSelectTag), testHelper1)
-	assert.Equal(t, ManualSelectTag, tun.clashServer.Mode(), "the group is still selected")
+	assert.Equal(t, ManualSelectTag, tun.clashModeManager.clashMode.Mode(), "the group is still selected")
 
 	// Every pairing ended.
 	require.NoError(t, c.ReconcileHelpers(servers.ServerList{}))
 	assert.Nil(t, tun.personalProxiesGroup())
-	assert.Equal(t, AutoSelectTag, tun.clashServer.Mode())
+	assert.Equal(t, AutoSelectTag, tun.clashModeManager.clashMode.Mode())
 	assert.Contains(t, selectorMembers(t, tun, ManualSelectTag), "lantern-1")
 
 	require.NoError(t, c.ReconcileHelpers(servers.ServerList{}), "nothing left to do")
