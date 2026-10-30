@@ -2277,14 +2277,15 @@ var (
 // gave up. It retries with backoff because the lookup services are often slow or blocked where
 // Lantern is used most. Without the IP, the API geolocates whichever relay delivered the request.
 // The lookups don't bypass the VPN, so it only looks up while direct reports true and discards a
-// result if the tunnel came up during the lookup. It gives up after publicIPAttempts lookups or
-// when ctx is done.
+// result if the tunnel came up or the network changed during the lookup. It gives up after
+// publicIPAttempts lookups or when ctx is done.
 func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context.Context) (*publicip.DetectResult, error)) net.IP {
 	backoff := publicIPBackoff()
 	for attempt := 1; attempt <= publicIPAttempts; attempt++ {
 		if !waitForDirect(ctx, direct) {
 			return nil
 		}
+		network := common.CurrentNetwork()
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
 		result, err := lookup(attemptCtx)
 		cancel()
@@ -2294,8 +2295,10 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 		case !direct():
 			slog.Debug("Discarded public IP looked up while the VPN came up", "attempt", attempt)
 			continue
+		case !common.SetPublicIPOn(network, result.IP.String()):
+			slog.Debug("Discarded public IP looked up before a network change", "attempt", attempt)
+			continue
 		default:
-			common.SetPublicIP(result.IP.String())
 			// IP intentionally omitted — Lantern users in censored regions
 			// can't safely have their public IP in routinely-collected
 			// client logs. Confidence + sources are enough for operator

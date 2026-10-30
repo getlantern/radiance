@@ -16,6 +16,8 @@ type clientIP struct {
 	// detected is false for an IP restored from storage, which is truncated for privacy and so
 	// only good for geolocation.
 	detected bool
+	// network counts calls to [ForgetDetectedPublicIP].
+	network uint64
 }
 
 var publicIP atomic.Pointer[clientIP]
@@ -26,7 +28,33 @@ func init() {
 
 // SetPublicIP stores the full public IP detected this session for inclusion in API requests.
 func SetPublicIP(ip string) {
-	publicIP.Store(&clientIP{ip: ip, detected: ip != ""})
+	for {
+		cur := publicIP.Load()
+		if publicIP.CompareAndSwap(cur, &clientIP{ip: ip, detected: ip != "", network: cur.network}) {
+			return
+		}
+	}
+}
+
+// CurrentNetwork returns a token, for [SetPublicIPOn], that changes whenever
+// [ForgetDetectedPublicIP] runs.
+func CurrentNetwork() uint64 {
+	return publicIP.Load().network
+}
+
+// SetPublicIPOn is [SetPublicIP] for an IP looked up after [CurrentNetwork] returned network. It
+// discards ip and reports false if [ForgetDetectedPublicIP] ran since, as the lookup may have
+// returned the old network's address.
+func SetPublicIPOn(network uint64, ip string) bool {
+	for {
+		cur := publicIP.Load()
+		if cur.network != network {
+			return false
+		}
+		if publicIP.CompareAndSwap(cur, &clientIP{ip: ip, detected: ip != "", network: network}) {
+			return true
+		}
+	}
 }
 
 // SetStoredPublicIP stores a truncated public IP from a previous session. API requests carry it
@@ -36,7 +64,7 @@ func SetPublicIP(ip string) {
 func SetStoredPublicIP(ip string) {
 	for {
 		cur := publicIP.Load()
-		if cur.detected || publicIP.CompareAndSwap(cur, &clientIP{ip: ip}) {
+		if cur.detected || publicIP.CompareAndSwap(cur, &clientIP{ip: ip, network: cur.network}) {
 			return
 		}
 	}
@@ -44,11 +72,12 @@ func SetStoredPublicIP(ip string) {
 
 // ForgetDetectedPublicIP marks the current public IP as no longer detected, because the network
 // changed and the address may have with it. Requests keep carrying it for geolocation, but
-// [SetDetectedClientIP] stops sending it until [SetPublicIP] records a new detection.
+// [SetDetectedClientIP] stops sending it until [SetPublicIP] or [SetPublicIPOn] records a new
+// detection.
 func ForgetDetectedPublicIP() {
 	for {
 		cur := publicIP.Load()
-		if !cur.detected || publicIP.CompareAndSwap(cur, &clientIP{ip: cur.ip}) {
+		if publicIP.CompareAndSwap(cur, &clientIP{ip: cur.ip, network: cur.network + 1}) {
 			return
 		}
 	}

@@ -33,6 +33,15 @@ func TestClientIPHeader(t *testing.T) {
 			SetPublicIP("198.51.100.9")
 			ForgetDetectedPublicIP()
 		}, "198.51.100.9", ""},
+		{"lookup from before a network change is discarded", func() {
+			network := CurrentNetwork()
+			SetStoredPublicIP("203.0.113.0")
+			ForgetDetectedPublicIP()
+			SetPublicIPOn(network, "198.51.100.9")
+		}, "203.0.113.0", ""},
+		{"lookup on the current network is sent", func() {
+			SetPublicIPOn(CurrentNetwork(), "198.51.100.9")
+		}, "198.51.100.9", "198.51.100.9"},
 		{"detection after a network change is sent", func() {
 			SetPublicIP("198.51.100.9")
 			ForgetDetectedPublicIP()

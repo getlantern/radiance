@@ -90,6 +90,21 @@ func TestDetectPublicIPDiscardsResultIfTunnelCameUp(t *testing.T) {
 	assert.Empty(t, recordedPublicIP(t), "a result that may be the VPN exit must not be recorded")
 }
 
+func TestDetectPublicIPDiscardsResultIfNetworkChanged(t *testing.T) {
+	common.SetPublicIP("")
+	var calls atomic.Int32
+	lookup := func(context.Context) (*publicip.DetectResult, error) {
+		if calls.Add(1) == 1 {
+			common.ForgetDetectedPublicIP() // the network changes while the lookup is in flight
+			return &publicip.DetectResult{IP: net.ParseIP("198.51.100.9")}, nil
+		}
+		return &publicip.DetectResult{IP: net.ParseIP("203.0.113.7")}, nil
+	}
+	runDetect(t, 5*time.Second, func() bool { return true }, lookup)
+	assert.Equal(t, "203.0.113.7", recordedPublicIP(t), "the old network's address must not be recorded")
+	assert.EqualValues(t, 2, calls.Load())
+}
+
 func TestDetectPublicIPRetriesAfterFailure(t *testing.T) {
 	common.SetPublicIP("")
 	var calls atomic.Int32
