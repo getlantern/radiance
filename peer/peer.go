@@ -30,6 +30,7 @@ import (
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/portforward"
 )
 
@@ -48,11 +49,16 @@ type StatusEvent struct {
 //	State     +1 on accept, -1 on close
 //	Source    remote peer "ip:port"
 //	Timestamp emit time in Unix milliseconds
+//	Pairing   the helper pairing the client came through, "" for the pool
+//
+// Pairing identifies a friend relationship. It goes to the local app only:
+// it must never be logged, traced or persisted.
 type ConnectionEvent struct {
 	events.Event
 	State     int    `json:"state"`
 	Source    string `json:"source"`
 	Timestamp int64  `json:"timestamp"`
+	Pairing   string `json:"pairing,omitempty"`
 }
 
 // Port range chosen to minimize collision risk on the typical home network,
@@ -143,7 +149,13 @@ type Config struct {
 	// left nothing serving what the server advertises. It runs on its own
 	// goroutine after Stop returns, with the reason.
 	OnSelfStop func(reason error)
+	// Live receives the connections that came through a helper pairing, for
+	// the volunteer's live per-friend status. Nil means helper.DefaultLive.
+	Live *helper.LiveTracker
 }
+
+// liveOwner groups this package's connections in the LiveTracker.
+const liveOwner = "peer"
 
 // defaultBoxCloseTimeout: samizdat's Close releases the listening port at once
 // but then waits for every open client connection to end, which with
@@ -252,6 +264,12 @@ type Client struct {
 	// pairingConfirmedAt is when a known set was last accepted. A rotation
 	// that reuses the record keeps it.
 	pairingConfirmedAt time.Time
+	// pairingByShortID maps each pairing short ID of the newest grouped set
+	// accepted to its pairing ID, so a connection's short ID names the
+	// friend it came through. Written under shortIDsMu and c.mu, read
+	// lock-free by the connection listener. Pairing IDs are kept in memory
+	// only and never logged.
+	pairingByShortID atomic.Pointer[map[[8]byte]string]
 	// shortIDsMu serializes recording a set with pushing it onto the box,
 	// so the box and pairingApplied agree. It is held across those local
 	// pushes only, never across network I/O or a box's Start or Close.
@@ -542,6 +560,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		startRevision = int64(regResp.PairingShortIDsRevision)
 		startPairingApplied = c.applyShortIDs(box, baseShortIDs, startPairing)
 	}
+	var startGroups map[[8]byte]string
+	if startPairingKnown {
+		startGroups, _ = groupPairingShortIDs(startPairing, regResp.PairingShortIDSets, baseShortIDs)
+	}
 
 	if err := box.Start(); err != nil {
 		cancelRun()
@@ -596,11 +618,14 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 				"state", state, "source", source)
 			return
 		}
+		// The pairing is deliberately absent from this line and every other.
 		slog.Debug("peer listener: forwarding connection event",
 			"state", state, "source", source)
+		pairing := c.pairingFor(evt.ShortID)
 		c.trackConn(state, source)
-		c.relay.recordFor(relayGen, state, source, evt.Bytes)
-		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli()})
+		c.relay.recordPairingFor(relayGen, state, source, pairing, evt.Bytes)
+		c.trackLive(state, pairing, evt.Bytes)
+		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli(), Pairing: pairing})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
 
@@ -637,6 +662,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	if startPairingKnown {
 		c.pairingConfirmedAt = c.cfg.Now()
 	}
+	c.setPairingByShortID(startGroups)
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
@@ -770,6 +796,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.pairingApplied = false
 	c.pairingRevision = 0
 	c.pairingConfirmedAt = time.Time{}
+	c.setPairingByShortID(nil)
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
 	stoppingSnapshot := c.status
@@ -788,6 +815,8 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	peerconn.SetListener(nil)
 	c.resetConnTracking()
 	c.relay.end()
+	// Stop drops the closes of connections still open, so end them here.
+	c.live().CloseOwner(liveOwner)
 
 	cancel()
 	<-done
@@ -1014,7 +1043,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				// Replaces the pairing set, so an ended pairing stops working
 				// here, unless a newer set was accepted while it was in
 				// flight.
-				c.applyPairingShortIDs(resp.PairingShortIDs, true, int64(resp.PairingShortIDsRevision))
+				c.offerPairingShortIDs(resp.PairingShortIDs, resp.PairingShortIDSets, true, int64(resp.PairingShortIDsRevision))
 			} else {
 				// A failed heartbeat, or one that does not vouch for a set,
 				// says nothing about pairings, so the last set stays, and is
@@ -1211,7 +1240,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if regResp.PairingShortIDsKnown {
 		// Offered like a heartbeat's set: taken only if newer than the
 		// one held, and pushed onto the box serving now.
-		c.applyPairingShortIDs(regResp.PairingShortIDs, true, int64(regResp.PairingShortIDsRevision))
+		c.offerPairingShortIDs(regResp.PairingShortIDs, regResp.PairingShortIDSets, true, int64(regResp.PairingShortIDsRevision))
 	}
 	sameRoute := regResp.RouteID == oldRouteID
 	// abandon undoes a registration this rotation can no longer use. A new
@@ -1670,6 +1699,17 @@ func (c *Client) acceptsPairingRevision(rev int64) bool {
 // none is known) because a push failed, it is pushed again; with known
 // false that is all it does.
 func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
+	c.offerPairingShortIDs(pairing, nil, known, rev)
+}
+
+// offerPairingShortIDs is applyPairingShortIDs with the set grouped by
+// pairing, as newer servers send it. Groups are taken with a set newer than
+// the one held, and also at the revision already held: a server replica that
+// predates groups answers with the same set and revision but no groups, so a
+// revision applied without them may get them later. Either way the groups'
+// IDs, in order, must be the flat set recorded at that revision, so groups
+// never describe a set other than the one applied.
+func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDSet, known bool, rev int64) {
 	c.shortIDsMu.Lock()
 	defer c.shortIDsMu.Unlock()
 	c.mu.Lock()
@@ -1684,6 +1724,13 @@ func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
 		c.pairingRevision = rev
 		c.pairingConfirmedAt = c.cfg.Now()
 		c.pairingApplied = false
+		if g, ok := groupPairingShortIDs(pairing, groups, base); ok {
+			c.setPairingByShortID(g)
+		}
+	} else if known && c.pairingKnown && rev == c.pairingRevision {
+		if g, ok := groupPairingShortIDs(c.pairingShortIDs, groups, base); ok {
+			c.setPairingByShortID(g)
+		}
 	}
 	if c.pairingApplied {
 		c.mu.Unlock()
@@ -1741,9 +1788,96 @@ func (c *Client) expireUnconfirmedPairing() {
 		c.pairingKnown = false
 		c.pairingApplied = true
 		c.pairingConfirmedAt = time.Time{}
+		c.setPairingByShortID(nil)
 	}
 	c.mu.Unlock()
 	slog.Info("peer: pairing short IDs unconfirmed for too long; dropped")
+}
+
+// groupPairingShortIDs maps each short ID in groups to its pairing, and
+// reports whether groups describe flat: their IDs, joined in order, equal
+// flat's, ignoring case. A short ID in base is the launch config's own, which
+// pool clients and the verifier use, so it never maps to a pairing.
+func groupPairingShortIDs(flat []string, groups []PairingShortIDSet, base []string) (map[[8]byte]string, bool) {
+	if len(groups) == 0 {
+		return nil, false
+	}
+	var joined []string
+	for _, g := range groups {
+		for _, id := range g.ShortIDs {
+			joined = append(joined, strings.ToLower(id))
+		}
+	}
+	if len(joined) != len(flat) {
+		return nil, false
+	}
+	for i, id := range flat {
+		if strings.ToLower(id) != joined[i] {
+			return nil, false
+		}
+	}
+	isBase := make(map[string]bool, len(base))
+	for _, id := range base {
+		isBase[strings.ToLower(id)] = true
+	}
+	out := make(map[[8]byte]string, len(joined))
+	for _, g := range groups {
+		if g.PairingID == "" {
+			continue
+		}
+		for _, id := range g.ShortIDs {
+			id = strings.ToLower(id)
+			raw, err := hex.DecodeString(id)
+			if err != nil || len(raw) != 8 || isBase[id] {
+				continue
+			}
+			out[[8]byte(raw)] = g.PairingID
+		}
+	}
+	return out, true
+}
+
+// setPairingByShortID replaces the short ID to pairing map; nil clears it.
+func (c *Client) setPairingByShortID(m map[[8]byte]string) {
+	if len(m) == 0 {
+		c.pairingByShortID.Store(nil)
+		return
+	}
+	c.pairingByShortID.Store(&m)
+}
+
+// pairingFor is the pairing a connection with short ID id came through, or ""
+// for the launch config's own ID, an unknown one, or none.
+func (c *Client) pairingFor(id [8]byte) string {
+	if id == ([8]byte{}) {
+		return ""
+	}
+	m := c.pairingByShortID.Load()
+	if m == nil {
+		return ""
+	}
+	return (*m)[id]
+}
+
+func (c *Client) live() *helper.LiveTracker {
+	if c.cfg.Live != nil {
+		return c.cfg.Live
+	}
+	return helper.DefaultLive
+}
+
+// trackLive follows a connection that came through a pairing in the
+// LiveTracker, keyed by its byte counter, which its accept and close share.
+func (c *Client) trackLive(state int, pairing string, bytes *peerconn.Counter) {
+	if bytes == nil {
+		return
+	}
+	switch {
+	case state > 0 && pairing != "":
+		c.live().Open(liveOwner, bytes, pairing, func() uint64 { return bytes.Down() + bytes.Up() })
+	case state < 0:
+		c.live().Close(bytes)
+	}
 }
 
 // defaultBuildBoxService builds the sing-box service for one peer box.
