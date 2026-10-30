@@ -605,3 +605,47 @@ func TestBuildOptions_PersonalProxies(t *testing.T) {
 		assert.Contains(t, ReservedTags(), PersonalProxiesTag)
 	})
 }
+
+func unboundedHelperOutbound(tag string) O.Outbound {
+	return O.Outbound{Type: lbC.TypeUnbounded, Tag: tag, Options: &lbO.UnboundedOutboundOptions{}}
+}
+
+// An Unbounded helper also takes pool volunteers, so the personal proxies
+// group leaves it out; Smart Location and the manual selector keep it.
+func TestBuildOptions_PersonalProxiesLeaveOutUnboundedHelpers(t *testing.T) {
+	const direct, unbounded = "helper-0123456789ab", "helper-ba9876543210"
+	t.Run("alongside a direct helper", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.Options.Outbounds = append(cfg.Options.Outbounds, helperOutbound(direct), unboundedHelperOutbound(unbounded))
+		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+		require.NoError(t, err)
+		group := findOutbound(opts.Outbounds, PersonalProxiesTag)
+		require.NotNil(t, group)
+		assert.Equal(t, []string{direct}, group.Options.(*lbO.MutableURLTestOutboundOptions).Outbounds)
+		auto := findOutbound(opts.Outbounds, AutoSelectTag).Options.(*lbO.MutableAutoSelectOutboundOptions)
+		assert.Contains(t, auto.Outbounds, unbounded)
+	})
+	t.Run("alone", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.Options.Outbounds = append(cfg.Options.Outbounds, unboundedHelperOutbound(unbounded))
+		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+		require.NoError(t, err)
+		assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag), "no group without a member")
+		manual := findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
+		assert.NotContains(t, manual.Outbounds, PersonalProxiesTag)
+		assert.Contains(t, manual.Outbounds, unbounded)
+		auto := findOutbound(opts.Outbounds, AutoSelectTag).Options.(*lbO.MutableAutoSelectOutboundOptions)
+		assert.Contains(t, auto.Outbounds, unbounded)
+	})
+}
+
+func TestPersonalProxyMembers(t *testing.T) {
+	types := map[string]string{
+		"helper-0123456789ab": C.TypeDirect,
+		"helper-ba9876543210": lbC.TypeUnbounded,
+		"lantern-1":           C.TypeDirect,
+	}
+	got := personalProxyMembers([]string{"lantern-1", "helper-0123456789ab", "helper-ba9876543210"},
+		func(tag string) string { return types[tag] })
+	assert.Equal(t, []string{"helper-0123456789ab"}, got)
+}

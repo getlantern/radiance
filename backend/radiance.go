@@ -977,10 +977,11 @@ func (r *LocalBackend) serverByTag(tag string) (*servers.Server, bool) {
 }
 
 // personalProxiesServer stands in for the tunnel's group over helper
-// outbounds. Like the group, it exists while a helper outbound does.
+// outbounds. Like the group, it exists while a helper outbound other than an
+// Unbounded one does (see vpn's personalProxyMembers).
 func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
 	for _, srv := range r.srvManager.AllServers() {
-		if lbA.IsHelperTag(srv.Tag) {
+		if lbA.IsHelperTag(srv.Tag) && srv.Type != lbC.TypeUnbounded {
 			return &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}, true
 		}
 	}
