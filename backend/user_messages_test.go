@@ -30,6 +30,62 @@ type accountTransportFunc func(*http.Request) (*http.Response, error)
 
 func (f accountTransportFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+func TestPatchSettingsAccountKeysDiscardStaleUserData(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	require.NoError(t, settings.Patch(settings.Settings{settings.UserIDKey: int64(1), settings.TokenKey: "a"}))
+	requested, release := make(chan struct{}), make(chan struct{})
+	a := account.NewClient(&http.Client{Transport: accountTransportFunc(func(req *http.Request) (*http.Response, error) {
+		close(requested)
+		<-release
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"userId":1,"token":"a","userLevel":"pro"}`)),
+			Request:    req,
+		}, nil
+	})}, t.TempDir(), log.NoOpLogger())
+	r := &LocalBackend{accountClient: a}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.FetchUserData(context.Background())
+		errc <- err
+	}()
+	<-requested
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.UserIDKey: int64(2), settings.TokenKey: "b"}))
+	close(release)
+
+	require.ErrorIs(t, <-errc, account.ErrAccountChanged)
+	require.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+	require.False(t, settings.IsPro())
+}
+
+func TestPatchSettingsSwitchKeepsMatches(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	require.NoError(t, settings.Patch(settings.Settings{
+		settings.UserIDKey:     int64(1),
+		settings.TokenKey:      "a",
+		settings.UserLevelKey:  "pro",
+		settings.OAuthLoginKey: true,
+	}))
+	r := &LocalBackend{accountClient: account.NewClient(http.DefaultClient, t.TempDir(), log.NoOpLogger())}
+
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.UserIDKey:     int64(2),
+		settings.TokenKey:      "b",
+		settings.UserLevelKey:  "pro",
+		settings.OAuthLoginKey: true,
+	}))
+
+	require.Equal(t, int64(2), settings.GetInt64(settings.UserIDKey))
+	require.True(t, settings.IsPro())
+	require.True(t, settings.GetBool(settings.OAuthLoginKey))
+}
+
 func TestUserMessagesFollowAccountEvents(t *testing.T) {
 	settings.Reset()
 	t.Cleanup(settings.Reset)

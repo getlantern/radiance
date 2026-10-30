@@ -108,11 +108,6 @@ func (a *Client) SubscriptionPlans(ctx context.Context, channel string) (string,
 	if err := json.Unmarshal(resp, &plans); err != nil {
 		return "", traces.RecordError(ctx, fmt.Errorf("unmarshaling plans response: %w", err))
 	}
-	if plans.BaseResponse != nil && plans.Error != "" {
-		err = fmt.Errorf("received bad response: %s", plans.Error)
-		a.logger.Error("retrieving plans", "error", err)
-		return "", traces.RecordError(ctx, err)
-	}
 	return string(resp), nil
 }
 
@@ -146,6 +141,9 @@ type VerifySubscriptionResponse struct {
 // should contain the information required by service to verify the subscription, such as the
 // purchase token for Google Play or the receipt for Apple. The status and subscription ID are returned
 // along with any error that occurred during the verification process.
+//
+// When the purchase belongs to a different account, the client switches to that account before
+// returning, unless the active account may have changed while the request was in flight.
 func (a *Client) VerifySubscription(ctx context.Context, service SubscriptionService, data map[string]string) (string, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "verify_subscription")
 	defer span.End()
@@ -161,13 +159,46 @@ func (a *Client) VerifySubscription(ctx context.Context, service SubscriptionSer
 		return "", traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}
 
+	generation := a.identityGeneration()
 	resp, err := a.sendProRequest(ctx, "POST", path, nil, nil, data)
 	if err != nil {
 		a.logger.Error("verifying subscription", "error", err)
 		return "", traces.RecordError(ctx, fmt.Errorf("verifying subscription: %w", err))
 	}
+	var result VerifySubscriptionResponse
+	if err := json.Unmarshal(resp, &result); err != nil {
+		a.logger.Error("unmarshaling verify subscription response", "error", err)
+	} else {
+		a.switchToPurchaser(ctx, generation, result.ActualUserID, result.ActualUserToken)
+	}
 	return string(resp), nil
+}
 
+// switchToPurchaser switches to the purchasing account unless the account may have changed since
+// generation was captured. It logs rather than returns failures, because the purchase already succeeded.
+func (a *Client) switchToPurchaser(ctx context.Context, generation uint64, id int64, token string) {
+	if id == 0 || token == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.generation != generation {
+		a.logger.Warn("not switching to the purchasing account", "error", traces.RecordError(ctx, ErrAccountChanged))
+		return
+	}
+	switching := id != settings.GetInt64(settings.UserIDKey)
+	if !switching && token == settings.GetString(settings.TokenKey) {
+		return
+	}
+	a.generation++
+	var extra settings.Settings
+	if switching {
+		// The previous account's OAuth sign-in doesn't carry over to the purchaser.
+		extra = settings.Settings{settings.OAuthLoginKey: false, settings.OAuthProviderKey: ""}
+	}
+	if err := a.storeIdentityLocked(id, token, extra); err != nil {
+		a.logger.Error("saving the purchasing account", "error", traces.RecordError(ctx, err))
+	}
 }
 
 type RestoreSubscriptionResponse struct {
@@ -181,6 +212,9 @@ type RestoreSubscriptionResponse struct {
 // data should contain the fields required by the backend for the chosen service (e.g.
 // "purchaseToken" for Google, "receipt" for Apple); callers are responsible for populating
 // it. Services other than [GoogleService] and [AppleService] are rejected.
+//
+// When the subscription belongs to a different account, the client switches to that account
+// before returning, unless the active account may have changed while the request was in flight.
 func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionService, data map[string]string) (*RestoreSubscriptionResponse, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "restore_subscription")
 	defer span.End()
@@ -195,6 +229,7 @@ func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionSe
 		return nil, traces.RecordError(ctx, fmt.Errorf("unsupported service: %s", service))
 	}
 
+	generation := a.identityGeneration()
 	resp, err := a.sendProRequest(ctx, "POST", path, nil, nil, data)
 	if err != nil {
 		a.logger.Error("restoring subscription", "error", err)
@@ -204,6 +239,7 @@ func (a *Client) RestoreSubscription(ctx context.Context, service SubscriptionSe
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("unmarshaling restore subscription response: %w", err))
 	}
+	a.switchToPurchaser(ctx, generation, result.ActualUserID, result.ActualUserToken)
 	return &result, nil
 }
 
@@ -343,10 +379,6 @@ func (a *Client) ActivationCode(ctx context.Context, email, resellerCode string)
 	var purchase PurchaseResponse
 	if err := json.Unmarshal(resp, &purchase); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("unmarshaling purchase response: %w", err))
-	}
-	if purchase.BaseResponse != nil && purchase.Error != "" {
-		a.logger.Error("retrieving subscription status", "error", purchase.Error)
-		return nil, traces.RecordError(ctx, fmt.Errorf("received bad response: %s", purchase.Error))
 	}
 	return &purchase, nil
 }
