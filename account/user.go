@@ -318,7 +318,7 @@ func (a *Client) Logout(ctx context.Context, email string) (*UserData, error) {
 	if jwtToken != "" {
 		logout.Token = jwtToken
 	}
-	a.logger.Info("Logout request", "deviceId", logout.DeviceId, "JWTTokenSet", jwtToken != "")
+	a.logger.Info("Logout request", "JWTTokenSet", jwtToken != "")
 	_, err := a.sendRequest(ctx, "POST", "/users/logout", nil, nil, logout)
 	if err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("logging out: %w", err))

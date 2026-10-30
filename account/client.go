@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/logsafe"
 )
 
 const tracerName = "github.com/getlantern/radiance/account"
@@ -84,6 +87,23 @@ func (a *Client) baseURL() string {
 		return a.authURL
 	}
 	return common.GetBaseURL()
+}
+
+// withoutURL returns the error a *url.Error in err wraps, dropping the request URL,
+// which can carry the device ID and query values such as the email. Other errors are
+// returned unchanged.
+func withoutURL(err error) error {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		return urlErr.Err
+	}
+	return err
+}
+
+func redactDeviceID(path string) string {
+	if id := settings.GetString(settings.DeviceIDKey); id != "" {
+		return strings.ReplaceAll(path, id, "[device-id]")
+	}
+	return path
 }
 
 // sendRequest sends an HTTP request to the specified URL with the given method, query parameters,
@@ -152,7 +172,7 @@ func (a *Client) sendRequest(
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("sending request: %w", err)
+		return nil, fmt.Errorf("sending request: %w", withoutURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -162,7 +182,7 @@ func (a *Client) sendRequest(
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		a.logger.Debug("error response", "path", req.URL.Path, "status", resp.StatusCode)
+		a.logger.Debug("error response", "path", redactDeviceID(req.URL.Path), "status", resp.StatusCode)
 		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitizeResponseBody(respBody))
 	}
 
@@ -200,8 +220,9 @@ func (a *Client) sendProRequest(
 	return a.sendRequest(ctx, method, url, queryParams, headers, body)
 }
 
-// curlFromRequest renders req as a curl command, replacing req.Body with an
-// unread copy of the same bytes.
+// curlFromRequest renders req as a curl command, replacing req.Body with an unread copy
+// of the same bytes. Secret headers, secret JSON body fields and the device ID are
+// redacted, and a body that isn't JSON is replaced by its size.
 func curlFromRequest(req *http.Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "curl -X %s", req.Method)
@@ -213,6 +234,9 @@ func curlFromRequest(req *http.Request) string {
 	sort.Strings(keys)
 	for _, k := range keys {
 		for _, v := range req.Header[k] {
+			if logsafe.IsSecretKey(k) {
+				v = logsafe.Redacted
+			}
 			fmt.Fprintf(&b, " -H '%s: %s'", k, v)
 		}
 	}
@@ -220,10 +244,19 @@ func curlFromRequest(req *http.Request) string {
 	if req.Body != nil {
 		buf, _ := io.ReadAll(req.Body)
 		req.Body = io.NopCloser(bytes.NewBuffer(buf))
-		fmt.Fprintf(&b, " -d '%s'", shellEscape(string(buf)))
+		body := fmt.Sprintf("[REDACTED %d bytes]", len(buf))
+		if json.Valid(buf) {
+			if r := logsafe.RedactJSONFields(buf); r != nil {
+				body = string(r)
+			} else {
+				body = string(buf)
+			}
+			body = redactDeviceID(body)
+		}
+		fmt.Fprintf(&b, " -d '%s'", shellEscape(body))
 	}
 
-	fmt.Fprintf(&b, " '%s'", req.URL.String())
+	fmt.Fprintf(&b, " '%s'", redactDeviceID(req.URL.String()))
 	return b.String()
 }
 

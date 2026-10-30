@@ -810,6 +810,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 func AttemptFixNetState() {
 	options := baseOpts("")
 	options = option.Options{
+		Log:      &option.LogOptions{Disabled: true},
 		DNS:      options.DNS,
 		Inbounds: options.Inbounds,
 		Route: &option.RouteOptions{

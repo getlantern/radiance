@@ -239,7 +239,7 @@ func (a *Client) connectDataCapSSE(ctx context.Context, handler func(*DataCapInf
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return traces.RecordError(ctx, fmt.Errorf("datacap SSE connect: %w", err))
+		return traces.RecordError(ctx, fmt.Errorf("datacap SSE connect: %w", withoutURL(err)))
 	}
 	defer resp.Body.Close()
 

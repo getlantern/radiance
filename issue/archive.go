@@ -53,6 +53,7 @@ func buildIssueArchive(logger *slog.Logger, logDir string, additionalFiles []str
 		if len(data) == 0 {
 			continue
 		}
+		data = redactLog(data)
 		if filepath.Base(lf) == logArchiveName {
 			primaryLogData = data
 		} else {
@@ -71,7 +72,6 @@ func buildIssueArchive(logger *slog.Logger, logDir string, additionalFiles []str
 	// Logs and attachments (config.json, servers.json, debug-box-options.json)
 	// can name helper outbounds and the helpers' addresses, which clients
 	// must not export.
-	attachments = stubHelperAttachments(logger, attachments)
 	primaryLogData = redact.HelperBytes(primaryLogData)
 	for i := range secondaryLogs {
 		secondaryLogs[i].data = redact.HelperBytes(secondaryLogs[i].data)
@@ -83,31 +83,14 @@ func buildIssueArchive(logger *slog.Logger, logDir string, additionalFiles []str
 	return fitArchive(primaryLogData, secondaryLogs, attachments, maxSize)
 }
 
-// stubHelperAttachments replaces every helper outbound or endpoint in the
-// JSON attachments with a stub that keeps only its type, so no helper's
-// address, port or keys are uploaded. A JSON attachment that does not parse is
-// dropped rather than uploaded raw.
-func stubHelperAttachments(logger *slog.Logger, files []extraFile) []extraFile {
-	out := files[:0]
-	for _, f := range files {
-		if strings.EqualFold(filepath.Ext(f.name), ".json") {
-			data, err := stubHelperOutbounds(f.data)
-			if err != nil {
-				logger.Warn("Dropping unparseable JSON attachment from issue report", "name", f.name)
-				continue
-			}
-			f.data = data
-		}
-		out = append(out, f)
+// sanitizeJSONAttachment re-encodes a JSON attachment, one value per line, with secret
+// fields redacted, URL queries stripped, and helpers stubbed as by stubHelpers.
+// Attachments without a .json extension, matched case-insensitively, are returned
+// unchanged. It fails on a JSON attachment that does not parse.
+func sanitizeJSONAttachment(name string, data []byte) ([]byte, error) {
+	if !strings.EqualFold(filepath.Ext(name), ".json") {
+		return data, nil
 	}
-	return out
-}
-
-// stubHelperOutbounds rewrites a JSON document so that every object tagged
-// with a helper tag, and every value keyed by one, becomes
-// {"type": <its type>, "tag": "helper"}, and every helper tag string becomes
-// "helper". The result is indented, one value per line.
-func stubHelperOutbounds(data []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var v any
@@ -117,9 +100,12 @@ func stubHelperOutbounds(data []byte) ([]byte, error) {
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("trailing data after JSON document")
 	}
-	return json.MarshalIndent(stubHelpers(v), "", "  ")
+	return json.MarshalIndent(stubHelpers(redactJSONValue(v)), "", "  ")
 }
 
+// stubHelpers replaces every object tagged with a helper tag, and every value keyed by
+// one, with {"type": <its type>, "tag": "helper"}, and every helper tag string with
+// "helper".
 func stubHelpers(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -185,6 +171,7 @@ func prependMostRecentBackup(logger *slog.Logger, primaryLogPath string, current
 	if len(backupData) == 0 {
 		return current
 	}
+	backupData = redactLog(backupData)
 	if backupData[len(backupData)-1] != '\n' {
 		backupData = append(backupData, '\n')
 	}
@@ -346,6 +333,10 @@ func readExtraFiles(logger *slog.Logger, paths []string) []extraFile {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			logger.Warn("unable to read additional file", "path", p, "error", err)
+			continue
+		}
+		if data, err = sanitizeJSONAttachment(p, data); err != nil {
+			logger.Warn("omitting unparseable JSON attachment", "path", p, "error", err)
 			continue
 		}
 		files = append(files, extraFile{

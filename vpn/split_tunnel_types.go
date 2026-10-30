@@ -58,6 +58,11 @@ type SplitTunnelFilter struct {
 	PackageName      []string
 }
 
+func (f SplitTunnelFilter) len() int {
+	return len(f.Domain) + len(f.DomainSuffix) + len(f.DomainKeyword) + len(f.DomainRegex) +
+		len(f.ProcessName) + len(f.ProcessPath) + len(f.ProcessPathRegex) + len(f.PackageName)
+}
+
 func (f SplitTunnelFilter) String() string {
 	var str []string
 	if len(f.Domain) > 0 {

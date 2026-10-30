@@ -75,11 +75,11 @@ func TestSpanExportRedactsVolunteerAddresses(t *testing.T) {
 	span.End()
 
 	s := mem.GetSpans()[0]
-	assert.Equal(t, "outbound/samizdat[helper]: dial tcp <redacted>", s.Status.Description)
+	assert.Equal(t, "outbound/samizdat[helper]: dial tcp [REDACTED]", s.Status.Description)
 	evAttrs := attribute.NewSet(s.Events[0].Attributes...)
 	msg, _ := evAttrs.Value("exception.message")
-	assert.Equal(t, "outbound/samizdat[helper]: dial tcp <redacted>", msg.AsString())
-	assert.Contains(t, s.Attributes, attribute.String("peer", "<redacted>"), "the span names a helper, so every address in it goes")
+	assert.Equal(t, "outbound/samizdat[helper]: dial tcp [REDACTED]", msg.AsString())
+	assert.Contains(t, s.Attributes, attribute.String("peer", "[REDACTED]"), "the span names a helper, so every address in it goes")
 }
 
 func TestRedactedSpanReturnsOriginalsWhenNothingChanges(t *testing.T) {
@@ -135,8 +135,8 @@ func TestSpanExportRedactsAddressesInSpansNamingAHelper(t *testing.T) {
 
 	spans := mem.GetSpans()
 	require.Len(t, spans, 2)
-	assert.Contains(t, spans[0].Attributes, attribute.String("server", "<redacted>"))
-	assert.Contains(t, spans[0].Events[0].Attributes, attribute.String("error", "dial tcp <redacted>: connect: connection refused"))
+	assert.Contains(t, spans[0].Attributes, attribute.String("server", "[REDACTED]"))
+	assert.Contains(t, spans[0].Events[0].Attributes, attribute.String("error", "dial tcp [REDACTED]: connect: connection refused"))
 	assert.Contains(t, spans[1].Events[0].Attributes, attribute.String("error", "dial tcp 198.51.100.9:443: connect: connection refused"),
 		"a span that names no helper keeps its addresses")
 }
@@ -170,5 +170,5 @@ func TestSpanExportRedactsThePersonalProxiesTag(t *testing.T) {
 		assert.NotContains(t, kv.Value.Emit(), "personal-proxies", string(kv.Key))
 		assert.NotContains(t, kv.Value.Emit(), "198.51.100.9", string(kv.Key), "a span naming the group loses every address")
 	}
-	assert.Equal(t, "outbound/mutableurltest[helper]: dial tcp <redacted>", s.Status.Description)
+	assert.Equal(t, "outbound/mutableurltest[helper]: dial tcp [REDACTED]", s.Status.Description)
 }

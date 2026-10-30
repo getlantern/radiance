@@ -55,7 +55,16 @@ type Config struct {
 // When env.Testing is set, a no-op logger is returned before any file is created. A "disable"
 // level is different: it only filters records, so the log file is still created.
 //
-// Top-level "level" attributes with non-slog.Level values are emitted as "attr.level".
+// Top-level "time" and "level" attributes whose values are not, respectively, a
+// time.Time or slog.Level are emitted as "attr.time" and "attr.level".
+//
+// Attribute values are redacted when their key, or an enclosing group's key, names a
+// credential or user identifier, or when they are not errors, times, scalars, slices
+// or arrays of non-byte scalars, or maps of scalars. Map entries are redacted by the
+// same key rule. The message, error values and strings, including slice, array and
+// map elements, have URL queries stripped and the values of secret JSON fields
+// redacted. Such text over a size limit that may hold a secret field is replaced
+// whole.
 func NewLogger(cfg Config) *slog.Logger {
 	if env.GetBool(env.Testing) {
 		return NoOpLogger()
@@ -116,13 +125,7 @@ func NewLogger(cfg Config) *slog.Logger {
 		logWriter = io.MultiWriter(logWriter, Publisher())
 	}
 	logWriter = newRedactingWriter(logWriter)
-	var handler slog.Handler = slog.NewTextHandler(logWriter, &slog.HandlerOptions{
-		Level:       leveler,
-		ReplaceAttr: replaceLogAttr,
-	})
-	handler = newSourceHandler(handler)
-	handler = &Handler{Handler: handler, w: logWriter}
-	logger := slog.New(handler)
+	logger := slog.New(&Handler{Handler: newHandler(logWriter, leveler), w: logWriter})
 	if toStdout {
 		fmt.Printf("Logging to stdout only, level: %s\n", FormatLogLevel(slevel))
 	} else if !loggingToStdOut {
@@ -137,21 +140,32 @@ func NewLogger(cfg Config) *slog.Logger {
 	return logger
 }
 
+func newHandler(w io.Writer, level slog.Leveler) slog.Handler {
+	return newSourceHandler(slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: replaceLogAttr,
+	}))
+}
+
 func replaceLogAttr(groups []string, a slog.Attr) slog.Attr {
 	switch a.Key {
 	case slog.TimeKey:
 		if t, ok := a.Value.Any().(time.Time); ok {
 			a.Value = slog.StringValue(t.UTC().Format("2006-01-02 15:04:05.000 UTC"))
+			return a
+		} else if len(groups) == 0 {
+			a.Key = "attr." + slog.TimeKey
 		}
 	case slog.LevelKey:
 		// slog renders custom levels like trace as "DEBUG-4"; FormatLogLevel gives them real names.
 		if level, ok := a.Value.Any().(slog.Level); ok {
 			a.Value = slog.StringValue(FormatLogLevel(level))
+			return a
 		} else if len(groups) == 0 {
 			a.Key = "attr." + slog.LevelKey
 		}
 	}
-	return a
+	return redactAttr(groups, a)
 }
 
 type Handler struct {
