@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -63,6 +64,9 @@ type Tickets struct {
 	// Lifetime is how long lantern-cloud says the tickets live from now, or
 	// 0 if it did not say.
 	Lifetime time.Duration
+	// InviterPairings maps the outbound tag of each pairing this device
+	// invited to that pairing's ID, or is nil when lantern-cloud sent no tags.
+	InviterPairings map[string]string
 }
 
 // Split sorts tickets by the role each claims. It does not verify them:
@@ -78,6 +82,30 @@ func Split(tickets []string) Tickets {
 		}
 	}
 	return t
+}
+
+// inviterPairings maps each tag in tags to the pairing of the inviter ticket
+// at its index in tickets. tags must be index-aligned with tickets; a list of
+// another length is ignored whole, since no ticket's tag can then be trusted.
+func inviterPairings(tickets, tags []string) map[string]string {
+	if len(tags) != len(tickets) {
+		return nil
+	}
+	var m map[string]string
+	for i, tag := range tags {
+		if tag == "" {
+			continue
+		}
+		role, pairing := helperticket.Peek(tickets[i])
+		if role != helperticket.RoleInviter || pairing == "" {
+			continue
+		}
+		if m == nil {
+			m = make(map[string]string)
+		}
+		m[tag] = pairing
+	}
+	return m
 }
 
 // Fetcher asks lantern-cloud for this device's tickets.
@@ -119,12 +147,14 @@ func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
 	}
 	var body struct {
 		Tickets         []string `json:"tickets"`
+		InviterTags     []string `json:"inviter_tags"`
 		LifetimeSeconds int64    `json:"lifetime_seconds"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&body); err != nil {
 		return Tickets{}, errors.New("ticket response: malformed JSON")
 	}
 	t := Split(body.Tickets)
+	t.InviterPairings = inviterPairings(body.Tickets, body.InviterTags)
 	if body.LifetimeSeconds > 0 && body.LifetimeSeconds <= int64(maxLifetime/time.Second) {
 		t.Lifetime = time.Duration(body.LifetimeSeconds) * time.Second
 	}
@@ -150,10 +180,16 @@ type Source struct {
 	mu        sync.Mutex
 	inviter   []held
 	volunteer []held
-	due       time.Time // zero: due at the first read
-	fetching  bool
-	busy      time.Duration // the backoff after the last 429 or 503 in a row
-	gen       uint64        // bumped by Invalidate; a fetch started under an older gen is stale
+	// pairings is the last answered fetch's Tickets.InviterPairings.
+	pairings map[string]string
+	// answered is set once lantern-cloud has answered a fetch, with tickets
+	// or with ErrDisabled.
+	answered bool
+	onChange func()
+	due      time.Time // zero: due at the first read
+	fetching bool
+	busy     time.Duration // the backoff after the last 429 or 503 in a row
+	gen      uint64        // bumped by Invalidate; a fetch started under an older gen is stale
 }
 
 // NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
@@ -165,6 +201,53 @@ func NewSource(ctx context.Context, fetch func(context.Context) (Tickets, error)
 // Inviter returns the current inviter tickets.
 func (s *Source) Inviter() []string {
 	return s.read(helperticket.RoleInviter, false)
+}
+
+// InviterFor returns the current inviter tickets for the pairing whose
+// outbound tag is tag, and whether lantern-cloud has answered a fetch yet:
+// until it has, no tickets means only that none are known.
+func (s *Source) InviterFor(tag string) (tickets []string, answered bool) {
+	all := s.Inviter()
+	s.mu.Lock()
+	pairing, ok := s.pairings[tag]
+	answered = s.answered
+	s.mu.Unlock()
+	if !ok {
+		return nil, answered
+	}
+	for _, tk := range all {
+		if _, p := helperticket.Peek(tk); p == pairing {
+			tickets = append(tickets, tk)
+		}
+	}
+	return tickets, answered
+}
+
+// InviterTags returns the outbound tags of the pairings this device invited
+// that have a current inviter ticket.
+func (s *Source) InviterTags() []string {
+	var tags []string
+	s.mu.Lock()
+	candidates := make([]string, 0, len(s.pairings))
+	for tag := range s.pairings {
+		candidates = append(candidates, tag)
+	}
+	s.mu.Unlock()
+	for _, tag := range candidates {
+		if tickets, _ := s.InviterFor(tag); len(tickets) > 0 {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
+}
+
+// SetOnInviterChange sets f to run after a fetch changes the inviter pairings
+// InviterFor knows, or first answers. f runs on the fetch's goroutine, with
+// no lock held.
+func (s *Source) SetOnInviterChange(f func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = f
 }
 
 // Volunteer returns the current volunteer tickets.
@@ -223,9 +306,11 @@ func (s *Source) refresh(gen uint64) {
 	s.mu.Lock()
 	now := s.now()
 	s.fetching = false
+	prevPairings, prevAnswered := s.pairings, s.answered
 	switch {
 	case errors.Is(err, ErrDisabled):
 		s.inviter, s.volunteer = nil, nil
+		s.pairings, s.answered = nil, true
 		s.busy = 0
 		s.due = now.Add(DisabledInterval)
 	case errors.Is(err, ErrUnavailable):
@@ -237,6 +322,7 @@ func (s *Source) refresh(gen uint64) {
 	default:
 		s.inviter = hold(t.Inviter, start, t.Lifetime)
 		s.volunteer = hold(t.Volunteer, start, t.Lifetime)
+		s.pairings, s.answered = t.InviterPairings, true
 		s.busy = 0
 		// Renewal runs from the request's start too, like expiry, so a
 		// slow fetch never eats into the margin before the tickets expire.
@@ -249,7 +335,14 @@ func (s *Source) refresh(gen uint64) {
 		// stands.
 		s.due = time.Time{}
 	}
+	var onChange func()
+	if s.answered != prevAnswered || !maps.Equal(s.pairings, prevPairings) {
+		onChange = s.onChange
+	}
 	s.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 
 	switch {
 	case errors.Is(err, errPanicked):
