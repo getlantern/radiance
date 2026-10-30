@@ -30,9 +30,16 @@ func SetPublicIP(ip string) {
 }
 
 // SetStoredPublicIP stores a truncated public IP from a previous session. API requests carry it
-// for geolocation until [SetPublicIP] replaces it, but [SetDetectedClientIP] never sends it.
+// for geolocation until [SetPublicIP] replaces it, but [SetDetectedClientIP] never sends it. An IP
+// already detected this session is kept: a backend restarted within the process (mobile, when IPC
+// comes and goes) reloads the stored value after the first backend detected the current one.
 func SetStoredPublicIP(ip string) {
-	publicIP.Store(&clientIP{ip: ip})
+	for {
+		cur := publicIP.Load()
+		if cur.detected || publicIP.CompareAndSwap(cur, &clientIP{ip: ip}) {
+			return
+		}
+	}
 }
 
 // SetDetectedClientIP sets [ClientIPHeader] on req to the public IP detected this session, or

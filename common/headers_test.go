@@ -23,6 +23,11 @@ func TestClientIPHeader(t *testing.T) {
 			SetStoredPublicIP("203.0.113.0")
 			SetPublicIP("198.51.100.9")
 		}, "198.51.100.9", "198.51.100.9"},
+		// A backend restarted within the process reloads the stored value.
+		{"stored does not replace detected", func() {
+			SetPublicIP("198.51.100.9")
+			SetStoredPublicIP("203.0.113.0")
+		}, "198.51.100.9", "198.51.100.9"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
