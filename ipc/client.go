@@ -916,7 +916,7 @@ func (c *Client) HelperActivity(ctx context.Context) (helper.Activity, error) {
 }
 
 // HelperLive reads whether each helper pairing's friend is connected to this
-// volunteer now (see helper.LiveTracker). Poll it with the 1s snapshots.
+// volunteer now (see helper.LiveSnapshot).
 func (c *Client) HelperLive(ctx context.Context) (helper.LiveSnapshot, error) {
 	var s helper.LiveSnapshot
 	err := c.doJSON(ctx, http.MethodGet, helperLiveEndpoint, nil, &s)

@@ -50,8 +50,8 @@ type RegisterResponse struct {
 	PairingShortIDSets []PairingShortIDSet `json:"pairing_short_id_sets"`
 }
 
-// PairingShortIDSet is one pairing's short IDs. The pairing ID identifies a
-// friend relationship: it is kept in memory only and never logged.
+// PairingShortIDSet is one pairing's short IDs. PairingID identifies a
+// friend relationship and must never be logged or persisted.
 type PairingShortIDSet struct {
 	PairingID string   `json:"pairing_id"`
 	ShortIDs  []string `json:"short_ids"`

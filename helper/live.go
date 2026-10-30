@@ -22,8 +22,7 @@ const (
 	LiveSampleInterval = time.Second
 )
 
-// DefaultLive is the process's LiveTracker, fed by direct sharing (peer) and
-// the Unbounded widget, and read by the backend's HelperLive.
+// DefaultLive is the process's LiveTracker.
 var DefaultLive = NewLiveTracker(nil)
 
 // LivePairing is one pairing's live state on the volunteer.
@@ -105,9 +104,10 @@ func NewLiveTracker(now func() time.Time) *LiveTracker {
 }
 
 // Open starts following a connection that came through pairing. key
-// identifies it for Close, owner groups it for CloseOwner, and read, if not
-// nil, returns its cumulative byte count, which is sampled at each Snapshot
-// and at Close. A connection with no pairing (a pool one) is ignored.
+// identifies it for Close, and owner groups it for CloseOwner; opening a key
+// already open closes the earlier one. read, if not nil, returns its
+// cumulative byte count, sampled every LiveSampleInterval while any
+// connection is open, at Snapshot and at Close. An empty pairing is ignored.
 func (t *LiveTracker) Open(owner string, key any, pairing string, read func() uint64) {
 	if t == nil || pairing == "" || key == nil {
 		return
@@ -132,8 +132,6 @@ func (t *LiveTracker) Open(owner string, key any, pairing string, read func() ui
 	}
 }
 
-// sampleLoop samples every open connection each interval, until none is
-// open.
 func (t *LiveTracker) sampleLoop(interval time.Duration) {
 	tk := time.NewTicker(interval)
 	defer tk.Stop()
@@ -149,8 +147,6 @@ func (t *LiveTracker) sampleLoop(interval time.Duration) {
 	}
 }
 
-// sampleAllLocked reads every open connection's bytes and re-evaluates
-// every pairing at now.
 func (t *LiveTracker) sampleAllLocked(now time.Time) {
 	for _, f := range t.flows {
 		t.sampleLocked(f, now)
@@ -277,9 +273,9 @@ func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {
 	for _, s := range p.samples {
 		total += s.n
 	}
-	// Expire samples oldest first. If the window was at the threshold and
-	// an expiry took it below, the pairing went quiet when that sample
-	// expired, not at this later evaluation.
+	// If the window was at the threshold and an expiry took it below, the
+	// pairing went quiet when that sample expired, not at this later
+	// evaluation.
 	var crossedAt time.Time
 	drop := 0
 	for drop < len(p.samples) && !p.samples[drop].at.After(cutoff) {

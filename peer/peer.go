@@ -49,7 +49,7 @@ type StatusEvent struct {
 //	State     +1 on accept, -1 on close
 //	Source    remote peer "ip:port"
 //	Timestamp emit time in Unix milliseconds
-//	Pairing   the helper pairing the client came through, "" for the pool
+//	Pairing   the helper pairing the client came through, "" for the pool or not yet known
 //
 // Pairing identifies a friend relationship. It goes to the local app only:
 // it must never be logged, traced or persisted.
@@ -264,11 +264,9 @@ type Client struct {
 	// pairingConfirmedAt is when a known set was last accepted. A rotation
 	// that reuses the record keeps it.
 	pairingConfirmedAt time.Time
-	// pairingByShortID maps each pairing short ID of the newest grouped set
-	// accepted to its pairing ID, so a connection's short ID names the
-	// friend it came through. Written under shortIDsMu and c.mu, read
-	// lock-free by the connection listener. Pairing IDs are kept in memory
-	// only and never logged.
+	// pairingByShortID maps each short ID of the newest grouped set accepted
+	// to its pairing ID. Written under c.mu, read lock-free by the connection
+	// listener.
 	pairingByShortID atomic.Pointer[map[[8]byte]string]
 	// liveMu orders the listener's LiveTracker updates against a session's
 	// end. liveGen identifies the running session and changes at every
@@ -1720,13 +1718,11 @@ func (c *Client) applyPairingShortIDs(pairing []string, known bool, rev int64) {
 	c.offerPairingShortIDs(pairing, nil, known, rev)
 }
 
-// offerPairingShortIDs is applyPairingShortIDs with the set grouped by
-// pairing, as newer servers send it. Groups are taken with a set newer than
-// the one held, and also at the revision already held: a server replica that
-// predates groups answers with the same set and revision but no groups, so a
-// revision applied without them may get them later. Either way the groups'
-// IDs, in order, must be the flat set recorded at that revision, so groups
-// never describe a set other than the one applied.
+// offerPairingShortIDs is applyPairingShortIDs with the set's per-pairing
+// groups, taken only when their IDs, joined in order, equal the set held at
+// that revision. Groups are also taken at the revision already held, since a
+// replica that predates groups answers that revision without them. A newer
+// set without matching groups keeps the previous mapping.
 func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDSet, known bool, rev int64) {
 	c.shortIDsMu.Lock()
 	defer c.shortIDsMu.Unlock()
@@ -1885,7 +1881,7 @@ func (c *Client) setPairingByShortID(m map[[8]byte]string) {
 }
 
 // pairingFor is the pairing a connection with short ID id came through, or ""
-// for the launch config's own ID, an unknown one, or none.
+// if none.
 func (c *Client) pairingFor(id [8]byte) string {
 	if id == ([8]byte{}) {
 		return ""
@@ -1923,12 +1919,9 @@ func (c *Client) endLive() {
 	c.live().CloseOwner(liveOwner)
 }
 
-// trackPairing resolves a connection event's pairing, records the event in
-// the relay snapshot, and follows a connection that came through a pairing
-// in the LiveTracker, keyed by its byte counter, which its accept and close
-// share. An accepted connection whose short ID names no pairing yet is kept
-// as unresolved for a later grouped set. Live tracking ignores an event from
-// a session other than liveGen. It returns the pairing, "" for the pool.
+// trackPairing records a connection event in the relay snapshot and the
+// LiveTracker and returns its pairing, "" for the pool or not yet known.
+// Events from a session other than liveGen are not live-tracked.
 func (c *Client) trackPairing(liveGen, relayGen uint64, state int, source string, shortID [8]byte, bytes *peerconn.Counter) string {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()

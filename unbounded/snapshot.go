@@ -40,9 +40,8 @@ type PeerBytes struct {
 	Down uint64 `json:"down"`
 	Up   uint64 `json:"up"`
 	// Pairing is the helper pairing this consumer most recently came
-	// through, or "" for a pool consumer or one broflake could not
-	// attribute, so the app can label its globe arc. It identifies a friend
-	// relationship: local app only, never logged.
+	// through, "" for the pool or one broflake could not attribute. It
+	// identifies a friend relationship and must never be logged.
 	Pairing string `json:"pairing,omitempty"`
 }
 
@@ -212,9 +211,7 @@ type liveSlot struct {
 }
 
 // recordPairing follows broflake's pairing for a slot's connection change,
-// which arrives just after recordConnection's. An accepted slot that came
-// through a helper pairing is followed in the LiveTracker by its byte total,
-// and its consumer's tally is labelled with the pairing for the snapshot.
+// which arrives just after recordConnection's.
 func (m *unboundedManager) recordPairing(ctx context.Context, slots *slotTable, state, slot int, pairing string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

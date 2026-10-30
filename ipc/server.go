@@ -299,8 +299,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Not traced either: a traced poll would mark the device as a helper
 	// volunteer in exported telemetry.
 	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
-	// Not traced: its body names the device's friends and whether each is
-	// connected, and a traced poll would mark the device as a volunteer.
+	// Not traced either, for the same reason.
 	mux.HandleFunc("GET "+helperLiveEndpoint, s.helperLiveHandler)
 
 	// Split tunnel

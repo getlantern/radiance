@@ -34,9 +34,9 @@ type PeerBytes struct {
 	IP   string `json:"ip"`
 	Down uint64 `json:"down"`
 	Up   uint64 `json:"up"`
-	// Pairing is the helper pairing this client most recently came through,
-	// or "" for a pool client, so the app can label its globe arc. It
-	// identifies a friend relationship: local app only, never logged.
+	// Pairing is the helper pairing of this client's latest connection, ""
+	// for the pool or not yet attributed. It identifies a friend
+	// relationship and must never be logged.
 	Pairing string `json:"pairing,omitempty"`
 }
 

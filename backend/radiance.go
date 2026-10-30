@@ -2017,7 +2017,7 @@ func (r *LocalBackend) HelperActivity() helper.Activity {
 }
 
 // HelperLive is whether each helper pairing's friend is connected to this
-// volunteer now, through direct sharing or Unbounded. In memory only.
+// volunteer now.
 func (r *LocalBackend) HelperLive() helper.LiveSnapshot {
 	return helper.DefaultLive.Snapshot()
 }
