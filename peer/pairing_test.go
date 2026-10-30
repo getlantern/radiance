@@ -370,3 +370,23 @@ func TestClient_StopForgetsUnresolvedStreams(t *testing.T) {
 	c.setPairingByShortID(map[[8]byte]string{sid(t, sidA1): pairingA})
 	assert.Empty(t, live.Snapshot().Pairings)
 }
+
+// Attributing an older stream late does not relabel its IP when a newer
+// stream from that IP came after it.
+func TestClient_LateAttributionKeepsTheLatestStreamsLabel(t *testing.T) {
+	c := pairingClient(t, func(cfg *Config) { cfg.Live = helper.NewLiveTracker(nil) })
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidA1)})
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1001", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, testBaseShortID)})
+	c.offerPairingShortIDs([]string{sidA1, sidA2, sidB1}, groupsAB(), true, 100)
+	snap := c.RelaySnapshot()
+	require.Len(t, snap.PeerBytes, 1)
+	assert.Equal(t, "", snap.PeerBytes[0].Pairing, "the IP's latest stream is the pool one")
+
+	// A stream resolved at accept still labels its IP.
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.2:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidB1)})
+	for _, pb := range c.RelaySnapshot().PeerBytes {
+		if pb.IP == "198.51.100.2" {
+			assert.Equal(t, pairingB, pb.Pairing)
+		}
+	}
+}

@@ -46,8 +46,11 @@ type relayTally struct {
 	closedDown, closedUp uint64
 	open                 int
 	endedAt              time.Time
-	// pairing is the pairing of the client's latest connection.
+	// pairing is the pairing of the client's latest connection, and
+	// latest that connection's counter, so a connection attributed late
+	// relabels the client only if it is still the latest.
 	pairing string
+	latest  *peerconn.Counter
 }
 
 // relayConn is an open connection's source and, once a later session has
@@ -232,6 +235,7 @@ func (r *relayStats) recordPairingFor(gen uint64, state int, source, pairing str
 		}
 		t.open++
 		t.pairing = pairing
+		t.latest = bytes
 	case state < 0:
 		rc, ok := r.conns[bytes]
 		if !ok || !rc.retiredAt.IsZero() {
@@ -254,7 +258,7 @@ func (r *relayStats) setPairing(bytes *peerconn.Counter, pairing string) {
 	if !ok || !rc.retiredAt.IsZero() {
 		return
 	}
-	if t := r.ips[ipOf(rc.source)]; t != nil {
+	if t := r.ips[ipOf(rc.source)]; t != nil && t.latest == bytes {
 		t.pairing = pairing
 	}
 }
