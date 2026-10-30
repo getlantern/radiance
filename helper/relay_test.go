@@ -122,6 +122,21 @@ func TestRelayRejectsANonJSONSuccess(t *testing.T) {
 	assert.NotContains(t, err.Error(), "captive", "an error never quotes the body")
 }
 
+// lantern-cloud answers an Empty with no body unless its binding says
+// otherwise: a success, relayed as {}.
+func TestRelayTakesAnEmptySuccessAsAnEmptyObject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	for _, op := range []string{"invites", "invites/claim", "pairings/end"} {
+		res, err := NewRelayer(srv.Client(), srv.URL+"/v1", nil).Relay(context.Background(), op, []byte(`{}`))
+		require.NoError(t, err, op)
+		assert.Equal(t, http.StatusOK, res.Status, op)
+		assert.JSONEq(t, `{}`, string(res.Body), op)
+	}
+}
+
 // A pairing change runs onChange, so the backend's ticket Source fetches at
 // its next read and a new pairing's rooms work within one read, not one
 // refresh interval.

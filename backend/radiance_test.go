@@ -2,11 +2,14 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +31,8 @@ import (
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/unbounded"
 	"github.com/getlantern/radiance/vpn"
+
+	lbA "github.com/getlantern/lantern-box/adapter"
 )
 
 // newCachedConfigBackend returns a backend loading its config and servers
@@ -190,7 +195,7 @@ func TestLanternServersToEvict(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing []*servers.Server
-		incoming int
+		offered  []string
 		limit    int
 		selected string
 		want     []string
@@ -206,13 +211,34 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:  []string{"demoted"},
 		},
 		{
-			name: "hard-demoted lantern server is evicted regardless of incoming config",
+			name: "hard-demoted lantern server is evicted even when offered",
 			existing: []*servers.Server{
 				newTestServer("demoted", true, true, baseTime),
 			},
-			incoming: 1,
-			limit:    60,
-			want:     []string{"demoted"},
+			offered: []string{"demoted"},
+			limit:   60,
+			want:    []string{"demoted"},
+		},
+		{
+			name: "offered hard-demoted server does not take a retention slot",
+			existing: []*servers.Server{
+				newTestServer("demoted", true, true, baseTime),
+				newTestServer("old", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("new", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered: []string{"demoted", "fresh"},
+			limit:   3,
+			want:    []string{"demoted"},
+		},
+		{
+			name: "offered tag held by a non-lantern server does not take a retention slot",
+			existing: []*servers.Server{
+				newTestServer("user", false, false, baseTime),
+				newTestServer("old", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("new", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered: []string{"user", "fresh"},
+			limit:   3,
 		},
 		{
 			name: "under the limit nothing is evicted",
@@ -220,8 +246,8 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("a", true, false, baseTime),
 				newTestServer("b", true, false, baseTime),
 			},
-			incoming: 2,
-			limit:    60,
+			offered: []string{"c", "d"},
+			limit:   60,
 		},
 		{
 			name: "over the limit evicts oldest working servers and keeps the newest",
@@ -230,19 +256,42 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("mid", true, false, baseTime.Add(2*time.Hour)),
 				newTestServer("new", true, false, baseTime.Add(3*time.Hour)),
 			},
-			incoming: 1,
-			limit:    3,
-			want:     []string{"old"},
+			offered: []string{"fresh"},
+			limit:   3,
+			want:    []string{"old"},
 		},
 		{
-			name: "incoming at the limit evicts all existing working servers",
+			name: "offered servers at the limit evict all servers no longer offered",
 			existing: []*servers.Server{
 				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
 				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
 			},
-			incoming: 3,
-			limit:    3,
-			want:     []string{"a", "b"},
+			offered: []string{"c", "d", "e"},
+			limit:   3,
+			want:    []string{"a", "b"},
+		},
+		{
+			name: "re-offered servers are kept and servers no longer offered are evicted",
+			existing: []*servers.Server{
+				newTestServer("offered-oldest", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("dropped-old", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("dropped-new", true, false, baseTime.Add(3*time.Hour)),
+				newTestServer("offered-newest", true, false, baseTime.Add(4*time.Hour)),
+			},
+			offered: []string{"offered-oldest", "offered-newest", "fresh"},
+			limit:   4,
+			want:    []string{"dropped-old"},
+		},
+		{
+			name: "offered servers over the limit are all kept",
+			existing: []*servers.Server{
+				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("dropped", true, false, baseTime.Add(3*time.Hour)),
+			},
+			offered: []string{"a", "b", "c"},
+			limit:   2,
+			want:    []string{"dropped"},
 		},
 		{
 			name: "selected working server is exempt but counts toward the limit",
@@ -252,10 +301,33 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("b", true, false, baseTime.Add(3*time.Hour)),
 				newTestServer("c", true, false, baseTime.Add(4*time.Hour)),
 			},
-			incoming: 1,
+			offered:  []string{"fresh"},
 			limit:    3,
 			selected: "old-selected",
 			want:     []string{"a", "b"},
+		},
+		{
+			name: "offered selected server counts toward the limit once",
+			existing: []*servers.Server{
+				newTestServer("selected", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("a", true, false, baseTime.Add(2*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(3*time.Hour)),
+			},
+			offered:  []string{"selected", "fresh"},
+			limit:    3,
+			selected: "selected",
+			want:     []string{"a"},
+		},
+		{
+			name: "selected server is kept when over the limit",
+			existing: []*servers.Server{
+				newTestServer("selected", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("a", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered:  []string{"b", "c"},
+			limit:    2,
+			selected: "selected",
+			want:     []string{"a"},
 		},
 		{
 			name: "selected server is still evicted when hard-demoted",
@@ -263,9 +335,32 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("selected-demoted", true, true, baseTime),
 				newTestServer("working", true, false, baseTime),
 			},
+			offered:  []string{"selected-demoted"},
 			limit:    60,
 			selected: "selected-demoted",
 			want:     []string{"selected-demoted"},
+		},
+		{
+			name: "helpers are never evicted",
+			existing: []*servers.Server{
+				newTestServer("helper-0123456789ab", true, false, time.Time{}),
+				newTestServer("helper-ba9876543210", true, true, baseTime),
+				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered:  []string{"helper-0123456789ab", "c", "d"},
+			limit:    3,
+			selected: "personal-proxies",
+			want:     []string{"a"},
+		},
+		{
+			name: "offered new helpers take no retention slot",
+			existing: []*servers.Server{
+				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
+				newTestServer("b", true, false, baseTime.Add(2*time.Hour)),
+			},
+			offered: []string{"helper-0123456789ab", "helper-ba9876543210", "c"},
+			limit:   3,
 		},
 		{
 			name: "server with no selection history sorts oldest",
@@ -273,19 +368,36 @@ func TestLanternServersToEvict(t *testing.T) {
 				newTestServer("no-history", true, false, time.Time{}),
 				newTestServer("probed", true, false, baseTime.Add(5*time.Hour)),
 			},
-			incoming: 1,
-			limit:    2,
-			want:     []string{"no-history"},
+			offered: []string{"fresh"},
+			limit:   2,
+			want:    []string{"no-history"},
 		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected)
+			offered := make(map[string]struct{}, len(tt.offered))
+			for _, tag := range tt.offered {
+				offered[tag] = struct{}{}
+			}
+			got := lanternServersToEvict(tt.existing, offered, tt.limit, tt.selected)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
+}
+
+func TestEndedHelpersAreThoseTheConfigNoLongerCarries(t *testing.T) {
+	existing := []*servers.Server{
+		newTestServer("helper-0123456789ab", true, false, time.Time{}),
+		newTestServer("helper-ba9876543210", true, false, time.Time{}),
+		newTestServer("helper-00000000000d", true, true, time.Unix(9, 0)),
+		newTestServer("helper-0000000000aa", false, false, time.Time{}),
+		newTestServer("a", true, false, time.Time{}),
+	}
+	got := endedHelpers(existing, map[string]struct{}{"helper-0123456789ab": {}})
+	assert.ElementsMatch(t, []string{"helper-ba9876543210", "helper-00000000000d"}, got,
+		"Lantern helpers the config dropped; a user server is not the config's to end")
 }
 
 func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
@@ -1401,4 +1513,711 @@ func TestReregisterPeer_TurningOffCancelsTheRunningAttempt(t *testing.T) {
 		t.Fatal("turning sharing off waited for the attempt")
 	}
 	waitPeerWork(t, b)
+}
+
+func newPersonalProxiesBackend(t *testing.T) *LocalBackend {
+	t.Helper()
+	return newPersonalProxiesBackendIn(t, t.TempDir())
+}
+
+func newPersonalProxiesBackendIn(t *testing.T, dataDir string) *LocalBackend {
+	t.Helper()
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(dataDir))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
+	require.NoError(t, err)
+	return &LocalBackend{
+		ctx:         ctx,
+		confHandler: config.NewConfigHandler(ctx, config.Options{DataPath: dataDir, Logger: log.NoOpLogger()}),
+		srvManager:  srvMgr,
+		vpnClient:   vpn.NewVPNClient(dataDir, log.NoOpLogger(), nil),
+	}
+}
+
+func addDirectServer(t *testing.T, r *LocalBackend, tag string) {
+	t.Helper()
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{{
+		Tag: tag, Type: "direct", IsLantern: true,
+		Options: option.Outbound{Tag: tag, Type: "direct", Options: &option.DirectOutboundOptions{}},
+	}}}, false))
+}
+
+func TestPersonalProxiesServerExistsWhileAHelperDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "lantern-1")
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found, "no helper outbound, no group")
+	assert.False(t, r.connectable(vpn.PersonalProxiesTag))
+
+	addDirectServer(t, r, "helper-0123456789ab")
+	srv, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	require.True(t, found)
+	assert.Equal(t, vpn.PersonalProxiesTag, srv.Tag)
+	assert.False(t, srv.IsLantern)
+	assert.Nil(t, srv.Options)
+	assert.True(t, r.connectable(vpn.PersonalProxiesTag))
+	for _, s := range r.AllServers() {
+		assert.NotEqual(t, vpn.PersonalProxiesTag, s.Tag, "never listed among servers")
+	}
+}
+
+func TestPersonalProxiesSelectionLastsWhileAHelperDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "helper-0123456789ab")
+	r.persistSelection(vpn.PersonalProxiesTag)
+	assert.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	sel, exists, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
+
+	r.clearSelectedIfMissing()
+	assert.False(t, settings.GetBool(settings.AutoConnectKey), "kept while a helper remains")
+
+	_, err = r.srvManager.RemoveServers([]string{"helper-0123456789ab"})
+	require.NoError(t, err)
+	r.clearSelectedIfMissing()
+	assert.True(t, settings.GetBool(settings.AutoConnectKey), "falls back to Smart Location")
+}
+
+func directServers(tags ...string) servers.ServerList {
+	var list servers.ServerList
+	for _, tag := range tags {
+		list.Servers = append(list.Servers, &servers.Server{
+			Tag: tag, Type: "direct", IsLantern: true,
+			Options: option.Outbound{Tag: tag, Type: "direct", Options: &option.DirectOutboundOptions{}},
+		})
+	}
+	return list
+}
+
+// Helper outbounds arrive in the config, so they are Lantern servers, but
+// they are the user's pairings rather than offers to rotate out. With the
+// personal proxies group selected, evicting them all would drop the user's
+// choice back to Smart Location.
+func TestConfigEvictionKeepsHelpersAndThePersonalProxiesSelection(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	r := newPersonalProxiesBackend(t)
+	retained := []string{h1, h2}
+	for i := range maxRetainedLanternServers + 5 {
+		retained = append(retained, fmt.Sprintf("lantern-%d", i))
+	}
+	require.NoError(t, r.srvManager.AddServers(directServers(retained...), false))
+	r.persistSelection(vpn.PersonalProxiesTag)
+
+	incoming := []string{h1, h2} // a config keeps carrying its pairings' helpers
+	for i := range 10 {
+		incoming = append(incoming, fmt.Sprintf("new-%d", i))
+	}
+	require.NoError(t, r.updateServers(directServers(incoming...), true))
+
+	for _, tag := range []string{h1, h2} {
+		_, found := r.srvManager.GetServerByTag(tag)
+		assert.True(t, found, "helper %s must not be evicted", tag)
+	}
+	assert.Len(t, r.srvManager.AllServers(), maxRetainedLanternServers+2,
+		"other retained servers are still evicted down to the limit; the helpers sit outside it")
+	assert.False(t, settings.GetBool(settings.AutoConnectKey), "the personal proxies selection is kept")
+	sel, exists, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
+}
+
+func helperWithPort(tag string, port uint16) *servers.Server {
+	return &servers.Server{
+		Tag: tag, Type: "socks", IsLantern: true,
+		Options: option.Outbound{Tag: tag, Type: "socks", Options: &option.SOCKSOutboundOptions{
+			ServerOptions: option.ServerOptions{Server: "203.0.113.7", ServerPort: port},
+		}},
+	}
+}
+
+func storedPort(t *testing.T, r *LocalBackend, tag string) uint16 {
+	t.Helper()
+	srv, found := r.srvManager.GetServerByTag(tag)
+	require.True(t, found, tag)
+	return srv.Options.(option.Outbound).Options.(*option.SOCKSOutboundOptions).ServerPort
+}
+
+// A helper's tag is stable per pairing and route, but the credentials in its
+// options rotate (the samizdat short ID changes daily), so a config carrying
+// a known helper tag with new options must replace the stored server.
+func TestConfigUpdateRefreshesAHelperWhoseOptionsChanged(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1080)}}, true))
+	require.Equal(t, uint16(1080), storedPort(t, r, h))
+	before, _ := r.srvManager.GetServerByTag(h)
+	before.SelectionHistory = &servers.SelectionHistory{UpdatedAt: time.Unix(100, 0).UTC()}
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{before}}, true))
+
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1081)}}, true))
+	assert.Equal(t, uint16(1081), storedPort(t, r, h), "the new options are stored")
+	after, _ := r.srvManager.GetServerByTag(h)
+	require.NotNil(t, after.SelectionHistory, "the server's history is kept")
+	assert.Equal(t, time.Unix(100, 0).UTC(), after.SelectionHistory.UpdatedAt)
+
+	// Non-helper servers keep the first offer, as before.
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort("lantern-x", 1080)}}, true))
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort("lantern-x", 1081)}}, true))
+	assert.Equal(t, uint16(1080), storedPort(t, r, "lantern-x"))
+}
+
+func TestConfigUpdateLeavesAnUnchangedHelperAlone(t *testing.T) {
+	const h = "helper-0123456789ab"
+	dataDir := t.TempDir()
+	r := newPersonalProxiesBackendIn(t, dataDir)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1080)}}, true))
+	serversFile := filepath.Join(dataDir, internal.ServersFileName)
+	stamp := time.Unix(1, 0)
+	require.NoError(t, os.Chtimes(serversFile, stamp, stamp))
+
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(h, 1080)}}, true))
+	info, err := os.Stat(serversFile)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(stamp), "identical options are not rewritten")
+	assert.Equal(t, uint16(1080), storedPort(t, r, h))
+}
+
+func TestImportRefusesThePersonalProxiesTag(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	_, err := r.AddServersByJSON(`{"outbounds":[{"type":"socks","tag":"personal-proxies","server":"203.0.113.7","server_port":1080}]}`)
+	require.ErrorIs(t, err, servers.ErrReservedTag)
+	require.ErrorIs(t, r.AddServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(vpn.PersonalProxiesTag, 1080)}}),
+		servers.ErrReservedTag)
+	assert.Empty(t, r.AllServers())
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found)
+}
+
+// A config that no longer carries a helper ended its pairing: the helper is
+// removed, and with the last one the personal proxies group and a selection
+// of it. That holds for the cached config applied at startup too: the process
+// can stop after a new config is saved but before it is applied, and later
+// fetches of the same config bring no update. Only helpers are withdrawn on
+// that path; a retained Lantern server is not evicted.
+func TestConfigWithoutAHelperEndsItsPairing(t *testing.T) {
+	const h = "helper-0123456789ab"
+	for _, tc := range []struct {
+		name  string
+		fresh bool
+	}{
+		{"fresh config", true},
+		{"cached config at startup, saved before a crash", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newPersonalProxiesBackend(t)
+			tun := &fakeHelperTunnel{}
+			tun.attach(r)
+			tun.up(directServers("lantern-1", "lantern-old", h).Servers...)
+			// The servers the previous config left.
+			require.NoError(t, r.updateServers(directServers("lantern-1", "lantern-old", h), true))
+			r.persistSelection(vpn.PersonalProxiesTag)
+			require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+			// The new config, applied fresh or (after a restart) from the cache.
+			require.NoError(t, r.updateServers(directServers("lantern-1"), tc.fresh))
+			_, helperKept := r.srvManager.GetServerByTag(h)
+			_, offered := r.GetServerByTag(vpn.PersonalProxiesTag)
+			_, retained := r.srvManager.GetServerByTag("lantern-old")
+			assert.False(t, helperKept)
+			assert.False(t, offered)
+			assert.True(t, retained, "a Lantern server the config dropped is retained, not evicted")
+			assert.True(t, settings.GetBool(settings.AutoConnectKey),
+				"a selection of the withdrawn group falls back to auto-select")
+			assert.False(t, tun.holds(h), "and the helper leaves the tunnel")
+		})
+	}
+}
+
+// The IPC AddServers path takes a server's tag and its outbound separately.
+// The server's tag is the effective one: an outbound tagged with a reserved
+// tag under another name is stored and handed to the tunnel under that name.
+func TestAddServersUsesTheServerTag(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	srv := helperWithPort("mine", 1080)
+	srv.IsLantern = false
+	srv.Options = helperWithPort(vpn.AutoSelectTag, 1080).Options
+	list := servers.ServerList{Servers: []*servers.Server{srv}}
+	require.NoError(t, r.AddServers(list))
+	assert.Equal(t, "mine", list.Outbounds()[0].Tag, "what reaches the tunnel")
+	stored, found := r.GetServerByTag("mine")
+	require.True(t, found)
+	assert.Equal(t, "mine", stored.Options.(option.Outbound).Tag)
+	_, found = r.GetServerByTag(vpn.AutoSelectTag)
+	assert.False(t, found)
+
+	require.ErrorIs(t, r.AddServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(vpn.AutoSelectTag, 1080)}}),
+		servers.ErrReservedTag, "a reserved server tag is still refused")
+}
+
+// The app renames a private server by fetching it over IPC (as JSON), removing
+// it, and adding it back with only its tag changed: its outbound still carries
+// the old tag. The rename must keep the server, under the new tag throughout.
+func TestRenamingAServerKeepsIt(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	original := helperWithPort("old", 1080)
+	original.IsLantern = false
+	require.NoError(t, r.AddServers(servers.ServerList{Servers: []*servers.Server{original}}))
+
+	stored, found := r.GetServerByTag("old")
+	require.True(t, found)
+	wire, err := json.Marshal(stored)
+	require.NoError(t, err)
+	var source servers.Server
+	require.NoError(t, json.Unmarshal(wire, &source))
+
+	require.NoError(t, r.RemoveServers([]string{"old"}))
+	source.Tag = "new"
+	list := servers.ServerList{Servers: []*servers.Server{&source}}
+	require.NoError(t, r.AddServers(list))
+
+	assert.Equal(t, "new", list.Outbounds()[0].Tag, "what reaches the tunnel")
+	renamed, found := r.GetServerByTag("new")
+	require.True(t, found)
+	assert.Equal(t, "new", renamed.Options.(option.Outbound).Tag)
+	assert.Equal(t, uint16(1080), renamed.Options.(option.Outbound).Options.(*option.SOCKSOutboundOptions).ServerPort)
+	_, found = r.GetServerByTag("old")
+	assert.False(t, found)
+}
+
+func lanternServersWithHistory(n int) servers.ServerList {
+	list := directServers()
+	for i := range n {
+		srv := directServers(fmt.Sprintf("lantern-%d", i)).Servers[0]
+		srv.SelectionHistory = &servers.SelectionHistory{UpdatedAt: time.Unix(int64(1000+i), 0).UTC()}
+		list.Servers = append(list.Servers, srv)
+	}
+	return list
+}
+
+// A new pairing's helper takes no retention slot, so it does not push out a
+// Lantern server.
+func TestNewHelperDoesNotEvictALanternServer(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(lanternServersWithHistory(maxRetainedLanternServers), false))
+	require.NoError(t, r.updateServers(directServers("helper-0123456789ab"), true))
+	assert.Len(t, r.AllServers(), maxRetainedLanternServers+1, "nothing was evicted")
+}
+
+// A connect that selected the group, which a config update withdrew while
+// the tunnel came up, persists auto-select rather than leaving the old choice.
+func TestConnectedSelectionFallsBackWhenWithdrawnDuringConnect(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	r.persistSelection("lantern-1")
+	r.persistConnectedSelection(vpn.PersonalProxiesTag)
+	assert.True(t, settings.GetBool(settings.AutoConnectKey))
+
+	require.NoError(t, r.updateServers(directServers("lantern-1", "helper-0123456789ab"), true))
+	r.persistConnectedSelection(vpn.PersonalProxiesTag)
+	assert.False(t, settings.GetBool(settings.AutoConnectKey))
+	sel, _, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
+}
+
+// fakeHelperTunnel stands in for the running tunnel in backend tests, which
+// have no tunnel. live maps each outbound tag to its options' fingerprint,
+// and is nil while no tunnel is up. UpdateOutbounds only adds and updates, as
+// the real update does when its guards keep old outbounds; ReconcileHelpers
+// does what the real one does. calls records each call in order.
+type fakeHelperTunnel struct {
+	mu      sync.Mutex
+	live    map[string]string
+	removed [][]string
+	calls   []string
+	fail    bool
+	gate    func() // if set, runs before each reconciliation
+}
+
+var _ liveTunnel = (*fakeHelperTunnel)(nil)
+
+func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.live = f }
+
+func fingerprint(srv *servers.Server) string {
+	if out, ok := srv.Options.(option.Outbound); ok {
+		if socks, ok := out.Options.(*option.SOCKSOutboundOptions); ok {
+			return fmt.Sprint(socks.ServerPort)
+		}
+	}
+	return srv.Type
+}
+
+func (f *fakeHelperTunnel) UpdateOutbounds(list servers.ServerList) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "update")
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	for _, srv := range list.Servers {
+		f.live[srv.Tag] = fingerprint(srv)
+	}
+	return nil
+}
+
+func (f *fakeHelperTunnel) RemoveOutbounds(tags []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "remove")
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	for _, tag := range tags {
+		delete(f.live, tag)
+	}
+	return nil
+}
+
+func (f *fakeHelperTunnel) SelectServer(tag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "select:"+tag)
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	return nil
+}
+
+func (f *fakeHelperTunnel) ReconcileHelpers(helpers servers.ServerList) error {
+	if f.gate != nil {
+		f.gate()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "reconcile")
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	if f.fail {
+		return errors.New("tunnel busy")
+	}
+	keep := helpers.Tags()
+	var stale []string
+	for tag := range f.live {
+		if lbA.IsHelperTag(tag) && !slices.Contains(keep, tag) {
+			stale = append(stale, tag)
+		}
+	}
+	if len(stale) > 0 {
+		slices.Sort(stale)
+		f.removed = append(f.removed, stale)
+		for _, tag := range stale {
+			delete(f.live, tag)
+		}
+	}
+	for _, srv := range helpers.Servers {
+		f.live[srv.Tag] = fingerprint(srv)
+	}
+	return nil
+}
+
+// up brings a tunnel up holding servers, as a connect or restart installs the
+// options it captured.
+func (f *fakeHelperTunnel) up(list ...*servers.Server) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.live = make(map[string]string)
+	for _, srv := range list {
+		f.live[srv.Tag] = fingerprint(srv)
+	}
+}
+
+func (f *fakeHelperTunnel) holds(tag string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.live[tag]
+	return ok
+}
+
+func (f *fakeHelperTunnel) options(tag string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.live[tag]
+}
+
+func (f *fakeHelperTunnel) removals() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.removed)
+}
+
+func (f *fakeHelperTunnel) callLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
+}
+
+// A config that ends every pairing of a helpers-only device leaves an empty
+// managed list, which the tunnel's update skips; the backend takes the ended
+// helpers out of the tunnel itself, whether the config is fresh or cached.
+func TestConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	for _, fresh := range []bool{true, false} {
+		r := newPersonalProxiesBackend(t)
+		tun := &fakeHelperTunnel{}
+		tun.attach(r)
+		tun.up(directServers(h1, h2).Servers...)
+		require.NoError(t, r.updateServers(directServers(h1, h2), true))
+		require.NoError(t, r.updateServers(servers.ServerList{}, fresh))
+		assert.Equal(t, [][]string{{h1, h2}}, tun.removals(), "fresh=%v", fresh)
+		assert.Empty(t, r.AllServers())
+	}
+}
+
+// A failed removal is reported and the next config retries it, since the
+// tunnel is reconciled with the manager each time; a helper whose pairing
+// came back is kept.
+func TestEndedHelperRemovalIsRetried(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h1, h2).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h1, h2), true))
+
+	tun.fail = true
+	require.Error(t, r.updateServers(directServers("lantern-1"), true), "the failed removal is reported")
+	assert.True(t, tun.holds(h1))
+
+	// h2's pairing comes back before the retry: only h1 is removed.
+	tun.fail = false
+	require.NoError(t, r.updateServers(directServers("lantern-1", h2), true))
+	assert.Equal(t, [][]string{{h1}}, tun.removals())
+	assert.True(t, tun.holds(h2))
+
+	require.NoError(t, r.updateServers(directServers("lantern-1", h2), true))
+	assert.Len(t, tun.removals(), 1, "nothing more to remove")
+}
+
+// A selection cannot interleave with a config update that withdraws it: it
+// waits for the update, then finds the group gone and changes nothing.
+func TestSelectionWaitsForAWithdrawingConfigUpdate(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection("lantern-1")
+
+	inRemoval, release := make(chan struct{}), make(chan struct{})
+	tun := &fakeHelperTunnel{gate: func() {
+		close(inRemoval)
+		<-release
+	}}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	updated := make(chan error, 1)
+	go func() { updated <- r.updateServers(directServers("lantern-1"), true) }()
+	<-inRemoval
+
+	selected := make(chan error, 1)
+	go func() { selected <- r.SelectServer(vpn.PersonalProxiesTag) }()
+	select {
+	case err := <-selected:
+		t.Fatalf("selection ran during the withdrawal: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-updated)
+	require.ErrorIs(t, <-selected, vpn.ErrPersonalProxiesUnavailable)
+	sel, _, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.Equal(t, "lantern-1", sel.Tag, "the persisted choice is untouched")
+}
+
+// A connect or restart builds its tunnel from options it captured before
+// taking the VPN lock. A config update in between that ends a pairing finds
+// no tunnel (connect) or takes the helper out of the old one (restart); the
+// tunnel that then comes up still holds it, and is reconciled with the
+// manager once it reports Connected. A helper whose pairing remains is kept.
+func TestTunnelsBuiltFromStaleOptionsLoseEndedHelpers(t *testing.T) {
+	const ended, kept = "helper-0123456789ab", "helper-ba9876543210"
+	for _, tc := range []struct {
+		name      string
+		upAtStart bool
+	}{
+		{"connect during the update", false},
+		{"restart during the update", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newPersonalProxiesBackend(t)
+			r.startHelperReconcileListener()
+			tun := &fakeHelperTunnel{}
+			tun.attach(r)
+			if tc.upAtStart {
+				tun.up(directServers("lantern-1", ended, kept).Servers...)
+			}
+			require.NoError(t, r.updateServers(directServers("lantern-1", ended, kept), true))
+
+			snapshot := r.AllServers() // the options the connect or restart captures
+			lockTaken := make(chan struct{})
+			connected := make(chan struct{})
+			go func() {
+				defer close(connected)
+				<-lockTaken
+				tun.up(snapshot...)
+				events.Emit(vpn.StatusUpdateEvent{Status: vpn.Connected})
+			}()
+
+			// The pairing ends before the connect or restart installs its options.
+			require.NoError(t, r.updateServers(directServers("lantern-1", kept), true))
+			close(lockTaken)
+			<-connected
+
+			require.Eventually(t, func() bool { return !tun.holds(ended) }, 5*time.Second, 10*time.Millisecond,
+				"the new tunnel loses the ended helper")
+			assert.True(t, tun.holds(kept), "a helper whose pairing remains is kept")
+			assert.True(t, tun.holds("lantern-1"))
+		})
+	}
+}
+
+// A config that withdraws an individually selected helper falls back to
+// auto-select before the tunnel update removes the helper, so the manual
+// selector never picks an arbitrary member meanwhile.
+func TestWithdrawnSelectedHelperFallsBackBeforeTheUpdate(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection(h)
+	require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	before := len(tun.callLog())
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	calls := tun.callLog()[before:]
+	selectAt, updateAt := slices.Index(calls, "select:auto"), slices.Index(calls, "update")
+	require.NotEqual(t, -1, selectAt, "%v", calls)
+	require.NotEqual(t, -1, updateAt, "%v", calls)
+	assert.Less(t, selectAt, updateAt, "auto-select first: %v", calls)
+	assert.True(t, settings.GetBool(settings.AutoConnectKey))
+	assert.False(t, tun.holds(h))
+}
+
+// A config update that fails after the manager dropped a selected helper
+// (here, saving the removal) still falls back to auto-select, so the
+// persisted choice and the tunnel's agree.
+func TestFailedConfigUpdateStillClearsAWithdrawnSelection(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	serversDir := t.TempDir()
+	srvMgr, err := servers.NewManager(serversDir, log.NoOpLogger())
+	require.NoError(t, err)
+	r.srvManager = srvMgr
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection(vpn.PersonalProxiesTag)
+	require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	require.NoError(t, os.Chmod(serversDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(serversDir, 0o700) })
+	require.Error(t, r.updateServers(directServers("lantern-1"), true), "saving the removal fails")
+
+	assert.True(t, settings.GetBool(settings.AutoConnectKey), "the withdrawn selection falls back")
+	assert.Contains(t, tun.callLog(), "select:auto")
+	assert.False(t, tun.holds(h), "and the helper leaves the tunnel")
+}
+
+// A tunnel built from options captured before a config update reflects none
+// of that update's helper changes; on Connected it gains the new helper, the
+// rotated credentials and loses the ended helper.
+func TestConnectedTunnelGetsHelperChangesMadeWhileItCameUp(t *testing.T) {
+	const rotated, added, ended = "helper-0123456789ab", "helper-ba9876543210", "helper-00000000000e"
+	r := newPersonalProxiesBackend(t)
+	r.startHelperReconcileListener()
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{
+		helperWithPort("lantern-1", 1080), helperWithPort(rotated, 1080), helperWithPort(ended, 1080),
+	}}, true))
+	snapshot := r.AllServers() // the options a connect captures
+
+	// While the tunnel comes up: rotated's credentials change, added is
+	// paired and ended's pairing ends.
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{
+		helperWithPort("lantern-1", 1080), helperWithPort(rotated, 1081), helperWithPort(added, 1080),
+	}}, true))
+
+	tun.up(snapshot...)
+	events.Emit(vpn.StatusUpdateEvent{Status: vpn.Connected})
+	require.Eventually(t, func() bool { return tun.holds(added) && !tun.holds(ended) },
+		5*time.Second, 10*time.Millisecond, "the new tunnel gains the new helper and loses the ended one")
+	assert.Equal(t, "1081", tun.options(rotated), "with the rotated credentials")
+	assert.Equal(t, "1080", tun.options("lantern-1"))
+}
+
+// Removing servers whose removal fails to save has already taken them out of
+// the manager in memory. Removing the last helper that way still falls back
+// from a selection of the personal proxies group and takes the helper out of
+// the tunnel, as a successful removal does.
+func TestFailedRemovalStillWithdrawsTheHelper(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	serversDir := t.TempDir()
+	srvMgr, err := servers.NewManager(serversDir, log.NoOpLogger())
+	require.NoError(t, err)
+	r.srvManager = srvMgr
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection(vpn.PersonalProxiesTag)
+	require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	require.NoError(t, os.Chmod(serversDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(serversDir, 0o700) })
+	require.Error(t, r.RemoveServers([]string{h}), "saving the removal fails")
+
+	assert.True(t, settings.GetBool(settings.AutoConnectKey), "the withdrawn selection falls back")
+	calls := tun.callLog()
+	selectAt, removeAt := slices.Index(calls, "select:auto"), slices.Index(calls, "remove")
+	require.NotEqual(t, -1, selectAt, "%v", calls)
+	require.NotEqual(t, -1, removeAt, "%v", calls)
+	assert.Less(t, selectAt, removeAt, "auto-select first: %v", calls)
+	assert.False(t, tun.holds(h), "and the helper leaves the tunnel")
+	assert.True(t, tun.holds("lantern-1"))
+
+	require.NoError(t, os.Chmod(serversDir, 0o700))
+	before := len(tun.callLog())
+	require.NoError(t, r.RemoveServers([]string{"never-existed"}))
+	assert.Len(t, tun.callLog(), before, "removing an unknown tag touches nothing")
+}
+
+// Adds do not take the selection lock, so a server can be added between a
+// removal's start and the manager's delete. RemoveServers cleans up after
+// what the manager actually removed, so that server leaves the tunnel too.
+func TestRemovalCleansUpAServerAddedConcurrently(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1").Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+
+	late := helperWithPort("late", 1080)
+	late.IsLantern = false
+	r.beforeManagerRemove = func() {
+		require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{late}}, false))
+		require.NoError(t, tun.UpdateOutbounds(servers.ServerList{Servers: []*servers.Server{late}}))
+	}
+	require.NoError(t, r.RemoveServers([]string{"late"}))
+
+	_, held := r.srvManager.GetServerByTag("late")
+	assert.False(t, held)
+	assert.False(t, tun.holds("late"), "the removed server leaves the tunnel")
+	assert.True(t, tun.holds("lantern-1"))
 }

@@ -357,3 +357,13 @@ func TestLogOutputRedactsAddressesUnderRedactedOutboundFields(t *testing.T) {
 	assert.NotContains(t, out, "2001:db8::7")
 	assert.Contains(t, out, "198.51.100.9:443")
 }
+
+func TestRedactingWriterRedactsThePersonalProxiesTag(t *testing.T) {
+	var buf bytes.Buffer
+	w := newRedactingWriter(&buf)
+	in := []byte("outbound/mutableurltest[personal-proxies]: dial tcp 203.0.113.7:443\n")
+	n, err := w.Write(in)
+	require.NoError(t, err)
+	assert.Equal(t, len(in), n)
+	assert.Equal(t, "outbound/mutableurltest[helper]: dial tcp [REDACTED]\n", buf.String())
+}

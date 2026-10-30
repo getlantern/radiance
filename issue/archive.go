@@ -109,12 +109,12 @@ func sanitizeJSONAttachment(name string, data []byte) ([]byte, error) {
 func stubHelpers(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
-		if tag, ok := t["tag"].(string); ok && lbA.IsHelperTag(tag) {
+		if tag, ok := t["tag"].(string); ok && isHelperTag(tag) {
 			return helperStub(t)
 		}
 		out := make(map[string]any, len(t))
 		for k, e := range t {
-			if lbA.IsHelperTag(k) {
+			if isHelperTag(k) {
 				out["helper"] = helperStub(e)
 				continue
 			}
@@ -127,7 +127,7 @@ func stubHelpers(v any) any {
 		}
 		return t
 	case string:
-		if lbA.IsHelperTag(t) {
+		if isHelperTag(t) {
 			return "helper"
 		}
 	}
@@ -142,6 +142,12 @@ func helperStub(v any) map[string]any {
 		}
 	}
 	return stub
+}
+
+// isHelperTag reports whether tag names a helper outbound or the group over
+// them; both mark the device as having personal proxies.
+func isHelperTag(tag string) bool {
+	return lbA.IsHelperTag(tag) || tag == redact.PersonalProxiesTag
 }
 
 // prependMostRecentBackup prepends the newest rotated gzip backup, if present,

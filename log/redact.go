@@ -405,7 +405,10 @@ func (h connectionInfoHandler) WithGroup(name string) slog.Handler {
 	return connectionInfoHandler{Handler: h.Handler.WithGroup(name)}
 }
 
-var helperWord = []byte("helper")
+var (
+	helperWord          = []byte("helper")
+	personalProxiesWord = []byte(redact.PersonalProxiesTag)
+)
 
 // redactingWriter applies redact.HelperBytes on the way to every log sink: the
 // log file (which issue reports upload), stdout and the publisher that
@@ -424,7 +427,7 @@ func newRedactingWriter(w io.Writer) io.Writer {
 // Write redacts p and reports len(p) on success, as io.Writer requires, even
 // though fewer bytes may reach the sink.
 func (r *redactingWriter) Write(p []byte) (int, error) {
-	if !bytes.Contains(p, helperWord) {
+	if !bytes.Contains(p, helperWord) && !bytes.Contains(p, personalProxiesWord) {
 		return r.w.Write(p)
 	}
 	if _, err := r.w.Write(redact.HelperBytes(p)); err != nil {
