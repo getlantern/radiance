@@ -67,11 +67,11 @@ type LocalBackend struct {
 
 	srvManager *servers.Manager
 	vpnClient  *vpn.VPNClient
-	// removeLiveOutbounds, if set, replaces vpnClient.RemoveOutbounds, for
+	// removeLiveHelpers, if set, replaces vpnClient.RemoveHelpersExcept, for
 	// tests that have no tunnel.
-	removeLiveOutbounds func(tags []string) error
-	splitTunnelMgr      *vpn.SplitTunnel
-	sessionHistory      *vpn.SessionHistory
+	removeLiveHelpers func(keep []string) error
+	splitTunnelMgr    *vpn.SplitTunnel
+	sessionHistory    *vpn.SessionHistory
 
 	peerClient   peerController
 	peerToggleMu sync.Mutex
@@ -99,10 +99,6 @@ type LocalBackend struct {
 	// changes that can withdraw it (config updates and removals), so the
 	// tunnel's choice and the persisted one cannot disagree.
 	selectionMu sync.Mutex
-	// pendingWithdrawals are helper tags a config ended that may still be live
-	// in the tunnel; each config update retries removing them until it
-	// succeeds. Guarded by selectionMu.
-	pendingWithdrawals map[string]struct{}
 
 	deviceID string
 
@@ -561,7 +557,7 @@ func (r *LocalBackend) Close() {
 }
 
 func (r *LocalBackend) startVPNStatusListeners() {
-	r.startWithdrawalListener()
+	r.startHelperReconcileListener()
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		r.updateConnMetrics(evt.Status)
 	})
@@ -1072,9 +1068,9 @@ const maxRetainedLanternServers = 60
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err error) {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
-	// Whatever else fails, retry taking ended pairings out of the tunnel.
+	// Whatever else fails, take ended pairings out of the tunnel.
 	defer func() {
-		err = errors.Join(err, r.flushWithdrawalsLocked())
+		err = errors.Join(err, r.reconcileLiveHelpersLocked())
 	}()
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
@@ -1124,16 +1120,6 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 			}
 		}
 		tagsToEvict := lanternServersToEvict(existing, incomingSlots, maxRetainedLanternServers, selectedTag, incomingHelpers)
-		// Recorded before the manager changes, so a failure below cannot lose
-		// track of a helper still live in the tunnel.
-		for _, tag := range tagsToEvict {
-			if lbA.IsHelperTag(tag) {
-				if r.pendingWithdrawals == nil {
-					r.pendingWithdrawals = make(map[string]struct{})
-				}
-				r.pendingWithdrawals[tag] = struct{}{}
-			}
-		}
 
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
@@ -1175,56 +1161,44 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	return nil
 }
 
-// startWithdrawalListener removes pending withdrawn helpers from each tunnel
-// that comes up. A connect builds its tunnel from options captured before it
-// waits for offline URL tests to stop, with no tunnel to update meanwhile, so
-// a config update in that wait cannot take ended helpers out of it; this does
-// once it is up.
-func (r *LocalBackend) startWithdrawalListener() {
+// startHelperReconcileListener reconciles each tunnel that comes up with the
+// helpers the server manager holds. A connect or restart builds its tunnel
+// from options captured before it took the VPN lock, so a config update that
+// ended a pairing meanwhile may have found no tunnel, or the previous one, to
+// take the helper out of.
+func (r *LocalBackend) startHelperReconcileListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		if evt.Status != vpn.Connected {
 			return
 		}
 		r.selectionMu.Lock()
 		defer r.selectionMu.Unlock()
-		if err := r.flushWithdrawalsLocked(); err != nil {
-			slog.Warn("Failed to remove withdrawn helpers from the new tunnel", "error", err)
+		if err := r.reconcileLiveHelpersLocked(); err != nil {
+			slog.Warn("Failed to remove ended helpers from the new tunnel", "error", err)
 		}
 	})
 }
 
-// flushWithdrawalsLocked removes the pending withdrawn helpers from the
-// tunnel. updateOutbounds alone would keep them dialable: it skips an empty
+// reconcileLiveHelpersLocked removes from the tunnel every helper the server
+// manager no longer holds, which is the record of the pairings that remain.
+// updateOutbounds alone can keep an ended helper dialable: it skips an empty
 // list and keeps old outbounds when every new one fails to load. Removing the
-// last also withdraws the personal proxies group. A tag the manager holds
-// again (the pairing came back) is dropped from the set, not removed. Tags
-// stay pending until a tunnel removes them: while removal fails, and while no
-// tunnel is up, since a connect in progress may still install them (see
-// startWithdrawalListener). Removing a tag a tunnel lacks is a no-op. The
-// caller must hold r.selectionMu.
-func (r *LocalBackend) flushWithdrawalsLocked() error {
-	var tags []string
-	for tag := range r.pendingWithdrawals {
-		if _, back := r.srvManager.GetServerByTag(tag); back {
-			delete(r.pendingWithdrawals, tag)
-			continue
+// last also withdraws the personal proxies group. With no tunnel up there is
+// nothing to do; the next one is reconciled when it connects. The caller
+// must hold r.selectionMu.
+func (r *LocalBackend) reconcileLiveHelpersLocked() error {
+	var keep []string
+	for _, srv := range r.srvManager.AllServers() {
+		if lbA.IsHelperTag(srv.Tag) {
+			keep = append(keep, srv.Tag)
 		}
-		tags = append(tags, tag)
 	}
-	if len(tags) == 0 {
-		return nil
+	remove := r.vpnClient.RemoveHelpersExcept
+	if r.removeLiveHelpers != nil {
+		remove = r.removeLiveHelpers
 	}
-	remove := r.vpnClient.RemoveOutbounds
-	if r.removeLiveOutbounds != nil {
-		remove = r.removeLiveOutbounds
-	}
-	if err := remove(tags); errors.Is(err, vpn.ErrTunnelNotConnected) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("remove withdrawn helpers: %w", err)
-	}
-	for _, tag := range tags {
-		delete(r.pendingWithdrawals, tag)
+	if err := remove(keep); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("remove ended helpers: %w", err)
 	}
 	return nil
 }

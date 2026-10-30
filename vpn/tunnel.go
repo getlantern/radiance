@@ -979,6 +979,38 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 	return errors.Join(errs...)
 }
 
+// removeHelpersExcept removes the helper outbounds in the selection groups
+// that keep does not name, under one hold of t.outboundMu, so what it finds
+// is what it removes.
+func (t *tunnel) removeHelpersExcept(keep []string) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	if t.mutGrpMgr == nil {
+		return nil
+	}
+	var stale []string
+	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
+		group, ok := t.mutGrpMgr.OutboundGroup(groupTag)
+		if !ok {
+			continue
+		}
+		for _, tag := range helperTags(group.All()) {
+			if !slices.Contains(keep, tag) && !slices.Contains(stale, tag) {
+				stale = append(stale, tag)
+			}
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	slog.Debug("Removing helpers that no longer have a pairing", "count", len(stale))
+	err := t.removeOutboundsLocked(stale)
+	if errors.Is(err, errLibboxClosed) {
+		return err
+	}
+	return errors.Join(err, t.syncPersonalProxiesLocked())
+}
+
 func (t *tunnel) removeOutbounds(tags []string) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()

@@ -520,3 +520,30 @@ func TestWithdrawingTheSelectedGroupSwitchesToAuto(t *testing.T) {
 		})
 	}
 }
+
+// RemoveHelpersExcept reconciles a running tunnel with the helpers that
+// remain: it removes the others, keeps the named ones and non-helpers, and
+// withdraws the group (handing a selection of it to auto) with the last.
+func TestRemoveHelpersExceptReconcilesTheTunnel(t *testing.T) {
+	tun := startPersonalProxiesTestTunnel(t, testHelper1, testHelper2)
+	c := &VPNClient{tunnel: tun}
+	require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
+
+	require.NoError(t, c.RemoveHelpersExcept([]string{testHelper2}))
+	assert.Equal(t, []string{testHelper2}, personalProxiesMembers(tun))
+	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
+		members := selectorMembers(t, tun, groupTag)
+		assert.NotContains(t, members, testHelper1, groupTag)
+		assert.Contains(t, members, testHelper2, groupTag)
+		assert.Contains(t, members, "lantern-1", groupTag)
+	}
+	assert.Equal(t, ManualSelectTag, tun.clashServer.Mode(), "the group is still selected")
+
+	require.NoError(t, c.RemoveHelpersExcept(nil))
+	assert.Nil(t, tun.personalProxiesGroup())
+	assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), testHelper2)
+	assert.Equal(t, AutoSelectTag, tun.clashServer.Mode())
+
+	require.NoError(t, c.RemoveHelpersExcept(nil), "nothing left to remove")
+	require.ErrorIs(t, (&VPNClient{}).RemoveHelpersExcept(nil), ErrTunnelNotConnected)
+}

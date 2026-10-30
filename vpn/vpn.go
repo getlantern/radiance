@@ -441,6 +441,19 @@ func (c *VPNClient) UpdateNonSelectableOutbounds(list servers.ServerList) error 
 	return c.tunnel.updateNonSelectableOutbounds(list)
 }
 
+// RemoveHelpersExcept removes from the running tunnel every helper outbound
+// (lbA.IsHelperTag) not in keep, withdrawing the personal proxies group with
+// the last. A tunnel built from options captured before a pairing ended may
+// still hold its helpers; this reconciles it with the helpers that remain.
+func (c *VPNClient) RemoveHelpersExcept(keep []string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.removeHelpersExcept(keep)
+}
+
 func (c *VPNClient) RemoveOutbounds(tags []string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
