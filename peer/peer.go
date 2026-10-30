@@ -1921,7 +1921,7 @@ func (c *Client) endLive() {
 
 // trackPairing records a connection event in the relay snapshot and the
 // LiveTracker and returns its pairing, "" for the pool or not yet known.
-// Events from a session other than liveGen are not live-tracked.
+// Events from an ended session are not live-tracked.
 func (c *Client) trackPairing(liveGen, relayGen uint64, state int, source string, shortID [8]byte, bytes *peerconn.Counter) string {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
