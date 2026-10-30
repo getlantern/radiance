@@ -274,12 +274,12 @@ type Client struct {
 	// ended adds nothing that the end would have had to close.
 	liveMu  sync.Mutex
 	liveGen uint64
-	// unresolved holds the open connections of this session whose short
-	// ID named no pairing when they were accepted, keyed by byte counter,
-	// so a grouped set that arrives later can still attribute them. It is
-	// bounded by the open connections, emptied on close and at the
-	// session's end. Guarded by liveMu, which is taken after c.mu.
-	unresolved map[*peerconn.Counter]unresolvedConn
+	// conns holds this session's open connections by byte counter, so a
+	// close reports the pairing its accept was attributed to, and a grouped
+	// set that arrives later can attribute one accepted without a pairing.
+	// Emptied on close and at the session's end. Guarded by liveMu, which
+	// is taken after c.mu.
+	conns map[*peerconn.Counter]liveConn
 	// beforeTrackLive, if set, runs in the listener just before its
 	// LiveTracker update, so tests can interleave it with Stop.
 	beforeTrackLive func()
@@ -1851,9 +1851,9 @@ func groupPairingShortIDs(flat []string, groups []PairingShortIDSet, base []stri
 	return out, true
 }
 
-// unresolvedConn is an open connection whose short ID named no pairing yet.
-type unresolvedConn struct {
+type liveConn struct {
 	shortID [8]byte
+	pairing string
 }
 
 // setPairingByShortID replaces the short ID to pairing map; nil clears it.
@@ -1865,16 +1865,19 @@ func (c *Client) setPairingByShortID(m map[[8]byte]string) {
 		return
 	}
 	c.pairingByShortID.Store(&m)
-	// After the store, so a connection the listener records as unresolved
-	// either sees the new map itself or is here to be resolved.
+	// After the store, so a connection the listener records without a
+	// pairing either sees the new map itself or is here to be resolved.
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
-	for bytes, u := range c.unresolved {
-		pairing := m[u.shortID]
+	for bytes, lc := range c.conns {
+		if lc.pairing != "" {
+			continue
+		}
+		pairing := m[lc.shortID]
 		if pairing == "" {
 			continue
 		}
-		delete(c.unresolved, bytes)
+		c.conns[bytes] = liveConn{shortID: lc.shortID, pairing: pairing}
 		c.relay.setPairing(bytes, pairing)
 		c.live().Open(liveOwner, bytes, pairing, func() uint64 { return bytes.Down() + bytes.Up() })
 	}
@@ -1905,7 +1908,7 @@ func (c *Client) beginLive() uint64 {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
 	c.liveGen++
-	clear(c.unresolved)
+	clear(c.conns)
 	return c.liveGen
 }
 
@@ -1915,7 +1918,7 @@ func (c *Client) endLive() {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
 	c.liveGen++
-	clear(c.unresolved)
+	clear(c.conns)
 	c.live().CloseOwner(liveOwner)
 }
 
@@ -1926,20 +1929,25 @@ func (c *Client) trackPairing(liveGen, relayGen uint64, state int, source string
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
 	pairing := c.pairingFor(shortID)
+	lc, open := c.conns[bytes]
+	if state < 0 && open {
+		pairing = lc.pairing
+	}
 	c.relay.recordPairingFor(relayGen, state, source, pairing, bytes)
 	if bytes == nil || liveGen != c.liveGen {
 		return pairing
 	}
 	switch {
-	case state > 0 && pairing != "":
-		c.live().Open(liveOwner, bytes, pairing, func() uint64 { return bytes.Down() + bytes.Up() })
-	case state > 0 && shortID != ([8]byte{}):
-		if c.unresolved == nil {
-			c.unresolved = make(map[*peerconn.Counter]unresolvedConn)
+	case state > 0:
+		if c.conns == nil {
+			c.conns = make(map[*peerconn.Counter]liveConn)
 		}
-		c.unresolved[bytes] = unresolvedConn{shortID: shortID}
+		c.conns[bytes] = liveConn{shortID: shortID, pairing: pairing}
+		if pairing != "" {
+			c.live().Open(liveOwner, bytes, pairing, func() uint64 { return bytes.Down() + bytes.Up() })
+		}
 	case state < 0:
-		delete(c.unresolved, bytes)
+		delete(c.conns, bytes)
 		c.live().Close(bytes)
 	}
 	return pairing

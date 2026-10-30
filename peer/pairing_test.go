@@ -350,7 +350,7 @@ func TestClient_StreamAcceptedBeforeGroupsIsAttributedLater(t *testing.T) {
 	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.1:1000", Bytes: friend, ShortID: sid(t, sidA1)})
 	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.2:1000", Bytes: pool, ShortID: sid(t, testBaseShortID)})
 	c.liveMu.Lock()
-	assert.Empty(t, c.unresolved, "closed streams are forgotten")
+	assert.Empty(t, c.conns, "closed streams are forgotten")
 	c.liveMu.Unlock()
 }
 
@@ -361,11 +361,11 @@ func TestClient_StopForgetsUnresolvedStreams(t *testing.T) {
 	c := pairingClient(t, func(cfg *Config) { cfg.Live = live })
 	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidA1)})
 	c.liveMu.Lock()
-	require.Len(t, c.unresolved, 1)
+	require.Len(t, c.conns, 1)
 	c.liveMu.Unlock()
 	require.NoError(t, c.Stop(context.Background()))
 	c.liveMu.Lock()
-	assert.Empty(t, c.unresolved)
+	assert.Empty(t, c.conns)
 	c.liveMu.Unlock()
 	c.setPairingByShortID(map[[8]byte]string{sid(t, sidA1): pairingA})
 	assert.Empty(t, live.Snapshot().Pairings)
@@ -389,4 +389,43 @@ func TestClient_LateAttributionKeepsTheLatestStreamsLabel(t *testing.T) {
 			assert.Equal(t, pairingB, pb.Pairing)
 		}
 	}
+}
+
+// A close reports the pairing its accept, or a later grouped set, attributed
+// the stream to, even after a newer set dropped its short ID.
+func TestClient_CloseKeepsTheStreamsPairing(t *testing.T) {
+	c := pairingClient(t, func(cfg *Config) { cfg.Live = helper.NewLiveTracker(nil) })
+	c.offerPairingShortIDs([]string{sidA1, sidA2, sidB1}, groupsAB(), true, 100)
+
+	got := make(chan ConnectionEvent, 16)
+	sub := events.Subscribe(func(evt ConnectionEvent) { got <- evt })
+	defer sub.Unsubscribe()
+	closeOf := func(src string) string {
+		t.Helper()
+		for {
+			select {
+			case evt := <-got:
+				if evt.State < 0 && evt.Source == src {
+					return evt.Pairing
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no close event")
+				return ""
+			}
+		}
+	}
+
+	accepted := counter(0, 0)
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: accepted, ShortID: sid(t, sidA1)})
+	// sidA1 leaves the newest set, as it does when the epoch rotates.
+	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 200)
+	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.1:1000", Bytes: accepted, ShortID: sid(t, sidA1)})
+	assert.Equal(t, pairingA, closeOf("198.51.100.1:1000"), "attributed at accept")
+
+	late := counter(0, 0)
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.2:1000", Destination: "example.com:443", Bytes: late, ShortID: sid(t, sidA2)})
+	c.offerPairingShortIDs([]string{sidA2}, []PairingShortIDSet{{PairingID: pairingA, ShortIDs: []string{sidA2}}}, true, 300)
+	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 400)
+	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.2:1000", Bytes: late, ShortID: sid(t, sidA2)})
+	assert.Equal(t, pairingA, closeOf("198.51.100.2:1000"), "attributed late")
 }
