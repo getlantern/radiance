@@ -22,11 +22,18 @@ const Redacted = "<redacted>"
 // exported only as "helper", like a helper tag.
 const PersonalProxiesTag = "personal-proxies"
 
-// Tag returns s with every helper tag and PersonalProxiesTag replaced by
-// "helper". Unlike Helper it leaves addresses alone, for values that are only
-// outbound tags or rules, such as metric attributes.
+// PersonalProxyTag is the tag of radiance's url-test group over one paired
+// friend's outbounds (vpn.PersonalProxyTag). It is exported only as "helper",
+// like PersonalProxiesTag.
+const PersonalProxyTag = "personal-proxy"
+
+var groupTags = strings.NewReplacer(PersonalProxiesTag, "helper", PersonalProxyTag, "helper")
+
+// Tag returns s with every helper tag, PersonalProxiesTag and PersonalProxyTag
+// replaced by "helper". Unlike Helper it leaves addresses alone, for values
+// that are only outbound tags or rules, such as metric attributes.
 func Tag(s string) string {
-	return strings.ReplaceAll(lbA.RedactHelperTags(s), PersonalProxiesTag, "helper")
+	return groupTags.Replace(lbA.RedactHelperTags(s))
 }
 
 var (
@@ -60,10 +67,10 @@ func Helper(s string) string {
 }
 
 // NamesHelper reports whether s may name a helper outbound: by its tag, by
-// the group over them (PersonalProxiesTag), or by the "helper" a redaction
-// left in its place.
+// a group over them (PersonalProxiesTag, PersonalProxyTag), or by the
+// "helper" a redaction left in its place.
 func NamesHelper(s string) bool {
-	return strings.Contains(s, PersonalProxiesTag) ||
+	return strings.Contains(s, PersonalProxiesTag) || strings.Contains(s, PersonalProxyTag) ||
 		(strings.Contains(s, "helper") && helperNamed.MatchString(s))
 }
 
@@ -77,7 +84,8 @@ func Addresses(s string) string {
 // HelperBytes is Helper for a byte slice. It returns b itself when there is
 // nothing to redact.
 func HelperBytes(b []byte) []byte {
-	if !bytes.Contains(b, []byte("helper")) && !bytes.Contains(b, []byte(PersonalProxiesTag)) {
+	if !bytes.Contains(b, []byte("helper")) && !bytes.Contains(b, []byte(PersonalProxiesTag)) &&
+		!bytes.Contains(b, []byte(PersonalProxyTag)) {
 		return b
 	}
 	return []byte(Helper(string(b)))

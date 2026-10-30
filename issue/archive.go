@@ -158,10 +158,11 @@ func helperStub(v any) map[string]any {
 	return stub
 }
 
-// isHelperTag reports whether tag names a helper outbound or the group over
-// them; both mark the device as having personal proxies.
+// isHelperTag reports whether tag names a helper outbound or a group over
+// them, or selects one; all mark the device as having personal proxies.
 func isHelperTag(tag string) bool {
-	return lbA.IsHelperTag(tag) || tag == redact.PersonalProxiesTag
+	return lbA.IsHelperTag(tag) || tag == redact.PersonalProxiesTag || tag == redact.PersonalProxyTag ||
+		strings.HasPrefix(tag, redact.PersonalProxyTag+":")
 }
 
 // prependMostRecentBackup prepends the newest rotated gzip backup, if present,
