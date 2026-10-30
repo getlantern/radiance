@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"os"
+	"runtime"
 	"testing"
 
 	"github.com/sagernet/sing-box/option"
@@ -86,4 +88,25 @@ func outboundTags(outs []option.Outbound) []string {
 		tags = append(tags, o.Tag)
 	}
 	return tags
+}
+
+// RemoveServers deletes in memory before saving, so a failed save still
+// reports the servers it removed, for callers to clean up after them.
+func TestRemoveServersReportsRemovalsWhenTheSaveFails(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
+	dir := t.TempDir()
+	mgr, err := NewManager(dir, log.NoOpLogger())
+	require.NoError(t, err)
+	require.NoError(t, mgr.AddServers(ServerList{Servers: []*Server{socksServer("a", false), socksServer("b", false)}}, false))
+
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	removed, err := mgr.RemoveServers([]string{"a", "missing"})
+	require.Error(t, err)
+	require.Len(t, removed, 1)
+	assert.Equal(t, "a", removed[0].Tag)
+	_, held := mgr.GetServerByTag("a")
+	assert.False(t, held)
 }

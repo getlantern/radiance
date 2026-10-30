@@ -435,7 +435,9 @@ func (m *Manager) RemoveServer(tag string) error {
 	return err
 }
 
-// RemoveServers removes multiple server configs by their tags and returns the removed servers.
+// RemoveServers removes multiple server configs by their tags and returns the
+// removed servers. They are removed in memory before the save, so a failed save
+// returns them with its error: they are gone until the next successful save.
 func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
 	// Perform the in-memory mutation under the write lock, then release it
 	// before saving to disk (saveServers acquires its own locks). Scoped in
@@ -454,7 +456,7 @@ func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
 	}()
 	// saveServers acquires its own locks; don't hold the write lock across it.
 	if err := m.saveServers(); err != nil {
-		return nil, fmt.Errorf("failed to save servers: %w", err)
+		return removed, fmt.Errorf("failed to save servers: %w", err)
 	}
 	return removed, nil
 }

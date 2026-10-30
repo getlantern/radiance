@@ -2115,3 +2115,27 @@ func TestFailedRemovalStillWithdrawsTheHelper(t *testing.T) {
 	require.NoError(t, r.RemoveServers([]string{"never-existed"}))
 	assert.Len(t, tun.callLog(), before, "removing an unknown tag touches nothing")
 }
+
+// Adds do not take the selection lock, so a server can be added between a
+// removal's start and the manager's delete. RemoveServers cleans up after
+// what the manager actually removed, so that server leaves the tunnel too.
+func TestRemovalCleansUpAServerAddedConcurrently(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1").Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+
+	late := helperWithPort("late", 1080)
+	late.IsLantern = false
+	r.beforeManagerRemove = func() {
+		require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{late}}, false))
+		require.NoError(t, tun.UpdateOutbounds(servers.ServerList{Servers: []*servers.Server{late}}))
+	}
+	require.NoError(t, r.RemoveServers([]string{"late"}))
+
+	_, held := r.srvManager.GetServerByTag("late")
+	assert.False(t, held)
+	assert.False(t, tun.holds("late"), "the removed server leaves the tunnel")
+	assert.True(t, tun.holds("lantern-1"))
+}

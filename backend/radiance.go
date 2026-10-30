@@ -69,9 +69,12 @@ type LocalBackend struct {
 	vpnClient  *vpn.VPNClient
 	// live, if set, replaces vpnClient for the tunnel changes config updates
 	// and selection fallbacks make, for tests that have no tunnel.
-	live           liveTunnel
-	splitTunnelMgr *vpn.SplitTunnel
-	sessionHistory *vpn.SessionHistory
+	live liveTunnel
+	// beforeManagerRemove, if set, runs in RemoveServers just before the
+	// manager removes the servers, for tests of a concurrent add.
+	beforeManagerRemove func()
+	splitTunnelMgr      *vpn.SplitTunnel
+	sessionHistory      *vpn.SessionHistory
 
 	peerClient   peerController
 	peerToggleMu sync.Mutex
@@ -990,24 +993,19 @@ func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
 func (r *LocalBackend) RemoveServers(tags []string) error {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
-	var held []string
-	for _, tag := range tags {
-		if _, found := r.srvManager.GetServerByTag(tag); found {
-			held = append(held, tag)
-		}
+	if r.beforeManagerRemove != nil {
+		r.beforeManagerRemove()
 	}
-	_, err := r.srvManager.RemoveServers(tags)
+	// The manager reports what it removed even when the save fails, since the
+	// servers left it in memory first: those are gone either way, so the
+	// selection falls back first, then the tunnel follows.
+	removed, err := r.srvManager.RemoveServers(tags)
 	if err != nil {
 		err = fmt.Errorf("failed to remove servers from ServerManager: %w", err)
 	}
-	// A failed save comes after the servers left the manager in memory, so
-	// whatever it no longer holds is gone either way: the selection falls
-	// back first, then the tunnel follows.
-	var gone []string
-	for _, tag := range held {
-		if _, found := r.srvManager.GetServerByTag(tag); !found {
-			gone = append(gone, tag)
-		}
+	gone := make([]string, 0, len(removed))
+	for _, srv := range removed {
+		gone = append(gone, srv.Tag)
 	}
 	if len(gone) == 0 {
 		return err
