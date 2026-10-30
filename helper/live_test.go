@@ -23,9 +23,77 @@ func liveOf(s LiveSnapshot, id string) *LivePairing {
 	return nil
 }
 
+// newManualTracker is a tracker without its sampler goroutine, so a test's
+// fake clock is only read from the test's goroutine.
+func newManualTracker(now func() time.Time) *LiveTracker {
+	lt := NewLiveTracker(now)
+	lt.interval = 0
+	return lt
+}
+
+func (lt *LiveTracker) sampleNow() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	lt.sampleAllLocked(lt.now())
+}
+
+// Traffic that moved minutes ago, with nobody reading the tracker since, is
+// not "connected now": the sampler stamped it when it moved.
+func TestLive_SampledTrafficKeepsItsTime(t *testing.T) {
+	clk := newLiveClock()
+	lt := newManualTracker(clk.now)
+	var n atomic.Uint64
+	lt.Open("peer", "c1", "pA", n.Load)
+	n.Add(LiveThreshold)
+	clk.advance(time.Second)
+	lt.sampleNow() // what the sampler goroutine does each second
+	clk.advance(5 * time.Minute)
+	p := liveOf(lt.Snapshot(), "pA")
+	require.NotNil(t, p, "the connection is still open")
+	assert.False(t, p.Connected, "the burst was five minutes ago")
+}
+
+// A pairing first evaluated long after its traffic left the window went quiet
+// when it left, so its linger is long over too.
+func TestLive_QuietFromWhenTrafficLeftTheWindow(t *testing.T) {
+	clk := newLiveClock()
+	lt := newManualTracker(clk.now)
+	lt.Add("pA", LiveThreshold)
+	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected)
+	clk.advance(5 * time.Minute)
+	assert.Nil(t, liveOf(lt.Snapshot(), "pA"), "no linger five minutes on")
+}
+
+// The sampler runs by itself while a connection is open, with no Snapshot
+// calls, and stops once none is.
+func TestLive_SamplerRunsOnlyWhileConnectionsAreOpen(t *testing.T) {
+	lt := NewLiveTracker(nil)
+	lt.interval = 5 * time.Millisecond
+	var n atomic.Uint64
+	lt.Open("peer", "c1", "pA", n.Load)
+	n.Add(100)
+	require.Eventually(t, func() bool {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		p := lt.pairings["pA"]
+		return p != nil && len(p.samples) > 0
+	}, 2*time.Second, time.Millisecond, "bytes sampled without a Snapshot")
+	lt.Close("c1")
+	require.Eventually(t, func() bool {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		return !lt.sampling
+	}, 2*time.Second, time.Millisecond, "the sampler exits with no connection open")
+	lt.Open("peer", "c2", "pA", n.Load)
+	lt.mu.Lock()
+	assert.True(t, lt.sampling, "and restarts with the next")
+	lt.mu.Unlock()
+	lt.Close("c2")
+}
+
 func TestLive_BelowThresholdIsNotConnected(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	var n atomic.Uint64
 	lt.Open("peer", "c1", "pA", n.Load)
 	// A url-test probe's worth of bytes every few seconds stays under 32 KiB
@@ -41,7 +109,7 @@ func TestLive_BelowThresholdIsNotConnected(t *testing.T) {
 
 func TestLive_ThresholdWindowAndLinger(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	var n atomic.Uint64
 	lt.Open("peer", "c1", "pA", n.Load)
 
@@ -62,7 +130,7 @@ func TestLive_ThresholdWindowAndLinger(t *testing.T) {
 	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected)
 
 	// Out of the window: quiet, but lingers.
-	clk.advance(5 * time.Second)
+	clk.advance(3 * time.Second)
 	p = liveOf(lt.Snapshot(), "pA")
 	assert.True(t, p.Connected, "lingers")
 	assert.Equal(t, start.UnixMilli(), p.Since)
@@ -76,7 +144,7 @@ func TestLive_ThresholdWindowAndLinger(t *testing.T) {
 
 func TestLive_LingerAbsorbsAShortDip(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	lt.Add("pA", LiveThreshold)
 	since := clk.t.UnixMilli()
 	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected)
@@ -92,7 +160,7 @@ func TestLive_LingerAbsorbsAShortDip(t *testing.T) {
 
 func TestLive_MultiplePairingsAreIndependent(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	var a, b atomic.Uint64
 	lt.Open("peer", "a", "pA", a.Load)
 	lt.Open("unbounded", "b", "pB", b.Load)
@@ -110,7 +178,7 @@ func TestLive_MultiplePairingsAreIndependent(t *testing.T) {
 
 func TestLive_BytesFromSeveralConnectionsAndAddSum(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	var a, b atomic.Uint64
 	lt.Open("peer", "a", "pA", a.Load)
 	lt.Open("peer", "b", "pA", b.Load)
@@ -125,7 +193,7 @@ func TestLive_BytesFromSeveralConnectionsAndAddSum(t *testing.T) {
 
 func TestLive_CloseCountsFinalBytesAndPrunes(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	var n atomic.Uint64
 	lt.Open("peer", "c1", "pA", n.Load)
 	n.Add(LiveThreshold)
@@ -139,7 +207,7 @@ func TestLive_CloseCountsFinalBytesAndPrunes(t *testing.T) {
 
 func TestLive_CloseOwnerOnlyClosesThatOwner(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	lt.Open("peer", "a", "pA", nil)
 	lt.Open("unbounded", 1, "pB", nil)
 	lt.CloseOwner("peer")
@@ -152,7 +220,7 @@ func TestLive_CloseOwnerOnlyClosesThatOwner(t *testing.T) {
 
 func TestLive_IgnoresPoolAndReopen(t *testing.T) {
 	clk := newLiveClock()
-	lt := NewLiveTracker(clk.now)
+	lt := newManualTracker(clk.now)
 	lt.Open("peer", "a", "", nil)
 	lt.Add("", LiveThreshold)
 	assert.Empty(t, lt.Snapshot().Pairings, "pool connections are not tracked")

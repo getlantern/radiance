@@ -16,6 +16,10 @@ const (
 	LiveThreshold = 32 << 10
 	LiveWindow    = 60 * time.Second
 	LiveLinger    = 15 * time.Second
+	// LiveSampleInterval is how often open connections' byte totals are
+	// read while any is open, so traffic is stamped with when it moved
+	// rather than when someone next asked.
+	LiveSampleInterval = time.Second
 )
 
 // DefaultLive is the process's LiveTracker, fed by direct sharing (peer) and
@@ -50,8 +54,14 @@ type LiveTracker struct {
 	threshold uint64
 	window    time.Duration
 	linger    time.Duration
-	pairings  map[string]*livePairing
-	flows     map[any]*liveFlow
+	// interval is how often the sampler runs; zero disables it, for tests
+	// that drive sampling by hand.
+	interval time.Duration
+	// sampling says the sampler goroutine is running. It runs only while a
+	// connection is open, and exits once none is.
+	sampling bool
+	pairings map[string]*livePairing
+	flows    map[any]*liveFlow
 }
 
 type liveFlow struct {
@@ -88,6 +98,7 @@ func NewLiveTracker(now func() time.Time) *LiveTracker {
 		threshold: LiveThreshold,
 		window:    LiveWindow,
 		linger:    LiveLinger,
+		interval:  LiveSampleInterval,
 		pairings:  make(map[string]*livePairing),
 		flows:     make(map[any]*liveFlow),
 	}
@@ -115,6 +126,38 @@ func (t *LiveTracker) Open(owner string, key any, pairing string, read func() ui
 	p := t.pairingLocked(pairing, now)
 	p.flows++
 	t.evaluateLocked(p, now)
+	if !t.sampling && t.interval > 0 {
+		t.sampling = true
+		go t.sampleLoop(t.interval)
+	}
+}
+
+// sampleLoop samples every open connection each interval, until none is
+// open.
+func (t *LiveTracker) sampleLoop(interval time.Duration) {
+	tk := time.NewTicker(interval)
+	defer tk.Stop()
+	for range tk.C {
+		t.mu.Lock()
+		if len(t.flows) == 0 {
+			t.sampling = false
+			t.mu.Unlock()
+			return
+		}
+		t.sampleAllLocked(t.now())
+		t.mu.Unlock()
+	}
+}
+
+// sampleAllLocked reads every open connection's bytes and re-evaluates
+// every pairing at now.
+func (t *LiveTracker) sampleAllLocked(now time.Time) {
+	for _, f := range t.flows {
+		t.sampleLocked(f, now)
+	}
+	for _, p := range t.pairings {
+		t.evaluateLocked(p, now)
+	}
 }
 
 // Close stops following the connection key, counting its last bytes.
@@ -168,12 +211,8 @@ func (t *LiveTracker) Snapshot() LiveSnapshot {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
-	for _, f := range t.flows {
-		t.sampleLocked(f, now)
-	}
+	t.sampleAllLocked(t.now())
 	for id, p := range t.pairings {
-		t.evaluateLocked(p, now)
 		if !p.connected && p.flows == 0 && len(p.samples) == 0 {
 			delete(t.pairings, id)
 			continue
@@ -238,6 +277,12 @@ func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {
 	for drop < len(p.samples) && !p.samples[drop].at.After(cutoff) {
 		drop++
 	}
+	// When the window last lost traffic: if that took the pairing below
+	// the threshold, it went quiet then, not at this later evaluation.
+	var droppedAt time.Time
+	if drop > 0 {
+		droppedAt = p.samples[drop-1].at.Add(t.window)
+	}
 	if drop > 0 {
 		p.samples = append(p.samples[:0], p.samples[drop:]...)
 	}
@@ -255,6 +300,9 @@ func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {
 	case p.connected:
 		if p.quietSince.IsZero() {
 			p.quietSince = now
+			if !droppedAt.IsZero() && droppedAt.Before(now) {
+				p.quietSince = droppedAt
+			}
 		}
 		if now.Sub(p.quietSince) >= t.linger {
 			p.connected = false
