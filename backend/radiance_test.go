@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -1972,6 +1973,9 @@ func TestWithdrawnSelectedHelperFallsBackBeforeTheUpdate(t *testing.T) {
 // (here, saving the removal) still falls back to auto-select, so the
 // persisted choice and the tunnel's agree.
 func TestFailedConfigUpdateStillClearsAWithdrawnSelection(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
 	const h = "helper-0123456789ab"
 	r := newPersonalProxiesBackend(t)
 	serversDir := t.TempDir()
