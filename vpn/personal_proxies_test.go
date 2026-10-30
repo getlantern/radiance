@@ -521,29 +521,45 @@ func TestWithdrawingTheSelectedGroupSwitchesToAuto(t *testing.T) {
 	}
 }
 
-// RemoveHelpersExcept reconciles a running tunnel with the helpers that
-// remain: it removes the others, keeps the named ones and non-helpers, and
-// withdraws the group (handing a selection of it to auto) with the last.
-func TestRemoveHelpersExceptReconcilesTheTunnel(t *testing.T) {
-	tun := startPersonalProxiesTestTunnel(t, testHelper1, testHelper2)
+// ReconcileHelpers makes a running tunnel's helpers the given set: it adds
+// missing helpers, swaps in those whose options changed, removes the rest,
+// keeps non-helpers, and withdraws the group (handing a selection of it to
+// auto) with the last.
+func TestReconcileHelpersMatchesTheTunnelToTheGivenSet(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(target.Close)
+	dest := M.ParseSocksaddr(target.Listener.Addr().String())
+	tun := startPersonalProxiesTestTunnel(t)
 	c := &VPNClient{tunnel: tun}
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{blockServer(testHelper1)}}))
 	require.NoError(t, tun.selectOutbound(PersonalProxiesTag))
 
-	require.NoError(t, c.RemoveHelpersExcept([]string{testHelper2}))
-	assert.Equal(t, []string{testHelper2}, personalProxiesMembers(tun))
+	// testHelper1's credentials rotated and testHelper2 was paired.
+	require.NoError(t, c.ReconcileHelpers(servers.ServerList{Servers: []*servers.Server{
+		directServer(testHelper1), directServer(testHelper2),
+	}}))
+	assert.ElementsMatch(t, []string{testHelper1, testHelper2}, personalProxiesMembers(tun))
 	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
 		members := selectorMembers(t, tun, groupTag)
-		assert.NotContains(t, members, testHelper1, groupTag)
 		assert.Contains(t, members, testHelper2, groupTag)
 		assert.Contains(t, members, "lantern-1", groupTag)
 	}
+	require.Eventually(t, func() bool { return dialsThrough(t, tun, PersonalProxiesTag, dest) == nil },
+		5*time.Second, 20*time.Millisecond, "the group dials through the rotated helper")
+
+	// testHelper1's pairing ended.
+	require.NoError(t, c.ReconcileHelpers(servers.ServerList{Servers: []*servers.Server{directServer(testHelper2)}}))
+	assert.Equal(t, []string{testHelper2}, personalProxiesMembers(tun))
+	assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), testHelper1)
+	assert.NotContains(t, selectorMembers(t, tun, AutoSelectTag), testHelper1)
 	assert.Equal(t, ManualSelectTag, tun.clashServer.Mode(), "the group is still selected")
 
-	require.NoError(t, c.RemoveHelpersExcept(nil))
+	// Every pairing ended.
+	require.NoError(t, c.ReconcileHelpers(servers.ServerList{}))
 	assert.Nil(t, tun.personalProxiesGroup())
-	assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), testHelper2)
 	assert.Equal(t, AutoSelectTag, tun.clashServer.Mode())
+	assert.Contains(t, selectorMembers(t, tun, ManualSelectTag), "lantern-1")
 
-	require.NoError(t, c.RemoveHelpersExcept(nil), "nothing left to remove")
-	require.ErrorIs(t, (&VPNClient{}).RemoveHelpersExcept(nil), ErrTunnelNotConnected)
+	require.NoError(t, c.ReconcileHelpers(servers.ServerList{}), "nothing left to do")
+	require.ErrorIs(t, (&VPNClient{}).ReconcileHelpers(servers.ServerList{}), ErrTunnelNotConnected)
 }

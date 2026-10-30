@@ -799,6 +799,13 @@ func (t *tunnel) addOutbounds(list servers.ServerList) error {
 // addOutboundsLocked adds the servers in list to the tunnel. The caller must
 // hold t.outboundMu.
 func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
+	return t.loadOutboundsLocked(list, true)
+}
+
+// loadOutboundsLocked adds the servers in list to the tunnel, or swaps in
+// those whose options changed, and with applyOverrides sets list's bandit URL
+// overrides on the auto group. The caller must hold t.outboundMu.
+func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides bool) error {
 	list = allowedServers(list)
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
@@ -837,7 +844,10 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 		// An outbound with new options replaces the one under its tag. The
 		// selection groups skip a tag they already hold, so the manual
 		// selector refused it; it is swapped into both groups below.
-		replaced := prev != nil && t.liveOutbound(outbound.Tag) != prev
+		// A failed create leaves no new outbound, even if a queued removal
+		// took the old one meanwhile.
+		cur := t.liveOutbound(outbound.Tag)
+		replaced := prev != nil && cur != nil && cur != prev
 		if replaced {
 			err = nil
 			if lbA.IsHelperTag(outbound.Tag) {
@@ -901,6 +911,10 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 		}
 	}
 
+	if !applyOverrides {
+		slog.Debug("Added servers", "added", added)
+		return errors.Join(errs...)
+	}
 	if len(list.URLOverrides) > 0 {
 		slog.Info("Applying bandit URL overrides to auto-select group",
 			"override_count", len(list.URLOverrides),
@@ -979,15 +993,17 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 	return errors.Join(errs...)
 }
 
-// removeHelpersExcept removes the helper outbounds in the selection groups
-// that keep does not name, under one hold of t.outboundMu, so what it finds
-// is what it removes.
-func (t *tunnel) removeHelpersExcept(keep []string) error {
+// reconcileHelpers makes the tunnel's helper outbounds those in helpers:
+// it removes the helpers in the selection groups that helpers does not name,
+// adds the missing ones and swaps in those whose options changed, all under
+// one hold of t.outboundMu. helpers must hold only helper servers.
+func (t *tunnel) reconcileHelpers(helpers servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
 	if t.mutGrpMgr == nil {
 		return nil
 	}
+	keep := helpers.Tags()
 	var stale []string
 	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
 		group, ok := t.mutGrpMgr.OutboundGroup(groupTag)
@@ -1000,15 +1016,23 @@ func (t *tunnel) removeHelpersExcept(keep []string) error {
 			}
 		}
 	}
-	if len(stale) == 0 {
-		return nil
+	var errs []error
+	if len(stale) > 0 {
+		slog.Debug("Removing helpers that no longer have a pairing", "count", len(stale))
+		err := t.removeOutboundsLocked(stale)
+		if errors.Is(err, errLibboxClosed) {
+			return err
+		}
+		errs = append(errs, err)
 	}
-	slog.Debug("Removing helpers that no longer have a pairing", "count", len(stale))
-	err := t.removeOutboundsLocked(stale)
+	// Bandit URL overrides belong to the whole server list, so a helpers-only
+	// load leaves them alone.
+	err := t.loadOutboundsLocked(helpers, false)
 	if errors.Is(err, errLibboxClosed) {
 		return err
 	}
-	return errors.Join(err, t.syncPersonalProxiesLocked())
+	errs = append(errs, err, t.syncPersonalProxiesLocked())
+	return errors.Join(errs...)
 }
 
 func (t *tunnel) removeOutbounds(tags []string) error {

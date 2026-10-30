@@ -67,11 +67,11 @@ type LocalBackend struct {
 
 	srvManager *servers.Manager
 	vpnClient  *vpn.VPNClient
-	// removeLiveHelpers, if set, replaces vpnClient.RemoveHelpersExcept, for
-	// tests that have no tunnel.
-	removeLiveHelpers func(keep []string) error
-	splitTunnelMgr    *vpn.SplitTunnel
-	sessionHistory    *vpn.SessionHistory
+	// live, if set, replaces vpnClient for the tunnel changes config updates
+	// and selection fallbacks make, for tests that have no tunnel.
+	live           liveTunnel
+	splitTunnelMgr *vpn.SplitTunnel
+	sessionHistory *vpn.SessionHistory
 
 	peerClient   peerController
 	peerToggleMu sync.Mutex
@@ -1055,6 +1055,21 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
+// liveTunnel is the part of vpn.VPNClient that config updates and selection
+// fallbacks change the running tunnel through.
+type liveTunnel interface {
+	UpdateOutbounds(list servers.ServerList) error
+	SelectServer(tag string) error
+	ReconcileHelpers(helpers servers.ServerList) error
+}
+
+func (r *LocalBackend) liveTunnel() liveTunnel {
+	if r.live != nil {
+		return r.live
+	}
+	return r.vpnClient
+}
+
 // maxRetainedLanternServers caps the number of working Lantern servers retained
 // across config updates.
 const maxRetainedLanternServers = 60
@@ -1068,8 +1083,11 @@ const maxRetainedLanternServers = 60
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err error) {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
-	// Whatever else fails, take ended pairings out of the tunnel.
+	// Whatever else fails, fall back from a selection the manager no longer
+	// holds and bring the tunnel's helpers in line with the manager, in that
+	// order, so traffic is on auto-select before a selected helper goes.
 	defer func() {
+		r.clearSelectedIfMissingLocked()
 		err = errors.Join(err, r.reconcileLiveHelpersLocked())
 	}()
 	existing := r.srvManager.AllServers()
@@ -1150,11 +1168,11 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
-	outboundErr := r.vpnClient.UpdateOutbounds(allList)
-	// This update preserves the selected server unless hard-demoted, so clearing
-	// an evicted selection is safe even while connected. Run it even when the
-	// outbound update failed, since an evicted pin is already gone from the manager.
+	// An evicted selection falls back to auto-select before the update removes
+	// it from the tunnel: the manual selector would otherwise pick an
+	// arbitrary member meanwhile.
 	r.clearSelectedIfMissingLocked()
+	outboundErr := r.liveTunnel().UpdateOutbounds(allList)
 	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
 	}
@@ -1163,9 +1181,9 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 
 // startHelperReconcileListener reconciles each tunnel that comes up with the
 // helpers the server manager holds. A connect or restart builds its tunnel
-// from options captured before it took the VPN lock, so a config update that
-// ended a pairing meanwhile may have found no tunnel, or the previous one, to
-// take the helper out of.
+// from options captured before it took the VPN lock, so a config update in
+// between, which found no tunnel or the previous one, may have ended, added
+// or rotated a helper the new tunnel does not reflect.
 func (r *LocalBackend) startHelperReconcileListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		if evt.Status != vpn.Connected {
@@ -1174,31 +1192,28 @@ func (r *LocalBackend) startHelperReconcileListener() {
 		r.selectionMu.Lock()
 		defer r.selectionMu.Unlock()
 		if err := r.reconcileLiveHelpersLocked(); err != nil {
-			slog.Warn("Failed to remove ended helpers from the new tunnel", "error", err)
+			slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
 		}
 	})
 }
 
-// reconcileLiveHelpersLocked removes from the tunnel every helper the server
-// manager no longer holds, which is the record of the pairings that remain.
-// updateOutbounds alone can keep an ended helper dialable: it skips an empty
-// list and keeps old outbounds when every new one fails to load. Removing the
-// last also withdraws the personal proxies group. With no tunnel up there is
-// nothing to do; the next one is reconciled when it connects. The caller
-// must hold r.selectionMu.
+// reconcileLiveHelpersLocked makes the tunnel's helpers the ones the server
+// manager holds, which is the record of the pairings that remain: helpers
+// that ended are removed (the last also withdraws the personal proxies
+// group), new ones added and rotated credentials swapped in. updateOutbounds
+// alone can keep an ended helper dialable: it skips an empty list and keeps
+// old outbounds when every new one fails to load. With no tunnel up there is
+// nothing to do; the next one is reconciled when it connects. The caller must
+// hold r.selectionMu.
 func (r *LocalBackend) reconcileLiveHelpersLocked() error {
-	var keep []string
+	var helpers servers.ServerList
 	for _, srv := range r.srvManager.AllServers() {
 		if lbA.IsHelperTag(srv.Tag) {
-			keep = append(keep, srv.Tag)
+			helpers.Servers = append(helpers.Servers, srv)
 		}
 	}
-	remove := r.vpnClient.RemoveHelpersExcept
-	if r.removeLiveHelpers != nil {
-		remove = r.removeLiveHelpers
-	}
-	if err := remove(keep); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		return fmt.Errorf("remove ended helpers: %w", err)
+	if err := r.liveTunnel().ReconcileHelpers(helpers); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("reconcile helpers: %w", err)
 	}
 	return nil
 }
@@ -1302,7 +1317,7 @@ func (r *LocalBackend) clearSelectedIfMissingLocked() {
 	// Persist before notifying the VPN client so the auto-select choice
 	// survives even if the tunnel isn't running to accept the switch.
 	r.persistSelection(vpn.AutoSelectTag)
-	if err := r.vpnClient.SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+	if err := r.liveTunnel().SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Warn("Failed to switch to auto-select after selected server was removed", "error", err)
 	}
 }

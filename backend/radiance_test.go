@@ -1697,30 +1697,70 @@ func TestConnectedSelectionFallsBackWhenWithdrawnDuringConnect(t *testing.T) {
 	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
 }
 
-// fakeHelperTunnel stands in for the tunnel's helper reconciliation in
-// backend tests, which have no tunnel. live is nil while no tunnel is up.
+// fakeHelperTunnel stands in for the running tunnel in backend tests, which
+// have no tunnel. live maps each outbound tag to its options' fingerprint,
+// and is nil while no tunnel is up. UpdateOutbounds only adds and updates, as
+// the real update does when its guards keep old outbounds; ReconcileHelpers
+// does what the real one does. calls records each call in order.
 type fakeHelperTunnel struct {
 	mu      sync.Mutex
-	live    map[string]bool
+	live    map[string]string
 	removed [][]string
+	calls   []string
 	fail    bool
 	gate    func() // if set, runs before each reconciliation
 }
 
-func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.removeLiveHelpers = f.removeHelpersExcept }
+var _ liveTunnel = (*fakeHelperTunnel)(nil)
 
-func (f *fakeHelperTunnel) removeHelpersExcept(keep []string) error {
+func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.live = f }
+
+func fingerprint(srv *servers.Server) string {
+	if out, ok := srv.Options.(option.Outbound); ok {
+		if socks, ok := out.Options.(*option.SOCKSOutboundOptions); ok {
+			return fmt.Sprint(socks.ServerPort)
+		}
+	}
+	return srv.Type
+}
+
+func (f *fakeHelperTunnel) UpdateOutbounds(list servers.ServerList) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "update")
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	for _, srv := range list.Servers {
+		f.live[srv.Tag] = fingerprint(srv)
+	}
+	return nil
+}
+
+func (f *fakeHelperTunnel) SelectServer(tag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "select:"+tag)
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	return nil
+}
+
+func (f *fakeHelperTunnel) ReconcileHelpers(helpers servers.ServerList) error {
 	if f.gate != nil {
 		f.gate()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "reconcile")
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
 	if f.fail {
 		return errors.New("tunnel busy")
 	}
+	keep := helpers.Tags()
 	var stale []string
 	for tag := range f.live {
 		if lbA.IsHelperTag(tag) && !slices.Contains(keep, tag) {
@@ -1734,21 +1774,31 @@ func (f *fakeHelperTunnel) removeHelpersExcept(keep []string) error {
 			delete(f.live, tag)
 		}
 	}
+	for _, srv := range helpers.Servers {
+		f.live[srv.Tag] = fingerprint(srv)
+	}
 	return nil
 }
 
-// up brings a tunnel up holding tags, as a connect or restart installs the
+// up brings a tunnel up holding servers, as a connect or restart installs the
 // options it captured.
-func (f *fakeHelperTunnel) up(tags ...string) {
+func (f *fakeHelperTunnel) up(list ...*servers.Server) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.live = make(map[string]bool)
-	for _, tag := range tags {
-		f.live[tag] = true
+	f.live = make(map[string]string)
+	for _, srv := range list {
+		f.live[srv.Tag] = fingerprint(srv)
 	}
 }
 
 func (f *fakeHelperTunnel) holds(tag string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.live[tag]
+	return ok
+}
+
+func (f *fakeHelperTunnel) options(tag string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.live[tag]
@@ -1760,12 +1810,10 @@ func (f *fakeHelperTunnel) removals() [][]string {
 	return slices.Clone(f.removed)
 }
 
-func tagsOfServers(list []*servers.Server) []string {
-	var tags []string
-	for _, srv := range list {
-		tags = append(tags, srv.Tag)
-	}
-	return tags
+func (f *fakeHelperTunnel) callLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 // A fresh config that ends every pairing of a helpers-only device leaves an
@@ -1777,7 +1825,7 @@ func TestFreshConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
 		r := newPersonalProxiesBackend(t)
 		tun := &fakeHelperTunnel{}
 		tun.attach(r)
-		tun.up(h1, h2)
+		tun.up(directServers(h1, h2).Servers...)
 		require.NoError(t, r.updateServers(directServers(h1, h2), true))
 		require.NoError(t, r.updateServers(servers.ServerList{}, fresh))
 		if fresh {
@@ -1798,7 +1846,7 @@ func TestEndedHelperRemovalIsRetried(t *testing.T) {
 	r := newPersonalProxiesBackend(t)
 	tun := &fakeHelperTunnel{}
 	tun.attach(r)
-	tun.up("lantern-1", h1, h2)
+	tun.up(directServers("lantern-1", h1, h2).Servers...)
 	require.NoError(t, r.updateServers(directServers("lantern-1", h1, h2), true))
 
 	tun.fail = true
@@ -1829,7 +1877,7 @@ func TestSelectionWaitsForAWithdrawingConfigUpdate(t *testing.T) {
 		<-release
 	}}
 	tun.attach(r)
-	tun.up("lantern-1", h)
+	tun.up(directServers("lantern-1", h).Servers...)
 	updated := make(chan error, 1)
 	go func() { updated <- r.updateServers(directServers("lantern-1"), true) }()
 	<-inRemoval
@@ -1869,11 +1917,11 @@ func TestTunnelsBuiltFromStaleOptionsLoseEndedHelpers(t *testing.T) {
 			tun := &fakeHelperTunnel{}
 			tun.attach(r)
 			if tc.upAtStart {
-				tun.up("lantern-1", ended, kept)
+				tun.up(directServers("lantern-1", ended, kept).Servers...)
 			}
 			require.NoError(t, r.updateServers(directServers("lantern-1", ended, kept), true))
 
-			snapshot := tagsOfServers(r.AllServers()) // the options the connect or restart captures
+			snapshot := r.AllServers() // the options the connect or restart captures
 			lockTaken := make(chan struct{})
 			connected := make(chan struct{})
 			go func() {
@@ -1894,4 +1942,82 @@ func TestTunnelsBuiltFromStaleOptionsLoseEndedHelpers(t *testing.T) {
 			assert.True(t, tun.holds("lantern-1"))
 		})
 	}
+}
+
+// A config that withdraws an individually selected helper falls back to
+// auto-select before the tunnel update removes the helper, so the manual
+// selector never picks an arbitrary member meanwhile.
+func TestWithdrawnSelectedHelperFallsBackBeforeTheUpdate(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection(h)
+	require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	before := len(tun.callLog())
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	calls := tun.callLog()[before:]
+	selectAt, updateAt := slices.Index(calls, "select:auto"), slices.Index(calls, "update")
+	require.NotEqual(t, -1, selectAt, "%v", calls)
+	require.NotEqual(t, -1, updateAt, "%v", calls)
+	assert.Less(t, selectAt, updateAt, "auto-select first: %v", calls)
+	assert.True(t, settings.GetBool(settings.AutoConnectKey))
+	assert.False(t, tun.holds(h))
+}
+
+// A config update that fails after the manager dropped a selected helper
+// (here, saving the removal) still falls back to auto-select, so the
+// persisted choice and the tunnel's agree.
+func TestFailedConfigUpdateStillClearsAWithdrawnSelection(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	serversDir := t.TempDir()
+	srvMgr, err := servers.NewManager(serversDir, log.NoOpLogger())
+	require.NoError(t, err)
+	r.srvManager = srvMgr
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection(vpn.PersonalProxiesTag)
+	require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	require.NoError(t, os.Chmod(serversDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(serversDir, 0o700) })
+	require.Error(t, r.updateServers(directServers("lantern-1"), true), "saving the removal fails")
+
+	assert.True(t, settings.GetBool(settings.AutoConnectKey), "the withdrawn selection falls back")
+	assert.Contains(t, tun.callLog(), "select:auto")
+	assert.False(t, tun.holds(h), "and the helper leaves the tunnel")
+}
+
+// A tunnel built from options captured before a config update reflects none
+// of that update's helper changes; on Connected it gains the new helper, the
+// rotated credentials and loses the ended helper.
+func TestConnectedTunnelGetsHelperChangesMadeWhileItCameUp(t *testing.T) {
+	const rotated, added, ended = "helper-0123456789ab", "helper-ba9876543210", "helper-00000000000e"
+	r := newPersonalProxiesBackend(t)
+	r.startHelperReconcileListener()
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{
+		helperWithPort("lantern-1", 1080), helperWithPort(rotated, 1080), helperWithPort(ended, 1080),
+	}}, true))
+	snapshot := r.AllServers() // the options a connect captures
+
+	// While the tunnel comes up: rotated's credentials change, added is
+	// paired and ended's pairing ends.
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{
+		helperWithPort("lantern-1", 1080), helperWithPort(rotated, 1081), helperWithPort(added, 1080),
+	}}, true))
+
+	tun.up(snapshot...)
+	events.Emit(vpn.StatusUpdateEvent{Status: vpn.Connected})
+	require.Eventually(t, func() bool { return tun.holds(added) && !tun.holds(ended) },
+		5*time.Second, 10*time.Millisecond, "the new tunnel gains the new helper and loses the ended one")
+	assert.Equal(t, "1081", tun.options(rotated), "with the rotated credentials")
+	assert.Equal(t, "1080", tun.options("lantern-1"))
 }
