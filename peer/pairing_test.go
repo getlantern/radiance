@@ -321,3 +321,52 @@ func TestClient_AcceptRacingStopLeavesNoLiveConnection(t *testing.T) {
 
 	assert.Empty(t, live.Snapshot().Pairings, "the stopped session's late accept was not tracked")
 }
+
+// A friend connected before the server's grouped set arrived (an older
+// replica answered register flat) is attributed once it does, for the rest
+// of the stream's life.
+func TestClient_StreamAcceptedBeforeGroupsIsAttributedLater(t *testing.T) {
+	live := helper.NewLiveTracker(nil)
+	c := pairingClient(t, func(cfg *Config) { cfg.Live = live })
+
+	friend, pool := counter(0, 0), counter(0, 0)
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: friend, ShortID: sid(t, sidA1)})
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.2:1000", Destination: "example.com:443", Bytes: pool, ShortID: sid(t, testBaseShortID)})
+	assert.Empty(t, live.Snapshot().Pairings, "no groups yet")
+
+	c.offerPairingShortIDs([]string{sidA1, sidA2, sidB1}, groupsAB(), true, 100)
+	friend.AddDown(helper.LiveThreshold)
+	pool.AddDown(helper.LiveThreshold)
+	s := live.Snapshot()
+	require.Len(t, s.Pairings, 1)
+	assert.Equal(t, pairingA, s.Pairings[0].PairingID)
+	assert.True(t, s.Pairings[0].Connected)
+	got := map[string]string{}
+	for _, pb := range c.RelaySnapshot().PeerBytes {
+		got[pb.IP] = pb.Pairing
+	}
+	assert.Equal(t, map[string]string{"198.51.100.1": pairingA, "198.51.100.2": ""}, got)
+
+	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.1:1000", Bytes: friend, ShortID: sid(t, sidA1)})
+	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.2:1000", Bytes: pool, ShortID: sid(t, testBaseShortID)})
+	c.liveMu.Lock()
+	assert.Empty(t, c.unresolved, "closed streams are forgotten")
+	c.liveMu.Unlock()
+}
+
+// Unresolved streams are dropped with their session, and a grouped set
+// arriving afterwards opens nothing.
+func TestClient_StopForgetsUnresolvedStreams(t *testing.T) {
+	live := helper.NewLiveTracker(nil)
+	c := pairingClient(t, func(cfg *Config) { cfg.Live = live })
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidA1)})
+	c.liveMu.Lock()
+	require.Len(t, c.unresolved, 1)
+	c.liveMu.Unlock()
+	require.NoError(t, c.Stop(context.Background()))
+	c.liveMu.Lock()
+	assert.Empty(t, c.unresolved)
+	c.liveMu.Unlock()
+	c.setPairingByShortID(map[[8]byte]string{sid(t, sidA1): pairingA})
+	assert.Empty(t, live.Snapshot().Pairings)
+}

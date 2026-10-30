@@ -276,6 +276,12 @@ type Client struct {
 	// ended adds nothing that the end would have had to close.
 	liveMu  sync.Mutex
 	liveGen uint64
+	// unresolved holds the open connections of this session whose short
+	// ID named no pairing when they were accepted, keyed by byte counter,
+	// so a grouped set that arrives later can still attribute them. It is
+	// bounded by the open connections, emptied on close and at the
+	// session's end. Guarded by liveMu, which is taken after c.mu.
+	unresolved map[*peerconn.Counter]unresolvedConn
 	// beforeTrackLive, if set, runs in the listener just before its
 	// LiveTracker update, so tests can interleave it with Stop.
 	beforeTrackLive func()
@@ -632,13 +638,11 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		// The pairing is deliberately absent from this line and every other.
 		slog.Debug("peer listener: forwarding connection event",
 			"state", state, "source", source)
-		pairing := c.pairingFor(evt.ShortID)
 		c.trackConn(state, source)
-		c.relay.recordPairingFor(relayGen, state, source, pairing, evt.Bytes)
 		if c.beforeTrackLive != nil {
 			c.beforeTrackLive()
 		}
-		c.trackLive(liveGen, state, pairing, evt.Bytes)
+		pairing := c.trackPairing(liveGen, relayGen, state, source, evt.ShortID, evt.Bytes)
 		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli(), Pairing: pairing})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
@@ -1851,13 +1855,33 @@ func groupPairingShortIDs(flat []string, groups []PairingShortIDSet, base []stri
 	return out, true
 }
 
+// unresolvedConn is an open connection whose short ID named no pairing yet.
+type unresolvedConn struct {
+	shortID [8]byte
+}
+
 // setPairingByShortID replaces the short ID to pairing map; nil clears it.
+// Open connections the new map attributes are then followed in the
+// LiveTracker and labelled in the relay snapshot.
 func (c *Client) setPairingByShortID(m map[[8]byte]string) {
 	if len(m) == 0 {
 		c.pairingByShortID.Store(nil)
 		return
 	}
 	c.pairingByShortID.Store(&m)
+	// After the store, so a connection the listener records as unresolved
+	// either sees the new map itself or is here to be resolved.
+	c.liveMu.Lock()
+	defer c.liveMu.Unlock()
+	for bytes, u := range c.unresolved {
+		pairing := m[u.shortID]
+		if pairing == "" {
+			continue
+		}
+		delete(c.unresolved, bytes)
+		c.relay.setPairing(bytes, pairing)
+		c.live().Open(liveOwner, bytes, pairing, func() uint64 { return bytes.Down() + bytes.Up() })
+	}
 }
 
 // pairingFor is the pairing a connection with short ID id came through, or ""
@@ -1885,6 +1909,7 @@ func (c *Client) beginLive() uint64 {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
 	c.liveGen++
+	clear(c.unresolved)
 	return c.liveGen
 }
 
@@ -1894,27 +1919,37 @@ func (c *Client) endLive() {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
 	c.liveGen++
+	clear(c.unresolved)
 	c.live().CloseOwner(liveOwner)
 }
 
-// trackLive follows a connection that came through a pairing in the
-// LiveTracker, keyed by its byte counter, which its accept and close share.
-// An event from a session other than gen is ignored.
-func (c *Client) trackLive(gen uint64, state int, pairing string, bytes *peerconn.Counter) {
-	if bytes == nil {
-		return
-	}
+// trackPairing resolves a connection event's pairing, records the event in
+// the relay snapshot, and follows a connection that came through a pairing
+// in the LiveTracker, keyed by its byte counter, which its accept and close
+// share. An accepted connection whose short ID names no pairing yet is kept
+// as unresolved for a later grouped set. Live tracking ignores an event from
+// a session other than liveGen. It returns the pairing, "" for the pool.
+func (c *Client) trackPairing(liveGen, relayGen uint64, state int, source string, shortID [8]byte, bytes *peerconn.Counter) string {
 	c.liveMu.Lock()
 	defer c.liveMu.Unlock()
-	if gen != c.liveGen {
-		return
+	pairing := c.pairingFor(shortID)
+	c.relay.recordPairingFor(relayGen, state, source, pairing, bytes)
+	if bytes == nil || liveGen != c.liveGen {
+		return pairing
 	}
 	switch {
 	case state > 0 && pairing != "":
 		c.live().Open(liveOwner, bytes, pairing, func() uint64 { return bytes.Down() + bytes.Up() })
+	case state > 0 && shortID != ([8]byte{}):
+		if c.unresolved == nil {
+			c.unresolved = make(map[*peerconn.Counter]unresolvedConn)
+		}
+		c.unresolved[bytes] = unresolvedConn{shortID: shortID}
 	case state < 0:
+		delete(c.unresolved, bytes)
 		c.live().Close(bytes)
 	}
+	return pairing
 }
 
 // defaultBuildBoxService builds the sing-box service for one peer box.
